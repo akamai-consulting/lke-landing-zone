@@ -20,8 +20,9 @@ import (
 )
 
 func ciAssertLokiCmd() *cobra.Command {
-	var nameMatch string
+	var nameMatch, region string
 	var settle, interval int
+	var noFlushProbe bool
 	c := &cobra.Command{
 		Use:   "assert-loki",
 		Short: "fail unless Loki is bootstrapped (workloads Ready + S3-backed) on the current cluster",
@@ -32,16 +33,28 @@ func ciAssertLokiCmd() *cobra.Command {
 			"(non-gating). Polls for a short settle budget so a transient kubectl/apiserver\n" +
 			"blip (or a brief readiness / kyverno-mutation lag) doesn't flake the gate — the\n" +
 			"same treatment assert-scrape-targets/assert-reconciler already carry. Exit 0\n" +
-			"bootstrapped, 1 otherwise.",
+			"bootstrapped, 1 otherwise.\n\n" +
+			"PROVES the write path rather than inferring it: if nothing has reached the chunks\n" +
+			"bucket since the ingesters started, it POSTs /flush to each ingester and waits for a\n" +
+			"chunk to land. Every other check here passes on a Loki that has never written a byte\n" +
+			"(#397), and two observational attempts to catch that both passed vacuously on a real\n" +
+			"cluster. --no-flush-probe keeps the gate strictly read-only at the cost of the proof.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertLoki(nameMatch, time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
+			return runCIAssertLoki(nameMatch, region, time.Duration(settle)*time.Second, time.Duration(interval)*time.Second, !noFlushProbe)
 		},
 	}
 	c.Flags().StringVar(&nameMatch, "name-match", "loki", "substring/regex identifying Loki workloads/objects")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling for Loki to bootstrap before failing (rides out a transient kubectl blip / readiness lag)")
 	c.Flags().IntVar(&interval, "interval", 10, "seconds between poll attempts")
+	c.Flags().StringVar(&region, "region", "",
+		"deployment whose spec names the Loki chunks bucket the write proof reads. Threaded in rather than "+
+			"read from $REGION here, for the reason assertSuiteLanes documents: a call site that reaches for "+
+			"the environment turns a missing value into a silent skip instead of a visible one")
+	c.Flags().BoolVar(&noFlushProbe, "no-flush-probe", false,
+		"do not POST /flush to the ingesters to force a write. The lane then reports UNPROVEN instead of "+
+			"proving the write path, because nothing else on a young cluster makes Loki write on demand")
 	return c
 }
 
@@ -88,7 +101,7 @@ type lokiPod struct {
 // (cobra exits 1 on it). The ::error:: annotation is still written directly —
 // GitHub parses an annotation only at the start of a line, and a returned error
 // reaches stderr behind main.go's "llz: " prefix.
-func runCIAssertLoki(nameMatch string, settle, interval time.Duration) error {
+func runCIAssertLoki(nameMatch, region string, settle, interval time.Duration, allowFlush bool) error {
 	fmt.Println("## Loki bootstrap assertion")
 
 	// Poll the two gating conditions for a settle budget. lokiBootstrapped reads the
@@ -103,7 +116,7 @@ func runCIAssertLoki(nameMatch string, settle, interval time.Duration) error {
 	var msgs []string
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
-		ok, msgs = lokiBootstrapped(nameMatch)
+		ok, msgs = lokiBootstrapped(nameMatch, region, allowFlush)
 		if ok || !time.Now().Before(deadline) {
 			break
 		}
@@ -145,7 +158,7 @@ func runCIAssertLoki(nameMatch string, settle, interval time.Duration) error {
 // re-run it across a settle budget: a transient kubectl failure surfaces here as
 // "not bootstrapped" (kItems → empty) and is ridden out by the poll rather than
 // hard-failing the gate on one blip.
-func lokiBootstrapped(nameMatch string) (bool, []string) {
+func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string) {
 	ok := true
 	var msgs []string
 
@@ -197,14 +210,70 @@ func lokiBootstrapped(nameMatch string) (bool, []string) {
 	// remove. The OUTCOME signal — has anything reached the bucket since the
 	// ingesters started — covers that, but only after enough time has passed that a
 	// healthy Loki would have flushed. Together they cover both.
-	for _, m := range lokiWriteFindings(nameMatch) {
-		msgs = append(msgs, m.text)
-		if m.fatal {
-			ok = false
-		}
+	failed, lines := applyLokiWriteVerdict(lokiWriteFindings(nameMatch, region, allowFlush))
+	msgs = append(msgs, lines...)
+	if failed {
+		ok = false
 	}
 	return ok, msgs
 }
+
+// applyLokiWriteVerdict turns write findings into lines plus a pass/fail, applying
+// the #397 deferral. Split out from lokiBootstrapped so the deferral rule can be
+// tested on its own: through lokiBootstrapped it is invisible, because the pod and
+// config checks fail first without a cluster and mask whatever this decides.
+func applyLokiWriteVerdict(findings []lokiWriteMsg) (bool, []string) {
+	var failed bool
+	var lines []string
+	for _, m := range findings {
+		lines = append(lines, m.text)
+		if !m.fatal {
+			continue
+		}
+		if lokiWriteChecksGating {
+			failed = true
+			continue
+		}
+		lines = append(lines, "  ^ REPORTED, NOT GATING: this is "+lokiWriteChecksOpenIssue+", a known platform "+
+			"defect this repo cannot fix — see lokiWriteChecksGating. The finding is real; it is not failing "+
+			"the lane because there is no action available to whoever reads it.")
+	}
+	return failed, lines
+}
+
+// lokiWriteChecksGating decides whether a proven write outage FAILS the lane.
+//
+// TRUE. A cluster that cannot persist a log line is not a passing cluster, and this
+// gate says so even though nobody reading the failure can fix it today.
+//
+// THE CONSEQUENCE IS DELIBERATE: while #397 is open, every e2e run is RED here. That
+// is the point. The alternative — reporting the outage and passing anyway — buys a
+// green pipeline by making the pipeline mean less, and this repo has just spent three
+// check designs learning where that leads. The first two versions of this check
+// PASSED on clusters that had persisted nothing at all, and each looked reasonable
+// while doing it.
+//
+// It went in as false for one run on the argument that an unsatisfiable gate is one
+// people route around. That was overruled, and the overrule is right: a gate nobody
+// can satisfy is a problem with the PLATFORM, not with the gate, and hiding it
+// relocates the problem to somewhere nobody is looking.
+//
+// WHAT IT TAKES TO GO GREEN, so this is actionable rather than merely loud. The cause
+// is Linode's Ceph RGW rejecting the AWS SDK's default aws-chunked trailer-checksum
+// framing; the remedy is Loki's thanos client (use_thanos_objstore +
+// send_content_md5), whose config apl-core owns on a managed App Platform. Measured,
+// not assumed: LLZ's one admission-time lever does NOT reach it — a Kyverno mutation
+// setting AWS_REQUEST_CHECKSUM_CALCULATION landed cleanly on an ingester and it still
+// failed every flush and wrote nothing.
+//
+// Set to false only as a temporary, explicitly-owned exception with a date and a
+// reason — never as a way to get a merge through.
+var lokiWriteChecksGating = true
+
+// lokiWriteChecksOpenIssue is the defect this gate currently catches. Named in the
+// output so the failure carries its own diagnosis, and so that if anyone ever does
+// flip lokiWriteChecksGating to false, the reason they are not failing is on record.
+const lokiWriteChecksOpenIssue = "#397"
 
 // lokiWriteMsg is one line of the write-path verdict; fatal ones fail the lane.
 type lokiWriteMsg struct {
@@ -213,7 +282,7 @@ type lokiWriteMsg struct {
 }
 
 // lokiWriteFindings answers "is Loki actually persisting anything".
-func lokiWriteFindings(nameMatch string) []lokiWriteMsg {
+func lokiWriteFindings(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 	var out []lokiWriteMsg
 
 	fails := lokiFlushFailures(nameMatch)
@@ -231,74 +300,20 @@ func lokiWriteFindings(nameMatch string) []lokiWriteMsg {
 	}
 	out = append(out, lokiWriteMsg{fmt.Sprintf("OK: no chunk-flush failures in the last %s", lokiFlushWindow), false})
 
-	// The outcome half. Skipped rather than guessed when the pieces are missing —
-	// this must never fail a lane because the gate could not look.
-	newest, since, err := lokiNewestWriteAge(nameMatch)
-	if err != nil {
-		out = append(out, lokiWriteMsg{"SKIP: could not compare the chunks bucket against ingester start (" + err.Error() + ") — the write OUTCOME is unmeasured here", false})
-		return out
-	}
-	if newest.After(since) {
-		out = append(out, lokiWriteMsg{fmt.Sprintf("OK: Loki has written to object storage since the ingesters started (newest object %s)", newest.Format(time.RFC3339)), false})
-		return out
-	}
-	// Nothing since start. Only a finding once a healthy Loki would have flushed:
-	// it holds a chunk until chunk_idle_period, so an empty bucket minutes into a
-	// bootstrap is normal and failing on it would red every fresh cluster — the
-	// exact mistake that made the obj-encryption [object] check unsatisfiable.
-	grace := lokiFlushGrace()
-	waited := lokiNow().Sub(since)
-	if waited < grace {
-		out = append(out, lokiWriteMsg{fmt.Sprintf(
-			"UNPROVEN: nothing written to object storage in the %s since the ingesters started, but Loki holds "+
-				"chunks for up to %s — too early to call. This lane cannot confirm Loki persists anything on a "+
-				"cluster this young; assert-obj-encryption's [object] check judges whatever HAS been written",
-			waited.Round(time.Second), grace), false})
-		return out
-	}
-	out = append(out, lokiWriteMsg{fmt.Sprintf(
-		"FAIL: Loki has written NOTHING to object storage in the %s since the ingesters started, which is longer "+
-			"than the %s it holds a chunk — it is not persisting logs, and no flush error has surfaced to say so. "+
-			"Check the ingesters for S3 errors; see #397 for the Linode/Ceph checksum-framing case that produces "+
-			"exactly this with every health signal green", waited.Round(time.Second), grace), true})
-	return out
+	// The PROOF half. This used to compare the bucket's newest object against the
+	// ingesters' start time and, before enough time had passed for a healthy Loki to
+	// flush, report UNPROVEN. That was honest but useless on the only timeline this
+	// runs on: the e2e suite fires ~9 minutes after bootstrap, Loki holds a chunk for
+	// up to chunk_idle_period, so the answer was always "too early to tell" and the
+	// lane never actually confirmed anything. Two revisions of observational checking
+	// both passed vacuously on a real cluster before this.
+	//
+	// So it asks Loki to write instead of waiting to see whether it did.
+	return append(out, lokiProveWrites(nameMatch, region, allowFlush)...)
 }
 
-// lokiNow is the clock seam; lokiFlushGrace is how long a healthy Loki may sit on a
-// chunk before flushing (Loki's chunk_idle_period default). A var so a cluster that
-// tunes it can be matched without re-releasing, and so tests can shrink it.
-var (
-	lokiNow        = time.Now
-	lokiFlushGrace = func() time.Duration { return 30 * time.Minute }
-)
-
-// lokiNewestWriteAge returns the newest object in the chunks bucket and the time the
-// OLDEST running ingester started — the two ends of "has it written since it came up".
-//
-// The OLDEST ingester, deliberately: a rolling restart makes the youngest pod seconds
-// old, and measuring against that would call every cluster "too early" forever.
-func lokiNewestWriteAge(nameMatch string) (newest time.Time, since time.Time, err error) {
-	bucket, endpoint := lokiChunksTarget()
-	if bucket == "" || endpoint == "" {
-		return newest, since, fmt.Errorf("no chunks bucket/endpoint for this deployment")
-	}
-	ak, sk, cerr := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
-	if cerr != nil {
-		return newest, since, fmt.Errorf("reading %s: %w", lokiObjSecretRef, cerr)
-	}
-	start, serr := lokiOldestIngesterStart(nameMatch)
-	if serr != nil {
-		return newest, since, serr
-	}
-	refs, lerr := s3SampleObjectKeys(ak, sk, endpoint, bucket, 1) // newest-first, so one is enough
-	if lerr != nil {
-		return newest, since, fmt.Errorf("listing %s: %w", bucket, lerr)
-	}
-	if len(refs) == 0 {
-		return time.Time{}, start, nil // empty bucket: nothing written, by definition
-	}
-	return refs[0].LastModified, start, nil
-}
+// lokiNow is the clock seam.
+var lokiNow = time.Now
 
 // lokiOldestIngesterStart is when the longest-running ingester came up.
 func lokiOldestIngesterStart(nameMatch string) (time.Time, error) {
@@ -333,8 +348,7 @@ var (
 	// lokiChunksTarget resolves the bucket + endpoint from the deployment spec, the
 	// same derivation assert-obj-encryption uses, so the two cannot disagree about
 	// which bucket "Loki's" means.
-	lokiChunksTarget = func() (string, string) {
-		region := os.Getenv("REGION")
+	lokiChunksTarget = func(region string) (string, string) {
 		if region == "" {
 			return "", ""
 		}

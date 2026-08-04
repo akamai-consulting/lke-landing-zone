@@ -84,7 +84,10 @@ func assertSuiteLanes(region string) []suiteLane {
 	return []suiteLane{
 		{
 			Name: "loki", Gating: true,
-			Steps: [][]string{{"assert-loki"}},
+			// --region because the write PROOF has to resolve this deployment's chunks
+			// bucket from the spec. Without it the proof degrades to a skip, which is
+			// the quiet failure this lane exists to stop having.
+			Steps: [][]string{regionArg("assert-loki")},
 			Why:   "Loki is bootstrapped and S3-backed. Says nothing about anything REACHING it — that is openbao-audit and delivery.",
 		},
 		{
