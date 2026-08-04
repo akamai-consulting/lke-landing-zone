@@ -124,8 +124,18 @@ func ciDocsGuardCmd() *cobra.Command {
 				fmt.Println(f)
 			}
 			if len(findings) > 0 {
-				fmt.Printf("docs-guard: checked %s across %d file(s).\n", n, len(docs))
-				return fmt.Errorf("docs-guard: %d finding(s) across %d Markdown file(s)", len(findings), len(files))
+				// Say READ vs FOUND separately when they differ. Printing
+				// "checked N" beside an error citing a larger M invited the
+				// reader to assume the gap was rounding — when it is exactly the
+				// thing that matters: files this guard could not open and
+				// therefore cannot vouch for.
+				scope := fmt.Sprintf("%d file(s)", len(docs))
+				if len(docs) != len(files) {
+					scope = fmt.Sprintf("%d of %d file(s) — %d unreadable",
+						len(docs), len(files), len(files)-len(docs))
+				}
+				fmt.Printf("docs-guard: checked %s across %s.\n", n, scope)
+				return fmt.Errorf("docs-guard: %d finding(s) across %s", len(findings), scope)
 			}
 			fmt.Printf("docs-guard: %d Markdown file(s) OK — checked %s.\n", len(docs), n)
 			return nil
