@@ -1,0 +1,50 @@
+# Budget gates on EVERY pull request, whatever it targets.
+#
+# WHY THIS IS NOT JUST A JOB IN lint.yml. lint.yml is filtered to
+# `pull_request: branches: [main, master]`, so a STACKED pull request — one based
+# on another feature branch — runs none of it. That is the exact workflow ADR 0014
+# prescribes: the catalog's decomposition lands as a stack of slices, each based on
+# the last. The core-surface budget would therefore have been blind to every slice
+# of the programme it exists to drive, and would only have spoken when the whole
+# stack finally merged to main — the point at which acting on it is most expensive.
+#
+# The obvious fix, dropping lint.yml's branch filter, is the wrong one: it would
+# also run the kind server-side dry-run, the chart render, tflint and checkov on
+# every stacked PR. Those are minutes and cost, and whether stacked PRs should pay
+# them is a separate policy question nobody has asked for.
+#
+# So only the two budget gates move. They are pure Go over a committed config file
+# — no cluster, no cloud, no rendered charts, well under a second each — which
+# makes running them everywhere essentially free. lint.yml keeps running them too
+# for PRs targeting main; a gate that is cheap and idempotent loses nothing by
+# being asserted twice, and neither workflow depends on the other still doing it.
+name: Budget gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: budget-gates-${{ github.ref }}
+  # Superseded PR pushes are worth cancelling; main-branch runs are not. Cancelling
+  # on push would let a quick second merge discard the first commit's budget result,
+  # leaving a commit on main with no record of whether it held.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  budgets:
+    name: Untestable-LOC and core-surface budgets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up llz toolchain
+        uses: ./.github/actions/setup-llz
+      - name: Untestable-LOC budget gate
+        run: make untestable-loc-check
+      - name: Core-surface budget gate
+        run: make core-surface-check

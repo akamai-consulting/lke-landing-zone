@@ -563,7 +563,7 @@ jobs:
       # Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
       # destination for converted logic but caps nothing there, so package main
       # accretes. This budgets the destination — Go logic lines in package main —
-      # and is satisfied by extracting to tools/internal/<pkg> (ADR 0002) or
+      # and is satisfied by extracting to tools/internal/<pkg> (ADR 0013) or
       # moving the capability out to an extension (issue #10), never by raising
       # the budget. Same Go-toolchain-only requirement as the step above.
       - name: Core-surface budget gate
