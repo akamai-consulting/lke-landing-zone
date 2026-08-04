@@ -1029,3 +1029,58 @@ func rawOnBlock(body string) string {
 	}
 	return b.String()
 }
+
+// A leading `/` is ROOT-relative in Markdown — GitHub resolves it against the repo
+// root, not the file's directory. Joining it to the file's dir turned a VALID link
+// into `docs/docs/x.md` and reported it dead: a false positive, latent only because
+// no doc uses that form today.
+func TestCheckDocLinks_RootRelativeLinksResolveFromTheRoot(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "docs/target.md", "# target")
+	writeMD(t, root, "instance-template/kubernetes-custom/README.md", "# custom")
+
+	for _, tc := range []struct{ name, rel, body, wantHit string }{
+		{
+			// From a NESTED file, so joining to its dir would give
+			// docs/runbooks/docs/target.md and wrongly report it.
+			name: "root-relative from a nested file resolves",
+			rel:  "docs/runbooks/r.md",
+			body: "see [t](/docs/target.md)\n",
+		},
+		{
+			name: "root-relative from a top-level file resolves",
+			rel:  "README.md",
+			body: "see [t](/docs/target.md)\n",
+		},
+		{
+			// For a scaffold file the root is the INSTANCE root after render.
+			name: "root-relative in instance-template resolves against the instance",
+			rel:  "instance-template/AGENTS.md",
+			body: "see [c](/kubernetes-custom/README.md)\n",
+		},
+		{
+			name:    "a root-relative link to nothing is still reported",
+			rel:     "docs/runbooks/r.md",
+			body:    "see [x](/docs/nope.md)\n",
+			wantHit: "does not exist",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeMD(t, root, tc.rel, tc.body)
+			docs, bad := loadDocs(root, []string{tc.rel})
+			if len(bad) != 0 {
+				t.Fatalf("fixture unreadable: %v", bad)
+			}
+			got := checkDocLinks(root, docs, &docsScanned{})
+			if tc.wantHit == "" {
+				if len(got) != 0 {
+					t.Fatalf("a valid root-relative link was reported: %v", got)
+				}
+				return
+			}
+			if len(got) == 0 || !strings.Contains(got[0].Detail, tc.wantHit) {
+				t.Fatalf("expected %q, got %v", tc.wantHit, got)
+			}
+		})
+	}
+}

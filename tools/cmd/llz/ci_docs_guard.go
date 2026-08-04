@@ -712,7 +712,20 @@ func checkDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 					continue
 				}
 				n.links++
-				resolved := filepath.Clean(filepath.Join(linkDir, path))
+				// A leading `/` is ROOT-relative in Markdown — GitHub resolves it
+				// against the repo (or, for a rendered scaffold file, the instance)
+				// root, not against the file's directory. Joining it to linkDir
+				// gave `docs/docs/x.md` and reported a valid link as dead.
+				//
+				// (It never escaped to the OS root, as one review suggested:
+				// filepath.Join CLEANS, so `Join("docs","/etc/passwd")` is
+				// "docs/etc/passwd" — contained. The defect is a false POSITIVE,
+				// not a filesystem read outside the tree.)
+				base := linkDir
+				if strings.HasPrefix(path, "/") {
+					base, path = "", strings.TrimPrefix(path, "/")
+				}
+				resolved := filepath.Clean(filepath.Join(base, path))
 				// A rendered instance has NOTHING above its root, so a link that
 				// climbs past it is dead there however it resolves here. Catch it
 				// before the existence probes: filepath.Join(root, "../x") walks
@@ -814,7 +827,14 @@ func checkDeliveredDocLinks(root string, docs []docFile, n *docsScanned) []docFi
 				if path == "" {
 					continue
 				}
-				resolved := filepath.Clean(filepath.Join(dir, path))
+				// Root-relative here too — see the note in checkDocLinks. Fixing
+				// only one of the two resolvers left this one reporting a valid
+				// `/docs/x.md` as dead, which the test caught.
+				dbase := dir
+				if strings.HasPrefix(path, "/") {
+					dbase, path = "", strings.TrimPrefix(path, "/")
+				}
+				resolved := filepath.Clean(filepath.Join(dbase, path))
 				// A link OUT of docs/ cannot be repointed by deliver-docs (its
 				// rewrite is docs/-relative) and will not resolve in an instance.
 				if !strings.HasPrefix(resolved, "docs/") {
