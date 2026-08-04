@@ -144,7 +144,7 @@ func verifyClientSigV4(r *http.Request, secretKey, host string) error {
 	auth := r.Header.Get("Authorization")
 	_, scope, signedHeaders, want, ok := parseAuthorization(auth)
 	if !ok {
-		return fmt.Errorf("Authorization header is not a parseable AWS4-HMAC-SHA256 credential")
+		return fmt.Errorf("the Authorization header is not a parseable AWS4-HMAC-SHA256 credential")
 	}
 	parts := strings.Split(scope, "/")
 	if len(parts) != 4 {

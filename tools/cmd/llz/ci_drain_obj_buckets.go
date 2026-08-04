@@ -164,7 +164,7 @@ var drainObjMintKey = func(region, endpoint string, buckets []string) (string, s
 	id, _ := cli.AsUint64(m["id"])
 	ak, sk := cli.AsString(m["access_key"]), cli.AsString(m["secret_key"])
 	if ak == "" || sk == "" {
-		return "", "", nil, fmt.Errorf("Linode returned no usable key pair")
+		return "", "", nil, fmt.Errorf("the Linode API returned no usable key pair")
 	}
 	return ak, sk, func() {
 		if err := api.DeleteObjectStorageKey(context.Background(), id); err != nil {
