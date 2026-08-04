@@ -179,8 +179,9 @@ does not exist yet, so the binary installs but `llz new` then dies with
 #   llz-darwin-arm64  llz-darwin-amd64  llz-linux-amd64  llz-linux-arm64
 ORG=akamai-consulting            # or your fork's org
 VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
-  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
-        |map({t:.,k:(sub("^v";"")|split(".")|map(tonumber))})|sort_by(.k)|last|.t // empty')
+  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
+        |map({t:.,k:(sub("^v";"")|sub("[-+].*$";"")|split(".")|map(tonumber))})
+        |reduce .[] as $r (null; if . == null or $r.k > .k then $r else . end)|(.t // empty)')
 : "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 ASSET=llz-darwin-arm64
 BINDIR="$HOME/.local/bin"
@@ -198,8 +199,9 @@ anonymously — no token, no API asset endpoint:
 ```bash
 ORG=akamai-consulting; ASSET=llz-darwin-arm64
 VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
-  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
-        |map({t:.,k:(sub("^v";"")|split(".")|map(tonumber))})|sort_by(.k)|last|.t // empty')
+  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
+        |map({t:.,k:(sub("^v";"")|sub("[-+].*$";"")|split(".")|map(tonumber))})
+        |reduce .[] as $r (null; if . == null or $r.k > .k then $r else . end)|(.t // empty)')
 : "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
 curl -fsSL \

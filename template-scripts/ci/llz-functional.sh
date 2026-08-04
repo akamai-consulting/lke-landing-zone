@@ -136,11 +136,14 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     # Highest-semver FULL release: skip drafts and pre-releases (unpromoted e2e
     # candidates), matching latestRelease() in selfupdate.go — including its
     # tolerance for a -pre/+build tail, which is stripped before the numeric
-    # sort. Without the strip, `split(".") | map(tonumber)` would ERROR on a tag
-    # like v1.2.3-hotfix rather than rank it, so the filter and the sort key
-    # have to move together.
+    # comparison. Without the strip, `split(".") | map(tonumber)` would ERROR on
+    # a tag like v1.2.3-hotfix rather than rank it, so the filter and the key
+    # have to move together. The reduce keeps the FIRST of equal cores (gh lists
+    # newest first), which is what latestLLZTag does and what a `sort_by | last`
+    # would silently invert — see TestLatestLLZTagTieKeepsFirst.
+    # shellcheck disable=SC2016  # $r is a jq variable; it must NOT expand in the shell.
     TAG="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq \
-      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))] | sort_by(ltrimstr("v") | sub("[-+].*$";"") | split(".") | map(tonumber)) | last')"
+      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))] | map({tag:., key:(ltrimstr("v") | sub("[-+].*$";"") | split(".") | map(tonumber))}) | reduce .[] as $r (null; if . == null or $r.key > .key then $r else . end) | (.tag // empty)')"
     [[ -n "$TAG" && "$TAG" != "null" ]] || { fail "no full vX.Y.Z release found on $REPO"; TAG=""; }
   fi
   WANT_VER="$TAG"   # e.g. v0.0.38

@@ -81,6 +81,26 @@ func TestLatestLLZTag(t *testing.T) {
 	}
 }
 
+// TestLatestLLZTagTieKeepsFirst pins the tie-break: semver() ignores a -pre/+build
+// tail, so two full releases can share one numeric core, and the picker replaces
+// `best` only on a STRICTLY greater version — keeping the FIRST of equals. gh
+// lists newest first, so that is the newer release.
+//
+// This is not a detail: three shell implementations mirror this picker
+// (install-llz.sh, llz-functional.sh, and the quickstart's by-hand snippets),
+// and jq's natural spelling — sort_by(key) | last — silently does the OPPOSITE,
+// because its sort is stable and the last of equals is the oldest-listed. Pin it
+// here so the shells have something authoritative to agree with.
+func TestLatestLLZTagTieKeepsFirst(t *testing.T) {
+	// Newest-first, as `gh release list` returns them.
+	if got, _ := latestLLZTag([]string{"v1.2.3-hotfix", "v1.2.3"}); got != "v1.2.3-hotfix" {
+		t.Errorf("tie: got %q, want the first-listed v1.2.3-hotfix", got)
+	}
+	if got, _ := latestLLZTag([]string{"v1.2.3", "v1.2.3-hotfix"}); got != "v1.2.3" {
+		t.Errorf("tie (reversed input): got %q, want the first-listed v1.2.3", got)
+	}
+}
+
 func TestChecksumFor(t *testing.T) {
 	sums := "abc123  llz-linux-amd64\n" +
 		"def456  llz-darwin-arm64\n" +

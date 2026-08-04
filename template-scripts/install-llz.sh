@@ -55,10 +55,20 @@ gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
 #                         The suffix is tolerated and then stripped for ordering,
 #                         exactly as semver() does, so the two agree on a tag
 #                         like v1.2.3-hotfix that is not flagged pre-release.
+#
+# The reduce is not a stylistic choice over `sort_by(.key) | last`. Stripping the
+# tail means two full releases can share one numeric core (v1.2.3 and
+# v1.2.3-hotfix), and jq's sort is stable, so `last` returns the LAST of equals —
+# which is the OLDEST, since gh lists newest first. latestLLZTag replaces its
+# best only on a strictly greater version, keeping the first (newest) of equals;
+# `$r.key > .key` reproduces exactly that. Pinned by
+# TestLatestLLZTagTieKeepsFirst.
+# shellcheck disable=SC2016  # $r is a jq variable; it must NOT expand in the shell.
 tag_query='[.[] | select((.isDraft or .isPrerelease) | not) | .tagName
      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
    | map({tag: ., key: (sub("^v";"") | sub("[-+].*$";"") | split(".") | map(tonumber))})
-   | sort_by(.key) | (last | .tag) // empty'
+   | reduce .[] as $r (null; if . == null or $r.key > .key then $r else . end)
+   | (.tag // empty)'
 
 if [ -z "$VER" ]; then
   VER="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq "$tag_query")"
@@ -106,7 +116,7 @@ install -m 0755 "$tmp/$asset" "$BINDIR/llz"
 # `</dev/null` for the same reason as the probes below: under `curl … | bash`,
 # stdin IS the installer script, and any child that reads it truncates the rest.
 echo "install-llz: installed $("$BINDIR/llz" version </dev/null) → $BINDIR/llz"
-echo "install-llz: enable shell completion with \`llz completion zsh|bash\` (see quickstart §2)."
+echo "install-llz: enable shell completion with \`llz completion zsh\` (or \`bash\`) — see quickstart §2."
 
 # ── which llz will the shell actually run? ───────────────────────────────────
 # Installing the binary is not the same as the shell RUNNING it. Another llz
@@ -129,9 +139,15 @@ echo "install-llz: enable shell completion with \`llz completion zsh|bash\` (see
 # stops wherever the buffer ran out. These probes execute whatever files happen
 # to be named `llz` on this machine, which is precisely the code we cannot vouch
 # for. Detach them from stdin so a stray `llz` that reads it truncates nothing.
+# `|| true` inside the braces, because `set -o pipefail` is on: when the probed
+# binary prints more than `head` reads, it takes SIGPIPE (141) once head exits,
+# pipefail promotes that to the pipeline's status, and the captured line is
+# thrown away — reporting "(not runnable)" for a binary that answered correctly.
+# Measured with a stub printing 200k lines: empty before, right version after.
+# Swallowing the status here is safe because emptiness is the real signal.
 llz_version_of() {
-  v="$("$1" version </dev/null 2>/dev/null | head -1)" || v=""
-  [ -n "$v" ] || v="$("$1" --version </dev/null 2>/dev/null | head -1)" || v=""
+  v="$({ "$1" version </dev/null 2>/dev/null || true; } | head -1)"
+  [ -n "$v" ] || v="$({ "$1" --version </dev/null 2>/dev/null || true; } | head -1)"
   [ -n "$v" ] || v="(not runnable)"
   printf '%s' "$v"
 }
