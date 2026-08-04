@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -185,7 +184,15 @@ var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max
 		if token != "" {
 			// Canonical query order is by key, and `continuation-token` sorts before
 			// `list-type`/`max-keys` — send it in the order it is signed or SigV4 fails.
-			query = "continuation-token=" + url.QueryEscape(token) + "&" + query
+			//
+			// RFC3986 escaping, not url.QueryEscape: the two agree on the base64
+			// alphabet a continuation token actually uses (+, /, =) and disagree on a
+			// space, which QueryEscape renders `+` where SigV4 demands %20. Today's
+			// tokens contain no spaces, so this was correct by the luck of the
+			// alphabet rather than by construction — and a signature that is right
+			// only for the inputs seen so far is the kind that breaks on a bucket big
+			// enough to need the second page.
+			query = "continuation-token=" + s3EscapeQueryComponent(token) + "&" + query
 		}
 		code, body, err := s3SignedRequest(http.MethodGet, accessKey, secretKey, endpoint, "/"+bucket, query)
 		if err != nil {

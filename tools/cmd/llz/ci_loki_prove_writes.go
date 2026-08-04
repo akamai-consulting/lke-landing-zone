@@ -111,27 +111,37 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 	}
 
 	deadline := lokiNow().Add(lokiProveBudget)
+	var landed bool
+	var landedAfter time.Duration
 	for {
 		if newest, ok := lokiNewestObject(ak, sk, endpoint, bucket); ok && newest.After(triggered) {
-			return append(out, lokiWriteMsg{fmt.Sprintf(
-				"PROVEN: a chunk reached object storage %s after the flush — Loki's write path works end to end",
-				newest.Sub(triggered).Round(time.Second)), false})
+			landed, landedAfter = true, newest.Sub(triggered).Round(time.Second)
+			break
 		}
 		if !lokiNow().Before(deadline) {
 			break
 		}
 		lokiProveSleep(lokiProveInterval)
 	}
-	// NOTHING LANDED. That is two different situations and they must not share a
-	// verdict: an ingester that TRIED and failed is a write outage, and one that had
-	// no buffered chunk to write has simply told us nothing. A flush cannot invent
-	// data, so on a quiet cluster the second case is normal — failing on it would
-	// red a healthy Loki for having nothing to say.
-	//
-	// The ingesters' own logs separate them, and #397 falls on the fatal side: its
-	// 403s are logged on every attempt, so the case this gate was built for still
-	// fails loudly.
-	if errs := lokiFlushFailuresSince(nameMatch, triggered); len(errs) > 0 {
+
+	// ERRORS ARE CHECKED WHETHER OR NOT SOMETHING LANDED, and that ordering is the
+	// point. An earlier version returned PROVEN the moment any object appeared, which
+	// meant a fleet where two ingesters wrote and a third could not reported success
+	// — a third of the cluster's logs lost, with the failing replica's 403s never
+	// read. That is the PARTIAL failure this gate was written to surface, and it was
+	// producing it instead: lokiFlushIngester deliberately flushes every ingester
+	// rather than one via a Service, precisely so a broken replica cannot hide, and
+	// the verdict then threw that away.
+	errs := lokiFlushFailuresSince(nameMatch, triggered)
+
+	switch {
+	case len(errs) > 0 && landed:
+		return append(out,
+			lokiWriteMsg{fmt.Sprintf("FAIL: a chunk reached %s, but %d ingester write error(s) were logged doing it — "+
+				"SOME replicas cannot persist, so a share of this cluster's logs is being dropped while the "+
+				"write path looks healthy", bucket, len(errs)), true},
+			lokiWriteMsg{"  " + errs[0], false})
+	case len(errs) > 0:
 		return append(out,
 			lokiWriteMsg{fmt.Sprintf("FAIL: %d ingester(s) flushed, nothing reached %s within %s, and they logged "+
 				"write errors doing it — Loki is not persisting logs", flushed, bucket, lokiProveBudget), true},
@@ -139,7 +149,14 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 			lokiWriteMsg{"  Every other signal in this lane can be green in this state — that is what #397 is. " +
 				"A 403 AccessDenied here is usually NOT the credential but Linode's Ceph rejecting the AWS SDK's " +
 				"default aws-chunked trailer-checksum framing", false})
+	case landed:
+		return append(out, lokiWriteMsg{fmt.Sprintf(
+			"PROVEN: a chunk reached object storage %s after the flush, with no ingester reporting a write "+
+				"error — Loki's write path works end to end", landedAfter), false})
 	}
+	// Nothing landed and nothing complained. A flush cannot invent data, so on a
+	// quiet cluster this is normal: the ingesters had no buffered chunk to write.
+	// Failing here would red a healthy Loki for having nothing to say.
 	return append(out, lokiWriteMsg{fmt.Sprintf(
 		"INCONCLUSIVE: %d ingester(s) flushed without error and nothing new reached %s within %s — they had no "+
 			"buffered chunk to write, so this neither proves nor disproves the write path. On a cluster with log "+
@@ -147,9 +164,9 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 		flushed, bucket, lokiProveBudget), false})
 }
 
-// lokiFlushFailuresSince returns flush errors logged after t. Bounded by a window
-// derived from the elapsed time so a long-running gate does not re-read an entire
-// pod log, and so errors from BEFORE the trigger cannot be attributed to this flush.
+// lokiFlushFailuresSince returns flush errors logged after t. The window is derived
+// from elapsed time so a long-running gate does not re-read an entire pod log, and
+// so an error from BEFORE the trigger cannot be blamed on this flush.
 func lokiFlushFailuresSince(nameMatch string, t time.Time) []string {
 	window := lokiNow().Sub(t) + 5*time.Second
 	var out []string

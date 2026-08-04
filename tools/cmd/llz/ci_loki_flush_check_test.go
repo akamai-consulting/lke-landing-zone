@@ -384,3 +384,47 @@ func TestFlippingLokiWriteChecksGatingRestoresTheGate(t *testing.T) {
 		t.Errorf("a real failure that fails nothing must name why (%s): %v", lokiWriteChecksOpenIssue, deferredLines)
 	}
 }
+
+// THE PARTIAL-FAILURE HOLE. A fleet where two ingesters write and a third cannot is
+// a cluster silently dropping a share of its logs. The first version returned PROVEN
+// the moment ANY object appeared, so the broken replica's errors were never read —
+// this gate was producing the partial failure it exists to surface. lokiFlushIngester
+// flushes every ingester individually for exactly this reason, and the verdict has to
+// honour that.
+func TestLokiProveWritesFailsWhenSomeIngestersCannotWrite(t *testing.T) {
+	now := time.Date(2026, 8, 3, 21, 43, 0, 0, time.UTC)
+	h := &proveHarness{
+		start:        now.Add(-9 * time.Minute),
+		now:          now,
+		appearsAt:    now.Add(5 * time.Second),                                          // the healthy replicas DID write
+		postFlushLog: `level=error msg="failed to flush" err="403 AccessDenied"` + "\n", // one did not
+	}
+	h.install(t)
+
+	fatal, text := proveVerdict(t, true)
+	if !fatal {
+		t.Fatalf("a chunk landed but an ingester logged a write error — a share of logs is being dropped:\n%s", text)
+	}
+	if strings.Contains(text, "PROVEN") {
+		t.Errorf("a partially-broken fleet must not read as proven:\n%s", text)
+	}
+	if !strings.Contains(text, "SOME replicas") {
+		t.Errorf("the finding must name the partial nature, or it reads as a total outage:\n%s", text)
+	}
+}
+
+// And the clean case must state that nothing complained, so PROVEN means "all of
+// them wrote", not "at least one did".
+func TestLokiProveWritesPassOnlyWhenNoIngesterComplained(t *testing.T) {
+	now := time.Date(2026, 8, 3, 21, 43, 0, 0, time.UTC)
+	h := &proveHarness{start: now.Add(-9 * time.Minute), now: now, appearsAt: now.Add(2 * time.Second)}
+	h.install(t)
+
+	fatal, text := proveVerdict(t, true)
+	if fatal {
+		t.Fatalf("a clean flush must pass:\n%s", text)
+	}
+	if !strings.Contains(text, "no ingester reporting a write error") {
+		t.Errorf("PROVEN must say the whole fleet was quiet, not just that something landed:\n%s", text)
+	}
+}
