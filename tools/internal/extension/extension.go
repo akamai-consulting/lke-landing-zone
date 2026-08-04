@@ -27,6 +27,17 @@ const (
 // lifecycle is the ordered spine. promoted/upgraded/destroyed sit outside it —
 // they are transitions an operating instance takes repeatedly, not stations on
 // the way up.
+//
+// FIVE OF THE SEVEN ARE ENTERED BY ACTING; the last two are not, and that is the
+// model's shape rather than a gap in it. `verified` is the conclusion drawn when
+// the assertions required at that state hold, and `operating` is the condition of
+// continuing to satisfy its invariants — neither is somewhere an extension moves
+// the platform to, which is why bindableStates gives Transition no way to target
+// them. What follows is that ADVANCING past `converged` is the driver's job, not
+// an extension's: the driver evaluates the required set and names the state. That
+// division has no code yet (this package is wired to nothing) and it is the first
+// thing the driver slice has to get right, because if extensions could declare
+// "verified reached" the core would no longer own what success means.
 var lifecycle = []State{Scaffolded, Configured, Provisioned, Seeded, Converged, Verified, Operating}
 
 var recurring = []State{Promoted, Upgraded, Destroyed}
@@ -80,14 +91,29 @@ const (
 // yielded a one-line bypass and an unsatisfiable pair, both pinned as regressions
 // in extension_test.go; docs/designs/internal-extension-model.md explains them.
 // Each binding is judged on what it declares, and lends nothing to its siblings.
+//
+// NAME DISAMBIGUATES REPEATED ATTACHMENTS, and exists because the same reasoning
+// that moved grants onto Binding applies one level further down. `operating` is
+// the only state an invariant may attach to, so without a name an extension could
+// hold exactly one invariant — and reconcile-actions is SEVEN of them (ES-store
+// recovery, OpenBao, tokens, apl-overlay, argo-nudge, sc-demote,
+// linode-token-wait) whose needs genuinely differ: the token restorers place
+// credential material, sc-demote only writes to the cluster. Collapsed into one
+// binding their grants widen to the union, which is precisely the over-granting
+// that scoping grants per binding was introduced to prevent. Optional: a single
+// attachment needs no name, and two of the same kind:state do.
 type Binding struct {
 	Kind   BindingKind
+	Name   string
 	State  State
 	Grants []Grant
 }
 
 func (b Binding) String() string {
 	s := string(b.Kind) + ":" + string(b.State)
+	if b.Name != "" {
+		s += "/" + b.Name
+	}
 	if len(b.Grants) > 0 {
 		s += "[" + grantList(b.Grants) + "]"
 	}
@@ -97,9 +123,17 @@ func (b Binding) String() string {
 // Grant is a capability a binding declares it needs. Grants replace PR #15's
 // `kind: check|tool` ceiling: instead of a closed menu of shapes an extension may
 // take, it declares what it TOUCHES and the validator decides whether its
-// bindings permit that. The catalog measures how these distribute across all 57
-// candidates — no grant is held by a majority, which is the evidence the model
-// discriminates rather than relabels.
+// bindings permit that.
+//
+// ON THE CATALOG'S GRANT DISTRIBUTION — no grant held by a majority of the 57
+// candidates — READ IT AS A DESIGN INTUITION, NOT A MEASUREMENT. The assignments
+// were authored in the same pass that invented this vocabulary, so the spread
+// reports the author's judgement rather than an independent property of package
+// main. It is a reason to think the axis is discriminating; it is not evidence,
+// and it cannot become evidence until extensions declare their own grants and the
+// distribution is observed instead of assigned. The same caution applies to
+// "nothing in package main needed a fifth binding kind" on BindingKind: the
+// catalog was built with four in mind.
 type Grant string
 
 const (
@@ -138,10 +172,19 @@ type Extension struct {
 	Name string
 	// Short is a one-line summary for `llz extension list`.
 	Short string
-	// Always means the extension ships ENABLED on every instance. 34 of the
-	// catalog's 57 are always — universality turned out not to be the thing that
-	// distinguishes an extension from core, which is why this is a registry fact
-	// recorded here rather than a mechanism that gates what may become one.
+	// Always means the extension ships ENABLED on every instance. 41 of the
+	// catalog's 57 are always, against 16 opt-in — universality turned out not to
+	// be the thing that distinguishes an extension from core, which is why this is
+	// a registry fact recorded here rather than a mechanism that gates what may
+	// become one.
+	//
+	// IT IS A DEFAULT, NOT A CONSTANT. The assert lanes are the case that settles
+	// this: `llz ci assert-suite` is called from three places in instance-template
+	// (bootstrap unconditionally, cluster-health as a six-lane subset, and
+	// scheduled-checks), so an instance with no object storage has to be able to
+	// turn assert-objstore off in its own configuration rather than by taking a
+	// different build. The registry that reads this field must therefore let an
+	// instance override it in both directions.
 	//
 	// NOTHING VALIDATES IT, DELIBERATELY. There is no rule an always-enabled
 	// extension must satisfy that an opt-in one need not; inventing one to give

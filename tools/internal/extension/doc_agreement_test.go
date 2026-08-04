@@ -56,15 +56,25 @@ func TestDesignDocBindingTableMatchesTheCode(t *testing.T) {
 	for _, s := range spine {
 		attaches := s != extension.Verified && s != extension.Operating
 		assertAttaches(extension.Transition, s, attaches)
-		assertAttaches(extension.Assertion, s, true) // "any spine state"
+		assertAttaches(extension.Assertion, s, true) // "any state"
 		assertAttaches(extension.Invariant, s, s == extension.Operating)
 		assertAttaches(extension.Gate, s, s == extension.Scaffolded || s == extension.Configured)
+	}
+
+	// The RECURRING states, checked for the same reason the spine is. Sweeping only
+	// the spine was how the first cut shipped an Assertion row that excluded
+	// `destroyed`: assert-no-orphans had nowhere to attach and no test looked.
+	for _, s := range []extension.State{extension.Promoted, extension.Upgraded, extension.Destroyed} {
+		assertAttaches(extension.Transition, s, true)
+		assertAttaches(extension.Assertion, s, true)
+		assertAttaches(extension.Invariant, s, false)
+		assertAttaches(extension.Gate, s, false)
 	}
 
 	// The doc's exact wording, so a reworded row is noticed too.
 	for kind, want := range map[string]string{
 		"transition": "every state except",
-		"assertion":  "any spine state",
+		"assertion":  "any state",
 		"invariant":  "`operating`",
 		"gate":       "`scaffolded`, `configured`",
 	} {

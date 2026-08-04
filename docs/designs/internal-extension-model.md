@@ -126,7 +126,7 @@ code rather than invented ahead of it.
 | kind | means | may attach to |
 |---|---|---|
 | `transition` | **acts** to move the platform into the state | every state except `verified` and `operating` |
-| `assertion` | contributes **evidence** the state holds | any spine state |
+| `assertion` | contributes **evidence** the state holds | any state |
 | `invariant` | must hold **continuously** in the state | `operating` |
 | `gate` | runs **before** the state is attempted, over files alone | `scaffolded`, `configured` |
 
@@ -136,12 +136,27 @@ Two of these rows are load-bearing findings rather than taxonomy:
 platform *to*. `verified` is the conclusion of assertions; `operating` is a condition that holds.
 Making that a type error is what stops "run the asserts" from being modelled as a step.
 
-**`assertion` may target any spine state, not just `verified`.** This is the catalog's most valuable
-single split. `ci_health.go` (1,097 lines) fuses the *action* (converge) with the *predicate*
-(health). Under this model they separate: converge stays a `transition:converged`, health becomes an
-`assertion:converged`. Restricting assertions to `verified` would leave that split nowhere to land —
-and the same applies to `config-readiness`, which the catalog identified as "the `configured`
-predicate, mis-filed as a command".
+**`assertion` may target any state, not just `verified`.** Two things follow from that, and the
+first is load-bearing.
+
+*It reaches the recurring states, because that is where being wrong costs money.* `assert-no-orphans`
+(`ci_teardown.go`) is the assertion that `destroyed` actually holds — a missed Volume or
+NodeBalancer bills until somebody notices, which is why PR #391 exists. An earlier cut of this table
+read "any spine state" and left the repo's highest-stakes assertion inexpressible in a model derived
+from that repo. Asserting `upgraded` (template drift) and `promoted` follows the same way.
+
+*It reaches the non-`verified` spine states, and the repo already demonstrates why.* `internal/health`
+is **1,164 logic lines** of pure classification — `argo.go`, `certs.go`, `matchers.go` — which
+`ci_health.go`'s own header calls "the tested `internal/health` predicate", describing itself as "the
+kubectl orchestration that feeds them". That separation is already built and already load-bearing;
+under this model the library half simply *is* an `assertion:converged` and the command half a
+`transition:converged`. `config-readiness` is the same shape for `configured`, which the catalog
+identified as "the `configured` predicate, mis-filed as a command". A rule admitting only `verified`
+would have nowhere to put either.
+
+(An earlier draft of this section claimed `ci_health.go` *fused* action and predicate and called that
+the catalog's most valuable split. It does not — the split happened before this design existed. The
+rule is unchanged; the evidence for it is stronger as a precedent than it was as a proposal.)
 
 An extension may carry **several bindings**, which is how the catalog's strongest structural signal
 gets expressed: `harbor-provisioner` ↔ `assert-registry`, `database-provisioner` ↔
@@ -155,9 +170,16 @@ count from ~57 toward ~49.
 `read-repo` · `cloud-read` · `cluster-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
 `own-paths`
 
-The vocabulary is closed. [The catalog](internal-extensions.md) measures how it distributes across
-all 57 candidates; the property that matters here is that **no grant is held by a majority**, which
-is what a scoping model looks like when it discriminates rather than relabels.
+The vocabulary is closed. [The catalog](internal-extensions.md) records how it distributes across all
+57 candidates, and no grant is held by a majority — which is what a scoping model looks like when it
+discriminates rather than relabels.
+
+**Read that as a design intuition, not a measurement.** The grants were assigned in the same pass
+that invented the vocabulary, so the spread reports the author's judgement about package `main`, not
+an independent property of it. It is a reason to believe the axis discriminates; it is not evidence,
+and it cannot become evidence until extensions declare their own grants and the distribution is
+*observed* rather than assigned. The same caution applies to "nothing in package `main` needed a
+fifth binding kind": the catalog was built with four in mind.
 
 ### The ceiling, restated as rules
 
@@ -168,10 +190,24 @@ The ceiling is now the relationship between the two. `Validate()` enforces:
 | a `gate` binding may hold **only** `read-repo` | it runs in the fast pre-commit path; all six catalogued gates need nothing else, and one that reached a cluster would be doing so pre-commit against live infrastructure |
 | an `assertion` binding may hold only read grants | an assertion observes; it does not change what it measures |
 | a `transition:seeded` binding **must** declare `secret-custody` | that transition is *defined* by placing credential material; claiming the state without the grant hides custody from the reviewer reading the grant line |
-| `own-paths` only on a `transition` to `scaffolded` or `upgraded` | it declares files `copier update` must not re-render, which is only meaningful where files are written — and ADR 0014's corollary makes `.template-manifest` the one authority for it |
+| `own-paths` only on a `transition` to `scaffolded` or `upgraded` | it is exactly `.template-manifest`'s `owned` class — "copier must not render these bytes, something else does" — and a fence only matters when the thing it fences off runs. Copier runs at exactly two moments: `llz new` and `copier update`. Writing a file at some other state is not grounds for the grant; being outside copier's render is (see the catalog's Decision 1) |
+| every binding must declare **at least one** grant | the grant is the handle the action receives — a read-only kubeconfig, a path-fenced OpenBao token — so a binding asking for nothing is handed nothing and cannot run |
+| `secret-custody` only at `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `destroyed`; `cluster-write` only at those plus `operating` | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
 
 Plus the structural rules: kebab-case unique names, at least one binding, closed vocabularies, no
 duplicate bindings or grants.
+
+**Repeated attachments carry a name.** `operating` is the only state an invariant may attach to, so
+without one an extension could hold exactly a single invariant — and `reconcile-actions` is seven,
+whose needs genuinely differ (the token restorers place credential material; the storage-class
+demoter only writes to the cluster). Collapsing them into one binding widens its grants to the union,
+which is the over-granting that scoping grants *per binding* was introduced to prevent. The name is
+optional and only disambiguates: two unnamed attachments of the same `kind:state` are still the
+mistake they always were.
+
+**The state table's restricted-grant rows are judgement transcribed, not derived.** They record where
+the catalog places each grant today. A new row is the most likely thing here to be needed, and should
+arrive as an argued change rather than a quiet widening.
 
 **The escape hatch is re-modelling, not an exception list.** The catalog contains exactly two
 entries that break the assertion rule, and flags both itself: `assert-storage` holds `cloud-mutate`
@@ -274,12 +310,36 @@ or a render context is not defined here. There is no consumer yet, and freezing 
 the first real extension needs it is how the wrong ABI gets locked in. `converge` (the acid test) and `import-brownfield` (the biggest movable block) are the two that
 should drive its shape, which is why issue #399 sequences them early rather than last.
 
+Its *shape* is nonetheless constrained already, because **grants are enforced: the grant IS the
+handle.** A `cluster-read` binding receives a read-only kubeconfig, a `secret-custody` binding an
+OpenBao token fenced to its declared paths. That makes the ABI a delivery mechanism for scoped
+capabilities rather than one context handed to everyone — a security decision, not only an ergonomic
+one — and it is why a binding declaring no grants is now rejected: it would receive nothing and could
+do nothing.
+
 **The manifest.** The declaration is a Go value. A YAML projection is for the externalisable
-minority (21 of 57) and can be added when one of them is actually externalised; adding it now would
+minority (29 of 57) and can be added when one of them is actually externalised; adding it now would
 mean designing the schema against zero external extensions.
 
 **The registry, loader, ordering and enablement.** The next slice. The catalog sizes it: ~45–55
-internal extensions, so `llz extension list` and the loader must be built for dozens.
+internal extensions, so `llz extension list` and the loader must be built for dozens. `Always` is a
+**default**, not a constant: `llz ci assert-suite` is called from three places in
+`instance-template/`, so an instance with no object storage must be able to turn `assert-objstore`
+off in its own configuration rather than by taking a different build.
+
+**The driver, and what advances the last two spine states.** Five of the seven are entered by acting;
+`verified` and `operating` are not, and naming them is the driver's job. Two decisions already
+constrain it (both recorded in [the catalog](internal-extensions.md#decisions)):
+
+- **`llz state` recomputes with a freshness window.** Cheap predicates evaluate every time; the
+  expensive ones reuse a recorded result inside a TTL and re-run past it. So every state needs a
+  predicate with a declared cost, and `llz state` must be able to say when it last actually looked. A
+  recorded-only state reports a station the instance has drifted out of; always-recompute makes the
+  command too slow to reach for, and an unobserved state machine is a diagram.
+- **A required assertion may be waived — with a reason and an expiry, in the spec.** The core keeps
+  the required set; the driver evaluates it *minus live waivers*. An extension never declares its own
+  state reached. The waiver's job is to make a skipped assertion visible and time-boxed rather than
+  absorbed, which is what stops `verified` from meaning something different on every instance.
 
 ## Ordering
 

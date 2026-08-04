@@ -33,17 +33,45 @@ func validName(s string) bool {
 // is reached by acting: `verified` is the conclusion of assertions, and
 // `operating` is a condition that holds rather than a place you move to.
 //
-// Assertion may target any spine state, not just verified. That is a finding, not
-// a generalisation for its own sake: the catalog identified config-readiness as
-// "the configured predicate" and — the single most valuable split it found —
-// ci_health.go as an action (converge) fused with a predicate (health). Under
-// this model those separate, and health becomes a `converged` assertion. If
-// assertions could only target `verified`, that split would have nowhere to land.
+// Assertion targets EVERY state, including the three recurring ones. Two reasons,
+// both concrete:
+//
+//   - A state that can be entered can be wrong about having been entered, and the
+//     recurring states are where that costs money. `assert-no-orphans`
+//     (ci_teardown.go) is the assertion that `destroyed` actually holds; leaving
+//     it inexpressible would have been the sharpest possible case of the model
+//     failing the code it was derived from. Asserting `upgraded` (template drift)
+//     and `promoted` follows the same way.
+//   - It need not target `verified` alone. internal/health is the precedent: 1,164
+//     logic lines of pure classification (argo.go, certs.go, matchers.go) that
+//     ci_health.go's own header calls "the tested internal/health predicate", with
+//     that command reduced to the kubectl orchestration feeding it. An
+//     already-separated predicate for `converged` is exactly an assertion at a
+//     non-verified state, and config-readiness is the same shape for `configured`.
+//     A rule admitting only `verified` would have no room for either.
 var bindableStates = map[BindingKind][]State{
 	Transition: {Scaffolded, Configured, Provisioned, Seeded, Converged, Promoted, Upgraded, Destroyed},
-	Assertion:  {Scaffolded, Configured, Provisioned, Seeded, Converged, Verified, Operating},
+	Assertion:  {Scaffolded, Configured, Provisioned, Seeded, Converged, Verified, Operating, Promoted, Upgraded, Destroyed},
 	Invariant:  {Operating},
 	Gate:       {Scaffolded, Configured},
+}
+
+// grantStates is the second half of the ceiling: WHERE a dangerous capability may
+// be asked for. Without it the model requires secret-custody in one place and
+// forbids it in none — a transition to `scaffolded` could declare it and validate
+// clean — which leaves "declare what you touch and be judged on it" true only for
+// the two kinds that carry a blanket rule (gate, assertion), covering 13 of the
+// catalog's 57 declarations while the 44 transitions and invariants go unchecked.
+//
+// Only the mutating grants are listed; the read grants are unrestricted, because
+// reading is not what the reviewer is being protected from. The states come from
+// where the catalog actually places each grant, so this table is JUDGEMENT
+// TRANSCRIBED, not a derived fact — it is the most likely thing here to need a row
+// added, and adding one should be an argued change rather than a quiet widening.
+var grantStates = map[Grant][]State{
+	SecretCustody: {Seeded, Operating},
+	CloudMutate:   {Provisioned, Seeded, Converged, Destroyed},
+	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
 }
 
 func kinds() []BindingKind { return []BindingKind{Transition, Assertion, Invariant, Gate} }
@@ -81,22 +109,42 @@ func (e Extension) Validate() []error {
 			errs = append(errs, fmt.Errorf("%s: unknown state %q in binding %s", e.Name, b.State, b))
 			continue
 		}
+		// A name is optional, but a malformed one is not: it is what distinguishes
+		// repeated attachments in the duplicate key and in every message here.
+		if b.Name != "" && !validName(b.Name) {
+			errs = append(errs, fmt.Errorf("%s: binding name %q must be kebab-case (same rule as an extension name)", e.Name, b.Name))
+		}
 		if !containsState(allowed, b.State) {
 			errs = append(errs, fmt.Errorf("%s: a %s binding cannot attach to %q (allowed: %s)",
 				e.Name, b.Kind, b.State, stateList(allowed)))
 		}
-		// Keyed on kind:state, NOT on b.String() — that includes grants now, so two
+		// Keyed on kind:state:name, NOT on b.String() — that includes grants, so two
 		// declarations of the same attachment carrying DIFFERENT grants would have
 		// looked distinct. Same attachment twice is a mistake whatever it asks for,
 		// and the conflicting-grants case is the one most worth catching.
-		at := string(b.Kind) + ":" + string(b.State)
+		//
+		// Name is part of the key so an extension can hold several invariants (see
+		// Binding.Name); leaving it out capped every extension at one, since
+		// `operating` is the only state an invariant may attach to. Unnamed
+		// attachments still collide with each other, which is the common mistake.
+		at := string(b.Kind) + ":" + string(b.State) + ":" + b.Name
 		if seenBinding[at] {
-			errs = append(errs, fmt.Errorf("%s: duplicate binding %s", e.Name, at))
+			errs = append(errs, fmt.Errorf("%s: duplicate binding %s", e.Name, b))
 		}
 		seenBinding[at] = true
 	}
 
 	for _, b := range e.Bindings {
+		// A grant is the HANDLE, not a label on one: a cluster-read binding is
+		// handed a read-only kubeconfig, a secret-custody binding an OpenBao token
+		// fenced to its declared paths. So a binding that declares nothing is handed
+		// nothing and cannot do anything — it is an incomplete declaration rather
+		// than a modest one, and saying so here is cheaper than debugging an action
+		// that receives an empty context.
+		if len(b.Grants) == 0 {
+			errs = append(errs, fmt.Errorf("%s: %s: needs at least one grant — a grant is the handle the action "+
+				"receives, so a binding that asks for nothing is handed nothing", e.Name, b))
+		}
 		seenGrant := map[Grant]bool{}
 		for _, g := range b.Grants {
 			if !validGrant(g) {
@@ -148,6 +196,22 @@ func (e Extension) checkBindingCeiling(b Binding) []error {
 		}
 	}
 
+	// Where a mutating grant may be asked for. Applied to transition and invariant
+	// only: gate and assertion already carry a blanket rule above, and running both
+	// would report one mistake twice. These two kinds are exactly the pair that had
+	// no ceiling at all, which is what grantStates exists to close.
+	if b.Kind == Transition || b.Kind == Invariant {
+		for _, g := range b.Grants {
+			allowed, restricted := grantStates[g]
+			if !restricted || containsState(allowed, b.State) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("%s: %s: %q may only be asked for at %s — "+
+				"a binding elsewhere that needs it is either mislabelled or is widening "+
+				"what the state is understood to do", e.Name, b, g, stateList(allowed)))
+		}
+	}
+
 	// Seeding is DEFINED by placing credential material. A binding that claims the
 	// state without the grant has either mislabelled itself or is smuggling
 	// custody past the reviewer who reads the grant line.
@@ -157,8 +221,25 @@ func (e Extension) checkBindingCeiling(b Binding) []error {
 	}
 
 	// own-paths is the copier fence, and ADR 0014's corollary is that
-	// .template-manifest is the ONE ownership authority. It is only meaningful
-	// where files are written or re-rendered.
+	// .template-manifest is the ONE ownership authority — the grant is exactly the
+	// manifest's `owned` class, whose meaning is "copier must not render these
+	// bytes; something else does". That something else may be llz (`apl-values/*/**`
+	// comes from `llz render`), another tool (`.terraform.lock.hcl` from `terraform
+	// init`), or the operator (`kubernetes-custom/**`) — authorship is not what the
+	// class turns on.
+	//
+	// WHICH IS WHY THE TWO STATES ARE RIGHT, and not merely a convention: a fence
+	// is only meaningful when the thing it fences off runs, and copier runs at
+	// exactly two moments — `llz new` (scaffolded) and `copier update` (upgraded).
+	// A binding that WRITES a file at some other state does not thereby need the
+	// grant; it needs its extension to have declared the fence once, at one of the
+	// two moments copier could otherwise have clobbered it.
+	//
+	// The case that proves the distinction: promote-pipeline generates
+	// `.github/workflows/promote.yml`, and the manifest classes that file `merge`,
+	// not `owned` — it is a copier-rendered caller stub carrying `instance_repo`
+	// plus a trigger surface an operator may tune. Generating a file is not
+	// grounds for the grant; being outside copier's render is.
 	if bindingHas(b, OwnPaths) && !(b.Kind == Transition && (b.State == Scaffolded || b.State == Upgraded)) {
 		errs = append(errs, fmt.Errorf("%s: %s: %q is only meaningful on a transition to %q or %q — "+
 			"it declares files the template must not re-render (ADR 0014)",

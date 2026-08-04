@@ -136,7 +136,7 @@ Realistic settled core: **~2,900**.
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `import-brownfield` | 3,133 | 8 | ✘ | ✔ | The single biggest movable block, and the only large one that is genuinely optional. Adds a `brownfield → provisioned` edge. Externalisable — its four non-trivial core calls become `llz render` / `llz new` argv. |
+| `import-brownfield` | 3,133 | 8 | ✘ | ✔ | The single biggest movable block, and the only large one that is genuinely optional. Externalisable — its four non-trivial core calls become `llz render` / `llz new` argv. **Two bindings, not one:** import *writes an instance repo* (`transition:scaffolded[read-repo, cloud-read, own-paths]`) and *adopts cloud substrate* (`transition:provisioned[cloud-mutate]`). An earlier draft declared it as one transition to `provisioned` holding `own-paths`, which the validator rejects — own-paths is only meaningful where files are written. |
 | `cluster-bootstrap` | 964 | 2 | ✔ | ✘ | `ci_bootstrap_cluster` 771 + manifests 193. ADR 0011's payload. |
 | `cluster-access` | 952 | 4 | ✔ | ✘ | `runner_acl` 458, `runner_acl_configmap` 201, `fetchkubeconfig_state` 192, `fetchkubeconfig` 101. |
 | `cloud-firewall` | 394 | 2 | ✔ | ✘ | `ci_discover_firewall` 215, `ci_firewall` 179. |
@@ -163,7 +163,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test.** Also the catalog's most valuable split: `ci_health.go` fuses the *action* (converge) with the *predicate* (health). Under the model those separate — health becomes the core-registered `converged` assertion, converge stays the action. |
+| `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test.** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `ci_health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
 | `apl-upgrade` | 306 | 2 | ✔ | ✘ | `ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76. |
 | `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. |
 | `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. |
@@ -215,7 +215,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
 | `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 |
 | `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. |
-| `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. |
+| `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
 
 ## Gate — attach at `→ scaffolded` / `→ configured`, grants: `read-repo`
 
@@ -250,19 +250,32 @@ collapses ~8 pairs into 8 extensions with two bindings each, taking the count to
 around **45–55 internal extensions** is the real shape — which means the loader, the registry, and
 `llz extension list` need to be built for dozens, not for the handful the spike assumes.
 
-**Universality is not the discriminator — 34 of 57 are `always`.** That is the whole point of the
-reframe, and it's now measurable: if the framework only carries the 23 optional ones, it relieves
-~12,000 lines. If it carries all 57, it relieves 37,945.
+**Universality is not the discriminator — 41 of 57 are `always`, against 16 opt-in.** That is the
+whole point of the reframe: if the framework carries only the opt-in ones it relieves ~9,400 lines;
+carrying all 57 relieves 37,945.
 
-**Only 21 of 57 are externalisable** (guards, asserts, dev-only, read-only posture). The other 36
-need in-process Go — spec types, credential handles, cluster clients. **That ratio is the argument
-for the internal Go action ABI being built first**, not the remote-fetch half the spike front-loaded.
+`always` is a **default, not a constant**, and the assert lanes are what settle it. `llz ci
+assert-suite` is invoked from three places in `instance-template/` — unconditionally in
+`llz-bootstrap-openbao.yml`, as a six-lane subset in `llz-cluster-health.yml`, and on a schedule in
+`llz-scheduled-checks.yml`. So the battery is instance-facing, not template-repo-only, and an
+instance with no object storage has to disable `assert-objstore` in its own configuration rather than
+by taking a different build. The registry must let an instance override this field in both
+directions.
 
-**Grant distribution, as a sanity check on the grant model:**
-`read-repo` 20 · `cluster-read` 19 · `secret-custody` 11 · `cloud-mutate` 10 · `cluster-write` 10 ·
-`own-paths` 6 · `cloud-read` 2. No grant is held by a majority, and `secret-custody` — the one the
-current ceiling bans outright — is concentrated in exactly one transition plus two invariants. That
-is a scoping model doing real work, not a relabelling.
+**29 of 57 are externalisable** — the 12 flagged in the tables, plus the 11 assertion contributors and
+6 gates, all of which are read-only and argv-shaped. The other 28 need in-process Go: spec types,
+credential handles, cluster clients. **That ratio is the argument for the internal Go action ABI
+being built first**, not the remote-fetch half the spike front-loaded.
+
+**Grant distribution:** `cluster-read` 18 · `read-repo` 14 · `secret-custody` 11 · `cloud-mutate` 10 ·
+`cluster-write` 10 · `own-paths` 5 · `cloud-read` 2. No grant is held by a majority, and
+`secret-custody` — the one the `check|tool` ceiling banned outright — is concentrated in one
+transition plus two invariants.
+
+Read that distribution as a **design intuition, not a measurement**: the grants below were assigned
+in the same pass that invented the vocabulary, so the spread reports this document's judgement rather
+than an independent property of package `main`. It becomes evidence when extensions declare their own
+grants and the distribution is observed instead of assigned.
 
 ## Suggested first five
 
@@ -279,3 +292,67 @@ is a scoping model doing real work, not a relabelling.
 
 Cumulative: **8,511 lines out of package `main`** across five extensions, exercising every binding
 type (gate, transition, assertion, invariant), both enablement modes, and four of the seven grants.
+
+## Decisions
+
+Four questions the declaration model raised. All four are settled; two changed the code and two
+constrain the driver slice that has not been written yet.
+
+### 1. Generated files: `own-paths` is a fence against copier, not a claim on authorship
+
+The per-file question turned out to be already answered by `.template-manifest`, whose classes turn
+on **who renders the bytes at upgrade time** — not on who wrote them first:
+
+| the bytes come from | class | example |
+|---|---|---|
+| copier, token-free, template owns them outright | `managed` | the vendored `llz-*.yml` reusable bodies, `apl-values/_shared/apl-overlay/**` |
+| copier, carrying fork-local tokens or an operator-tunable trigger surface | `merge` | the workflow caller stubs — `terraform.yml`, **`promote.yml`** |
+| anything that is not copier | `owned` | `apl-values/*/**` (from `llz render`), `.terraform.lock.hcl` (from `terraform init`), `kubernetes-custom/**` (from the operator) |
+
+`own-paths` **is** the `owned` class. So the grant does not mean "this binding writes files"; it means
+"copier must not render these bytes, because something else does." Authorship is irrelevant — llz
+generates `apl-values/*/**` and it is `owned`; llz also generates `promote.yml` and it is `merge`,
+because copier renders that one too.
+
+**Which is why restricting the grant to `scaffolded` and `upgraded` is principled rather than
+conventional:** a fence only matters when the thing it fences off runs, and copier runs at exactly
+two moments — `llz new` and `copier update`. A binding that writes a file at some *other* state does
+not need the grant; it needs its extension to have declared the fence once, at one of the two moments
+copier could otherwise have clobbered it.
+
+Consequences: `promote-pipeline` does **not** want `own-paths` (its output is `merge`), and the
+validator was right to refuse it. The catalog row was wrong and is corrected. A future
+`llz-extensions.yml` generated from the per-instance *enabled set* cannot be copier-rendered at all,
+so it is `owned` and its extension declares the fence at `scaffolded`/`upgraded` — which the existing
+rule already permits.
+
+### 2. `llz state` recomputes, with a freshness window
+
+Cheap predicates are evaluated every time; expensive ones (the gating assert lanes, minutes of
+cluster round-trips) reuse a recorded result inside a TTL and re-run past it. A recorded-only state
+would let `llz state` report a station the instance has since drifted out of, and always-recompute
+would make the command too slow to reach for — which in practice means nobody runs it, and an
+unobserved state machine is a diagram.
+
+This binds the driver slice: every state needs a predicate with a declared cost and a TTL, and
+`llz state` must be able to say *when* it last actually looked.
+
+### 3. Grants are enforced — the grant IS the handle
+
+A `cluster-read` binding receives a read-only kubeconfig; a `secret-custody` binding receives an
+OpenBao token fenced to its declared paths. Grants are capability scoping, not review metadata.
+
+Two things follow. A binding declaring **no** grants is handed nothing and cannot run, so it is now
+rejected as an incomplete declaration (it previously validated). And the action ABI has to be
+designed around *delivering* capabilities rather than passing one context to everyone — which makes
+the ABI's shape a security question, not only an ergonomics one.
+
+### 4. A required assertion may be waived, with a reason and an expiry, in the spec
+
+The core keeps ownership of the required set; the waiver is a spec-level, attributable, expiring
+exception — the same shape this repo already uses for coverage and credential exemptions. What it
+must not become is a per-instance redefinition of `verified`: the waiver records that a known
+assertion is being skipped and until when, so a stale one is visible rather than absorbed.
+
+This also answers what advances `verified` and `operating` — the driver evaluates the required set
+minus live waivers. An extension never declares its own state reached.

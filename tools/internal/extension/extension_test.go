@@ -11,6 +11,10 @@ func bind(k extension.BindingKind, s extension.State, g ...extension.Grant) exte
 	return extension.Binding{Kind: k, State: s, Grants: g}
 }
 
+func named(k extension.BindingKind, name string, s extension.State, g ...extension.Grant) extension.Binding {
+	return extension.Binding{Kind: k, Name: name, State: s, Grants: g}
+}
+
 // ok is a minimal valid extension the negative cases mutate one field of, so each
 // test names exactly one reason for failure.
 func ok() extension.Extension {
@@ -191,6 +195,116 @@ func TestGatePlusSeededTransitionIsSatisfiable(t *testing.T) {
 	}
 }
 
+// A state that can be entered can be wrong about having been entered, and
+// assert-no-orphans (ci_teardown.go) is the case that costs money when it is:
+// leaked Volumes and NodeBalancers bill until someone notices. The first cut of
+// bindableStates listed only the seven spine states for Assertion, which made the
+// repo's highest-stakes assertion inexpressible in the model derived from it.
+func TestAssertionMayTargetTheRecurringStates(t *testing.T) {
+	for _, s := range []extension.State{extension.Destroyed, extension.Upgraded, extension.Promoted} {
+		e := extension.Extension{Name: "teardown", Short: "destroy the substrate and prove nothing leaked",
+			Bindings: []extension.Binding{bind(extension.Assertion, s, extension.CloudRead)}}
+		if errs := e.Validate(); len(errs) != 0 {
+			t.Errorf("an assertion that %q holds must be expressible: %s", s, errText(errs))
+		}
+	}
+}
+
+// `operating` is the only state an invariant may attach to, so without a name on
+// the binding an extension could hold exactly one. reconcile-actions is seven,
+// and their grants differ — the token restorers place credential material, the
+// storage-class demoter only writes to the cluster. One binding would have to ask
+// for the union, which is the over-granting that per-binding grants exist to stop.
+func TestAnExtensionMayHoldSeveralNamedInvariants(t *testing.T) {
+	e := extension.Extension{Name: "reconcile-actions", Short: "restore operating invariants", Always: true,
+		Bindings: []extension.Binding{
+			named(extension.Invariant, "openbao-store", extension.Operating, extension.ClusterWrite, extension.SecretCustody),
+			named(extension.Invariant, "sc-demote", extension.Operating, extension.ClusterWrite),
+			named(extension.Invariant, "argo-nudge", extension.Operating, extension.ClusterWrite),
+		}}
+	if errs := e.Validate(); len(errs) != 0 {
+		t.Fatalf("several named invariants must validate, got:\n%s", errText(errs))
+	}
+	// Unnamed ones still collide — that is the common mistake and stays caught.
+	dup := extension.Extension{Name: "reconcile-actions", Short: "s",
+		Bindings: []extension.Binding{
+			bind(extension.Invariant, extension.Operating, extension.ClusterWrite),
+			bind(extension.Invariant, extension.Operating, extension.SecretCustody),
+		}}
+	if errs := dup.Validate(); len(errs) == 0 {
+		t.Error("two unnamed invariants on the same state must be rejected as duplicates")
+	}
+	bad := extension.Extension{Name: "reconcile-actions", Short: "s",
+		Bindings: []extension.Binding{named(extension.Invariant, "Not Kebab", extension.Operating, extension.ClusterWrite)}}
+	if errs := bad.Validate(); len(errs) == 0 {
+		t.Error("a malformed binding name must be rejected — it is what distinguishes repeated attachments")
+	}
+}
+
+// The ceiling's second half. Before grantStates, secret-custody was REQUIRED at
+// `seeded` and forbidden nowhere: a transition to `scaffolded` could declare it,
+// plus cloud-mutate and cluster-write, and validate clean — leaving transition and
+// invariant (44 of the catalog's 57 declarations) with no ceiling at all.
+func TestMutatingGrantsAreScopedToStates(t *testing.T) {
+	mk := func(s extension.State, g extension.Grant) extension.Extension {
+		return extension.Extension{Name: "scaffold-instance", Short: "render a new instance repo",
+			Bindings: []extension.Binding{bind(extension.Transition, s, g)}}
+	}
+	for _, tc := range []struct {
+		state extension.State
+		grant extension.Grant
+		ok    bool
+	}{
+		{extension.Seeded, extension.SecretCustody, true},
+		{extension.Operating, extension.SecretCustody, true}, // via invariant below
+		{extension.Scaffolded, extension.SecretCustody, false},
+		{extension.Configured, extension.SecretCustody, false},
+		{extension.Provisioned, extension.CloudMutate, true},
+		{extension.Destroyed, extension.CloudMutate, true},
+		{extension.Scaffolded, extension.CloudMutate, false},
+		{extension.Converged, extension.ClusterWrite, true},
+		{extension.Configured, extension.ClusterWrite, false},
+		{extension.Scaffolded, extension.ReadRepo, true}, // read grants stay unrestricted
+	} {
+		e := mk(tc.state, tc.grant)
+		if tc.state == extension.Operating {
+			e.Bindings = []extension.Binding{bind(extension.Invariant, tc.state, tc.grant)}
+		}
+		errs := e.Validate()
+		if got := len(errs) == 0; got != tc.ok {
+			t.Errorf("%s at %q: valid=%v, want %v (%s)", tc.grant, tc.state, got, tc.ok, errText(errs))
+		}
+	}
+}
+
+// A grant is the handle the action receives, so a binding declaring none is
+// handed none. It is an incomplete declaration, not a modest one.
+func TestABindingNeedsAtLeastOneGrant(t *testing.T) {
+	e := ok()
+	e.Bindings = []extension.Binding{{Kind: extension.Gate, State: extension.Configured}}
+	if errs := e.Validate(); len(errs) == 0 {
+		t.Error("a binding with no grants must be rejected — it would receive an empty context")
+	}
+}
+
+// promote-pipeline is the case that separates "generates a file" from "needs the
+// fence". It writes .github/workflows/promote.yml, which .template-manifest classes
+// `merge` — a copier-rendered caller stub carrying instance_repo and a trigger
+// surface. own-paths is the `owned` class, i.e. bytes copier must not render at
+// all, so this extension does not want the grant and its binding validates without.
+func TestGeneratingAFileIsNotGroundsForOwnPaths(t *testing.T) {
+	e := extension.Extension{Name: "promote-pipeline", Short: "render the promotion workflow", Always: true,
+		Bindings: []extension.Binding{bind(extension.Transition, extension.Promoted, extension.ReadRepo)}}
+	if errs := e.Validate(); len(errs) != 0 {
+		t.Fatalf("promote-pipeline must validate without own-paths, got:\n%s", errText(errs))
+	}
+	withGrant := e
+	withGrant.Bindings = []extension.Binding{bind(extension.Transition, extension.Promoted, extension.ReadRepo, extension.OwnPaths)}
+	if errs := withGrant.Validate(); len(errs) == 0 {
+		t.Error("own-paths at promoted must still be rejected — copier does not run there, so there is nothing to fence")
+	}
+}
+
 func TestOwnPathsOnlyWhereFilesAreWritten(t *testing.T) {
 	mk := func(k extension.BindingKind, s extension.State) extension.Extension {
 		return extension.Extension{Name: "template-sustain", Short: "upgrade policy and drift",
@@ -223,9 +337,17 @@ func catalogSample() []extension.Extension {
 			bind(extension.Assertion, extension.Converged, extension.ClusterRead),
 		},
 	}, {
+		// The catalog declares this as ONE transition to `provisioned` holding
+		// own-paths, and the validator rejects that — own-paths is only meaningful
+		// where files are written. The resolution is not to drop the grant (an
+		// earlier draft of this sample did, which made a test named for checking the
+		// catalog quietly disagree with it) but to see that import does two things:
+		// it writes an instance repo, and it adopts cloud substrate. That is the
+		// pairing pattern, and each half is scoped on its own.
 		Name: "import-brownfield", Short: "adopt an existing cluster",
 		Bindings: []extension.Binding{
-			bind(extension.Transition, extension.Provisioned, extension.ReadRepo, extension.CloudRead, extension.CloudMutate)},
+			bind(extension.Transition, extension.Scaffolded, extension.ReadRepo, extension.CloudRead, extension.OwnPaths),
+			bind(extension.Transition, extension.Provisioned, extension.CloudMutate)},
 	}, {
 		Name: "assert-observability", Short: "scrape, alerting and log-ingestion assertions", Always: true,
 		Bindings: []extension.Binding{bind(extension.Assertion, extension.Verified, extension.ClusterRead)},
