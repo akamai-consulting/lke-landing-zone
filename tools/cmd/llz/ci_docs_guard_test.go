@@ -378,3 +378,62 @@ func repoRootForDocsGuard(t *testing.T) string {
 	t.Skip("repo root not found from the test working directory")
 	return ""
 }
+
+// `make instance-test` leaves a fully rendered instance at .instance-test/, and
+// `tofu init` leaves vendored provider READMEs under .terraform/. Both are full of
+// Markdown whose links resolve against a DIFFERENT repo — scanning them made the
+// guard fail on a clean tree, purely because another target had run first.
+func TestMarkdownFiles_SkipsBuildArtifacts(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "docs/real.md", "# real")
+	writeMD(t, root, ".instance-test/instance/README.md", "[x](nope.md)")
+	writeMD(t, root, "a/.terraform/providers/p/README.md", "[y](nope.md)")
+	writeMD(t, root, "node_modules/pkg/README.md", "[z](nope.md)")
+	writeMD(t, root, "rendered/out/README.md", "[w](nope.md)")
+
+	files, err := markdownFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != filepath.Join("docs", "real.md") {
+		t.Errorf("expected only docs/real.md, got %v", files)
+	}
+}
+
+// The Makefile invokes the guard with `--root .` or `--root ..`, whose BASENAME
+// starts with a dot. An earlier cut of the dot-directory skip matched the root
+// itself and skipped the entire walk — reporting a clean "0 Markdown file(s) OK"
+// while checking nothing at all. A guard that passes vacuously is worse than none.
+func TestMarkdownFiles_RootPassedAsDotIsNotSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "docs/real.md", "# real")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []string{".", "./"} {
+		files, err := markdownFiles(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 {
+			t.Errorf("--root %q walked %d files, want 1 — the root must never be skipped", r, len(files))
+		}
+	}
+	// ..: the parent of a temp dir may hold other tests' dirs, so assert only
+	// that the walk is not short-circuited to nothing.
+	if err := os.Chdir(filepath.Join(root, "docs")); err != nil {
+		t.Fatal(err)
+	}
+	files, err := markdownFiles("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Error(`--root ".." walked 0 files — the root was skipped`)
+	}
+}

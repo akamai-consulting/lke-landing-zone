@@ -119,8 +119,23 @@ func markdownFiles(root string) ([]string, error) {
 			return nil
 		}
 		if d.IsDir() {
+			// NEVER skip the root itself — it is routinely passed as "." or "..",
+			// whose basename starts with a dot and would match the rule below,
+			// skipping the entire walk and reporting a clean "0 files OK".
+			if p == root {
+				return nil
+			}
+			// Skip build artifacts and vendored trees. Any DOT-directory is
+			// out: .git, .terraform (whose provider tarballs carry READMEs
+			// full of links relative to THEIR repo), and .instance-test —
+			// the rendered instance `make instance-test` leaves behind, which
+			// would otherwise be scanned as if it were source. No documentation
+			// this guard should judge lives in a dot-directory.
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
 			switch d.Name() {
-			case ".git", "node_modules", "vendor":
+			case "node_modules", "vendor", "rendered", "bin":
 				return filepath.SkipDir
 			}
 			return nil
