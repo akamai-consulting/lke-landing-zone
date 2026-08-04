@@ -235,6 +235,7 @@ llz new my-instance --push --yes                       # scaffold + create/push 
                                                        #   (--org only if you maintain your own template fork)
 cd my-instance
 llz env add lab --region us-sea --obj-cluster us-sea-1  # author the spec for a deployment + render; fill any overlay placeholders it lists
+git push                                               # `env add` commits; the build renders from the PUSHED tree
 llz doctor --env lab                                   # "am I ready to build?" — fix what it lists, re-run until green
 llz up lab --yes                                       # credentials → readiness gate → build; llz status lab to verify
 ```

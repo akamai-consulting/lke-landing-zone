@@ -265,6 +265,30 @@ the `owned` (never-touched) escape hatches:
 - `.githooks/pre-commit.local` — extra pre-commit checks (an executable script,
   run by `llz precommit` after the built-in `llz lint`).
 
+### What `llz` checks before it lets you spend money
+
+Each command validates what it can before doing anything expensive, and the
+refusal carries the fix. The full set, so you know what is and is not covered:
+
+| Command | Checks | Blocks? |
+|---|---|---|
+| `llz new <dir>` | the directory is empty (copier renders *on top* of a populated one) | yes |
+| `llz env add` | the CWD is an instance root; `--region` and `--obj-cluster` exist in your Linode account and belong together; runner CIDRs parse, match their flag's address family, and are not `0.0.0.0/0` | yes |
+| `llz env add` | lists the overlay placeholders left to fill, and names the one command that fixes the rendered ones (`llz spec set instance.repo=…`) | no |
+| `llz doctor --env` | spec valid, committed `apl-values` in sync with it, no unfilled placeholders, every required repo secret/variable set; reports an open-world control-plane ACL wherever it came from | yes (advisory for the ACL) |
+| `llz build` / `llz up` | `landingzone.yaml` and `environments/<env>.yaml` are on the branch the workflow checks out, and the deployment exists | yes (`--skip-preflight` to override) |
+| `llz build` / `llz up` | your working copy differs from the pushed spec, or the deployment is only on the remote | no — the build uses the pushed tree either way |
+| `llz status` | a kubeconfig exists and the cluster answers, before running any check against it | yes |
+
+Two properties are worth relying on:
+
+- **A check that cannot get an answer does not block you.** Without `gh`, a
+  Linode token, a reachable API or a spec, each check says it is skipping and the
+  command proceeds.
+- **`workflow_dispatch` runs from the repo's default branch.** Pushing a feature
+  branch does not put a deployment where the build reads it; the refusal says so
+  and names your branch.
+
 ### Adding a deployment (environment) inside an instance
 
 Use `llz env add` instead of hand-copying overlays. It declares the env in the
