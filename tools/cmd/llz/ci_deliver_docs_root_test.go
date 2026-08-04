@@ -281,7 +281,6 @@ func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(wd) })
 
 	for _, tc := range []struct{ name, root, docs string }{
 		{"both relative", ".", "docs"},
@@ -319,9 +318,15 @@ func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(tmpl, "platform-apl"), 0o755); err != nil {
 				t.Fatal(err)
 			}
+			// Chdir is process-global, and `base` is removed when THIS subtest
+			// ends — so the restore must be scoped here, not to the parent.
+			// Leaving it to the parent left the process sitting in a deleted
+			// directory between subtests, which broke an unrelated timing-
+			// sensitive test elsewhere in the package.
 			if err := os.Chdir(base); err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() { _ = os.Chdir(wd) })
 			root, docs := tc.root, tc.docs
 			if root == "" {
 				root = base
@@ -345,6 +350,54 @@ func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
 			}
 			if strings.Contains(string(b), "/tree/main/platform-apl") {
 				t.Errorf("root pass walked docs/ (spelling: root=%q docs=%q):\n%s", tc.root, tc.docs, b)
+			}
+		})
+	}
+}
+
+// Both walks in deliver-docs used to return nil on a WalkDir error, so an
+// unreadable subtree was skipped and the run still reported success — a stale
+// link surviving a delivery that claimed to have fixed it. Same false-green class
+// as docs-guard's. Both must now fail closed.
+func TestDeliverDocs_WalkErrorFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — an unreadable dir is still traversable")
+	}
+	for _, tc := range []struct{ name, blockedRel string }{
+		{"the instance-root pass", "sub"}, // repointInstanceRootLinks
+		// Must live under a KEPT dir: deliver-docs prunes docs/ first, and a
+		// blocked dir outside the keep-set fails at the PRUNE instead — which
+		// made the first cut of this subtest pass without ever reaching the walk.
+		{"the docs-scoped pass", "docs/runbooks/nested"}, // repointReferencedLinks
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, tmpl := t.TempDir(), t.TempDir()
+			mk := func(base, rel, body string) {
+				p := filepath.Join(base, rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mk(root, "docs/quickstart.md", "# qs")
+			mk(tmpl, "instance-template/AGENTS.md", "src")
+			mk(root, "AGENTS.md", "[g](docs/gone.md)\n")
+
+			blocked := filepath.Join(root, tc.blockedRel)
+			if err := os.MkdirAll(blocked, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mk(root, filepath.Join(tc.blockedRel, "x.md"), "# x")
+			if err := os.Chmod(blocked, 0o000); err != nil {
+				t.Skipf("cannot chmod: %v", err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+			err := runDeliverDocs(filepath.Join(root, "docs"), "acme", "v1", root, tmpl)
+			if err == nil {
+				t.Error("a walk error was swallowed — deliver-docs must fail closed, not report a delivery it did not complete")
 			}
 		})
 	}

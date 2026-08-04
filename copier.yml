@@ -126,7 +126,12 @@ _tasks:
   # unknown flag and silently leave the full docs/ tree with no README pointer, so
   # the middle rung retries the pre-flag form and only then gives up. Cosmetic
   # degradation (root links stay relative) instead of a broken delivery.
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && { llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> 2>/dev/null || { echo \"(llz predates --template-root — root-level doc links left relative; 'llz self-update' then re-run 'llz upgrade' to repoint them)\" && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @>; }; } || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
+  #
+  # The middle rung cannot tell an OLD BINARY from a FAILED PASS — both are just a
+  # non-zero exit — and the root pass now fails closed on a walk error, so that
+  # second cause is real. The message therefore names both and gives the command to
+  # find out, rather than asserting a cause it cannot know.
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && { llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> 2>/dev/null || { echo \"(root-link repoint skipped — either this llz predates --template-root, or the pass failed; docs are delivered either way. Diagnose with: llz ci deliver-docs --docs docs --root . --template-root <template-checkout>)\" && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @>; }; } || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
   # The vendored workflow bodies (llz-*.yml) ship VERBATIM — comments included.
   # There is deliberately NO comment-strip task here: .github/workflows/** is
   # `merge`-classified (.template-manifest), and copier's 3-way merge on

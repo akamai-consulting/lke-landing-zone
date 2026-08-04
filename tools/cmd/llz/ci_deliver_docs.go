@@ -155,8 +155,11 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 	docsInfo, docsErr := os.Stat(docsDir)
 	total := 0
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		// FAIL CLOSED. Returning nil here skips part of the instance tree and
+		// still reports success, so a stale link survives a delivery that
+		// claimed to have fixed it — the same false-green class as docs-guard's.
 		if err != nil {
-			return nil
+			return fmt.Errorf("walk %s: %w", p, err)
 		}
 		if d.IsDir() {
 			// docs/ is handled by repointReferencedLinks.
@@ -321,17 +324,29 @@ func repointReferencedLinks(dir, org string) error {
 	if org == "" {
 		org = "akamai-consulting"
 	}
+	// PRE-EXISTING swallow, fixed alongside the one above: a walk error here
+	// under-fills `present`, and an absent-looking doc gets its links rewritten
+	// to a template URL even though it IS delivered locally. Wrong output, no
+	// error — so it fails closed now too.
 	present := map[string]bool{}
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+	if err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", p, err)
+		}
+		if !d.IsDir() {
 			if rel, e := filepath.Rel(dir, p); e == nil {
 				present[rel] = true
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", p, err)
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".md") {
 			return nil
 		}
 		data, err := os.ReadFile(p)
