@@ -26,6 +26,8 @@ gh auth status --hostname github.com || gh auth login --hostname github.com
 curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
 
 # 2. Scaffold your instance repo + create/push it on GitHub (§3)
+#    Answer instance_repo <owner>/<name> — the OWNER (org or your user) must
+#    already exist; llz creates the repo, not the org.
 llz new my-instance --push --yes
 cd my-instance
 
@@ -89,7 +91,9 @@ the short version:
 - **Linode account with LKE-Enterprise** — `+lke` versions, not standard LKE
 - **Akamai App Platform (apl-core) entitlement**
 - **A GitHub org you can create a repo in** — `llz new --push` creates the
-  instance repo itself. **Forking this template is not required** (see §3)
+  instance *repo* itself, but **not the org**: [create it](https://github.com/organizations/new)
+  first, or use your own username as the `<owner>`. **Forking this template is
+  not required** (see §3)
 
 > **Start the Linode account first — it has the longest lead time.**
 
@@ -286,7 +290,7 @@ unless the note says otherwise:
 | Prompt | What to answer |
 |---|---|
 | `upstream_org` | **Keep `akamai-consulting`** to track upstream. Set it only if you publish your own template fork. |
-| `instance_repo` | **Your** instance repo as `<owner>/<name>` — this is what `--push` creates. |
+| `instance_repo` | **Your** instance repo as `<owner>/<name>` — this is what `--push` creates. The **`<owner>` must already exist** (see the note below). |
 | `openbao_team` | Default `platform`. Names your operators' scoped, non-root OpenBao subtree (`secret/platform`) + the apl-core team. Lowercase kebab; add more later in `landingzone.yaml`. See [spec.teams](landing-zone-spec.md#field-reference). |
 
 (`llz_version` is a fourth answer, but `llz new` sets it from its own version — you
@@ -294,6 +298,16 @@ are not prompted.) With `--push --yes` it also runs `gh repo create <instance_re
 --private --source . --push`, so the remote repo exists and `llz tokens`/`doctor`
 work against it immediately. It does **not** ask for credentials — that's
 `llz tokens` (§4).
+
+> **The `<owner>` half of `instance_repo` must already exist.** `llz new --push`
+> creates a **repository**, never the GitHub org that holds it — so either
+> [create the org](https://github.com/organizations/new) *before* you scaffold, or
+> answer `instance_repo` with your own username (`<your-login>/<name>`). `llz new`
+> checks the owner before it tries and tells you which fix to take; without that
+> check GitHub returns a bare `does not have the correct permissions to execute
+> CreateRepository`, which looks like a token-scope problem and isn't. Already
+> created the repo by hand? Re-running `--push --yes` adopts it: llz wires it as
+> `origin` and pushes instead of trying to create it again.
 
 > **The instance pins to the `llz` version you installed.** `llz new` records this
 > CLI's own version as the instance's `llz_version` and renders the scaffold's
