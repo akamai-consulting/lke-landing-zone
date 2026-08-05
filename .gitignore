@@ -54,3 +54,5 @@ __pycache__/
 
 # Copier-rendered instance for the local smoke test (make instance-test)
 /.instance-test/
+# Scaffold+upgrade pair for the day-2 gate (make upgrade-test)
+/.upgrade-test/

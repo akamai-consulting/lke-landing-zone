@@ -200,6 +200,10 @@ func ciCmd() *cobra.Command {
 	// found 30 doc defects, most of them detectable from the repo itself.
 	c.AddCommand(ciDocsGuardCmd())
 	c.AddCommand(ciGenTOCCmd())
+	// Day-2 gate: scaffold at the previous release and `copier update` to HEAD.
+	// instance-test.sh covers `copier copy` and stops there, so the upgrade path —
+	// same answers, same _tasks, plus a 3-way merge — was run by nobody.
+	c.AddCommand(ciUpgradeTestCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

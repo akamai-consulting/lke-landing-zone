@@ -69,8 +69,28 @@ func copierCopyArgv(org, ref, dir string) []string {
 		"gh:" + org + "/" + templateName, dir}
 }
 
+// copierUpdateArgv is the update invocation, and --defaults is load-bearing.
+//
+// Without it `copier update` RE-ASKS every question — upstream_org,
+// instance_repo, openbao_team — using the stored answers as prompt defaults. Two
+// costs, and the second is the one that bit:
+//
+//   - With no terminal that is not a prompt, it is an unhandled OSError out of
+//     prompt_toolkit. `llz upgrade` inherits the operator's stdin, so it worked
+//     by hand and died in CI, in a wrapper script, and over `ssh host 'llz
+//     upgrade'` — with a Python traceback, not a message.
+//   - Interactively it is three unexplained prompts mid-upgrade, on answers that
+//     are rendered INTO managed files. instance_repo becomes the ArgoCD repoURL
+//     and every `gh` target, so one stray keystroke re-renders the instance
+//     against a repo that does not exist.
+//
+// --defaults keeps the stored answers (verified: a non-default instance_repo and
+// openbao_team both survive v0.0.39 → v0.0.40 untouched). It does NOT make the
+// answers safe on its own — copier still falls back to the template DEFAULT for
+// an answer it cannot keep, which is why runUpgrade verifies them afterwards
+// rather than trusting this flag. `llz ci upgrade-test` runs this exact argv.
 func copierUpdateArgv(ref string) []string {
-	a := []string{"copier", "update", "--trust"}
+	a := []string{"copier", "update", "--trust", "--defaults"}
 	if ref != "" {
 		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
 	}
@@ -315,6 +335,25 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 // notes, and the ordered command sequence with cyan commands + dim, column-
 // aligned `#` comments. Everything degrades to plain text off a TTY (color.go),
 // and the lines stay copy-paste-safe (commands run; notes are shell comments).
+//
+// THIS LIST IS THE QUICKSTART, and has to be kept as one. It is the first thing
+// an adopter reads after `llz new`, so it out-ranks docs/quickstart.md in
+// practice — nobody opens a doc while a terminal is already telling them what to
+// type. It had drifted from the quickstart in exactly the two ways that matter:
+//
+//   - no `git push`. `llz env add` commits and does not push, the build renders
+//     from the pushed tree, and "committed, not pushed" was therefore the state
+//     this list walked every adopter into. #405 named that one of the two
+//     default-path slips a literal top-to-bottom read hits, and fixed it in
+//     docs/quickstart.md; the copy of the same sequence living in Go string
+//     literals was outside that audit's corpus (Markdown) and kept its version.
+//   - `llz validate --env`, which prints a deprecation notice and points at
+//     `llz doctor --env`. `llz ci docs-guard` catches a deprecated flag in a
+//     doc — there is a test asserting exactly this string — but the guard reads
+//     Markdown, and this is not.
+//
+// Keeping the two in sync is a review obligation, not a mechanical one: there is
+// no gate that reads both.
 func printNextSteps(dir string, pushed bool) {
 	cdNote := "commit + push to your GitHub repo (or re-run `llz new --push --yes`)"
 	if pushed {
@@ -342,10 +381,11 @@ func printNextSteps(dir string, pushed bool) {
 	cmd("cd "+dir, cdNote)
 	cmd("llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>", "authors the spec + renders")
 	note("tune it: llz env set <env> cluster.nodePool.count=8  (or `llz env edit <env>`); llz env show <env>")
-	cmd("llz validate --env <env>", "catch unfilled placeholders before a build")
-	cmd("llz tokens --env <env> --yes", "create state bucket+key, gather PATs, push")
-	cmd("llz doctor --env <env>", "confirm every required value is set")
-	cmd("llz build <env> --yes", "kick off the apply")
+	cmd("git push", "`env add` COMMITS but does not push — the build reads your repo, not this checkout")
+	cmd("llz up <env> --yes", "tokens → doctor → build, stopping at the first failure")
+	note("`llz up` is interactive: it opens pre-filled links and reads a Linode PAT + GitHub PATs.")
+	note("run the gates individually to inspect each one — llz tokens --env <env> --yes /")
+	note("llz doctor --env <env> (the single readiness gate) / llz build <env> --yes")
 	note("local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml")
 }
 
@@ -632,6 +672,9 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 
 func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
+	// Snapshot before copier runs — it rewrites this file in place, so afterwards
+	// there is nothing left to compare against (see Lever 0).
+	answersBefore := currentAnswerMap()
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
@@ -683,6 +726,29 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// the stamp/rollback dance this used to need around the conflict gate below.
 	newRef := currentTemplateRef()
 
+	// ── Lever 0: the answers must be the ones we came in with ────────────────
+	// copier does not error on an answer it cannot keep — it substitutes the
+	// template DEFAULT and exits 0. The reachable case is an answer the CURRENT
+	// template's validator rejects (instance_repo grew one in #405), which is
+	// exactly the malformed value an instance scaffolded before that validator can
+	// be holding. instance_repo is the ArgoCD repoURL and every `gh` target, so the
+	// silent outcome is an instance re-rendered against `your-org/your-instance-repo`
+	// — a repository that does not exist — with a clean exit and a normal-looking
+	// diffstat.
+	//
+	// Checked rather than trusted: --defaults on the update argv preserves answers
+	// in the normal case, but it does not close this one, and a flag that is right
+	// 99% of the time is not a substitute for verifying the 1%.
+	if regressions := answerRegressions(answersBefore, currentAnswerMap()); len(regressions) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%s copier update rewrote %d answer(s) it does not own:\n", red("✗"), len(regressions))
+		for _, r := range regressions {
+			fmt.Fprintf(os.Stderr, "    %s\n", r)
+		}
+		return fmt.Errorf("the tree is at %s but its identity changed — restore the answer(s) above in "+
+			".copier-answers.yml and re-run (a value the template's validator now rejects is replaced by "+
+			"the DEFAULT, silently; fix the value, don't accept the default)", newRef)
+	}
+
 	// ── Lever 1: make the upgrade reviewable + safe ──────────────────────────
 	// A botched copier 3-way merge can leave <<<<<<< markers that otherwise ship
 	// invalid YAML far downstream (the gsap-apl incident). Fail loudly here BEFORE
@@ -713,6 +779,15 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 			return err
 		}
 	}
+
+	// ── Lever 3: name what the new pin invalidates that this command cannot fix ──
+	// Same class as lever 2, different owner. TF_IMAGE/KUBE_IMAGE are derived FROM
+	// the pin copier just rewrote, so they go stale on every upgrade with no
+	// operator judgment involved — but the value CI reads is a GitHub repo
+	// VARIABLE, and `llz upgrade` is a local command that pushes nothing.
+	// Re-rendering cannot reach it. Left unsaid, the skew surfaces as a failed
+	// `llz ci assert-image-fresh` on the first pipeline run after every upgrade.
+	reportCIImageSkew(newRef)
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
 	// single reviewable summary rather than a scattered surprise at commit time.
@@ -814,6 +889,42 @@ func printUpgradeSummary(oldRef, newRef string) {
 	} else {
 		fmt.Println(dim("  no file changes — already up to date."))
 	}
+}
+
+// reportCIImageSkew warns when the tree's ci image variables still name the
+// commit the PREVIOUS pin resolved to, and prints both routes back.
+//
+// Deliberately a warning, not a fix and not an error. The authoritative copy of
+// these two values is a GitHub repo variable; `llz upgrade` neither reads nor
+// writes repo config, and quietly growing a network mutation here would make an
+// otherwise-local command need credentials. So it says the thing at the moment
+// the skew is created — the #405 lens, one lever up: fail (or here, warn) at the
+// mistake rather than 20 minutes into the run that inherits it.
+//
+// The `gh variable set` pair is worded to match `llz ci assert-image-fresh`'s
+// remediation verbatim, because an operator who ignores this will meet that one
+// next and the two must read as the same instruction.
+var reportCIImageSkew = func(ref string) {
+	local := readEnvFile(".llz/vars.env")
+	skew := staleCIImageVars(ref, func(k string) string { return local[k] })
+	if len(skew) == 0 {
+		return
+	}
+	repo := "<owner>/<instance>"
+	if a, _ := readAnswers("."); a != nil && strings.Contains(a.InstanceRepo, "/") {
+		repo = a.InstanceRepo
+	}
+	fmt.Fprintf(os.Stderr, "\n%s the new pin moved the ci images this instance should run — %d variable(s) still name the old commit:\n",
+		yellow("!"), len(skew))
+	for _, s := range skew {
+		fmt.Fprintf(os.Stderr, "    %s\n      have %s\n      want %s\n", bold(s.Name), dim(s.Have), cyan(s.Want))
+	}
+	fmt.Fprintf(os.Stderr, "  CI reads these as %s repo variables, which this command does not push. Re-pin with either:\n", repo)
+	fmt.Fprintf(os.Stderr, "    %s\n", cyan("llz tokens --env <env> --yes"))
+	for _, s := range skew {
+		fmt.Fprintf(os.Stderr, "    %s\n", cyan(fmt.Sprintf("gh variable set %s --repo %s --body %s", s.Name, repo, s.Want)))
+	}
+	fmt.Fprintln(os.Stderr, dim("  Until then the first pipeline run fails `llz ci assert-image-fresh`."))
 }
 
 // commitUpgrade stages the whole tree and records the upgrade as one labeled

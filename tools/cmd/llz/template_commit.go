@@ -323,6 +323,86 @@ func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 		yellow("!"), why, ciTofuTag, ciKubernetesTag, ref)
 }
 
+// ciImageSkew is one ci image variable whose recorded value no longer names the
+// commit the instance's template pin resolves to.
+type ciImageSkew struct{ Name, Have, Want string }
+
+// staleCIImageVars reports which of TF_IMAGE / KUBE_IMAGE name a commit other
+// than ref's, given a lookup for whatever the instance currently records.
+//
+// WHY THIS EXISTS. Until #407 the ci image vars were floating version tags, so
+// they self-healed across an upgrade: whatever main last published was what you
+// got. Pinning them to `sha-<the commit the template pin names>` fixed the skew
+// that killed an adopter's first pipeline run and, in the same move, made them
+// stale BY CONSTRUCTION the moment the pin moves — the same class as the
+// apl-values `?ref=` kustomizations `llz upgrade` already re-renders, and for
+// the identical reason. Detecting that needs the pin, the recorded value, and
+// nothing else, so it lives here and both `llz upgrade` and `llz tokens` use it.
+//
+// Two deliberate refusals to speak:
+//
+//   - A value LLZ did not compute is LEFT ALONE. A private fork or a
+//     hand-chosen image is a decision someone made on purpose, and telling them
+//     it is wrong — or worse, silently overwriting it — is not this function's
+//     call to make.
+//   - !pinned says nothing at all. That is computeCIImageVars reporting it has
+//     no commit-pinned answer — the ref did not resolve, or the images for the
+//     commit it names were never published — and the floating tags it returns
+//     instead are the very thing #407 exists to keep instances off. Advising a
+//     re-pin onto them would make a correctly pinned instance worse. (An
+//     unreachable REGISTRY is not this case: ciImageVarsForTag deliberately
+//     keeps the pin when it could not ask, so the skew is still reported.)
+func staleCIImageVars(ref string, recorded func(string) string) []ciImageSkew {
+	if ref = strings.TrimSpace(ref); ref == "" {
+		return nil
+	}
+	// Read what is recorded BEFORE resolving anything. A fresh instance has neither
+	// variable set — filling those is computeAndReportImageVars' job, not this
+	// one's — and computeCIImageVars below costs up to five network requests, which
+	// `llz upgrade` should not spend to discover there was nothing to compare.
+	have := make([]string, len(ciImageVars))
+	empty := true
+	for i, w := range ciImageVars {
+		if have[i] = strings.TrimSpace(recorded(w.name)); have[i] != "" {
+			empty = false
+		}
+	}
+	if empty {
+		return nil
+	}
+	tfImage, kubeImage, pinned, _ := computeCIImageVars(instanceTemplateRepo(), ref)
+	if !pinned {
+		return nil
+	}
+	want := [...]string{tfImage, kubeImage}
+	var out []ciImageSkew
+	for i, w := range ciImageVars {
+		if have[i] == "" || have[i] == want[i] || !llzComputedImageRef(have[i], w.image) {
+			continue
+		}
+		out = append(out, ciImageSkew{Name: w.name, Have: have[i], Want: want[i]})
+	}
+	return out
+}
+
+// ciImageVars pairs each ci image variable with the GHCR repository it names.
+// Order is load-bearing: staleCIImageVars indexes computeCIImageVars' (tf, kube)
+// return against it.
+var ciImageVars = [...]struct{ name, image string }{
+	{"TF_IMAGE", "ci-tofu"},
+	{"KUBE_IMAGE", "ci-kubernetes"},
+}
+
+// llzComputedImageRef reports whether ref is one LLZ itself produces for image —
+// the template org's GHCR repository, carrying any tag. It is the test for "this
+// value is ours to re-pin"; another registry, org, or image belongs to the
+// operator. defaultTemplateOrg (not the instance's upstream_org) because that is
+// where ciImageVarsForTag/floatingImageVars build every reference they hand out.
+func llzComputedImageRef(ref, image string) bool {
+	prefix := ciImageRef(defaultTemplateOrg, image, "")
+	return strings.HasPrefix(ref, prefix) && len(ref) > len(prefix)
+}
+
 // imagePublished reports whether an image reference resolves in the registry, and
 // whether the registry could be ASKED at all. The two are not the same and callers
 // must not conflate them (see computeCIImageVars).

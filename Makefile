@@ -7,7 +7,7 @@ SHELL := /bin/bash
         chart-pin-guard chart-version-guard \
 		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
         test coverage clean \
-        instance-test scaffold-check llz-functional reap-orphans \
+        instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
 
 KUBECTL_VERSION  := 1.31.0
@@ -99,6 +99,10 @@ help:
 	@echo "                  The fast counterpart to release-e2e (which stands up a real"
 	@echo "                  cluster); also the CI 'instantiate' job. Runs scaffold-check"
 	@echo "                  first. Self-skips without copier; SKIP_TF=1 skips tf validate."
+	@echo "  upgrade-test    Day-2 half: scaffold at the PREVIOUS release, then copier"
+	@echo "                  update to HEAD. Asserts the update runs unattended, keeps"
+	@echo "                  every answer it does not own, moves the pin, and leaves no"
+	@echo "                  merge artifacts. Offline; self-skips without copier or tags."
 	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
 	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
 	@echo "                  per-env files present, values.yaml renders via templatefile()"
@@ -932,6 +936,19 @@ coverage:
 # used to sit on this line was dead — the script's own default always governed.)
 instance-test: scaffold-check
 	template-scripts/ci/instance-test.sh
+
+# upgrade-test: the DAY-2 half of instance-test. That target proves `copier copy`
+# (scaffold) works; this one proves `copier update` (upgrade) does — scaffold at
+# the previous release, update to HEAD, and assert the update ran unattended,
+# kept every answer it does not own, moved the pin, and left no merge artifacts.
+# `copier update` appeared in no workflow, target or script before this, so the
+# path every adopter takes on day 2 was gated by nobody. Offline and cloud-free;
+# skips itself when copier is absent or the clone has no tags.
+# LLZ_FORCE_SOURCE: the gate runs `llz upgrade`'s own copier argv, so it has to be
+# the argv of the tree under test — same reason docs-guard sets it.
+upgrade-test: export LLZ_FORCE_SOURCE := 1
+upgrade-test:
+	$(call LLZ_CI,upgrade-test,--template ..)
 
 # scaffold-check: scaffold a throwaway env via `llz env add` and assert the
 # per-env scaffold is correct (no leftover `your-env`, required per-env files
