@@ -434,6 +434,18 @@ jobs:
       - name: Instantiate the template + assert render + structure + actionlint
         run: SKIP_TF=1 template-scripts/ci/instance-test.sh
 
+      # The day-2 half. instance-test proves `copier copy`; this proves `copier
+      # update` — which appeared in no workflow, target or script until now, so
+      # the path every adopter takes on their second week was gated by nobody.
+      #
+      # `llz` here is setup-llz's build of THIS tree, which is the whole point:
+      # the gate runs `llz upgrade`'s own copier argv, so a released binary would
+      # answer for code that is not under test. The checkout above is already
+      # fetch-depth: 0, so the release tags this scaffolds from are present — the
+      # gate self-skips rather than fails if they ever are not.
+      - name: Upgrade the previous release to this commit
+        run: llz ci upgrade-test --template .
+
   # ── Terraform ────────────────────────────────────────────────────────────────
   # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):
   # tflint + checkov over the reusable modules, then instantiate + validate the

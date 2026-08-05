@@ -69,8 +69,28 @@ func copierCopyArgv(org, ref, dir string) []string {
 		"gh:" + org + "/" + templateName, dir}
 }
 
+// copierUpdateArgv is the update invocation, and --defaults is load-bearing.
+//
+// Without it `copier update` RE-ASKS every question — upstream_org,
+// instance_repo, openbao_team — using the stored answers as prompt defaults. Two
+// costs, and the second is the one that bit:
+//
+//   - With no terminal that is not a prompt, it is an unhandled OSError out of
+//     prompt_toolkit. `llz upgrade` inherits the operator's stdin, so it worked
+//     by hand and died in CI, in a wrapper script, and over `ssh host 'llz
+//     upgrade'` — with a Python traceback, not a message.
+//   - Interactively it is three unexplained prompts mid-upgrade, on answers that
+//     are rendered INTO managed files. instance_repo becomes the ArgoCD repoURL
+//     and every `gh` target, so one stray keystroke re-renders the instance
+//     against a repo that does not exist.
+//
+// --defaults keeps the stored answers (verified: a non-default instance_repo and
+// openbao_team both survive v0.0.39 → v0.0.40 untouched). It does NOT make the
+// answers safe on its own — copier still falls back to the template DEFAULT for
+// an answer it cannot keep, which is why runUpgrade verifies them afterwards
+// rather than trusting this flag. `llz ci upgrade-test` runs this exact argv.
 func copierUpdateArgv(ref string) []string {
-	a := []string{"copier", "update", "--trust"}
+	a := []string{"copier", "update", "--trust", "--defaults"}
 	if ref != "" {
 		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
 	}
@@ -652,6 +672,9 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 
 func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
+	// Snapshot before copier runs — it rewrites this file in place, so afterwards
+	// there is nothing left to compare against (see Lever 0).
+	answersBefore := currentAnswerMap()
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
@@ -702,6 +725,29 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// (_commit + llz_version), which IS the record — see stamp.go. That also retires
 	// the stamp/rollback dance this used to need around the conflict gate below.
 	newRef := currentTemplateRef()
+
+	// ── Lever 0: the answers must be the ones we came in with ────────────────
+	// copier does not error on an answer it cannot keep — it substitutes the
+	// template DEFAULT and exits 0. The reachable case is an answer the CURRENT
+	// template's validator rejects (instance_repo grew one in #405), which is
+	// exactly the malformed value an instance scaffolded before that validator can
+	// be holding. instance_repo is the ArgoCD repoURL and every `gh` target, so the
+	// silent outcome is an instance re-rendered against `your-org/your-instance-repo`
+	// — a repository that does not exist — with a clean exit and a normal-looking
+	// diffstat.
+	//
+	// Checked rather than trusted: --defaults on the update argv preserves answers
+	// in the normal case, but it does not close this one, and a flag that is right
+	// 99% of the time is not a substitute for verifying the 1%.
+	if regressions := answerRegressions(answersBefore, currentAnswerMap()); len(regressions) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%s copier update rewrote %d answer(s) it does not own:\n", red("✗"), len(regressions))
+		for _, r := range regressions {
+			fmt.Fprintf(os.Stderr, "    %s\n", r)
+		}
+		return fmt.Errorf("the tree is at %s but its identity changed — restore the answer(s) above in "+
+			".copier-answers.yml and re-run (a value the template's validator now rejects is replaced by "+
+			"the DEFAULT, silently; fix the value, don't accept the default)", newRef)
+	}
 
 	// ── Lever 1: make the upgrade reviewable + safe ──────────────────────────
 	// A botched copier 3-way merge can leave <<<<<<< markers that otherwise ship

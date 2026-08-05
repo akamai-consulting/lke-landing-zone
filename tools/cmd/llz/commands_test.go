@@ -60,12 +60,16 @@ func TestRunNewGitHubUnreachable(t *testing.T) {
 	}
 }
 
+// --defaults is not cosmetic — see copierUpdateArgv's comment and
+// TestCopierUpdateArgvIsNonInteractive. Without it `copier update` re-asks every
+// question, which is three silent re-answer prompts by hand and an unhandled
+// prompt_toolkit exception with no terminal.
 func TestCopierUpdateArgv(t *testing.T) {
-	if got := copierUpdateArgv(""); !reflect.DeepEqual(got, []string{"copier", "update", "--trust"}) {
+	if got := copierUpdateArgv(""); !reflect.DeepEqual(got, []string{"copier", "update", "--trust", "--defaults"}) {
 		t.Errorf("no-ref: got %v", got)
 	}
 	if got := copierUpdateArgv("v0.0.39"); !reflect.DeepEqual(got,
-		[]string{"copier", "update", "--trust", "--vcs-ref", "v0.0.39", "--data", "llz_version=v0.0.39"}) {
+		[]string{"copier", "update", "--trust", "--defaults", "--vcs-ref", "v0.0.39", "--data", "llz_version=v0.0.39"}) {
 		t.Errorf("ref: got %v", got)
 	}
 }
