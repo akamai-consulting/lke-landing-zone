@@ -129,6 +129,14 @@ type convergeState struct {
 
 func newConvergeState() *convergeState { return &convergeState{} }
 
+// convergePoll is the health scan the converge loop runs — a seam so the loop's
+// CONTROL FLOW (poll → hard-fail re-check → verdict) can be driven directly.
+// Reaching a converged (exit 0) verdict through the kubectl fake means satisfying
+// every one of the ~20 checks at once, which makes a control-flow test hostage to
+// unrelated check changes; the real scan is still exercised end-to-end by the
+// fixtures in ci_health_test.go / ci_health_mutation_test.go.
+var convergePoll = healthExitCodeState
+
 // convergeSleep is the pause after an in-progress poll: the remainder of
 // --interval after the poll's own duration. A full health pass costs tens of
 // seconds of kubectl round-trips — sleeping a flat interval ON TOP of that
@@ -202,7 +210,7 @@ func runConverge(budget, interval, retryDelay int) error {
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
-		res := healthExitCodeState(st)
+		res := convergePoll(st)
 		step := health.ConvergeStep(res.code)
 		pollDur := time.Since(pollStart)
 		// Self-heal a repo-server↔argocd-redis auth split. The redis pod bakes its
@@ -249,11 +257,24 @@ func runConverge(budget, interval, retryDelay int) error {
 		case health.ConvergeRetryHard:
 			fmt.Fprintf(os.Stderr, "::warning::hard failure reported — re-checking after %ds to absorb transients.\n", retryDelay)
 			time.Sleep(time.Duration(retryDelay) * time.Second)
-			if health.ConvergeStep(healthExitCodeState(st).code) == health.ConvergeRetryHard {
+			// The re-check is a FULL health scan, so its verdict is worth exactly as
+			// much as any poll's — consume it rather than testing only "still hard".
+			// Discarding a DONE here cost a whole extra scan (35-58s, measured on
+			// every one of 7 sampled release-e2e runs): the hard strike is routinely
+			// the Loki pods cycling as they re-render onto S3, which clears within
+			// the retry delay, so the re-check said converged and the loop then paid
+			// another scan to be told the same thing. Same reasoning that retired the
+			// confirm-on-DONE pass (see convergeState).
+			recheck := convergePoll(st)
+			switch health.ConvergeStep(recheck.code) {
+			case health.ConvergeRetryHard:
 				fmt.Fprintln(os.Stderr, "::error::cluster hard-failed twice in a row — operator intervention required.")
 				return fmt.Errorf("cluster hard-failed twice in a row — operator intervention required")
+			case health.ConvergeDone:
+				reportConvergeLongPole(prevNonOK, prevAttempt)
+				return nil
 			}
-			// recovered to converged/in-progress — keep polling
+			// recovered to in-progress (or the apiserver blipped) — keep polling
 		case health.ConvergeUnreachable:
 			// The apiserver was unreachable — an infrastructure transient, not a
 			// cluster verdict. Retry against the budget WITHOUT spending a hard
