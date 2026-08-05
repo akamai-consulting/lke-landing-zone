@@ -164,7 +164,31 @@ When measuring block density, exclude any block whose lines start with
 `- `, `* `, `1. `, `|`, `#` or `>`. Real count across `docs/`: **6** prose blocks
 over 150 words, largest 245. There is no paragraph-bloat problem here.
 
-## Rule 8 — de-duplicate, but do not merge different questions
+## Rule 8 — the root README indexes what is LIVE, not what happened
+
+Index real estate is the scarcest in the repo, and it is the one place a reader
+assumes everything listed is current. Point-in-time records do not belong there
+even when they are excellent:
+
+- **Version-pair upgrade designs** (`apl-core-v6-migration`, `apl-core-v61-upgrade`)
+  are records of a move that already happened. They live in
+  [`docs/designs/README.md`](../../../docs/designs/README.md) with a status.
+- **ADRs and designs generally** — one row pointing at each index, never rows per
+  document. The indexes exist so the README does not have to grow.
+
+And **do not enumerate a directory in the README.** That list is hand-maintained
+and it rots: this repo's had already lost 4 of 11 runbooks and `first-workload`,
+the playbook a new adopter needs most. Give the directory its own index —
+[`runbooks/README.md`](../../../docs/runbooks/README.md) is by **symptom**,
+[`playbooks/README.md`](../../../docs/playbooks/README.md) by **task** — which
+puts the list next to the files it describes, where an author changing them will
+see it. Both directories are in the `deliver-docs` keep-set, so those indexes
+ship to adopters too.
+
+Rule of thumb: if a row would still be there after the thing it describes is
+finished, it belongs in a sub-index, not the README.
+
+## Rule 9 — de-duplicate, but do not merge different questions
 
 Real duplication: the `secrets: inherit` / `required: false` rationale was
 written at full length in **both** workflow docs — the second even said "same
@@ -175,7 +199,7 @@ Not duplication: three apl-core documents that look interchangeable in an index
 are a cutover **runbook** plus two version-pair **designs**. The audit proposed
 merging them; that was wrong. Label them by the question each answers instead.
 
-## Rule 9 — a chart README edit needs a Chart.yaml bump
+## Rule 10 — a chart README edit needs a Chart.yaml bump
 
 `chart-version-guard` fires on any edit inside a chart directory, because
 `publish-charts.yml` only pushes a **new** version. A README-only change still

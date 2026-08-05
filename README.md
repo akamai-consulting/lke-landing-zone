@@ -280,27 +280,13 @@ failure mode the default already prevents.
 | Bootstrap "done" contract (4 exit codes) | [docs/architecture/convergence-contract.md](docs/architecture/convergence-contract.md) |
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
-| apl-core — **cutting a cluster over** (operational procedure) | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
-| apl-core — **moving 5.x → 6.x** (what changed, and why) | [docs/designs/apl-core-v6-migration.md](docs/designs/apl-core-v6-migration.md) |
-| apl-core — **moving 6.0 → 6.1** (what changed, and why) | [docs/designs/apl-core-v61-upgrade.md](docs/designs/apl-core-v61-upgrade.md) |
+| apl-core cutover (operational procedure) | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
 | Linode account request + InfoSec checklist | [docs/infosec/linode-account-request-checklist.md](docs/infosec/linode-account-request-checklist.md) |
 
-**Runbooks** ([docs/runbooks/](docs/runbooks/)) — bootstrap & rotation procedures:
-[bootstrap-openbao](docs/runbooks/bootstrap-openbao.md) ·
-[lke-admin-rotation](docs/runbooks/lke-admin-rotation.md) ·
-[linode-credential-rotation](docs/runbooks/linode-credential-rotation.md) ·
-[apl-values-propagation](docs/runbooks/apl-values-propagation.md) ·
-[orphan-volume-cleanup](docs/runbooks/orphan-volume-cleanup.md) ·
-[volume-labels](docs/runbooks/volume-labels.md) ·
-[e2e-lane-diagnostics](docs/runbooks/e2e-lane-diagnostics.md)
-
-**Playbooks** ([docs/playbooks/](docs/playbooks/)) — day-2 access & ops:
-[operator-onboarding](docs/playbooks/operator-onboarding.md) (start here) ·
-[argocd-ops](docs/playbooks/argocd-ops.md) ·
-[openbao-accounts](docs/playbooks/openbao-accounts.md) ·
-[harbor-accounts](docs/playbooks/harbor-accounts.md) ·
-[grafana-access](docs/playbooks/grafana-access.md) ·
-[loki-access](docs/playbooks/loki-access.md)
+**[Runbooks](docs/runbooks/README.md)** — indexed by symptom, for when something
+is wrong. **[Playbooks](docs/playbooks/README.md)** — indexed by task, for a
+normal Tuesday; start with
+[operator-onboarding](docs/playbooks/operator-onboarding.md).
 
 ## License
 
