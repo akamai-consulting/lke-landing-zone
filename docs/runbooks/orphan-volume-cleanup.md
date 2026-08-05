@@ -40,6 +40,12 @@ any cluster that ran long enough to relabel, **most orphans no longer match the
 `--env <deployment>` is what widens the sweep to include those renamed Volumes.
 Without it the sweep silently matches only the CSI defaults:
 
+<!-- llz:fact reap-volumes.env -->
+```text
+--env  deployment name (REGION_SHORT) whose RELABELED volumes to include; without it the sweep sees only the CSI default pvc-* labels and leaks every renamed volume
+```
+<!-- /llz:fact -->
+
 ```text
 --env string   deployment name (REGION_SHORT) whose RELABELED volumes to include;
                without it the sweep sees only the CSI default pvc-* labels and

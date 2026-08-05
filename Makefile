@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard docs-facts docs-facts-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -66,6 +66,8 @@ help:
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
 	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007 (state encryption))"
 	@echo "  docs-guard      doc drift: llz FLAGS, gh workflow-run inputs, and links resolve"
+	@echo "  docs-facts      regenerate the doc blocks rendered from Go constants"
+	@echo "  docs-facts-check  ...and verify they match their source (CI)"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -660,10 +662,27 @@ docs-guard: export LLZ_FORCE_SOURCE := 1
 docs-guard:
 	$(call LLZ_CI,docs-guard,--root ..)
 
+# docs-facts: the half docs-guard cannot reach. It validates that a doc's `llz`
+# flags, workflow inputs and links resolve; it cannot tell that a SENTENCE is
+# wrong — and all four CRITICAL findings of the documentation audit were exactly
+# that: a doc restating a Go constant (the OpenBao in-pod env, the Loki tenants,
+# where `llz hooks` installs, what --env buys on the volume sweep) and drifting.
+#
+# A marked block is rendered from the constant, so it cannot drift. This target
+# REGENERATES; docs-facts-check verifies (CI). --strict additionally requires
+# every registered fact to be rendered somewhere, which is a whole-repo invariant.
+docs-facts: export LLZ_FORCE_SOURCE := 1
+docs-facts:
+	$(call LLZ_CI,docs-facts --strict,--root ..)
+
+docs-facts-check: export LLZ_FORCE_SOURCE := 1
+docs-facts-check:
+	$(call LLZ_CI,docs-facts --check --strict,--root ..)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard docs-facts-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -703,7 +722,7 @@ lint:
 		$(MAKE) --no-print-directory untestable-loc-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/cmd/llz/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
-		$(MAKE) --no-print-directory docs-guard; \
+		$(MAKE) --no-print-directory docs-guard docs-facts-check; \
 	fi
 
 # ── Audit ─────────────────────────────────────────────────────────────────────
