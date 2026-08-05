@@ -199,6 +199,10 @@ func ciCmd() *cobra.Command {
 	// in the template and in the post-deliver-docs keep-set. Added after an audit
 	// found 30 doc defects, most of them detectable from the repo itself.
 	c.AddCommand(ciDocsGuardCmd())
+	// Facts docs restate from Go constants, rendered from the source so they
+	// cannot drift. Targets the half of the doc audit docs-guard cannot reach:
+	// all four of its CRITICAL findings were a doc quoting a constant, wrongly.
+	c.AddCommand(ciDocsFactsCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

@@ -21,6 +21,13 @@ Two facts shape every Loki playbook:
 There is more than one writer and they do not share a tenant, so there is no single
 correct value — pick the one belonging to the logs you are looking for:
 
+<!-- llz:fact loki.tenants -->
+```text
+apl-core's collector (every landing-zone namespace)   X-Scope-OrgID: admins
+the OpenBao promtail sidecar (audit log)              X-Scope-OrgID: platform
+```
+<!-- /llz:fact -->
+
 | Logs you want | Tenant | Why |
 |---|---|---|
 | Anything in a landing-zone namespace (`llz-*`, `argocd`, `harbor`, `external-secrets`, …) | **`admins`** | apl-core's collector routes by namespace; everything outside a team namespace lands in the default pipeline |

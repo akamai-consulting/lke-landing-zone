@@ -397,6 +397,11 @@ jobs:
         uses: ./.github/actions/setup-llz
       - name: Commands, workflow inputs and links resolve
         run: make docs-guard
+      # The half docs-guard cannot reach: facts a doc RESTATES from a Go constant.
+      # All four CRITICAL findings of the doc audit were that shape, so a drifted
+      # block is a red build rather than something a reader has to notice.
+      - name: Facts rendered from Go constants are current
+        run: make docs-facts-check
 
   # ── Instantiate (copier render) ──────────────────────────────────────────────
   # Renders instance-template/ into a throwaway instance with the REAL copier and

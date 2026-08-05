@@ -99,6 +99,25 @@ port:
 ```
 
 An in-pod `bao` invocation holds no client identity, so it must target **`:8210`**.
+
+The two listeners, and the env every in-pod caller uses — both rendered from the
+code, so neither can drift from it:
+
+<!-- llz:fact openbao.listeners -->
+```text
+[::]:8200        pod network — mTLS, a CLIENT CERTIFICATE IS REQUIRED
+127.0.0.1:8210   loopback    — TLS, no client certificate
+```
+<!-- /llz:fact -->
+
+<!-- llz:fact openbao.in-pod-env -->
+```text
+BAO_ADDR=https://127.0.0.1:8210
+BAO_CACERT=/openbao/tls/ca.crt
+VAULT_ADDR=https://127.0.0.1:8210
+VAULT_CACERT=/openbao/tls/ca.crt
+```
+<!-- /llz:fact -->
 And it must set the **`BAO_*`** names: OpenBao prefers a present `BAO_*` variable
 over its `VAULT_*` alias unconditionally, and the chart bakes `BAO_ADDR` into the
 container — so exporting `VAULT_ADDR` alone is silently ignored and the command

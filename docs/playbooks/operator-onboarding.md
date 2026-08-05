@@ -53,6 +53,13 @@ llz doctor
 > entirely — and if the path does not exist, **no hooks run at all**, silently,
 > including the secret guard.
 
+<!-- llz:fact hooks.install-path -->
+```text
+installed hook:    <git hooks dir>/pre-commit  (git rev-parse --git-path hooks)
+your extra checks: .githooks/pre-commit.local  (executable; runs after the built-in gate)
+```
+<!-- /llz:fact -->
+
 `llz doctor` lists anything missing and the command to fix it. To skip host
 installs altogether, open the repo in its [Dev Container](../devcontainer.md) —
 same toolchain, prebuilt.

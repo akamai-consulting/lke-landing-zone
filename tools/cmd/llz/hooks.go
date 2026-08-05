@@ -57,6 +57,16 @@ func gitOutput(dir string, args ...string) (string, error) {
 }
 
 // runHooksInstall writes the pre-commit shim into dir's git hooks directory.
+// The two paths the hook contract is made of. Named because a doc renders them
+// (`llz ci docs-facts`, fact hooks.install-path) and because the audit found a
+// runbook telling operators to point core.hooksPath somewhere else — which makes
+// git ignore the installed hook and run NOTHING, silently disabling the secret
+// guard. A fact that load-bearing should have exactly one spelling.
+const (
+	gitPreCommitHookName = "pre-commit"
+	localPreCommitHook   = ".githooks/pre-commit.local"
+)
+
 func runHooksInstall(g globalOpts, dir string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -69,7 +79,7 @@ func runHooksInstall(g globalOpts, dir string) error {
 	if !filepath.IsAbs(hooksDir) {
 		hooksDir = filepath.Join(dir, hooksDir)
 	}
-	hookPath := filepath.Join(hooksDir, "pre-commit")
+	hookPath := filepath.Join(hooksDir, gitPreCommitHookName)
 	shim := preCommitShim(self)
 
 	if g.dryRun {
@@ -128,8 +138,8 @@ func runPrecommit(g globalOpts) error {
 	}
 
 	// ── operator escape hatch ──
-	if fi, err := os.Stat(".githooks/pre-commit.local"); err == nil && fi.Mode()&0o111 != 0 {
-		return run(g, ".githooks/pre-commit.local")
+	if fi, err := os.Stat(localPreCommitHook); err == nil && fi.Mode()&0o111 != 0 {
+		return run(g, localPreCommitHook)
 	}
 	return nil
 }
