@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // esManualPaths are KV paths intentionally seeded outside of any bootstrap
@@ -49,27 +51,12 @@ const (
 	esBaoConfigurePath  = "tools/cmd/llz/ci_openbao_configure.go"
 )
 
-// esRepoPath resolves a repo-relative path, tolerating the template layout
-// where the instance content (bootstrap workflows, apl-values) lives under
-// instance-template/ rather than at the repo root.
-func esRepoPath(root, rel string) string {
-	direct := filepath.Join(root, filepath.FromSlash(rel))
-	if _, err := os.Stat(direct); err == nil {
-		return direct
-	}
-	nested := filepath.Join(root, "instance-template", filepath.FromSlash(rel))
-	if _, err := os.Stat(nested); err == nil {
-		return nested
-	}
-	return direct
-}
-
 // platformTreeDirs returns the two shared platform-bootstrap manifest roots the
 // wave/mesh guards scan: platform-apl/manifest (the always-on base) and
 // platform-apl/components (the per-component kustomize Components). Since the
 // platform-apl move they live at the repo ROOT, outside the instance scaffold.
 func platformTreeDirs(root string) []string {
-	p := esRepoPath(root, "platform-apl")
+	p := guardkit.RepoPath(root, "platform-apl")
 	// manifest-secret-store is a real deployed unit — ci_bootstrap_cluster_manifests
 	// gives it its own llz-secret-store Application ("path":
 	// "platform-apl/manifest-secret-store") — and it holds the two
@@ -119,8 +106,8 @@ var (
 // while the reported list said something else.
 func esScanDirs(root, renderDir string) []string {
 	return []string{
-		esRepoPath(root, "platform-apl"),
-		esRepoPath(root, "apl-values"),
+		guardkit.RepoPath(root, "platform-apl"),
+		guardkit.RepoPath(root, "apl-values"),
 		filepath.Join(root, filepath.FromSlash(renderDir)),
 	}
 }
@@ -465,7 +452,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// apl-values/ AND an unrendered chart tree both yielded zero sources, zero
 	// refs, and a clean pass — the guard would vouch for ExternalSecret paths it
 	// never read.
-	if err := requireCorpus("externalsecret-paths", examined, esDirs); err != nil {
+	if err := guardkit.RequireCorpus("externalsecret-paths", examined, esDirs); err != nil {
 		return err
 	}
 
@@ -474,7 +461,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// `llz ci provision-harbor-robots` (ci_harbor.go, parsed by the Go-aware
 	// collector). See docs/templatization-plan.md §"Keeping instances in sync".
 	seededPaths, seededFields, err := collectSeeded([]string{
-		esRepoPath(root, ".github/workflows/llz-bootstrap-openbao.yml"),
+		guardkit.RepoPath(root, ".github/workflows/llz-bootstrap-openbao.yml"),
 	})
 	if err != nil {
 		return err
@@ -505,7 +492,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		// `bao kv put` step in a workflow, only here.
 		"tools/cmd/llz/ci_seed_ssec_key.go",
 	} {
-		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
+		goPaths, goFields, err := collectSeededGo(guardkit.RepoPath(root, goSrc))
 		if err != nil {
 			return err
 		}
@@ -523,7 +510,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	}
 
 	policyPaths := map[string]esPolicy{}
-	if policyPaths[esBaoConfigureLabel], err = collectPolicyPaths(esRepoPath(root, esBaoConfigurePath)); err != nil {
+	if policyPaths[esBaoConfigureLabel], err = collectPolicyPaths(guardkit.RepoPath(root, esBaoConfigurePath)); err != nil {
 		return err
 	}
 

@@ -1,13 +1,15 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first two
-extensions: `guard-budgets` (`tools/internal/budget`) and `guard-docs` (`tools/internal/docsguard`)
-declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first three
+extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`) and
+`posture-at-rest` (`tools/internal/atrest`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-both still run because `ci.go` registers their cobra commands, and the declarations are inert. Both
-are also the same shape (`gate:scaffolded[read-repo]`), so the ceiling's interesting half is still
-untested: no transition, no assertion, no invariant, and five of seven grants unexercised. The action
+all three still run because `ci.go` registers their cobra commands, and the declarations are inert.
+Two kinds, two states and one grant are exercised; `transition`, `assertion`, six of seven grants,
+multi-binding extensions, named bindings and the `grantStates` table are not — and [the coupling
+census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural rather
+than incidental. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
 the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that design is not
 contradicted here, only re-sequenced, and is tracked in issue #399.

@@ -30,6 +30,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // meshStrictNamespaces maps a namespace known to enforce Istio STRICT mTLS to the
@@ -139,7 +141,7 @@ func runCIMeshEgressGuard(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCorpus("mesh-egress-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("mesh-egress-guard", examined, dirs); err != nil {
 		return err
 	}
 	findings, seen := filterMeshEgressAllowed(all)

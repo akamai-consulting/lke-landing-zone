@@ -23,6 +23,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 func ciDroppedAPIVersionsCmd() *cobra.Command {
@@ -52,7 +54,7 @@ func runCIDroppedAPIVersions(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCorpus("dropped-apiversions", examined, scannedManifestTrees); err != nil {
+	if err := guardkit.RequireCorpus("dropped-apiversions", examined, scannedManifestTrees); err != nil {
 		return err
 	}
 	if err := reportDroppedAPIVersions(hits); err != nil {

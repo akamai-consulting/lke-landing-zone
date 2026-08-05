@@ -48,6 +48,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // credExemptKind names WHY a secret needs no write-time or expiry entry of its
@@ -203,11 +205,11 @@ func credMeasuredByName() map[string]credCoverage {
 }
 
 func runCICredentialCoverageGuard(root string) error {
-	dir := esRepoPath(root, filepath.Join("instance-template", ".github", "workflows"))
+	dir := guardkit.RepoPath(root, filepath.Join("instance-template", ".github", "workflows"))
 	// An instance IS the scaffold's contents, so the same trees sit at the root
 	// there. esRepoPath resolves the template layout; this is the instance one.
 	if _, err := os.Stat(dir); err != nil {
-		dir = esRepoPath(root, filepath.Join(".github", "workflows"))
+		dir = guardkit.RepoPath(root, filepath.Join(".github", "workflows"))
 	}
 
 	used, examined, err := collectWorkflowSecretRefs(dir)
@@ -216,7 +218,7 @@ func runCICredentialCoverageGuard(root string) error {
 	}
 	// Same rationale as the sibling guards: a guard that read no workflows prints
 	// the same green as one that read all of them.
-	if err := requireCorpus("credential-coverage-guard", examined, []string{dir}); err != nil {
+	if err := guardkit.RequireCorpus("credential-coverage-guard", examined, []string{dir}); err != nil {
 		return err
 	}
 

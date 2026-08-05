@@ -1,6 +1,7 @@
-package main
+package atrest
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,7 @@ func TestAtRestGuardFailsOnRootWithNoEncryptionBlock(t *testing.T) {
 	root := writeTFRoot(t, map[string]string{
 		"newroot/backend.tf": "terraform {\n  backend \"s3\" {}\n}\n",
 	})
-	err := runCIAtRestGuard(root)
+	err := Run(io.Discard, root)
 	if err == nil {
 		t.Fatal("a backend with no encryption block must fail")
 	}
@@ -51,7 +52,7 @@ func TestAtRestGuardAcceptsAnEncryptedRoot(t *testing.T) {
 	})
 	// Every real registry entry is now stale against this synthetic tree, which is
 	// its own (correct) failure — assert on the findings instead.
-	findings, examined, err := collectAtRestFindings(root, atRestScanDirs(root))
+	findings, examined, err := collectAtRestFindings(root, ScanDirs(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestAtRestGuardCoversDeclaredVolumes(t *testing.T) {
 
 // A guard that walked nothing prints the same green as one that walked everything.
 func TestAtRestGuardFailsOnEmptyCorpus(t *testing.T) {
-	err := runCIAtRestGuard(t.TempDir())
+	err := Run(io.Discard, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "examined 0") {
 		t.Fatalf("an empty corpus must fail closed, got %v", err)
 	}
@@ -138,7 +139,7 @@ func TestAtRestAllowedEntriesCarryAnExitCondition(t *testing.T) {
 
 // The live tree must be green, and green because it was read.
 func TestAtRestGuardPassesOnThisRepo(t *testing.T) {
-	if err := runCIAtRestGuard("../../.."); err != nil {
+	if err := Run(io.Discard, "../../.."); err != nil {
 		t.Fatalf("at-rest-guard must be green on this repo: %v", err)
 	}
 }
@@ -260,7 +261,7 @@ func TestAtRestGuardStillSeesLeveredResourcesAfterABucket(t *testing.T) {
 // until they say what lands in it and what would retire the entry.
 func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
 	root := "../../.." // tools/cmd/llz -> repo root, as TestAtRestGuardPassesOnThisRepo
-	findings, _, err := collectAtRestFindings(root, atRestScanDirs(root))
+	findings, _, err := collectAtRestFindings(root, ScanDirs(root))
 	if err != nil {
 		t.Fatal(err)
 	}

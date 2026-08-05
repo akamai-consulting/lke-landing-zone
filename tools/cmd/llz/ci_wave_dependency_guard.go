@@ -50,6 +50,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // wdSecretRef is one Secret reference by a container/volume, with its optionality.
@@ -147,7 +149,7 @@ func runCIWaveDependencyGuard(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCorpus("wave-dependency-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("wave-dependency-guard", examined, dirs); err != nil {
 		return err
 	}
 	if len(inversions) == 0 {

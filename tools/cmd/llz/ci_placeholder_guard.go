@@ -29,6 +29,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // placeholderHost is the example hostname the template ships. A rendered
@@ -77,7 +79,7 @@ func runCIPlaceholderGuard(renderDir string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCorpus("placeholder-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("placeholder-guard", examined, dirs); err != nil {
 		return err
 	}
 	if len(findings) == 0 {

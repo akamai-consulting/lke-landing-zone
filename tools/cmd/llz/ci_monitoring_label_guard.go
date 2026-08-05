@@ -24,6 +24,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // monitoringGuardKinds are the CR kinds apl-core's Prometheus label-selects.
@@ -78,7 +80,7 @@ func runMonitoringLabelGuard(roots []string) error {
 	// ServiceMonitor renders its `prometheus: system` label from
 	// serviceMonitor.selectorLabels, so only the RENDERED tree carries the real
 	// value — and rendered/ not being built was exactly the silently-skipped case.
-	if err := requireCorpus("monitoring-label-guard", examined, roots); err != nil {
+	if err := guardkit.RequireCorpus("monitoring-label-guard", examined, roots); err != nil {
 		return err
 	}
 	if len(findings) == 0 {

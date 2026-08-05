@@ -31,6 +31,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // waveHealthKindRule describes why a kind is safe at a negative sync wave.
@@ -184,7 +186,7 @@ func ciWaveHealthGuardCmd() *cobra.Command {
 }
 
 func runCIWaveHealthGuard(root string) error {
-	aplDir := esRepoPath(root, "apl-values")
+	aplDir := guardkit.RepoPath(root, "apl-values")
 	valuesPath := filepath.Join(aplDir, "values.yaml")
 	valuesRaw, err := os.ReadFile(valuesPath)
 	if err != nil {
@@ -199,7 +201,7 @@ func runCIWaveHealthGuard(root string) error {
 	// moved it walked zero files, found zero negative-wave kinds, and printed the
 	// same green as a full clean run — the PR #142 wedge class silently unpoliced.
 	// Its three siblings gated on requireCorpus; this one did not.
-	if err := requireCorpus("wave-health-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("wave-health-guard", examined, dirs); err != nil {
 		return err
 	}
 	failed := false

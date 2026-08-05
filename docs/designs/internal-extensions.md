@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first two, extracted](#the-first-two-extracted). |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first three, extracted](#the-first-three-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -205,7 +205,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
-| `posture-at-rest` | 304 | 1 | ✔ | ✔ | |
+| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first three, extracted](#the-first-three-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first two, extracted](#the-first-two-extracted). |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first three, extracted](#the-first-three-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first two, extracted
+## The first three, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -261,11 +261,12 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | before | 47,182 | 236 | |
 | `guard-budgets` extracted | 46,716 | 234 | −466, the first paydown this gate ever recorded |
 | `llz extension list` | 46,797 | 235 | +81, spent deliberately |
-| `guard-docs` extracted | **46,106** | 235 | −691, the largest single move so far |
+| `guard-docs` extracted | 46,106 | 235 | −691, the largest single move so far |
+| `posture-at-rest` extracted | **45,763** | 234 | −343, and the first binding that is not a gate |
 
-**Net −1,076 (2.3%) across two extensions.** At that rate the remaining 57 reach the ~2,900 residue,
-which is the first evidence the target is arrivable rather than aspirational — though the two
-cheapest were taken first, so read it as a floor on effort, not a schedule.
+**Net −1,419 (3.0%) across three extensions.** Read that as a floor on the effort rather than a
+schedule: the three cheapest were taken first, and [what it costs to go
+further](#the-cost-of-the-interesting-half) is the section that matters more than this one.
 
 ### What `guard-budgets` established
 
@@ -311,14 +312,85 @@ fit. Three findings:
   deleted. Every future extraction will hit this. Read a low floor on a freshly extracted package as
   "its tests are elsewhere" before reading it as "it is untested", and say which in the comment.
 
-### What neither proves
+### What `posture-at-rest` added — the first binding that is not a gate
 
-Nothing is loaded, dispatched or disabled through the model. Both still run because `ci.go` registers
-their cobra commands, and the declarations are inert. **Both are also the same shape** —
-`gate:scaffolded[read-repo]` — so the ceiling's interesting half is still untested: no transition, no
-assertion, no invariant, and five of seven grants unexercised. The third extension should be chosen
-to break that, not to fit; `converge` is the case the catalog nominates, and it is where the
-action/predicate split either holds or does not.
+Two gates in a row left three of four binding kinds and nine of ten states unexercised. This one was
+picked to move that, and it produced the first thing the model has said that reading the code does
+not.
+
+**The discriminator between a gate and an invariant is the claim's LIFETIME, not the
+implementation.** `llz ci at-rest-guard` is a static Terraform scan — file-in, findings-out, exactly
+like the two gates — and it is still an invariant, because encryption is decided at CREATE and is
+immutable afterwards. There is no remediation for a resource that came up unencrypted, only a
+rebuild, so the property has to hold across every future apply rather than at the moment someone ran
+the checker. A gate claims something about a *change*; an invariant claims something about the
+*running system*. The catalog classed this one correctly but never said why, and the reason was
+invisible while everything declared was a gate.
+
+**Declaring it honestly cost something, and the cost is recorded rather than smoothed over.** An
+invariant may attach only to `operating`, and this scan runs in template-repo CI long before anything
+is operating — so the declaration is a claim the driver cannot yet honour. Declaring `gate` would
+have been the convenient lie, and it would have made the model agree with itself by making it say
+nothing.
+
+**A third extraction, a third shared rule.** `guardkit` — `RepoPath` (where a tree is, in the
+template layout or the instance layout) and `RequireCorpus` (did the walk see anything at all) — was
+private to two guard files and called by eight. Extracting one guard turned it into a package. This
+has now happened on every extraction without exception.
+
+## The cost of the interesting half
+
+Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
+(`scaffolded`, `operating`) and one grant (`read-repo`). The untested half is not untested by
+accident, and the reason is measurable.
+
+Counting the package-`main` symbols each candidate's files reference — its **closure**, not its file
+list:
+
+| candidate | shape it would exercise | coupling to package `main` | extracted? |
+|---|---|---:|:-:|
+| `guard-budgets` | `gate` · `read-repo` | 0 | ✅ |
+| `guard-docs` | `gate` · `read-repo` | 2 | ✅ |
+| `posture-at-rest` | **`invariant`** · `read-repo` | 2 | ✅ |
+| `template-sustain` | `transition` · **`own-paths`** | 26 | ✘ |
+| `assert-storage` | **`assertion`** + `transition` · `cloud-mutate` | 16 | ✘ |
+| `teardown` | `transition` + `assertion` · `destroyed` | 30 | ✘ |
+| `obj-encryption` | `transition:seeded` · **`secret-custody`** | 43 | ✘ |
+| `reconcile-actions` | `invariant` ×7 · **named bindings** | 62 | ✘ |
+
+**The catalog's line counts are file counts, not closures**, and the gap between the two is where the
+remaining work is. The cheap extractions are all gates because a gate reaches nothing; every
+candidate that would exercise a mutating grant is, by construction, one that holds a credential
+handle, a cluster client or a cloud client — and those live in package `main`.
+
+Three consequences, and the first two change the plan:
+
+- **The suggested order below is wrong.** It ranks by lines relieved, which put `converge` second and
+  `import-brownfield` third. Closure says those are among the most expensive things available, and
+  that the next tranche of *cheap* relief is the six remaining gates — which buy no new model
+  coverage at all. Size and difficulty are close to uncorrelated here.
+- **The action ABI has to come before the expensive extractions, not after.** Every high-coupling
+  candidate is coupled through the same four things: a cluster client, a cloud client, a credential
+  handle, a kubectl seam. That list is the ABI's requirements document, and it was derivable only by
+  trying to extract something that needs them.
+- **`template-sustain` cannot be separated from what defines its grant.** It is the extension that
+  would hold `own-paths`, and 26 of its references are into `ci_template_manifest.go` — which ADR
+  0014's one-ownership-authority corollary pins as permanently core. The pairing pattern's two halves
+  have different extraction costs, and this pair may not be separable at all.
+
+A fourth extraction was attempted and abandoned rather than forced. That is the honest state: the
+model's untested half stays untested until the ABI exists.
+
+### What none of them proves
+
+Nothing is loaded, dispatched or disabled through the model. All three still run because `ci.go`
+registers their cobra commands, and the declarations are inert.
+
+Still unexercised: **`transition` and `assertion`** as binding kinds, **six of seven grants**,
+**multi-binding extensions** (the pairing pattern, the catalog's strongest structural signal),
+**named bindings**, and the `grantStates` table that says where a dangerous grant may appear. Every
+one of those needs a candidate from the lower half of the coupling table above, so the honest next
+step is the action ABI rather than a fourth extraction.
 
 ## What the catalog says
 
@@ -358,8 +430,15 @@ grants and the distribution is observed instead of assigned.
 
 ## Suggested first five
 
+> **Superseded by measurement.** This ranks by lines relieved. [The cost of the interesting
+> half](#the-cost-of-the-interesting-half) measures each candidate's *closure* into package `main`
+> and finds size and difficulty close to uncorrelated: `converge` and `import-brownfield`, ranked 2nd
+> and 3rd here, are among the most expensive things available. Kept as written, because it is what
+> the catalog concluded before anything had been extracted, and the correction is worth more than the
+> tidy version.
+
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first two, extracted](#the-first-two-extracted).
+   **Done** — [The first three, extracted](#the-first-three-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

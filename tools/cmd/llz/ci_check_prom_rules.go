@@ -29,6 +29,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // defaultPromRulesDirs are the roots that ship PrometheusRule CRDs (matched by
@@ -160,7 +162,7 @@ func runCICheckPromRules(rulesDirs []string, files []string, w io.Writer) error 
 		present := 0
 		for _, dir := range rulesDirs {
 			if !filepath.IsAbs(dir) {
-				dir = esRepoPath(".", dir)
+				dir = guardkit.RepoPath(".", dir)
 			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				fmt.Fprintf(w, "check-prom-rules: %s absent — skipping that root\n", dir)

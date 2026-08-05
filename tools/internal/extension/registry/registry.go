@@ -22,17 +22,19 @@ package registry
 import (
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 )
 
 // declarations is the built-in set. One line per extension; the catalog
-// (docs/designs/internal-extensions.md) sizes the other 57.
+// (docs/designs/internal-extensions.md) sizes the other 56.
 //
 // Listed in import order, NOT declaration order — All sorts by name, so the order
 // here carries no meaning and nobody has to maintain one.
 var declarations = []func() extension.Extension{
+	atrest.Extension,
 	budget.Extension,
 	docsguard.Extension,
 }

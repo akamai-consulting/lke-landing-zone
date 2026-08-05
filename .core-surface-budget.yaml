@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 46,106 logic lines across 235 non-test files, 126 of them ci_*.go.
+    # 45,763 logic lines across 234 non-test files, 125 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -64,12 +64,15 @@ categories:
     #                       TOC renderer are tools/internal/docsguard; the two
     #                       commands are a flag set and a file write. -691, the
     #                       largest single move so far.
+    #   45,763 / 234 files  posture-at-rest, the first extension that is not a
+    #                       gate, plus the guardkit its extraction forced out.
+    #                       -343.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 46106
+    budget: 45763
     exact: true
     include:
       - "tools/cmd/llz/*.go"

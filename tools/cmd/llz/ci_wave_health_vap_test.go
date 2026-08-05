@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // TestWaveHealthVAPMatchesGuard pins the llz-wave-health-guard ValidatingAdmissionPolicy
@@ -17,7 +19,7 @@ import (
 // waveHealthAllowedKinds + waveHealthAllowedNames. If they drift (a kind vetted in one
 // place but not the other), the two guards disagree and this fails the build.
 func TestWaveHealthVAPMatchesGuard(t *testing.T) {
-	path := esRepoPath("../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
+	path := guardkit.RepoPath("../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read VAP: %v", err)
@@ -59,7 +61,7 @@ func TestWaveHealthVAPMatchesGuard(t *testing.T) {
 // dropped, the admission twin would deny a hook the other two allow (the release-e2e
 // v0.0.23 coredns-restart PostSync Job false positive) — so fail the build.
 func TestWaveHealthVAPSkipsHooks(t *testing.T) {
-	path := esRepoPath("../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
+	path := guardkit.RepoPath("../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read VAP: %v", err)

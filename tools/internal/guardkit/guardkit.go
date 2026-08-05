@@ -1,6 +1,15 @@
-package main
-
-// guard_corpus.go — the shared "did this guard actually examine anything?" check.
+// Package guardkit is the scaffolding every file-scanning guard shares: WHERE its
+// corpus is, and whether it actually examined one.
+//
+// Eight guards resolve their roots and check their corpus the same way, and while
+// both rules lived in package main each was one file's private helper that the
+// others happened to call. That is the shape this repo keeps paying for — two
+// copies of a rule agreeing by accident — so the extraction of `posture-at-rest`
+// (the first guard to move out) turned them into a package rather than duplicating
+// them.
+//
+// RepoPath answers "where is this tree, in either layout". RequireCorpus answers
+// "did the walk see anything at all".
 //
 // The manifest guards walk a set of roots and report what they find. Each one
 // skipped a root that did not exist (`os.Stat` → `continue`), which is sensible
@@ -27,14 +36,33 @@ package main
 // the hole this file exists to close. It now calls requireCorpus like its
 // siblings (see TestWaveHealthGuardFailsOnEmptyCorpus).
 
+package guardkit
+
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
-// requireCorpus fails when a guard examined no files at all. Call it after the
+// RepoPath resolves a repo-relative path, tolerating the template layout
+// where the instance content (bootstrap workflows, apl-values) lives under
+// instance-template/ rather than at the repo root.
+func RepoPath(root, rel string) string {
+	direct := filepath.Join(root, filepath.FromSlash(rel))
+	if _, err := os.Stat(direct); err == nil {
+		return direct
+	}
+	nested := filepath.Join(root, "instance-template", filepath.FromSlash(rel))
+	if _, err := os.Stat(nested); err == nil {
+		return nested
+	}
+	return direct
+}
+
+// RequireCorpus fails when a guard examined no files at all. Call it after the
 // walk, with the number of files actually read and the roots that were searched.
-func requireCorpus(guard string, examined int, dirs []string) error {
+func RequireCorpus(guard string, examined int, dirs []string) error {
 	if examined > 0 {
 		return nil
 	}

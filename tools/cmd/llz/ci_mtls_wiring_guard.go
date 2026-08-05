@@ -34,6 +34,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // The file paths inClusterBaoHTTPClient() reads when the corresponding env var
@@ -142,7 +144,7 @@ func runCIMTLSWiringGuard(root string) error {
 	}
 	// A guard that walked nothing reports the same green as one that walked
 	// everything — the sibling guards' shared contract.
-	if err := requireCorpus("mtls-wiring-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("mtls-wiring-guard", examined, dirs); err != nil {
 		return err
 	}
 	for _, f := range findings {

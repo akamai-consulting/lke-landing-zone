@@ -49,6 +49,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // reCosignWorkflowSubject matches a keyless `subject:` whose identity is a
@@ -118,7 +120,7 @@ func runCosignSubjectGuard(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCorpus("cosign-subject-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("cosign-subject-guard", examined, dirs); err != nil {
 		return err
 	}
 

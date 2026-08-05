@@ -49,6 +49,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 )
 
 // plaintextRule is why one hop is allowed to stay unencrypted.
@@ -499,7 +501,7 @@ func runCIPlaintextGuard(root string) error {
 	}
 	// Same rationale as the sibling guards: a guard that walked nothing prints
 	// the same green as one that walked everything.
-	if err := requireCorpus("plaintext-guard", examined, dirs); err != nil {
+	if err := guardkit.RequireCorpus("plaintext-guard", examined, dirs); err != nil {
 		return err
 	}
 
@@ -547,7 +549,7 @@ func runCIPlaintextGuard(root string) error {
 // examined count above zero).
 func plaintextScanDirs(root string) []string {
 	dirs := platformTreeDirs(root)
-	dirs = append(dirs, esRepoPath(root, "kubernetes-charts"), esRepoPath(root, "tools"))
+	dirs = append(dirs, guardkit.RepoPath(root, "kubernetes-charts"), guardkit.RepoPath(root, "tools"))
 	return dirs
 }
 
