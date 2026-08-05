@@ -1,6 +1,6 @@
 // reconcile_apl_overlay.go — cmd/llz wiring for the apl-overlay reconciler. The
 // sync ORCHESTRATION (read → fill → merge → overlay onto apl-<env>) lives in
-// internal/apl/overlay (ADR 0002 Phase 1, the values front door); this file is the
+// internal/apl/overlay (ADR 0013 Phase 1, the values front door); this file is the
 // transport + config that feeds it: it reads the reconciler's env contract, gates
 // on the ESO-synced repo token, adapts the GitHub git-data REST API
 // (gh_gitdata_native.go) to overlay.Repo, and reads the obj credential from

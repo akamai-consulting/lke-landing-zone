@@ -56,7 +56,11 @@ type: application
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
 #        Also re-pins llz-cluster-foundation 0.1.14 + llz-cert-automation 0.1.10.
-version: 0.1.23
+# 0.1.24: re-pin llz-cert-automation 0.1.10 -> 0.1.11 (that chart's doc-only bump).
+#         Pin-only change — a pin the registry never received 404s at Argo sync
+#         time, which is why the pin realignment ships with the bump rather than
+#         after it. Same shape as 0.1.20.
+version: 0.1.24
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

@@ -48,26 +48,31 @@ var docsKeep = map[string]bool{
 }
 
 func ciDeliverDocsCmd() *cobra.Command {
-	var dir, org, ref string
+	var dir, org, ref, root, templateRoot string
 	c := &cobra.Command{
 		Use:   "deliver-docs",
 		Short: "prune a copied-in docs/ to the operator set + write a version-pinned pointer to the rest",
 		Long: "Slims an instance's docs/ to quickstart.md + runbooks/ + playbooks/ and writes\n" +
 			"docs/README.md pointing at the full docs for the pinned template version in the\n" +
 			"(public) template repo. Run after copying the template's docs/ in; the same verb\n" +
-			"backs both the copier render step and release-e2e, so the keep-set can't drift.",
+			"backs both the copier render step and release-e2e, so the keep-set can't drift.\n" +
+			"With --template-root, ALSO repoints links in the instance's root-level Markdown\n" +
+			"(README.md, AGENTS.md, …) that target template-only paths, which the docs/-scoped\n" +
+			"rewrite never sees.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runDeliverDocs(dir, org, ref)
+			return runDeliverDocs(dir, org, ref, root, templateRoot)
 		},
 	}
 	c.Flags().StringVar(&dir, "docs", "docs", "the already-copied docs directory to prune in place")
 	c.Flags().StringVar(&org, "org", "", "template org for the reference URL (e.g. akamai-consulting)")
 	c.Flags().StringVar(&ref, "ref", "", "template ref/tag the instance is pinned to (for the version-matched URL)")
+	c.Flags().StringVar(&root, "root", ".", "the instance root, whose top-level Markdown is repointed (needs --template-root)")
+	c.Flags().StringVar(&templateRoot, "template-root", "", "path to the template checkout; enables the instance-root link repoint (copier passes _copier_conf.src_path)")
 	return c
 }
 
-func runDeliverDocs(dir, org, ref string) error {
+func runDeliverDocs(dir, org, ref, root, templateRoot string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read docs dir %s: %w", dir, err)
@@ -91,10 +96,190 @@ func runDeliverDocs(dir, org, ref string) error {
 	if err := repointReferencedLinks(dir, org); err != nil {
 		return fmt.Errorf("repoint doc links: %w", err)
 	}
+	repointed := 0
+	if templateRoot != "" {
+		if repointed, err = repointInstanceRootLinks(root, dir, templateRoot, org); err != nil {
+			return fmt.Errorf("repoint instance-root links: %w", err)
+		}
+	}
 	sort.Strings(removed)
 	fmt.Printf("deliver-docs: kept the operator set (quickstart + runbooks + playbooks); referenced %d other entr%s at the template repo.\n",
 		len(removed), plural(len(removed), "y", "ies"))
+	if repointed > 0 {
+		fmt.Printf("deliver-docs: repointed %d instance-root link%s to template-only paths.\n",
+			repointed, plural(repointed, "", "s"))
+	}
 	return nil
+}
+
+// ── the instance ROOT, which the docs/-scoped rewrite never sees ─────────────
+//
+// repointReferencedLinks walks only `docs/`, so a link from README.md or AGENTS.md
+// into a path the instance does not carry stayed relative and stayed dead — in
+// every rendered instance, forever. Three shipped that way: AGENTS.md →
+// docs/adopter-guide.md (which this very command prunes), and
+// apl-values/README.md → ../../platform-apl/ (a template-only tree).
+//
+// The rewrite is gated on the link existing IN THE TEMPLATE and NOT in the
+// instance. That pairing is what makes it safe to run over arbitrary root-level
+// Markdown: a link to something the instance creates LATER (landingzone.yaml,
+// written by the first `llz env add`) is absent from both and so is left alone,
+// rather than being repointed at a template URL that 404s.
+
+// templateScaffoldSubdir is where the template keeps the files it renders INTO an instance.
+// A file is template-owned iff the template ships it at instance-template/<rel>.
+const templateScaffoldSubdir = "instance-template"
+
+// repointInstanceRootLinks rewrites, in every TEMPLATE-OWNED .md under root except
+// those under docsDir, the relative links that are dead in the instance but present
+// in the template checkout. Returns how many links it rewrote.
+//
+// ONLY TEMPLATE-OWNED FILES ARE TOUCHED, and that is a correctness rule, not an
+// optimisation. This runs on `copier update` against a LIVE instance, which holds
+// plenty of Markdown that is none of our business: a `vendor/`ed chart, a
+// `.terraform/` module cache, an adopter's own notes. An early cut of this walked
+// all of them and rewrote a link inside `vendor/` — mutating a file the template
+// does not own is exactly what .template-manifest exists to prevent. Gating on
+// "the template ships this path under instance-template/" bounds the blast radius
+// to the files copier itself rendered, with no denylist to keep current.
+func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, error) {
+	if org == "" {
+		org = "akamai-consulting"
+	}
+	// Identify docs/ by INODE, not by path string. --docs and --root are
+	// independent flags: copier passes `--docs docs --root .` (both relative to
+	// the instance), e2e passes `--docs .e2e-instance/docs --root .e2e-instance`.
+	// Comparing cleaned path strings — or resolving one against the other — is
+	// wrong for one caller or the other, and gets it wrong SILENTLY by walking
+	// docs/ twice. os.SameFile sidesteps the spelling entirely.
+	docsInfo, docsErr := os.Stat(docsDir)
+	total := 0
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		// FAIL CLOSED. Returning nil here skips part of the instance tree and
+		// still reports success, so a stale link survives a delivery that
+		// claimed to have fixed it — the same false-green class as docs-guard's.
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", p, err)
+		}
+		if d.IsDir() {
+			// docs/ is handled by repointReferencedLinks.
+			if docsErr == nil {
+				if fi, e := os.Stat(p); e == nil && os.SameFile(fi, docsInfo) {
+					return filepath.SkipDir
+				}
+			}
+			// Dot-directories (.git, .terraform, .instance-test) and vendored
+			// trees hold no template-owned file, so skipping them is pure
+			// walk cost avoided — the ownership check below is what makes it safe.
+			if p != root {
+				if strings.HasPrefix(d.Name(), ".") {
+					return filepath.SkipDir
+				}
+				switch d.Name() {
+				case "node_modules", "vendor":
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".md") {
+			return nil
+		}
+		if relPath, e := filepath.Rel(root, p); e != nil ||
+			!pathExists(filepath.Join(templateRoot, templateScaffoldSubdir, relPath)) {
+			return nil // not ours to rewrite
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		fileDir := filepath.Dir(rel)
+		if fileDir == "." {
+			fileDir = ""
+		}
+		out, n := rewriteInstanceRootLinks(string(data), fileDir,
+			func(q string) bool { return pathExists(filepath.Join(root, q)) },
+			func(q string) (bool, bool) {
+				fi, e := os.Stat(filepath.Join(templateRoot, q))
+				if e != nil {
+					return false, false
+				}
+				return true, fi.IsDir()
+			}, org)
+		total += n
+		if n > 0 {
+			return os.WriteFile(p, []byte(out), 0o644)
+		}
+		return nil
+	})
+	return total, err
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// rewriteInstanceRootLinks repoints relative links that inInstance reports absent
+// and inTemplate reports present, to the template repo at referencedDocsBranch.
+// Directories get /tree/, files /blob/. Pure (both lookups are injected), so the
+// "absent from BOTH is left alone" rule is unit-tested without a fixture tree.
+func rewriteInstanceRootLinks(
+	content, fileDir string,
+	inInstance func(string) bool,
+	inTemplate func(string) (exists bool, isDir bool),
+	org string,
+) (string, int) {
+	n := 0
+	out := mdLinkRe.ReplaceAllStringFunc(content, func(m string) string {
+		target := m[2 : len(m)-1] // strip "](" … ")"
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") ||
+			strings.HasPrefix(target, "#") || strings.HasPrefix(target, "mailto:") ||
+			target == "" {
+			return m
+		}
+		path, anchor := target, ""
+		if i := strings.IndexByte(target, '#'); i >= 0 {
+			path, anchor = target[:i], target[i:]
+		}
+		if path == "" {
+			return m
+		}
+		// Root-relative (`/docs/x.md`) resolves from the INSTANCE root, not the
+		// file's directory — the same rule the guard's two resolvers use. This was
+		// the third copy of that resolution and the one I missed when fixing them.
+		base := fileDir
+		if strings.HasPrefix(path, "/") {
+			base, path = "", strings.TrimPrefix(path, "/")
+		}
+		resolved := filepath.Clean(filepath.Join(base, path))
+		// Defensive: nothing above the instance root, and nothing absolute, ever
+		// reaches the existence probes. (Neither can escape the tree today —
+		// filepath.Join(root, "/x") is root/x, cleaned, not /x — but the probes
+		// should not depend on that being true of every future caller.)
+		if resolved == "." || resolved == "" || filepath.IsAbs(resolved) || strings.HasPrefix(resolved, "..") {
+			return m // escapes the instance — not ours to rewrite
+		}
+		if inInstance(resolved) {
+			return m // alive here; stays relative
+		}
+		exists, isDir := inTemplate(resolved)
+		if !exists {
+			// Dead in BOTH: a file the instance creates later (landingzone.yaml),
+			// or a genuine typo. A template URL would 404 too, so leave it —
+			// docs-guard reports it instead.
+			return m
+		}
+		kind := "blob"
+		if isDir {
+			kind = "tree"
+		}
+		n++
+		return fmt.Sprintf("](https://github.com/%s/lke-landing-zone/%s/%s/%s%s)",
+			org, kind, referencedDocsBranch, resolved, anchor)
+	})
+	return out, n
 }
 
 // docsPointer renders the docs/README.md that replaces the referenced docs. org
@@ -150,17 +335,29 @@ func repointReferencedLinks(dir, org string) error {
 	if org == "" {
 		org = "akamai-consulting"
 	}
+	// PRE-EXISTING swallow, fixed alongside the one above: a walk error here
+	// under-fills `present`, and an absent-looking doc gets its links rewritten
+	// to a template URL even though it IS delivered locally. Wrong output, no
+	// error — so it fails closed now too.
 	present := map[string]bool{}
-	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+	if err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", p, err)
+		}
+		if !d.IsDir() {
 			if rel, e := filepath.Rel(dir, p); e == nil {
 				present[rel] = true
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", p, err)
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".md") {
 			return nil
 		}
 		data, err := os.ReadFile(p)

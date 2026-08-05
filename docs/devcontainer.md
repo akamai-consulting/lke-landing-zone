@@ -84,8 +84,9 @@ llz doctor --env <env>              # confirm the toolchain + your repo config
 can share your host setup with the container:
 
 - **Git / SSH:** VS Code forwards your host SSH agent automatically, and copies
-  your `~/.gitconfig` in — so commits and the ArgoCD deploy-key SSH wiring work
-  with your host keys.
+  your `~/.gitconfig` in — so `git` push/pull over SSH works with your host
+  keys. (Argo CD itself no longer uses an SSH deploy key: the values-repo
+  credential is the `APL_VALUES_REPO_TOKEN` PAT over HTTPS.)
 - **`gh` login:** mount it in by adding to `.devcontainer/devcontainer.json`:
   ```jsonc
   "mounts": [
@@ -107,7 +108,8 @@ image build ships with it:
    [`dockerfiles/Dockerfile`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/dockerfiles/Dockerfile)
    in the template repo (the `devcontainer` target); [`.github/workflows/build-images.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/build-images.yml)
    builds and pushes it (amd64 + arm64) to `ghcr.io/<your-org>/devcontainer` on
-   every change under `dockerfiles/**`. Trigger it manually with **Run workflow →
+   **every push to `main`** — there is deliberately no path filter, so `:latest`
+   always carries HEAD's baked sha. Trigger it manually with **Run workflow →
    image: devcontainer**.
 2. Point your instance at it: `image:` in `.devcontainer/devcontainer.json` is
    rendered from your `upstream_org` Copier answer, so it already targets your

@@ -20,8 +20,10 @@ landing-zone template. It is a single Go module (`go.mod`).
   create|revoke-old` for the 120-day TF-state Object Storage key SLA
   (keep-newest-N drain — the OBJ keys API exposes no `created` time). Built and
   exec'd by the `linode-credentials` composite action. The former standalone
-  `secret-rotation` and `linode-cred-audit` binaries are folded in too, as
-  `llz credentials lke-admin rotate` and `llz ci cred-audit`.
+  `secret-rotation` binary is folded in too, as `llz credentials lke-admin
+  rotate`. (`linode-cred-audit` became `llz ci cred-audit` and has since been
+  RETIRED in turn — its measurement lives in `llz ci token-inventory` and its
+  reporting in `llz ci alert-eval`.)
 - `internal/linode/` — the shared, minimal Linode API client (LKE control-plane
   ACL; profile-token / OBJ-key CRUD and the lke-admin delete-kubeconfig
   rotation), plus chrono-free Linode timestamp helpers, used by the rotation

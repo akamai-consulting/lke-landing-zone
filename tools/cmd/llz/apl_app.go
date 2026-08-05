@@ -1,7 +1,7 @@
 package main
 
 // apl_app.go — `llz apl app`, the App Platform apps (components) verb of the apl
-// front door (ADR 0002). `list` shows the component registry; `enable`/`disable`
+// front door (ADR 0013). `list` shows the component registry; `enable`/`disable`
 // flip a component in environments/<env>.yaml — the declarative GitOps source —
 // then re-render, so the toggle can't be forgotten (the apl-overlay reconciler
 // propagates it onto apl-<env> from there). It is validated, friendlier sugar over

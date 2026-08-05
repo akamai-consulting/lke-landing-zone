@@ -74,13 +74,21 @@ Drop a `.json` export into your apl-values dashboards directory and commit. Argo
 ## Rotating the admin password
 
 1. In Grafana UI: *Administration → Users → admin → Change Password*.
-2. Re-seed OpenBao so ESO stays in sync:
+2. Re-seed OpenBao so ESO stays in sync. **`--yes` is required** — without it the
+   command prints a plan, writes nothing, and still exits 0, which leaves the
+   password rotated in Grafana and stale in OpenBao:
 
     ```bash
-    llz openbao set secret/grafana/admin password=<new-password>
+    llz openbao set secret/grafana/admin password=<new-password> --yes
     ```
 
-3. Force ESO to refresh (optional — happens within `refreshInterval` otherwise):
+3. Verify the write landed before you close the terminal:
+
+    ```bash
+    llz openbao get active secret/grafana/admin password
+    ```
+
+4. Force ESO to refresh (optional — happens within `refreshInterval` otherwise):
 
     ```bash
     kubectl -n grafana annotate externalsecret grafana-admin-credentials \

@@ -4,31 +4,41 @@
 
 **Related:** [`operator-onboarding.md`](operator-onboarding.md), `llz status <env>` (one-shot support-plane Application health report; `--wait` polls), and the sync-wave + correctness rules described in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md).
 
-> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (the shared base under `platform-apl/manifest/` + the per-component `platform-apl/components/`) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
+> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (the shared platform tree your `apl-values/<env>/manifest` overlay remote-refs) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
 
 ---
 
 ## Get into Argo CD
 
+Argo CD is installed and owned by apl-core, and is **Keycloak-SSO'd** — the same
+identity you use for `llz openbao login`. The platform console links to it.
+
 ```bash
 # Per-region (each cluster runs its own Argo CD)
 kubectl -n argocd port-forward svc/argocd-server 8080:443
-
-# Browse: https://localhost:8080
-# Default username: admin
-# Initial admin password:
-kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 -d
-
-# CLI alternative — most operations are simpler from the CLI:
-argocd login localhost:8080 \
-  --insecure \
-  --username admin \
-  --password "$(kubectl -n argocd get secret argocd-initial-admin-secret \
-                  -o jsonpath='{.data.password}' | base64 -d)"
+# Browse https://localhost:8080 and use the SSO button.
 ```
 
-The argocd CLI is installed by the repo's tooling target; if you don't have it, `brew install argocd` works on macOS.
+> **The upstream chart's local admin may not exist here.** `argocd-initial-admin-secret`
+> is created by the community argo-cd chart; apl-core's Argo CD is SSO-integrated and
+> nothing in LLZ references that Secret. Check before you plan around it:
+>
+> ```bash
+> kubectl -n argocd get secret argocd-initial-admin-secret   # NotFound is expected
+> ```
+>
+> If it does exist and you need the local admin for a break-glass case:
+> `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
+
+For the CLI, log in through SSO:
+
+```bash
+argocd login localhost:8080 --insecure --sso
+```
+
+Install the `argocd` CLI yourself — `brew install argocd` on macOS, or the release
+binary. (Your instance has no Makefile; the [Dev Container](../devcontainer.md)
+ships it.)
 
 ---
 
@@ -66,7 +76,34 @@ argocd app sync <app-name> --watch
 
 ### App stuck `OutOfSync`
 
-Most common cause: someone modified a resource in-cluster (or another controller patched it) and Argo CD won't auto-correct because the app has `selfHeal: false` or no auto-sync.
+Two causes dominate here, and the second is the one that wastes a day.
+
+**1. Something changed the resource in-cluster** (a person, or another controller)
+and the app has `selfHeal: false` or no auto-sync, so Argo CD will not correct it.
+
+**2. Nothing changed it — Argo is comparing the wrong thing.** Argo's default
+client-side diff compares your manifest against the live object *including fields
+the cluster wrote itself*: CRD defaults filled in by ESO/Kyverno, an admission
+webhook's mutation, a `mutateDigest`-rewritten image. Those never appear in git, so
+the app is permanently `OutOfSync` with a diff you cannot fix by editing anything.
+
+Every LLZ-carved Application already ships
+`argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true`
+for this reason. If you see permanent drift on an app **without** that annotation,
+that is the first thing to check.
+
+Settle which one you are looking at before changing anything — ask the server what
+it would actually write:
+
+```bash
+kubectl apply --server-side --dry-run=server -f <the-manifest-argo-syncs>
+```
+
+If the result matches the live object, the manifest is fine and the diff is
+client-side — add the compare-options annotation rather than editing the manifest.
+
+> **Do not "fix" this with `ignoreDifferences` on an image path.** It silences the
+> diff and silently stops image bumps from ever rolling out.
 
 ```bash
 # 1. See exactly what differs
@@ -97,9 +134,9 @@ kubectl -n <ns> get events --sort-by='.lastTimestamp' | tail -20
 # 3. For ExternalSecrets specifically:
 #    SecretSyncedError → OpenBao path missing or ESO can't auth
 kubectl describe externalsecret <name> -n <ns>
-# Compare the spec.data[].remoteRef.key against the OpenBao paths in
-# `llz ci bao-configure` (tools/cmd/llz/ci_openbao_configure.go) — anything new
-# must be in the read-only `platform-ci` policy (ESO's Kubernetes-auth role).
+# Compare spec.data[].remoteRef.key against the OpenBao paths `llz ci
+# bao-configure` grants — anything new must be in the read-only `platform-ci`
+# policy (ESO's Kubernetes-auth role), or under a declared team subtree.
 ```
 
 ### Sync hangs forever
@@ -217,6 +254,11 @@ If the resources themselves are corrupt, drop `--cascade=false` and Argo CD clea
 In this setup most apps are `automated: true, selfHeal: true` (e.g. `cert-manager`, `external-secrets`, `observability/*`). One intentional exception:
 
 - **`firewall-controller`** — manual sync only (the Application manifest carries an enable-on-demand comment). Reason: the controller mutates Linode Cloud Firewall state; auto-syncing during an incident can re-apply a broken rule set faster than you can stop it.
+
+  > **Akamai-internal.** This Application ships from the private
+  > `lke-landing-zone-internal` repo, not the public template — if you do not see it
+  > in your cluster, that is why. The public template ships the `cidrFirewall`
+  > component instead.
 
 If you're tempted to flip `selfHeal: true` somewhere it's currently off, ask why it's off first — usually a deliberate operator-gate-required reason.
 

@@ -3,7 +3,7 @@ description: >
   Builds the OpenTofu state+plan encryption config from the passphrase secret and
   exports it as TF_ENCRYPTION for every LATER step in the calling job.
 
-  ADR 0007 splits posture from key material: the roots' encryption.tf carries only
+  ADR 0007 (state encryption) splits posture from key material: the roots' encryption.tf carries only
   the `state`/`plan` blocks and REFERENCES `method.unencrypted.migrate`, while the
   key provider and the method DECLARATIONS arrive in this env var. OpenTofu merges
   the two, so a job that runs tofu without this env var fails to init.
@@ -11,7 +11,7 @@ description: >
   WHY IT IS ITS OWN ACTION. This lived inline in terraform-init, so only jobs that
   inited through that action got the env var. `cluster-access` → `fetch-kubeconfig`
   runs `llz ci fetch-kubeconfig-state`, which does its OWN `tofu init` and never
-  goes through terraform-init — so after ADR 0007 landed, every cluster-facing job
+  goes through terraform-init — so after ADR 0007 (state encryption) landed, every cluster-facing job
   failed at init with OpenTofu's own unhelpful diagnostic:
 
       Error: Reference to undeclared encryption method

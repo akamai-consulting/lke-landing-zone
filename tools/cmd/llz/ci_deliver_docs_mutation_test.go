@@ -59,7 +59,7 @@ func TestDeliverDocsKeepsLocalLinksRelative(t *testing.T) {
 		"secrets.md":          "referenced\n",
 		"adopter-guide.md":    "referenced\n",
 	})
-	if err := runDeliverDocs(dir, "myorg", "v1.2.3"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v1.2.3", "", ""); err != nil {
 		t.Fatalf("runDeliverDocs: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestDeliverDocsDefaultsOrgOnlyWhenUnset(t *testing.T) {
 		"quickstart.md": "See [secrets](secrets.md).\n",
 		"secrets.md":    "referenced\n",
 	})
-	if err := runDeliverDocs(dir, "", "v1.2.3"); err != nil {
+	if err := runDeliverDocs(dir, "", "v1.2.3", "", ""); err != nil {
 		t.Fatalf("runDeliverDocs: %v", err)
 	}
 	if q := ddRead(t, dir, "quickstart.md"); !strings.Contains(q, "github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md") {

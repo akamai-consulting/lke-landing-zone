@@ -31,11 +31,13 @@ separate, LKE-Enterprise-specific case — see
 > **One env list, no drift.** The per-deployment matrices in both
 > `secret-rotation.yml` (PAT propagation + lke-admin rotation) and
 > `scheduled-checks.yml` (every health/audit job) are derived from a single
-> `discover` job that runs `llz env list --json` — i.e. the set of
-> `terraform-iac-bootstrap/cluster/<name>.tfvars` files. So rotation writes a
-> token into exactly the deployments the daily checks verify, and a new
-> deployment (`llz env add`) is covered by both the moment it exists. There is
-> no hand-maintained env list to fall out of sync.
+> `discover` job that runs `llz env list --json` — the **union** of the spec's
+> `environments/<name>.yaml` set and any `terraform-iac-bootstrap/cluster/<name>.tfvars`.
+> The union is what makes this work in CI: the tfvars are gitignored build
+> artifacts, so in a fresh checkout the spec is the only source. Rotation therefore
+> writes a token into exactly the deployments the daily checks verify, and a new
+> deployment (`llz env add`) is covered by both the moment it is committed. There
+> is no hand-maintained env list to fall out of sync.
 
 ---
 
@@ -47,7 +49,7 @@ creation. So the policy is enforced as **verify-and-alert**, not auto-rotate.
 
 ### Automated verification
 
-`instance-template/.github/workflows/scheduled-checks.yml → credential single pane`
+`.github/workflows/scheduled-checks.yml → credential single pane`
 runs daily (06:00 UTC, each environment), in two steps sharing one kubeconfig:
 
 1. **`llz ci token-inventory`** (writer) — measures every CI token this job
@@ -69,7 +71,7 @@ is the single pane, so the same breach pages the same way whether CI ran or not.
 ### Rotating `LINODE_API_TOKEN` (automated — `secret-rotation.yml`)
 
 The broad `LINODE_API_TOKEN` is rotated by
-`instance-template/.github/workflows/secret-rotation.yml` on the monthly
+`.github/workflows/secret-rotation.yml` on the monthly
 schedule (1st of the month, 04:00 UTC), or on-demand via `workflow_dispatch`
 with `scope=linode-pat`, `pat-apply=true`. The pipeline:
 
@@ -254,7 +256,7 @@ inventory:
 
 ### Automated verification
 
-`instance-template/.github/workflows/scheduled-checks.yml → credential single pane`
+`.github/workflows/scheduled-checks.yml → credential single pane`
 runs daily. For each known service PAT `llz ci token-inventory` makes one
 authenticated request to the matching API (`https://api.github.com`) and
 reads the **`GitHub-Authentication-Token-Expiration`** response header. The job

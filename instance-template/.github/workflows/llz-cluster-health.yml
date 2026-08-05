@@ -31,7 +31,7 @@ on:
     secrets:
       TF_STATE_ENCRYPTION_PASSPHRASE:
         description: >
-          Passphrase for OpenTofu state+plan encryption (ADR 0007). Required by
+          Passphrase for OpenTofu state+plan encryption (ADR 0007 (state encryption)). Required by
           the cluster-access action: the kubeconfig is read from Terraform state,
           whose roots carry an `encryption` block.
         required: false

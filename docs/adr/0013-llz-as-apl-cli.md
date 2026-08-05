@@ -1,11 +1,11 @@
-# ADR 0002 — Reframe LLZ as the APL CLI: one binary, two altitudes
+# ADR 0013 — Reframe LLZ as the APL CLI: one binary, two altitudes
 
 - Status: Proposed
 - Date: 2026-07-24
 - Deciders: platform / LLZ maintainers
 - Related: `docs/designs/apl-core-values-branch-isolation.md`,
   `tools/cmd/llz/reconcile_apl_overlay.go`,
-  `docs/adr/0001-pat-rotation-locus.md`
+  the reserved ADR 0001 (PAT rotation locus) — see [the ADR index](README.md)
 
 ## Context
 

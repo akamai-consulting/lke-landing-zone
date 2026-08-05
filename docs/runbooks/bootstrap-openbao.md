@@ -1,6 +1,6 @@
 # OpenBao Bootstrap Runbook
 
-**Workflow:** `instance-template/.github/workflows/bootstrap-openbao.yml`  
+**Workflow:** `.github/workflows/bootstrap-openbao.yml` (a thin caller; the body is `.github/workflows/llz-bootstrap-openbao.yml`)  
 **Applies to:** every cluster (one `<env>` per cluster); run once per cluster during provisioning and again for emergency recovery.
 
 ---
@@ -41,7 +41,32 @@ The workflow detects cluster state automatically and chooses the right path:
 | `OPENBAO_RECOVERY_KEY_2` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_RECOVERY_KEY_3` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_ROOT_TOKEN` | Re-configure only | Set manually; delete immediately after the run |
-| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist the OpenBao seal/recovery keys. **Required PAT scopes (classic):** `repo`, `workflow`. **Additionally required:** the PAT owner must be **Environment admin** on every `infra-<env>` GHA Environment whose secrets are written. Missing Environment admin causes `--env`-scoped `gh secret set` calls to 401 even though repo-level writes succeed — the partial state typically surfaces as `bootstrap-openbao.yml` failing its S3 preflight 5 minutes into a run that started 30 minutes earlier. Verify with: `GH_TOKEN=$PAT gh api user` (must succeed and return your username). |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist the OpenBao seal/recovery keys. **Permissions — see the box below; getting this wrong is the single most common bootstrap failure.** |
+
+> ### `OPENBAO_SECRETS_WRITE_TOKEN` permissions
+>
+> Either form works:
+>
+> - **Fine-grained PAT** (what `llz tokens`' pre-filled link creates): **Actions:
+>   write + Environments: write** on the instance repo.
+> - **Classic PAT**: `repo` + `workflow`.
+>
+> Two traps, both of which fail the same way:
+>
+> - The fine-grained **"Secrets" permission is NOT enough.** It governs *repo-level*
+>   secrets; the `infra-<env>` **environment** secrets this workflow writes are
+>   governed by **Environments**.
+> - The PAT owner must **also be Environment admin** on every `infra-<env>`
+>   environment being written.
+>
+> Get either wrong and repo-level writes still succeed while the `--env`-scoped
+> `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
+> failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
+>
+> Verify the token authenticates at all with `GH_TOKEN=$PAT gh api user`. (That
+> only proves the token is live — it cannot prove the Environments permission, which
+> is why the two traps above are worth re-reading.) Same guidance, adopter-facing:
+> [quickstart §4](../quickstart.md#4-build-it--llz-up).
 | *(retired)* `LOKI_S3_*` / `HARBOR_REGISTRY_S3_*` | — | No longer exist: the workflow's `llz ci mint-bootstrap-objkeys` step mints the object-storage keys via the Linode API and seeds OpenBao directly; the in-cluster `linodeCredRotator` rotates them. The credentials never transit GitHub. |
 | *(retired)* `GITEA_BACKUP_S3_ACCESS_KEY` / `GITEA_BACKUP_S3_SECRET_KEY` | — | No longer exist: Gitea is disabled on apl-core v6 (external BYO Git / git-server), so there is no in-cluster Gitea to back up and no backup CronJob to seed. |
 | `LINODE_DNS_TOKEN` | Consumed by Terraform (`TF_VAR_linode_dns_token`), not this workflow | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`apps.cert-manager.dns.provider.linode.apiToken`) and ExternalDNS. No OpenBao seed is involved. ACME certificate challenges fail until it is provisioned. The `llz-letsencrypt-*` ClusterIssuers that target that webhook sync automatically via Argo CD (the mandatory `platform-apl/manifest/dns` base). |
@@ -268,13 +293,24 @@ gh workflow run breakglass-openbao.yml \
 ```
 
 The run's **job summary** (and a 1-day `openbao-root-token-<env>-encrypted`
-artifact) contains only ciphertext. Decrypt locally with your offline key:
+artifact) contains only ciphertext. **Save that ciphertext to a file first** — the
+decrypt below reads it from disk:
 
 ```bash
+# Paste the base64 ciphertext from the job summary, or download the artifact:
+gh run download <run-id> -n openbao-root-token-<env>-encrypted   # -> root-token.b64
+# ...or by hand:  pbpaste > root-token.b64   /   cat > root-token.b64  (then Ctrl-D)
+
 base64 -d root-token.b64 \
   | openssl pkeyutl -decrypt -inkey bg-priv.pem \
       -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo
 ```
+
+> **macOS: use Homebrew's OpenSSL, not the system one.** The system `openssl` is
+> LibreSSL, which does not support `-pkeyopt rsa_oaep_md` and fails here with an
+> unhelpful error — at the worst possible moment. Check with `openssl version`; if
+> it says LibreSSL, run `brew install openssl@3` and use
+> `$(brew --prefix openssl@3)/bin/openssl` for both the keygen and the decrypt.
 
 ### When the incident is over
 
@@ -301,4 +337,4 @@ gh workflow run breakglass-openbao.yml --field region=<env> --field action=revok
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
-- [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — workflow source
+- [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — the thin caller in the TEMPLATE repo (in your instance it is `.github/workflows/bootstrap-openbao.yml`); the body is `llz-bootstrap-openbao.yml` beside it

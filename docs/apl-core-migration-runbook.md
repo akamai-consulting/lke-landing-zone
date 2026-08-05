@@ -133,8 +133,11 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
 7. **Bootstrap OpenBao**:
    ```bash
-   gh workflow run bootstrap-openbao.yml -f environment=<env> -f mode=init
+   gh workflow run bootstrap-openbao.yml -f region=<env>
    ```
+
+   The workflow's only input is `region` (the *deployment* name, not a Linode
+   region), and it detects cluster state itself — there is no `mode` to select.
    Copy the static seal key (`OPENBAO_SEAL_KEY`) + recovery keys 4-5 + root token to offline storage. See
    [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md).
 

@@ -373,6 +373,31 @@ jobs:
       - name: Scaffold a throwaway env and validate its apl-values
         run: make scaffold-check
 
+  # ── Docs ─────────────────────────────────────────────────────────────────────
+  # Validates every Markdown file against the repo it documents: `llz` commands +
+  # flags against the live cobra tree, `gh workflow run` inputs against the
+  # workflows' declared inputs, and relative links resolved BOTH here and in the
+  # post-`deliver-docs` keep-set an adopter carries.
+  #
+  # Its own job, and cheap (seconds, no cloud, no Helm): a docs-only PR should not
+  # have to wait on kind, and a docs defect should not be buried in a lint job
+  # whose name gives no hint that the failure is in a runbook.
+  #
+  # Needs Go for the same reason as `scaffold`: it must check the docs against the
+  # CLI IN THIS PR, not against the last released binary. Checking against an old
+  # CLI would miss exactly the rename-shaped drift the guard exists for.
+  docs:
+    name: Docs guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go (build llz — the guard reads its own command tree)
+        uses: ./.github/actions/setup-llz
+      - name: Commands, workflow inputs and links resolve
+        run: make docs-guard
+
   # ── Instantiate (copier render) ──────────────────────────────────────────────
   # Renders instance-template/ into a throwaway instance with the REAL copier and
   # asserts no unrendered `<@ … @>` tokens survived, the required per-instance

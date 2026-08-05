@@ -60,6 +60,16 @@ elif [[ -x "$ROOT/bin/llz" ]]; then LLZ="$ROOT/bin/llz"
 elif command -v llz >/dev/null 2>&1; then LLZ="$(command -v llz)"
 else ( cd "$ROOT/tools" && go build -o "$ROOT/bin/llz" ./cmd/llz ) && LLZ="$ROOT/bin/llz"; fi
 
+# copier's _tasks shell out to a BARE `llz` (they run in the rendered instance, not
+# here), so they pick up whatever is on PATH — which on a dev box is the installed
+# release, not this tree. That made the deliver-docs task test the WRONG binary:
+# a task using a flag this tree just added failed against an older release and fell
+# through to its fallback, and the run reported a docs-delivery failure that had
+# nothing to do with the template under test. Put the resolved llz first on PATH so
+# the copier tasks exercise the CLI this template ships with.
+PATH="$(cd "$(dirname "$LLZ")" && pwd):$PATH"
+export PATH
+
 # step() and fail() come from lib-common.sh; fail() accumulates into FAILED.
 FAILED=0
 

@@ -239,10 +239,20 @@ surfaces mid-download instead of as a clean "can't create file" — that's why t
 
 Enable shell completion (cobra-generated):
 
-```bash
-llz completion zsh  > "${fpath[1]}/_llz"     # zsh  (then restart the shell)
-source <(llz completion bash)                 # bash (add to ~/.bashrc)
+```zsh
+# zsh — writes into the first writable dir on your $fpath, then restart the shell.
+# (`${fpath[1]}` is a zsh array; in bash it expands to EMPTY and this writes to /_llz.)
+llz completion zsh > "${fpath[1]}/_llz"
 ```
+
+```bash
+# bash — add to ~/.bashrc
+source <(llz completion bash)
+```
+
+> If `${fpath[1]}` is a system directory you cannot write to, use a personal one
+> instead: `mkdir -p ~/.zfunc && llz completion zsh > ~/.zfunc/_llz`, and add
+> `fpath=(~/.zfunc $fpath)` above `compinit` in your `~/.zshrc`.
 
 Once installed, keep the binary current without re-running the download — `llz
 self-update` pulls the latest **full** release for your platform (pre-release
@@ -343,7 +353,7 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 
 - `region` (**required**), `k8sVersion` (an LKE-E `+lke` version) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`)
 - `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
-- `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the leftover `--cluster-domain` flag prints a domain in the summary banner but writes nothing.
+- `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the `--cluster-domain` flag is deprecated and ignored (it warns and writes nothing).
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
 > **Export `LINODE_TOKEN` (or `LINODE_API_TOKEN`) first** and `env add` checks
@@ -562,8 +572,10 @@ them.
 > Get either wrong and repo-level writes still succeed while the `--env`-scoped
 > `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
 > failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
-> Check the PAT with `GH_TOKEN=$PAT gh api user`. Full detail:
-> [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md).
+> Check the token is live with `GH_TOKEN=$PAT gh api user` (that cannot prove the
+> Environments permission — only that the token works at all). Canonical
+> reference: [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md) →
+> "`OPENBAO_SECRETS_WRITE_TOKEN` permissions".
 
 > **Manual alternative.** `llz secrets gather` (paste every credential yourself)
 > + `llz secrets push <env> --yes` is still available if you'd rather not have
@@ -588,7 +600,8 @@ that must be true before the build:
    committed `apl-values` are in sync with it (so a spec edit you forgot to
    `llz render` is caught here); then scans the tfvars + overlay for residual
    placeholders, verifies the deployment discriminator agrees across the tfvars,
-   and renders the overlay (the former `llz validate --env`).
+   and renders the overlay. (This absorbed the env-scoped check `llz validate`
+   used to carry; that flag still works but is deprecated and prints a notice.)
 3. **Repo config** — every variable/secret an e2e/build needs, required vs
    optional, set vs missing, merging your local `.llz/*.env` with the live repo
    config. (Variable *values* are read from the repo; secrets are presence-only —
@@ -662,7 +675,7 @@ The **Scheduled Checks** workflow runs the same check monthly (its
 
 The OCI chart `targetRevision`s and external GitHub Action digests version on
 their own cadence and move via **Renovate PRs** (not `llz`).
-`instance-template/renovate.json` ships in and bumps those. The first-party LLZ
+`renovate.json` (delivered into your instance by copier) bumps those. The first-party LLZ
 module/workflow refs are **not** Renovate-managed — they ride `llz_version` and
 move with `llz upgrade` (Track A), so Renovate is disabled on them to avoid
 racing. After forking, repoint its `packageName` / `registryAliases` from

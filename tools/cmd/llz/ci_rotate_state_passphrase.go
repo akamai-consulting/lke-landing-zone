@@ -1,7 +1,7 @@
 package main
 
 // ci_rotate_state_passphrase.go implements `llz ci rotate-state-passphrase` — the
-// rollover half of OpenTofu state-encryption key rotation (ADR 0007 / ADR 0009).
+// rollover half of OpenTofu state-encryption key rotation (ADR 0007 (state encryption) / ADR 0009).
 //
 // WHY A ROLLOVER IS POSSIBLE AT ALL. Three facts, each verified against OpenTofu
 // 1.12.3 rather than assumed:
@@ -60,7 +60,7 @@ type rootRollover struct {
 // Seams for tests.
 //
 // STDOUT OF `tofu state pull` IS PLAINTEXT STATE — kubeconfigs, database admin
-// passwords, the whole reason ADR 0007 exists. Neither seam captures it: the
+// passwords, the whole reason ADR 0007 (state encryption) exists. Neither seam captures it: the
 // re-key pipes it straight into `state push` inside one shell so it never lands
 // in a Go buffer or on disk, and the verify discards it outright. Only STDERR is
 // captured, so a failure message can never carry decrypted state into a log, a

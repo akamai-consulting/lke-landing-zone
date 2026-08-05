@@ -32,8 +32,10 @@ Your own Kubernetes manifests do **not** live here — they live at
 apl-core's inputs only.
 
 **The heavy platform manifests are NOT here.** The always-on base and the
-per-component kustomize Components live at [`platform-apl/`](../../platform-apl/)
-in the **template repo root**, outside the instance scaffold. An instance vendors
+per-component kustomize Components live at
+[`platform-apl/`](https://github.com/akamai-consulting/lke-landing-zone/tree/main/platform-apl)
+in the **template repo**, outside the instance scaffold — so there is no local path
+to follow, which is why that link leaves this repo. An instance vendors
 none of it: each env's `manifest/kustomization.yaml` references them as pinned
 kustomize **remote refs** at the template ref the instance tracks, e.g.
 

@@ -1,5 +1,5 @@
 // Package overlay is the apl-overlay git-to-git config-sync reconciler, lifted out
-// of package main per ADR 0002 Phase 1 (docs/adr/0002-llz-as-apl-cli.md) — the
+// of package main per ADR 0013 Phase 1 (docs/adr/0013-llz-as-apl-cli.md) — the
 // values front door the ADR names as its flagship. It reads LLZ's apl-overlay from
 // the human-owned source branch, fills the obj credential, merges the _shared +
 // <env> layers, and overlays ONLY the owned files onto the machine-owned apl-<env>

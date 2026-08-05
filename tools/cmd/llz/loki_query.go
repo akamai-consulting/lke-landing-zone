@@ -21,9 +21,10 @@ package main
 // therefore wrong for one of them by construction — see defaultAuditTenant and
 // defaultCollectorTenant, which is why they are two constants.
 //
-// (docs/playbooks/loki-access.md contradicts itself on this point — it says both
-// "do not add the header" and "note the mandatory header". The header is
-// mandatory.)
+// (docs/playbooks/loki-access.md used to contradict itself here — it said both "do
+// not add the header" and "note the mandatory header", and told operators that a
+// 401 "no org id" was NOT a tenancy problem. It now carries the routing table
+// above; keep the two in step.)
 
 import (
 	"encoding/json"

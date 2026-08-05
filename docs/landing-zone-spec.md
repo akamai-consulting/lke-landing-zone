@@ -218,8 +218,9 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 **Must NOT be set:** `cluster.bootstrap.domainSuffix` — Linode owns the
 `lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; a stale value
 would misroute the Keycloak issuer and Harbor URL, so the validator rejects it
-outright. (`llz env add --cluster-domain` is a leftover no-op: it prints a
-`domainSuffix` in its summary banner but writes nothing.)
+outright. (The `--cluster-domain` flag on `llz env add` is deprecated and ignored;
+passing it now warns and writes nothing, where it used to echo a `domainSuffix`
+back in the summary banner as though it had been applied.)
 
 **Deprecated: `spec.instance.templateVersion`.** Accepted and ignored — leave it or
 delete it, nothing reads it. The template pin lives once in `.copier-answers.yml`

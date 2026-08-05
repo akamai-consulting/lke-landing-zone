@@ -40,7 +40,7 @@ there rather than restating it here, so prose can't drift from the pin.
 
 | Path | What it is |
 |---|---|
-| [`landingzone.yaml`](landingzone.yaml) | Instance identity + shared `spec.defaults` + shared VPCs |
+| `landingzone.yaml` | Instance identity + shared `spec.defaults` + shared VPCs. **Created by your first `llz env add`** — until then the only copy here is [`landingzone.yaml.example`](landingzone.yaml.example), fully commented |
 | [`environments/`](environments/) | One `<env>.yaml` cluster definition per deployment |
 | [`terraform-iac-bootstrap/`](terraform-iac-bootstrap/) | Terraform roots; the `*.tfvars` are **rendered** from the spec |
 | [`apl-values/`](apl-values/) | The apl-core values overlay, per deployment |

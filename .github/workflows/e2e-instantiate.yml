@@ -278,9 +278,16 @@ jobs:
           # the copier _tasks can't drift — which is what previously leaked
           # cross-org-reuse-pattern.md (literal `<@ … @>` examples) into the instance
           # and tripped the unrendered-token guard below.
+          # --root/--template-root additionally repoint the instance ROOT's
+          # Markdown (README.md, AGENTS.md, apl-values/README.md) at paths only the
+          # template carries. Passed here for the same reason the keep-set lives in
+          # the verb: without them the e2e instance would carry dead root links that
+          # a copier-rendered instance does not, and the reference instance would
+          # stop matching what an adopter actually gets.
           mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
           bin/llz ci deliver-docs --docs .e2e-instance/docs \
-            --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}"
+            --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}" \
+            --root .e2e-instance --template-root .
           # Composite actions are VENDORED into every instance (.github/actions/ —
           # the reusable llz-* bodies reference them as `./.github/actions/<name>`),
           # so the `cp -a instance-template/.` above already put them where the

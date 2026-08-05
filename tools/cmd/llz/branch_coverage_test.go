@@ -440,3 +440,56 @@ func TestOpenWorldACLFindings(t *testing.T) {
 		t.Errorf("a closed ACL must produce no findings, got %+v", got)
 	}
 }
+
+// `llz env add`'s output used to print an unconditional "Still to fill … the
+// REPLACE_PER_ENV / REPLACE_ME placeholders" block and then, two lines later,
+// "✓ no placeholders left to fill" — so a clean scaffold sent the operator
+// hunting for placeholders that were not there. printPlaceholderChecklist is now
+// the sole reporter; this pins that.
+func TestEnvAddNextSteps_DoesNotClaimPlaceholdersUnconditionally(t *testing.T) {
+	out := captureStdout(t, func() {
+		printEnvAddNextSteps("lab", "environments/lab.yaml", envAddOpts{})
+	})
+	for _, banned := range []string{"Still to fill", "REPLACE_PER_ENV", "REPLACE_ME"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("printEnvAddNextSteps must leave placeholder reporting to the checklist, but printed %q:\n%s", banned, out)
+		}
+	}
+	if !strings.Contains(out, "scaffolded") {
+		t.Errorf("expected the scaffolded confirmation:\n%s", out)
+	}
+}
+
+// --cluster-domain writes nothing (Linode owns the domain; the validator rejects
+// cluster.bootstrap.domainSuffix). The banner used to echo it back as
+// `domainSuffix: <value>`, which read exactly like it had been applied.
+func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
+	dir := chdirTempDir(t)
+	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
+	out := captureStdout(t, func() {
+		_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
+			region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+		})
+	})
+	if strings.Contains(out, "domainSuffix:") {
+		t.Errorf("the banner must not echo a domainSuffix it never writes:\n%s", out)
+	}
+}
+
+// cobra's MarkDeprecated already warns at parse time; a second warning printed
+// from runEnvAdd said the same thing twice AND split the summary banner in half.
+func TestEnvAdd_ClusterDomainWarnsExactlyOnce(t *testing.T) {
+	dir := chdirTempDir(t)
+	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
+	var out, errOut string
+	errOut = captureStderr(t, func() {
+		out = captureStdout(t, func() {
+			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
+				region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+			})
+		})
+	})
+	if n := strings.Count(errOut+out, "cluster-domain"); n > 0 {
+		t.Errorf("runEnvAdd must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
+	}
+}

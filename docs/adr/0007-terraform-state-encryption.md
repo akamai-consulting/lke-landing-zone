@@ -145,7 +145,7 @@ Terraform 1.9.8 until that migration):
 
 ## Related
 
-- ADR 0001 (PAT rotation locus) — same "where does the credential live" question.
+- The **PAT-rotation-locus** question — same "where does the credential live" framing. (Reserved as ADR 0001; not yet written — see [the ADR index](README.md).)
 - [docs/designs/shared-managed-postgres.md](../designs/shared-managed-postgres.md)
   — the rotate-on-create half, which limits how long the state copy is *live*
   rather than how readable it is. The two are complementary: encryption protects

@@ -117,11 +117,35 @@ useful context for emergency recovery and understanding the secret layout.
 
 ### Emergency manual bring-up (fallback only)
 
-If the workflow fails partway through and you need to intervene manually, the
-equivalent `bao` commands can be found in the workflow source
-(`instance-template/.github/workflows/bootstrap-openbao.yml`). Access OpenBao via
-`kubectl exec` into the `<release>-openbao-0` pod with
-`VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true`.
+If the workflow fails partway through and you need to intervene manually, reach for
+the individual verbs rather than raw `bao` — the bootstrap steps are Go commands,
+not inline shell, so there is no shell transcript in the workflow to copy. The
+dispatched `bootstrap-openbao.yml` is a thin caller; the body is
+`llz-bootstrap-openbao.yml`, and every step in it is an `llz ci bao-*` verb:
+
+| verb | what it does |
+|---|---|
+| `llz ci bao-status` | probes every pod, reports initialized/sealed — always safe, start here |
+| `llz ci bao-init` | first-time `bao operator init`; persists recovery keys + root token |
+| `llz ci bao-regen-root` | regenerates the root token by quorum |
+| `llz ci bao-configure` | KV v2, auth methods, policies, roles, audit device |
+| `llz ci bao-seed-all` | seeds the platform secret set |
+
+Each is documented in
+[`runbooks/bootstrap-openbao.md`](runbooks/bootstrap-openbao.md) → "Break-glass
+handles". If you must drive `bao` inside the pod directly, the in-pod environment
+is **not** the obvious one — target the loopback listener on `:8210` and set the
+`BAO_*` names, or the command reaches the mTLS listener without a client
+certificate and dies on the handshake:
+
+```bash
+kubectl -n llz-openbao exec -it <release>-openbao-0 -- \
+    env BAO_ADDR=https://127.0.0.1:8210 BAO_CACERT=/openbao/tls/ca.crt \
+    bao status
+```
+
+See [`playbooks/openbao-accounts.md`](playbooks/openbao-accounts.md) → "break-glass
+root" for why (`:8200` is mTLS-only, and a present `BAO_ADDR` shadows `VAULT_ADDR`).
 
 ## Secret layout
 
@@ -433,17 +457,37 @@ It writes to both regional clusters, verifies the SHA-256 hash of the post-write
 payload matches, and rolls back the primary if the secondary write fails. It
 **dry-runs by default** — add `--yes` to execute the write.
 
-Prerequisites:
+Prerequisites — **the normal path needs none of them**:
 
 ```bash
-# Operator-level token for each region. Do NOT use the ESO platform-ci credentials — they are read-only.
-# Obtain via your normal operator auth method, or via `bao operator generate-root` for
-# emergency access (requires three of the five recovery key holders).
-export OPENBAO_ADDR_ACTIVE=https://openbao.primary.<cluster_domain>
-export OPENBAO_ADDR_STANDBY=https://openbao.secondary.<cluster_domain>
-export OPENBAO_TOKEN_ACTIVE=...        # operator token for the active cluster
-export OPENBAO_TOKEN_STANDBY=...      # operator token for the standby cluster
+# Point KUBECONFIG at the cluster, then take a team-scoped, attributed token.
+# `llz openbao set` port-forwards each cluster itself, so there is no address to export.
+eval "$(llz openbao login --team <name>)"     # → OPENBAO_TOKEN
 ```
+
+See [`runbooks/openbao-team-login.md`](runbooks/openbao-team-login.md). Root is
+**not** the everyday credential: it is revoked at the end of every bootstrap, so
+reaching for it means a break-glass regeneration
+([`playbooks/openbao-accounts.md`](playbooks/openbao-accounts.md)) for a write the
+team login already covers.
+
+<details>
+<summary>Overriding the addresses (an out-of-cluster OpenBao)</summary>
+
+Only when you are not port-forwarding — e.g. an OpenBao reachable directly on the
+network. Do **not** hand-assemble these from a cluster domain: on Managed App
+Platform Linode owns the domain and LLZ discovers it in-cluster.
+
+```bash
+export OPENBAO_ADDR_ACTIVE=https://<active-openbao-host>
+export OPENBAO_ADDR_STANDBY=https://<standby-openbao-host>
+export OPENBAO_TOKEN_ACTIVE=...        # operator token for the active cluster
+export OPENBAO_TOKEN_STANDBY=...       # operator token for the standby cluster
+```
+
+Do **not** use the ESO `platform-ci` credentials — they are read-only.
+
+</details>
 
 Rotate a generated key seed:
 
@@ -604,9 +648,14 @@ OpenBao with HTTP 400). To verify the device is active:
 
 ```bash
 kubectl -n llz-openbao exec -it <release>-openbao-0 -- \
-    env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN=<token> \
+    env BAO_ADDR=https://127.0.0.1:8210 BAO_CACERT=/openbao/tls/ca.crt BAO_TOKEN=<token> \
     bao audit list
 ```
+
+> The loopback listener (`:8210`) and the `BAO_*` names are both load-bearing —
+> `:8200` requires a client certificate an in-pod caller does not have, and a
+> present `BAO_ADDR` shadows `VAULT_ADDR`. `llz openbao exec -- audit list` does
+> this for you.
 
 ### Audit device failure stops OpenBao
 

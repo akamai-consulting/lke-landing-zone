@@ -89,7 +89,9 @@ revoked its root token, so:
 
 ```bash
 # 1. Declare the team (above), then render + commit so apl-core makes team-<name>:
-llz render && git commit -am "feat: add gsap team" && git push   # apl-core converges the group/role
+llz render
+# `-am` will NOT stage the overlay files a new team renders — they are untracked.
+git add -A && git commit -m "feat: add gsap team" && git push   # apl-core converges the group/role
 
 # 2. OpenBao side (needs root) + the device-flow client:
 export OPENBAO_ROOT_TOKEN=<root>     # get root: see "Getting a root token" above (break-glass)
@@ -113,7 +115,7 @@ llz ci keycloak-configure --region <region>  # public device-flow `llz` client
 > minting **15m/30m** tokens until a re-configure runs — an upgrade of the `llz`
 > binary alone changes nothing. If `login` tokens still expire mid-seed on an
 > existing cluster, that is what you are looking at; the re-configure above is the
-> fix. Check the live value with `bao read auth/keycloak/role/<team>`.
+> fix. Check the live value with `llz openbao exec -- read auth/keycloak/role/<team>`.
 
 All idempotent. `bao-configure` is the only step that needs root. If
 `keycloak-configure` can't reach Keycloak, create the client by hand: a **public**
@@ -181,7 +183,7 @@ covered by unit tests).
 > `_llz_smoke_<timestamp>` key under the team subtree, and the smoke token has no
 > `delete` capability (by design — writers can't delete), so each run **accumulates**
 > one such key. Fine on an e2e/throwaway cluster; on a long-lived cluster, prune them
-> with the root token (`bao kv metadata delete secret/<subtree>/_llz_smoke_<ts>`) if
+> with the root token (`llz openbao exec -- kv metadata delete secret/<subtree>/_llz_smoke_<ts>`) if
 > they pile up.
 
 ## Offboard a team (remove write + ESO read access)
@@ -196,19 +198,21 @@ To fully offboard team `<name>` (needs the root token):
 ```bash
 export OPENBAO_ROOT_TOKEN=<root>   # get root: break-glass (see "Getting a root token" above)
 # 1. OpenBao: remove the login role + the writer policy.
-bao delete   auth/keycloak/role/<name>
-bao policy delete <name>-writer
+#    `llz openbao exec` port-forwards and sets the in-pod BAO_ADDR/BAO_CACERT for
+#    you — a bare `bao` from your laptop has neither and will not connect.
+llz openbao exec -- delete auth/keycloak/role/<name>
+llz openbao exec -- policy delete <name>-writer
 # 1b. Detach the ESO READ grant, then delete the reader policy. Order matters: the
 #     `eso` k8s-auth role keeps a deleted policy in its list (a no-op grant that
 #     springs back to life if the name is ever re-created), and bao-configure does
 #     NOT re-derive the list on its own — it is one-shot and root-gated. Re-write
 #     the role with the remaining teams' readers (drop only <name>):
-bao read auth/kubernetes/role/eso                       # inspect the current list first
-bao write auth/kubernetes/role/eso \
+llz openbao exec -- read auth/kubernetes/role/eso       # inspect the current list first
+llz openbao exec -- write auth/kubernetes/role/eso \
     bound_service_account_names=external-secrets \
     bound_service_account_namespaces=external-secrets \
     policies=platform-ci[,<other-team>-reader…] ttl=15m
-bao policy delete <name>-reader
+llz openbao exec -- policy delete <name>-reader
 # 2. apl-core: HAND-DELETE the teamConfig.<name> entry from the committed
 #    apl-values/<env>/values.yaml (render only ADDS/preserves teamConfig — dropping the
 #    team from spec.teams stops it being re-added but removes NOTHING already committed).
