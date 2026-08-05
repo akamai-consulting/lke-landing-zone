@@ -21,6 +21,53 @@
 
 <!-- /toc -->
 
+## Where each step runs
+
+The build happens **in CI**, not on your machine. That one fact explains the two
+steps people trip on: you `git push` before building (step 4) because CI reads
+your repo, and you fetch a kubeconfig afterwards (step 8) because the cluster was
+created somewhere you were not.
+
+```mermaid
+flowchart LR
+    subgraph L1["🖥️ Your machine"]
+        direction TB
+        I["<b>1.</b> install-llz.sh"]
+        N["<b>2.</b> llz new"]
+        E["<b>3.</b> llz env add"]
+        P["<b>4.</b> git push"]
+        D["<b>5.</b> llz doctor --env"]
+        U["<b>6.</b> llz up"]
+        I --> N --> E --> P --> D --> U
+    end
+
+    subgraph CI["☁️ GitHub Actions — the cluster is built HERE"]
+        direction TB
+        TF["terraform apply<br/>vpc → cluster → object-storage"]
+        BOOT["llz ci bootstrap-cluster"]
+        CONV["converge gate"]
+        TF --> BOOT --> CONV
+    end
+
+    subgraph L2["🖥️ Back on your machine"]
+        direction TB
+        K["<b>8.</b> llz ci fetch-kubeconfig"]
+        S["<b>9.</b> llz status"]
+        K --> S
+    end
+
+    U ==>|"workflow_dispatch"| TF
+    CONV ==> K
+    CONV -.->|"<b>7.</b> shown ONCE — copy offline"| M["🔑 static seal key<br/>recovery keys 4 &amp; 5<br/>root token"]
+
+    classDef local fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef ci fill:#f3e8fd,stroke:#a142f4,color:#111;
+    classDef warn fill:#fce8e6,stroke:#ea4335,stroke-width:2px,color:#111;
+    class I,N,E,P,D,U,K,S local;
+    class TF,BOOT,CONV ci;
+    class M warn;
+```
+
 ## The whole path — copy/paste, top to bottom
 
 Once the [accounts](#1-accounts-you-need) exist, this is the **entire flow in

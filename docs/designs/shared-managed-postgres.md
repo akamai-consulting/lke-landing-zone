@@ -1,10 +1,10 @@
 # Design: VPC-attached Managed Postgres (`llz-databases`)
 
 **Status:** Partial — Terraform module + embedded root + `llz render` wiring
-> landed; the OpenBao seed command and CI workflow jobs are the remaining wiring
-> (see "Remaining work"). Motivated by the gsap-apl managed-app-platform buildout,
-> which needed a shared Postgres but had **no** IaC for one (the cluster was
-> provisioned ad-hoc, public, non-VPC).
+landed; the OpenBao seed command and CI workflow jobs are the remaining wiring
+(see "Remaining work"). Motivated by the gsap-apl managed-app-platform buildout,
+which needed a shared Postgres but had **no** IaC for one (the cluster was
+provisioned ad-hoc, public, non-VPC).
 
 ## What it provides
 
@@ -38,21 +38,26 @@ cluster writes one entry; the cost of the general case is a single map level.
 
 ## Shape (mirrors `llz-object-storage`)
 
-```
-spec.cluster.databases           →  llz render  →  databases/<env>.tfvars
-  <name>:                                             │   databases = { <name> = { … } }
-    region, vpcId, subnetId,                          ▼
-    engineVersion, type,            databases root: for_each = var.databases
-    clusterSize                                       │
-                                                      ▼  (one module call per cluster)
-                                    terraform-modules/llz-databases
-                                      (linode_database_postgresql_v2,
-                                       private_network = { vpc_id, subnet_id,
-                                                           public_access = false })
-                                                      │  outputs, keyed by <name>
-                                                      ▼
-                                    llz ci seed-db-admin
-                                      → secret/infra/db-admin/<name>
+```mermaid
+flowchart TB
+    SPEC["<b>spec.cluster.databases</b><br/>&lt;name&gt;: region · vpcId · subnetId<br/>engineVersion · type · clusterSize"]
+    RENDER["llz render"]
+    TFVARS["databases/&lt;env&gt;.tfvars<br/><code>databases = { &lt;name&gt; = { … } }</code>"]
+    ROOT["databases root<br/><code>for_each = var.databases</code>"]
+    MOD["<b>terraform-modules/llz-databases</b><br/>linode_database_postgresql_v2<br/>private_network = { vpc_id, subnet_id,<br/>public_access = <b>false</b> }"]
+    SEED["llz ci seed-db-admin"]
+    BAO["secret/infra/db-admin/&lt;name&gt;"]
+
+    SPEC --> RENDER --> TFVARS --> ROOT
+    ROOT -->|"one module call per cluster"| MOD
+    MOD -->|"outputs, keyed by &lt;name&gt;"| SEED --> BAO
+
+    classDef spec fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef tf fill:#f3e8fd,stroke:#a142f4,color:#111;
+    classDef sec fill:#fef7e0,stroke:#f9ab00,color:#111;
+    class SPEC,RENDER spec;
+    class TFVARS,ROOT,MOD tf;
+    class SEED,BAO sec;
 ```
 
 Spec example — one shared cluster plus a separately-sized one:

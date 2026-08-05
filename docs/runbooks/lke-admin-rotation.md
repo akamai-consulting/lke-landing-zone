@@ -24,18 +24,25 @@ Your Product Security rotation guidelines recommend a Linode PAT scoped to the *
 
 `.github/workflows/secret-rotation.yml` — monthly (1st, 04:00 UTC), each environment:
 
-```
-per environment, Environment-gated (infra-<env>)
-        │
-        ▼
-fetch kubeconfig (TF state) → resolve cluster_id
-        │
-        ▼  llz credentials lke-admin rotate --apply
-   asserts cluster is LKE-Enterprise (+lke) — refuses otherwise
-   DELETE /v4/lke/clusters/<id>/kubeconfig   (LINODE_API_TOKEN, shared TF token)
-        │
-        ▼  terraform apply -refresh-only      (repopulate kubeconfig_raw)
-        ▼  post-rotation health gate          (kubectl get nodes, bounded)
+```mermaid
+flowchart TB
+    START(["per environment,<br/>Environment-gated <code>infra-&lt;env&gt;</code>"])
+    FETCH["fetch kubeconfig from TF state<br/>→ resolve <code>cluster_id</code>"]
+    GATE{"is the cluster<br/>LKE-<b>Enterprise</b> (+lke)?"}
+    REFUSE(["❌ refuse — rotation does not<br/>apply to standard LKE"])
+    DEL["<code>DELETE /v4/lke/clusters/&lt;id&gt;/kubeconfig</code><br/><i>LINODE_API_TOKEN — the shared TF token</i>"]
+    REFRESH["<code>terraform apply -refresh-only</code><br/>repopulate <code>kubeconfig_raw</code>"]
+    HEALTH["post-rotation health gate<br/><code>kubectl get nodes</code>, bounded"]
+    DONE(["✅ rotated"])
+
+    START --> FETCH --> GATE
+    GATE -->|no| REFUSE
+    GATE -->|yes| DEL --> REFRESH --> HEALTH --> DONE
+
+    classDef bad fill:#fce8e6,stroke:#ea4335,color:#111;
+    classDef ok fill:#e6f4ea,stroke:#34a853,color:#111;
+    class REFUSE bad;
+    class DONE ok;
 ```
 
 The tool is dry-run unless `--apply`. It touches **only** the Linode API — never the Kubernetes API — so it carries no in-cluster RBAC and the PAT never enters a cluster.

@@ -28,6 +28,43 @@ Every "is the cluster ready?" check in this repo — ``llz ci health``, the TF r
 | **`1`** | **Hard-failed**. A required component is in a state the reconciler cannot resolve on its own — ImagePullBackOff on an image that doesn't exist, CrashLoopBackOff with `Error` exit code, a Job past `backoffLimit`, a Certificate stuck on `IssuerNotReady` for an Issuer that itself is in a `NotReady` terminal state. | Stop. Operator intervention required. |
 | **`3`** | **Apiserver unreachable**. An infrastructure-level blip, not a statement about the cluster's contents — the check could not ask the question at all. | **Retry without spending a hard strike.** Callers MUST distinguish this from `1`; collapsing it into `1` turns every transient apiserver blip into an operator-visible failure. |
 
+The four codes are a loop, and `llz ci converge` is the thing that walks it:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Check
+    Check: llz ci health
+
+    Check --> Converged: exit 0
+    Check --> InProgress: exit 2
+    Check --> HardFail: exit 1
+    Check --> Unreachable: exit 3
+
+    InProgress: In progress
+    Unreachable: Apiserver unreachable
+    HardFail: Hard-failed
+
+    InProgress --> Check: sleep $INTERVAL (30s)
+    Unreachable --> Check: retry — NO hard strike spent
+    HardFail --> Recheck: one re-run after $RETRY_DELAY (60s)
+    Recheck: re-check once
+    Recheck --> Check: transient — resume polling
+    Recheck --> Stop: still failing — propagate exit 1
+
+    InProgress --> Stop: $BUDGET elapsed (30m) — give up, dump diagnostics
+
+    Converged --> [*]: caller proceeds
+    Stop --> [*]: operator intervention
+```
+
+> Two rules the diagram cannot show, and both are load-bearing:
+>
+> - **Phase 0 — a cluster with nothing on it yet — is exit `2`, not exit `0`.**
+>   Conflating them is what produced the old step-and-pray model.
+> - **"I don't know" is exit `2`, never exit `0`.** A check that cannot answer
+>   makes the caller poll; it does not wave the caller through.
+
 ### How to classify a check
 
 When writing a new check, the question to ask is:

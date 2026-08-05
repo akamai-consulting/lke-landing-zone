@@ -38,17 +38,32 @@ reaches `prod`) without a second repo or a separate config system: the same
 `llz tokens → doctor → build → status` flow you already run for one deployment
 (or `llz up <env>`, which chains the first three), run per stage in a fixed order.
 
+```mermaid
+flowchart LR
+    PR["PR merges a chart pin<br/>or module change to <b>main</b>"]
+
+    subgraph REPO["one instance repo, one main branch"]
+        direction LR
+        DEV["<b>dev</b><br/>promotion_rank = 1<br/><i>build + verify</i>"]
+        STG["<b>staging</b><br/>promotion_rank = 2<br/><i>build + verify</i>"]
+        PRD["<b>prod</b><br/>promotion_rank = 3<br/><i>build + verify</i>"]
+        LAB["<b>lab</b><br/><i>no rank — not in the pipeline</i>"]
+    end
+
+    PR --> DEV
+    DEV ==>|"on green"| STG
+    STG ==>|"on green"| PRD
+
+    classDef ranked fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef unranked fill:#f1f3f4,stroke:#9aa0a6,stroke-dasharray:4 3,color:#5f6368;
+    class DEV,STG,PRD ranked;
+    class LAB unranked;
 ```
-        one instance repo, main branch
-                     │
-   PR merges a chart pin / module change to main
-                     │
-   ┌─────────────────┼──────────────────┐
-   ▼                 ▼                  ▼
- dev (rank 1) ──▶ staging (rank 2) ──▶ prod (rank 3)
- build+verify     build+verify         build+verify
-   on green         on green             on green
-```
+
+Each stage is a **separate cluster** built from the same `main`. Only ranked
+deployments appear in the pipeline — `lab` above is a real deployment that
+`llz env list --ordered` simply never returns, because it has no
+`promotion_rank`.
 
 ## 2. Declaring the order: `promotion_rank`
 

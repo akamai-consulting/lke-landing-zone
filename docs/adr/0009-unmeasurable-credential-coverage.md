@@ -47,14 +47,22 @@ being a plumbing change.
 Two of the three are **bootstrap-ordering circular**, the same shape ADR 0007 (state encryption) hit
 when it rejected `key_provider "openbao"`:
 
-```
-TF_STATE_ACCESS_KEY  ──unlocks──>  state bucket
-                                        │
-                                        ├─ cluster root ──creates──> LKE cluster
-                                        │                                 │
-                                        │                            runs OpenBao
-                                        │                                 │
-                                        └─────────────── would store the key ◄┘
+```mermaid
+flowchart LR
+    KEY["🔑 TF_STATE_ACCESS_KEY"]
+    BUCKET["state bucket"]
+    ROOT["cluster root"]
+    LKE["LKE cluster"]
+    BAO["OpenBao"]
+
+    KEY -->|"unlocks"| BUCKET
+    BUCKET --> ROOT
+    ROOT -->|"creates"| LKE
+    LKE -->|"runs"| BAO
+    BAO -.->|"<b>would store the key</b> ⟲"| KEY
+
+    classDef cyc fill:#fce8e6,stroke:#ea4335,stroke-width:2px,color:#111;
+    class KEY,BAO cyc;
 ```
 
 OpenBao runs inside the cluster whose state is guarded by the very key we would
