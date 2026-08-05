@@ -626,9 +626,16 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.aplOverlayInterval,
 			// Git-syncs the apl-overlay onto apl-<env> with ff-retry. WRITES (to git),
 			// so leader-gated — a single writer cooperating with apl-operator's pushes.
-			// No kube watch: the source is a remote git repo, so it resyncs on the
-			// interval. Reads GH_REPO/APL_VALUES_REPO_TOKEN/REGION + OpenBao from env.
+			// Reads GH_REPO/APL_VALUES_REPO_TOKEN/REGION + OpenBao from env.
 			run: gate(func(ctx context.Context) error { return reconcileAplOverlay(ctx, reg) }),
+			// Not a KUBE watch — the source is a remote git repo, so the interval stays
+			// the steady-state cadence. What this levels on instead is the lane's
+			// PRECONDITION: on a cold bootstrap the obj credential is seeded long after
+			// the pod starts, and without a kick the obj.yaml push (and behind it Loki's
+			// move onto S3, the measured converge tail) waits out the full resync floor.
+			// Gives up after a bootstrap window, since an instance without object
+			// storage never seeds it. See reconcile_apl_overlay_wait.go.
+			watch: watchAplOverlayPrecondition,
 		})
 	}
 	return recs
