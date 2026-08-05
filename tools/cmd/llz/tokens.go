@@ -207,11 +207,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// so `llz doctor` shows + validates it and a stale PAT can't silently rot.)
 
 	// ── Computed vars ────────────────────────────────────────────────────────
-	if !have("TF_IMAGE", false) {
-		vars["TF_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-tofu:%s", strings.ToLower(defaultTemplateOrg), ciTofuTag)
-	}
-	if !have("KUBE_IMAGE", false) {
-		vars["KUBE_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-kubernetes:%s", strings.ToLower(defaultTemplateOrg), ciKubernetesTag)
+	// Gated on actually having something to compute. computeCIImageVars makes up to
+	// five network requests and can print a warning about a fallback, and this
+	// command's headline property is that a re-run "SKIPS anything already
+	// satisfied" — so doing that work for two variables it is not going to touch
+	// both slows the idempotent path and, worse, warns that TF_IMAGE/KUBE_IMAGE are
+	// unpinned when they are already set to something the operator chose.
+	needTF, needKube := !have("TF_IMAGE", false), !have("KUBE_IMAGE", false)
+	if needTF || needKube {
+		computeAndReportImageVars(vars, needTF, needKube)
 	}
 
 	// ── Optional secrets ─────────────────────────────────────────────────────

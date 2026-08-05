@@ -292,7 +292,15 @@ jobs:
       # BEFORE the ~15-min cluster apply. TF_IMAGE (baked llz) and the instance's
       # template pin move independently; skew shows up far downstream as "unknown
       # flag". The preflight reads the pin out of the checkout above.
+      #
+      # GH_TOKEN: the pin is a release TAG and the image's baked llz is a COMMIT, so
+      # the guard resolves the tag against the (public) template repo to compare them
+      # at all. The job token only needs public read; without it the guard falls back
+      # to an anonymous request and, failing that, warns and passes — which is how
+      # this skew reached a live adopter's first pipeline run undetected.
       - name: Pre-flight — ci-tofu image matches the instance's template pin
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: llz ci assert-image-fresh
 
       # The COMMITTED apl-values tree is what ArgoCD syncs, and its kustomize refs
