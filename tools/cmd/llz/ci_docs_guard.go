@@ -15,7 +15,7 @@ package main
 // binary and the workflow YAML, not against a hand-maintained list that would rot
 // the same way.
 //
-// THREE CHECKS, in ascending order of what they cost to get wrong:
+// FOUR CHECKS, in ascending order of what they cost to get wrong:
 //
 //  1. FLAGS — for every `llz …` invocation whose command RESOLVES, each `--flag`
 //     is one that command accepts (deprecated ones are reported too). Walks the
@@ -37,6 +37,12 @@ package main
 //     template tree and against the post-`deliver-docs` keep-set, because the
 //     delivered operator docs are the ones every adopter carries and are exactly
 //     where the audit found the rot concentrated.
+//
+//  4. TABLES OF CONTENTS — every entry inside a `<!-- toc -->` block resolves to
+//     a heading in that same file. A TOC is precisely the hand-maintained list
+//     this header warns about, so it is allowed only in the delimited form that
+//     makes it regenerable, and only because this check exists. The LINK check
+//     cannot cover it: a bare `#anchor` names no file, so it skips them.
 //
 // DELIBERATELY NOT CHECKED: prose claims about behaviour ("multi-tenancy is off"),
 // which is what the audit's worst findings actually were. No linter catches those.
@@ -69,11 +75,12 @@ type docsScanned struct {
 	dispatches  int // `gh workflow run` calls parsed
 	links       int // relative links resolved
 	selfLinks   int // absolute links into this repo's own tree, resolved
+	tocEntries  int // generated table-of-contents entries resolved to a heading
 }
 
 func (c docsScanned) String() string {
-	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s)",
-		c.invocations, c.flags, c.dispatches, c.links+c.selfLinks)
+	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s), %d toc entr(ies)",
+		c.invocations, c.flags, c.dispatches, c.links+c.selfLinks, c.tocEntries)
 }
 
 type docFinding struct {
@@ -99,6 +106,7 @@ func ciDocsGuardCmd() *cobra.Command {
 			"  • every `gh workflow run` input, against the workflow's declared inputs\n" +
 			"  • every relative link, in the template tree AND in the delivered\n" +
 			"    (post-`deliver-docs`) operator set\n" +
+			"  • every entry of a `<!-- toc -->` block, against that file's headings\n" +
 			"Reports every finding, then exits 1. Catches the mechanical half of doc rot;\n" +
 			"prose claims about behaviour still need a human.",
 		Args: cobra.NoArgs,
@@ -753,6 +761,103 @@ func checkDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 	}
 	out = append(out, checkSelfRepoLinks(root, docs, n)...)
 	out = append(out, checkDeliveredDocLinks(root, docs, n)...)
+	out = append(out, checkDocTOCs(docs, n)...)
+	return out
+}
+
+// ── 3b. generated tables of contents ─────────────────────────────────────────
+
+// A TOC is a hand-maintained list of the exact kind this file's header warns
+// about: it is true when written and rots the moment a heading is renamed, in a
+// long doc where nobody re-reads the top. The link check above cannot catch it —
+// it skips `#`-anchors entirely, because a bare anchor names no file.
+//
+// So the rule is: a doc may only carry a TOC if it is DELIMITED, and every entry
+// inside the delimiters must resolve to a heading in that same file. That makes
+// the list regenerable (the delimiters say where) and checkable (this function),
+// which is what separates it from the hand-maintained lists we refuse elsewhere.
+//
+// Only the delimited block is checked. Prose that happens to link a section is a
+// normal cross-reference, not a claim to be exhaustive.
+var (
+	tocBlockRe  = regexp.MustCompile(`(?s)<!--\s*toc\s*-->(.*?)<!--\s*/toc\s*-->`)
+	tocEntryRe  = regexp.MustCompile(`\[[^\]]*\]\(#([^)]+)\)`)
+	mdHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	anchorStrip = regexp.MustCompile("`([^`]*)`")
+	anchorBold  = regexp.MustCompile(`\*+([^*]*)\*+`)
+	anchorLink  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	// Underscore SURVIVES. GitHub keeps it, and this repo's headings are full of
+	// `workflow_call`, `promotion_rank`, `ha_role` — dropping it silently turned
+	// every such anchor into a false positive on the first run of this check.
+	anchorPunct  = regexp.MustCompile(`[^\p{L}\p{N}_\s-]`)
+	anchorSpaces = regexp.MustCompile(`\s+`)
+)
+
+// githubAnchor reproduces GitHub's heading-slug rule: strip inline markup,
+// lowercase, drop everything that is not a letter/number/space/hyphen, then turn
+// runs of whitespace into single hyphens.
+func githubAnchor(text string) string {
+	t := anchorStrip.ReplaceAllString(text, "$1")
+	t = anchorBold.ReplaceAllString(t, "$1")
+	t = anchorLink.ReplaceAllString(t, "$1")
+	t = strings.ToLower(strings.TrimSpace(t))
+	t = anchorPunct.ReplaceAllString(t, "")
+	return anchorSpaces.ReplaceAllString(t, "-")
+}
+
+// docAnchors returns every anchor the headings of a doc define. A repeated
+// heading text gets GitHub's `-1`, `-2` … suffixes, so those are registered too.
+func docAnchors(body string) map[string]bool {
+	out, seen, fence := map[string]bool{}, map[string]int{}, false
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fence = !fence
+			continue
+		}
+		if fence {
+			continue
+		}
+		m := mdHeadingRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		a := githubAnchor(m[2])
+		if a == "" {
+			continue
+		}
+		if n := seen[a]; n > 0 {
+			out[fmt.Sprintf("%s-%d", a, n)] = true
+		} else {
+			out[a] = true
+		}
+		seen[a]++
+	}
+	return out
+}
+
+func checkDocTOCs(docs []docFile, n *docsScanned) []docFinding {
+	var out []docFinding
+	for _, d := range docs {
+		block := tocBlockRe.FindStringSubmatchIndex(d.body)
+		if block == nil {
+			continue
+		}
+		anchors := docAnchors(d.body)
+		inner := d.body[block[2]:block[3]]
+		base := strings.Count(d.body[:block[2]], "\n") + 1
+		for i, line := range strings.Split(inner, "\n") {
+			for _, m := range tocEntryRe.FindAllStringSubmatch(line, -1) {
+				n.tocEntries++
+				if anchors[m[1]] {
+					continue
+				}
+				out = append(out, docFinding{
+					File: d.rel, Line: base + i, Kind: "toc",
+					Detail: fmt.Sprintf("#%s matches no heading — regenerate the block between the toc markers", m[1]),
+				})
+			}
+		}
+	}
 	return out
 }
 

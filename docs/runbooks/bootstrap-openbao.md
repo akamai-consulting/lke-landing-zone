@@ -5,6 +5,22 @@
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Modes](#modes)
+- [Required secrets and variables](#required-secrets-and-variables)
+- [First-time bootstrap](#first-time-bootstrap)
+- [Re-seal recovery — automatic](#re-seal-recovery-automatic)
+- [Re-configure (configuration incomplete)](#re-configure-configuration-incomplete)
+- [Post-bootstrap checklist](#post-bootstrap-checklist)
+- [Additional-cluster ordering constraint](#additional-cluster-ordering-constraint)
+- [Relationship to the release workflow](#relationship-to-the-release-workflow)
+- [Break-glass handles (when `bao-ensure-ready` is wedged)](#break-glass-handles-when-bao-ensure-ready-is-wedged)
+- [Break-glass root token (workflow) — `breakglass-openbao.yml`](#break-glass-root-token-workflow-breakglass-openbaoyml)
+
+<!-- /toc -->
+
 ## Modes
 
 The workflow detects cluster state automatically and chooses the right path:

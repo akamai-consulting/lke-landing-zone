@@ -8,6 +8,19 @@
 > rationale behind each step, read the [adopter guide](adopter-guide.md); this
 > page is the fast path.
 
+<!-- toc -->
+## Contents
+
+- [The whole path — copy/paste, top to bottom](#the-whole-path-copypaste-top-to-bottom)
+- [1. Accounts you need](#1-accounts-you-need)
+- [2. Install `llz`](#2-install-llz)
+- [3. Scaffold your instance — `llz new` + `llz env add`](#3-scaffold-your-instance-llz-new-llz-env-add)
+- [4. Build it — `llz up`](#4-build-it-llz-up)
+- [5. Day-2 — upgrading to a newer upstream version](#5-day-2-upgrading-to-a-newer-upstream-version)
+- [Checklist](#checklist)
+
+<!-- /toc -->
+
 ## The whole path — copy/paste, top to bottom
 
 Once the [accounts](#1-accounts-you-need) exist, this is the **entire flow in

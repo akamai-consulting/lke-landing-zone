@@ -15,6 +15,19 @@ Related: `docs/architecture/convergence-contract.md`,
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Workflow-level](#workflow-level)
+- [Job: `resolve` — Resolve HA role](#job-resolve-resolve-ha-role)
+- [Job: `bootstrap` — Bootstrap OpenBao](#job-bootstrap-bootstrap-openbao)
+- [Removed job: `harbor` — Harbor provisioning MOVED IN-CLUSTER](#removed-job-harbor-harbor-provisioning-moved-in-cluster)
+- [Job: `provision-peer-ca` — Provision standby CA in active peer cluster](#job-provision-peer-ca-provision-standby-ca-in-active-peer-cluster)
+- [Job: `fetch-standby-ca` — Fetch standby CA (recovery)](#job-fetch-standby-ca-fetch-standby-ca-recovery)
+- [Job: `reprovision-peer-ca` — Re-provision standby CA in active peer cluster](#job-reprovision-peer-ca-re-provision-standby-ca-in-active-peer-cluster)
+
+<!-- /toc -->
+
 ## Workflow-level
 
 ### Why it is LOCAL to the instance

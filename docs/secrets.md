@@ -18,6 +18,24 @@ target, for example, that means CI reads the values and passes them to the deplo
 tool as variables; the mechanism is "CI injects at deploy time", not a runtime
 client of OpenBao.)
 
+<!-- toc -->
+## Contents
+
+- [Topology](#topology)
+- [Why OpenBao and not Vault OSS](#why-openbao-and-not-vault-oss)
+- [Why operator-side dual-write and not a stretched cluster](#why-operator-side-dual-write-and-not-a-stretched-cluster)
+- [Initial cluster bring-up](#initial-cluster-bring-up)
+- [Secret layout](#secret-layout)
+- [Writing / rotating secrets — dual-write](#writing-rotating-secrets-dual-write)
+- [CI read path](#ci-read-path)
+- [Regional failover](#regional-failover)
+- [In-cluster TLS to OpenBao](#in-cluster-tls-to-openbao)
+- [Audit logging](#audit-logging)
+- [Unseal automation](#unseal-automation)
+- [Cross-references](#cross-references)
+
+<!-- /toc -->
+
 ## Topology
 
 ```

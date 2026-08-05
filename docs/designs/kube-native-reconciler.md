@@ -138,6 +138,22 @@ future reconcilers that plug into the same manager, not as Phase-1 work.
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Problem](#problem)
+- [Goals / non-goals](#goals-non-goals)
+- [Watch vs. resync — the honest classification](#watch-vs-resync-the-honest-classification)
+- [Proposed design](#proposed-design)
+- [Bootstrap / cold-start](#bootstrap-cold-start)
+- [Failure modes](#failure-modes)
+- [Observability](#observability)
+- [What this retires (once enabled + e2e-validated)](#what-this-retires-once-enabled-e2e-validated)
+- [Rollout (phased — lowest-risk / highest-CIDR-payoff first)](#rollout-phased-lowest-risk-highest-cidr-payoff-first)
+- [Open questions](#open-questions)
+
+<!-- /toc -->
+
 ## Problem
 
 The cluster runs **six fixed-interval polling loops**, each a standalone CronJob

@@ -5,6 +5,18 @@ Date: 2026-07-28
 Supersedes the "in-cluster posture" rationale in `tools/internal/openbao/openbao.go`
 (`HTTPClientInsecure`) and the `OPENBAO_SKIP_VERIFY` comments across the workload manifests.
 
+<!-- toc -->
+## Contents
+
+- [Context](#context)
+- [Decision](#decision)
+- [Consequences](#consequences)
+- [Rollout](#rollout)
+- [The wiring is statically enforced — `mtls-wiring-guard`](#the-wiring-is-statically-enforced-mtls-wiring-guard)
+- [Unverified prerequisites](#unverified-prerequisites)
+
+<!-- /toc -->
+
 ## Context
 
 An audit of in-cluster traffic found that **nothing in the LLZ-owned plane was

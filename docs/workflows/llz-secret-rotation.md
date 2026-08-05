@@ -20,6 +20,25 @@ inputs are forwarded by the caller as `workflow_call` inputs.
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [What the workflow rotates](#what-the-workflow-rotates)
+- [Triggers](#triggers)
+- [Auth model](#auth-model)
+- [Why the job split looks redundant](#why-the-job-split-looks-redundant)
+- [`workflow_call` interface](#workflow_call-interface)
+- [Job: `discover`](#job-discover)
+- [Job: `setup`](#job-setup)
+- [Job: `rotate`](#job-rotate)
+- [Job: `create-linode-pat`](#job-create-linode-pat)
+- [Job: `propagate-linode-pat`](#job-propagate-linode-pat)
+- [Job: `revoke-linode-pat`](#job-revoke-linode-pat)
+- [Job: `create-tf-state-key`](#job-create-tf-state-key)
+- [Job: `revoke-tf-state-key`](#job-revoke-tf-state-key)
+
+<!-- /toc -->
+
 ## What the workflow rotates
 
 ### 1. `lke-admin-token`

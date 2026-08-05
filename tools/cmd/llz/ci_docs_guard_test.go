@@ -440,6 +440,9 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 	if n.dispatches < 10 {
 		t.Errorf("only %d workflow dispatch(es) scanned (was 15)", n.dispatches)
 	}
+	if n.tocEntries < 100 {
+		t.Errorf("only %d toc entr(ies) checked (was 137) — either the toc blocks were removed from the long docs or the block parser stopped seeing them", n.tocEntries)
+	}
 	for _, f := range findings {
 		t.Errorf("%s", f)
 	}
@@ -1082,5 +1085,75 @@ func TestCheckDocLinks_RootRelativeLinksResolveFromTheRoot(t *testing.T) {
 				t.Fatalf("expected %q, got %v", tc.wantHit, got)
 			}
 		})
+	}
+}
+
+// A TOC entry that no longer matches a heading is the whole reason the block is
+// allowed to exist in a repo that otherwise refuses hand-maintained lists.
+func TestCheckDocTOCs(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{
+			name: "every entry resolves",
+			body: "# T\n\n<!-- toc -->\n## Contents\n\n- [Alpha](#alpha)\n- [Beta gamma](#beta-gamma)\n\n<!-- /toc -->\n\n## Alpha\n\n## Beta gamma\n",
+		},
+		{
+			name: "renamed heading is caught",
+			body: "# T\n\n<!-- toc -->\n- [Alpha](#alpha)\n<!-- /toc -->\n\n## Alpha renamed\n",
+			want: 1,
+		},
+		{
+			// The load-bearing case for this repo: headings here are full of
+			// `workflow_call`, `promotion_rank`, `ha_role`. Dropping `_` from the
+			// allowed set made every one of them a false positive.
+			name: "underscores survive the slug",
+			body: "# T\n\n<!-- toc -->\n- [`workflow_call` interface](#workflow_call-interface)\n<!-- /toc -->\n\n## `workflow_call` interface\n",
+		},
+		{
+			name: "duplicate headings get GitHub's -1 suffix",
+			body: "# T\n\n<!-- toc -->\n- [Notes](#notes)\n- [Notes](#notes-1)\n<!-- /toc -->\n\n## Notes\n\n## Notes\n",
+		},
+		{
+			// Prose cross-references are NOT a claim to be exhaustive, so only the
+			// delimited block is judged.
+			name: "anchors outside the block are ignored",
+			body: "# T\n\nSee [the missing part](#nowhere).\n\n## Alpha\n",
+		},
+		{
+			name: "a heading inside a fence does not define an anchor",
+			body: "# T\n\n<!-- toc -->\n- [Fake](#fake)\n<!-- /toc -->\n\n```\n## Fake\n```\n",
+			want: 1,
+		},
+		{
+			name: "no toc block at all is fine",
+			body: "# T\n\n## Alpha\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var n docsScanned
+			got := checkDocTOCs([]docFile{{rel: "d.md", body: tc.body}}, &n)
+			if len(got) != tc.want {
+				t.Fatalf("got %d finding(s), want %d: %v", len(got), tc.want, got)
+			}
+		})
+	}
+}
+
+func TestGithubAnchor(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Topology", "topology"},
+		{"`workflow_call` interface", "workflow_call-interface"},
+		{"Writing / rotating secrets — dual-write", "writing-rotating-secrets-dual-write"},
+		{"**Bold** and *italic*", "bold-and-italic"},
+		{"A [linked](x.md) word", "a-linked-word"},
+		{"Trailing punctuation!", "trailing-punctuation"},
+		{"HA roles are declared, not hardcoded", "ha-roles-are-declared-not-hardcoded"},
+	} {
+		if got := githubAnchor(tc.in); got != tc.want {
+			t.Errorf("githubAnchor(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

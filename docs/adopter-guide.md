@@ -20,6 +20,19 @@
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [1. Prerequisites](#1-prerequisites)
+- [2. The reusable artifacts](#2-the-reusable-artifacts)
+- [3. The values contract (what you must set)](#3-the-values-contract-what-you-must-set)
+- [4. Scaffold an instance, and pull template updates — Copier](#4-scaffold-an-instance-and-pull-template-updates-copier)
+- [5. Org literals to repoint to your fork](#5-org-literals-to-repoint-to-your-fork)
+- [6. Bootstrap order](#6-bootstrap-order)
+- [7. Checklist](#7-checklist)
+
+<!-- /toc -->
+
 ## 1. Prerequisites
 
 You must have these before you start — the platform assumes them and does not

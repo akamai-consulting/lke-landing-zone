@@ -14,6 +14,29 @@ Sections below are organised by job, and within a job by step name.
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Workflow-level](#workflow-level)
+- [Job: `push-noop-notice`](#job-push-noop-notice)
+- [Job: `discover`](#job-discover)
+- [Job: `plan-cluster-pr`](#job-plan-cluster-pr)
+- [Job: `tf-lint`](#job-tf-lint)
+- [Job: `checkov`](#job-checkov)
+- [Job: `promote-pipeline-drift`](#job-promote-pipeline-drift)
+- [Job: `apply-vpc`](#job-apply-vpc)
+- [Job: `apply-cluster`](#job-apply-cluster)
+- [Job: `bootstrap-openbao`](#job-bootstrap-openbao)
+- [Destroy path (overview)](#destroy-path-overview)
+- [Job: `pre-destroy-cluster`](#job-pre-destroy-cluster)
+- [Job: `plan-destroy-cluster`](#job-plan-destroy-cluster)
+- [Job: `destroy-cluster`](#job-destroy-cluster)
+- [Job: `apply-object-storage`](#job-apply-object-storage)
+- [Job: `plan-destroy-object-storage`](#job-plan-destroy-object-storage)
+- [Job: `destroy-object-storage`](#job-destroy-object-storage)
+
+<!-- /toc -->
+
 ## Workflow-level
 
 ### Locality and the cross-org reuse pattern
