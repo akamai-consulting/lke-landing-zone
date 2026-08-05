@@ -91,6 +91,12 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > rebase and stayed red until the line moved. The dated figures below are left as
 > written; [the catalog](../designs/internal-extensions.md#re-measured-on-rebase-2026-08-05)
 > reconciles the two measurements file by file.
+>
+> **Then down, for the first time: 46,797** across 235 files, when `guard-budgets`
+> became the first internal extension and the engine moved to
+> `tools/internal/budget`. The downward move is the half that was still unproven —
+> and `exact: true` is what forced it to be recorded, since extracting the code
+> and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
 
 `exact: true` makes "no
 slack" literal in both directions: the gate fails when the number sits ABOVE the
@@ -133,7 +139,7 @@ signal to watch is the trend of this line, not any single value.
 the default answer), make it an extension (issue #10 — per the catalog that is the
 same move with a registry and a binding attached, since 36 of 57 candidates must
 stay in-process Go), or delete what is dead. The gate says as much on a breach;
-the wording lives in `coreSurfaceRemedy` and is not restated here.
+the wording lives in `budget.CoreSurfaceRemedy` and is not restated here.
 
 
 ### Where the budget is going
@@ -159,7 +165,7 @@ would be actively wrong. untestable-loc's remedy is "move the logic into
 breach message says both is not a gate, it's a riddle.
 
 So they share the *engine* and not the *doctrine*: one scan, one glob walk, one
-tally, one ratchet convention, in `ci_untestable_loc.go`. The only thing this ADR
+tally, one ratchet convention, in `tools/internal/budget`. The only thing this ADR
 made configurable is the remedy sentence. The two budgets are then reviewed and
 ratcheted independently, which is what they need — they will often move in
 opposite directions in the same PR, and that is exactly the trade being made

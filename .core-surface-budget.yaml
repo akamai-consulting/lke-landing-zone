@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 46,716 logic lines across 234 non-test files, 128 of them ci_*.go.
+    # 46,797 logic lines across 235 non-test files, 128 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -56,12 +56,16 @@ categories:
     #                       counters, the remedies and their tests are now
     #                       tools/internal/budget; the two commands are a flag set
     #                       each. -466, and the FIRST paydown.
+    #   46,797 / 235 files  `llz extension list`. +81, spent deliberately: the
+    #                       declaration model was validated with no way to look at
+    #                       it, and a ratchet that could only be paid into would be
+    #                       a freeze rather than a budget.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 46716
+    budget: 46797
     exact: true
     include:
       - "tools/cmd/llz/*.go"

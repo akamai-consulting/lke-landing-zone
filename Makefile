@@ -32,6 +32,7 @@ COVERAGE_MINS := \
 	internal/cli=95 \
 	internal/clusterspec=95 \
 	internal/extension=95 \
+	internal/extension/registry=100 \
 	internal/health=95 \
 	internal/kube=78 \
 	internal/linode=80 \

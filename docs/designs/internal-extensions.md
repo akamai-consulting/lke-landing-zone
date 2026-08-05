@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first one, extracted](#the-first-one-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -240,6 +240,51 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 | `doctor-probes` | 230 | 3 | ✔ | doctor-linode 93, doctor-crossorg 104, credentials-probe 33 |
 
 ---
+
+---
+
+## The first one, extracted
+
+`guard-budgets` is no longer a row in a table. The engine, the six counters, the
+two remedy strings and every one of their tests are `tools/internal/budget`; the
+two cobra commands are a flag set each; `tools/internal/extension/registry` holds
+the declaration and `llz extension list` shows it.
+
+```
+$ llz extension list --verbose
+NAME           ENABLED  BINDINGS                    GRANTS     SUMMARY
+guard-budgets  always   gate:scaffolded             read-repo  cap untestable logic …
+                        gate:scaffolded[read-repo]
+```
+
+**The budget went 47,182 → 46,797.** Four things are worth reading off a −385 that
+the catalog scores at 907:
+
+- **It is the first downward move this gate has ever recorded**, and the direction
+  that was still unproven. `exact: true` is what forced it into the diff: extract
+  the code, forget the line, and the gate fails with `SHRANK — LOWER IT` and the
+  number to write.
+- **The shortfall is spending, not slippage.** `llz extension list`, the registry
+  and the declaration are new core surface, added deliberately so the model is
+  legible rather than only testable. A ratchet that can only be paid into is a
+  freeze; this one can be spent against, and the spend is visible on the same line.
+- **Two files came out that the catalog never assigned to `guard-budgets`.** The
+  glob matcher and the shell-quote splitter were both used by unrelated gates —
+  `llz ci template-manifest` matches copier's fence entries with the same dialect,
+  and `llz ci at-rest-guard` strips Terraform comments with the same quoting rule.
+  Extracting one extension surfaced two shared libraries (`internal/pathglob`,
+  `internal/shquote`) whose agreement with each other had until then been
+  accidental. **The catalog cannot see this class**, because it assigns whole files
+  and these were functions inside one; expect the same on every extraction.
+- **The declaration lives with the code, not in the registry.** A central table
+  transcribing each extension's bindings would be a hand-maintained list beside the
+  thing it describes — the shape that rots. `registry.go` names packages; each
+  package states its own bindings and grants.
+
+What it does NOT prove: nothing is loaded, dispatched or disabled through the
+model. `guard-budgets` still runs because `ci.go` registers two cobra commands, and
+the declaration is inert. The action ABI is the next thing that has to exist, and
+`converge` is the case that should shape it.
 
 ## What the catalog says
 
@@ -279,7 +324,8 @@ grants and the distribution is observed instead of assigned.
 
 ## Suggested first five
 
-1. **`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.
+1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
+   **Done** — [The first one, extracted](#the-first-one-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

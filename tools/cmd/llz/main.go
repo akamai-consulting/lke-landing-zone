@@ -67,7 +67,7 @@ func newRootCmd() *cobra.Command {
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
-		aplCmd(),
+		aplCmd(), extensionCmd(),
 	)
 
 	// Group the adopter-facing commands in `llz --help` so the front door is
