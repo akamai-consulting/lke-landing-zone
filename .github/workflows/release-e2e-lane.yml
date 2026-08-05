@@ -149,7 +149,13 @@ jobs:
   llz-functional:
     name: llz functional (commands + install flow)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 30, not 10: the adopter-shape gate below may wait up to 20 minutes for a
+    # release commit's ci images to publish (the same budget pin-instance-images
+    # uses for the same images). At 10 the job would be KILLED mid-wait, replacing
+    # the gate's actionable verdict with a bare timeout. The wait is bounded and
+    # runs parallel to instantiate, which is already waiting on the same build, so
+    # this does not move the lane's critical path.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

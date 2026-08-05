@@ -34,9 +34,12 @@ package main
 // runs in the lane's fast pre-flight job and gates the release before any spend.
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -86,6 +89,16 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	fmt.Printf("  ✓ %s resolves to %s\n", ref, commit)
 
 	// 2. What `llz tokens` would write into the adopter's repo variables.
+	//
+	// WAIT FIRST, on the release path. This gate fires on `release: prereleased`,
+	// and a maintainer publishing the candidate minutes after the merge can easily
+	// beat build-images.yml to the finish — the ci images for the release commit are
+	// then genuinely absent, and leg 2 would fail a perfectly good release with
+	// "would not pin", pointing at the pin computation rather than at a build that
+	// is still running. The instantiate job already treats this as a wait rather than
+	// an error (`pin-instance-images --build-if-missing`); so does this. Costs
+	// nothing when the images are already there — the first check is immediate.
+	waitForCIImages(commit)
 	// ForCommit: leg 1 already resolved this tag. Re-resolving here would make the
 	// verdict depend on a second round-trip, and a blip on it reported "could not
 	// resolve" as a pin-computation failure — blaming the code for the network.
@@ -168,15 +181,99 @@ func foreignCommit(commit string) string {
 // an adopter running `llz new` today would be scaffolded at.
 //
 // Package var so tests substitute the round-trip.
+// `releases/latest` EXCLUDES prereleases and drafts, which is exactly right here
+// and must not be "fixed": a prerelease is not what an adopter scaffolds into.
+// `llz new` / `llz self-update` skip prereleases (selfupdate.go) — that is the
+// whole reason a release candidate can be published without being consumable —
+// so the tag this returns is the one an adopter running `llz new` today gets.
+//
+// Bounded HTTP rather than `gh api`, for the same reason resolveTemplateCommit
+// dropped it: execOutput has no timeout, and this runs in a gate.
 var latestReleaseTag = func(repo string) (string, bool) {
 	if repo == "" {
+		return "", false
+	}
+	req, err := http.NewRequest(http.MethodGet, githubAPIBase+"/repos/"+repo+"/releases/latest", nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if t := githubToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	resp, err := (&http.Client{Timeout: httpAskTimeout}).Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", false
 	}
 	var r struct {
 		TagName string `json:"tag_name"`
 	}
-	if err := ghAPIJSON("repos/"+repo+"/releases/latest", &r); err == nil && strings.TrimSpace(r.TagName) != "" {
-		return strings.TrimSpace(r.TagName), true
+	if json.NewDecoder(resp.Body).Decode(&r) != nil {
+		return "", false
 	}
-	return "", false
+	tag := strings.TrimSpace(r.TagName)
+	return tag, tag != ""
+}
+
+// The publish-wait budget: 20 minutes, deliberately COPIED from
+// `pin-instance-images --timeout` (1200s) rather than guessed. That flag exists to
+// wait for exactly these images from exactly this build, so any shorter budget
+// here is an assertion that build-images.yml is faster than the repo's own
+// measurement of it — and being wrong means failing a good release, which costs a
+// re-cut and a re-run of the whole lane.
+//
+// It is also free in wall-clock terms: this job runs in PARALLEL with instantiate,
+// which is already waiting on the same images with the same budget. The lane's
+// long pole does not move.
+//
+// Package vars so tests do not sleep. Every test in the gate's file installs a
+// no-op sleep — without one, any case that stubs an image as unpublished burns the
+// full budget and the unit test looks hung. Found the hard way.
+var (
+	adopterPinPublishRetries = 40
+	adopterPinPublishDelay   = 30 * time.Second
+	adopterPinSleep          = func(d time.Duration) { time.Sleep(d) }
+)
+
+// waitForCIImages polls until both ci images for commit are published, the budget
+// is spent, or the registry stops answering.
+//
+// Returns nothing: it is a WAIT, not a check. Whether the images are there is
+// still decided downstream by computeCIImageVarsForCommit, which owns that verdict
+// and its message — duplicating the decision here would mean two places that can
+// disagree about the same fact.
+func waitForCIImages(commit string) {
+	images := []string{
+		ciImageRef(defaultTemplateOrg, "ci-tofu", "sha-"+commit),
+		ciImageRef(defaultTemplateOrg, "ci-kubernetes", "sha-"+commit),
+	}
+	for attempt := 0; ; attempt++ {
+		missing := ""
+		for _, im := range images {
+			published, asked := imagePublished(im)
+			// !asked means the registry never answered. Waiting on that is pointless —
+			// polling an unreachable endpoint ten more times tells us nothing new, and
+			// the downstream check treats "could not ask" as "do not downgrade" anyway.
+			if !asked {
+				return
+			}
+			if !published {
+				missing = im
+				break
+			}
+		}
+		if missing == "" || attempt >= adopterPinPublishRetries {
+			return
+		}
+		if attempt == 0 {
+			fmt.Printf("  … %s is not published yet — waiting up to %s for build-images.yml\n",
+				missing, time.Duration(adopterPinPublishRetries)*adopterPinPublishDelay)
+		}
+		adopterPinSleep(adopterPinPublishDelay)
+	}
 }

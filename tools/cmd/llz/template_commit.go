@@ -116,18 +116,35 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 	return r.SHA, true
 }
 
-// githubToken is a credential for api.github.com, or "" for anonymous.
+// githubToken is a credential FOR github.com, or "" for anonymous.
 //
 // `gh auth token` reads the local config/keyring and makes NO network call, so
 // leaning on it here does not reintroduce the unbounded shell-out this file
 // deliberately avoids — it recovers the one thing dropping `gh api` would
 // otherwise cost: an operator working against a PRIVATE template fork, who is
 // authenticated to gh but has no token in their environment.
+//
+// HOST-SCOPED, and that is a security property, not tidiness. githubAPIBase is
+// api.github.com — the template repo is a github.com repo in every path here
+// (instanceTemplateRepo only accepts an owner/repo slug and otherwise falls back
+// to the first-party default). But GH_HOST points the ambient environment at a
+// different forge in the GHES e2e lane and in any GHE-hosted instance, and there:
+//
+//   - GH_TOKEN / GITHUB_TOKEN hold an APPLIANCE token (a GHES workflow's
+//     `github.token` is issued by the appliance), and
+//   - a bare `gh auth token` returns the token for GH_HOST, not for github.com.
+//
+// Attaching either to a request to api.github.com would disclose an enterprise
+// credential to a third party that can only reject it. So the env token is used
+// only when the environment is actually pointed at github.com, and `gh` is asked
+// for the github.com token by name.
 func githubToken() string {
-	if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
+	if ghHost() == "github.com" {
+		if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
+			return t
+		}
 	}
-	out, err := execOutput("gh", "auth", "token")
+	out, err := execOutput("gh", "auth", "token", "--hostname", "github.com")
 	if err != nil {
 		return ""
 	}

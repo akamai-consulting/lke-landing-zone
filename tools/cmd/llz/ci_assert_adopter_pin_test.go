@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -10,9 +11,24 @@ const (
 	otherSHA = "1550263c84909350942bd1d0116088062f9a1c8b"
 )
 
+// stubPublishWait makes the publish wait instant and records how many times it
+// slept. EVERY test in this file installs one — waitForCIImages otherwise sleeps
+// its real 10x30s budget whenever a case stubs an image as unpublished, which is
+// most of them, and a unit test that takes five minutes is a hung test.
+func stubPublishWait(t *testing.T) *int {
+	t.Helper()
+	prevSleep, prevDelay := adopterPinSleep, adopterPinPublishDelay
+	t.Cleanup(func() { adopterPinSleep, adopterPinPublishDelay = prevSleep, prevDelay })
+	slept := 0
+	adopterPinPublishDelay = time.Nanosecond
+	adopterPinSleep = func(time.Duration) { slept++ }
+	return &slept
+}
+
 // adopterPinStubs wires the happy path: the tag resolves, both images published.
 func adopterPinStubs(t *testing.T) {
 	t.Helper()
+	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })
 	stubLatestRelease(t, func(string) (string, bool) { return "v0.0.39", true })
@@ -48,6 +64,7 @@ func TestAssertAdopterPinDefaultsToLatestRelease(t *testing.T) {
 // computes a floating version tag for a release-pinned instance. It has to FAIL —
 // this exact configuration shipped to a live adopter with e2e green throughout.
 func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
+	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
 	// A commit with no published images is what makes computeCIImageVars fall back to
 	// the floating tags — the same end state the pre-fix code produced unconditionally.
@@ -69,6 +86,7 @@ func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 // mid-pipeline; this gate exists solely to answer the question, so not being able
 // to ask it is the failure.
 func TestAssertAdopterPinFailsOnAnUnresolvableRef(t *testing.T) {
+	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })
 	if err := runAssertAdopterPin("acme/tmpl", "v9.9.9"); err == nil {
@@ -77,6 +95,7 @@ func TestAssertAdopterPinFailsOnAnUnresolvableRef(t *testing.T) {
 }
 
 func TestAssertAdopterPinFailsWithNoReleaseAndNoRef(t *testing.T) {
+	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })
 	stubLatestRelease(t, func(string) (string, bool) { return "", false })
@@ -88,6 +107,7 @@ func TestAssertAdopterPinFailsWithNoReleaseAndNoRef(t *testing.T) {
 // An unreachable registry must not fail the gate — the other three legs still
 // answered, and the container pull is the backstop for an absent image.
 func TestAssertAdopterPinToleratesAnUnreachableRegistry(t *testing.T) {
+	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
 	stubImagePublished(t, func(string) (bool, bool) { return false, false })
 	if err := runAssertAdopterPin("acme/tmpl", "v0.0.39"); err != nil {
@@ -136,6 +156,7 @@ func TestAssertAdopterPinCmdWiring(t *testing.T) {
 // default instead of the repo it was handed. On a FORK that means resolving the
 // fork's own release tag against upstream, where it does not exist.
 func TestAssertAdopterPinResolvesAgainstTheRepoItWasGiven(t *testing.T) {
+	stubPublishWait(t)
 	writeInstanceDir(t, nil) // no answers file, exactly like a template checkout
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })
 
@@ -160,6 +181,7 @@ func TestAssertAdopterPinResolvesAgainstTheRepoItWasGiven(t *testing.T) {
 // is exactly the verdict the gate reports as "the skew guard is not guarding".
 // A transient error must not be able to manufacture that.
 func TestAssertAdopterPinLegFourIsNotNetworkDependent(t *testing.T) {
+	stubPublishWait(t)
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })
 
 	calls := 0
@@ -174,4 +196,47 @@ func TestAssertAdopterPinLegFourIsNotNetworkDependent(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("resolved %d time(s), want exactly 1 — legs 2-4 must reuse leg 1's answer", calls)
 	}
+}
+
+func TestWaitForCIImages(t *testing.T) {
+	t.Run("already published costs nothing", func(t *testing.T) {
+		slept := stubPublishWait(t)
+		stubImagePublished(t, func(string) (bool, bool) { return true, true })
+		waitForCIImages(pinSHA)
+		if *slept != 0 {
+			t.Errorf("slept %d time(s) for images that were already there", *slept)
+		}
+	})
+
+	// The race this exists for: a candidate published minutes after the merge, with
+	// build-images.yml still running. It must resolve into a pass, not a failed release.
+	t.Run("waits for a build that is still running", func(t *testing.T) {
+		slept := stubPublishWait(t)
+		n := 0
+		stubImagePublished(t, func(string) (bool, bool) { n++; return n > 3, true })
+		waitForCIImages(pinSHA)
+		if *slept == 0 {
+			t.Error("did not wait for an image that was not published yet")
+		}
+	})
+
+	t.Run("gives up inside the budget rather than hanging", func(t *testing.T) {
+		slept := stubPublishWait(t)
+		stubImagePublished(t, func(string) (bool, bool) { return false, true })
+		waitForCIImages(pinSHA)
+		if *slept != adopterPinPublishRetries {
+			t.Errorf("slept %d time(s), want exactly the %d-retry budget", *slept, adopterPinPublishRetries)
+		}
+	})
+
+	// Polling an endpoint that is not answering learns nothing, and the downstream
+	// check treats "could not ask" as "do not downgrade" anyway.
+	t.Run("does not wait on an unreachable registry", func(t *testing.T) {
+		slept := stubPublishWait(t)
+		stubImagePublished(t, func(string) (bool, bool) { return false, false })
+		waitForCIImages(pinSHA)
+		if *slept != 0 {
+			t.Errorf("slept %d time(s) against a registry that never answered", *slept)
+		}
+	})
 }
