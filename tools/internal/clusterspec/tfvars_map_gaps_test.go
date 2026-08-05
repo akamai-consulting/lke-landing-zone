@@ -105,7 +105,7 @@ func TestClusterTFVars_APLEnabled(t *testing.T) {
 }
 
 func TestObjectStorageTFVars(t *testing.T) {
-	full := assignKeys(ObjectStorageTFVars("prod", fullCluster()))
+	full := assignKeys(ObjectStorageTFVars("acme", "prod", fullCluster()))
 	for _, k := range []string{"region_suffix", "obj_cluster"} {
 		if _, ok := full[k]; !ok {
 			t.Errorf("ObjectStorageTFVars(full) missing %q", k)
@@ -118,7 +118,7 @@ func TestObjectStorageTFVars(t *testing.T) {
 		t.Error("obj_key_rotation_days must not be emitted (variable removed; rotator owns rotation)")
 	}
 	// Minimal: only region_suffix; optional cluster omitted.
-	min := assignKeys(ObjectStorageTFVars("dev", Cluster{}))
+	min := assignKeys(ObjectStorageTFVars("acme", "dev", Cluster{}))
 	if _, ok := min["region_suffix"]; !ok {
 		t.Error("region_suffix should always be emitted")
 	}
@@ -139,7 +139,7 @@ func TestObjectStorageTFVars(t *testing.T) {
 // an apply against the wrong thing rather than a clean no-op.
 func TestDatabasesTFVars(t *testing.T) {
 	// Zero clusters — the stub: region_suffix only, no `databases` key at all.
-	stub := assignKeys(DatabasesTFVars("dev", Cluster{}))
+	stub := assignKeys(DatabasesTFVars("acme", "dev", Cluster{}))
 	if got := stub["region_suffix"]; got != `"dev"` {
 		t.Errorf("region_suffix must always be emitted, got %q", got)
 	}
@@ -153,7 +153,7 @@ func TestDatabasesTFVars(t *testing.T) {
 		Region: "us-ord", VPCID: 575244, SubnetID: 12345,
 		EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2,
 	}}
-	one := assignKeys(DatabasesTFVars("prod", c))
+	one := assignKeys(DatabasesTFVars("acme", "prod", c))
 	if got := one["region_suffix"]; got != `"prod"` {
 		t.Errorf("region_suffix = %q, want %q", got, `"prod"`)
 	}
@@ -182,7 +182,7 @@ func TestDatabasesTFVars(t *testing.T) {
 		"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
 		"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345, ClusterSize: 1},
 	}
-	many := assignKeys(DatabasesTFVars("prod", c))["databases"]
+	many := assignKeys(DatabasesTFVars("acme", "prod", c))["databases"]
 	if a, s := strings.Index(many, `"analytics"`), strings.Index(many, `"shared"`); a < 0 || s < 0 || a > s {
 		t.Errorf("databases entries must be sorted by name for a byte-stable re-render, got:\n%s", many)
 	}

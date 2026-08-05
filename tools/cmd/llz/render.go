@@ -281,8 +281,8 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		// defaults) and gets the spec's assignments applied.
 		assigns := map[string][]clusterspec.Assign{
 			"cluster":        clusterspec.ClusterTFVars(e.Cluster),
-			"object-storage": clusterspec.ObjectStorageTFVars(name, e.Cluster),
-			"databases":      clusterspec.DatabasesTFVars(name, e.Cluster),
+			"object-storage": clusterspec.ObjectStorageTFVars(lz.ObjLabelPrefix(), name, e.Cluster),
+			"databases":      clusterspec.DatabasesTFVars(lz.ObjLabelPrefix(), name, e.Cluster),
 		}
 		for _, root := range tfRoots {
 			base, err := tfrootExample(root)
@@ -509,7 +509,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
 		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
-		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo) {
+		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo, id.ObjLabelPrefix) {
 			// Assert the SYNTHESIZED values before they can be committed. A derived
 			// value must be empty (a deliberate "unset" a discovery path handles) or
 			// well-formed — never malformed-but-non-empty, the one shape that defeats
@@ -543,7 +543,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	targets[filepath.Join(shared, clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayShared()
 	targets[filepath.Join(shared, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayShared()
 	overlay := filepath.Join(aplDir, env, "apl-overlay")
-	if obj := clusterspec.RenderObjOverlayEnv(env, e.Cluster.ObjectStorage.Cluster); obj != "" {
+	if obj := clusterspec.RenderObjOverlayEnv(id.ObjLabelPrefix, env, e.Cluster.ObjectStorage.Cluster); obj != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
 	}
 	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Components)
@@ -573,7 +573,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 // lived in manifest/); the filename is taken from the registry Patch.Path so it
 // stays in lockstep with the reference RenderCarvedAppKustomization emits. Returns
 // empty for a carved component with no per-env patch (externalSecrets).
-func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment, ghRepo string) map[string]string {
+func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment, ghRepo, objLabelPrefix string) map[string]string {
 	out := make(map[string]string, len(c.Patches))
 	content := map[string]string{}
 	switch c.Name {
@@ -598,9 +598,11 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		content["obj-proxy-cert-patch.yaml"] = clusterspec.RenderObjProxyCertPatch(oc)
 		content["obj-proxy-dns-patch.yaml"] = clusterspec.RenderObjProxyDNSPatch(oc)
 	case "llzReconciler":
-		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
-		// the env name and OBJ_CLUSTER the object-storage cluster.
-		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, ghRepo)
+		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds) +
+		// OBJ_LABEL_PREFIX (the instance's bucket/key namespace — the in-cluster
+		// rotator has no spec to read it from); REGION is the env name and
+		// OBJ_CLUSTER the object-storage cluster.
+		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, ghRepo, objLabelPrefix)
 	}
 	for _, p := range c.Patches {
 		if body, ok := content[p.Path]; ok {

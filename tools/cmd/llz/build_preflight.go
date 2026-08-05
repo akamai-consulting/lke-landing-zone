@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
@@ -42,12 +43,38 @@ var ghAPIJSON = func(path string, out any) error {
 	return json.Unmarshal(b, out)
 }
 
+// ghAPIJSONPaged is ghAPIJSON over every page. `--paginate --slurp` yields an
+// ARRAY of page objects, so the caller's shape is decoded per page and the named
+// list fields concatenated — a single-object decode would silently keep page 1.
+var ghAPIJSONPaged = func(path string, out any) error {
+	b, err := execOutput("gh", "api", "--paginate", "--slurp", path)
+	if err != nil {
+		// `--slurp` is a recent `gh api` flag. An older gh rejects it at parse time
+		// — exit 1, NO stdout — so this is the only place that case is visible. It
+		// used to fall through to a decode of empty output and surface as "could not
+		// determine whether the passphrase exists", with no way forward for an
+		// operator on a distro-packaged gh. Retry unpaged: one page is worse than a
+		// hard stop, and the list this serves is short.
+		if strings.Contains(err.Error(), "unknown flag") || strings.Contains(err.Error(), "unknown shorthand") {
+			return ghAPIJSON(path, out)
+		}
+		return err
+	}
+	// --slurp ALWAYS wraps, including a single page, so a non-array here means the
+	// shape changed rather than "this gh did not slurp".
+	var pages []json.RawMessage
+	if err := json.Unmarshal(b, &pages); err != nil {
+		return fmt.Errorf("gh api --slurp %s: expected an array of pages: %w", path, err)
+	}
+	return mergeJSONPages(pages, out)
+}
+
 // buildPreflight verifies the deployment the dispatch names is present, locally
 // and on the branch CI builds from. A returned error blocks the dispatch; every
 // unknown degrades to nil (or an advisory line) so this can only ever fail a
 // build that was already going to fail.
 func buildPreflight(env string) error {
-	tfDir, _, _ := instanceLayout()
+	tfDir, aplDir, _ := instanceLayout()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
 		// No spec: either not an instance checkout, or a pre-spec instance whose
@@ -66,7 +93,69 @@ func buildPreflight(env string) error {
 		// works, and "run `llz env add`" would then author a duplicate.
 		return unknownDeploymentErr(tfDir, env)
 	}
-	return remoteDeploymentPresent(specRoot, env)
+	if err := remoteDeploymentPresent(specRoot, env); err != nil {
+		return err
+	}
+	warnUnpublishedEdits(specRoot, aplDir, env)
+	return nil
+}
+
+// warnUnpublishedEdits names spec/overlay files that are edited but not committed.
+//
+// remoteDeploymentPresent compares the two SPEC files against the build branch,
+// which catches "committed but never pushed" for them. It cannot catch the state
+// the quickstart actually walks an operator into: `llz env add` commits the spec
+// AND the overlay up front, and everything that comes after it — filling the
+// placeholders `env add` just listed, `llz env set`, `llz spec set`, `llz env
+// edit` — writes files that NOTHING commits. Those edits sit in the working tree
+// while the dispatch builds the pushed tree, so the fix the operator just made is
+// silently absent from the cluster they get. Nothing failed; it just built the
+// wrong thing, which is the expensive way to find out.
+//
+// Advisory, like the stale-file warning above and for the same reason: building
+// an older revision on purpose is legitimate. Name what will be left behind and
+// get out of the way.
+func warnUnpublishedEdits(specRoot, aplDir, env string) {
+	// THIS deployment's files only. The whole environments/ directory would flag a
+	// half-drafted environments/other.yaml while building `env` — and then
+	// prescribe `git add -A && git commit && git push`, which publishes that
+	// unfinished deployment into the spec `llz-discover-deployments.yml`
+	// enumerates, pulling it into rotation and the scheduled health checks.
+	// remoteDeploymentPresent already scopes to environments/<env>.yaml; match it.
+	//
+	// _shared/apl-overlay IS in scope: `llz render` writes it (obj.yaml, apps.yaml)
+	// and the build reads the pushed copy, so a re-render left uncommitted there is
+	// the same silent-stale-build class as the per-env overlay.
+	paths := []string{
+		filepath.Join(specRoot, clusterspec.LandingZoneFile),
+		filepath.Join(specRoot, clusterspec.EnvironmentsDir, env+".yaml"),
+		filepath.Join(aplDir, env),
+		filepath.Join(aplDir, "_shared"),
+	}
+	dirty := gitOut(append([]string{"status", "--porcelain", "--"}, paths...)...)
+	if dirty == "" {
+		// Also the answer outside a git repo, or when git is unavailable: no
+		// evidence of an unpublished edit is not evidence of one.
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s uncommitted spec/overlay changes — the build reads the COMMITTED + pushed tree, so these are NOT in it:\n", yellow("!"))
+	for _, line := range strings.Split(dirty, "\n") {
+		fmt.Fprintf(os.Stderr, "      %s\n", dim(strings.TrimSpace(line)))
+	}
+	// Stage exactly the paths that were scanned. `git add -A` is worktree-wide
+	// while this warning is scoped, so prescribing it would sweep in whatever else
+	// happens to be dirty — including, on the environments/ side, a half-drafted
+	// deployment that publishing pulls into rotation and the scheduled checks.
+	// existingPaths, because `git status --porcelain -- <missing>` ignores an
+	// unmatched pathspec while `git add -- <missing>` is fatal (exit 128) and stages
+	// NOTHING. apl-values/<env> is genuinely absent after an HA-deferred `env add`,
+	// so the prescribed fix would have aborted in exactly the state that most needs
+	// it. Same guard scaffold.go already applies before committing generated files.
+	if stage := existingPaths(paths); len(stage) > 0 {
+		fmt.Fprintf(os.Stderr, "  publish them first: %s\n",
+			cyan(fmt.Sprintf(`git add -- %s && git commit -m "llz: fill deployment values" && git push`,
+				strings.Join(stage, " "))))
+	}
 }
 
 // knownLocally reports whether the local spec declares env. The error case is a
@@ -286,4 +375,45 @@ func ghFileSHA(repo, path, ref string) (sha string, found, ok bool) {
 // transient, which is the failure this whole split exists to avoid.
 func isNotFoundErr(err error) bool {
 	return strings.Contains(err.Error(), "HTTP 404")
+}
+
+// mergeJSONPages decodes each page into a fresh copy of out's type, appends every
+// SLICE field, and takes the LAST non-zero value of every other field.
+//
+// Reflection rather than a per-caller merge because the alternative is each caller
+// hand-rolling pagination, which is how page-1 truncation gets reintroduced.
+//
+// Non-slice fields are carried rather than dropped: the first cut only appended
+// slices, which silently zeroed `total_count` — the one field you would use to
+// CHECK pagination was complete. Scalars are page-invariant on GitHub list
+// endpoints (every page repeats the same total), so last-non-zero is well defined.
+//
+// Limitation, stated rather than discovered later: out must point at a STRUCT, so
+// this cannot serve the gh endpoints returning a top-level array. Those need a
+// slice-shaped variant; there is no caller for one yet.
+func mergeJSONPages(pages []json.RawMessage, out any) error {
+	dst := reflect.ValueOf(out)
+	if dst.Kind() != reflect.Ptr || dst.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("mergeJSONPages: out must be a pointer to struct, got %T", out)
+	}
+	for _, p := range pages {
+		page := reflect.New(dst.Elem().Type())
+		if err := json.Unmarshal(p, page.Interface()); err != nil {
+			return err
+		}
+		for i := 0; i < dst.Elem().NumField(); i++ {
+			f, pf := dst.Elem().Field(i), page.Elem().Field(i)
+			if !f.CanSet() {
+				continue // unexported
+			}
+			if f.Kind() == reflect.Slice {
+				f.Set(reflect.AppendSlice(f, pf))
+				continue
+			}
+			if !pf.IsZero() {
+				f.Set(pf)
+			}
+		}
+	}
+	return nil
 }

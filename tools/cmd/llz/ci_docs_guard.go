@@ -201,6 +201,14 @@ var docsGuardSkipDir = map[string]bool{
 	"vendor":         true,
 	"rendered":       true, // `make render-charts` output
 	"bin":            true,
+	// A nested git WORKTREE of this same repo. `.claude/worktrees/<branch>` is a
+	// supported layout (git worktree add inside the repo), and it is a full second
+	// checkout — so walking it double-counts every doc and reports that branch's
+	// findings against this one. Observed: 19 findings, all from the worktree,
+	// while the real tree was clean; `make instance-test` also fails on it, because
+	// copier's clone sees the gitlink and tries a submodule update. Skipping the
+	// container rather than deleting anything: it is the operator's live work.
+	"worktrees": true,
 }
 
 func markdownFiles(root string) ([]string, error) {

@@ -40,11 +40,11 @@ unquoted = bare
 // ── seed-harbor-registry-s3 ───────────────────────────────────────────────────
 
 func TestHarborRegistryS3Fields(t *testing.T) {
-	got := harborRegistryS3Fields("primary", "us-ord-1", "AK", "SK")
+	got := harborRegistryS3Fields("acme", "primary", "us-ord-1", "AK", "SK")
 	want := map[string]string{
 		"access_key_id":     "AK",
 		"secret_access_key": "SK",
-		"bucket_name":       "platform-harbor-registry-primary",
+		"bucket_name":       "acme-harbor-registry-primary",
 		"endpoint":          "https://us-ord-1.linodeobjects.com",
 		"region":            "us-ord-1",
 	}
@@ -98,6 +98,11 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	mintObjkeysLinodeClient = func(string) rotatorLinodeAPI { return stub }
 	t.Cleanup(func() { mintObjkeysLinodeClient = prevClient })
 
+	// mint runs in CI inside the instance checkout, so the label prefix comes from
+	// the committed spec (the in-cluster rotator gets OBJ_LABEL_PREFIX instead).
+	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
+		"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
+
 	// obj_cluster unresolvable → hard error, no mint.
 	if err := runCIMintBootstrapObjkeys("primary"); err == nil {
 		t.Error("missing obj_cluster must hard-fail")
@@ -123,7 +128,7 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
 	wantPuts := []string{
 		"kv put secret/loki/object-store AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
-		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=platform-harbor-registry-primary " +
+		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=acme-harbor-registry-primary " +
 			"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 rotated_at=" + rotatedAt + " secret_access_key=SK",
 		"kv put secret/obj/platform AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
 	}

@@ -226,18 +226,46 @@ The fastest path is the **`llz`** CLI, which fronts the whole flow (token wizard
 `copier` + `gh` + the bootstrap workflows). **No clone of this repo is required** —
 the installer is a one-liner and `llz new` creates your own repo:
 
+The installer adds **only `llz`** — it sequences tools you install yourself. On the
+laptop you need `git`, `gh`, `copier` (a Python tool, on no machine by default) and,
+for the final verify step, `kubectl`. `llz doctor` is the authoritative list.
+
 ```bash
-# gh must be authenticated FIRST — the installer and every GitHub call below use it
+# Prerequisites. gh must be authenticated FIRST — the installer and every GitHub
+# call below use it. copier is what `llz new` renders the scaffold with.
 gh auth status --hostname github.com || gh auth login --hostname github.com
+command -v copier >/dev/null || pipx install copier
 
 curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+export PATH="$HOME/.local/bin:$PATH"   # ~/.local/bin is not on PATH by default on macOS
+hash -r; llz version
+
+# Strongly recommended: with a Linode PAT exported, `llz env add` and `llz doctor`
+# check your region, OBJ cluster, LKE-E entitlement and k8s version against your
+# ACCOUNT. Without it those checks skip and `terraform apply` is the first thing to
+# notice a typo. (zsh's `read -p` reads from a coprocess, hence the printf.)
+printf 'Linode PAT: '; read -rs LINODE_TOKEN; echo; export LINODE_TOKEN
+
 llz new my-instance --push --yes                       # scaffold + create/push the instance repo
                                                        #   (--org only if you maintain your own template fork)
 cd my-instance
 llz env add lab --region us-sea --obj-cluster us-sea-1  # author the spec for a deployment + render; fill any overlay placeholders it lists
-git push                                               # `env add` commits; the build renders from the PUSHED tree
-llz doctor --env lab                                   # "am I ready to build?" — fix what it lists, re-run until green
-llz up lab --yes                                       # credentials → readiness gate → build; llz status lab to verify
+llz doctor --env lab                                   # "am I ready to build?" — fix what it lists, BEFORE you publish
+git add -A && git commit -m "llz: fill deployment values" && git push
+                                                       # `env add` commits its own output; anything you changed
+                                                       # after it is yours. The build renders from the PUSHED tree.
+llz up lab --yes                                       # credentials → readiness gate → build
+
+# `llz up` DISPATCHES the build and returns; the apply + bootstrap + converge take
+# ~20 minutes in GitHub Actions. Watch it, then come back:
+gh run watch --repo <owner>/<name> "$(gh run list --repo <owner>/<name> --workflow terraform.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+
+# The cluster was built in CI, so this machine has no kubeconfig for it. Fetch one,
+# then verify. NOTE --region here is the DEPLOYMENT name, not the geographic region.
+export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)
+llz ci fetch-kubeconfig --region lab --output ~/.kube/lab.yaml
+export KUBECONFIG=~/.kube/lab.yaml
+llz status lab --wait --timeout 900                    # --wait defaults to 300s; convergence is slower
 ```
 
 Already have a checkout of this repo? Run `./template-scripts/install-llz.sh`

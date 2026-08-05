@@ -84,31 +84,32 @@ type credEntry struct {
 // region/objCluster come from the CronJob env (rendered per-env, like the
 // volume-labeler's REGION). Labels + bucket grants MIRROR the llz-object-storage
 // module's bootstrap-minted keys ("<label_prefix>-<name>-<region_suffix>",
-// label_prefix "platform"): the Loki key spans the chunks/ruler/admin buckets —
+// label_prefix is the instance's spec.instance.objLabelPrefix — it used to be the
+// shared constant "platform", which gave every instance identical labels): the Loki key spans the chunks/ruler/admin buckets —
 // the actual bucket names, NOT the key label (an earlier revision minted against
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
-func buildRotationTable(region, objCluster string) []credEntry {
+func buildRotationTable(prefix, region, objCluster string) []credEntry {
 	return []credEntry{
 		{
-			name: "loki-object-store", kind: credKindObjKey, label: "platform-loki-" + region,
+			name: "loki-object-store", kind: credKindObjKey, label: prefix + "-loki-" + region,
 			objCluster: objCluster,
 			buckets: []string{
-				"platform-loki-chunks-" + region,
-				"platform-loki-ruler-" + region,
-				"platform-loki-admin-" + region,
+				prefix + "-loki-chunks-" + region,
+				prefix + "-loki-ruler-" + region,
+				prefix + "-loki-admin-" + region,
 			},
 			permissions: "read_write",
 			baoPath:     "secret/loki/object-store", presentField: "AWS_ACCESS_KEY_ID",
 			fields: func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
 		},
 		{
-			name: "harbor-registry-s3", kind: credKindObjKey, label: "platform-harbor-registry-" + region,
+			name: "harbor-registry-s3", kind: credKindObjKey, label: prefix + "-harbor-registry-" + region,
 			objCluster:  objCluster,
-			buckets:     []string{"platform-harbor-registry-" + region},
+			buckets:     []string{prefix + "-harbor-registry-" + region},
 			permissions: "read_write",
 			baoPath:     "secret/harbor/registry-s3", presentField: "access_key_id",
 			fields: func(access, secret string) map[string]string {
-				return harborRegistryS3Fields(region, objCluster, access, secret)
+				return harborRegistryS3Fields(prefix, region, objCluster, access, secret)
 			},
 		},
 		{
@@ -120,13 +121,13 @@ func buildRotationTable(region, objCluster string) []credEntry {
 			// secret/obj/platform; the obj-secrets ExternalSecret projects the secret
 			// half into apl-secrets/obj-secrets (property provider_linode_secretAccessKey),
 			// and the reconciler fills obj.yaml.accessKeyId from AWS_ACCESS_KEY_ID.
-			name: "obj-platform", kind: credKindObjKey, label: "platform-obj-" + region,
+			name: "obj-platform", kind: credKindObjKey, label: prefix + "-obj-" + region,
 			objCluster: objCluster,
 			buckets: []string{
-				"platform-loki-chunks-" + region,
-				"platform-loki-ruler-" + region,
-				"platform-loki-admin-" + region,
-				"platform-harbor-registry-" + region,
+				prefix + "-loki-chunks-" + region,
+				prefix + "-loki-ruler-" + region,
+				prefix + "-loki-admin-" + region,
+				prefix + "-harbor-registry-" + region,
 			},
 			permissions: "read_write",
 			baoPath:     "secret/obj/platform", presentField: "AWS_ACCESS_KEY_ID",
@@ -155,11 +156,11 @@ func lokiObjectStoreFields(access, secret string) map[string]string {
 // actually provisioned into — NOT guessed from the env name. Lives here (not
 // ci_seed_special.go) because the rotation table owns this path now: both the
 // bootstrap mint and the rotator write the same complete field set.
-func harborRegistryS3Fields(region, objCluster, accessKey, secretKey string) map[string]string {
+func harborRegistryS3Fields(prefix, region, objCluster, accessKey, secretKey string) map[string]string {
 	return map[string]string{
 		"access_key_id":     accessKey,
 		"secret_access_key": secretKey,
-		"bucket_name":       "platform-harbor-registry-" + region,
+		"bucket_name":       prefix + "-harbor-registry-" + region,
 		"endpoint":          "https://" + objCluster + ".linodeobjects.com",
 		"region":            objCluster,
 	}
@@ -238,7 +239,16 @@ func runRotateLinodeCreds(ctx context.Context, apply bool) error {
 	rotateAfter := int(cli.EnvInt("ROTATE_AFTER_DAYS", 80))
 	keepNewest := int(cli.EnvInt("KEEP_NEWEST", 2))
 
-	table := buildRotationTable(region, objCluster)
+	// In-cluster: there is no instance repo here, so the prefix is rendered into
+	// the reconciler Deployment by `llz render` (RenderReconcilerEnvPatch). No
+	// default — matching keys under the wrong prefix rotates ANOTHER instance's
+	// credentials, which is silent and worse than stopping.
+	prefix := os.Getenv("OBJ_LABEL_PREFIX")
+	if prefix == "" {
+		return fmt.Errorf("OBJ_LABEL_PREFIX must be set (the instance's Object Storage label prefix). " +
+			"`llz render` writes it into the llz-reconciler Deployment; re-render and re-apply the reconciler if it is missing")
+	}
+	table := buildRotationTable(prefix, region, objCluster)
 	for _, e := range table {
 		if e.kind == credKindObjKey && objCluster == "" {
 			return fmt.Errorf("OBJ_CLUSTER must be set to rotate object-storage keys (e.g. %s)", e.name)

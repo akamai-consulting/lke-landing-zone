@@ -33,6 +33,8 @@ func TestIdsToDrainReturnsNilWhenNothingToDrain(t *testing.T) {
 // OBJ_CLUSTER-present path was covered, so the guard could be inverted into
 // "refuse when it IS set" unnoticed.
 func TestRunRotateLinodeCredsRefusesWithoutObjCluster(t *testing.T) {
+	// The prefix gate comes first now; this test is about the OBJ_CLUSTER one.
+	t.Setenv("OBJ_LABEL_PREFIX", "acme")
 	t.Setenv("REGION", "primary")
 	t.Setenv("OBJ_CLUSTER", "")
 	t.Setenv("LINODE_TOKEN", "minting")
@@ -59,7 +61,7 @@ func (f failingDrain) DeleteObjectStorageKey(context.Context, uint64) error {
 
 func TestDrainOldLogsFailedRevokesAndStaysQuietOnSuccess(t *testing.T) {
 	var objEntry credEntry
-	for _, e := range buildRotationTable("primary", "us-ord-1") {
+	for _, e := range buildRotationTable("acme", "primary", "us-ord-1") {
 		if e.kind == credKindObjKey {
 			objEntry = e
 			break

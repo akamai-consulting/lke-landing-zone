@@ -25,6 +25,11 @@ func TestCopierCopyArgv(t *testing.T) {
 func TestRunNewMissingTemplateSource(t *testing.T) {
 	// A typo'd / un-forked --org must fail fast with the actionable error instead
 	// of letting copier drop into an interactive git username prompt.
+	//
+	// copier is stubbed present: runNew now refuses before the GitHub lookup when
+	// it is absent, and whether the machine running the tests happens to have a
+	// Python tool installed must not decide which error this asserts.
+	withCopierInstalled(t)
 	withTemplateSourceStatus(t, func(string) (bool, error) { return false, nil })
 
 	err := runNew(globalOpts{}, "nonexistent-org", "v0.0.38", "my-instance", false)
@@ -42,6 +47,7 @@ func TestRunNewMissingTemplateSource(t *testing.T) {
 // reported as an absent template: the upstream is public, and "fork it first" is
 // then the wrong instruction to hand a brand-new adopter.
 func TestRunNewGitHubUnreachable(t *testing.T) {
+	withCopierInstalled(t)
 	withTemplateSourceStatus(t, func(string) (bool, error) {
 		return false, errors.New("gh: To get started with GitHub CLI, please run: gh auth login")
 	})
@@ -248,5 +254,84 @@ func TestCheckNewTargetUnreadableDirIsNotEmpty(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cannot read") {
 		t.Errorf("error %q should name the read failure", err)
+	}
+}
+
+// ── copier as a prerequisite ─────────────────────────────────────────────────
+
+// withCopierInstalled / withoutCopier stub tool discovery so these tests do not
+// depend on whether the machine running them has a Python tool installed.
+func withCopierInstalled(t *testing.T) {
+	t.Helper()
+	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
+}
+
+func withoutCopier(t *testing.T) {
+	t.Helper()
+	withLookPath(t, func(f string) (string, error) {
+		if f == "copier" {
+			return "", errors.New(`exec: "copier": executable file not found in $PATH`)
+		}
+		return "/usr/bin/" + f, nil
+	})
+}
+
+func TestRequireCopierNamesAnInstallRoute(t *testing.T) {
+	// The failure this replaces was exec's own words — `copier copy: exec:
+	// "copier": executable file not found in $PATH` — as the second command of the
+	// quickstart. Naming the tool is not enough; the operator has never heard of
+	// copier, so the error has to carry a way to get it.
+	withoutCopier(t)
+
+	err := requireCopier(globalOpts{}, "`llz new`")
+	if err == nil {
+		t.Fatal("expected a refusal when copier is not on PATH")
+	}
+	for _, want := range []string{"copier", "llz new", "pipx install copier", "llz doctor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// A --dry-run never execs copier, so it must not hard-fail on its absence — but
+// staying silent would report "this would work" about a run that would not.
+func TestRequireCopierWarnsButPassesUnderDryRun(t *testing.T) {
+	withoutCopier(t)
+	var err error
+	out := captureStderr(t, func() { err = requireCopier(globalOpts{dryRun: true}, "`llz new`") })
+	if err != nil {
+		t.Fatalf("--dry-run must not fail on a tool it will not invoke: %v", err)
+	}
+	for _, want := range []string{"would fail here", "pipx install copier"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry-run warning missing %q, got: %s", want, out)
+		}
+	}
+}
+
+func TestRequireCopierSilentWhenInstalled(t *testing.T) {
+	withCopierInstalled(t)
+	if err := requireCopier(globalOpts{}, "`llz new`"); err != nil {
+		t.Fatalf("copier is on PATH, nothing to say: %v", err)
+	}
+}
+
+func TestRunNewRefusesMissingCopierBeforeCallingGitHub(t *testing.T) {
+	// Ordering is the point. copier is what actually renders the scaffold, and the
+	// check is free and local — resolving a release tag first would spend two API
+	// calls to arrive at the same dead end.
+	withoutCopier(t)
+	withTemplateSourceStatus(t, func(string) (bool, error) {
+		t.Error("GitHub was consulted before the local copier check")
+		return true, nil
+	})
+
+	err := runNew(globalOpts{}, defaultTemplateOrg, "v0.0.40", t.TempDir()+"/my-instance", false)
+	if err == nil {
+		t.Fatal("expected a refusal when copier is not on PATH")
+	}
+	if !strings.Contains(err.Error(), "pipx install copier") {
+		t.Errorf("error %q is not the copier-missing diagnosis", err)
 	}
 }

@@ -75,17 +75,28 @@ const (
 // inclusterPATLabel is the Linode-side token label — also the drain target
 // (keep-newest, like every rotated credential). Per-region: each region's
 // OpenBao gets its own token, so revoking one region never breaks another.
-func inclusterPATLabel(region string) string { return "llz-incluster-" + region }
+func inclusterPATLabel(prefix, region string) string {
+	// The instance discriminator matters here for the same reason it does on the
+	// obj keys: runCredentialsPATRevokeOld selects EVERY profile token with this
+	// exact label, keeps the newest, and revokes the rest. Two instances in one
+	// Linode account that both have a deployment named `lab` would each revoke the
+	// other's live in-cluster credential on a schedule — silently, monthly. PATs
+	// are profile-scoped, so the account is the shared namespace.
+	if prefix == "" {
+		return "llz-incluster-" + region
+	}
+	return "llz-incluster-" + prefix + "-" + region
+}
 
 // mintVerifiedInclusterPAT mints the narrow PAT with the broad provisioning
 // token and confirms the NEW token authenticates (GET /v4/profile) before the
 // caller writes it anywhere. A token that fails verification is left for the
 // drain (it can never be the newest verified sibling).
-func mintVerifiedInclusterPAT(ctx context.Context, mint patAPI, region string) (id uint64, token string, err error) {
+func mintVerifiedInclusterPAT(ctx context.Context, mint patAPI, prefix, region string) (id uint64, token string, err error) {
 	expiry := linode.FmtLinodeTS(rotatorNow().Unix() + inclusterPATValidityDays*linode.DaySecs)
-	resp, err := mint.CreateProfileToken(ctx, inclusterPATLabel(region), inclusterPATScopes, expiry)
+	resp, err := mint.CreateProfileToken(ctx, inclusterPATLabel(prefix, region), inclusterPATScopes, expiry)
 	if err != nil {
-		return 0, "", fmt.Errorf("mint in-cluster PAT %s: %w", inclusterPATLabel(region), err)
+		return 0, "", fmt.Errorf("mint in-cluster PAT %s: %w", inclusterPATLabel(prefix, region), err)
 	}
 	id, ok := cli.AsUint64(resp["id"])
 	if !ok {
@@ -121,6 +132,12 @@ func ciMintBootstrapPATCmd() *cobra.Command {
 }
 
 func runCIMintBootstrapPAT(region string) error {
+	// CI, inside the instance checkout — the label is instance-scoped so a peer
+	// instance's monthly drain cannot revoke this deployment's live PAT.
+	prefix, err := objLabelPrefixFor("mint-bootstrap-pat")
+	if err != nil {
+		return err
+	}
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -140,7 +157,7 @@ func runCIMintBootstrapPAT(region string) error {
 		fmt.Println("secret/linode/api-token already seeded — skipping mint (rotation owns it).")
 		return nil
 	}
-	id, token, err := mintVerifiedInclusterPAT(context.Background(), newPATRotatorClient(minting), region)
+	id, token, err := mintVerifiedInclusterPAT(context.Background(), newPATRotatorClient(minting), prefix, region)
 	if err != nil {
 		return err
 	}
@@ -153,9 +170,9 @@ func runCIMintBootstrapPAT(region string) error {
 	}); err != nil {
 		return fmt.Errorf("seed secret/linode/api-token: %w", err)
 	}
-	fmt.Printf("Minted in-cluster PAT %s (id=%d) and seeded secret/linode/api-token.\n", inclusterPATLabel(region), id)
+	fmt.Printf("Minted in-cluster PAT %s (id=%d) and seeded secret/linode/api-token.\n", inclusterPATLabel(prefix, region), id)
 	return appendGHAFile("GITHUB_STEP_SUMMARY",
-		fmt.Sprintf("Minted in-cluster PAT `%s` (id=`%d`) and seeded `secret/linode/api-token`.", inclusterPATLabel(region), id))
+		fmt.Sprintf("Minted in-cluster PAT `%s` (id=`%d`) and seeded `secret/linode/api-token`.", inclusterPATLabel(prefix, region), id))
 }
 
 func ciRotateInclusterPATCmd() *cobra.Command {
@@ -164,7 +181,7 @@ func ciRotateInclusterPATCmd() *cobra.Command {
 		Short: "mint a fresh narrow in-cluster PAT, write it to this region's OpenBao, drain old siblings",
 		Long: "Replaces `llz ci propagate-pat`: instead of round-tripping the BROAD PAT\n" +
 			"through a GitHub secret into every cluster, each region's job mints its own\n" +
-			"NARROW in-cluster PAT (label llz-incluster-<region>) with the broad token,\n" +
+			"NARROW in-cluster PAT (label llz-incluster-<objLabelPrefix>-<region>) with the broad token,\n" +
 			"verifies it, writes secret/linode/api-token via the secret-propagator\n" +
 			"GitHub-OIDC role (payload on stdin, never argv), and drains older same-labeled\n" +
 			"siblings past the grace window. The token never crosses a job boundary and\n" +
@@ -179,6 +196,13 @@ func ciRotateInclusterPATCmd() *cobra.Command {
 
 func runCIRotateInclusterPAT() error {
 	region := os.Getenv("REGION")
+	// Runs from the instance checkout (llz-secret-rotation.yml), so the
+	// instance-scoped label comes from the spec — see inclusterPATLabel for why it
+	// must not be a bare llz-incluster-<env>.
+	prefix, err := objLabelPrefixFor("rotate-incluster-pat")
+	if err != nil {
+		return err
+	}
 	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## In-cluster Linode PAT rotation — %s", region), ""); err != nil {
 		return err
@@ -199,7 +223,7 @@ func runCIRotateInclusterPAT() error {
 
 	ctx := context.Background()
 	client := newPATRotatorClient(minting)
-	id, token, err := mintVerifiedInclusterPAT(ctx, client, region)
+	id, token, err := mintVerifiedInclusterPAT(ctx, client, prefix, region)
 	if err != nil {
 		return err
 	}
@@ -213,17 +237,17 @@ func runCIRotateInclusterPAT() error {
 	fmt.Printf("Wrote secret/linode/api-token to %s OpenBao (new_pat_id=%d).\n", region, id)
 	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("> Wrote `secret/linode/api-token` (new_pat_id=`%d`, label `%s`) via secret-propagator GitHub-OIDC role.",
-			id, inclusterPATLabel(region))); err != nil {
+			id, inclusterPATLabel(prefix, region))); err != nil {
 		return err
 	}
 	// Drain older same-labeled siblings past the grace window. Keep-newest
 	// keeps the token just written; consumers re-sync via ESO well inside the
 	// grace window. Drain failure is non-fatal by design of the monthly cadence
 	// (the next run retries) — but surface it, or leaked tokens hide forever.
-	if err := runCredentialsPATRevokeOld(ctx, client, true, inclusterPATLabel(region), inclusterPATGraceDays); err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", inclusterPATLabel(region), err)
+	if err := runCredentialsPATRevokeOld(ctx, client, true, inclusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", inclusterPATLabel(prefix, region), err)
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", inclusterPATLabel(region), err))
+			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", inclusterPATLabel(prefix, region), err))
 	}
 	return nil
 }

@@ -55,21 +55,21 @@ func TestRenderObjOverlayShared(t *testing.T) {
 }
 
 func TestRenderObjOverlayEnv(t *testing.T) {
-	y := RenderObjOverlayEnv("primary", "us-ord-1")
+	y := RenderObjOverlayEnv("acme", "primary", "us-ord-1")
 	if got, _ := digStr(t, y, "spec", "provider", "linode", "region"); got != "us-ord-1" {
 		t.Errorf("region = %q, want us-ord-1", got)
 	}
-	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "loki"); got != "platform-loki-chunks-primary" {
-		t.Errorf("buckets.loki = %q, want platform-loki-chunks-primary", got)
+	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "loki"); got != "acme-loki-chunks-primary" {
+		t.Errorf("buckets.loki = %q, want acme-loki-chunks-primary", got)
 	}
-	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "harbor"); got != "platform-harbor-registry-primary" {
-		t.Errorf("buckets.harbor = %q, want platform-harbor-registry-primary", got)
+	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "harbor"); got != "acme-harbor-registry-primary" {
+		t.Errorf("buckets.harbor = %q, want acme-harbor-registry-primary", got)
 	}
 	// No credential fields in the per-env override (they live in _shared).
 	if strings.Contains(y, "accessKeyId") || strings.Contains(y, "secretAccessKey") {
 		t.Errorf("env obj overlay must not carry credentials:\n%s", y)
 	}
-	if RenderObjOverlayEnv("primary", "") != "" {
+	if RenderObjOverlayEnv("acme", "primary", "") != "" {
 		t.Error("no object-storage cluster → empty env obj overlay")
 	}
 }
@@ -118,7 +118,7 @@ func TestRenderAppsOverlayEnv(t *testing.T) {
 }
 
 func TestMergeOverlay(t *testing.T) {
-	merged, err := MergeOverlay([]byte(RenderObjOverlayShared()), []byte(RenderObjOverlayEnv("primary", "us-ord-1")))
+	merged, err := MergeOverlay([]byte(RenderObjOverlayShared()), []byte(RenderObjOverlayEnv("acme", "primary", "us-ord-1")))
 	if err != nil {
 		t.Fatalf("MergeOverlay: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestMergeOverlay(t *testing.T) {
 	if got, _ := digStr(t, y, "spec", "provider", "linode", "region"); got != "us-ord-1" {
 		t.Errorf("merged region = %q, want us-ord-1", got)
 	}
-	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "loki"); got != "platform-loki-chunks-primary" {
+	if got, _ := digStr(t, y, "spec", "provider", "linode", "buckets", "loki"); got != "acme-loki-chunks-primary" {
 		t.Errorf("merged buckets.loki = %q", got)
 	}
 }
@@ -151,7 +151,7 @@ func TestMergeOverlay_EnvWinsScalar(t *testing.T) {
 }
 
 func TestMergeOverlay_EmptyLayers(t *testing.T) {
-	merged, err := MergeOverlay(nil, []byte(RenderObjOverlayEnv("primary", "us-ord-1")))
+	merged, err := MergeOverlay(nil, []byte(RenderObjOverlayEnv("acme", "primary", "us-ord-1")))
 	if err != nil {
 		t.Fatalf("MergeOverlay(nil, env): %v", err)
 	}
@@ -164,7 +164,7 @@ func TestMergeOverlay_EmptyLayers(t *testing.T) {
 }
 
 func TestFillObjPlaceholders(t *testing.T) {
-	merged, _ := MergeOverlay([]byte(RenderObjOverlayShared()), []byte(RenderObjOverlayEnv("primary", "us-ord-1")))
+	merged, _ := MergeOverlay([]byte(RenderObjOverlayShared()), []byte(RenderObjOverlayEnv("acme", "primary", "us-ord-1")))
 	filled := FillObjPlaceholders(merged, "AKID123")
 	y := string(filled)
 	if strings.Contains(y, ObjAccessKeyIDPlaceholder) {

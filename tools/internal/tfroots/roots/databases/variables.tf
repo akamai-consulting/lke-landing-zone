@@ -46,3 +46,24 @@ variable "databases" {
     error_message = "every databases entry needs a real vpc_id and subnet_id (`linode-cli vpcs list`; `linode-cli vpcs subnets-list <vpc_id>`) — 0 is the unscaffolded placeholder."
   }
 }
+
+# Per-instance namespace on the database cluster label, exactly as in the
+# object-storage root. The module defaults this to "platform" and its own doc
+# calls the result "the global database label", so leaving it at the default gave
+# every LLZ instance the same `platform-<name>-<env>` and the second one to
+# declare a database for a given deployment name fails at apply.
+#
+# No default: `llz render` always emits it from spec.instance.objLabelPrefix.
+variable "label_prefix" {
+  description = "Per-instance prefix for the database cluster label (spec.instance.objLabelPrefix). The label becomes <label_prefix>-<name>-<region_suffix>."
+  type        = string
+
+  validation {
+    # Rejects the SHIPPED PLACEHOLDER as well as the grammar, mirroring
+    # region_suffix's `!= "your-env"`. Without it two adopters hand-authoring
+    # tfvars from the example both create `your-instance-…` — the identical
+    # collision this variable exists to remove, under a new shared name.
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.label_prefix)) && var.label_prefix != "your-instance"
+    error_message = "label_prefix must be lowercase alphanumerics and hyphens, not starting or ending with a hyphen, and must not be the shipped placeholder \"your-instance\" — `llz render` fills it from spec.instance.objLabelPrefix."
+  }
+}

@@ -5,8 +5,9 @@
 # label_prefix. The module's scar-comments (force_destroy quirk, rotation model,
 # Harbor wiring) travel with the code. See modules/object-storage/README.md.
 #
-# label_prefix is intentionally left at the module default ("platform") so the
-# in-repo deployment's bucket labels are unchanged.
+# label_prefix comes from the spec (spec.instance.objLabelPrefix) via
+# `llz render`. It is NOT left at the module default: "platform" is the same for
+# every instance on earth, and OBJ bucket labels are global per region.
 module "object_storage" {
   # checkov:skip=CKV_TF_1: First-party module sources pin to immutable-by-convention
   # SemVer tags (terraform-modules/RELEASING.md — tags are never moved), which are the
@@ -16,4 +17,5 @@ module "object_storage" {
 
   region_suffix = var.region_suffix
   obj_cluster   = var.obj_cluster
+  label_prefix  = var.label_prefix
 }

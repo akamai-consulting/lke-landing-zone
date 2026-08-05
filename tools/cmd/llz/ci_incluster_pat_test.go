@@ -90,6 +90,11 @@ func stubInclusterBaoExec(t *testing.T, seededToken, loginToken string) *[][]str
 
 func inclusterPATEnv(t *testing.T, broadToken string) string {
 	t.Helper()
+	// The PAT label is instance-scoped (see inclusterPATLabel), and these verbs
+	// run from the instance checkout — so they read the prefix off the spec.
+	dir := chdirTempDir(t)
+	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
+		"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
 	sum := filepath.Join(t.TempDir(), "sum")
 	t.Setenv("GITHUB_STEP_SUMMARY", sum)
 	t.Setenv("REGION", "primary")
@@ -118,7 +123,7 @@ func TestMintBootstrapPATHappyPath(t *testing.T) {
 	if err := runCIMintBootstrapPAT("primary"); err != nil {
 		t.Fatalf("mint-bootstrap-pat: %v", err)
 	}
-	if s.label != "llz-incluster-primary" {
+	if s.label != "llz-incluster-acme-primary" {
 		t.Errorf("mint label = %q", s.label)
 	}
 	// The narrow scope set: in-cluster consumers only — and none of the
@@ -201,10 +206,10 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 	s := &patMintStub{stubLinode: stubLinode{pats: []map[string]any{
 		// An older same-labeled sibling past the 7-day grace → drained; a
 		// foreign label → untouched.
-		{"label": "llz-incluster-primary", "id": jn(7), "created": linode.FmtLinodeTS(now.Unix() - 30*linode.DaySecs)},
+		{"label": "llz-incluster-acme-primary", "id": jn(7), "created": linode.FmtLinodeTS(now.Unix() - 30*linode.DaySecs)},
 		{"label": "gha-platform-platform_LINODE_API_TOKEN", "id": jn(8), "created": linode.FmtLinodeTS(now.Unix() - 40*linode.DaySecs)},
 		// The token this run just minted (newest — kept).
-		{"label": "llz-incluster-primary", "id": jn(101), "created": linode.FmtLinodeTS(now.Unix())},
+		{"label": "llz-incluster-acme-primary", "id": jn(101), "created": linode.FmtLinodeTS(now.Unix())},
 	}}}
 	withInclusterPATStubs(t, s, now)
 	calls := stubInclusterBaoExec(t, "", "propagator-token")

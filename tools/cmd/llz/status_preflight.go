@@ -69,8 +69,33 @@ func noClusterAccessErr(env, why string) error {
 	// fetch-kubeconfig resolves the cluster from <env>.tfvars, and those are
 	// gitignored build artifacts — absent in a fresh clone until a render.
 	fmt.Fprintf(&b, "  %s\n", dim(fmt.Sprintf("(fresh clone? `llz render %s` first — it resolves the cluster from the rendered %s.tfvars)", env, env)))
+	// The ACL is enabled unconditionally by the cluster module, and its address set
+	// is exactly cluster.apiServerAllowCIDRs. The quickstart's default answer for
+	// that field is EMPTY (correct for github.com-hosted runners, which open their
+	// egress IP per job and revoke it on the way out), so the common case here is
+	// not a misconfigured ACL — it is a correctly-configured one that has never
+	// contained this laptop. "Edit the spec and re-apply" was the only remedy named,
+	// which costs a full apply to run one kubectl. `runner-acl open` is the same
+	// Linode-API ACL write the CI job does, and an operator can run it directly.
 	b.WriteString("  Still refused or timing out? The LKE-E control-plane ACL admits only the prefixes in\n")
-	fmt.Fprintf(&b, "  cluster.apiServerAllowCIDRs — add your egress one (%s, then re-apply),\n", cyan("llz env edit "+env))
-	b.WriteString("  or run the checks from a host that is already allowed.")
+	b.WriteString("  cluster.apiServerAllowCIDRs, and a github.com-hosted build leaves none of yours there.\n")
+	b.WriteString("  Add THIS machine's egress IP to the live ACL — takes effect at once, no re-apply:\n")
+	// Needs a token, and runner-acl NO-OPS WITH EXIT 0 when it has none (it is
+	// built for a CI job where a missing token should not fail the step), so an
+	// operator who skipped the export would otherwise see success and still be
+	// refused. --region on BOTH lines: it names the state file `revoke` reads back,
+	// and without it revoke looks under "default", finds nothing, and reports a
+	// no-op — leaving a home IP in the control-plane ACL indefinitely.
+	fmt.Fprintf(&b, "      %s\n", cyan("export LINODE_TOKEN=…   # runner-acl no-ops (exit 0) without it"))
+	fmt.Fprintf(&b, "      %s\n", cyan("llz ci runner-acl open --region "+env))
+	fmt.Fprintf(&b, "      %s\n", cyan("llz ci runner-acl revoke --region "+env)+dim("   # when you are done"))
+	fmt.Fprintf(&b, "  %s\n", dim("(add --runner-configmap if this cluster runs the cidrFirewall component, whose"))
+	fmt.Fprintf(&b, "  %s\n", dim("controller replaces the ACL on each reconcile; it is off by default.)"))
+	// NOT "edit the spec and re-apply": the cluster resource carries
+	// `ignore_changes = [control_plane[0].acl, pool]`, so the ACL is set at CREATE
+	// only and a re-apply against a live cluster is a no-op on it. Saying otherwise
+	// buys the operator a 20-minute apply that changes nothing and reports success.
+	fmt.Fprintf(&b, "  A spec edit (%s) does NOT change this cluster's ACL — Terraform holds it\n", cyan("llz env edit "+env))
+	b.WriteString("  under ignore_changes, so it applies only to a cluster created later. Or run from an allowed host.")
 	return fmt.Errorf("%s", b.String())
 }

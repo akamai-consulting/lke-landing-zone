@@ -184,6 +184,18 @@ func catalog() []secretSpec {
 			Dest:    "repository variable",
 			IsVar:   true,
 		},
+		{
+			// The quickstart offers `llz secrets gather` + `llz secrets push` as the
+			// manual alternative for operators who would rather llz did not create
+			// Linode resources for them. That path omitted this, so it produced an
+			// instance whose every Terraform root exits 1 at init — `llz tokens`
+			// generates it, but gather does not run that code. Prompted rather than
+			// generated here, because this catalog's whole contract is "you paste
+			// every value yourself".
+			Name:    statePassphraseSecret,
+			Purpose: "OpenTofu state+plan encryption passphrase — REPO-LEVEL, one per instance. LEAVE BLANK if this instance already has one (`llz tokens` generates it); a NEW value here would make every existing state file unreadable. First time only: `openssl rand -base64 32`, and ESCROW IT",
+			Dest:    "repository secret",
+		},
 	}
 }
 
@@ -338,6 +350,17 @@ func pushSecrets(g globalOpts, env string) error {
 		return fmt.Errorf("nothing to push — run `llz secrets gather` first")
 	}
 
+	// The manual route has the same clobber hazard as the wizard and none of its
+	// guards: `gather` re-prompts every catalog entry on every run, and the
+	// passphrase's own prompt text says `openssl rand -base64 32` — so an operator
+	// re-running gather to add one missing token can paste a NEW passphrase over
+	// the live one and make every state file unreadable. Ask before pushing.
+	if repo, rerr := resolveInstanceRepo("", false); rerr == nil {
+		if err := dropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
+			return err
+		}
+	}
+
 	type item struct {
 		argv []string
 		val  string
@@ -390,7 +413,11 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	fmt.Println(bold("Tooling:"))
 	// terraform OR tofu satisfies the Terraform requirement.
 	reportEither("terraform", "tofu")
-	for _, t := range []string{"copier", "gh", "kubectl", "helm", "bao", "jq", "linode-cli"} {
+	// git is first because it is the one every other step assumes: copier clones
+	// the template with it, `llz env add` commits with it, and the build reads what
+	// `git push` published. It was the only tool in this flow that nothing checked
+	// — the list carries `jq` and `linode-cli`, which llz never invokes at all.
+	for _, t := range []string{"git", "copier", "gh", "kubectl", "helm", "bao", "jq", "linode-cli"} {
 		report(t, lookable(t))
 	}
 

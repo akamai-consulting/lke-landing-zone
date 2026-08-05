@@ -25,8 +25,8 @@ func TestRotateInclusterPATDoesNotReportASuccessfulDrainAsFailed(t *testing.T) {
 	})
 	now := time.Now()
 	s := &patMintStub{stubLinode: stubLinode{pats: []map[string]any{
-		{"label": "llz-incluster-primary", "id": jn(7), "created": linode.FmtLinodeTS(now.Unix() - 30*linode.DaySecs)},
-		{"label": "llz-incluster-primary", "id": jn(101), "created": linode.FmtLinodeTS(now.Unix())},
+		{"label": "llz-incluster-acme-primary", "id": jn(7), "created": linode.FmtLinodeTS(now.Unix() - 30*linode.DaySecs)},
+		{"label": "llz-incluster-acme-primary", "id": jn(101), "created": linode.FmtLinodeTS(now.Unix())},
 	}}}
 	withInclusterPATStubs(t, s, now)
 	stubInclusterBaoExec(t, "", "propagator-token")

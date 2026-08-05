@@ -186,6 +186,11 @@ type Instance struct {
 	// (forge.Supported) — the latter rejects a forge that is reserved but not
 	// yet wired, rather than silently ignoring it.
 	Forge string `json:"forge"`
+	// ObjLabelPrefix prefixes every Object Storage bucket and key label this
+	// instance creates. Optional: derived from metadata.name when empty (see
+	// objlabels.go). `llz env add` writes the derived value here so the effective
+	// prefix is visible in the spec — these become globally-unique cloud names.
+	ObjLabelPrefix string `json:"objLabelPrefix,omitempty"`
 	// TemplateVersion is DEPRECATED and ignored. The template pin lives once, in
 	// copier's .copier-answers.yml; the renderer resolves it there
 	// (resolveTemplateRef) and never read this field. Nothing re-stamped it on
