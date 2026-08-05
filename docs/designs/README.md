@@ -60,6 +60,7 @@ doing its job. Links are still checked.
 | Design | What it covers |
 |---|---|
 | [credential-single-pane-incluster](credential-single-pane-incluster.md) | Moving the credential pane fully in-cluster. Input to the credential-rotation / PAT-window review. |
+| [windows-support](windows-support.md) | What native Windows support for `llz` would take, as a tiered spectrum rather than a switch. Tier 0 (WSL2 / Dev Container) already works. |
 
 ### Superseded
 

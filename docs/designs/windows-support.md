@@ -1,7 +1,8 @@
 # Windows support for llz: what it would take, what it would mean
 
-Status: **draft / design** — exploratory. Nothing here is committed work; this
+**Status:** Proposed — exploratory. Nothing here is committed work; this
 documents the shape of the problem and a tiered answer, not a decision.
+See [the designs index](README.md) for the status vocabulary.
 
 <!-- toc -->
 ## Contents
@@ -313,5 +314,5 @@ fraction of the standing cost.
   Tier-0 answer.
 - [adopter-guide.md](../adopter-guide.md) — the operator flow whose surface this
   doc scopes (§2 install, §4 scaffold + hooks).
-- [convergence-contract.md](convergence-contract.md) — the other live doc in this
-  directory.
+- [convergence-contract.md](../architecture/convergence-contract.md) — the exit-code
+  contract every readiness gate honours, including on a Windows host.
