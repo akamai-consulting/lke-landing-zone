@@ -651,6 +651,74 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	}
 }
 
+// withConvergePoll scripts the converge loop's health scan: one healthResult per
+// call, and a fatal if the loop asks for more than the script provides. The
+// overrun check is the point of the test below — an extra scan is the waste.
+func withConvergePoll(t *testing.T, results ...healthResult) *int {
+	t.Helper()
+	calls := 0
+	prev := convergePoll
+	convergePoll = func(*convergeState) healthResult {
+		if calls >= len(results) {
+			t.Errorf("converge ran health scan #%d; the script has only %d — the loop is paying for scans it does not consume", calls+1, len(results))
+			return healthResult{code: 0}
+		}
+		r := results[calls]
+		calls++
+		return r
+	}
+	t.Cleanup(func() { convergePoll = prev })
+	return &calls
+}
+
+// A hard-fail re-check that comes back CONVERGED ends the run there.
+//
+// The re-check is a full health scan, so its verdict is as good as any poll's.
+// Testing it only for "still hard" and otherwise falling back into the loop cost
+// a whole extra scan — 35-58s, on every one of 7 sampled release-e2e runs, because
+// the hard strike is routinely the Loki pods cycling as they re-render onto S3 and
+// it clears inside the retry delay. Three scans here (poll, hard-fail, re-check)
+// and no fourth.
+func TestRunConvergeHardFailRecheckConvergedStops(t *testing.T) {
+	calls := withConvergePoll(t,
+		healthResult{code: 2},                            // in-progress — keep polling
+		healthResult{code: 1, nonOK: []string{"loki-0"}}, // hard fail — re-check
+		healthResult{code: 0},                            // re-check: converged
+	)
+	if err := runConverge(3600, 0, 0); err != nil {
+		t.Fatalf("runConverge = %v, want nil (the re-check converged)", err)
+	}
+	if *calls != 3 {
+		t.Errorf("health scans = %d, want 3 (poll, hard-fail, converged re-check)", *calls)
+	}
+}
+
+// The twice-in-a-row abort is the other half of the same branch and must survive:
+// a re-check that is STILL hard is terminal, not another lap of the poll loop.
+func TestRunConvergeHardFailTwiceAborts(t *testing.T) {
+	withConvergePoll(t, healthResult{code: 1}, healthResult{code: 1})
+	err := runConverge(3600, 0, 0)
+	if err == nil || !strings.Contains(err.Error(), "hard-failed twice in a row") {
+		t.Errorf("runConverge = %v, want the twice-in-a-row hard-fail abort", err)
+	}
+}
+
+// A re-check that recovers only to IN-PROGRESS is not a verdict — the loop must
+// keep polling to the budget rather than reading "not hard any more" as converged.
+func TestRunConvergeHardFailRecheckInProgressKeepsPolling(t *testing.T) {
+	calls := withConvergePoll(t,
+		healthResult{code: 1}, // hard fail
+		healthResult{code: 2}, // re-check: in-progress, not a verdict
+		healthResult{code: 2}, // …so the loop polls on, and this one exhausts the budget
+	)
+	if err := runConverge(0, 0, 0); err == nil {
+		t.Error("runConverge = nil, want the exhausted-budget error")
+	}
+	if *calls != 3 {
+		t.Errorf("health scans = %d, want 3 (hard-fail, in-progress re-check, one more poll)", *calls)
+	}
+}
+
 func TestConvergeSleep(t *testing.T) {
 	cases := []struct {
 		interval, elapsed, want time.Duration
