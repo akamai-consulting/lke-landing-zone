@@ -67,12 +67,12 @@ spec:
         # ── Saturation / audit-plane (the error-rate + saturation layer) ──────────
         # These read OpenBao's own `vault_*` telemetry (OpenBao keeps the upstream
         # Vault metric namespace). Like every vault_* alert here, they depend on the
-        # :8200 metrics scrape — which this branch's llz-openbao-platform 0.1.18
-        # NetworkPolicy fix restores (the `monitoring`-namespace Prometheus was
-        # L4-blocked, so vault_* was absent and these read DEAD? in `alert-eval`
-        # until the fix converges). vault_expire_num_leases / vault_audit_* are the
-        # canonical Vault names; verify live post-fix with `llz ci prom-metrics
-        # --match '^vault_'`.
+        # :8200 metrics scrape, which llz-openbao-platform allows via a pod-scoped
+        # `allowedClientPods` grant for apl-core's Prometheus (since chart 0.1.18).
+        # Without that grant the `monitoring`-namespace Prometheus is L4-blocked,
+        # vault_* is absent, and these read DEAD? in `alert-eval` — never-firing
+        # rather than loudly broken. vault_expire_num_leases / vault_audit_* are the
+        # canonical Vault names; confirm with `llz ci prom-metrics --match '^vault_'`.
         - alert: OpenBaoLeaseExhaustion
           # Saturation: the number of unexpired leases the expiration manager tracks.
           # Unbounded lease growth (a client not renewing/revoking, or a too-long TTL)

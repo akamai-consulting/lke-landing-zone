@@ -77,7 +77,7 @@ func TestCredentialCoverageGuardWouldHaveCaughtTheSealKey(t *testing.T) {
 		t.Fatalf("the pre-fix state must be reported unmeasured, got %v", unmeasured)
 	}
 
-	// And with the entry restored — the state this PR ships — it is accounted for.
+	// And with the entry restored — the shipping state — it is accounted for.
 	ghSecretTargets = orig
 	if unmeasured, _ := classifyCredentialCoverage([]string{"OPENBAO_SEAL_KEY"}, io.Discard); len(unmeasured) != 0 {
 		t.Errorf("the seal key must now be measured, got %v", unmeasured)

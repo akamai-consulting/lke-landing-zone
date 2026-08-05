@@ -69,8 +69,8 @@ func TestReconcilerAlertSemantics(t *testing.T) {
 //
 // The daily credential-single-pane job runs
 // `llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)'`, so the alert
-// name is not cosmetic — it is the filter. `LLZRootTokenParked` (this branch's
-// first spelling) is about the highest-privilege credential in the platform and
+// name is not cosmetic — it is the filter. `LLZRootTokenParked` (the original
+// spelling) is about the highest-privilege credential in the platform and
 // matched NOTHING: the rule was live and would have fired through Alertmanager,
 // but the job whose entire purpose is reading credential alerts skipped it.
 //

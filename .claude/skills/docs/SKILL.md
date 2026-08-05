@@ -225,7 +225,40 @@ Two measurement traps when sweeping for this:
 Archival files — `docs/adr/`, `docs/designs/`, `docs/workflows/`,
 `lessons-learned.md` — are exempt. History is their content.
 
-## Rule 10 — de-duplicate, but do not merge different questions
+## Rule 10 — code comments: the same rule, one narrow exception
+
+The Markdown rules above were applied to the Go/YAML comment tree. **Measured
+first, and the result was: do not mass-trim.**
+
+| | |
+|---|---|
+| Comment ratio, non-test Go | 28% (20,275 / 73,088 lines) |
+| Comment ratio, tests | 13% |
+| Identical long comment lines across a source/`_test.go` pair | **8**, nearly all section banners |
+| Author-seat (`this branch` / `this PR`, git sense) | **6** — all fixed |
+
+The historical narration reads as over-commenting by volume and is not. Comments
+like *"an earlier cut terminated on `<` to catch input redirects, so the scan
+stopped at the placeholder and skipped every flag after it on ~92 invocations"*
+each record a specific failure, its silent consequence, and why the current rule
+is shaped as it is. That is the knowledge that stops the next person re-making
+the same cut. **Deleting it is a regression, not a cleanup.**
+
+The one class that IS wrong is the same as Rule 9's: `this branch` / `this PR`
+meaning *the change I am authoring*. Once merged, nobody can resolve it.
+
+**But most `this branch` hits in Go are the CONTROL-FLOW sense** — "reaching this
+branch means the API refused" — which is correct and must be left alone. Of 11
+matches, only 3 in Go and 3 in YAML were the git sense. Read every one; a blind
+sweep would have mangled the other five. (`lint.yml`'s "the CLI IN THIS PR" is
+also correct — that workflow genuinely runs on a PR.)
+
+Rewrite the git-sense ones as a standing fact plus the version that carries it,
+exactly as in Rule 9 — and keep the prose comment and its Markdown counterpart
+consistent, since the alert YAML and `alerting.md` describe the same thing and
+had drifted into the same stale story.
+
+## Rule 11 — de-duplicate, but do not merge different questions
 
 Real duplication: the `secrets: inherit` / `required: false` rationale was
 written at full length in **both** workflow docs — the second even said "same
@@ -236,7 +269,7 @@ Not duplication: three apl-core documents that look interchangeable in an index
 are a cutover **runbook** plus two version-pair **designs**. The audit proposed
 merging them; that was wrong. Label them by the question each answers instead.
 
-## Rule 11 — a chart README edit needs a Chart.yaml bump
+## Rule 12 — a chart README edit needs a Chart.yaml bump
 
 `chart-version-guard` fires on any edit inside a chart directory, because
 `publish-charts.yml` only pushes a **new** version. A README-only change still
