@@ -1,8 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -220,58 +222,6 @@ func TestInstanceTemplateRepo(t *testing.T) {
 	})
 }
 
-// resolveTemplateCommit prefers `gh api`; the anonymous leg exists for the
-// container that has no usable credential. Both must reject a body that does not
-// actually answer the question rather than pass "" up as a commit.
-func TestResolveTemplateCommitViaGH(t *testing.T) {
-	const sha = "b9fe2721b55e2cb196d418f8d0bc6069957e3bd3"
-	prev := ghAPIJSON
-	t.Cleanup(func() { ghAPIJSON = prev })
-
-	t.Run("decodes the sha", func(t *testing.T) {
-		var gotPath string
-		ghAPIJSON = func(path string, out any) error {
-			gotPath = path
-			return json.Unmarshal([]byte(`{"sha":"`+sha+`"}`), out)
-		}
-		got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39")
-		if !ok || got != sha {
-			t.Fatalf("resolveTemplateCommit = %q,%v", got, ok)
-		}
-		if want := "repos/acme/tmpl/commits/v0.0.39"; gotPath != want {
-			t.Errorf("gh api path = %q, want %q", gotPath, want)
-		}
-	})
-
-	t.Run("an empty repo or ref asks nothing", func(t *testing.T) {
-		ghAPIJSON = func(string, any) error {
-			t.Fatal("gh api called with an empty repo/ref")
-			return nil
-		}
-		if _, ok := resolveTemplateCommit("", "v1"); ok {
-			t.Error("empty repo resolved")
-		}
-		if _, ok := resolveTemplateCommit("o/r", ""); ok {
-			t.Error("empty ref resolved")
-		}
-	})
-
-	// A 404/403 from `gh` must fall through to the anonymous leg, and when that also
-	// fails the answer is "could not ask" — never a fabricated sha.
-	t.Run("a gh failure degrades to not-ok", func(t *testing.T) {
-		ghAPIJSON = func(string, any) error { return errors.New("gh: HTTP 401") }
-		t.Setenv("GH_TOKEN", "")
-		t.Setenv("GITHUB_TOKEN", "")
-		// Point the anonymous leg at a host that cannot resolve, so this test makes no
-		// network request of its own.
-		t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-		t.Setenv("https_proxy", "http://127.0.0.1:1")
-		if got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39"); ok {
-			t.Fatalf("resolveTemplateCommit = %q,%v, want not-ok", got, ok)
-		}
-	})
-}
-
 // writeInstanceDir runs the test in a fresh directory containing files
 // (name → content) — chdirTemp plus the instance files the case needs.
 func writeInstanceDir(t *testing.T, files map[string]string) {
@@ -282,4 +232,248 @@ func writeInstanceDir(t *testing.T, files map[string]string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// ── The two network legs, against a real server ──────────────────────────────
+//
+// These exercise resolveTemplateCommit and imagePublished END TO END rather than
+// stubbing them out: URL shape, headers, status handling, body decoding. Every
+// other test in this file replaces the round-trip, so without these the
+// round-trip itself has no coverage — and it is where the mistakes live (the GHCR
+// Accept headers below are load-bearing and were found the hard way).
+
+// serveGitHub points the api.github.com leg at h for the duration of the test.
+func serveGitHub(t *testing.T, h http.HandlerFunc) {
+	t.Helper()
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+	prev := githubAPIBase
+	t.Cleanup(func() { githubAPIBase = prev })
+	githubAPIBase = s.URL
+	// No ambient credential: these assert the anonymous shape unless a case says
+	// otherwise, and a developer's real GH_TOKEN must not leak into the assertions.
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no gh") })
+}
+
+func TestResolveTemplateCommitOverHTTP(t *testing.T) {
+	const sha = "b9fe2721b55e2cb196d418f8d0bc6069957e3bd3"
+
+	t.Run("asks the right URL and decodes the sha", func(t *testing.T) {
+		var gotPath, gotAccept, gotAuth string
+		serveGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+			gotPath, gotAccept, gotAuth = r.URL.Path, r.Header.Get("Accept"), r.Header.Get("Authorization")
+			fmt.Fprintf(w, `{"sha":%q}`, sha)
+		})
+		got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39")
+		if !ok || got != sha {
+			t.Fatalf("resolveTemplateCommit = %q,%v", got, ok)
+		}
+		if want := "/repos/acme/tmpl/commits/v0.0.39"; gotPath != want {
+			t.Errorf("path = %q, want %q", gotPath, want)
+		}
+		if gotAccept != "application/vnd.github+json" {
+			t.Errorf("Accept = %q", gotAccept)
+		}
+		if gotAuth != "" {
+			t.Errorf("Authorization = %q, want unset with no credential available", gotAuth)
+		}
+	})
+
+	t.Run("sends a bearer token when one is in the environment", func(t *testing.T) {
+		var gotAuth string
+		serveGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			fmt.Fprintf(w, `{"sha":%q}`, sha)
+		})
+		t.Setenv("GH_TOKEN", "s3cret")
+		if _, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39"); !ok {
+			t.Fatal("resolve failed")
+		}
+		if gotAuth != "Bearer s3cret" {
+			t.Errorf("Authorization = %q, want the env token", gotAuth)
+		}
+	})
+
+	// A ref with a slash must not silently address a different endpoint.
+	t.Run("escapes a ref containing a slash", func(t *testing.T) {
+		var gotRaw string
+		serveGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+			gotRaw = r.URL.EscapedPath()
+			fmt.Fprintf(w, `{"sha":%q}`, sha)
+		})
+		if _, ok := resolveTemplateCommit("acme/tmpl", "feat/x"); !ok {
+			t.Fatal("resolve failed")
+		}
+		if !strings.Contains(gotRaw, "feat%2Fx") {
+			t.Errorf("escaped path = %q, want the ref percent-encoded", gotRaw)
+		}
+	})
+
+	// Every not-an-answer is "could not ask", never a fabricated commit. A 404 in
+	// particular must not become "", true — callers treat ok as permission to
+	// compare, and an empty sha would compare against everything.
+	for _, tc := range []struct {
+		name string
+		h    http.HandlerFunc
+	}{
+		{"404", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) }},
+		{"403 rate limited", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(403) }},
+		{"500", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }},
+		{"200 with no sha", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{}`) }},
+		{"200 with a non-sha", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{"sha":"nope"}`) }},
+		{"200 with garbage", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `not json`) }},
+	} {
+		t.Run("degrades on "+tc.name, func(t *testing.T) {
+			serveGitHub(t, tc.h)
+			if got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39"); ok || got != "" {
+				t.Fatalf("resolveTemplateCommit = %q,%v; want \"\",false", got, ok)
+			}
+		})
+	}
+
+	t.Run("an empty repo or ref asks nothing", func(t *testing.T) {
+		serveGitHub(t, func(http.ResponseWriter, *http.Request) { t.Error("request made for an empty repo/ref") })
+		if _, ok := resolveTemplateCommit("", "v1"); ok {
+			t.Error("empty repo resolved")
+		}
+		if _, ok := resolveTemplateCommit("o/r", ""); ok {
+			t.Error("empty ref resolved")
+		}
+	})
+}
+
+func TestImagePublishedOverHTTP(t *testing.T) {
+	// serveGHCR emulates the two-step registry dance: an anonymous pull-scoped
+	// token, then the manifest request that carries it.
+	serveGHCR := func(t *testing.T, manifest http.HandlerFunc) *[]*http.Request {
+		t.Helper()
+		var seen []*http.Request
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = append(seen, r.Clone(r.Context()))
+			if strings.HasPrefix(r.URL.Path, "/token") {
+				fmt.Fprint(w, `{"token":"tok"}`)
+				return
+			}
+			manifest(w, r)
+		}))
+		t.Cleanup(s.Close)
+		prev := ghcrBase
+		t.Cleanup(func() { ghcrBase = prev })
+		ghcrBase = s.URL
+		return &seen
+	}
+
+	t.Run("a published multi-arch image", func(t *testing.T) {
+		seen := serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+		published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc")
+		if !published || !asked {
+			t.Fatalf("imagePublished = %v,%v; want true,true", published, asked)
+		}
+		if len(*seen) != 2 {
+			t.Fatalf("made %d request(s), want 2 (token then manifest)", len(*seen))
+		}
+		tokenReq, manifestReq := (*seen)[0], (*seen)[1]
+		if want := "repository:acme/ci-tofu:pull"; tokenReq.URL.Query().Get("scope") != want {
+			t.Errorf("token scope = %q, want %q", tokenReq.URL.Query().Get("scope"), want)
+		}
+		if want := "/v2/acme/ci-tofu/manifests/sha-abc"; manifestReq.URL.Path != want {
+			t.Errorf("manifest path = %q, want %q", manifestReq.URL.Path, want)
+		}
+		if manifestReq.Header.Get("Authorization") != "Bearer tok" {
+			t.Errorf("manifest Authorization = %q, want the issued token", manifestReq.Header.Get("Authorization"))
+		}
+		// THE ONE THAT BIT. The ci images are multi-arch, so the registry serves an
+		// INDEX. Without these Accept types it answers 404 for an image that is
+		// plainly there, every pin silently downgrades to a floating tag, and the
+		// bug this whole change exists to fix comes straight back.
+		accept := manifestReq.Header.Get("Accept")
+		for _, want := range []string{
+			"application/vnd.oci.image.index.v1+json",
+			"application/vnd.docker.distribution.manifest.list.v2+json",
+		} {
+			if !strings.Contains(accept, want) {
+				t.Errorf("Accept %q is missing %q", accept, want)
+			}
+		}
+	})
+
+	t.Run("404 is a definite no", func(t *testing.T) {
+		serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
+		published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc")
+		if published || !asked {
+			t.Fatalf("imagePublished = %v,%v; want false,true — a 404 IS an answer", published, asked)
+		}
+	})
+
+	// Anything else is "could not ask". Reporting 401/5xx as absent would downgrade
+	// a perfectly good pin on no evidence.
+	for _, code := range []int{401, 403, 500, 502} {
+		t.Run(fmt.Sprintf("%d is not an answer", code), func(t *testing.T) {
+			serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) })
+			if published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
+				t.Fatalf("imagePublished = %v,%v; want false,false", published, asked)
+			}
+		})
+	}
+
+	t.Run("a token endpoint that fails is not an answer", func(t *testing.T) {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
+		t.Cleanup(s.Close)
+		prev := ghcrBase
+		t.Cleanup(func() { ghcrBase = prev })
+		ghcrBase = s.URL
+		if published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
+			t.Fatalf("imagePublished = %v,%v; want false,false", published, asked)
+		}
+	})
+}
+
+func TestComputeAndReportImageVars(t *testing.T) {
+	const sha = "b9fe2721b55e2cb196d418f8d0bc6069957e3bd3"
+	setup := func(t *testing.T) map[string]string {
+		t.Helper()
+		writeInstanceDir(t, map[string]string{
+			".copier-answers.yml": "_src_path: gh:acme/tmpl\nllz_version: v0.0.39\n",
+		})
+		stubTemplateCommit(t, func(string, string) (string, bool) { return sha, true })
+		stubImagePublished(t, func(string) (bool, bool) { return true, true })
+		return map[string]string{}
+	}
+
+	// Writes ONLY what was asked for. An operator's existing TF_IMAGE is theirs, and
+	// overwriting it would break this command's "skips anything already satisfied"
+	// contract in the one place it silently matters.
+	t.Run("fills only the requested variables", func(t *testing.T) {
+		vars := setup(t)
+		computeAndReportImageVars(vars, false, true)
+		if _, ok := vars["TF_IMAGE"]; ok {
+			t.Error("TF_IMAGE written when it was not requested")
+		}
+		if want := "ghcr.io/akamai-consulting/ci-kubernetes:sha-" + sha; vars["KUBE_IMAGE"] != want {
+			t.Errorf("KUBE_IMAGE = %q, want %q", vars["KUBE_IMAGE"], want)
+		}
+	})
+
+	t.Run("fills both when both are requested", func(t *testing.T) {
+		vars := setup(t)
+		computeAndReportImageVars(vars, true, true)
+		if want := "ghcr.io/akamai-consulting/ci-tofu:sha-" + sha; vars["TF_IMAGE"] != want {
+			t.Errorf("TF_IMAGE = %q, want %q", vars["TF_IMAGE"], want)
+		}
+		if want := "ghcr.io/akamai-consulting/ci-kubernetes:sha-" + sha; vars["KUBE_IMAGE"] != want {
+			t.Errorf("KUBE_IMAGE = %q, want %q", vars["KUBE_IMAGE"], want)
+		}
+	})
+
+	t.Run("uses the instance's own template repo and pin", func(t *testing.T) {
+		vars := setup(t)
+		var gotRepo, gotRef string
+		stubTemplateCommit(t, func(repo, ref string) (string, bool) { gotRepo, gotRef = repo, ref; return sha, true })
+		computeAndReportImageVars(vars, true, true)
+		if gotRepo != "acme/tmpl" || gotRef != "v0.0.39" {
+			t.Errorf("resolved (%q,%q), want the answers file's repo + pin", gotRepo, gotRef)
+		}
+	})
 }

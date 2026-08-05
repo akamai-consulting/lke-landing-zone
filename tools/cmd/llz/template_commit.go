@@ -34,6 +34,31 @@ import (
 	"time"
 )
 
+// Endpoint bases, overridable so tests point the two network legs at an httptest
+// server. NOT a convenience: without them a test can only stub the whole
+// round-trip, which leaves the round-trip itself — the token dance, the Accept
+// headers, the status-to-answer mapping — with no coverage at all. That is not
+// hypothetical here. The GHCR leg 404s a published image if the request does not
+// Accept the index media types (the ci images are multi-arch), a mistake that
+// would silently downgrade every pin and that only an end-to-end request catches.
+//
+// The first attempt at this used HTTPS_PROXY + t.Setenv to intercept instead. It
+// does not hold: net/http caches the proxy config in a process-global sync.Once
+// (envProxyOnce), so once ANY earlier test in the binary has made a request the
+// setting is ignored and the "offline" test quietly talks to api.github.com.
+// Measured — with an earlier httptest request in the same process, a blackhole
+// proxy stopped taking effect and the test went from 10s (blocked, as intended)
+// to 0.5s (real round-trip).
+var (
+	githubAPIBase = "https://api.github.com"
+	ghcrBase      = "https://ghcr.io"
+)
+
+// httpAskTimeout bounds every "can I ask?" request in this file. These run in
+// preflights whose whole point is to fail fast, so an unreachable endpoint has to
+// degrade to "could not ask" in seconds rather than stall a pipeline's first job.
+const httpAskTimeout = 10 * time.Second
+
 // resolveTemplateCommit returns the full commit sha that ref names in the template
 // repo, and whether the question could be ANSWERED at all.
 //
@@ -44,46 +69,37 @@ import (
 // a pin naming a ref that does not exist is a real problem, but it is not THIS
 // guard's problem, and `llz lint`/copier report it where it belongs.
 //
+// NOT `gh api`, which is what this used at first and what every other GitHub
+// lookup in the package uses. The call site is the FIRST preflight step of every
+// pipeline job, and execOutput (exec.Command().Output(), no context) has no
+// timeout — so a hung api.github.com would have stalled that step until the job's
+// own timeout-minutes, turning a check that used to be purely local into a way to
+// burn fifteen minutes. A bounded http.Client cannot do that. `gh` is still used,
+// but only for the strictly LOCAL job of producing a credential (see githubToken).
+//
 // Package var so tests substitute the whole round-trip.
 var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 	if repo == "" || ref == "" {
 		return "", false
 	}
-	path := "repos/" + repo + "/commits/" + url.PathEscape(ref)
-	var r struct {
-		SHA string `json:"sha"`
-	}
-	// `gh api` first: inside CI it carries the job token, and on an operator's
-	// machine it carries their login — both authenticated, so neither is subject
-	// to the 60/hr anonymous rate limit.
-	if err := ghAPIJSON(path, &r); err == nil && hexSHARe.MatchString(r.SHA) {
-		return r.SHA, true
-	}
-	// Fallback: the template repo is public, so an unauthenticated GET answers the
-	// same question. This is the path that matters for an ALREADY-SCAFFOLDED
-	// instance, whose vendored workflow predates the GH_TOKEN this step now gets —
-	// exactly the instance most likely to be skewed.
-	return anonTemplateCommit(repo, ref)
-}
-
-// anonTemplateCommit is the unauthenticated api.github.com leg of
-// resolveTemplateCommit. Short timeout: this runs in a preflight whose whole point
-// is to fail fast, and an unreachable api.github.com must degrade to "cannot ask"
-// in seconds rather than stall the first job of every pipeline.
-func anonTemplateCommit(repo, ref string) (string, bool) {
-	u := "https://api.github.com/repos/" + repo + "/commits/" + url.PathEscape(ref)
+	// PathEscape, not raw: a ref may legally contain characters a URL path treats
+	// specially. Tags do not in practice, but --template-ref accepts a branch, and
+	// `feat/x` unescaped would address a different endpoint shape entirely.
+	u := githubAPIBase + "/repos/" + repo + "/commits/" + url.PathEscape(ref)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	// Honour a token if the environment has one even though `gh` could not use it
-	// (gh absent from the image, or `gh auth` never run in a container).
-	if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
+	// Anonymous works — the template repo is public — but a token lifts the 60/hr
+	// per-IP limit that shared CI egress makes real, and is REQUIRED for a private
+	// fork. This is the path that matters for an already-scaffolded instance, whose
+	// vendored workflow predates the GH_TOKEN the preflight step now sets.
+	if t := githubToken(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: httpAskTimeout}).Do(req)
 	if err != nil {
 		return "", false
 	}
@@ -98,6 +114,24 @@ func anonTemplateCommit(repo, ref string) (string, bool) {
 		return "", false
 	}
 	return r.SHA, true
+}
+
+// githubToken is a credential for api.github.com, or "" for anonymous.
+//
+// `gh auth token` reads the local config/keyring and makes NO network call, so
+// leaning on it here does not reintroduce the unbounded shell-out this file
+// deliberately avoids — it recovers the one thing dropping `gh api` would
+// otherwise cost: an operator working against a PRIVATE template fork, who is
+// authenticated to gh but has no token in their environment.
+func githubToken() string {
+	if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
+		return t
+	}
+	out, err := execOutput("gh", "auth", "token")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ownerRepoRe matches a bare GitHub `<owner>/<name>` slug and nothing else — not a
@@ -196,6 +230,37 @@ func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pi
 	return tf, kube, true, ""
 }
 
+// computeAndReportImageVars fills the ci image variables the caller still needs and
+// explains a fallback if there was one. Split out of `llz tokens` so the fill/report
+// decision is unit-testable rather than buried in a 200-line interactive wizard.
+//
+// Writes ONLY the variables asked for: an operator's existing TF_IMAGE is theirs,
+// and this command's contract is to skip what is already satisfied.
+func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
+	ref := pinnedTemplateRef()
+	tfImage, kubeImage, pinned, why := computeCIImageVars(instanceTemplateRepo(), ref)
+	if needTF {
+		vars["TF_IMAGE"] = tfImage
+	}
+	if needKube {
+		vars["KUBE_IMAGE"] = kubeImage
+	}
+	if pinned {
+		return
+	}
+	// Not fatal — the floating tags are what every instance ran until now, and they
+	// are right whenever the tree is at main. But this is the shape that broke an
+	// adopter, so name it rather than let it look deliberate, and say what it costs:
+	// the pin can be outrun, and `assert-image-fresh` is what will tell them.
+	fmt.Printf("\n%s TF_IMAGE/KUBE_IMAGE are NOT pinned to this instance's template commit —\n"+
+		"      %s.\n"+
+		"      Falling back to the floating tags (%s / %s), which track main and can outrun\n"+
+		"      pin %q. The first pipeline run will say so (`llz ci assert-image-fresh`) rather\n"+
+		"      than fail obscurely later. Upgrading to a release whose ci images were published\n"+
+		"      is the durable fix.\n",
+		yellow("!"), why, ciTofuTag, ciKubernetesTag, ref)
+}
+
 // imagePublished reports whether an image reference resolves in the registry, and
 // whether the registry could be ASKED at all. The two are not the same and callers
 // must not conflate them (see computeCIImageVars).
@@ -214,12 +279,12 @@ var imagePublished = func(image string) (published, asked bool) {
 	if !found || rest == "" || tag == "" {
 		return false, false
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: httpAskTimeout}
 
 	var tok struct {
 		Token string `json:"token"`
 	}
-	tokenURL := "https://ghcr.io/token?service=ghcr.io&scope=" + url.QueryEscape("repository:"+rest+":pull")
+	tokenURL := ghcrBase + "/token?service=ghcr.io&scope=" + url.QueryEscape("repository:"+rest+":pull")
 	resp, err := client.Get(tokenURL)
 	if err != nil {
 		return false, false
@@ -229,7 +294,7 @@ var imagePublished = func(image string) (published, asked bool) {
 		return false, false
 	}
 
-	req, err := http.NewRequest(http.MethodHead, "https://ghcr.io/v2/"+rest+"/manifests/"+url.PathEscape(tag), nil)
+	req, err := http.NewRequest(http.MethodHead, ghcrBase+"/v2/"+rest+"/manifests/"+url.PathEscape(tag), nil)
 	if err != nil {
 		return false, false
 	}

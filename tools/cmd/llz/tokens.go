@@ -207,25 +207,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// so `llz doctor` shows + validates it and a stale PAT can't silently rot.)
 
 	// ── Computed vars ────────────────────────────────────────────────────────
-	tfImage, kubeImage, pinned, why := computeCIImageVars(instanceTemplateRepo(), pinnedTemplateRef())
-	if !have("TF_IMAGE", false) {
-		vars["TF_IMAGE"] = tfImage
-	}
-	if !have("KUBE_IMAGE", false) {
-		vars["KUBE_IMAGE"] = kubeImage
-	}
-	if !pinned {
-		// Not fatal — the floating tags are what every instance ran until now, and they
-		// are right whenever the tree is at main. But this is the shape that broke an
-		// adopter, so name it rather than let it look deliberate, and say what it costs:
-		// the pin can be outrun, and `assert-image-fresh` is what will tell them.
-		fmt.Printf("\n%s TF_IMAGE/KUBE_IMAGE are NOT pinned to this instance's template commit —\n"+
-			"      %s.\n"+
-			"      Falling back to the floating tags (%s / %s), which track main and can outrun\n"+
-			"      pin %q. The first pipeline run will say so (`llz ci assert-image-fresh`) rather\n"+
-			"      than fail obscurely later. Upgrading to a release whose ci images were published\n"+
-			"      is the durable fix.\n",
-			yellow("!"), why, ciTofuTag, ciKubernetesTag, pinnedTemplateRef())
+	// Gated on actually having something to compute. computeCIImageVars makes up to
+	// five network requests and can print a warning about a fallback, and this
+	// command's headline property is that a re-run "SKIPS anything already
+	// satisfied" — so doing that work for two variables it is not going to touch
+	// both slows the idempotent path and, worse, warns that TF_IMAGE/KUBE_IMAGE are
+	// unpinned when they are already set to something the operator chose.
+	needTF, needKube := !have("TF_IMAGE", false), !have("KUBE_IMAGE", false)
+	if needTF || needKube {
+		computeAndReportImageVars(vars, needTF, needKube)
 	}
 
 	// ── Optional secrets ─────────────────────────────────────────────────────
