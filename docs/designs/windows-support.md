@@ -1,7 +1,24 @@
 # Windows support for llz: what it would take, what it would mean
 
-Status: **draft / design** — exploratory. Nothing here is committed work; this
+**Status:** Proposed — exploratory. Nothing here is committed work; this
 documents the shape of the problem and a tiered answer, not a decision.
+See [the designs index](README.md) for the status vocabulary.
+
+<!-- toc -->
+## Contents
+
+- [Summary](#summary)
+- [What "Windows support" actually scopes to](#what-windows-support-actually-scopes-to)
+- [The cheap answer that already works: WSL2 / Dev Container (Tier 0)](#the-cheap-answer-that-already-works-wsl2--dev-container-tier-0)
+- [A spectrum of "native", not a switch](#a-spectrum-of-native-not-a-switch)
+- [The blockers, by hardness](#the-blockers-by-hardness)
+- [Tier 1, scoped: a native `llz.exe` with basic PowerShell support](#tier-1-scoped-a-native-llzexe-with-basic-powershell-support)
+- [What it would mean](#what-it-would-mean)
+- [Recommendation](#recommendation)
+- [Open questions](#open-questions)
+- [Out of scope](#out-of-scope)
+
+<!-- /toc -->
 
 ## Summary
 
@@ -297,5 +314,5 @@ fraction of the standing cost.
   Tier-0 answer.
 - [adopter-guide.md](../adopter-guide.md) — the operator flow whose surface this
   doc scopes (§2 install, §4 scaffold + hooks).
-- [convergence-contract.md](convergence-contract.md) — the other live doc in this
-  directory.
+- [convergence-contract.md](../architecture/convergence-contract.md) — the exit-code
+  contract every readiness gate honours, including on a Windows host.

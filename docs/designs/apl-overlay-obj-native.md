@@ -1,6 +1,6 @@
 # Design: apl-core-native object storage via a reconciler-driven `apl-overlay`
 
-**Status:** In progress — code landing on branch `fix/loki-memory-3g` (continuation
+**Status:** Partial — code landing on branch `fix/loki-memory-3g` (continuation
 of the instance-diet / in-cluster-credential series). Runtime behaviour (does
 apl-operator consume the overlaid files) is **lab-gated** — see Lab-validation.
 

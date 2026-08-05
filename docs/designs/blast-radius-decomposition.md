@@ -1,5 +1,11 @@
 # Blast-radius decomposition of platform-bootstrap
 
+**Status:** Partial — the two gates landed (`llz ci wave-dependency-guard`, the
+#163 gate, and `llz ci wave-health-guard`, the #142 gate). Decomposing the four
+toggleable kustomize Components into independently health-gated Argo
+`Application`s is the remaining work. See [the designs index](README.md) for the
+status vocabulary.
+
 ## Problem
 
 `platform-bootstrap` is a hybrid app-of-apps. Some pieces are already independent

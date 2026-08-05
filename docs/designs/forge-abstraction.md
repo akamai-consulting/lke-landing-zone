@@ -1,6 +1,6 @@
 # Design: the forge abstraction — GitHub.com, GHEC, GHES, GitLab
 
-**Status:** The `internal/forge` package and all of its code-level phases have
+**Status:** Partial — the `internal/forge` package and all of its code-level phases have
 landed on branch `feat/forge` (off `origin/main`). **Phase 0** — the field is no
 longer dead (recognized-but-unwired forges fail spec validation loudly; the
 `github-enterprise-server` flavor split out of `github-enterprise`; the false
@@ -48,6 +48,26 @@ until that gate opens (§Open questions).
 > already lying; the GitHub coupling has **escaped the CI layer into the cluster**;
 > and the four forges do not have the same *capabilities*, so a uniform interface
 > would have to paper over the one place they genuinely differ — rotation.
+
+<!-- toc -->
+## Contents
+
+- [Problem](#problem)
+- [Goals / non-goals](#goals--non-goals)
+- [The two-forge split](#the-two-forge-split)
+- [The forge capability matrix](#the-forge-capability-matrix)
+- [Proposed design](#proposed-design)
+- [Token management and rotation](#token-management-and-rotation)
+- [Wizard changes](#wizard-changes)
+- [Bootstrap / cold-start](#bootstrap--cold-start)
+- [Failure modes](#failure-modes)
+- [Observability](#observability)
+- [What this retires (once implemented + e2e-validated)](#what-this-retires-once-implemented--e2e-validated)
+- [Rollout (phased — cheapest and most-honest first; each phase independently shippable)](#rollout-phased--cheapest-and-most-honest-first-each-phase-independently-shippable)
+- [e2e lane isolation (shared Linode account)](#e2e-lane-isolation-shared-linode-account)
+- [Open questions](#open-questions)
+
+<!-- /toc -->
 
 ## Problem
 

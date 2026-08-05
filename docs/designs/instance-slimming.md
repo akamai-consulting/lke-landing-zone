@@ -1,6 +1,6 @@
 # Design: slim the instance surface + smooth upgrades
 
-**Status:** Levers 1 and 1.5 landed. Levers 2–3 are the staged, e2e-gated rollout
+**Status:** Partial — levers 1 and 1.5 landed. Levers 2–3 are the staged, e2e-gated rollout
 this doc specifies — but see **Re-ranking (measured)** below: the largest single
 win is not in Lever 2.
 **Relates to:** `docs/designs/cross-org-reuse-pattern.md` (#201/#202 — why the

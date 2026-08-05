@@ -1,6 +1,6 @@
 # ADR: apl-core writes to a per-env branch (`apl-<env>`), never `main`
 
-**Status:** Accepted — implemented on the branch that carries this file. Default
+**Status:** Shipped — implemented on the branch that carries this file. Default
 changed in `llz render`; existing instances cut over on their next `copier update`
 + render (see Migration). Full runtime validation is gated on the release-e2e run
 for this change (see Lab-validation).

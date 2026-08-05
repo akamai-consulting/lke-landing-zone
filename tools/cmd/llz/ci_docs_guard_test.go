@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,6 +440,9 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 	}
 	if n.dispatches < 10 {
 		t.Errorf("only %d workflow dispatch(es) scanned (was 15)", n.dispatches)
+	}
+	if n.tocEntries < 100 {
+		t.Errorf("only %d toc entr(ies) checked (was 137) — either the toc blocks were removed from the long docs or the block parser stopped seeing them", n.tocEntries)
 	}
 	for _, f := range findings {
 		t.Errorf("%s", f)
@@ -1082,5 +1086,142 @@ func TestCheckDocLinks_RootRelativeLinksResolveFromTheRoot(t *testing.T) {
 				t.Fatalf("expected %q, got %v", tc.wantHit, got)
 			}
 		})
+	}
+}
+
+// A TOC entry that no longer matches a heading is the whole reason the block is
+// allowed to exist in a repo that otherwise refuses hand-maintained lists.
+func TestCheckDocTOCs(t *testing.T) {
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{
+			name: "every entry resolves",
+			body: "# T\n\n<!-- toc -->\n## Contents\n\n- [Alpha](#alpha)\n- [Beta gamma](#beta-gamma)\n\n<!-- /toc -->\n\n## Alpha\n\n## Beta gamma\n",
+		},
+		{
+			name: "renamed heading is caught",
+			body: "# T\n\n<!-- toc -->\n- [Alpha](#alpha)\n<!-- /toc -->\n\n## Alpha renamed\n",
+			want: 1,
+		},
+		{
+			// The load-bearing case for this repo: headings here are full of
+			// `workflow_call`, `promotion_rank`, `ha_role`. Dropping `_` from the
+			// allowed set made every one of them a false positive.
+			name: "underscores survive the slug",
+			body: "# T\n\n<!-- toc -->\n- [`workflow_call` interface](#workflow_call-interface)\n<!-- /toc -->\n\n## `workflow_call` interface\n",
+		},
+		{
+			name: "duplicate headings get GitHub's -1 suffix",
+			body: "# T\n\n<!-- toc -->\n- [Notes](#notes)\n- [Notes](#notes-1)\n<!-- /toc -->\n\n## Notes\n\n## Notes\n",
+		},
+		{
+			// Prose cross-references are NOT a claim to be exhaustive, so only the
+			// delimited block is judged.
+			name: "anchors outside the block are ignored",
+			body: "# T\n\nSee [the missing part](#nowhere).\n\n## Alpha\n",
+		},
+		{
+			name: "a heading inside a fence does not define an anchor",
+			body: "# T\n\n<!-- toc -->\n- [Fake](#fake)\n<!-- /toc -->\n\n```\n## Fake\n```\n",
+			want: 1,
+		},
+		{
+			name: "no toc block at all is fine",
+			body: "# T\n\n## Alpha\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var n docsScanned
+			got := checkDocTOCs([]docFile{{rel: "d.md", body: tc.body}}, &n)
+			if len(got) != tc.want {
+				t.Fatalf("got %d finding(s), want %d: %v", len(got), tc.want, got)
+			}
+		})
+	}
+}
+
+func TestGithubAnchor(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Topology", "topology"},
+		{"`workflow_call` interface", "workflow_call-interface"},
+		{"Writing / rotating secrets — dual-write", "writing--rotating-secrets--dual-write"},
+		{"**Bold** and *italic*", "bold-and-italic"},
+		{"A [linked](x.md) word", "a-linked-word"},
+		{"Trailing punctuation!", "trailing-punctuation"},
+		{"HA roles are declared, not hardcoded", "ha-roles-are-declared-not-hardcoded"},
+	} {
+		if got := githubAnchor(tc.in); got != tc.want {
+			t.Errorf("githubAnchor(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestGithubAnchor_MatchesGithubSlugger pins githubAnchor against the real
+// implementation GitHub runs.
+//
+// testdata/github_slugs.json is every heading in this repo's Markdown, each
+// paired with the slug `github-slugger` produced for it. It exists because the
+// first cut of githubAnchor collapsed whitespace RUNS to one hyphen while
+// github-slugger emits one hyphen PER SPACE — so " — " and " / " (which this
+// repo's headings are full of) generated anchors that do not resolve on GitHub.
+//
+// That bug survived its own guard: the TOC generator used the same rule, so
+// docs-guard compared a wrong anchor against a wrong anchor and passed. An
+// ORACLE captured from the real implementation is the only thing that catches
+// that class, which is why this fixture is checked in rather than hand-written.
+//
+// Regenerate with: node scratch/oracle.mjs (see the docs-authoring skill).
+func TestGithubAnchor_MatchesGithubSlugger(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "github_slugs.json"))
+	if err != nil {
+		t.Skipf("oracle fixture unavailable: %v", err)
+	}
+	var cases []struct {
+		Heading string `json:"heading"`
+		Slug    string `json:"slug"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatalf("parse oracle: %v", err)
+	}
+	if len(cases) < 500 {
+		t.Fatalf("oracle has only %d heading(s) — it was regenerated over a shrunken scan", len(cases))
+	}
+	var bad int
+	for _, c := range cases {
+		// github-slugger de-duplicates within a document; the oracle resets per
+		// heading, so every entry here is a FIRST occurrence and carries no
+		// numeric suffix. docAnchors owns the suffixing separately.
+		if got := githubAnchor(c.Heading); got != c.Slug {
+			if bad++; bad <= 10 {
+				t.Errorf("githubAnchor(%q)\n  got  %q\n  want %q", c.Heading, got, c.Slug)
+			}
+		}
+	}
+	if bad > 10 {
+		t.Errorf("... and %d more mismatch(es)", bad-10)
+	}
+}
+
+// A mermaid node label is a caption, not a shell line. The quickstart's
+// lifecycle diagram has a node reading `llz doctor --env`, whose closing `"]`
+// the tokeniser folded into the flag and reported as `--env]`.
+func TestBlankMermaid_LabelsAreNotInvocations(t *testing.T) {
+	body := "# T\n\n```mermaid\nflowchart LR\n    D[\"llz doctor --env\"]\n    X[\"gh workflow run nope.yml -f bad=1\"]\n```\n\n```bash\nllz doctor --env lab\n```\n"
+
+	var n docsScanned
+	if got := checkDocCommands([]docFile{{rel: "d.md", body: body}}, newRootCmd(), &n); len(got) != 0 {
+		t.Fatalf("mermaid labels produced findings: %v", got)
+	}
+	// The bash block beside it must STILL be scanned — blanking mermaid must not
+	// become a way to stop checking the copy/paste instructions.
+	if n.invocations == 0 {
+		t.Error("the ```bash invocation was not scanned; blankMermaid over-reached")
+	}
+	if lines := strings.Count(blankMermaid(body), "\n"); lines != strings.Count(body, "\n") {
+		t.Errorf("blankMermaid changed the line count (%d vs %d) — findings would point at the wrong line",
+			lines, strings.Count(body, "\n"))
 	}
 }

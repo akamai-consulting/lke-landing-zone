@@ -105,13 +105,15 @@ Covered by `openbao-alerts` (under
 | Uninitialized | — | — | ⚠️ gap (no reliable native `vault_` gauge; an uninitialized cluster has no leader → `OpenBaoNoActiveLeader` covers it in practice) |
 | Login error rate high | — | — | ⚠️ gap (no clean core error-rate metric; `vault_core_handle_login_request` is latency/count only) |
 
-> **All `vault_*` alerts depend on the :8200 metrics scrape.** Before the
-> `llz-openbao-platform` 0.1.18 NetworkPolicy fix in this branch, apl-core's
-> Prometheus (in the `monitoring` namespace) was L4-blocked from OpenBao :8200, so
-> **every** `vault_*` series was absent and all six OpenBao alerts read `DEAD?` in
-> `llz ci alert-eval` on a converged cluster — silently never-firing. The fix adds
-> a pod-scoped `allowedClientPods` grant for the Prometheus pod. Verify post-fix:
-> `llz ci prom-metrics --match '^vault_'` should return a non-empty set.
+> **All `vault_*` alerts depend on the :8200 metrics scrape**, which a
+> NetworkPolicy has to allow. `llz-openbao-platform` grants it with a pod-scoped
+> `allowedClientPods` entry for apl-core's Prometheus pod (since chart 0.1.18).
+>
+> Without that grant Prometheus (in the `monitoring` namespace) is L4-blocked from
+> OpenBao :8200, so **every** `vault_*` series is absent and all six OpenBao alerts
+> read `DEAD?` in `llz ci alert-eval` on a converged cluster — silently
+> never-firing rather than loudly broken. Verify with
+> `llz ci prom-metrics --match '^vault_'`; a non-empty set means the grant is live.
 
 ### Observability / support plane
 
@@ -131,25 +133,31 @@ promtool can't verify exist, so each was checked against a live `/metrics` with
 | OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | 🟡 `OTelCollectorRefusingData` (memory_limiter/backpressure) + `OTelCollectorExportFailures` — **provisional**: `otelcol_*` only scrapes after the 0.1.8 NP fix below, and the pipeline is still a placeholder (debug exporter), so these read `DEAD?`/quiet until a real exporter + the fix land |
 | Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ✅ `LokiRequestErrors` (5xx ratio) + `LokiObjectStoreErrors` (S3 Put/Get 5xx, List excluded) + `LokiIngestionDiscarding` — **verified live** against 271 real `loki_*` series (armed, not false-firing) |
 | Grafana | `GrafanaMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | — (availability is the main concern) |
-| Harbor | `HarborMetricsTargetDown` ✅ (retargeted) | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | 🟡 `HarborComponentDown` (`harbor_up`) + `HarborCoreHighErrorRate` (core 5xx ratio) + `HarborJobQueueBacklog` (`harbor_task_queue_size`) — **provisional** (issue #183): this branch enables the exporter (`harbor._rawValues.metrics`) + its ServiceMonitor + the `monitoring`→`:8001` NP, but `harbor_*` only appears once that converges, so `alert-eval` reads these `DEAD?` until then. `HarborMetricsTargetDown` was retargeted off the CNPG DB (`harbor-otomi-db`) onto the real `harbor-*` targets. Registry-disk saturation is N/A (registry → S3, not a PVC). |
+| Harbor | `HarborMetricsTargetDown` ✅ (retargeted) | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | 🟡 `HarborComponentDown` (`harbor_up`) + `HarborCoreHighErrorRate` (core 5xx ratio) + `HarborJobQueueBacklog` (`harbor_task_queue_size`) — defined, but **not scrape-gated** (see below). The exporter (`harbor._rawValues.metrics`), its ServiceMonitor and the `monitoring`→`:8001` NetworkPolicy all ship; `harbor_*` appears once the cluster converges. `HarborMetricsTargetDown` targets the real `harbor-*` targets, not the CNPG database (`harbor-otomi-db`, which also lives in the `harbor` namespace). Registry-disk saturation is N/A — the registry writes to S3, not a PVC. |
 | Prometheus | (self — via `defaultRules`) | (via `defaultRules`) | ⚠️ confirm TSDB compaction failures + scrape-duration are covered by defaults |
 
 The desired end-state coverage bar is one availability + one error-rate + one
 resource-saturation alert per service. Availability is covered fleet-wide; Loki is
-fully covered (verified); OpenBao gained lease/audit coverage; OTel and Harbor are
-provisional (Harbor's exporter is enabled by this branch but `harbor_*` and the
-alert thresholds still want a live spot-check once the first e2e converges —
-`llz ci prom-metrics --match '^harbor_'` + `alert-eval`, then add the Harbor
-ServiceMonitor to `defaultScrapeMonitors` in `ci_assert_scrape.go` to gate it).
+fully covered (verified live); OpenBao carries lease/audit coverage.
+
+**Open gap — Harbor and OTel are not scrape-gated.** `defaultScrapeMonitors` in
+`tools/cmd/llz/ci_assert_scrape.go` lists four ServiceMonitors (cert-manager,
+otel-collector-monitoring, llz-reconciler, platform-openbao); **Harbor's is not
+among them**, so nothing fails if Harbor's metrics stop arriving and its three
+alerts quietly go `DEAD?`. Closing it: spot-check the series on a converged
+cluster (`llz ci prom-metrics --match '^harbor_'` + `llz ci alert-eval`), confirm
+the thresholds against real values, then add the Harbor ServiceMonitor to
+`defaultScrapeMonitors`.
 
 > **The OTel `:8888` scrape depends on a NetworkPolicy, like OpenBao's.** The
-> `otel-collector-monitoring` ServiceMonitor selects the target, but until the
-> `llz-cluster-foundation` 0.1.8 fix in this branch, `observability-allow-ingress`
-> had no rule for apl-core's Prometheus (`monitoring` namespace), so every scrape
-> of the collector's `:8888` telemetry port timed out and `otelcol_*` was absent
-> cluster-wide (confirmed live). The fix adds a `monitoring`→`:8888` ingress rule
-> scoped to the metrics port. Verify post-fix: `llz ci prom-metrics --match
-> '^otelcol_'` should return a non-empty set.
+> `otel-collector-monitoring` ServiceMonitor selects the target;
+> `observability-allow-ingress` carries the `monitoring`→`:8888` rule that lets
+> apl-core's Prometheus reach it, scoped to the metrics port (since
+> `llz-cluster-foundation` 0.1.8).
+>
+> Without that rule every scrape of the collector's `:8888` telemetry port times
+> out and `otelcol_*` is absent cluster-wide — observed live. Verify with
+> `llz ci prom-metrics --match '^otelcol_'`; a non-empty set means the rule is live.
 
 **E2E wiring gate.** The scrape-health alerts above are only as good as the
 scrape wiring they sit on: a ServiceMonitor/PrometheusRule that loses its

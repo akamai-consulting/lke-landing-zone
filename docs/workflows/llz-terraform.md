@@ -14,6 +14,29 @@ Sections below are organised by job, and within a job by step name.
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Workflow-level](#workflow-level)
+- [Job: `push-noop-notice`](#job-push-noop-notice)
+- [Job: `discover`](#job-discover)
+- [Job: `plan-cluster-pr`](#job-plan-cluster-pr)
+- [Job: `tf-lint`](#job-tf-lint)
+- [Job: `checkov`](#job-checkov)
+- [Job: `promote-pipeline-drift`](#job-promote-pipeline-drift)
+- [Job: `apply-vpc`](#job-apply-vpc)
+- [Job: `apply-cluster`](#job-apply-cluster)
+- [Job: `bootstrap-openbao`](#job-bootstrap-openbao)
+- [Destroy path (overview)](#destroy-path-overview)
+- [Job: `pre-destroy-cluster`](#job-pre-destroy-cluster)
+- [Job: `plan-destroy-cluster`](#job-plan-destroy-cluster)
+- [Job: `destroy-cluster`](#job-destroy-cluster)
+- [Job: `apply-object-storage`](#job-apply-object-storage)
+- [Job: `plan-destroy-object-storage`](#job-plan-destroy-object-storage)
+- [Job: `destroy-object-storage`](#job-destroy-object-storage)
+
+<!-- /toc -->
+
 ## Workflow-level
 
 ### Locality and the cross-org reuse pattern
@@ -48,7 +71,36 @@ forwards empty strings, which leaves every action-gated job correctly skipped
 (PR plan jobs gate on `github.event_name`, which *does* inherit).
 
 This is the single most load-bearing gotcha in the file and a short version of
-it is deliberately kept inline.
+it is deliberately kept inline. Concretely — the caller forwards each selector
+by hand:
+
+```yaml
+# terraform.yml (the thin caller)
+jobs:
+  call:
+    uses: ./.github/workflows/llz-terraform.yml
+    with:
+      # github.event.inputs does NOT cross the workflow_call boundary, so every
+      # dispatch selector is forwarded explicitly. Empty on push/PR, which is
+      # what leaves the action-gated jobs correctly skipped.
+      action:          ${{ inputs.action }}
+      module:          ${{ inputs.module }}
+      region:          ${{ inputs.region }}
+      confirm_destroy: ${{ inputs.confirm_destroy }}
+    secrets: inherit
+```
+
+and the reusable reads them from `inputs`, never `github.event.inputs`:
+
+```yaml
+# llz-terraform.yml (the body)
+    if: >-
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+```
+
+Add a dispatch input and you must touch **both** files; adding it only to the
+caller yields a job that silently never runs.
 
 The `bootstrap-openbao` job calls the sibling local reusable
 `llz-bootstrap-openbao.yml` directly; the PR `discover` job calls the sibling
@@ -72,7 +124,23 @@ secret fine at runtime. `required: false` defers to runtime; presence is enforce
 by the `llz ci require-secret` preflight plus the per-job `environment:`. The
 same rationale applies to `APL_VALUES_REPO_TOKEN`.
 
+```yaml
+# llz-terraform.yml
+    secrets:
+      # All `required: false` on purpose: these are environment-scoped secrets,
+      # which cannot satisfy a workflow_call `secrets` contract at call time.
+      # Presence is enforced at runtime by `llz ci require-secret`.
+      TF_STATE_ACCESS_KEY:
+        required: false
+      LINODE_API_TOKEN:
+        required: false
+```
+
 Refs: `github/docs#44458`, `actions/runner#1490`.
+
+> **This rationale is canonical here.** `llz-bootstrap-openbao.yml` declares its
+> secrets the same way for the same reason; its doc links back to this section
+> rather than restating it.
 
 ### `concurrency`
 

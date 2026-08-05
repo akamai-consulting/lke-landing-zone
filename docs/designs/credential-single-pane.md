@@ -1,5 +1,11 @@
 # Credential single pane of glass
 
+**Status:** Shipped — runs as the `credential-single-pane` job in
+`llz-scheduled-checks.yml` (`llz ci token-inventory` writes, `llz ci alert-eval
+--strict` reads). The per-provider probe jobs it replaced are retired. See
+[credential-single-pane-incluster](credential-single-pane-incluster.md) for the
+proposed fully in-cluster successor.
+
 One Prometheus/Grafana view of every credential the platform depends on — CI tokens
 **and** certificates — with alerts that fire **before** anything expires. Replaces the
 per-provider scheduled probe jobs (`gh-pat-expiry-health`, `linode-pat-expiry-health`)
@@ -14,26 +20,41 @@ that re-probed and went red. No single pane, and no *lead-time* on token expiry.
 
 ## Data flow
 
-```
-                external tokens live OUTSIDE the cluster
-                            │
- scheduled job:  llz ci token-inventory   (holds the tokens; measures expiry)
-                            │  writes (metadata only — never a token value)
-                 ConfigMap llz-reconciler/llz-token-inventory
-                            │  read every 60s
- in-cluster:     llz reconcile --reconcile-token-inventory
-                            │  re-exposes
-                 llz_token_expiry_timestamp_seconds{provider,token}
-                 llz_token_audit_ok{provider,token}
-                 llz_token_inventory_updated_timestamp_seconds
-                            │  scraped by apl-core Prometheus
- certs:          cert-manager :9402  ── ServiceMonitor + allow-netpol ──┘
-                            │
-                 PrometheusRule credential-alerts  (fire BEFORE expiry)
-                 Grafana "LLZ Credentials — single pane"
-                            │
- scheduled job:  llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict
-                 (the cluster is the status source; --strict catches a dead funnel)
+```mermaid
+flowchart TB
+    subgraph OUT["🌐 Outside the cluster"]
+        TOK["GitHub / Linode PATs<br/><i>external tokens live here</i>"]
+    end
+
+    subgraph CI["⏱️ Scheduled CI jobs"]
+        INV["<b>llz ci token-inventory</b><br/>holds the tokens, measures expiry"]
+        EVAL["<b>llz ci alert-eval --strict</b><br/>asks the cluster what is firing"]
+    end
+
+    subgraph K8S["☸️ In-cluster — the single pane"]
+        CM["ConfigMap<br/>llz-reconciler/llz-token-inventory"]
+        REC["llz reconcile --reconcile-token-inventory"]
+        MET["llz_token_expiry_timestamp_seconds<br/>llz_token_audit_ok<br/>llz_token_inventory_updated_timestamp_seconds"]
+        CERT["cert-manager :9402"]
+        PROM["apl-core Prometheus"]
+        RULE["PrometheusRule<br/>credential-alerts — fire BEFORE expiry"]
+        GRAF["Grafana<br/>“LLZ Credentials — single pane”"]
+    end
+
+    TOK --> INV
+    INV -->|"writes METADATA ONLY —<br/>never a token value"| CM
+    CM -->|"read every 60s"| REC
+    REC -->|"re-exposes"| MET
+    MET --> PROM
+    CERT -->|"ServiceMonitor + allow-netpol"| PROM
+    PROM --> RULE
+    RULE --> GRAF
+    RULE --> EVAL
+
+    classDef ci fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef sec fill:#fef7e0,stroke:#f9ab00,color:#111;
+    class INV,EVAL ci;
+    class TOK sec;
 ```
 
 Only a job that *holds* a token can measure its expiry, so `token-inventory` is the one

@@ -166,8 +166,15 @@ categories:
       - "instance-template/**/*.sh"
 
   python-scripts:
-    kind: script
-    budget: 60
+    # Ratcheted 60 → 0: there are no Python scripts left. The last one was a
+    # table-of-contents generator, and it was over budget on its first commit
+    # (74/60) — correctly, because it re-implemented githubAnchor in a second
+    # language. The two copies then disagreed with GitHub the SAME way, so
+    # docs-guard compared a wrong anchor against a wrong anchor and passed. Its
+    # logic now lives in `llz ci gen-toc`, sharing docHeadings with the checker.
+    # Keep this at 0: a new .py file here is a decision to put logic somewhere
+    # it cannot be unit-tested, and should be argued for explicitly.
+    budget: 0
     include:
       - "template-scripts/**/*.py"
 

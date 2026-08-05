@@ -1,6 +1,6 @@
 # Design: in-cluster Linode credential rotator (CronJob)
 
-**Status:** Phase 2 — DEFAULT-ON fleet-wide, sole owner of the object-storage
+**Status:** Shipped — phase 2, DEFAULT-ON fleet-wide, sole owner of the object-storage
 key lifecycle. The llz-object-storage module is buckets-only (keys +
 `time_rotating` + `obj_key_rotation_days` + key outputs removed); the FIRST
 keys are minted at bootstrap by `llz ci mint-bootstrap-objkeys`

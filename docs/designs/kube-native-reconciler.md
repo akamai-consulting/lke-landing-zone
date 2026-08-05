@@ -1,6 +1,6 @@
 # Design: in-cluster reconciler + convergence metrics surface (watch-based)
 
-**Status:** Phases 0–2 landed; **rollout underway**. The `llzReconciler` component
+**Status:** Partial — phases 0–2 landed, **rollout underway**. The `llzReconciler` component
 is **default-on** (fleet-wide, e2e-proven in #161) running observe-only gauges +
 the leader-gated driving reconcilers that need no per-env secrets —
 `--reconcile-argo-nudge`, `--reconcile-sc-demote` (batch 1) — plus the read-only
@@ -137,6 +137,22 @@ security-audit surface (#99) and the tag-driven volume reaper (#70, #26) only as
 future reconcilers that plug into the same manager, not as Phase-1 work.
 
 ---
+
+<!-- toc -->
+## Contents
+
+- [Problem](#problem)
+- [Goals / non-goals](#goals--non-goals)
+- [Watch vs. resync — the honest classification](#watch-vs-resync--the-honest-classification)
+- [Proposed design](#proposed-design)
+- [Bootstrap / cold-start](#bootstrap--cold-start)
+- [Failure modes](#failure-modes)
+- [Observability](#observability)
+- [What this retires (once enabled + e2e-validated)](#what-this-retires-once-enabled--e2e-validated)
+- [Rollout (phased — lowest-risk / highest-CIDR-payoff first)](#rollout-phased--lowest-risk--highest-cidr-payoff-first)
+- [Open questions](#open-questions)
+
+<!-- /toc -->
 
 ## Problem
 

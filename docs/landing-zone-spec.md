@@ -44,6 +44,18 @@ deployments from it (unioned with any committed `cluster/*.tfvars`).
 > the spec landed: they keep using their committed tfvars + manifest trees
 > unchanged, because every spec-driven path is a no-op when no spec is present.
 
+<!-- toc -->
+## Contents
+
+- [Layout](#layout)
+- [Full example](#full-example)
+- [OpenBao HA pair](#openbao-ha-pair)
+- [Minimal example](#minimal-example)
+- [Field reference](#field-reference)
+- [Commands](#commands)
+
+<!-- /toc -->
+
 ## Layout
 
 ```

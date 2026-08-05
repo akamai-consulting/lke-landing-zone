@@ -18,27 +18,57 @@ target, for example, that means CI reads the values and passes them to the deplo
 tool as variables; the mechanism is "CI injects at deploy time", not a runtime
 client of OpenBao.)
 
+<!-- toc -->
+## Contents
+
+- [Topology](#topology)
+- [Why OpenBao and not Vault OSS](#why-openbao-and-not-vault-oss)
+- [Why operator-side dual-write and not a stretched cluster](#why-operator-side-dual-write-and-not-a-stretched-cluster)
+- [Initial cluster bring-up](#initial-cluster-bring-up)
+- [Secret layout](#secret-layout)
+- [Writing / rotating secrets — dual-write](#writing--rotating-secrets--dual-write)
+- [CI read path](#ci-read-path)
+- [Regional failover](#regional-failover)
+- [In-cluster TLS to OpenBao](#in-cluster-tls-to-openbao)
+- [Audit logging](#audit-logging)
+- [Unseal automation](#unseal-automation)
+- [Cross-references](#cross-references)
+
+<!-- /toc -->
+
 ## Topology
 
+```mermaid
+flowchart TB
+    subgraph OP["🧑‍💻 Operator / CI runner — the ONLY thing that spans regions"]
+        SET["<b>llz openbao set</b><br/>dual-write (single-write if standalone)"]
+        GET["<b>llz openbao get</b><br/>read by role"]
+    end
+
+    subgraph A["Region: active — e.g. us-lax"]
+        A1["LKE Enterprise cluster<br/>Argo CD · Prometheus / Grafana / OTel<br/><b>OpenBao HA — 3-node Raft</b>"]
+    end
+
+    subgraph S["Region: standby — e.g. us-sea"]
+        S1["LKE Enterprise cluster<br/>Argo CD · Prometheus / Grafana / OTel<br/><b>OpenBao HA — 3-node Raft</b>"]
+    end
+
+    SET ==>|"write 1"| A1
+    SET ==>|"write 2"| S1
+    GET -->|"OPENBAO_ADDR_ACTIVE"| A1
+    GET -.->|"OPENBAO_ADDR_STANDBY"| S1
+
+    A1 <-.->|"❌ NO replication — OpenBao OSS<br/>has no cross-region primitive"| S1
+
+    classDef bad fill:#fce8e6,stroke:#ea4335,stroke-width:2px,color:#111;
+    classDef op fill:#e8f0fe,stroke:#4285f4,color:#111;
+    class SET,GET op;
 ```
-  Region: primary  (e.g. us-lax)              Region: secondary  (e.g. us-sea)
-  ┌────────────────────────────────┐          ┌────────────────────────────────┐
-  │  LKE Enterprise cluster        │          │  LKE Enterprise cluster        │
-  │  - Argo CD                     │          │  - Argo CD                     │
-  │  - Prometheus / Grafana / OTel │          │  - Prometheus / Grafana / OTel │
-  │  - OpenBao HA (3-node Raft)    │          │  - OpenBao HA (3-node Raft)    │
-  └──────────────┬─────────────────┘          └────────────────┬───────────────┘
-                 │                                             │
-                 │   no automatic replication                  │
-                 │   between these two clusters                │
-                 └──────────────┐              ┌───────────────┘
-                                ▼              ▼
-                          ┌──────────────────────────────────────┐
-                          │  Operator / CI runner                │
-                          │  llz openbao set  │  (dual-write, or single-write if standalone)
-                          │  llz openbao get  │  (read by role: active | standby)
-                          └──────────────────────────────────────┘
-```
+
+**The dashed red edge is the whole design.** There is no replication between the
+two clusters, so the operator *is* the replication mechanism — which is why
+`llz openbao set` dual-writes rather than writing once and letting the cluster
+gossip. See [why not a stretched cluster](#why-operator-side-dual-write-and-not-a-stretched-cluster).
 
 Application workloads may run off-cluster (e.g. on an edge/serverless target) — in
 that case the LKE clusters are the support plane only, holding the secret backend

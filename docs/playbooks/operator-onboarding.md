@@ -6,6 +6,17 @@
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [What you're getting access to](#what-youre-getting-access-to)
+- [Onboarding checklist](#onboarding-checklist)
+- [Things you cannot do as a fresh operator](#things-you-cannot-do-as-a-fresh-operator)
+- [What "done" looks like](#what-done-looks-like)
+- [Next: run something on it](#next-run-something-on-it)
+
+<!-- /toc -->
+
 ## What you're getting access to
 
 Five distinct surfaces, each with its own playbook for ongoing work:

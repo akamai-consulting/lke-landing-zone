@@ -1,5 +1,9 @@
 # E2E timing instrumentation — make "where did the time go?" a query
 
+**Status:** Shipped — phase timing landed as `llz ci phase-timing`. The questions
+below are now answerable from the emitted timings rather than by hand-reading a
+run's log timestamps.
+
 ## Problem
 
 Every e2e speed-up decision so far has been gated on the same missing thing:

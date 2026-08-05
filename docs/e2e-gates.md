@@ -60,6 +60,34 @@ rule.
 Everything above reduces to two shapes. When you add a behavior, ask which one it
 is — most behaviors worth gating are one of them.
 
+```mermaid
+flowchart TB
+    subgraph UD["① Unverified delivery — A is configured to send to B"]
+        direction LR
+        A1["<b>A</b> producer"] -->|"config names a target"| B1["<b>B</b> consumer"]
+        A1 -.->|"❌ what the naive gate checks:<br/>“is the config well-formed?”"| CFG1["config looks right<br/><i>and always did</i>"]
+        B1 -.->|"❌ “is B healthy?”<br/>assert-loki was green throughout"| H1["B is up"]
+        B1 ==>|"✅ <b>GATE HERE</b><br/>read the data back OUT of B,<br/>bounded to a recent window"| G1["did it ARRIVE,<br/>and is it FRESH?"]
+    end
+
+    subgraph SC["② Split contract — A and B share a rule, each holding its own copy"]
+        direction LR
+        A2["<b>A</b> producer<br/>desiredVolumeLabel()"] --> R1["rule, copy 1"]
+        B2["<b>B</b> consumer<br/>VolumeIsCandidate()"] --> R2["rule, copy 2"]
+        R1 -.->|"both correct on day 1,<br/>drift silently after"| R2
+        A2 ==>|"✅ <b>GATE HERE</b><br/>feed A's REAL output into<br/>B's REAL predicate"| B2
+    end
+
+    classDef good fill:#e6f4ea,stroke:#34a853,stroke-width:2px,color:#111;
+    classDef bad fill:#fce8e6,stroke:#ea4335,color:#111;
+    class G1 good;
+    class CFG1,H1 bad;
+```
+
+The green edges are the gates. Both naive alternatives in ① stay green while the
+behaviour is broken — which is exactly how each of the two regressions above
+shipped.
+
 ### Unverified delivery — A is configured to send to B
 
 A push URL, a scrape target, a webhook, a log/metric/event sink, a secret written

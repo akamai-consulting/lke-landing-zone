@@ -159,11 +159,11 @@ spec:
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'Loki has discarded samples for 15m ({{ $value | humanize }}/s) — ingestion is hitting a rate/stream limit or rejecting malformed logs; some logs are not being stored.'
         # ── OTel Collector error-rate / saturation ────────────────────────────────
-        # PROVISIONAL. Unlike the Loki exprs above, these are NOT yet verified live:
-        # until the observability-allow-ingress NetworkPolicy fix in this branch
-        # (llz-cluster-foundation 0.1.8) reaches a cluster, otelcol_* is absent (the
-        # :8888 scrape times out), so `alert-eval` reports these DEAD? — expected
-        # until the fix converges. The names are the canonical OTel Collector
+        # PROVISIONAL. Unlike the Loki exprs above, these are NOT verified against
+        # real series. The scrape path itself is in place — observability-allow-ingress
+        # carries the `monitoring`→:8888 rule (since llz-cluster-foundation 0.1.8);
+        # without it the scrape times out, otelcol_* is absent, and `alert-eval`
+        # reports these DEAD?. The names are the canonical OTel Collector
         # internal-telemetry counters (registered per receiver/exporter at startup,
         # so present at 0 once scraped). The collector is currently a placeholder
         # pipeline (OTLP → memory_limiter/batch → debug exporter); these become
@@ -203,12 +203,16 @@ spec:
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
         # ── Harbor error-rate / saturation ────────────────────────────────────────
-        # PROVISIONAL (issue #183). harbor_* only exists once metrics are enabled
-        # (this branch: apl-values/values.yaml harbor._rawValues.metrics + the
-        # harbor-allow-metrics NetworkPolicy) AND the scrape converges — until then
-        # `alert-eval` reports these DEAD?. Names are the goharbor v2.15 exporter/core
-        # metrics; verify live once deployed with `llz ci prom-metrics --match '^harbor_'`
-        # and tune thresholds. (Registry-disk saturation is intentionally omitted —
+        # PROVISIONAL — and NOT scrape-gated, which is the part that matters.
+        # The pieces harbor_* needs all ship: apl-values/values.yaml
+        # harbor._rawValues.metrics, the harbor-allow-metrics NetworkPolicy, and the
+        # ServiceMonitor. But Harbor's ServiceMonitor is NOT in defaultScrapeMonitors
+        # (tools/cmd/llz/ci_assert_scrape.go), so nothing fails if its metrics stop
+        # arriving and these three quietly read DEAD? in `alert-eval`. Names are the
+        # goharbor v2.15 exporter/core metrics; confirm against real values with
+        # `llz ci prom-metrics --match '^harbor_'`, tune the thresholds, then add the
+        # ServiceMonitor to defaultScrapeMonitors to close the gap.
+        # (Registry-disk saturation is intentionally omitted —
         # the registry stores to Linode Object Storage (S3), not a PVC. DB health is
         # covered by the CNPG cnpg_* metrics + the availability alert above.)
         - alert: HarborComponentDown

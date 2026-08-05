@@ -15,7 +15,7 @@ package main
 // binary and the workflow YAML, not against a hand-maintained list that would rot
 // the same way.
 //
-// THREE CHECKS, in ascending order of what they cost to get wrong:
+// FOUR CHECKS, in ascending order of what they cost to get wrong:
 //
 //  1. FLAGS — for every `llz …` invocation whose command RESOLVES, each `--flag`
 //     is one that command accepts (deprecated ones are reported too). Walks the
@@ -37,6 +37,12 @@ package main
 //     template tree and against the post-`deliver-docs` keep-set, because the
 //     delivered operator docs are the ones every adopter carries and are exactly
 //     where the audit found the rot concentrated.
+//
+//  4. TABLES OF CONTENTS — every entry inside a `<!-- toc -->` block resolves to
+//     a heading in that same file. A TOC is precisely the hand-maintained list
+//     this header warns about, so it is allowed only in the delimited form that
+//     makes it regenerable, and only because this check exists. The LINK check
+//     cannot cover it: a bare `#anchor` names no file, so it skips them.
 //
 // DELIBERATELY NOT CHECKED: prose claims about behaviour ("multi-tenancy is off"),
 // which is what the audit's worst findings actually were. No linter catches those.
@@ -69,11 +75,12 @@ type docsScanned struct {
 	dispatches  int // `gh workflow run` calls parsed
 	links       int // relative links resolved
 	selfLinks   int // absolute links into this repo's own tree, resolved
+	tocEntries  int // generated table-of-contents entries resolved to a heading
 }
 
 func (c docsScanned) String() string {
-	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s)",
-		c.invocations, c.flags, c.dispatches, c.links+c.selfLinks)
+	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s), %d toc entr(ies)",
+		c.invocations, c.flags, c.dispatches, c.links+c.selfLinks, c.tocEntries)
 }
 
 type docFinding struct {
@@ -99,6 +106,7 @@ func ciDocsGuardCmd() *cobra.Command {
 			"  • every `gh workflow run` input, against the workflow's declared inputs\n" +
 			"  • every relative link, in the template tree AND in the delivered\n" +
 			"    (post-`deliver-docs`) operator set\n" +
+			"  • every entry of a `<!-- toc -->` block, against that file's headings\n" +
 			"Reports every finding, then exits 1. Catches the mechanical half of doc rot;\n" +
 			"prose claims about behaviour still need a human.",
 		Args: cobra.NoArgs,
@@ -326,6 +334,37 @@ func invocationTokens(rest string) []string {
 	return out
 }
 
+// blankMermaid replaces the CONTENTS of ```mermaid blocks with empty lines,
+// keeping the line count so every finding still points at the right line.
+//
+// A mermaid node label is a picture caption, not a shell line. The quickstart's
+// lifecycle diagram carries a node reading `llz doctor --env`, and the tokeniser
+// read the label's closing `"]` as part of the flag — reporting a flag named
+// `--env]` that no command could ever have. Diagrams describe commands
+// constantly, so this would recur with every new one.
+//
+// Only ```mermaid is blanked, not every fence: ```bash blocks are exactly the
+// copy/paste instructions this guard exists to check.
+func blankMermaid(body string) string {
+	lines := strings.Split(body, "\n")
+	in := false
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if in {
+			if strings.HasPrefix(t, "```") {
+				in = false
+				continue
+			}
+			lines[i] = ""
+			continue
+		}
+		if strings.HasPrefix(t, "```mermaid") {
+			in = true
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // logicalLine is a source line after shell CONTINUATIONS have been folded in,
 // carrying the line number of where it STARTED so a finding still points at the
 // place a reader will look.
@@ -396,7 +435,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command, n *docsScanned) []
 		if isDecisionRecord(rel) {
 			continue
 		}
-		for _, ll := range foldContinuations(d.body) {
+		for _, ll := range foldContinuations(blankMermaid(d.body)) {
 			for _, m := range llzStartRe.FindAllStringSubmatch(ll.text, -1) {
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
@@ -505,7 +544,7 @@ func checkDocWorkflowInputs(root string, docs []docFile, n *docsScanned) ([]docF
 	}
 	var out []docFinding
 	for _, d := range docs {
-		rel, text := d.rel, d.body
+		rel, text := d.rel, blankMermaid(d.body)
 		for _, m := range ghRunRe.FindAllStringSubmatchIndex(text, -1) {
 			whole := text[m[0]:m[1]]
 			sub := ghRunRe.FindStringSubmatch(whole)
@@ -753,6 +792,154 @@ func checkDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 	}
 	out = append(out, checkSelfRepoLinks(root, docs, n)...)
 	out = append(out, checkDeliveredDocLinks(root, docs, n)...)
+	out = append(out, checkDocTOCs(docs, n)...)
+	return out
+}
+
+// ── 3b. generated tables of contents ─────────────────────────────────────────
+
+// A TOC is a hand-maintained list of the exact kind this file's header warns
+// about: it is true when written and rots the moment a heading is renamed, in a
+// long doc where nobody re-reads the top. The link check above cannot catch it —
+// it skips `#`-anchors entirely, because a bare anchor names no file.
+//
+// So the rule is: a doc may only carry a TOC if it is DELIMITED, and every entry
+// inside the delimiters must resolve to a heading in that same file. That makes
+// the list regenerable (the delimiters say where) and checkable (this function),
+// which is what separates it from the hand-maintained lists we refuse elsewhere.
+//
+// Only the delimited block is checked. Prose that happens to link a section is a
+// normal cross-reference, not a claim to be exhaustive.
+var (
+	tocBlockRe  = regexp.MustCompile(`(?s)<!--\s*toc\s*-->(.*?)<!--\s*/toc\s*-->`)
+	tocEntryRe  = regexp.MustCompile(`\[[^\]]*\]\(#([^)]+)\)`)
+	mdHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	anchorStrip = regexp.MustCompile("`([^`]*)`")
+	anchorBold  = regexp.MustCompile(`\*+([^*]*)\*+`)
+	anchorLink  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	// Underscore SURVIVES. GitHub keeps it, and this repo's headings are full of
+	// `workflow_call`, `promotion_rank`, `ha_role` — dropping it silently turned
+	// every such anchor into a false positive on the first run of this check.
+	// Variation selectors and ZWJ SURVIVE. github-slugger removes a fixed list
+	// of punctuation/symbols; it never touches these, so `⚠️ …` slugs to a
+	// leading (invisible) U+FE0F. Stripping them is a mismatch the oracle test
+	// catches on three real headings in this repo.
+	anchorPunct = regexp.MustCompile(`[^\p{L}\p{N}_\s\x{200D}\x{FE00}-\x{FE0F}-]`)
+)
+
+// githubAnchor reproduces github-slugger, which is what GitHub actually runs.
+//
+// The subtle half is the LAST step. github-slugger does `.replace(/ /g, '-')` —
+// each space becomes its own hyphen — NOT a collapse of whitespace runs. It
+// matters whenever punctuation sits between two spaces, because removing the
+// punctuation leaves two spaces behind and therefore TWO hyphens:
+//
+//	"Writing / rotating secrets — dual-write"
+//	  -> writing--rotating-secrets--dual-write      (github, and now us)
+//	  -> writing-rotating-secrets-dual-write        (a \s+ collapse: WRONG)
+//
+// This repo's headings are full of that shape (" — ", " / "), so the collapse
+// rule broke a whole class of anchors. It went unnoticed at first because the
+// TOC generator and this checker shared the rule: the guard agreed with the
+// thing it was checking, which is the exact failure this file's header warns
+// about. TestGithubAnchor_MatchesGithubSlugger pins the output against slugs
+// captured from github-slugger over every heading in the repo.
+func githubAnchor(text string) string {
+	t := anchorStrip.ReplaceAllString(text, "$1")
+	t = anchorBold.ReplaceAllString(t, "$1")
+	t = anchorLink.ReplaceAllString(t, "$1")
+	t = strings.ToLower(strings.TrimSpace(t))
+	t = anchorPunct.ReplaceAllString(t, "")
+	// Tabs and newlines cannot appear in a heading line, so ' ' is the only
+	// whitespace left to map — one hyphen each.
+	return strings.ReplaceAll(t, " ", "-")
+}
+
+// docAnchors returns every anchor the headings of a doc define. A repeated
+// heading text gets GitHub's `-1`, `-2` … suffixes, so those are registered too.
+// docHeading is one heading with the anchor GitHub will give it.
+type docHeading struct {
+	Level  int
+	Text   string
+	Anchor string
+	Line   int
+}
+
+// docHeadings walks a document's headings IN ORDER, assigning each the anchor
+// GitHub would. Both the TOC generator (`llz ci gen-toc`) and the TOC checker
+// call it, so there is exactly ONE slug implementation in the repo.
+//
+// That sharing is deliberate but not free: a checker that shares its rule with
+// the generator cannot catch a bug IN the rule — which is precisely how the
+// whitespace-collapse bug survived when the generator was a separate Python
+// script. TestGithubAnchor_MatchesGithubSlugger is what covers that gap, by
+// pinning githubAnchor against slugs captured from the real implementation.
+//
+// De-duplication is over ALL headings in document order, before any level
+// filtering — GitHub numbers the second "Notes" as `notes-1` whether or not a
+// TOC lists it.
+func docHeadings(body string) []docHeading {
+	var out []docHeading
+	seen, fence := map[string]int{}, false
+	for i, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			fence = !fence
+			continue
+		}
+		if fence {
+			continue
+		}
+		m := mdHeadingRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		base := githubAnchor(m[2])
+		if base == "" {
+			continue
+		}
+		a := base
+		if n := seen[base]; n > 0 {
+			a = fmt.Sprintf("%s-%d", base, n)
+		}
+		seen[base]++
+		out = append(out, docHeading{
+			Level: len(m[1]), Text: strings.TrimRight(m[2], " "), Anchor: a, Line: i + 1,
+		})
+	}
+	return out
+}
+
+func docAnchors(body string) map[string]bool {
+	out := map[string]bool{}
+	for _, h := range docHeadings(body) {
+		out[h.Anchor] = true
+	}
+	return out
+}
+
+func checkDocTOCs(docs []docFile, n *docsScanned) []docFinding {
+	var out []docFinding
+	for _, d := range docs {
+		block := tocBlockRe.FindStringSubmatchIndex(d.body)
+		if block == nil {
+			continue
+		}
+		anchors := docAnchors(d.body)
+		inner := d.body[block[2]:block[3]]
+		base := strings.Count(d.body[:block[2]], "\n") + 1
+		for i, line := range strings.Split(inner, "\n") {
+			for _, m := range tocEntryRe.FindAllStringSubmatch(line, -1) {
+				n.tocEntries++
+				if anchors[m[1]] {
+					continue
+				}
+				out = append(out, docFinding{
+					File: d.rel, Line: base + i, Kind: "toc",
+					Detail: fmt.Sprintf("#%s matches no heading — regenerate the block between the toc markers", m[1]),
+				})
+			}
+		}
+	}
 	return out
 }
 

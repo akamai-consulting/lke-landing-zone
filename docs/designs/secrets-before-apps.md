@@ -1,5 +1,12 @@
 # Secrets-before-apps: bounded secret propagation without app-of-apps serialization
 
+**Status:** Partial. **Phase 1** (bounded steady-state propagation) landed.
+**Phase 3** landed *partially* — the CI steering call-sites were retired one by
+one except the post-seed `nudge-argo` app-sync half, which is **deliberately
+KEPT** (deleting it was unevidenced). **Phase 2** — the store-recovery watch lane
+in `llz-reconciler` — is the open piece, and it is what closes the bootstrap
+first-sync gap that Phase 1 explicitly does not.
+
 ## Problem
 
 Four separate mechanisms exist to push the platform past the same underlying

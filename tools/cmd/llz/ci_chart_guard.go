@@ -200,7 +200,7 @@ func splitLines(s string) []string {
 }
 
 // readFileOrEmpty returns the file's contents, or "" if it cannot be read (e.g.
-// the chart was removed in this PR).
+// the chart was deleted by the change under review).
 func readFileOrEmpty(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
