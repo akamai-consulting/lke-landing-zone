@@ -62,58 +62,83 @@ func ciAssertImageFreshCmd() *cobra.Command {
 					return err
 				}
 			}
-			return runAssertImageFresh(version, firstNonEmpty(templateRef, pinnedTemplateRef()))
+			return runAssertImageFresh(version, firstNonEmpty(templateRef, pinnedTemplateRef()), instanceTemplateRepo())
 		},
 	}
 	c.Flags().StringVar(&templateRef, "template-ref", "", "override the ref compared against the baked llz build (default: the instance's pin)")
 	return c
 }
 
-func runAssertImageFresh(bakedVersion, templateRef string) error {
+// runAssertImageFresh resolves the pin if it needs resolving, then compares.
+//
+// templateRepo is passed in rather than read from the instance inside the
+// comparison, because callers do not all live in one: `llz ci assert-adopter-pin`
+// runs from the TEMPLATE repo and must resolve against the repo it was given.
+// Reading `.copier-answers.yml` there returns the first-party default, so on a
+// FORK the release gate would have resolved its own release tag against upstream —
+// and a tag that upstream does not have resolves to nothing, which the gate then
+// reports as "the skew guard is not guarding".
+func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	templateRef = strings.TrimSpace(templateRef)
 	if templateRef == "" {
 		return fmt.Errorf("cannot resolve the template ref to compare against: no .copier-answers.yml in the working directory (run from an instance checkout, or pass --template-ref)")
 	}
+	// A TAG pin against a dev-SHA image used to warn and skip. That skip covered the
+	// DEFAULT new-adopter shape — copier pins a release tag while TF_IMAGE floats on
+	// a tag main republishes — so the guard passed on precisely the instances it
+	// exists to protect. Resolve the tag to the commit it names and compare the two
+	// as commits. See template_commit.go.
+	pinCommit := templateRef
+	if isDevBuild(bakedVersion) && !hexSHARe.MatchString(templateRef) {
+		sha, ok := resolveTemplateCommit(templateRepo, templateRef)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: template-ref %q is not a SHA and could not be resolved to one — cannot compare against baked dev build %q; skipping.\n", templateRef, strings.TrimSpace(bakedVersion))
+			return nil
+		}
+		pinCommit = sha
+	}
+	if err := assertImageFreshResolved(bakedVersion, templateRef, pinCommit); err != nil {
+		return err
+	}
+	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %q.\n", strings.TrimSpace(bakedVersion), templateRef)
+	return nil
+}
+
+// isDevBuild reports whether a baked version is a `dev-<sha>` stamp.
+func isDevBuild(baked string) bool {
+	return strings.HasPrefix(strings.TrimSpace(baked), "dev-")
+}
+
+// assertImageFreshResolved is the comparison itself, with the pin ALREADY resolved
+// to a commit (pinCommit == templateRef when the ref is a sha, or when the baked
+// build is a release tag and there is nothing to resolve).
+//
+// Pure — no network, no filesystem. That is what lets `llz ci assert-adopter-pin`
+// exercise this logic with the commit it resolved in its own first step instead of
+// paying for two more round-trips. Those round-trips were not just waste: a blip on
+// the NEGATIVE one degraded to warn-and-pass, which the gate reads as "the guard
+// accepted an unrelated commit" and reports as a hard failure. A transient network
+// error must not be able to manufacture that verdict.
+func assertImageFreshResolved(bakedVersion, templateRef, pinCommit string) error {
 	baked := strings.TrimSpace(bakedVersion)
 	if baked == "" || baked == "dev" {
 		fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: baked llz version is unstamped (%q) — cannot verify image/template freshness; skipping.\n", bakedVersion)
 		return nil
 	}
-
-	refIsSHA := hexSHARe.MatchString(templateRef)
-	bakedSHA := ""
-	if s := strings.TrimPrefix(baked, "dev-"); s != baked {
-		bakedSHA = s
+	if bakedSHA := strings.TrimPrefix(baked, "dev-"); bakedSHA != baked { // dev image — compare SHAs
+		if !shaPrefixMatch(bakedSHA, pinCommit) {
+			return imageSkewError(baked, templateRef, pinCommit)
+		}
+		return nil
 	}
-
-	if bakedSHA != "" { // dev image — compare SHAs
-		compareTo := templateRef
-		if !refIsSHA {
-			// A TAG pin against a dev-SHA image used to warn and skip. That skip
-			// covered the DEFAULT new-adopter shape — copier pins a release tag while
-			// TF_IMAGE floats on a tag main republishes — so the guard passed on
-			// precisely the instances it exists to protect. Resolve the tag to the
-			// commit it names and compare the two as commits. See template_commit.go.
-			sha, ok := resolveTemplateCommit(instanceTemplateRepo(), templateRef)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: template-ref %q is not a SHA and could not be resolved to one — cannot compare against baked dev build %q; skipping.\n", templateRef, baked)
-				return nil
-			}
-			compareTo = sha
-		}
-		if !shaPrefixMatch(bakedSHA, compareTo) {
-			return imageSkewError(baked, templateRef, compareTo)
-		}
-	} else { // release image — version is a tag
-		if refIsSHA {
-			fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: baked llz is release %q but template-ref is a SHA %q — cannot compare; skipping.\n", baked, templateRef)
-			return nil
-		}
-		if baked != templateRef {
-			return imageSkewError(baked, templateRef, templateRef)
-		}
+	// Release image — the baked version is a tag, so the pin must be one too.
+	if hexSHARe.MatchString(templateRef) {
+		fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: baked llz is release %q but template-ref is a SHA %q — cannot compare; skipping.\n", baked, templateRef)
+		return nil
 	}
-	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %q.\n", baked, templateRef)
+	if baked != templateRef {
+		return imageSkewError(baked, templateRef, templateRef)
+	}
 	return nil
 }
 

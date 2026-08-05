@@ -116,22 +116,64 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 	return r.SHA, true
 }
 
-// githubToken is a credential for api.github.com, or "" for anonymous.
+// githubToken is a credential FOR github.com, or "" for anonymous.
 //
 // `gh auth token` reads the local config/keyring and makes NO network call, so
 // leaning on it here does not reintroduce the unbounded shell-out this file
 // deliberately avoids — it recovers the one thing dropping `gh api` would
 // otherwise cost: an operator working against a PRIVATE template fork, who is
 // authenticated to gh but has no token in their environment.
+//
+// HOST-SCOPED, and that is a security property, not tidiness. githubAPIBase is
+// api.github.com — the template repo is a github.com repo in every path here
+// (instanceTemplateRepo only accepts an owner/repo slug and otherwise falls back
+// to the first-party default). But GH_HOST points the ambient environment at a
+// different forge in the GHES e2e lane and in any GHE-hosted instance, and there:
+//
+//   - GH_TOKEN / GITHUB_TOKEN hold an APPLIANCE token (a GHES workflow's
+//     `github.token` is issued by the appliance), and
+//   - a bare `gh auth token` returns the token for GH_HOST, not for github.com.
+//
+// Attaching either to a request to api.github.com would disclose an enterprise
+// credential to a third party that can only reject it. So the env token is used
+// only when the environment is actually pointed at github.com, and `gh` is asked
+// for the github.com token by name.
 func githubToken() string {
-	if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
-		return t
+	if envIsGitHubDotCom() {
+		if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
+			return t
+		}
 	}
-	out, err := execOutput("gh", "auth", "token")
+	out, err := execOutput("gh", "auth", "token", "--hostname", "github.com")
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// envIsGitHubDotCom reports whether the ambient environment's GitHub credentials
+// belong to github.com, so an env token may be sent to api.github.com.
+//
+// TWO signals, because neither covers the other's case:
+//
+//   - GH_HOST is what the operator/lane sets to point `gh` and llz at a forge. The
+//     GHES e2e lane sets it; an operator working an appliance sets it.
+//   - GITHUB_SERVER_URL is set by ACTIONS itself, to the forge that issued
+//     GITHUB_TOKEN. It is the only signal available inside the vendored instance
+//     workflows, which do NOT set GH_HOST today — the GHES instance-side plumbing
+//     is documented as not yet wired (release-e2e-lane.yml). Relying on GH_HOST
+//     alone would mean a GHE-hosted instance still shipped its appliance token to
+//     github.com the day that plumbing lands, which is precisely backwards: the
+//     scoping should already be correct when the host arrives, not one PR later.
+//
+// Unset means github.com — the overwhelmingly common case, and the historical
+// behaviour, so a laptop with neither variable keeps working.
+func envIsGitHubDotCom() bool {
+	if ghHost() != "github.com" {
+		return false
+	}
+	server := strings.TrimSpace(os.Getenv("GITHUB_SERVER_URL"))
+	return server == "" || server == "https://github.com" || server == "http://github.com"
 }
 
 // ownerRepoRe matches a bare GitHub `<owner>/<name>` slug and nothing else — not a
@@ -206,15 +248,35 @@ func ciImageRef(org, image, tag string) string {
 // happened: they need different remedies, and a caller that cannot tell them apart
 // can only print something vague.
 func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
-	floating := func(why string) (string, string, bool, string) {
-		return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
-			ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
-			false, why
-	}
 	tag, ok := pinnedImageTag(templateRepo, ref)
 	if !ok {
-		return floating(fmt.Sprintf("could not resolve the template pin %q to a commit in %s", ref, templateRepo))
+		return floatingImageVars(fmt.Sprintf("could not resolve the template pin %q to a commit in %s", ref, templateRepo))
 	}
+	return ciImageVarsForTag(tag, ref)
+}
+
+// computeCIImageVarsForCommit is computeCIImageVars for a caller that has ALREADY
+// resolved the pin — it skips the round-trip rather than repeating it.
+//
+// Not an optimisation. `llz ci assert-adopter-pin` resolves the tag as its own
+// first step and then reports on what it finds; when this re-resolved
+// independently, a blip between the two produced "`llz tokens` would not pin …
+// could not resolve", a hard gate failure blaming the pin computation for a
+// transient network error. One resolution, one verdict.
+func computeCIImageVarsForCommit(commit, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
+	return ciImageVarsForTag("sha-"+commit, ref)
+}
+
+// floatingImageVars is the fallback pair: the version tags that track main.
+func floatingImageVars(why string) (string, string, bool, string) {
+	return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
+		ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
+		false, why
+}
+
+// ciImageVarsForTag builds the pinned pair for an image tag and verifies both are
+// pullable, falling back to the floating tags if either is definitively absent.
+func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
 	tf := ciImageRef(defaultTemplateOrg, "ci-tofu", tag)
 	kube := ciImageRef(defaultTemplateOrg, "ci-kubernetes", tag)
 	for _, im := range []string{tf, kube} {
@@ -223,7 +285,7 @@ func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pi
 		// mis-configuration this function exists to stop producing. Only a definite
 		// "not there" falls back.
 		if published, asked := imagePublished(im); asked && !published {
-			return floating(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
+			return floatingImageVars(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
 				"running on every main push (#102), or that build failed", im, ref))
 		}
 	}

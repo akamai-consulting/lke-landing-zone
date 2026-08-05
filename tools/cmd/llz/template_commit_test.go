@@ -477,3 +477,81 @@ func TestComputeAndReportImageVars(t *testing.T) {
 		}
 	})
 }
+
+// githubToken feeds an Authorization header on requests to api.github.com, so it
+// must only ever return a github.com credential. GH_HOST points the ambient
+// environment at another forge in the GHES e2e lane and in any GHE-hosted
+// instance, where GH_TOKEN holds an APPLIANCE token and a bare `gh auth token`
+// returns the appliance's — sending either to github.com would disclose an
+// enterprise credential to a third party.
+func TestGithubTokenIsHostScoped(t *testing.T) {
+	t.Run("uses the env token on github.com", func(t *testing.T) {
+		t.Setenv("GH_HOST", "")
+		t.Setenv("GITHUB_SERVER_URL", "")
+		t.Setenv("GH_TOKEN", "dotcom")
+		withExecOutput(t, func(string, ...string) ([]byte, error) {
+			t.Error("shelled out to gh when the environment already had a github.com token")
+			return nil, nil
+		})
+		if got := githubToken(); got != "dotcom" {
+			t.Errorf("githubToken = %q, want the env token", got)
+		}
+	})
+
+	// GITHUB_SERVER_URL is set by Actions to the forge that ISSUED GITHUB_TOKEN, and
+	// is the only signal inside the vendored instance workflows — they do not set
+	// GH_HOST, so without this a GHE-hosted instance would ship its appliance token
+	// to github.com the day that plumbing is wired.
+	t.Run("ignores the env token when Actions says the forge is an appliance", func(t *testing.T) {
+		t.Setenv("GH_HOST", "")
+		t.Setenv("GITHUB_SERVER_URL", "https://ghes.corp.example")
+		t.Setenv("GH_TOKEN", "appliance-token")
+		withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("dotcom-from-gh"), nil })
+		if got := githubToken(); got == "appliance-token" {
+			t.Fatal("returned the APPLIANCE token for a request to api.github.com")
+		}
+	})
+
+	t.Run("ignores the env token when GH_HOST is an appliance", func(t *testing.T) {
+		t.Setenv("GITHUB_SERVER_URL", "")
+		t.Setenv("GH_HOST", "ghes.corp.example")
+		t.Setenv("GH_TOKEN", "appliance-token")
+		withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+			return []byte("dotcom-from-gh\n"), nil
+		})
+		if got := githubToken(); got == "appliance-token" {
+			t.Fatal("returned the APPLIANCE token for a request to api.github.com")
+		} else if got != "dotcom-from-gh" {
+			t.Errorf("githubToken = %q, want the github.com token from gh", got)
+		}
+	})
+
+	// A bare `gh auth token` returns the token for GH_HOST — the appliance's. The
+	// hostname must be named explicitly or the scoping above is undone one layer down.
+	t.Run("asks gh for github.com by name", func(t *testing.T) {
+		t.Setenv("GITHUB_SERVER_URL", "")
+		t.Setenv("GH_HOST", "ghes.corp.example")
+		t.Setenv("GH_TOKEN", "")
+		t.Setenv("GITHUB_TOKEN", "")
+		var gotArgs []string
+		withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+			gotArgs = args
+			return []byte("tok"), nil
+		})
+		githubToken()
+		if !strings.Contains(strings.Join(gotArgs, " "), "--hostname github.com") {
+			t.Errorf("gh args = %v, want an explicit --hostname github.com", gotArgs)
+		}
+	})
+
+	t.Run("anonymous when gh has nothing", func(t *testing.T) {
+		t.Setenv("GITHUB_SERVER_URL", "")
+		t.Setenv("GH_HOST", "")
+		t.Setenv("GH_TOKEN", "")
+		t.Setenv("GITHUB_TOKEN", "")
+		withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("not logged in") })
+		if got := githubToken(); got != "" {
+			t.Errorf("githubToken = %q, want empty", got)
+		}
+	})
+}
