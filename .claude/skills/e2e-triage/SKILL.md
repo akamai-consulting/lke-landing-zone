@@ -1,16 +1,25 @@
 ---
 name: e2e-triage
-description: Diagnosing a red release-e2e run or a wedged cluster. Use when an `llz ci assert-*` lane fails, when converge or the health tree hangs, when a bootstrap never finishes, or when a cluster create/destroy stalls. Routes to the classifiers that already name the failure class before spending a round on a live cluster.
+description: Triage a failed release-e2e run or a wedged cluster - map the failure to a known wedge class, read the lane's verdict, and clean up leaked Linode resources (orphan clusters, NodeBalancers, VPCs, volumes). Use when an `llz ci assert-*` lane fails, when converge or the health tree hangs, when a bootstrap never finishes, when a fresh cluster-create hangs, or when an e2e cycle leaks resources.
 ---
 
 # Triaging a red e2e lane
 
-A live-cluster round is the most expensive debugging step in this repo: a
-dispatch, a cluster, a bill, and a wait during which the step logs are not
-readable. **Everything below is ordered to avoid needing one.**
+`release-e2e.yml` stands up a REAL LKE-Enterprise cluster (instantiate → provision
+→ validate → destroy) — slow and billable, so triage before rerunning. A
+live-cluster round is the most expensive debugging step in this repo: a dispatch,
+a cluster, a bill, and a wait during which the step logs are not readable.
+**Everything below is ordered to avoid needing one.**
 
 [`docs/runbooks/e2e-lane-diagnostics.md`](../../../docs/runbooks/e2e-lane-diagnostics.md)
 is canonical for the access mechanics. This file is the order of operations.
+
+## Step 0 — get the failure
+
+```bash
+gh run list --workflow=release-e2e.yml --limit 5
+gh run view <run-id> --log-failed
+```
 
 ## Step 1 — read the lane's own verdict, not the symptom
 
@@ -54,7 +63,25 @@ credential refusal as if it were a network flake.
 **If the health tree is frozen with every app Degraded or Unknown, suspect a
 shared cache/auth split before suspecting the apps.**
 
-## Step 3 — the wedges with their own runbook
+## Step 3 — is it a class that already has a guard?
+
+If one of these recurs, **the guard has a gap — fix the guard, not just the
+symptom** (see the `add-ci-guard` skill). The Makefile comment above each target
+documents the original wedge:
+
+| Symptom | Class | Guard |
+|---|---|---|
+| platform-bootstrap sync stuck before OpenBao (wave 0) | negative-wave kind not health-inert (PR #142) | `wave-health-guard` |
+| workload never Healthy, later-wave ExternalSecrets starved | workload waves before the ExternalSecret it needs (#163) | `wave-dependency-guard` |
+| cross-namespace traffic to harbor silently dropped | egress into an Istio STRICT-mesh namespace | `mesh-egress-guard` |
+| metrics unscraped / alerts never fire, everything else green | monitor/rule CR missing `prometheus: system` (#175) | `monitoring-label-guard` |
+| Argo 404s a chart version on cold bootstrap; support-plane stranded | pin never published | `chart-pin-guard` / `chart-version-guard` |
+| an ExternalSecret on an apiVersion apl-core stopped serving | `platform-apl/` is invisible to the rendered-chart gates | `dropped-apiversions-check` |
+
+`docs/architecture/convergence-contract.md` defines what "converged" is supposed
+to mean, which is worth re-reading before declaring something wedged.
+
+## Step 4 — the wedges with their own runbook
 
 Do not rediscover these. Match the symptom, then follow the file:
 
@@ -68,7 +95,7 @@ Do not rediscover these. Match the symptom, then follow the file:
 `Running 1/1` with healthy endpoints is the **normal** appearance of most wedges
 here. It is not evidence of anything.
 
-## Step 4 — the failure modes that are not in a runbook
+## Step 5 — the failure modes that are not in a runbook
 
 From [`docs/lessons-learned.md`](../../../docs/lessons-learned.md) — read the
 "Operational scars" section in full before a live round. The ones that most often
@@ -84,11 +111,11 @@ present as an unrelated symptom:
 - **Converge polling forever on an APIService** is usually a dropped discovery
   probe, not a slow component.
 
-## Step 5 — only now, a live cluster
+## Step 6 — only now, a live cluster
 
 > **Ask the operator before dispatching.** Everything below stands up real,
 > billable Linode infrastructure on the instance repo's account, and a kept
-> cluster bills until someone removes it. Steps 1–4 are free; this one is not.
+> cluster bills until someone removes it. Steps 0–5 are free; this one is not.
 > Confirm it is wanted, and say what it will cost in time and resources.
 
 Two things do **not** work, and both cost a round:
@@ -113,7 +140,7 @@ things that waste a round once you are in: port-forwards race a cold ACL (poll
 until the target answers, and make sure the endpoint you poll exists), and
 `gh run view --log` returns almost nothing mid-run even for completed steps.
 
-## Step 6 — read the producer's config, not the consumer's error
+## Step 7 — read the producer's config, not the consumer's error
 
 The failures that cost the most rounds were all one shape: **the gate named what
 it could not find, and the answer was what the other side was actually doing.**
@@ -129,6 +156,36 @@ If a lane says "X is absent", the next command is almost always "what is
 present". Where a gate does not print that itself, **that is a gap worth closing
 rather than a cluster worth standing up** — see the `gate` skill.
 
+## Clean up leaked resources before rerunning
+
+Failed and cancelled cycles leak Linode resources, and the backlog is what makes
+the **next** cluster-create hang. Sweep before you rerun:
+
+```bash
+# DRY-RUN by default; needs LINODE_TOKEN; REGION recommended
+make reap-orphans REGION=<region> CLUSTER_LABEL=<label>
+```
+
+Sweeps in dependency order — clusters (if `CLUSTER_LABEL`) → firewall →
+NodeBalancers → VPCs → Volumes. Volume specifics:
+[`orphan-volume-cleanup.md`](../../../docs/runbooks/orphan-volume-cleanup.md).
+NOT for routine teardown — CI uses the cluster-scoped `llz ci reap-volumes` /
+`llz ci reap-nodebalancers` instead.
+
+> **`reap` deletes real cloud resources.** Show the operator the dry-run output
+> and get an explicit go-ahead before re-running with `CONFIRM=yes`. Never sweep
+> on a hunch: a hang is not proof of orphans, and it has been diagnosed as
+> VPC-quota exhaustion on an account reporting `Orphaned total: 0`.
+
+## Hard rules
+
+- **Never `kubectl delete` the `lke-admin-token` Secret.** On LKE-Enterprise it is
+  not regenerated. Rotation happens only via the Linode delete-kubeconfig API,
+  which is what `llz credentials lke-admin rotate` drives — see the
+  `rotate-credentials` skill and
+  [`lke-admin-rotation.md`](../../../docs/runbooks/lke-admin-rotation.md).
+- **Tags are immutable.** A fix means a NEW pre-release tag, never a moved one.
+
 ## Before you close it out
 
 - Tear the cluster down. Manual teardown needs the confirm token and only targets
@@ -136,5 +193,5 @@ rather than a cluster worth standing up** — see the `gate` skill.
 - Delete any `debug/*` branch you pushed to the instance repo. Its default branch
   is overwritten by every e2e instantiate; stray branches are not.
 - If the root cause was a class not yet encoded, put it where the next reader will
-  hit it: a classifier verdict, a lane's `Why`, or the scars list — **not** a new
-  table in this file.
+  hit it: a classifier verdict, a lane's `Why`, a guard (the `add-ci-guard`
+  skill), or the scars list — **not** a new table in this file.

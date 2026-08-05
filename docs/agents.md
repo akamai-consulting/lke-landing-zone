@@ -43,17 +43,27 @@ authoritative; nothing here replaces `make lint`.
   pre-commit hook at edit time) and a PostToolUse formatter that runs
   `gofmt -w` / `tofu fmt` on edited files (mirroring `make fmt` / `make
   tf-fmt`). Scripts live in `.claude/hooks/`.
-- **`.claude/skills/`** — repeatable workflows: `add-ci-guard` (the wedge-class
-  guard pattern), `release` (the two-step e2e-gated release, user-invoked
-  only), `onboard-adopter` (the quickstart flow), `triage-e2e` (failure classes
-  + orphan-resource cleanup), `rotate-credentials` (runbook router,
-  user-invoked only). Skills cite the canonical docs they wrap — when those
-  docs change, check the skill still matches.
+- **`.claude/skills/`** — procedure for the loops that cost the most rounds.
+  Each one **routes**: it cites the canonical file rather than restating it, so a
+  rule that changes in one place cannot rot in two. Grouped by when they fire:
+
+  | Before you write code | While you work | Before it ships | Operating |
+  |---|---|---|---|
+  | `gate` — which gate proves this, and at which layer | `netpol-change` — the Cilium/LKE-E traps | `preflight` — which gates your diff triggers | `e2e-triage` — a red lane to a root cause |
+  | `branch-base` — what to branch from, what a rebase orphans | `credential-change` — the fan-out of touching a secret | `delivered-surface` — what an adopter carries | `rotate-credentials` — run a rotation (user-invoked) |
+  | `add-ci-guard` — the mechanics of a static guard | `docs` — auditing and writing this repo's Markdown | `release` — the umbrella tag (user-invoked) | `onboard-adopter` — coach the quickstart |
+
+  `release` and `rotate-credentials` set `disable-model-invocation: true` — both
+  are cloud-mutating or irreversible, so they are user-invoked only.
+
 - **`.claude/agents/template-hygiene-reviewer.md`** — a read-only reviewer for
   the AGENTS.md conventions CI can't machine-check (org-identity hardcoding,
   prefix rules, scars-as-defaults comments).
 - **`.mcp.json`** — the HashiCorp Terraform MCP server (registry/provider doc
-  lookup; runs via Docker, no credentials).
+  lookup; runs via Docker, no credentials). **Pinned by digest**, not by tag or
+  `:latest`, for the reason `.github/workflows/AGENTS.md` gives for SHA-pinning
+  every `uses:` — a mutable reference is a supply-chain hole regardless of which
+  registry it points at. Bump the version and the digest together.
 
 Other agent CLIs ignore these directories; `AGENTS.md` remains the canonical
 cross-tool guidance.

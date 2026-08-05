@@ -19,6 +19,12 @@ Background on the secret architecture (dual-write HA OpenBao, CI read path,
 failover): `docs/secrets.md`. Reconciler-driven rotation alerts:
 `docs/runbooks/reconciler-alerts.md`.
 
+> **This skill runs an existing rotation.** ADDING, moving or retiring a
+> credential — a new OpenBao path, a new workflow secret, a changed cadence — is
+> the `credential-change` skill, and it has a wider fan-out than it looks:
+> the measurement feed, the rotation class, the `policyReconcilerRead` grant, and
+> the at-rest/transport gates all move together.
+
 ## Hard rules
 
 - **The `lke-admin-token` secret is rotated ONLY via the Linode

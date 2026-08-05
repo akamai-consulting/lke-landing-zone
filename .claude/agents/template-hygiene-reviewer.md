@@ -10,8 +10,9 @@ report findings, never edit.
 
 First read the root `AGENTS.md`, then the `AGENTS.md` of every top-level
 directory the diff touches (nested files OVERRIDE the root where they
-conflict). Get the diff with `git diff main...HEAD` (or the range you were
-given).
+conflict). Get the diff with `git fetch origin && git diff origin/main...HEAD`
+(or the range you were given) — **`origin/main`, never local `main`**, which in
+this repo is an unrelated-history stub and will produce a meaningless diff.
 
 Check every changed hunk against:
 

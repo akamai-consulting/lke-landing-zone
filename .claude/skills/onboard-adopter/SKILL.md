@@ -27,6 +27,16 @@ is the coaching layer on top, not a replacement.
    (`landingzone.yaml` + `environments/<env>.yaml`) is the source of truth —
    edits go through `llz env set` / `llz spec set` / `llz env edit`, never
    hand-edits of rendered tfvars (they are gitignored build artifacts).
+
+   > **Then `git push`.** `env add` *commits* — publishing is yours, and CI builds
+   > the pushed tree, not the laptop. This is one of the two default-path bugs
+   > that made adopters stall with a green local checkout and a CI that never saw
+   > their environment.
+
+   > **A region is not a deployment name, and OBJ cluster ids overlap region ids**
+   > (`de-fra-2` is a valid region), so a wrong value cannot be caught by shape —
+   > it has to be checked against the Linode API. `--region` is the GEOGRAPHIC
+   > region; the deployment name is the positional `<env>`.
 5. **Readiness**: `llz doctor --env <env>` is the single "am I ready to build?"
    gate — run it after every fix until green.
 6. **Build** (§4): `llz up <env> --yes` chains tokens → doctor → build and
@@ -37,7 +47,20 @@ is the coaching layer on top, not a replacement.
    `OPENBAO_ROOT_TOKEN` from the `infra-<env>` environment if seeded
    (`llz status` nags until done).
 8. **Finish + verify**: `llz bootstrap dns <env> --yes` (needs
-   `LINODE_DNS_TOKEN`), then `llz status <env>` until converged.
+   `LINODE_DNS_TOKEN`), then **fetch a kubeconfig before asking for status** —
+   the cluster was built in CI, so this machine has none:
+
+   ```bash
+   llz ci fetch-kubeconfig --region <env> --output ~/.kube/<env>.yaml
+   export KUBECONFIG=~/.kube/<env>.yaml
+   llz status <env>
+   ```
+
+   `llz status` reads the cluster directly; without a kubeconfig it stops and
+   prints these same commands. In a fresh clone run `llz render <env>` first, so
+   `fetch-kubeconfig` can resolve the cluster from the spec. If it is still
+   refused or timing out with a kubeconfig in hand, that is LKE-E's control-plane
+   ACL, not a broken cluster.
 
 ## How the agent should behave in this flow
 
