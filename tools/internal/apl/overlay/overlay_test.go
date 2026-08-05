@@ -44,7 +44,7 @@ func credsMissing(context.Context) (string, bool, error) { return "", false, nil
 func TestReconcile_FillsAndOverlays(t *testing.T) {
 	repo := &fakeRepo{files: map[string]string{
 		sharedOverlayPath(clusterspec.OverlayObjFile):         clusterspec.RenderObjOverlayShared(),
-		envOverlayPath("primary", clusterspec.OverlayObjFile): clusterspec.RenderObjOverlayEnv("primary", "us-ord-1"),
+		envOverlayPath("primary", clusterspec.OverlayObjFile): clusterspec.RenderObjOverlayEnv("acme", "primary", "us-ord-1"),
 		// apps SOURCE: LLZ wants knative OFF (bare apps: map — LLZ's desired-state input).
 		sharedOverlayPath(clusterspec.OverlayAppsFile):         "apps:\n  knative:\n    enabled: false\n",
 		envOverlayPath("primary", clusterspec.OverlayAppsFile): "",
@@ -89,7 +89,7 @@ func TestReconcile_FillsAndOverlays(t *testing.T) {
 	if !strings.Contains(obj, "kind: AplObjectStorage") {
 		t.Errorf("obj.yaml must be the AplObjectStorage CR:\n%s", obj)
 	}
-	if !strings.Contains(obj, "us-ord-1") || !strings.Contains(obj, "platform-loki-chunks-primary") {
+	if !strings.Contains(obj, "us-ord-1") || !strings.Contains(obj, "acme-loki-chunks-primary") {
 		t.Errorf("obj.yaml missing merged env region/buckets:\n%s", obj)
 	}
 }
@@ -99,7 +99,7 @@ func TestReconcile_FillsAndOverlays(t *testing.T) {
 func TestReconcile_SkipsObjWhenCredMissing(t *testing.T) {
 	repo := &fakeRepo{files: map[string]string{
 		sharedOverlayPath(clusterspec.OverlayObjFile):          clusterspec.RenderObjOverlayShared(),
-		envOverlayPath("primary", clusterspec.OverlayObjFile):  clusterspec.RenderObjOverlayEnv("primary", "us-ord-1"),
+		envOverlayPath("primary", clusterspec.OverlayObjFile):  clusterspec.RenderObjOverlayEnv("acme", "primary", "us-ord-1"),
 		sharedOverlayPath(clusterspec.OverlayAppsFile):         "apps:\n  knative:\n    enabled: false\n",
 		envOverlayPath("primary", clusterspec.OverlayAppsFile): "",
 		aplAppTarget("knative"):                                "kind: AplApp\nmetadata:\n  name: knative\nspec:\n  enabled: true\n",
@@ -121,7 +121,7 @@ func TestReconcile_MissingBranchIsNoOp(t *testing.T) {
 	repo := &fakeRepo{
 		files: map[string]string{
 			sharedOverlayPath(clusterspec.OverlayObjFile):          clusterspec.RenderObjOverlayShared(),
-			envOverlayPath("primary", clusterspec.OverlayObjFile):  clusterspec.RenderObjOverlayEnv("primary", "us-ord-1"),
+			envOverlayPath("primary", clusterspec.OverlayObjFile):  clusterspec.RenderObjOverlayEnv("acme", "primary", "us-ord-1"),
 			sharedOverlayPath(clusterspec.OverlayAppsFile):         clusterspec.RenderAppsOverlayShared(),
 			envOverlayPath("primary", clusterspec.OverlayAppsFile): "",
 		},

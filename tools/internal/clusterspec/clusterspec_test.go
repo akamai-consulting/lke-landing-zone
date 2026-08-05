@@ -402,7 +402,7 @@ func TestClusterTFVars_Golden(t *testing.T) {
 func TestObjTFVars_InjectEnvName(t *testing.T) {
 	lz := mustDecode(t, validSpec)
 	c := lz.Spec.Environments["primary"].Cluster
-	o := assignMap(ObjectStorageTFVars("primary", c))
+	o := assignMap(ObjectStorageTFVars("acme", "primary", c))
 	if o["region_suffix"] != `"primary"` || o["obj_cluster"] != `"us-ord-1"` {
 		t.Errorf("object-storage mapping mismatch; got %v", o)
 	}

@@ -344,7 +344,7 @@ func errsString(errs []error) string {
 }
 
 func TestRenderReconcilerEnvPatch(t *testing.T) {
-	out := RenderReconcilerEnvPatch("exa", "example", "us-ord-1", "acme/instance")
+	out := RenderReconcilerEnvPatch("exa", "example", "us-ord-1", "acme/instance", "acme")
 	for _, want := range []string{
 		"kind: Deployment", "name: llz-reconciler", "name: reconcile",
 		"REGION_SHORT", `value: "exa"`, // volume-labels

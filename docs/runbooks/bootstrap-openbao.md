@@ -165,7 +165,19 @@ gh workflow run bootstrap-openbao.yml \
 
 > ⚠️ **These steps are not automated. Do not skip them.**
 >
-> - **Copy the `OPENBAO_SEAL_KEY` (32-byte static seal key) to secure offline storage.** It is the only key that can unseal this cluster's data — the recovery keys authorize `generate-root` but cannot decrypt the root key, so losing the seal key loses the data.
+> - **Copy the `OPENBAO_SEAL_KEY` to secure offline storage.
+
+   **It is never printed.** The bootstrap masks it in the job log and writes it
+   straight into the `infra-<region>` environment secret, which GitHub exposes by
+   name only — there is no read-back API. The only place you can still obtain it is
+   the cluster:
+
+   ```bash
+   kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'
+   ```
+
+   That is the same base64 value the GitHub secret holds. Losing it *and* the
+   recovery quorum is unrecoverable.
 > - **Copy recovery keys 4 and 5 and the root token from the job summary to secure offline storage.** They are never stored automatically and will not be shown again.
 > - **Delete `OPENBAO_ROOT_TOKEN`** from the `infra-<env>` environment secrets if it was set before this run.
 

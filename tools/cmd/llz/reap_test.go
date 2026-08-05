@@ -8,11 +8,11 @@ import "testing"
 func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 	const env = "e2e"
 	reaped := map[string]bool{}
-	for _, l := range envObjKeyLabels(env) {
+	for _, l := range envObjKeyLabels("acme", env) {
 		reaped[l] = true
 	}
 	minted := 0
-	for _, e := range buildRotationTable(env, "us-ord-1") {
+	for _, e := range buildRotationTable("acme", env, "us-ord-1") {
 		if e.kind != credKindObjKey {
 			continue
 		}
@@ -27,7 +27,7 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 	// And the reaper must not target a label nothing mints (over-broad delete).
 	for l := range reaped {
 		found := false
-		for _, e := range buildRotationTable(env, "us-ord-1") {
+		for _, e := range buildRotationTable("acme", env, "us-ord-1") {
 			if e.kind == credKindObjKey && e.label == l {
 				found = true
 			}
@@ -41,7 +41,10 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 // TestEnvInclusterPATLabel pins the in-cluster PAT label the reaper deletes to the
 // one inclusterPATLabel mints.
 func TestEnvInclusterPATLabel(t *testing.T) {
-	if got := inclusterPATLabel("e2e"); got != "llz-incluster-e2e" {
-		t.Errorf("inclusterPATLabel(e2e) = %q, want llz-incluster-e2e (reaper matches this exactly)", got)
+	// Instance-scoped: runCredentialsPATRevokeOld revokes every token with this
+	// exact label, so two instances sharing a deployment name on one Linode
+	// account would revoke each other's live in-cluster credential monthly.
+	if got, want := inclusterPATLabel("acme", "e2e"), "llz-incluster-acme-e2e"; got != want {
+		t.Errorf("inclusterPATLabel = %q, want %q (reaper matches this exactly)", got, want)
 	}
 }

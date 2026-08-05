@@ -49,13 +49,28 @@ type derivedRule struct {
 // derivedRules maps the env-var NAME a patch emits to its shape. Keyed by name,
 // not by component, so a second renderer emitting GH_REPO inherits the rule.
 var derivedRules = map[string]derivedRule{
-	"HARBOR_HOST":           {shape: hostShape, why: "a malformed host defeats the provisioner's `== \"\"` discovery fallback and is seeded verbatim as registry_host"},
-	"GH_REPO":               {shape: repoSlugShape, why: "the instance's <owner>/<name>; a truncated half makes every gh call target the wrong repo"},
-	"REGION":                {shape: tokenShape, why: "the deployment name"},
-	"REGION_SHORT":          {shape: tokenShape, why: "the volume-label prefix"},
-	"OBJ_CLUSTER":           {shape: tokenShape, why: "the object-storage endpoint id; a wrong one reaches a disjoint bucket namespace"},
-	"BROAD_PAT_LABEL":       {shape: tokenShape, why: "selects which PATs the rotator revokes"},
-	"BROAD_PAT_DEPLOYMENTS": {shape: tokenShape, why: "selects which deployments receive the rotated PAT"},
+	"HARBOR_HOST":     {shape: hostShape, why: "a malformed host defeats the provisioner's `== \"\"` discovery fallback and is seeded verbatim as registry_host"},
+	"GH_REPO":         {shape: repoSlugShape, why: "the instance's <owner>/<name>; a truncated half makes every gh call target the wrong repo"},
+	"REGION":          {shape: tokenShape, why: "the deployment name"},
+	"REGION_SHORT":    {shape: tokenShape, why: "the volume-label prefix"},
+	"OBJ_CLUSTER":     {shape: tokenShape, why: "the object-storage endpoint id; a wrong one reaches a disjoint bucket namespace"},
+	"BROAD_PAT_LABEL": {shape: tokenShape, why: "selects which PATs the rotator revokes"},
+	// (The two OBJ_* rules above are plain shapes; the note below belongs to
+	// BROAD_PAT_DEPLOYMENTS, immediately after it.)
+	//
+	// tokenListShape, NOT tokenShape: the consumer parses this with strings.Fields
+	// (ci_rotate_broad_pat.go) and both the spec doc and the CronJob call it
+	// "space-separated" — but tokenShape rejects ALL whitespace, so the documented
+	// multi-deployment value hard-failed `llz render`. The nearest thing that
+	// rendered was a comma list, which strings.Fields reads as ONE name, and the
+	// rotator then tries to write into a GitHub environment literally called
+	// `infra-primary,secondary`. (That publish failure used to be suppressed for 60
+	// days by a premature rotated_at stamp; ci_rotate_broad_pat.go now publishes
+	// before stamping, so it retries.) An instance with more than one deployment
+	// could not express this field at all.
+	"OBJ_LABEL_PREFIX":      {shape: tokenShape, why: "namespaces every Object Storage bucket + key label; a wrong value points the in-cluster rotator at another instance's credentials"},
+	"OBJ_ENDPOINT_HOST":     {shape: hostShape, why: "the object-storage endpoint the SSE-C gateway dials; a sibling endpoint 404s NoSuchBucket on every request"},
+	"BROAD_PAT_DEPLOYMENTS": {shape: tokenListShape, why: "selects which deployments receive the rotated PAT"},
 }
 
 // envPairRe matches the `- name: FOO` / `value: "BAR"` pair shape the Render*Patch
@@ -120,6 +135,24 @@ func repoSlugShape(v string) error {
 	owner, name, ok := strings.Cut(v, "/")
 	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 		return fmt.Errorf("not an <owner>/<name> slug")
+	}
+	return nil
+}
+
+// tokenListShape accepts a whitespace-separated list of tokens — the wire format
+// strings.Fields consumes. Interior whitespace is the POINT here; what must still
+// be rejected is a value that is only whitespace, or padded at the ends.
+func tokenListShape(v string) error {
+	if strings.TrimSpace(v) != v {
+		return fmt.Errorf("leading/trailing whitespace")
+	}
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("only whitespace")
+	}
+	for _, f := range strings.Fields(v) {
+		if err := tokenShape(f); err != nil {
+			return fmt.Errorf("entry %q: %w", f, err)
+		}
 	}
 	return nil
 }

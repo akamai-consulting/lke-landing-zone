@@ -178,3 +178,75 @@ func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
 		t.Errorf("Use = %q, want bao-ensure-ready", c.Use)
 	}
 }
+
+// TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken covers the state
+// the tooling itself creates and used to wedge on.
+//
+// Bootstrap tells the operator to delete OPENBAO_ROOT_TOKEN once the run is done
+// (and `llz status` nags until they do), so every RE-RUN of bootstrap-openbao
+// arrives with no token. The regen gate used to require a NON-EMPTY token, which
+// made runCIBaoRegenRoot's own "No OPENBAO_ROOT_TOKEN set — regenerating via
+// quorum" branch unreachable: the run reported available=false, silently skipped
+// configure and every seed, and failed ~20 minutes later at the converge gate
+// blaming unconverged apps. With the recovery quorum present, regenerate.
+func TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken(t *testing.T) {
+	clearBaoEnv(t)
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+	readOutput, _ := ghaFiles(t)
+	withBaoSleep(t)
+
+	genRootInit := false
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "status":
+			return statusJSON(true, false), "", nil // initialized + unsealed
+		case strings.HasPrefix(joined, "operator generate-root -cancel"):
+			return "", "", nil
+		case strings.HasPrefix(joined, "operator generate-root -init"):
+			genRootInit = true
+			return `{"nonce":"n1","otp":"otp1"}`, "", nil
+		case strings.HasPrefix(joined, "operator generate-root -nonce="):
+			return `{"complete":true,"encoded_token":"enc"}`, "", nil
+		case joined == "token lookup":
+			t.Error("validated a token that was never set")
+			return "", "", fmt.Errorf("unexpected")
+		}
+		return "", "unexpected " + joined, fmt.Errorf("unexpected")
+	})
+
+	// The decode + GitHub write are past the point this test is about; it only has
+	// to prove the quorum path is ENTERED, which the old gate made impossible.
+	_ = runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second)
+
+	if !genRootInit {
+		t.Fatal("no root token + a full recovery quorum must regenerate, not skip to available=false")
+	}
+	if got := readOutput(); strings.Contains(got, "available=false") {
+		t.Errorf("GITHUB_OUTPUT = %q — reported unavailable despite a usable quorum", got)
+	}
+}
+
+// Without the quorum there is nothing to regenerate FROM, so the old
+// skip-and-report behaviour must survive: this is the one case where
+// available=false is the honest answer, and turning it into a hard failure would
+// break a re-run that only wanted the cluster applied.
+func TestRunCIBaoEnsureReadyStillSkipsWithNeitherTokenNorQuorum(t *testing.T) {
+	clearBaoEnv(t)
+	readOutput, _ := ghaFiles(t)
+	withBaoSleep(t)
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		if args[0] == "status" {
+			return statusJSON(true, false), "", nil
+		}
+		return "", "unexpected " + strings.Join(args, " "), fmt.Errorf("unexpected")
+	})
+	if err := runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("no token and no quorum must skip, not fail: %v", err)
+	}
+	if got := readOutput(); !strings.Contains(got, "available=false") {
+		t.Errorf("GITHUB_OUTPUT = %q, want available=false", got)
+	}
+}

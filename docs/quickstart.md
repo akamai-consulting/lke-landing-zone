@@ -25,9 +25,11 @@
 ## Where each step runs
 
 The build happens **in CI**, not on your machine. That one fact explains the two
-steps people trip on: you `git push` before building (step 4) because CI reads
+steps people trip on: you `git push` before building (step 5) because CI reads
 your repo, and you fetch a kubeconfig afterwards (step 8) because the cluster was
-created somewhere you were not.
+created somewhere you were not. The push comes *after* `llz doctor`, not before —
+whatever doctor sends you back to fix has to be committed too, and nothing commits
+those edits for you.
 
 ```mermaid
 flowchart LR
@@ -36,10 +38,10 @@ flowchart LR
         I["<b>1.</b> install-llz.sh"]
         N["<b>2.</b> llz new"]
         E["<b>3.</b> llz env add"]
-        P["<b>4.</b> git push"]
-        D["<b>5.</b> llz doctor --env"]
+        D["<b>4.</b> llz doctor --env"]
+        P["<b>5.</b> git add + commit + push"]
         U["<b>6.</b> llz up"]
-        I --> N --> E --> P --> D --> U
+        I --> N --> E --> D --> P --> U
     end
 
     subgraph CI["☁️ GitHub Actions — the cluster is built HERE"]
@@ -59,7 +61,7 @@ flowchart LR
 
     U ==>|"workflow_dispatch"| TF
     CONV ==> K
-    CONV -.->|"<b>7.</b> shown ONCE — copy offline"| M["🔑 static seal key<br/>recovery keys 4 &amp; 5<br/>root token"]
+    CONV -.->|"<b>7.</b> escrow offline"| M["🔑 recovery keys 4 &amp; 5 + root token<br/>(job summary, shown once)<br/>seal key (never printed —<br/>read from the cluster)"]
 
     classDef local fill:#e8f0fe,stroke:#4285f4,color:#111;
     classDef ci fill:#f3e8fd,stroke:#a142f4,color:#111;
@@ -78,13 +80,20 @@ one-liner; `llz new` creates your own repo). Each step links to the section that
 explains it.
 
 ```bash
-# 0. Authenticate gh FIRST — the installer and every GitHub call below use it (§2)
-#    Skips the login if you're already authed to github.com (host-scoped, so an
-#    unrelated/broken gh host doesn't trigger a needless re-login).
+# 0. Prerequisites on your machine (§2). `llz` sequences tools; it bundles none.
+#    git and gh you likely have; copier is a Python tool that is on no machine by
+#    default, and the llz installer does NOT add it.
+command -v git >/dev/null    || echo "install git first"
+command -v copier >/dev/null || pipx install copier
+#    gh must also be AUTHENTICATED. Host-scoped, so an unrelated/broken gh host
+#    doesn't trigger a needless re-login.
 gh auth status --hostname github.com || gh auth login --hostname github.com
 
-# 1. Install the llz CLI (§2)
+# 1. Install the llz CLI (§2). It lands in ~/.local/bin, which is NOT on PATH by
+#    default on macOS — put it there in THIS shell so the next line works.
 curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+export PATH="$HOME/.local/bin:$PATH"        # also append to ~/.zshrc to make it stick
+hash -r; llz version                        # must print the version the installer just did
 
 # 2. Scaffold your instance repo + create/push it on GitHub (§3)
 #    Answer instance_repo <owner>/<name> — the OWNER (org or your user) must
@@ -93,31 +102,57 @@ llz new my-instance --push --yes
 cd my-instance
 
 # 3. Add a deployment — authors the spec, renders the tfvars + apl-values overlay (§3)
-#    Run it from the instance directory (step 2's `cd`).
+#    Export a Linode PAT FIRST: with it, `llz env add` and `llz doctor` check your
+#    region, OBJ cluster, LKE-Enterprise entitlement and k8s version against your
+#    ACCOUNT. Without it every one of those checks SKIPS, and a typo'd region or a
+#    retired `+lke` version is first noticed by `terraform apply`, 20 minutes in.
+#    (`read -rs` keeps the token out of your shell history. Written this way
+#    because zsh's `read -p` means "read from the coprocess", not "prompt".)
+printf 'Linode PAT: '; read -rs LINODE_TOKEN; echo; export LINODE_TOKEN
+#    Run this from the instance directory (step 2's `cd`).
 llz env add lab --region us-sea --obj-cluster us-sea-1
 
-# 4. Publish it — `env add` commits the spec, and the build reads your repo (§4)
-git push
-
-# 5. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
+# 4. Confirm it's ready to build — fill anything doctor flags, then re-run (§4)
+#    BEFORE the push, deliberately: `env add` already committed the spec, but
+#    nothing commits the edits doctor sends you to make. Its repo-config section
+#    stays red until step 6 provisions the credentials — expected at this point.
 llz doctor --env lab
+
+# 5. Publish — the build reads your pushed repo, not this checkout (§4)
+git status --short          # anything listed here is NOT in the build yet
+git add -A && git commit -m "llz: fill deployment values"   # skip if that was empty
+git push
 
 # 6. Provision credentials → readiness gate → build, in ONE command (§4)
 llz up lab --yes
 
-# 7. AFTER the build, do the two manual steps the bootstrap can't (§4):
-#    • copy the static seal key + recovery keys 4 & 5 + the root token (shown once) to offline storage
+# 7. AFTER the build, do the manual steps the bootstrap can't (§4). Each value
+#    comes from a DIFFERENT place — see the escrow table in §4:
+#    • recovery keys 4 & 5 + the root token — printed in the job summary, shown once
+#    • OPENBAO_SEAL_KEY — never printed anywhere; read it out of the cluster:
+#        kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'
+#    • TF_STATE_ENCRYPTION_PASSPHRASE, if step 6 generated one — printed by
+#      `llz tokens`, and still cached in .llz/secrets.env
 #    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
 #      (`llz status` flags it every run until you do)
 
 # 8. Get a kubeconfig — the cluster was built in CI, so this machine has none (§4)
+#    NOTE --region here is the DEPLOYMENT name (`lab`), not the geographic region
+#    you passed to `llz env add` (`us-sea`). The `llz ci` verbs find the cluster
+#    through <deployment>.tfvars; passing `us-sea` fails with "cannot determine
+#    cluster label".
 export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)
 llz ci fetch-kubeconfig --region lab --output ~/.kube/lab.yaml
 export KUBECONFIG=~/.kube/lab.yaml
 
 # 9. Verify convergence (§4). DNS-01 needs no step — the llz-letsencrypt-*
 #    ClusterIssuers sync via Argo CD once LINODE_DNS_TOKEN is set.
-llz status lab
+#    Use --wait: convergence takes several minutes, and a bare `llz status` polls
+#    ONCE, so a red ✗ seconds after the build is the normal first answer, not a
+#    failure. Refused or timing out instead? Expected if you left
+#    --runner-ipv4-cidrs empty: the control-plane ACL has never contained this
+#    laptop. Open it:  llz ci runner-acl open --region lab
+llz status lab --wait
 ```
 
 That is the whole thing, start to converged cluster. Step 6's `llz up` chains the
@@ -126,8 +161,10 @@ missing token or unfilled placeholder is caught before the expensive apply; you 
 run those three individually to inspect each gate (§4). `llz` itself is a thin
 [cobra](https://github.com/spf13/cobra) front-end over the tools this flow already
 uses (`copier`, `gh`, `kubectl`, the Linode API) — it sequences them and adds the
-`llz tokens` provisioning wizard (state bucket + scoped key, ArgoCD deploy key,
-GitHub PATs behind pre-filled links), pushing everything to your repo.
+`llz tokens` provisioning wizard (state bucket + scoped key, the GitHub PATs behind
+pre-filled links, and the state-encryption passphrase), pushing everything to your
+repo. Argo CD pulls your instance repo over **HTTPS with `APL_VALUES_REPO_TOKEN`** —
+there is no deploy key to create.
 
 Run `llz <command> --help` for any command; the persistent flags `--dry-run`
 (print, change nothing), `--open` (open links), and `--yes` (execute
@@ -165,6 +202,23 @@ also reports deployment + e2e readiness (see §4).
 ---
 
 ## 2. Install `llz`
+
+**`llz` does not bundle its dependencies** — it sequences tools you install
+yourself, and the installer adds only `llz`. Three are needed before you can
+scaffold anything:
+
+| Tool | Needed by | Get it |
+|---|---|---|
+| `git` | copier clones the template with it, `llz env add` commits with it, and the build reads what you `git push` | almost certainly already installed |
+| `gh` | the installer, and every `llz` command that touches GitHub | [cli.github.com](https://cli.github.com) — then authenticate, below |
+| `copier` | `llz new`, `llz upgrade` (they render the scaffold with it) | `pipx install copier` (also `uv tool install copier` / `brew install copier`) |
+
+`copier` is the one that catches people out: it is a Python tool and is on no
+machine by default. Without it `llz new` refuses up front and names the install
+command — but it is the second thing you run, so install it now. `kubectl` is
+needed later, for `llz status` (step 9). The rest of the toolchain
+(`terraform`/`tofu`, `helm`, `bao`) only matters for day-2 work;
+**`llz doctor` is the authoritative list** and the Dev Container ships all of it.
 
 **Authenticate `gh` first.** The install script and every `llz` command that
 touches GitHub (`llz new`, `llz tokens`, `llz doctor`, `llz self-update`) drive
@@ -340,7 +394,10 @@ Two commands: scaffold the instance repo, then add a deployment to it.
 llz new my-instance --push --yes
 cd my-instance                 # `llz env add` refuses to run outside an instance root
 llz env add lab --region us-sea --obj-cluster us-sea-1
-git push                       # `env add` commits; publishing is yours (§4)
+llz doctor --env lab           # fill what it flags BEFORE publishing (§4)
+git add -A && git commit -m "llz: fill deployment values" && git push   # `env add`
+                               # commits its own output; anything you changed after
+                               # it is yours to commit, and the build reads the push
 ```
 
 ### Scaffold the instance repo — `llz new`
@@ -556,20 +613,46 @@ you want to inspect each gate — see the collapsible below.)
 > paste a Linode PAT + GitHub PATs and pick an OBJ cluster. Pass `--skip-tokens`
 > once those are already provisioned to get a non-interactive `doctor → build`.
 
-> ⚠️ **After the run, do the two manual steps the bootstrap can't:** copy the
-> **static seal key (`OPENBAO_SEAL_KEY`), recovery keys 4 & 5, and the root token**
-> to secure offline storage (the keys are shown once), and delete `OPENBAO_ROOT_TOKEN` from `infra-lab` if you
-> set it (`llz status` flags it on every run until you do). See the
+> ⚠️ **After the run, do the manual steps the bootstrap can't.** Copy to secure
+> offline storage, then delete `OPENBAO_ROOT_TOKEN` from `infra-lab` if you set it
+> (`llz status` flags it on every run until you do). See the
 > [bootstrap runbook](runbooks/bootstrap-openbao.md#after-first-time-bootstrap--required-operator-actions).
+>
+> | What | Where to get it |
+> |---|---|
+> | Recovery keys 4 & 5 + the root token | printed in the job summary — **shown once** |
+> | `TF_STATE_ENCRYPTION_PASSPHRASE` | printed by `llz tokens`; also cached in `.llz/secrets.env` |
+> | **`OPENBAO_SEAL_KEY`** | **never printed** — read it from the cluster (below) |
+>
+> The seal key is masked in the job log and written straight into the `infra-lab`
+> environment secret, which GitHub exposes by name only. There is no read-back API,
+> so the *only* place you can still obtain it is the cluster itself:
+>
+> ```bash
+> kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'
+> ```
+>
+> That is the same base64 value the GitHub secret holds. Escrow it — losing it and
+> the recovery quorum together is unrecoverable.
 
 > **Push before you build.** The workflow builds from your repo, not your laptop:
 > `llz env add` commits the spec, pushing is yours, and `llz build` stops if you
 > haven't. It dispatches against the repo's **default branch**, so a feature
-> branch has to be merged, not just pushed. (`--skip-preflight` overrides the
-> check if you mean it.)
+> branch has to be merged, not just pushed. (`llz build --skip-preflight`
+> overrides the check if you mean it.)
+>
+> **Nothing commits the edits you make after `env add`.** `llz env add` commits its
+> own output (and `llz new` makes the initial scaffold commit, and `llz upgrade
+> --commit` records an upgrade) — but filling the placeholders `env add` listed,
+> `llz env set`, `llz spec set`, `llz env edit` all write files and commit none of
+> them, so an edit made *after* your push is not in the build.
+> That one fails quietly, because the pushed tree is internally consistent and
+> renders fine; it is just the tree from before your fix. The preflight warns when
+> it finds uncommitted spec/overlay changes, but committing is still yours.
 
-Then finish the deferred DNS bit once its token exists (the ArgoCD deploy key was
-already provisioned by `llz tokens`), and verify convergence. `llz status` reads
+Then finish the deferred DNS bit once its token exists (Argo CD's pull credential
+is the HTTPS `APL_VALUES_REPO_TOKEN` `llz tokens` already pushed — there is no
+deploy key), and verify convergence. `llz status` reads
 the cluster over `kubectl`, and the build ran in GitHub Actions — so fetch a
 kubeconfig first (it stops with these same commands if you don't):
 
@@ -577,15 +660,42 @@ kubeconfig first (it stops with these same commands if you don't):
 export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)
 llz ci fetch-kubeconfig --region lab --output ~/.kube/lab.yaml
 export KUBECONFIG=~/.kube/lab.yaml
-llz status lab                 # openbao pods / argocd apps / ESO ClusterSecretStore
+llz status lab --wait          # openbao pods / argocd apps / ESO ClusterSecretStore
+                               # (--wait polls; a bare `llz status` checks once, and
+                               #  right after a build that first answer is a red ✗)
 ```
 
 In a fresh clone, run `llz render lab` first — `fetch-kubeconfig` finds the
 cluster through `lab.tfvars`, which is a render artifact and is not committed.
 
-> Still refused or timing out with a kubeconfig in hand? LKE-E's control-plane ACL
-> admits only `cluster.apiServerAllowCIDRs` — add your egress prefix
-> (`llz env edit lab`, then re-apply), or run from a host already allowed.
+> **Still refused or timing out with a kubeconfig in hand?** Expected, on the
+> default path. LKE-E's control-plane ACL admits only `cluster.apiServerAllowCIDRs`,
+> and the advice above — leave the `--runner-*-cidrs` flags empty for
+> github.com-hosted runners — is what a correctly-configured empty ACL looks like:
+> CI opened its own egress IP for the job and revoked it on the way out, and your
+> laptop was never in there. Add it yourself, against the live cluster:
+>
+> ```bash
+> llz ci runner-acl open --region lab     # takes effect at once — no re-apply
+> llz ci runner-acl revoke --region lab   # when you're done
+> ```
+>
+> `runner-acl` reads `LINODE_API_TOKEN`/`LINODE_TOKEN` and **no-ops with exit 0**
+> if neither is set, so export one first or it will report success and change
+> nothing. Pass `--region` on **both** lines: it names the state file `revoke`
+> reads back, and without it `revoke` finds nothing and leaves your IP in the ACL.
+>
+> That is the same Linode-API write the CI job does. It persists, because nothing
+> else manages the ACL — unless you enabled the `cidrFirewall` component, whose
+> controller replaces the ACL every reconcile; there, add `--runner-configmap` so
+> the controller preserves your IP for the lease's 45 minutes.
+>
+> **A spec edit will not fix this cluster.** `cluster.apiServerAllowCIDRs` reaches
+> Terraform, but the cluster resource holds the ACL under
+> `ignore_changes = [control_plane[0].acl, pool]` — it is set at **create** only, so
+> a re-apply is a no-op on it and would cost you 20 minutes to change nothing. Put
+> your prefix in the spec so a cluster created *later* carries it; for this one,
+> `runner-acl` is the way.
 
 To add the HA second region, repeat §3–4 with `secondary` (or `staging`),
 **after** `lab`/`primary` has fully bootstrapped.
@@ -611,10 +721,21 @@ For what's missing it:
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
 | **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (the build writes the remaining infra secrets with it — see the permissions note below), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
 | **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE`, pinned to the **commit your template pin names** (`ghcr.io/<org>/ci-tofu:sha-<commit>`). The CI jobs run the `llz` baked into that image, so it has to be the same `llz` that rendered your committed manifests — a floating tag outruns your pin and the first pipeline run dies on `llz render --check` |
+| **State passphrase** | **generates** `TF_STATE_ENCRYPTION_PASSPHRASE` (repo-level) if the repo has none, and prints it **once** — every Terraform root encrypts its state with it ([ADR 0007](adr/0007-terraform-state-encryption.md)) and `terraform-init` exits 1 without it. **Copy it to offline escrow**: lose it and every state file is permanently unreadable. Skipped when one already exists; if GitHub can't say whether it does, `llz tokens` stops rather than risk overwriting a live one |
 | **Optional** | offers `LINODE_DNS_TOKEN` (Enter to skip — the cluster still bootstraps) |
 
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
 pushes: secrets into the `infra-lab` GitHub Environment, variables at repo level.
+`TF_STATE_ENCRYPTION_PASSPHRASE` is the one exception — it goes in at **repo
+level**, because an instance has exactly one of them: a single
+`TF_STATE_ENCRYPTION_KEY_NAME` names the key every root writes under, and a
+rotation re-keys all of them together. A second deployment reuses it rather than
+minting its own.
+
+> ⚠️ **`.llz/secrets.env` is a cache, not escrow.** It is one laptop, gitignored
+> and `0600`. `TF_STATE_ENCRYPTION_PASSPHRASE` and the OpenBao recovery keys belong
+> in your secret manager as soon as you have them — and the seal key, which is
+> never printed, has to be read out of the cluster (§4).
 
 The remaining infra secrets — `OPENBAO_SEAL_KEY`, `OPENBAO_RECOVERY_KEY_*`, the OpenBao root token,
 Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
@@ -768,14 +889,16 @@ versioned charts + external actions*.
 ## Checklist
 
 - [ ] Accounts (§1): LKE-E, apl-core, GitHub org + instance repo
-- [ ] `gh auth login` done (§2)
+- [ ] `gh auth login` done, `copier` installed (§2) — the two prerequisites `llz new` needs
+- [ ] `LINODE_TOKEN` exported (§2) — without it every account-side check silently skips
 - [ ] `llz` installed + completion (§2); `llz doctor` tooling green
 - [ ] `llz new … --push --yes` run; org literals repointed; instance pushed to GitHub (§3)
 - [ ] `llz env add <env> --region … --obj-cluster …` run **from the instance root** (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
-- [ ] spec + overlay **pushed** — `env add` commits, you push; the build renders from the pushed tree (§4)
-- [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
-- [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); kubeconfig fetched (`llz ci fetch-kubeconfig --region <env>`); cluster converges (`llz status <env>`) (§4)
-- [ ] Static seal key + recovery keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
+- [ ] `llz doctor --env <env>` green on the deployment files — run it **before** publishing (§4)
+- [ ] spec + overlay **pushed** — `env add` commits its own output, but anything you changed after it is yours to commit; the build renders from the pushed tree (§4)
+- [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); kubeconfig fetched (`llz ci fetch-kubeconfig --region <env>`); cluster converges (`llz status <env> --wait`) (§4)
+- [ ] **`TF_STATE_ENCRYPTION_PASSPHRASE` saved offline** — printed once by `llz tokens`; lose it and every Terraform state file is unreadable ([ADR 0007](adr/0007-terraform-state-encryption.md))
+- [ ] Recovery keys 4 & 5 + root token (job summary) **and** the static seal key (`kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'` — it is never printed) saved offline; `OPENBAO_ROOT_TOKEN` deleted
 - [ ] `LINODE_DNS_TOKEN` set — `llz ci bootstrap-cluster` renders it into apl-core's DNS values; the ClusterIssuers then sync via Argo CD (no dedicated command)
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)
 

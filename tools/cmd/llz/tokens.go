@@ -116,6 +116,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		fmt.Println("\n" + dim("(no --yes: will gather + write .llz/*.env + print the push plan, but create/write nothing)"))
 	}
 
+	// Decide the state-encryption passphrase's fate BEFORE the interactive section
+	// below: its only failure mode is a hard refusal, and refusing after the
+	// prompts would throw away three freshly-pasted PATs and orphan a
+	// bucket-scoped OBJ key this run created. See state_passphrase.go.
+	passPlan, err := planStatePassphrase(instanceRepo, deployEnv, secrets)
+	if err != nil {
+		return err
+	}
+
 	// have(name) — already satisfied (env file or live instance repo) → skip.
 	have := func(name string, secret bool) bool {
 		return satisfied(requirement{Name: name, Secret: secret}, secrets, vars, instSt)
@@ -272,6 +281,13 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		}
 	}
 
+	// ── state-encryption passphrase ──────────────────────────────────────────
+	// Generated, not prompted: it is machine material with no issuer to visit, and
+	// every Terraform root refuses to run without it.
+	if err := ensureStatePassphrase(g, passPlan, instanceRepo, secrets); err != nil {
+		return err
+	}
+
 	// ── persist + push ───────────────────────────────────────────────────────
 	if err := writeEnvFile(".llz/secrets.env", secrets); err != nil {
 		return err
@@ -279,7 +295,17 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if err := writeEnvFile(".llz/vars.env", vars); err != nil {
 		return err
 	}
-	fmt.Printf("\n%s wrote %d secret(s) + %d variable(s) to .llz/\n", green("✓"), len(secrets), len(vars))
+	// AFTER the cache is written, so the operator keeps their local copy, and
+	// BEFORE the push, which re-sets every secret in the map unconditionally. The
+	// repo's passphrase is authoritative once it exists: pushing a cached one over
+	// it is a no-op at best and, against a rotated repo, strands every state file.
+	// Re-asked here rather than trusting passPlan, because the plan was made before
+	// the interactive section and the repo can have acquired a passphrase since.
+	if err := dropStatePassphraseIfLive(instanceRepo, deployEnv, secrets, passPlan.generate); err != nil {
+		return err
+	}
+	nSecrets, nVars := len(secrets), len(vars)
+	fmt.Printf("\n%s wrote %d secret(s) + %d variable(s) to .llz/\n", green("✓"), nSecrets, nVars)
 
 	// Admin e2e harness (template-repo vars + E2E_DISPATCH_TOKEN) runs BEFORE the
 	// instance-repo push: a push / branch-policy failure on the instance repo
@@ -561,8 +587,18 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		val  string
 	}
 	var items []item
+	// Secrets go into infra-<env> unless the requirement table marks them
+	// repo-level. Until TF_STATE_ENCRYPTION_PASSPHRASE every instance secret was
+	// env-scoped, so this loop hardcoded --env and agreed with the table by
+	// coincidence; reading EnvScope makes the table the single source of truth it
+	// already claims to be. An unknown name (not in the table) keeps the old
+	// env-scoped default.
 	for _, k := range sortedKeys(secrets) {
-		items = append(items, item{[]string{"gh", "secret", "set", k, "--repo", repo, "--env", "infra-" + env}, secrets[k]})
+		argv := []string{"gh", "secret", "set", k, "--repo", repo}
+		if secretIsEnvScoped(k) {
+			argv = append(argv, "--env", "infra-"+env)
+		}
+		items = append(items, item{argv, secrets[k]})
 	}
 	for _, k := range sortedKeys(vars) {
 		if st.value(k) == vars[k] {

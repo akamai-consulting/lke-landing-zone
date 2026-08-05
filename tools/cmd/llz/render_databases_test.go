@@ -34,7 +34,7 @@ func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
 		"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345, EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2},
 		"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345, ClusterSize: 1},
 	}
-	out := renderTfvars(base, clusterspec.DatabasesTFVars("prod", c))
+	out := renderTfvars(base, clusterspec.DatabasesTFVars("acme", "prod", c))
 
 	// Exactly one REAL assignment: the example's `databases = {}` was replaced, not
 	// appended past. (Anchored to column 0 — the file's commented example block
@@ -75,14 +75,14 @@ func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
 	// identically — this is what the sorted keys in hclDatabases buy (Go map
 	// iteration order is randomized).
 	for i := 0; i < 5; i++ {
-		if again := renderTfvars(base, clusterspec.DatabasesTFVars("prod", c)); again != out {
+		if again := renderTfvars(base, clusterspec.DatabasesTFVars("acme", "prod", c)); again != out {
 			t.Fatalf("re-render %d drifted — `llz render --check` would report false drift", i)
 		}
 	}
 
 	// Zero clusters: the example's `databases = {}` stands, so the root applies
 	// cleanly and provisions nothing. This is the common case.
-	stub := renderTfvars(base, clusterspec.DatabasesTFVars("dev", clusterspec.Cluster{}))
+	stub := renderTfvars(base, clusterspec.DatabasesTFVars("acme", "dev", clusterspec.Cluster{}))
 	if !strings.Contains(stub, "databases = {}") {
 		t.Errorf("an unconfigured env must keep `databases = {}`:\n%s", stub)
 	}
@@ -93,7 +93,7 @@ func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
 	// machine) went through `tofu fmt`. This is the assertion that would have caught
 	// the CI-only failure: locally both paths formatted, in CI neither did.
 	withLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
-	if unformatted := renderTfvars(base, clusterspec.DatabasesTFVars("prod", c)); unformatted != out {
+	if unformatted := renderTfvars(base, clusterspec.DatabasesTFVars("acme", "prod", c)); unformatted != out {
 		t.Errorf("render differs with no tofu/terraform on PATH — the CI container has neither, "+
 			"so hclDatabases must emit already-formatted HCL.\nwith formatter:\n%s\n\nwithout:\n%s", out, unformatted)
 	}

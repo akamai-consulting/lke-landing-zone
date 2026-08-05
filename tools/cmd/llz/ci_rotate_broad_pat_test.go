@@ -144,10 +144,19 @@ func TestRotateBroadPAT_PublishFailSkipsRevoke(t *testing.T) {
 	if err == nil {
 		t.Fatal("publish failure must error")
 	}
-	// The new token is minted + in OpenBao, but the OLD PAT is NOT revoked (still
-	// valid for CI until a later successful run) — the key safety property.
+	// The OLD PAT is NOT revoked (still valid for CI until a later successful run)
+	// — the key safety property.
 	if len(lc.deleted) != 0 {
 		t.Errorf("publish failure must NOT revoke the old PAT (it's still in use): %v", lc.deleted)
+	}
+	// And rotated_at must still be the OLD stamp. This is the ordering the FLOW
+	// comment now depends on: the OpenBao write is what stamps rotated_at, and
+	// rotated_at is what isDue reads. Stamping it before the publish meant a single
+	// failed publish told every subsequent run "not due" — action=skip, exit 0, for
+	// the whole 60-day window, while the 90-day PAT GitHub still held expired ~30
+	// days into it. No failing job, and no alert either: the credential-age gauge reads the OpenBao stamp the premature write had just refreshed.
+	if got := bao.data[broadPATBaoPath]["rotated_at"]; got != itoa(now.AddDate(0, 0, -90).Unix()) {
+		t.Errorf("rotated_at = %q — a failed publish must leave the stamp OLD so the next run is still due", got)
 	}
 }
 

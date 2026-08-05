@@ -95,6 +95,12 @@ spec:
     upstreamOrg: %s
     repo: %s
     forge: github
+    # Namespaces this instance's Object Storage bucket + key labels. Linode bucket
+    # labels are GLOBAL PER REGION across accounts, so two instances sharing this
+    # collide on "[400] ... already exists" at apply. Derived from the instance
+    # name; written out so the effective value is visible. Changing it after an
+    # apply orphans the existing buckets.
+    objLabelPrefix: %s
   # Team-scoped OpenBao WRITE access (non-root), chosen at `+"`llz new`"+`. Each entry
   # becomes a native apl-core team (namespace + Keycloak group/role team-<name>) and
   # a <name>-writer policy; operators use `+"`llz openbao login --team <name>`"+`, then
@@ -125,7 +131,8 @@ spec:
       # cluster.bootstrap.managedApps (e.g. [harbor, loki]). See docs/adr/0005.
       bootstrap: { managedAppPlatform: true }
 `, clusterspec.APIVersion, clusterspec.Kind, instanceName,
-		upstreamOrg, repo, team, team, k8s, nodeType, nodeCount)
+		upstreamOrg, repo, clusterspec.SanitizeObjLabelPrefix(instanceName),
+		team, team, k8s, nodeType, nodeCount)
 
 	if err := os.WriteFile(lzPath, []byte(lz), 0o644); err != nil {
 		return instanceName, false, err

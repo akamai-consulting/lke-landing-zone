@@ -16,10 +16,26 @@ package main
 // everywhere a consumer reads it):
 //   1. mint a fresh broad PAT (account:read_write, 90d) with the CURRENT broad token
 //   2. VERIFY it authenticates (GET /v4/profile) — a bad mint drains nothing
-//   3. write it to OpenBao (secret/linode/broad-pat) so the cluster's own copy (and
-//      the next run's LINODE_TOKEN, via ESO) update
-//   4. write it back to each infra-<deployment> GitHub ENVIRONMENT secret
+//   3. write it back to each infra-<deployment> GitHub ENVIRONMENT secret
 //      (LINODE_API_TOKEN), sealed-box — the copies the workflows actually read
+//   4. write it to OpenBao (secret/linode/broad-pat) so the cluster's own copy (and
+//      the next run's LINODE_TOKEN, via ESO) update
+//
+//      GitHub BEFORE OpenBao, because the OpenBao write is what stamps rotated_at
+//      and rotated_at is what `isDue` reads. With the writes the other way round, a
+//      single failed publish left a FRESH stamp behind: the next weekly run saw
+//      "not due", returned action=skip with exit 0, and did so for the whole
+//      60-day ROTATE_AFTER_DAYS window — while the 90-day PAT that GitHub still
+//      held expired ~30 days into it. CI then broke with no failing job anywhere:
+//      every run after the first exits 0, and the credential-age gauge reads the
+//      OpenBao stamp the premature write had just refreshed. Reversed, a
+//      PERSISTENT OpenBao failure leaves the stamp old, so
+//      LLZCredentialRotationOverdue (broad-pat is credClassAutomated) becomes
+//      reachable. One new mode, stated for honesty: a persistent PUBLISH failure
+//      now mints a PAT per weekly run without reaching revoke — self-limiting at
+//      ~13 against the 100-PAT cap given the 90-day expiry. Reversed, a failed OpenBao write leaves the stamp OLD, so
+//      the next run is still due, re-mints with the un-revoked old token, and
+//      converges.
 //   5. revoke OLDER same-labeled PATs, keeping the newest + anything inside the grace
 //      window, so the token CI is actively using is never pulled out from under it
 // Dry-run unless --apply.
@@ -89,7 +105,7 @@ func ciRotateBroadPATCmd() *cobra.Command {
 		Long: "In-cluster rotator for the broad account:read_write Linode PAT (LINODE_API_TOKEN).\n" +
 			"Runs in a dedicated CronJob (not the reconciler). When the OpenBao rotated_at is\n" +
 			"older than --rotate-after-days: mints a fresh broad PAT with the current token,\n" +
-			"verifies it, writes it to OpenBao, publishes it to each infra-<deployment> GitHub\n" +
+			"verifies it, publishes it to each infra-<deployment>, writes it to OpenBao GitHub\n" +
 			"environment secret (sealed box), then revokes older same-labeled PATs outside the\n" +
 			"grace window. Dry-run unless --apply. Env: LINODE_TOKEN (current broad PAT),\n" +
 			"BROAD_PAT_LABEL, BROAD_PAT_DEPLOYMENTS (space-separated), GH_TOKEN, GH_REPO,\n" +
@@ -186,17 +202,10 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 		return nil, fmt.Errorf("verify freshly-minted broad PAT (id=%d): %w — nothing written or revoked", newID, err)
 	}
 
-	// 3. Write to OpenBao (the cluster's own copy; ESO refreshes LINODE_TOKEN for next run).
-	if err := d.bao.Write(ctx, broadPATBaoPath, map[string]string{
-		"token":      newToken,
-		"rotated_at": strconv.FormatInt(now.Unix(), 10),
-	}); err != nil {
-		return nil, fmt.Errorf("write %s: %w — new PAT id=%d is live but not published; not revoking anything", broadPATBaoPath, err, newID)
-	}
-
-	// 4. Publish to every deployment's GitHub environment secret. A partial failure
-	//    is safe (old token still valid until the grace-windowed revoke) but fatal to
-	//    the run so revoke is skipped and it retries next cadence.
+	// 3. Publish to every deployment's GitHub environment secret. A partial failure
+	//    is safe (old token still valid until the grace-windowed revoke) and fatal to
+	//    the run so revoke is skipped — and because rotated_at has NOT been stamped
+	//    yet, the next run is still due and actually retries.
 	published := []string{}
 	for _, dep := range o.deployments {
 		env := "infra-" + dep
@@ -207,6 +216,17 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 			return record, fmt.Errorf("publish %s to %s: %w — old PAT NOT revoked (safe: still valid); retry next run", broadPATSecretName, env, err)
 		}
 		published = append(published, env)
+	}
+
+	// 4. Write to OpenBao (the cluster's own copy; ESO refreshes LINODE_TOKEN for next
+	//    run). This is the step that stamps rotated_at, so it goes AFTER the publish —
+	//    see the FLOW note above.
+	if err := d.bao.Write(ctx, broadPATBaoPath, map[string]string{
+		"token":      newToken,
+		"rotated_at": strconv.FormatInt(now.Unix(), 10),
+	}); err != nil {
+		return nil, fmt.Errorf("write %s: %w — new PAT id=%d is published to GitHub but the cluster copy is stale; "+
+			"not revoking anything, and rotated_at is unstamped so the next run retries", broadPATBaoPath, err, newID)
 	}
 
 	// 5. Only now revoke older siblings, keeping the newest + anything within grace.

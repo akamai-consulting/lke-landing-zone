@@ -12,6 +12,11 @@
 # Deployment suffix — must match the matching cluster deployment.
 region_suffix = "your-env"
 
+# Per-instance namespace on every bucket label — `llz render` fills this from
+# spec.instance.objLabelPrefix. Bucket labels are GLOBAL per region on Linode, so
+# two instances sharing a prefix collide on "[400] ... already exists".
+label_prefix = "your-instance"
+
 # Linode Object Storage cluster ID. List options with:
 #   linode-cli object-storage clusters-list
 obj_cluster = "us-ord-1"

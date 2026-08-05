@@ -88,8 +88,8 @@ func runDrainObjBuckets(region string, yes bool) error {
 		return fmt.Errorf("deployment %q declares no cluster.objectStorage.cluster", region)
 	}
 	buckets := []string{
-		clusterspec.ObjLokiChunksBucket(region),
-		clusterspec.ObjHarborRegistryBucket(region),
+		clusterspec.ObjLokiChunksBucket(lz.ObjLabelPrefix(), region),
+		clusterspec.ObjHarborRegistryBucket(lz.ObjLabelPrefix(), region),
 	}
 
 	// The SAME credential the consumers use, read from the cluster's own Secret, is

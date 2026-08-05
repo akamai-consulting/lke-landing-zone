@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -122,10 +123,17 @@ func runReap(g globalOpts, o reapOpts) error {
 	if o.env == "" {
 		fmt.Println(dim("  skipped — set --env <deployment> to reap its minted keys + PAT"))
 	} else {
-		if err := reapEnvObjKeys(ctx, client, o.env, del); err != nil {
+		// The prefix namespaces the key labels this reaps. Read it from the spec —
+		// an exact-label match under the wrong prefix would delete ANOTHER
+		// instance's keys, which is the one mistake a reaper must never make.
+		prefix, perr := objLabelPrefixFor("reap")
+		if perr != nil {
+			return perr
+		}
+		if err := reapEnvObjKeys(ctx, client, prefix, o.env, del); err != nil {
 			return err
 		}
-		if err := reapEnvInclusterPAT(ctx, client, o.env, del); err != nil {
+		if err := reapEnvInclusterPAT(ctx, client, prefix, o.env, del); err != nil {
 			return err
 		}
 	}
@@ -315,25 +323,25 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 // the obj-key entries buildRotationTable mints for a deployment. A test pins this
 // in lockstep with buildRotationTable so a mint-label change can't silently orphan
 // the reaper (the exact failure that let 76 keys pile up to the account cap).
-func envObjKeyLabels(env string) []string {
-	return []string{"platform-loki-" + env, "platform-harbor-registry-" + env, "platform-obj-" + env}
+func envObjKeyLabels(prefix, env string) []string {
+	return clusterspec.ObjKeyLabels(prefix, env)
 }
 
 // reapEnvObjKeys deletes the Object Storage keys minted for env — the loki +
-// harbor-registry keys (labels platform-loki-<env> / platform-harbor-registry-<env>,
+// harbor-registry keys (labels <objLabelPrefix>-loki-<env> / <objLabelPrefix>-harbor-registry-<env>,
 // per buildRotationTable). mint-bootstrap-objkeys and the in-cluster rotator each
 // create a fresh key under the same stable label; a failed teardown or failed
 // grace-window revoke leaks them, and the account caps at 100 keys (a fresh mint
 // then 400s "reached your access key quota"). On a destroy the env is gone, so
 // every key under those two labels is orphaned. Exact-label match — never another
 // env's keys.
-func reapEnvObjKeys(ctx context.Context, client *linode.Client, env string, del func(path, desc string)) error {
+func reapEnvObjKeys(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
 	keys, err := client.ListObjectStorageKeys(ctx)
 	if err != nil {
 		return fmt.Errorf("list object-storage keys: %w", err)
 	}
 	want := map[string]bool{}
-	for _, l := range envObjKeyLabels(env) {
+	for _, l := range envObjKeyLabels(prefix, env) {
 		want[l] = true
 	}
 	for _, k := range keys {
@@ -348,16 +356,16 @@ func reapEnvObjKeys(ctx context.Context, client *linode.Client, env string, del 
 }
 
 // reapEnvInclusterPAT deletes the narrow in-cluster PAT(s) minted for env (label
-// llz-incluster-<env>, per inclusterPATLabel). mint-bootstrap-pat drains older
+// llz-incluster-<objLabelPrefix>-<env>, per inclusterPATLabel). mint-bootstrap-pat drains older
 // siblings on each mint, but a failed drain / failed run leaks them toward the
 // account's 100-PAT cap. Exact-label match — the broad token this sweep RUNS under
 // carries a different label, so it is never self-revoked.
-func reapEnvInclusterPAT(ctx context.Context, client *linode.Client, env string, del func(path, desc string)) error {
+func reapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
 	toks, err := client.ListProfileTokens(ctx)
 	if err != nil {
 		return fmt.Errorf("list profile tokens: %w", err)
 	}
-	label := inclusterPATLabel(env)
+	label := inclusterPATLabel(prefix, env)
 	for _, t := range toks {
 		if linode.MapString(t, "label") != label {
 			continue

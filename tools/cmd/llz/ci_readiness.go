@@ -360,7 +360,7 @@ var (
 		if !ok {
 			return "", ""
 		}
-		return clusterspec.ObjLokiChunksBucket(region), clusterspec.ObjEndpointHost(e.Cluster.ObjectStorage.Cluster)
+		return clusterspec.ObjLokiChunksBucket(lz.ObjLabelPrefix(), region), clusterspec.ObjEndpointHost(e.Cluster.ObjectStorage.Cluster)
 	}
 )
 

@@ -27,7 +27,7 @@ func TestCheckDerivedEnvValuesSeesRealRendererOutput(t *testing.T) {
 		},
 		{
 			name: "llzReconciler",
-			body: RenderReconcilerEnvPatch("pri", "primary", "us-ord-1", "acme/instance"),
+			body: RenderReconcilerEnvPatch("pri", "primary", "us-ord-1", "acme/instance", "acme"),
 			want: []string{"REGION_SHORT", "REGION", "OBJ_CLUSTER", "GH_REPO"},
 		},
 	} {
@@ -143,7 +143,7 @@ func TestCheckDerivedEnvValuesRejectsPlaceholderSentinels(t *testing.T) {
 // tightening this is a tempting and wrong "improvement".
 func TestCheckDerivedEnvValuesAllowsEveryEmptyValue(t *testing.T) {
 	for _, body := range []string{
-		RenderReconcilerEnvPatch("", "", "", ""),
+		RenderReconcilerEnvPatch("", "", "", "", "acme"),
 		RenderHarborHostPatch("", ""),
 		RenderBroadPATEnvPatch("", "", ""),
 	} {
@@ -156,7 +156,7 @@ func TestCheckDerivedEnvValuesAllowsEveryEmptyValue(t *testing.T) {
 // Every offending field is reported in one pass, so a render does not turn into a
 // fix-one-rerun loop.
 func TestCheckDerivedEnvValuesReportsEveryOffender(t *testing.T) {
-	body := RenderReconcilerEnvPatch("pri ", "prim ary", "us ord", "acme/")
+	body := RenderReconcilerEnvPatch("pri ", "prim ary", "us ord", "acme/", "acme")
 	errs := CheckDerivedEnvValues(body)
 	if len(errs) < 4 {
 		t.Fatalf("expected all four fields reported, got %d: %v", len(errs), errs)
@@ -196,4 +196,28 @@ func errsText(errs []error) string {
 		parts[i] = e.Error()
 	}
 	return strings.Join(parts, "; ")
+}
+
+// The documented wire format is SPACE-separated (spec doc + the CronJob comment),
+// and the consumer parses it with strings.Fields — but the guard used tokenShape,
+// which rejects all whitespace. So the only multi-deployment value that rendered
+// was a comma list, which strings.Fields reads as one name, and the rotator then
+// targets a GitHub environment called `infra-primary,secondary` AFTER stamping
+// rotated_at — suppressing the retry for 60 days.
+func TestBroadPatDeploymentsAcceptsTheFormatItsConsumerParses(t *testing.T) {
+	pair := func(v string) string {
+		return "            - name: BROAD_PAT_DEPLOYMENTS\n              value: \"" + v + "\"\n"
+	}
+	for _, good := range []string{"primary secondary", "primary", "a b c"} {
+		if errs := CheckDerivedEnvValues(pair(good)); len(errs) != 0 {
+			t.Errorf("%q must render: %v", good, errs)
+		}
+	}
+	// Still rejected: padded and whitespace-only, which are malformed rather than
+	// multi-valued.
+	for _, bad := range []string{" primary", "primary ", "  "} {
+		if errs := CheckDerivedEnvValues(pair(bad)); len(errs) == 0 {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
 }

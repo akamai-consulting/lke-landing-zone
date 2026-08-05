@@ -122,7 +122,19 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 	//    cluster the loaded OPENBAO_ROOT_TOKEN may be the value a prior run
 	//    revoked — bao-regen-root validates it and regenerates via quorum if so,
 	//    re-exporting the fresh token to $GITHUB_ENV and the process env.
-	if initialized && os.Getenv("OPENBAO_ROOT_TOKEN") != "" {
+	//
+	//    The recovery-quorum half was unreachable until this condition included it.
+	//    runCIBaoRegenRoot has an explicit "No OPENBAO_ROOT_TOKEN set — regenerating
+	//    via quorum" branch, and the workflow passes RECOVERY_K1/2/3 in for exactly
+	//    that — but gating on a NON-EMPTY token meant it never ran. The state it was
+	//    written for is the one the tooling itself creates: bootstrap tells the
+	//    operator to delete OPENBAO_ROOT_TOKEN afterwards (and `llz status` nags
+	//    until they do), so every RE-RUN of bootstrap-openbao arrived with no token,
+	//    reported available=false, silently skipped configure + every seed, and died
+	//    ~20 minutes later at the converge gate complaining about unconverged apps
+	//    rather than about a root token. Regenerate whenever we have either input.
+	_, haveQuorum := recoveryKeysFromEnv()
+	if initialized && (os.Getenv("OPENBAO_ROOT_TOKEN") != "" || haveQuorum == nil) {
 		if err := runCIBaoRegenRoot(g, region); err != nil {
 			return err
 		}

@@ -9,7 +9,9 @@
 # cluster is addressed in state by its map key (module.databases["shared"]), so
 # a deployment can add or drop a cluster without touching the others.
 #
-# label_prefix is intentionally left at the module default ("platform") so the
+# label_prefix comes from the spec via `llz render` — NOT the module default
+# ("platform"), which is identical for every instance. (Historic note: it used to
+# read "intentionally left at the module default" so the
 # in-repo deployment's database labels are unchanged.
 module "databases" {
   # checkov:skip=CKV_TF_1: First-party module sources pin to immutable-by-convention
@@ -22,6 +24,7 @@ module "databases" {
 
   name          = each.key
   region_suffix = var.region_suffix
+  label_prefix  = var.label_prefix
 
   region         = each.value.region
   vpc_id         = each.value.vpc_id

@@ -164,10 +164,10 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 			endpoint = clusterspec.ObjEndpointHost(e.Cluster.ObjectStorage.Cluster)
 		}
 		if bucket == "" {
-			bucket = clusterspec.ObjLokiChunksBucket(region)
+			bucket = clusterspec.ObjLokiChunksBucket(lz.ObjLabelPrefix(), region)
 		}
 		if harborBucket == "" {
-			harborBucket = clusterspec.ObjHarborRegistryBucket(region)
+			harborBucket = clusterspec.ObjHarborRegistryBucket(lz.ObjLabelPrefix(), region)
 		}
 	}
 	if endpoint == "" {

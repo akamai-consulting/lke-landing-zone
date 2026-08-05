@@ -130,7 +130,7 @@ func RenderObjOverlayShared() string {
 // per the llz-object-storage module's naming. It deep-merges onto the _shared CR (same
 // kind/metadata; spec.provider.linode gains region+buckets). Empty when the env
 // declares no object-storage cluster (nothing to point at).
-func RenderObjOverlayEnv(env, objCluster string) string {
+func RenderObjOverlayEnv(prefix, env, objCluster string) string {
 	if objCluster == "" {
 		return ""
 	}
@@ -146,38 +146,12 @@ func RenderObjOverlayEnv(env, objCluster string) string {
 				// works with no new bucket. A dedicated single platform-loki-<env> bucket
 				// is the cleaner future target (lab-gated; see the design doc). Harbor uses
 				// its existing registry bucket. Both on the platform-<app>-<env> convention.
-				"loki":   objLabelPrefix + "-loki-chunks-" + env,
-				"harbor": objLabelPrefix + "-harbor-registry-" + env,
+				"loki":   ObjLokiChunksBucket(prefix, env),
+				"harbor": ObjHarborRegistryBucket(prefix, env),
 			},
 		}}},
 	})
 }
-
-// ObjLokiChunksBucket and ObjHarborRegistryBucket are THE derivations of the two
-// bucket names a deployment writes to, shared with RenderObjOverlayEnv above so a
-// checker cannot drift from the buckets the object-storage module actually creates.
-//
-// They exist because the alternative was three invented environment variables
-// (OBJ_ENDPOINT_HOST, LOKI_CHUNKS_BUCKET, HARBOR_REGISTRY_BUCKET) exported by
-// nothing — a gate configured from values no workflow sets does not fail closed,
-// it fails at the first flag check with an error about a missing argument.
-func ObjLokiChunksBucket(env string) string {
-	if env == "" {
-		return ""
-	}
-	return objLabelPrefix + "-loki-chunks-" + env
-}
-
-func ObjHarborRegistryBucket(env string) string {
-	if env == "" {
-		return ""
-	}
-	return objLabelPrefix + "-harbor-registry-" + env
-}
-
-// objLabelPrefix mirrors the llz-object-storage module's label_prefix default —
-// keep in lockstep with the module if that default changes.
-const objLabelPrefix = "platform"
 
 // appsOverlayDoc marshals the apps.<name>.enabled toggle fragment.
 type appsOverlayDoc struct {

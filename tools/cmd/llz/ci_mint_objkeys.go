@@ -88,7 +88,13 @@ func runCIMintBootstrapObjkeys(region string) error {
 	ctx := context.Background()
 	now := rotatorNow()
 
-	for _, e := range buildRotationTable(region, objCluster) {
+	// CI, inside the instance checkout — read the prefix from the spec (the
+	// in-cluster rotator gets the same value via OBJ_LABEL_PREFIX instead).
+	prefix, err := objLabelPrefixFor("mint-bootstrap-objkeys")
+	if err != nil {
+		return err
+	}
+	for _, e := range buildRotationTable(prefix, region, objCluster) {
 		if e.kind != credKindObjKey {
 			continue // the DNS PAT is seeded from LINODE_DNS_TOKEN / minted by the rotator
 		}

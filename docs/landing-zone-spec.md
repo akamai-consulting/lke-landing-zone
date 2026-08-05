@@ -92,6 +92,8 @@ spec:
     upstreamOrg: akamai-consulting         # → copier upstream_org (template source org)
     repo: my-org/platform-support          # → instance_repo (<owner>/<name>)
     forge: github                          # → forge_flavor (github | github-enterprise | gitlab)
+    objLabelPrefix: platform-support       # namespaces this instance's Object Storage
+                                           # bucket + key labels (see below)
                                            # (the template pin is NOT here — it lives in
                                            #  .copier-answers.yml, see below)
   defaults:                                # inherited by every ClusterDefinition
@@ -226,6 +228,34 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.{clusterLabel,region,k8sVersion}`, `cluster.nodePool.{type,count}`,
 `cluster.bootstrap.name`, and **`cluster.bootstrap.managedAppPlatform: true`**
 (LLZ never self-installs apl-core — `llz env add` seeds it into `spec.defaults`).
+
+**`spec.instance.objLabelPrefix`** — the per-instance namespace on every Object
+Storage bucket and key label, so a deployment's buckets become
+`<objLabelPrefix>-loki-{chunks,ruler,admin}-<env>` and
+`<objLabelPrefix>-harbor-registry-<env>`.
+
+Optional in the file, but never optional in effect: when unset it is derived from
+`metadata.name` (lowercased, illegal characters collapsed to hyphens), and
+`llz env add` writes the derived value out so the effective prefix is visible.
+`llz render` emits it as the object-storage root's `label_prefix`, and
+`llz render` also threads it to the in-cluster rotator as `OBJ_LABEL_PREFIX` —
+that pod has no spec to read.
+
+**Why it exists.** Linode Object Storage bucket labels share **one namespace per
+region, across accounts**. A shared prefix means the first instance to use a given
+deployment name in a region takes those names globally and every later one fails
+its apply with `[400] ... already exists`. Key labels carry the prefix for a
+related reason: they are per-account, but `llz reap` and the rotation table match
+by exact label, so two instances in one Linode account would otherwise rotate and
+delete each other's keys.
+
+**Do not change it after an apply.** A bucket label cannot be renamed in place, and
+the module declares no `create_before_destroy`, so Terraform plans
+**destroy-then-create** on all four buckets. There is no drain on the apply path
+(only on destroy), so if the old buckets still hold objects the apply fails with
+`bucket is not empty` and keeps failing until you empty them by hand; if they are
+empty, it deletes them and their data with them. Treat it as a rebuild, not a
+rename: drain and destroy the old object-storage root first, or keep the value.
 
 **Must NOT be set:** `cluster.bootstrap.domainSuffix` — Linode owns the
 `lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; a stale value

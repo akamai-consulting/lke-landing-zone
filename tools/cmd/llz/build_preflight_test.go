@@ -449,3 +449,85 @@ func TestRepoMissingOnlyOn404(t *testing.T) {
 		t.Error("a success means it exists")
 	}
 }
+
+// ── unpublished spec/overlay edits ───────────────────────────────────────────
+//
+// The two-file remote check above catches "committed but never pushed". These
+// cover the state it structurally cannot see: edits that were never committed at
+// all, which is where the quickstart's own step order lands an operator (`llz env
+// add` commits up front, then doctor tells them to fill placeholders, and nothing
+// commits THAT).
+
+func TestWarnUnpublishedEditsNamesWhatTheBuildWillMiss(t *testing.T) {
+	// The suggested `git add --` is filtered through existingPaths, so the scanned
+	// paths have to actually exist for the publish line to appear (an absent
+	// pathspec makes `git add` fatal — see the comment there). Lay them down.
+	dir := t.TempDir()
+	chdir(t, dir)
+	for _, d := range []string{"environments", filepath.Join("apl-values", "lab"), filepath.Join("apl-values", "_shared")} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"landingzone.yaml", filepath.Join("environments", "lab.yaml")} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var gotArgs []string
+	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
+		if name != "git" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		gotArgs = args
+		return []byte(" M apl-values/lab/values.yaml\n?? environments/lab.yaml\n"), nil
+	})
+
+	out := captureStderr(t, func() { warnUnpublishedEdits(".", "apl-values", "lab") })
+
+	// The operator has to be able to act on this: which files, and the one thing
+	// that makes the build see them.
+	for _, want := range []string{
+		"apl-values/lab/values.yaml",
+		"environments/lab.yaml",
+		"NOT in it",
+		"git push",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("warning missing %q, got:\n%s", want, out)
+		}
+	}
+
+	// Scoped to the spec + this deployment's overlay, never a bare `git status`.
+	// A whole-repo scan would flag every unrelated edit in the checkout — noise
+	// that trains the operator to skip the one line that matters here.
+	if len(gotArgs) < 3 || gotArgs[0] != "status" || gotArgs[1] != "--porcelain" || gotArgs[2] != "--" {
+		t.Fatalf("expected a pathspec-scoped `git status --porcelain --`, got %v", gotArgs)
+	}
+	paths := strings.Join(gotArgs[3:], " ")
+	for _, want := range []string{"landingzone.yaml", "environments", filepath.Join("apl-values", "lab")} {
+		if !strings.Contains(paths, want) {
+			t.Errorf("pathspec %q missing %q", paths, want)
+		}
+	}
+}
+
+func TestWarnUnpublishedEditsSilentWhenClean(t *testing.T) {
+	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("\n"), nil })
+	if out := captureStderr(t, func() { warnUnpublishedEdits(".", "apl-values", "lab") }); out != "" {
+		t.Errorf("a clean tree must say nothing, got:\n%s", out)
+	}
+}
+
+func TestWarnUnpublishedEditsSilentWithoutGit(t *testing.T) {
+	// Outside a git repo, or with no git at all: no evidence of an unpublished
+	// edit is not evidence of one. Same degrade-to-quiet rule as the rest of this
+	// gate — it can only ever warn about a build that was already going to be wrong.
+	withExecOutput(t, func(string, ...string) ([]byte, error) {
+		return nil, errors.New("fatal: not a git repository")
+	})
+	if out := captureStderr(t, func() { warnUnpublishedEdits(".", "apl-values", "lab") }); out != "" {
+		t.Errorf("an unanswerable question must stay quiet, got:\n%s", out)
+	}
+}

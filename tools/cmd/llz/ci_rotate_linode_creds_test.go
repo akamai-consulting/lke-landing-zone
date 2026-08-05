@@ -65,19 +65,19 @@ func TestIdsToDrain(t *testing.T) {
 
 func TestIdsByLabel(t *testing.T) {
 	items := []map[string]any{
-		{"id": jn(1), "label": "platform-loki-primary"},
+		{"id": jn(1), "label": "acme-loki-primary"},
 		{"id": jn(2), "label": "other"},
-		{"id": jn(3), "label": "platform-loki-primary"},
-		{"label": "platform-loki-primary"}, // no id -> skipped
+		{"id": jn(3), "label": "acme-loki-primary"},
+		{"label": "acme-loki-primary"}, // no id -> skipped
 	}
-	got := idsByLabel(items, "platform-loki-primary")
+	got := idsByLabel(items, "acme-loki-primary")
 	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
 		t.Errorf("idsByLabel = %v, want [1 3]", got)
 	}
 }
 
 func TestBuildRotationTable(t *testing.T) {
-	table := buildRotationTable("primary", "us-ord-1")
+	table := buildRotationTable("acme", "primary", "us-ord-1")
 	if len(table) != 3 {
 		t.Fatalf("table has %d entries, want 3", len(table))
 	}
@@ -89,8 +89,8 @@ func TestBuildRotationTable(t *testing.T) {
 	loki := byName["loki-object-store"]
 	// The Loki key spans the three REAL bucket names (chunks/ruler/admin) — the
 	// grant set the llz-object-storage module's bootstrap key carries. An earlier
-	// revision minted against the nonexistent "platform-loki-<region>" bucket.
-	wantLokiBuckets := "platform-loki-chunks-primary,platform-loki-ruler-primary,platform-loki-admin-primary"
+	// revision minted against the nonexistent "acme-loki-<region>" bucket.
+	wantLokiBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary"
 	if loki.kind != credKindObjKey || strings.Join(loki.buckets, ",") != wantLokiBuckets || loki.objCluster != "us-ord-1" {
 		t.Errorf("loki entry = %+v (want buckets %s)", loki, wantLokiBuckets)
 	}
@@ -113,7 +113,7 @@ func TestBuildRotationTable(t *testing.T) {
 	// The broad managed platform-obj key: seeded at secret/obj/platform, scoped to
 	// every provisioned bucket (loki chunks/ruler/admin + harbor), AWS_* fields.
 	obj := byName["obj-platform"]
-	wantObjBuckets := "platform-loki-chunks-primary,platform-loki-ruler-primary,platform-loki-admin-primary,platform-harbor-registry-primary"
+	wantObjBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary,acme-harbor-registry-primary"
 	if obj.kind != credKindObjKey || obj.baoPath != "secret/obj/platform" || strings.Join(obj.buckets, ",") != wantObjBuckets {
 		t.Errorf("obj-platform entry = %+v (want buckets %s)", obj, wantObjBuckets)
 	}
@@ -180,12 +180,15 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	t.Setenv("REGION", "primary")
 	t.Setenv("OBJ_CLUSTER", "us-ord-1")
+	// The in-cluster rotator has no spec to read; `llz render` writes this into
+	// the reconciler Deployment (RenderReconcilerEnvPatch).
+	t.Setenv("OBJ_LABEL_PREFIX", "acme")
 	t.Setenv("LINODE_TOKEN", "minting")
 
 	t.Run("all due -> mint+write both, drain old", func(t *testing.T) {
 		lc := &stubLinode{
 			// pre-existing older resources to drain (keep-newest default 2)
-			objkeys: []map[string]any{{"id": jn(10), "label": "platform-loki-primary"}, {"id": jn(11), "label": "platform-loki-primary"}, {"id": jn(201), "label": "platform-loki-primary"}},
+			objkeys: []map[string]any{{"id": jn(10), "label": "acme-loki-primary"}, {"id": jn(11), "label": "acme-loki-primary"}, {"id": jn(201), "label": "acme-loki-primary"}},
 		}
 		bao := &stubBao{data: map[string]map[string]string{}} // empty -> all due
 		withRotatorStubs(t, lc, bao, now)

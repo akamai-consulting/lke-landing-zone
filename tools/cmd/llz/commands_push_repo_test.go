@@ -577,13 +577,17 @@ func TestPushInstanceRepoPlaceholderRepo(t *testing.T) {
 	})
 	for _, want := range []string{
 		"still the placeholder", "gh repo create <owner>/<name>", "must already exist",
-		// This path returns before ensureScaffoldBranch, so the hand-run command
-		// below would push whatever `git init` named the branch.
-		"branch -M main",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("placeholder skip missing %q:\n%s", want, out)
 		}
+	}
+	// The old message also had to say `git branch -M main`, because this early
+	// return jumped over the only ensureScaffoldBranch call. runNew now normalises
+	// the branch for every scaffold before pushInstanceRepo is reached, so telling
+	// the operator to do it by hand would be stale advice about a done job.
+	if strings.Contains(out, "branch -M main") {
+		t.Errorf("still telling the operator to rename a branch runNew already renamed:\n%s", out)
 	}
 }
 

@@ -83,3 +83,38 @@ func TestCmdStatusKeepsTheRootTokenNagWithoutClusterAccess(t *testing.T) {
 		t.Errorf("the standing root-token nag was lost:\n%s", out)
 	}
 }
+
+func TestNoClusterAccessOffersTheACLFixThatIsNotAReApply(t *testing.T) {
+	// The default quickstart answer for cluster.apiServerAllowCIDRs is EMPTY —
+	// correct for github.com-hosted runners, which open their egress IP per job and
+	// revoke it on the way out — so the ACL is routinely a correctly-configured one
+	// that has simply never contained this laptop. When the only remedy named was
+	// "edit the spec and re-apply", the operator paid a full apply to run one
+	// kubectl. `runner-acl open` is the same Linode-API write the CI job does.
+	err := noClusterAccessErr("lab", "dial tcp: i/o timeout")
+
+	for _, want := range []string{
+		"llz ci runner-acl open --region lab", // the cheap fix, with the env filled in
+		"no re-apply",                         // why it is the one to reach for first
+		"llz env edit lab",                    // the permanent fix is still offered
+		"apiServerAllowCIDRs",                 // and what it is they are editing
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("remediation missing %q:\n%s", want, err)
+		}
+	}
+}
+
+func TestNoClusterAccessDoesNotPushTheConfigMapLeaseByDefault(t *testing.T) {
+	// --runner-configmap only matters when the cidrFirewall component is enabled,
+	// whose controller REPLACES the ACL on each reconcile. It is DefaultDisabled,
+	// so presenting the flag as part of the normal fix would have most operators
+	// pass a flag that needs cluster access they do not yet have.
+	err := noClusterAccessErr("lab", "connection refused")
+	if !strings.Contains(err.Error(), "cidrFirewall") {
+		t.Errorf("the flag's precondition must be stated, not just the flag:\n%s", err)
+	}
+	if strings.Contains(err.Error(), "runner-acl open --region lab --runner-configmap") {
+		t.Errorf("--runner-configmap must not be in the copy-paste command:\n%s", err)
+	}
+}

@@ -194,15 +194,21 @@ jobs:
           # mechanism for the object-storage keys, so no explicit env set is
           # needed; e2e exercises the mint → OpenBao → ESO → consumer cycle by
           # construction.)
-          # otomi.git.repoUrl must point at the INSTANCE repo (apl-operator
-          # pushes its rendered values tree there). This env add runs at the
-          # TEMPLATE root, where .copier-answers.yml doesn't exist, so the
-          # spec's instance.repo fallback is a dirname guess and the render-time
-          # repoUrl default would bake the wrong URL into values.yaml — set it
-          # explicitly from E2E_INSTANCE_REPO. (Real instances get the right
-          # default from their answers-derived spec.instance.repo.)
-          bin/llz env set "${E2E_ENV}" \
-            cluster.bootstrap.aplValues.repoURL="https://${GH_HOST}/${INSTANCE_REPO}.git"
+          # This env add runs at the TEMPLATE root, where .copier-answers.yml holds
+          # unrendered jinja — so readAnswers fails and spec.instance.repo falls back
+          # to a dirname guess (instance-template/instance-template). Fix the IDENTITY
+          # rather than papering over it downstream: it is what the render-time
+          # otomi.git.repoUrl default derives from (apl-operator pushes its values tree
+          # there), what the carved Argo Applications and the AppProject sourceRepos
+          # allowlist are scoped to, and what GH_REPO becomes for the in-cluster
+          # provisioners. Real instances get all of this from their answers-derived
+          # spec.instance.repo; the e2e scaffold has to be told.
+          bin/llz spec set instance.repo="${INSTANCE_REPO}"
+          # And pin the Object Storage label prefix explicitly. Derived, it would be
+          # `instance-template` — a name every fork's e2e lane would claim in the same
+          # region, which is the global bucket-label collision the prefix exists to
+          # remove (spec.instance.objLabelPrefix; clusterspec/objlabels.go).
+          bin/llz spec set instance.objLabelPrefix=llz-e2e
           # Point the TF-managed platform-bootstrap Application (and, via the
           # env-revision-configmap it renders, every in-repo child Application) at `main`.
           # appsRepoRevision is the single knob `llz render` threads into BOTH the

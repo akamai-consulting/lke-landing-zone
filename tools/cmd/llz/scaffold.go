@@ -154,6 +154,16 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
 	}
 	if _, err := os.Stat(envFile); err == nil {
+		// Distinguish "already scaffolded" from "a previous run authored the spec and
+		// then render rejected it", which leaves the env file WITHOUT an overlay. That
+		// second state used to dead-end: this refused, and `llz doctor` sent you back
+		// here because apl-values/<env>/ was missing.
+		if _, oerr := os.Stat(overlayDst); oerr != nil {
+			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
+				"  Fix the spec (%s or %s) and run %s,\n"+
+				"  or discard it and start over: %s",
+				envFile, overlayDst, envFile, lzPath, cyan("llz render "+name), cyan("rm "+envFile))
+		}
 		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
 	}
 
@@ -218,7 +228,15 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if !deferred {
 		fmt.Printf("\n%s %s\n", bold("Reconciling the spec"), dim("(`llz render "+orElse(renderEnv, "(all)")+"`):"))
 		if err := runRender(g, renderEnv, false, false, false); err != nil {
-			fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
+			// The rejected field is not always in the env file — spec.teams (the
+			// copier openbao_team answer) lives in landingzone.yaml — so name both,
+			// and name the way OUT. Without that last line this state was a loop:
+			// the env file now exists, so `llz env add` refuses to overwrite it, and
+			// `llz doctor` refuses because the overlay was never created and tells
+			// you to run the `llz env add` that just refused.
+			fmt.Fprintf(os.Stderr, "\n%s the spec was authored but `llz render` rejected it. Fix the field named above —\n", yellow("!"))
+			fmt.Fprintf(os.Stderr, "  it is in %s or %s — then run %s.\n", envFile, lzPath, cyan("llz render "+name))
+			fmt.Fprintf(os.Stderr, "  Or start this deployment over: %s\n", cyan("rm "+envFile))
 			return err
 		}
 	}

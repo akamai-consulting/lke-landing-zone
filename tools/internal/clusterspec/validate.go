@@ -36,6 +36,12 @@ func (lz *LandingZone) Validate() []error {
 	}
 
 	errs = append(errs, validateInstance(lz.Spec.Instance)...)
+	// The Object Storage label prefix is the one identity that has to be unique
+	// GLOBALLY, not just within the instance — Linode bucket labels share a
+	// namespace per region across accounts. Validated here so a prefix that cannot
+	// produce a legal label fails at `llz render`, not at apply.
+	errs = append(errs, validateObjLabelPrefix(lz)...)
+	errs = append(errs, validateAplValuesRepo(lz)...)
 
 	if len(lz.Spec.Environments) == 0 {
 		errs = append(errs, fmt.Errorf("spec.environments is empty — declare at least one deployment"))
@@ -169,7 +175,12 @@ func validateTeams(teams []Team) []error {
 			// (else it could grant itself write on system credentials like the Linode
 			// PAT). Reached only for an otherwise-valid secret/<ns>[/…] subtree.
 			ns := subtreeNamespace(t.OpenbaoSubtree)
-			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q is inside the platform-owned secret/%s namespace — pick a team-specific subtree (e.g. secret/%s)", i, t.Name, t.OpenbaoSubtree, ns, t.Name))
+			// "e.g. secret/<t.Name>" suggested the REJECTED value verbatim whenever the
+			// team is named after the reserved namespace (openbao_team: infra →
+			// "secret/infra is platform-owned — pick a team-specific subtree (e.g.
+			// secret/infra)"), which is the likeliest way to reach this branch at all.
+			// Prefix it so the suggestion is always distinct from what was refused.
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q is inside the platform-owned secret/%s namespace — pick a team-specific subtree (e.g. secret/team-%s)", i, t.Name, t.OpenbaoSubtree, ns, t.Name))
 		case !openbaoSubtreeRe.MatchString(t.OpenbaoSubtree):
 			// Catch-all for non-canonical paths the specific cases above miss —
 			// empty/'.'/'..' segments, consecutive slashes, whitespace, uppercase.

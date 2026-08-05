@@ -31,6 +31,14 @@ func e2eRequirements(admin bool) []requirement {
 		{"TF_STATE_SECRET_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
 		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Secrets:write"},
 		{"APL_VALUES_REPO_TOKEN", true, true, true, false, "GitHub fine-grained PAT, Contents:write (values+apps repo)"},
+		// REPO-LEVEL (EnvScope false), unlike every other secret here. One instance
+		// has ONE state-encryption passphrase: the key-provider name it writes under
+		// is a single repo variable (TF_STATE_ENCRYPTION_KEY_NAME), and a rotation
+		// re-keys every root of every deployment together. GitHub resolves a
+		// repo-level secret inside an infra-<env> job, so one value covers them all —
+		// whereas an env-scoped copy would let a second deployment be provisioned
+		// with a DIFFERENT passphrase and quietly diverge from that model.
+		{statePassphraseSecret, true, false, true, false, "OpenTofu state encryption — generated + escrowed (ADR 0007)"},
 		{"TF_STATE_BUCKET", false, false, true, false, "state bucket name (created)"},
 		{"TF_STATE_ENDPOINT", false, false, true, false, "S3 endpoint of the chosen cluster"},
 		{"TF_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-tofu:sha-<template pin> (computed)"},
@@ -54,6 +62,19 @@ func e2eRequirements(admin bool) []requirement {
 		)
 	}
 	return reqs
+}
+
+// secretIsEnvScoped reports whether a secret belongs in the infra-<env>
+// environment rather than at repo level. Unknown names default to env-scoped,
+// which is what every instance secret was before the requirement table carried a
+// repo-level one.
+func secretIsEnvScoped(name string) bool {
+	for _, r := range e2eRequirements(true) {
+		if r.Name == name && r.Secret {
+			return r.EnvScope
+		}
+	}
+	return true
 }
 
 // liveState is the configured-on-GitHub state of one repo. Variable values are

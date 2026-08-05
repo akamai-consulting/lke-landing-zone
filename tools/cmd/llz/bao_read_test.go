@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -118,6 +119,11 @@ func TestBaoSeedRefusesToWriteOnUnreadablePath(t *testing.T) {
 // The mint paths create real cloud resources on the same "" — a Linode
 // object-storage key and an in-cluster PAT.
 func TestMintPathsRefuseOnUnreadablePath(t *testing.T) {
+	// mint-bootstrap-pat resolves the instance-scoped PAT label from the spec
+	// before it touches OpenBao; this test is about the fail-closed read.
+	dir := chdirTempDir(t)
+	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
+		"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("LINODE_API_TOKEN", "broad")
 	withBaoRead(t, "connection refused", false)

@@ -14,6 +14,11 @@ package clusterspec
 // (*LandingZone).ValuesIdentity.
 type ValuesIdentity struct {
 	RepoURL string // the values repo the carved Application CRs sync from
+	// ObjLabelPrefix namespaces this instance's Object Storage bucket + key
+	// labels. Carried on the identity bundle because it IS instance identity, and
+	// because the alternative — a package const — is the bug it replaces
+	// (objlabels.go).
+	ObjLabelPrefix string
 }
 
 // ValuesIdentity resolves the values-repo URL for env from the assembled spec. It
@@ -28,5 +33,5 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 	if repoURL == "" && lz.Spec.Instance.Repo != "" {
 		repoURL = "https://github.com/" + lz.Spec.Instance.Repo + ".git"
 	}
-	return ValuesIdentity{RepoURL: repoURL}
+	return ValuesIdentity{RepoURL: repoURL, ObjLabelPrefix: lz.ObjLabelPrefix()}
 }

@@ -106,8 +106,10 @@ func NetworkTFVars(name string, v VPC) []Assign {
 // With no clusters declared, only region_suffix is emitted, which leaves the
 // example's `databases = {}` in place: the root applies and provisions nothing.
 // That is the 0 in 0-n, and it is why `databases` needs no enabled flag.
-func DatabasesTFVars(env string, c Cluster) []Assign {
-	a := []Assign{{"region_suffix", hclStr(env)}}
+func DatabasesTFVars(prefix, env string, c Cluster) []Assign {
+	// Same per-instance namespace as the object-storage root: the module builds
+	// "<label_prefix>-<name>-<region_suffix>" and its default is shared.
+	a := []Assign{{"region_suffix", hclStr(env)}, {"label_prefix", hclStr(prefix)}}
 	if len(c.Databases) > 0 {
 		a = append(a, Assign{"databases", hclDatabases(c.Databases)})
 	}
@@ -189,11 +191,16 @@ func hclDatabases(dbs Databases) string {
 }
 
 // ObjectStorageTFVars maps spec.cluster.objectStorage onto object-storage/<env>.tfvars.
-func ObjectStorageTFVars(env string, c Cluster) []Assign {
+func ObjectStorageTFVars(prefix, env string, c Cluster) []Assign {
 	var a []Assign
 	add := func(k, v string) { a = append(a, Assign{k, v}) }
 
 	add("region_suffix", hclStr(env))
+	// The per-instance namespace on every bucket label. Emitted unconditionally:
+	// the root's variable has no default, so a spec that somehow reached here
+	// without one fails at plan rather than silently creating buckets under the
+	// old shared `platform` name (objlabels.go).
+	add("label_prefix", hclStr(prefix))
 	if c.ObjectStorage.Cluster != "" {
 		add("obj_cluster", hclStr(c.ObjectStorage.Cluster))
 	}

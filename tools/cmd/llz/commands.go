@@ -97,13 +97,58 @@ func copierUpdateArgv(ref string) []string {
 	return a
 }
 
+// requireCopier fails with an install route when the copier CLI is absent.
+//
+// `llz new` and `llz upgrade` are thin wrappers around `copier copy` / `copier
+// update`, and copier is a Python tool that is on no machine by default. Without
+// this, the scaffold died on exec's own words — `copier copy: exec: "copier":
+// executable file not found in $PATH` — as the SECOND command of the quickstart,
+// naming a tool the operator has never heard of and no way to get it. The
+// installer only checks `gh`, and `llz doctor` (which does list copier) reports
+// rather than gates AND is two steps further down the quickstart, so nothing
+// between install and scaffold said this out loud.
+//
+// action names the command, because the two have different recovery paths: a
+// failed `llz new` leaves nothing behind, a failed `llz upgrade` is mid-flight.
+// g so a --dry-run, which never execs copier (run() returns before exec), reports
+// the gap without failing on it — the flag's contract is "print what would run,
+// change nothing", and a dry-run that hard-errors on a tool it was not going to
+// invoke breaks it. Warn rather than stay silent: "this would work" is the wrong
+// answer too.
+func requireCopier(g globalOpts, action string) error {
+	if lookable("copier") {
+		return nil
+	}
+	if g.dryRun {
+		fmt.Fprintf(os.Stderr, "%s `copier` is not on PATH — %s would fail here (dry-run: not executing it).\n",
+			yellow("!"), action)
+		fmt.Fprintf(os.Stderr, "  install it first: %s\n", cyan("pipx install copier"))
+		return nil
+	}
+	//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded install-route block, not a sentence fragment
+	return fmt.Errorf("the `copier` CLI is not on PATH — %s renders the scaffold with it.\n"+
+		"  copier is a Python tool and is not installed by default (the llz installer does not add it):\n"+
+		"  • pipx install copier      (what this repo's own CI uses)\n"+
+		"  • uv tool install copier\n"+
+		"  • brew install copier\n"+
+		"  Then re-run %s. `llz doctor` lists the rest of the toolchain it expects.", action, action)
+}
+
 func buildArgv(env string) []string {
 	return []string{"gh", "workflow", "run", "terraform.yml",
 		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
 }
 
+// secretSetArgv routes a secret to its scope. Reads the requirement table rather
+// than hardcoding --env, matching pushToRepo: TF_STATE_ENCRYPTION_PASSPHRASE is
+// repo-level (one per instance), and pushing it env-scoped through `llz secrets
+// push` would give a second deployment a different passphrase.
 func secretSetArgv(env, name string) []string {
-	return []string{"gh", "secret", "set", name, "--env", "infra-" + env}
+	argv := []string{"gh", "secret", "set", name}
+	if secretIsEnvScoped(name) {
+		argv = append(argv, "--env", "infra-"+env)
+	}
+	return argv
 }
 
 // ghSecretSetStdin pipes value into `gh secret set <name>` (with --env <ghEnv>
@@ -295,6 +340,12 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	if err := checkNewTarget(dir); err != nil {
 		return err
 	}
+	// Before the GitHub round-trips below: copier is what actually renders the
+	// scaffold, the check is free and local, and finding out it is missing AFTER
+	// resolving a release tag wastes two API calls to reach the same dead end.
+	if err := requireCopier(g, "`llz new`"); err != nil {
+		return err
+	}
 	repo := org + "/" + templateName
 	switch found, err := templateSourceStatusFn(repo); {
 	case err != nil:
@@ -317,6 +368,25 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	// `copier copy` git-inits the dir, but don't fail `new` if hook install does.
 	if err := runHooksInstall(g, dir); err != nil {
 		fmt.Fprintln(os.Stderr, "llz: could not arm pre-commit hook (run `llz hooks` in the instance):", err)
+	}
+
+	// Normalise the branch for EVERY scaffold, not just the --push one. copier's
+	// `git init` names the first branch `master` unless the operator set
+	// init.defaultBranch, and the rendered platform-bootstrap Application — plus
+	// every carved App under it — asks Argo CD for `main`. An adopter who scaffolds
+	// without --push and creates the repo by hand therefore built a tree whose Argo
+	// revision does not exist: `llz render --check` passes, the cluster applies, and
+	// it surfaces ~20 minutes later as an unresolvable revision inside the cluster.
+	// The rename only touches a branch with no upstream, so it cannot rewrite an
+	// instance that has deliberately been pushed elsewhere.
+	// Best-effort: at this point copier has git-init'd but not committed, so HEAD
+	// is unborn, and renaming an unborn branch needs git >= 2.30. On an older git
+	// the rename errors — and this step is cosmetic until something is pushed, so
+	// failing `llz new` over it would be worse than the drift it prevents.
+	if err := ensureScaffoldBranch(g, dir); err != nil {
+		fmt.Fprintf(os.Stderr, "%s could not rename the scaffold branch to %s (%v).\n", yellow("!"), bootstrapBranch, err)
+		fmt.Fprintf(os.Stderr, "  Do it before pushing — Argo CD tracks %s: %s\n",
+			bootstrapBranch, cyan("git -C "+dir+" branch -M "+bootstrapBranch))
 	}
 
 	pushed := false
@@ -381,7 +451,13 @@ func printNextSteps(dir string, pushed bool) {
 	cmd("cd "+dir, cdNote)
 	cmd("llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>", "authors the spec + renders")
 	note("tune it: llz env set <env> cluster.nodePool.count=8  (or `llz env edit <env>`); llz env show <env>")
-	cmd("git push", "`env add` COMMITS but does not push — the build reads your repo, not this checkout")
+	// doctor BEFORE the push, which is the order the quickstart now teaches too.
+	// `env add` commits its own output and nothing else commits at all, so an edit
+	// made after the push — filling a placeholder, `llz env set`, `llz spec set` —
+	// is simply absent from the tree the build renders. Pushing first made that the
+	// DEFAULT outcome for anyone doctor sent back to fix something.
+	cmd("llz doctor --env <env>", "the readiness gate — fix what it lists BEFORE publishing")
+	cmd(`git add -A && git commit -m "llz: fill values" && git push`, "`env add` commits its own output; later edits are yours")
 	cmd("llz up <env> --yes", "tokens → doctor → build, stopping at the first failure")
 	note("`llz up` is interactive: it opens pre-filled links and reads a Linode PAT + GitHub PATs.")
 	note("run the gates individually to inspect each one — llz tokens --env <env> --yes /")
@@ -523,13 +599,12 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 	a, err := readAnswers(dir)
 	if err != nil || a == nil || a.InstanceRepo == "" || a.InstanceRepo == "your-org/your-instance-repo" {
 		fmt.Fprintf(os.Stderr, "llz: --push: instance_repo is still the placeholder in %s/.copier-answers.yml — skipping the repo create.\n", dir)
-		// This returns before ensureScaffoldBranch, so the tree may still be on
-		// whatever `git init` named it — say so, since the command below pushes
-		// the checked-out branch and the bootstrap Application tracks `main`.
-		fmt.Fprintf(os.Stderr, "  Create it yourself once you know the <owner>/<name>, from `main` (`git -C %s branch -M main`\n"+
-			"  if you are on master — the platform-bootstrap Application tracks it):\n"+
+		// runNew has already normalised the branch to `main` (ensureScaffoldBranch),
+		// which is what the platform-bootstrap Application tracks — so the create
+		// below just needs the owner/name.
+		fmt.Fprintf(os.Stderr, "  Create it yourself once you know the <owner>/<name>:\n"+
 			"    gh repo create <owner>/<name> --private --source %s --remote origin --push\n"+
-			"  The <owner> (an org, or your own user) must already exist — that command creates the repo, not the org.\n", dir, dir)
+			"  The <owner> (an org, or your own user) must already exist — that command creates the repo, not the org.\n", dir)
 		return false, nil
 	}
 	repo := a.InstanceRepo
@@ -544,9 +619,8 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 			return false, err
 		}
 	}
-	if err := ensureScaffoldBranch(g, dir); err != nil {
-		return false, err
-	}
+	// (runNew already ran ensureScaffoldBranch, for the --push and no-push paths
+	// alike, so the tree is on `main` by here.)
 
 	// Preflight the destination before the create: an absent owner and an
 	// already-created repo are both dead ends for `gh repo create`, and both are
@@ -671,6 +745,11 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 }
 
 func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
+	// Same prerequisite as `llz new`, and worse to discover late: this one runs
+	// snapshot/restore around copier, so failing at the exec is failing mid-flight.
+	if err := requireCopier(g, "`llz upgrade`"); err != nil {
+		return err
+	}
 	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
 	// Snapshot before copier runs — it rewrites this file in place, so afterwards
 	// there is nothing left to compare against (see Lever 0).
@@ -981,7 +1060,10 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 var (
 	upTokens = func(g globalOpts, admin bool, env string) error { return runTokens(g, admin, env, "", "", "") }
 	upDoctor = func(g globalOpts, admin bool, env string) error { return runDoctor("", env, admin, true, "", "") }
-	upBuild  = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, false) }
+	// skipPreflight=true: cmdUp already ran buildPreflight itself (upPreflight,
+	// before the token wizard), and running it again here printed the whole
+	// unpublished-edits warning block twice in one `llz up`.
+	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true) }
 	// upPreflight is the same dispatch check, run before the chain starts; seamed
 	// alongside the three stages so the order test can drive it.
 	upPreflight = buildPreflight
@@ -1029,6 +1111,9 @@ func printManualActions(env string) {
 	fmt.Println(b("Watch convergence:   " + cyan("llz status "+env+" --wait")))
 	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
 	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
+	// Repeated here because stage 1's banner has scrolled past a full build by now,
+	// and this secret has the same "lose it and the data is gone" blast radius.
+	fmt.Println(dim("      – and TF_STATE_ENCRYPTION_PASSPHRASE, if `llz tokens` generated one above"))
 	fmt.Println(dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + dim("   (`llz status` flags it if left)"))
 	fmt.Println(b("DNS-01 certs wire automatically once TF_VAR_linode_dns_token is set at apply"))
 	fmt.Println(dim("      (the letsencrypt ClusterIssuers sync via Argo; re-apply TF if the token came later)"))

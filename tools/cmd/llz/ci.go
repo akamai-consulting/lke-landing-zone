@@ -405,8 +405,9 @@ func ciVerifyObjectStorageCmd() *cobra.Command {
 		Use:   "verify-object-storage",
 		Short: "verify a region's Loki/Harbor object-storage BUCKETS exist before the key mint + seeds",
 		Long: "Lists Linode object-storage buckets and checks the region's four exist\n" +
-			"(platform-loki-{chunks,ruler,admin}-<region>, platform-harbor-registry-\n" +
-			"<region>) — i.e. terraform.yml's apply-object-storage ran. Buckets only:\n" +
+			"(<prefix>-loki-{chunks,ruler,admin}-<region>, <prefix>-harbor-registry-\n" +
+			"<region>, <prefix> being spec.instance.objLabelPrefix) — i.e.\n" +
+			"terraform.yml's apply-object-storage ran. Buckets only:\n" +
 			"the scoped KEYS are no longer Terraform-minted — `llz ci\n" +
 			"mint-bootstrap-objkeys` mints them AFTER this preflight and the in-cluster\n" +
 			"rotator owns them after first boot, so key absence here is normal on a\n" +
@@ -424,6 +425,13 @@ func runCIVerifyObjectStorage(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
+	// From the spec, never a constant: these have to be THIS instance's buckets. A
+	// hardcoded prefix would let the gate pass on another adopter's identically
+	// named buckets in the same region (clusterspec/objlabels.go).
+	prefix, err := objLabelPrefixFor("verify-object-storage")
+	if err != nil {
+		return err
+	}
 	token, err := ciToken()
 	if err != nil {
 		return err
@@ -440,10 +448,10 @@ func runCIVerifyObjectStorage(region string) error {
 		have[cli.AsString(b["label"])] = true
 	}
 	want := []string{
-		"platform-loki-chunks-" + region,
-		"platform-loki-ruler-" + region,
-		"platform-loki-admin-" + region,
-		"platform-harbor-registry-" + region,
+		prefix + "-loki-chunks-" + region,
+		prefix + "-loki-ruler-" + region,
+		prefix + "-loki-admin-" + region,
+		prefix + "-harbor-registry-" + region,
 	}
 	var missing []string
 	for _, label := range want {
@@ -979,8 +987,8 @@ func ciReapObjKeysCmd() *cobra.Command {
 		Short: "delete a destroyed deployment's minted Linode obj-storage keys + in-cluster PAT (--yes to delete)",
 		Long: "Teardown hygiene for the ACCOUNT-scoped Linode credentials a deployment mints\n" +
 			"at bootstrap/rotation: the loki + harbor-registry Object Storage keys\n" +
-			"(platform-loki-<env> / platform-harbor-registry-<env>) and the narrow in-cluster\n" +
-			"PAT (llz-incluster-<env>). These carry no cluster tag, so the cluster-liveness\n" +
+			"(<objLabelPrefix>-loki-<env> / <objLabelPrefix>-harbor-registry-<env>) and the narrow in-cluster\n" +
+			"PAT (llz-incluster-<objLabelPrefix>-<env>). These carry no cluster tag, so the cluster-liveness\n" +
 			"sweeps (reap-volumes / reap-nodebalancers / `llz reap`) can't see them; a leaked\n" +
 			"mint (failed run, failed grace-window revoke) accretes toward the account's\n" +
 			"100-key / 100-PAT caps until a fresh mint 400s. Run on the destroy path with the\n" +
@@ -1002,11 +1010,15 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	if err != nil {
 		return err
 	}
-	del, fin := ciDeleter(ctx, g, client)
-	if err := reapEnvObjKeys(ctx, client, env, del); err != nil {
+	prefix, err := objLabelPrefixFor("reap-env-creds")
+	if err != nil {
 		return err
 	}
-	if err := reapEnvInclusterPAT(ctx, client, env, del); err != nil {
+	del, fin := ciDeleter(ctx, g, client)
+	if err := reapEnvObjKeys(ctx, client, prefix, env, del); err != nil {
+		return err
+	}
+	if err := reapEnvInclusterPAT(ctx, client, prefix, env, del); err != nil {
 		return err
 	}
 	return fin()
