@@ -14,8 +14,8 @@
 - [Get into Argo CD](#get-into-argo-cd)
 - [Day-2 cheatsheet](#day-2-cheatsheet)
 - [Common situations](#common-situations)
-- [Self-healing & auto-sync — when to enable each](#self-healing-auto-sync-when-to-enable-each)
-- [Reconciliation triggers + cadence](#reconciliation-triggers-cadence)
+- [Self-healing & auto-sync — when to enable each](#self-healing--auto-sync--when-to-enable-each)
+- [Reconciliation triggers + cadence](#reconciliation-triggers--cadence)
 - [When Argo CD itself is broken](#when-argo-cd-itself-is-broken)
 
 <!-- /toc -->

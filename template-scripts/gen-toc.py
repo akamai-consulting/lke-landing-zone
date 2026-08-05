@@ -15,8 +15,13 @@ def anchor(text: str) -> str:
     t = re.sub(r"\*([^*]*)\*", r"\1", t)
     t = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", t)
     t = t.strip().lower()
-    t = re.sub(r"[^\w\s-]", "", t, flags=re.UNICODE)
-    return re.sub(r"\s+", "-", t)
+    # Keep letters/digits/underscore/space/hyphen, plus the ZWJ and variation
+    # selectors github-slugger never strips (so "\u26a0\ufe0f Heading" keeps its
+    # invisible U+FE0F, as GitHub does).
+    t = re.sub(r"[^\w\s\u200d\ufe00-\ufe0f-]", "", t, flags=re.UNICODE)
+    # ONE HYPHEN PER SPACE, not a collapse of runs -- github-slugger does
+    # .replace(/ /g, "-"), so " -- " and " / " leave DOUBLE hyphens behind.
+    return t.replace(" ", "-")
 
 
 def strip_markup(text: str) -> str:

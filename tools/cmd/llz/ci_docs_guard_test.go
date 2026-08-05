@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1146,7 +1147,7 @@ func TestGithubAnchor(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"Topology", "topology"},
 		{"`workflow_call` interface", "workflow_call-interface"},
-		{"Writing / rotating secrets — dual-write", "writing-rotating-secrets-dual-write"},
+		{"Writing / rotating secrets — dual-write", "writing--rotating-secrets--dual-write"},
 		{"**Bold** and *italic*", "bold-and-italic"},
 		{"A [linked](x.md) word", "a-linked-word"},
 		{"Trailing punctuation!", "trailing-punctuation"},
@@ -1155,5 +1156,72 @@ func TestGithubAnchor(t *testing.T) {
 		if got := githubAnchor(tc.in); got != tc.want {
 			t.Errorf("githubAnchor(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestGithubAnchor_MatchesGithubSlugger pins githubAnchor against the real
+// implementation GitHub runs.
+//
+// testdata/github_slugs.json is every heading in this repo's Markdown, each
+// paired with the slug `github-slugger` produced for it. It exists because the
+// first cut of githubAnchor collapsed whitespace RUNS to one hyphen while
+// github-slugger emits one hyphen PER SPACE — so " — " and " / " (which this
+// repo's headings are full of) generated anchors that do not resolve on GitHub.
+//
+// That bug survived its own guard: the TOC generator used the same rule, so
+// docs-guard compared a wrong anchor against a wrong anchor and passed. An
+// ORACLE captured from the real implementation is the only thing that catches
+// that class, which is why this fixture is checked in rather than hand-written.
+//
+// Regenerate with: node scratch/oracle.mjs (see the docs-authoring skill).
+func TestGithubAnchor_MatchesGithubSlugger(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "github_slugs.json"))
+	if err != nil {
+		t.Skipf("oracle fixture unavailable: %v", err)
+	}
+	var cases []struct {
+		Heading string `json:"heading"`
+		Slug    string `json:"slug"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatalf("parse oracle: %v", err)
+	}
+	if len(cases) < 500 {
+		t.Fatalf("oracle has only %d heading(s) — it was regenerated over a shrunken scan", len(cases))
+	}
+	var bad int
+	for _, c := range cases {
+		// github-slugger de-duplicates within a document; the oracle resets per
+		// heading, so every entry here is a FIRST occurrence and carries no
+		// numeric suffix. docAnchors owns the suffixing separately.
+		if got := githubAnchor(c.Heading); got != c.Slug {
+			if bad++; bad <= 10 {
+				t.Errorf("githubAnchor(%q)\n  got  %q\n  want %q", c.Heading, got, c.Slug)
+			}
+		}
+	}
+	if bad > 10 {
+		t.Errorf("... and %d more mismatch(es)", bad-10)
+	}
+}
+
+// A mermaid node label is a caption, not a shell line. The quickstart's
+// lifecycle diagram has a node reading `llz doctor --env`, whose closing `"]`
+// the tokeniser folded into the flag and reported as `--env]`.
+func TestBlankMermaid_LabelsAreNotInvocations(t *testing.T) {
+	body := "# T\n\n```mermaid\nflowchart LR\n    D[\"llz doctor --env\"]\n    X[\"gh workflow run nope.yml -f bad=1\"]\n```\n\n```bash\nllz doctor --env lab\n```\n"
+
+	var n docsScanned
+	if got := checkDocCommands([]docFile{{rel: "d.md", body: body}}, newRootCmd(), &n); len(got) != 0 {
+		t.Fatalf("mermaid labels produced findings: %v", got)
+	}
+	// The bash block beside it must STILL be scanned — blanking mermaid must not
+	// become a way to stop checking the copy/paste instructions.
+	if n.invocations == 0 {
+		t.Error("the ```bash invocation was not scanned; blankMermaid over-reached")
+	}
+	if lines := strings.Count(blankMermaid(body), "\n"); lines != strings.Count(body, "\n") {
+		t.Errorf("blankMermaid changed the line count (%d vs %d) — findings would point at the wrong line",
+			lines, strings.Count(body, "\n"))
 	}
 }

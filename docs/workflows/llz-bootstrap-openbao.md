@@ -19,12 +19,12 @@ Related: `docs/architecture/convergence-contract.md`,
 ## Contents
 
 - [Workflow-level](#workflow-level)
-- [Job: `resolve` — Resolve HA role](#job-resolve-resolve-ha-role)
-- [Job: `bootstrap` — Bootstrap OpenBao](#job-bootstrap-bootstrap-openbao)
-- [Removed job: `harbor` — Harbor provisioning MOVED IN-CLUSTER](#removed-job-harbor-harbor-provisioning-moved-in-cluster)
-- [Job: `provision-peer-ca` — Provision standby CA in active peer cluster](#job-provision-peer-ca-provision-standby-ca-in-active-peer-cluster)
-- [Job: `fetch-standby-ca` — Fetch standby CA (recovery)](#job-fetch-standby-ca-fetch-standby-ca-recovery)
-- [Job: `reprovision-peer-ca` — Re-provision standby CA in active peer cluster](#job-reprovision-peer-ca-re-provision-standby-ca-in-active-peer-cluster)
+- [Job: `resolve` — Resolve HA role](#job-resolve--resolve-ha-role)
+- [Job: `bootstrap` — Bootstrap OpenBao](#job-bootstrap--bootstrap-openbao)
+- [Removed job: `harbor` — Harbor provisioning MOVED IN-CLUSTER](#removed-job-harbor--harbor-provisioning-moved-in-cluster)
+- [Job: `provision-peer-ca` — Provision standby CA in active peer cluster](#job-provision-peer-ca--provision-standby-ca-in-active-peer-cluster)
+- [Job: `fetch-standby-ca` — Fetch standby CA (recovery)](#job-fetch-standby-ca--fetch-standby-ca-recovery)
+- [Job: `reprovision-peer-ca` — Re-provision standby CA in active peer cluster](#job-reprovision-peer-ca--re-provision-standby-ca-in-active-peer-cluster)
 
 <!-- /toc -->
 
@@ -106,17 +106,16 @@ Required repository variables: `TF_STATE_BUCKET` (S3 bucket for Terraform state)
 ### Why every declared secret is `required: false`
 
 A green bootstrap genuinely needs several of these, yet all are declared
-`required: false`. This workflow is reached via a nested `workflow_call` under
-`secrets: inherit` (`llz-terraform.yml` → here). `secrets: inherit` forwards only
-repository/org secrets across the call boundary — environment-scoped secrets (the
-instance keeps `TF_STATE_*` in its `infra-<region>` Environment) are NOT inheritable,
-and a `required: true` declaration is validated statically at the call boundary
-BEFORE any job enters `environment: infra-<region>`. With `required: true` that
-yields a cryptic call-time "required, but not provided" failure on the very first job
-(Resolve HA role), which doesn't even use these secrets. The `bootstrap` job declares
-`environment: infra-<region>` and resolves them at runtime; `llz ci require-secret`
-preflights presence with a friendly error. Same rationale as `APL_VALUES_REPO_TOKEN`
-in `llz-terraform.yml`.
+`required: false` — **the same reason, and the same mechanism, as in
+`llz-terraform.yml`. The full explanation lives there and is not repeated here:
+[llz-terraform.md → why every entry is `required: false`](llz-terraform.md#secrets--why-every-entry-is-required-false).**
+
+The one detail specific to this file: it is reached via a **nested**
+`workflow_call` (`llz-terraform.yml` → here), and it is that nesting which forces
+the inherited secret bag to be materialised. So a `required: true` here fails at
+call time on the very first job (*Resolve HA role*) — a job that does not use
+these secrets at all. The `bootstrap` job declares `environment: infra-<region>`
+and resolves them at runtime instead.
 
 `APL_VALUES_REPO_TOKEN`, `LINODE_DNS_TOKEN`, `GHCR_READ_TOKEN` and
 `APPS_REPO_REVISION` are consumed only by the `bootstrap_cluster=true` phase (the

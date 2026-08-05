@@ -12,7 +12,7 @@ Supersedes the "in-cluster posture" rationale in `tools/internal/openbao/openbao
 - [Decision](#decision)
 - [Consequences](#consequences)
 - [Rollout](#rollout)
-- [The wiring is statically enforced — `mtls-wiring-guard`](#the-wiring-is-statically-enforced-mtls-wiring-guard)
+- [The wiring is statically enforced — `mtls-wiring-guard`](#the-wiring-is-statically-enforced--mtls-wiring-guard)
 - [Unverified prerequisites](#unverified-prerequisites)
 
 <!-- /toc -->

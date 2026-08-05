@@ -334,6 +334,37 @@ func invocationTokens(rest string) []string {
 	return out
 }
 
+// blankMermaid replaces the CONTENTS of ```mermaid blocks with empty lines,
+// keeping the line count so every finding still points at the right line.
+//
+// A mermaid node label is a picture caption, not a shell line. The quickstart's
+// lifecycle diagram carries a node reading `llz doctor --env`, and the tokeniser
+// read the label's closing `"]` as part of the flag — reporting a flag named
+// `--env]` that no command could ever have. Diagrams describe commands
+// constantly, so this would recur with every new one.
+//
+// Only ```mermaid is blanked, not every fence: ```bash blocks are exactly the
+// copy/paste instructions this guard exists to check.
+func blankMermaid(body string) string {
+	lines := strings.Split(body, "\n")
+	in := false
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if in {
+			if strings.HasPrefix(t, "```") {
+				in = false
+				continue
+			}
+			lines[i] = ""
+			continue
+		}
+		if strings.HasPrefix(t, "```mermaid") {
+			in = true
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // logicalLine is a source line after shell CONTINUATIONS have been folded in,
 // carrying the line number of where it STARTED so a finding still points at the
 // place a reader will look.
@@ -404,7 +435,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command, n *docsScanned) []
 		if isDecisionRecord(rel) {
 			continue
 		}
-		for _, ll := range foldContinuations(d.body) {
+		for _, ll := range foldContinuations(blankMermaid(d.body)) {
 			for _, m := range llzStartRe.FindAllStringSubmatch(ll.text, -1) {
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
@@ -513,7 +544,7 @@ func checkDocWorkflowInputs(root string, docs []docFile, n *docsScanned) ([]docF
 	}
 	var out []docFinding
 	for _, d := range docs {
-		rel, text := d.rel, d.body
+		rel, text := d.rel, blankMermaid(d.body)
 		for _, m := range ghRunRe.FindAllStringSubmatchIndex(text, -1) {
 			whole := text[m[0]:m[1]]
 			sub := ghRunRe.FindStringSubmatch(whole)
@@ -789,20 +820,39 @@ var (
 	// Underscore SURVIVES. GitHub keeps it, and this repo's headings are full of
 	// `workflow_call`, `promotion_rank`, `ha_role` — dropping it silently turned
 	// every such anchor into a false positive on the first run of this check.
-	anchorPunct  = regexp.MustCompile(`[^\p{L}\p{N}_\s-]`)
-	anchorSpaces = regexp.MustCompile(`\s+`)
+	// Variation selectors and ZWJ SURVIVE. github-slugger removes a fixed list
+	// of punctuation/symbols; it never touches these, so `⚠️ …` slugs to a
+	// leading (invisible) U+FE0F. Stripping them is a mismatch the oracle test
+	// catches on three real headings in this repo.
+	anchorPunct = regexp.MustCompile(`[^\p{L}\p{N}_\s\x{200D}\x{FE00}-\x{FE0F}-]`)
 )
 
-// githubAnchor reproduces GitHub's heading-slug rule: strip inline markup,
-// lowercase, drop everything that is not a letter/number/space/hyphen, then turn
-// runs of whitespace into single hyphens.
+// githubAnchor reproduces github-slugger, which is what GitHub actually runs.
+//
+// The subtle half is the LAST step. github-slugger does `.replace(/ /g, '-')` —
+// each space becomes its own hyphen — NOT a collapse of whitespace runs. It
+// matters whenever punctuation sits between two spaces, because removing the
+// punctuation leaves two spaces behind and therefore TWO hyphens:
+//
+//	"Writing / rotating secrets — dual-write"
+//	  -> writing--rotating-secrets--dual-write      (github, and now us)
+//	  -> writing-rotating-secrets-dual-write        (a \s+ collapse: WRONG)
+//
+// This repo's headings are full of that shape (" — ", " / "), so the collapse
+// rule broke a whole class of anchors. It went unnoticed at first because the
+// TOC generator and this checker shared the rule: the guard agreed with the
+// thing it was checking, which is the exact failure this file's header warns
+// about. TestGithubAnchor_MatchesGithubSlugger pins the output against slugs
+// captured from github-slugger over every heading in the repo.
 func githubAnchor(text string) string {
 	t := anchorStrip.ReplaceAllString(text, "$1")
 	t = anchorBold.ReplaceAllString(t, "$1")
 	t = anchorLink.ReplaceAllString(t, "$1")
 	t = strings.ToLower(strings.TrimSpace(t))
 	t = anchorPunct.ReplaceAllString(t, "")
-	return anchorSpaces.ReplaceAllString(t, "-")
+	// Tabs and newlines cannot appear in a heading line, so ' ' is the only
+	// whitespace left to map — one hyphen each.
+	return strings.ReplaceAll(t, " ", "-")
 }
 
 // docAnchors returns every anchor the headings of a doc define. A repeated

@@ -16,11 +16,11 @@ separate, LKE-Enterprise-specific case — see
 ## Contents
 
 - [Credential inventory](#credential-inventory)
-- [1. API token / PAT expiry (≤90 days)](#1-api-token-pat-expiry-90-days)
-- [2. Object Storage keys — Loki + Harbor registry (revoke ≤120 days)](#2-object-storage-keys-loki-harbor-registry-revoke-120-days)
+- [1. API token / PAT expiry (≤90 days)](#1-api-token--pat-expiry-90-days)
+- [2. Object Storage keys — Loki + Harbor registry (revoke ≤120 days)](#2-object-storage-keys--loki--harbor-registry-revoke-120-days)
 - [3. TF-state Object Storage key (workflow-driven)](#3-tf-state-object-storage-key-workflow-driven)
 - [4. GitHub service PATs](#4-github-service-pats)
-- [SLA & alerting](#sla-alerting)
+- [SLA & alerting](#sla--alerting)
 - [Verification (post-rotation)](#verification-post-rotation)
 
 <!-- /toc -->
