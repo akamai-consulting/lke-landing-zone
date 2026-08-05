@@ -346,7 +346,8 @@ kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
 hand-edit it.** `copier copy`/`copier update` fill the two scaffold-level tokens
 for you: `upstream_org` (every `akamai-consulting` in the scaffold — module
 `git::` sources, the OCI charts registry pin in the spec, every
-Argo CD Application's `repoURL: ghcr.io/<org>/charts`, CI images) and
+Argo CD Application's `repoURL: ghcr.io/<org>/charts`, and the in-cluster
+`llz` image CronJobs run) and
 `instance_repo` (the bootstrap Application repo URL + `gh` targeting). The
 workflows need no repointing at all: the reusable bodies and composite actions
 are vendored into the instance and referenced with repo-local `./` paths
@@ -364,24 +365,43 @@ in the published `kubernetes-charts/` chart values (which Copier doesn't templat
 These are overridable values/literals, not abstraction seams — the platform stays
 Linode + apl-core shaped by design.
 
+> **`TF_IMAGE` / `KUBE_IMAGE` are NOT repointed by `upstream_org`.** The two images
+> the CI *jobs* run in are computed by `llz tokens` and always name the **upstream**
+> org (`ghcr.io/akamai-consulting/ci-tofu:sha-<commit>`), because that is where they
+> are published and they are public. A fork only needs to care if it publishes its
+> own: the pin is resolved against *your* template repo, so a commit that exists
+> only on your fork has no published image, and `llz tokens` falls back to the
+> floating upstream tags and says so. Publish the pair from your fork
+> (`build-images.yml`) and set the two repo variables by hand if you need them
+> pinned to your own builds.
+
 ## 6. Bootstrap order
 
-The bootstrap is GitHub-Actions-driven (there is no single `bootstrap.sh`). For a
-new env, in order:
+The bootstrap is GitHub-Actions-driven (there is no single `bootstrap.sh`), and
+**one dispatch runs all of it**. `llz build <env> --yes` — or `llz up <env> --yes`,
+which gates it — dispatches `terraform.yml` with `action=apply module=all`, and
+that single run walks the whole sequence below. You do not dispatch the stages
+individually, and you do not dispatch `bootstrap-openbao.yml` afterwards: it is
+chained from the same run.
 
-1. **Provision the cluster** — dispatch the Terraform workflow
-   (`.github/workflows/terraform.yml`) with `action=apply`, `module=cluster`,
-   `region=<env>`. Creates the LKE-E cluster, VPC, firewall, node pool.
-2. **Object storage** — `module=object-storage` for the registry/log buckets.
-3. **Install apl-core** — folded into `module=all`, which runs `llz ci bootstrap-cluster` after the cluster apply. Helm-installs apl-core and
+What that one dispatch does, in order:
+
+1. **Preflights** — image pin, committed-render drift, secret presence, credential
+   validity + scope, apl-core chart floor. All front-loaded into the first job so a
+   misconfigured instance fails in seconds rather than after the cluster apply.
+   `llz doctor --env <env>` runs the same set locally.
+2. **Provision the cluster** — the LKE-E cluster, VPC, firewall, node pool.
+3. **Object storage** — the registry/log buckets.
+4. **Install apl-core** — `llz ci bootstrap-cluster` helm-installs apl-core and
    applies the `apl-values/<env>/manifest` Argo CD Applications.
-4. **Converge** — the workflow polls ``llz ci converge`` (wrapping
-   ``llz ci health``) until the cluster meets the convergence contract.
-5. **Bootstrap OpenBao** — dispatch `.github/workflows/bootstrap-openbao.yml` for
-   the env: seed the static seal key, `bao operator init` (recovery keys; the pods
-   auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
-   engine, auth methods, and policies.
-6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers come from
+5. **Bootstrap OpenBao** — the chained `bootstrap-openbao` job: seed the static
+   seal key, `bao operator init` (recovery keys; the pods auto-unseal from the
+   static seal key), then `llz ci bao-configure` writes the KV engine, auth
+   methods, and policies.
+6. **Converge** — the same job polls `llz ci converge` (wrapping `llz ci health`)
+   until the cluster meets the convergence contract, then runs the gating
+   `llz ci assert-suite` battery.
+7. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers come from
    the managed App Platform and sync automatically via Argo CD.
    DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
    which holds its own Linode token (`TF_VAR_linode_dns_token` from the
@@ -389,6 +409,12 @@ new env, in order:
    OpenBao seed or ExternalSecret is involved. (The Argo CD / apl-core values-repo
    credential is the `APL_VALUES_REPO_TOKEN` PAT, provisioned by `llz tokens`.)
 
+`bootstrap-openbao.yml` and the per-module `terraform.yml` dispatches
+(`module=cluster` / `module=object-storage`) are still available on their own —
+for a **retry** of one stage, not as the normal path.
+
+If a run fails, [docs/runbooks/first-build-failed.md](runbooks/first-build-failed.md)
+covers what exists at each stage, what is safe to re-run, and what to sweep.
 See [docs/runbooks/](runbooks/) for per-step detail (`bootstrap-openbao.md`,
 `apl-values-propagation.md`) and [docs/playbooks/operator-onboarding.md](playbooks/operator-onboarding.md)
 for day-2 operations.

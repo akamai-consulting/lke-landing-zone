@@ -37,6 +37,19 @@ func runReap(g globalOpts, o reapOpts) error {
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
+	// `--region` here is a LINODE region (us-ord), unlike almost every `llz ci`
+	// verb, where --region is the DEPLOYMENT name. That inconsistency is a trap
+	// with a silent failure on the other side: the sweeps compare it verbatim
+	// against each resource's region (reapNodeBalancers/reapVPCs/reapVolumes), so
+	// a deployment name matches nothing, every section prints "none matched", and
+	// the run ends `deleted=0` — which an operator reads as "the account is
+	// clean". This is the recovery path the first-build-failed runbook sends
+	// people to, so a false all-clear here costs them the orphan backlog that
+	// hangs their next cluster-create.
+	if err := checkReapRegion(o.region); err != nil {
+		return err
+	}
+
 	fmt.Println(bold("################ llz reap — orphaned Linode resources ################"))
 	if !confirm {
 		fmt.Println(yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
@@ -401,4 +414,55 @@ func containsString(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// checkReapRegion rejects a `--region` that is not one of the account's Linode
+// regions — most usefully, a DEPLOYMENT name.
+//
+// Best-effort in the same way checkRegion is (region_resolve.go): an
+// unanswerable lookup returns nil rather than blocking a sweep that would have
+// worked. But where a wrong value is KNOWN, this refuses instead of warning,
+// because the failure it prevents is a false all-clear rather than an error —
+// there is no later signal to catch it.
+func checkReapRegion(region string) error {
+	if region == "" {
+		return nil // account-wide is a legitimate, and clearly-labelled, scope
+	}
+	ids, ok := accountRegions()
+	if !ok {
+		return nil
+	}
+	for _, id := range ids {
+		if id == region {
+			return nil
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "--region %q is not a Linode region, so this sweep would match nothing and report a clean account.\n", region)
+	b.WriteString("  `llz reap --region` takes a LINODE region (us-ord, us-sea) — unlike `llz ci …\n")
+	b.WriteString("  --region`, which takes the DEPLOYMENT name. That is the usual mix-up here.\n")
+	// Name the deployment's own region when the value looks like a deployment: it
+	// turns the refusal into the command they meant to type.
+	if lr := linodeRegionForDeployment(region); lr != "" {
+		fmt.Fprintf(&b, "  %q is a deployment in this instance — its Linode region is %s:\n", region, lr)
+		fmt.Fprintf(&b, "      %s\n", cyan("llz reap --region "+lr))
+	} else if near := nearbyRegions(region, ids); len(near) > 0 {
+		fmt.Fprintf(&b, "  Did you mean: %s\n", strings.Join(near, ", "))
+	}
+	b.WriteString("  List them with `linode-cli regions list`, or omit --region to sweep account-wide.")
+	return fmt.Errorf("%s", b.String())
+}
+
+// linodeRegionForDeployment returns the Linode region of a deployment in this
+// instance, or "" when the name is not a deployment (or there is no spec here —
+// `llz reap` legitimately runs from anywhere).
+func linodeRegionForDeployment(name string) string {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil || lz == nil {
+		return ""
+	}
+	if e, ok := lz.Env(name); ok {
+		return e.Cluster.Region
+	}
+	return ""
 }

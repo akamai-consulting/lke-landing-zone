@@ -45,15 +45,24 @@ var regionClient = func() regionLister {
 // accountRegions returns the account's region ids, sorted. ok is false when the
 // answer is unknown (no token, API error, empty list) — which is NOT the same as
 // "the region does not exist", and callers must not treat it as one.
+//
+// An unknown answer is ANNOUNCED (reportSkippedAccountCheck), not swallowed. The
+// quickstart tells the operator to export LINODE_TOKEN precisely so this check
+// runs, and describes it as the difference between a 30-second error and a
+// 20-minute apply failure. Staying silent meant an expired or mis-scoped PAT —
+// the most likely first-run credential state — produced a run indistinguishable
+// from a validated one.
 func accountRegions() (ids []string, ok bool) {
 	c := regionClient()
 	if c == nil {
+		reportSkippedAccountCheck("--region", nil)
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	all, err := c.ListRegions(ctx)
 	if err != nil || len(all) == 0 {
+		reportSkippedAccountCheck("--region", firstNonNilErr(err, errEmptyAccountListing))
 		return nil, false
 	}
 	for _, m := range all {

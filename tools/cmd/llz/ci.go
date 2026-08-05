@@ -77,7 +77,7 @@ func ciCmd() *cobra.Command {
 	// converge tail is event-paced instead of waiting out the */5 schedule.
 	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd(), ciKickHarborProvisionerCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
-	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
+	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd(), ciBuildFailureSummaryCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
 	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
@@ -447,12 +447,10 @@ func runCIVerifyObjectStorage(region string) error {
 	for _, b := range buckets {
 		have[cli.AsString(b["label"])] = true
 	}
-	want := []string{
-		prefix + "-loki-chunks-" + region,
-		prefix + "-loki-ruler-" + region,
-		prefix + "-loki-admin-" + region,
-		prefix + "-harbor-registry-" + region,
-	}
+	// objBucketLabels, not a second copy of the list: this verb and the
+	// `llz doctor` bucket-label preflight must agree about what the
+	// object-storage root creates, and two literals cannot be kept in step.
+	want := objBucketLabels(prefix, region)
 	var missing []string
 	for _, label := range want {
 		if !have[label] {
