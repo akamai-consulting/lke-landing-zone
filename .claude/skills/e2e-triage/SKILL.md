@@ -86,6 +86,11 @@ present as an unrelated symptom:
 
 ## Step 5 — only now, a live cluster
 
+> **Ask the operator before dispatching.** Everything below stands up real,
+> billable Linode infrastructure on the instance repo's account, and a kept
+> cluster bills until someone removes it. Steps 1–4 are free; this one is not.
+> Confirm it is wanted, and say what it will cost in time and resources.
+
 Two things do **not** work, and both cost a round:
 
 - **Your own Linode token is the wrong account.** The e2e clusters belong to the
