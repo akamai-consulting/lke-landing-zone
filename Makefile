@@ -26,11 +26,22 @@ RETRY := template-scripts/ci/with-retry.sh
 # It's a ratchet: bump a floor UP as that package's coverage improves, never
 # down.
 # Override on the CLI, e.g. `make coverage COVERAGE_MINS="cmd/llz=20"`.
+#
+# THESE ARE PACKAGE-LOCAL NUMBERS, and extraction can move one a long way without
+# a test being deleted. internal/docsguard measures 74% here and 93% with
+# `-coverpkg=./internal/docsguard/... ./internal/docsguard/ ./cmd/llz/`: six of its
+# tests had to stay in package main, because they assert against the LIVE cobra
+# tree that only package main can build, and `go test -coverprofile` credits
+# coverage to the package under test rather than the package exercised. Set a floor
+# from the number this target prints, but read a LOW one on a freshly extracted
+# package as "its tests are elsewhere" before reading it as "it is untested" — and
+# say which in the comment, as here.
 COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/budget=92 \
 	internal/cli=95 \
 	internal/clusterspec=95 \
+	internal/docsguard=74 \
 	internal/extension=95 \
 	internal/extension/registry=100 \
 	internal/health=95 \

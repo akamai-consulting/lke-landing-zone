@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** Pure file-in/findings-out, externalisable, `always`. The seventh gate. |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first two, extracted](#the-first-two-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first one, extracted](#the-first-one-extracted). |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first two, extracted](#the-first-two-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -243,48 +243,82 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first one, extracted
+## The first two, extracted
 
-`guard-budgets` is no longer a row in a table. The engine, the six counters, the
-two remedy strings and every one of their tests are `tools/internal/budget`; the
-two cobra commands are a flag set each; `tools/internal/extension/registry` holds
-the declaration and `llz extension list` shows it.
+`guard-budgets` and `guard-docs` are no longer rows in a table.
 
 ```
 $ llz extension list --verbose
 NAME           ENABLED  BINDINGS                    GRANTS     SUMMARY
 guard-budgets  always   gate:scaffolded             read-repo  cap untestable logic …
                         gate:scaffolded[read-repo]
+guard-docs     always   gate:scaffolded             read-repo  fail when the docs name …
+                        gate:scaffolded[read-repo]
 ```
 
-**The budget went 47,182 → 46,797.** Four things are worth reading off a −385 that
-the catalog scores at 907:
+| | budget | files | |
+|---|---:|---:|---|
+| before | 47,182 | 236 | |
+| `guard-budgets` extracted | 46,716 | 234 | −466, the first paydown this gate ever recorded |
+| `llz extension list` | 46,797 | 235 | +81, spent deliberately |
+| `guard-docs` extracted | **46,106** | 235 | −691, the largest single move so far |
 
-- **It is the first downward move this gate has ever recorded**, and the direction
-  that was still unproven. `exact: true` is what forced it into the diff: extract
-  the code, forget the line, and the gate fails with `SHRANK — LOWER IT` and the
-  number to write.
-- **The shortfall is spending, not slippage.** `llz extension list`, the registry
-  and the declaration are new core surface, added deliberately so the model is
-  legible rather than only testable. A ratchet that can only be paid into is a
-  freeze; this one can be spent against, and the spend is visible on the same line.
-- **Two files came out that the catalog never assigned to `guard-budgets`.** The
-  glob matcher and the shell-quote splitter were both used by unrelated gates —
-  `llz ci template-manifest` matches copier's fence entries with the same dialect,
-  and `llz ci at-rest-guard` strips Terraform comments with the same quoting rule.
-  Extracting one extension surfaced two shared libraries (`internal/pathglob`,
-  `internal/shquote`) whose agreement with each other had until then been
-  accidental. **The catalog cannot see this class**, because it assigns whole files
-  and these were functions inside one; expect the same on every extraction.
-- **The declaration lives with the code, not in the registry.** A central table
-  transcribing each extension's bindings would be a hand-maintained list beside the
-  thing it describes — the shape that rots. `registry.go` names packages; each
-  package states its own bindings and grants.
+**Net −1,076 (2.3%) across two extensions.** At that rate the remaining 57 reach the ~2,900 residue,
+which is the first evidence the target is arrivable rather than aspirational — though the two
+cheapest were taken first, so read it as a floor on effort, not a schedule.
 
-What it does NOT prove: nothing is loaded, dispatched or disabled through the
-model. `guard-budgets` still runs because `ci.go` registers two cobra commands, and
-the declaration is inert. The action ABI is the next thing that has to exist, and
-`converge` is the case that should shape it.
+### What `guard-budgets` established
+
+- **The ratchet moves down, and `exact: true` is what forces it into the diff.** Extract the code,
+  forget the line, and the gate fails with `SHRANK — LOWER IT` and the number to write.
+- **The declaration lives with the code, not in the registry.** A central table transcribing each
+  extension's bindings would be a hand-maintained list beside the thing it describes. `registry.go`
+  names packages; each package states its own bindings and grants.
+- **Extraction surfaces shared rules the catalog cannot see**, because it assigns whole files and
+  these were functions inside one: `internal/pathglob` (the glob dialect `llz ci template-manifest`
+  also matches copier's fence entries with) and `internal/shquote` (the quoting rule `llz ci
+  at-rest-guard` also strips Terraform comments with). Two callers had each been keeping a private
+  copy, and their agreement was accidental.
+
+### What `guard-docs` added, by disagreeing
+
+`guard-budgets` fit the model perfectly, which proves less than it looks: a model tested only against
+the case it was derived from is a tautology. `guard-docs` was picked because it had never been scored
+by this catalog — it did not exist when the measurement was taken — and because part of it does not
+fit. Three findings:
+
+- **`ext?` was wrong, and this is the catalog's central claim demonstrated.** The delta table above
+  marks `guard-docs` externalisable. It is not, and cannot be: the command/flag check resolves each
+  documented `llz …` invocation against the **live cobra tree** and asks it whether a flag exists and
+  whether it takes a value — including *hidden* flags, which is how a deprecated-but-working `--env`
+  was once mis-reported as removed. An argv tool would have to re-derive the tree from help text,
+  which is the second-implementation-of-a-shared-rule bug this code already has scars from. "36 of 57
+  need in-process Go" now has one worked example instead of an estimate.
+- **The model has no `write-repo`, and that is a real gap.** `llz ci gen-toc` writes Markdown back to
+  disk, and nothing can express it. A `gate` may hold `read-repo` only — correctly. `own-paths` is
+  the nearest-looking grant and is the wrong one: per [Decision 1](#1-generated-files-own-paths-is-a-fence-against-copier-not-a-claim-on-authorship)
+  it means "copier must not render these bytes", a fence rather than a write permit, and the template
+  repo's own `docs/` is not copier-rendered at all. **This is the second case, not the first:**
+  `promote-pipeline` generates `promote.yml` and is recorded here as holding `read-repo` only, which
+  is wrong on its face for the same reason. Two independent cases is enough to say the vocabulary has
+  a hole and not enough to know its shape, so nothing was invented — the file split follows the
+  declaration instead (rendering in the package, the `os.WriteFile` in the command), so what IS
+  declared is true, and a test asserts the package contains no write path.
+- **Extraction moves tests, and the per-package coverage ratchet reads that as a regression.** Six of
+  27 test functions could not move, because they assert against the real command inventory; a
+  synthetic tree would let them pass while the CLI drifted. `internal/docsguard` therefore measures
+  **74%** package-local and **93%** with `-coverpkg` across both test packages, without a test being
+  deleted. Every future extraction will hit this. Read a low floor on a freshly extracted package as
+  "its tests are elsewhere" before reading it as "it is untested", and say which in the comment.
+
+### What neither proves
+
+Nothing is loaded, dispatched or disabled through the model. Both still run because `ci.go` registers
+their cobra commands, and the declarations are inert. **Both are also the same shape** —
+`gate:scaffolded[read-repo]` — so the ceiling's interesting half is still untested: no transition, no
+assertion, no invariant, and five of seven grants unexercised. The third extension should be chosen
+to break that, not to fit; `converge` is the case the catalog nominates, and it is where the
+action/predicate split either holds or does not.
 
 ## What the catalog says
 
@@ -325,7 +359,7 @@ grants and the distribution is observed instead of assigned.
 ## Suggested first five
 
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first one, extracted](#the-first-one-extracted).
+   **Done** — [The first two, extracted](#the-first-two-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

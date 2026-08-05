@@ -35,17 +35,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 )
 
-// docsKeep is the day-to-day operator set an instance carries locally. Everything
-// else in docs/ is referenced at the template repo. Defined ONCE here so both
-// delivery paths agree.
-var docsKeep = map[string]bool{
-	"quickstart.md": true, // stand up + operate this instance
-	"runbooks":      true, // incident recovery
-	"playbooks":     true, // routine operational how-tos
-	"README.md":     true, // the pointer this verb writes (kept if it already exists)
-}
+// The keep-set moved to docsguard.DeliveredDocs. It is defined ONCE, next to the
+// guard that validates every link AS IT RESOLVES inside the pruned tree — a check
+// that is meaningless if it runs against a different set than this verb ships.
 
 func ciDeliverDocsCmd() *cobra.Command {
 	var dir, org, ref, root, templateRoot string
@@ -79,7 +75,7 @@ func runDeliverDocs(dir, org, ref, root, templateRoot string) error {
 	}
 	var removed []string
 	for _, e := range entries {
-		if docsKeep[e.Name()] {
+		if docsguard.DeliveredDocs[e.Name()] {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {

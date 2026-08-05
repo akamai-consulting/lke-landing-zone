@@ -97,6 +97,10 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > `tools/internal/budget`. The downward move is the half that was still unproven —
 > and `exact: true` is what forced it to be recorded, since extracting the code
 > and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
+>
+> **And again: 46,106** with `guard-docs`. Two extensions, net −1,076 (2.3%). At
+> that rate the remaining 57 reach the ~2,900 residue this ADR argues for — read as
+> a floor on the effort rather than a schedule, since the two cheapest went first.
 
 `exact: true` makes "no
 slack" literal in both directions: the gate fails when the number sits ABOVE the

@@ -1,14 +1,22 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first
-extension: `guard-budgets` declares itself in `tools/internal/budget`,
-`tools/internal/extension/registry` collects and validates the compiled-in set, and `llz extension
-list` shows it. **Nothing is loaded, dispatched or disabled through the model** — `guard-budgets`
-still runs because `ci.go` registers two cobra commands, and the declaration is inert. The action
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first two
+extensions: `guard-budgets` (`tools/internal/budget`) and `guard-docs` (`tools/internal/docsguard`)
+declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
+both still run because `ci.go` registers their cobra commands, and the declarations are inert. Both
+are also the same shape (`gate:scaffolded[read-repo]`), so the ceiling's interesting half is still
+untested: no transition, no assertion, no invariant, and five of seven grants unexercised. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
 the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that design is not
 contradicted here, only re-sequenced, and is tracked in issue #399.
+
+**One known gap, found by the second extension:** there is no `write-repo` grant, so a binding that
+writes files in the repository cannot say so. `own-paths` is a copier fence, not a write permit. Two
+independent cases — `llz ci gen-toc` and the catalog's `promote-pipeline` — are recorded in [the
+catalog](internal-extensions.md#the-first-two-extracted). Deliberately not invented here: two cases
+say the vocabulary has a hole, not what shape it is.
 
 **Relates:** [ADR 0014](../adr/0014-core-surface-budget.md) (the budget this exists to relieve),
 [internal-extensions.md](internal-extensions.md) (the catalog this model is derived from),

@@ -1,4 +1,4 @@
-package main
+package docsguard
 
 import (
 	"strings"
@@ -121,11 +121,11 @@ func TestApplyTOC_IsIdempotent(t *testing.T) {
 func TestGeneratedTOCSatisfiesTheGuard(t *testing.T) {
 	body := "# T\n\n## Alpha / beta — gamma\n\n## `workflow_call` interface\n\n## Notes\n\n## Notes\n"
 	out, _ := applyTOC(body, 2)
-	var n docsScanned
+	var n Scanned
 	if f := checkDocTOCs([]docFile{{rel: "d.md", body: out}}, &n); len(f) != 0 {
 		t.Fatalf("docs-guard rejected a freshly generated TOC: %v", f)
 	}
-	if n.tocEntries != 4 {
-		t.Errorf("checked %d entries, want 4", n.tocEntries)
+	if n.TOCEntries != 4 {
+		t.Errorf("checked %d entries, want 4", n.TOCEntries)
 	}
 }

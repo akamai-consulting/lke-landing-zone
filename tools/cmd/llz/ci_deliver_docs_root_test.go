@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 )
 
 // tmpl/inst build the two lookups rewriteInstanceRootLinks takes, from plain
@@ -480,12 +482,12 @@ func TestLinkResolution_AllThreeResolversAgreeOnRootRelative(t *testing.T) {
 	// 1 + 2: the guard's resolvers must accept a root-relative link from a NESTED
 	// file (joining to the file's dir would give docs/runbooks/docs/… and report it).
 	mk("docs/runbooks/r.md", "[q](/docs/quickstart.md)\n")
-	docs, bad := loadDocs(root, []string{filepath.Join("docs", "runbooks", "r.md")})
-	if len(bad) != 0 {
-		t.Fatalf("fixture unreadable: %v", bad)
+	rep, err := docsguard.Run(root, docsguard.Options{SkipCommands: true, SkipWorkflows: true}, newRootCmd())
+	if err != nil {
+		t.Fatalf("docsguard.Run: %v", err)
 	}
-	if got := checkDocLinks(root, docs, &docsScanned{}); len(got) != 0 {
-		t.Errorf("checkDocLinks/checkDeliveredDocLinks reported a valid root-relative link: %v", got)
+	if len(rep.Findings) != 0 {
+		t.Errorf("the guard's link resolvers reported a valid root-relative link: %v", rep.Findings)
 	}
 
 	// 3: the rewriter must resolve it to the SAME place — proven by what it probes.
