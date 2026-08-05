@@ -1,6 +1,6 @@
 # Design: apl-core 6.0.0 → 6.1.0 upgrade
 
-**Status:** Baseline moved on branch `feat/apl-6.1.0-upgrade`; pinned to the GA
+**Status:** Partial — baseline moved on branch `feat/apl-6.1.0-upgrade`; pinned to the GA
 `v6.1.0` release (published 2026-07-28). Validate in lab before any non-lab
 promotion.
 **Relates to:** [apl-core-migration-runbook.md](../apl-core-migration-runbook.md),

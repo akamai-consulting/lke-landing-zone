@@ -1,6 +1,6 @@
 # Design: the forge abstraction — GitHub.com, GHEC, GHES, GitLab
 
-**Status:** The `internal/forge` package and all of its code-level phases have
+**Status:** Partial — the `internal/forge` package and all of its code-level phases have
 landed on branch `feat/forge` (off `origin/main`). **Phase 0** — the field is no
 longer dead (recognized-but-unwired forges fail spec validation loudly; the
 `github-enterprise-server` flavor split out of `github-enterprise`; the false

@@ -1,6 +1,6 @@
 # Design: VPC-attached Managed Postgres (`llz-databases`)
 
-> Status: in progress. Terraform module + embedded root + `llz render` wiring
+**Status:** Partial — Terraform module + embedded root + `llz render` wiring
 > landed; the OpenBao seed command and CI workflow jobs are the remaining wiring
 > (see "Remaining work"). Motivated by the gsap-apl managed-app-platform buildout,
 > which needed a shared Postgres but had **no** IaC for one (the cluster was

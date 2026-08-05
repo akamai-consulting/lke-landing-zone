@@ -1,6 +1,6 @@
 # Design: in-cluster reconciler + convergence metrics surface (watch-based)
 
-**Status:** Phases 0–2 landed; **rollout underway**. The `llzReconciler` component
+**Status:** Partial — phases 0–2 landed, **rollout underway**. The `llzReconciler` component
 is **default-on** (fleet-wide, e2e-proven in #161) running observe-only gauges +
 the leader-gated driving reconcilers that need no per-env secrets —
 `--reconcile-argo-nudge`, `--reconcile-sc-demote` (batch 1) — plus the read-only

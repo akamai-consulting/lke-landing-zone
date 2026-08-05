@@ -1,5 +1,11 @@
 # Credential single pane of glass
 
+**Status:** Shipped — runs as the `credential-single-pane` job in
+`llz-scheduled-checks.yml` (`llz ci token-inventory` writes, `llz ci alert-eval
+--strict` reads). The per-provider probe jobs it replaced are retired. See
+[credential-single-pane-incluster](credential-single-pane-incluster.md) for the
+proposed fully in-cluster successor.
+
 One Prometheus/Grafana view of every credential the platform depends on — CI tokens
 **and** certificates — with alerts that fire **before** anything expires. Replaces the
 per-provider scheduled probe jobs (`gh-pat-expiry-health`, `linode-pat-expiry-health`)

@@ -1,6 +1,6 @@
 # Design: narrow in-cluster Linode PAT + DNS-token consolidation (rotator tier-2)
 
-**Status:** IMPLEMENTED (Phase A landed with the #136 stack; Phase B landed on
+**Status:** Shipped — phase A landed with the #136 stack; Phase B landed on
 top of it — see the implementation notes below). Gated on a green Release-E2E
 per §7 before promotion past lab.
 

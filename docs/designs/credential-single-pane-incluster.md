@@ -1,6 +1,6 @@
 # Moving `credential-single-pane` in-cluster — analysis + open decisions
 
-Status: **analysis / not yet implemented.** This is the input to the coordinated
+**Status:** Proposed — analysed, not built. This is the input to the coordinated
 credential-rotation / PAT-window review (the same review that owns the item-3
 credential-SLA audits). It exists because the migration looked like the low-risk
 "kube-only, just delete the ACL dance" case, and the code says otherwise: it needs

@@ -1,6 +1,6 @@
 # Design: apl-core 5.x → 6.x migration
 
-**Status:** In progress — code landed on branch `feat/apl-core-v6-migration`;
+**Status:** Partial — code landed on branch `feat/apl-core-v6-migration`;
 pinned to the GA `v6.0.0` release (published 2026-07-01). Validate in lab before
 any non-lab promotion.
 **Relates to:** [apl-core-migration-runbook.md](../apl-core-migration-runbook.md),

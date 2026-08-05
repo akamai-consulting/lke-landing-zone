@@ -1,6 +1,6 @@
 # Design: SSE-C gateway for Object Storage encryption at rest
 
-Status: **built, not deployed.** `spec.components.objProxy` is default-disabled and
+**Status:** Partial — built, not deployed. `spec.components.objProxy` is default-disabled and
 the DNS rewrite that activates it is deliberately outside the kustomization.
 
 ## Problem

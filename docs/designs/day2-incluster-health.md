@@ -1,6 +1,6 @@
 # Design: in-cluster, CI-agnostic day-2 health (Argo-native)
 
-**Status:** MERGED. The kubectl-free verb + on-demand WorkflowTemplate landed in
+**Status:** Shipped. The kubectl-free verb + on-demand WorkflowTemplate landed in
 #203 (validated end-to-end on a real cluster — the `assert-health-workflow` gate
 went green in release-e2e run 29345530071). #206 trimmed it to on-demand only
 (dropped the scheduled CronWorkflow — see "Triggers" below). Originally pulled

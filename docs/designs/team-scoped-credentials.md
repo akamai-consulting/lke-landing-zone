@@ -1,6 +1,6 @@
 # Design: team-scoped credentials — retire the shared admin kubeconfig and root-for-writes
 
-**Status:** Phase 1 **shipped** in #300 (Keycloak → OpenBao write identity, no
+**Status:** Partial — phase 1 shipped in #300 (Keycloak → OpenBao write identity, no
 LKE-E control-plane dependency), completed by #336, which added the **read** half
 the sketch below omits (ESO consuming what a team writes — see *The read half* at
 the end); Phase 2 (scoped kube credentials) remains proposed, gated on an open

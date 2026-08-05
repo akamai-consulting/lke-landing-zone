@@ -274,6 +274,9 @@ failure mode the default already prevents.
 | Topic | File |
 |-------|------|
 | Architecture overview (high- + low-level diagrams) | [docs/architecture/overview.md](docs/architecture/overview.md) |
+| Architecture decision records (index + numbering rules) | [docs/adr/README.md](docs/adr/README.md) |
+| Design documents (index + what is actually built yet) | [docs/designs/README.md](docs/designs/README.md) |
+| Maintainer notes on the vendored workflows | [docs/workflows/README.md](docs/workflows/README.md) |
 | Bootstrap "done" contract (4 exit codes) | [docs/architecture/convergence-contract.md](docs/architecture/convergence-contract.md) |
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
