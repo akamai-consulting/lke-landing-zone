@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first three, extracted](#the-first-three-extracted). |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first four, extracted](#the-first-four-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -179,7 +179,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
-| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out) |
+| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first four, extracted](#the-first-four-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74 |
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
@@ -205,7 +205,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
-| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first three, extracted](#the-first-three-extracted). |
+| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first four, extracted](#the-first-four-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first three, extracted](#the-first-three-extracted). |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first four, extracted](#the-first-four-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first three, extracted
+## The first four, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -262,11 +262,12 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `guard-budgets` extracted | 46,716 | 234 | −466, the first paydown this gate ever recorded |
 | `llz extension list` | 46,797 | 235 | +81, spent deliberately |
 | `guard-docs` extracted | 46,106 | 235 | −691, the largest single move so far |
-| `posture-at-rest` extracted | **45,763** | 234 | −343, and the first binding that is not a gate |
+| `posture-at-rest` extracted | 45,763 | 234 | −343, and the first binding that is not a gate |
+| `assert-storage` extracted | **45,229** | 232 | −534, and the first that touches a cluster and a cloud |
 
-**Net −1,419 (3.0%) across three extensions.** Read that as a floor on the effort rather than a
-schedule: the three cheapest were taken first, and [what it costs to go
-further](#the-cost-of-the-interesting-half) is the section that matters more than this one.
+**Net −1,953 (4.1%) across four extensions.** Read that as a floor on the effort rather than a
+schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
+as a rate.
 
 ### What `guard-budgets` established
 
@@ -338,6 +339,69 @@ template layout or the instance layout) and `RequireCorpus` (did the walk see an
 private to two guard files and called by eight. Extracting one guard turned it into a package. This
 has now happened on every extraction without exception.
 
+### What `assert-storage` broke — the ceiling was wrong
+
+The catalog flags exactly two entries as breaking its own assertion rule, and this is one of them:
+*"holds `cloud-mutate` — the odd one out."* The model's answer was that such an entry is not an
+exception but a **mis-declaration**: re-model it, and declare the mutating half as its own binding.
+This is that claim, tested. It half survives.
+
+**The re-modelling works.** Three bindings, and the first extension in the repo with more than one:
+
+```
+$ llz extension list --verbose
+NAME            ENABLED  BINDINGS                              GRANTS                                SUMMARY
+assert-storage  always   assertion:verified invariant:operating cloud-read,cluster-read,cloud-mutate  every PV-backed Linode Volume …
+                         assertion:verified[cluster-read, cloud-read]
+                         invariant:operating/volume-tags[cluster-read, cloud-mutate]
+                         invariant:operating/volume-labels[cluster-read, cloud-mutate]
+```
+
+Folding the reconciler lanes into the assertion would need an assertion holding `cloud-mutate`, which
+the validator refuses — correctly, since an assertion that mutates what it measures cannot be trusted
+about what it found. Declared separately, the assertion keeps its read-only ceiling and the mutation
+is still declared. This is also the first declaration to need `Binding.Name` (two invariants, and
+`operating` is the only state one may attach to) and the first where the terse `GRANTS` union says
+something no single binding does — which is exactly the misreading `--verbose` exists to prevent.
+
+**And then the ceiling refused it.** `grantStates` listed `cloud-mutate` at `{provisioned, seeded,
+converged, destroyed}` — **not `operating`** — so both invariants were rejected:
+
+```
+REFUSED: assert-storage: invariant:operating/volume-tags[cluster-read, cloud-mutate]:
+  "cloud-mutate" may only be asked for at provisioned, seeded, converged, destroyed
+```
+
+Those two lanes are wired into `reconcile.go`. They run in-pod, continuously, and they PUT tags and
+labels onto Linode Volumes. **The model was refusing to describe code that ships.**
+
+Three things about that are worth keeping:
+
+- **Refusing it was not conservative, it was wrong in the dangerous direction.** A continuously
+  running cloud mutator is precisely what a reviewer most wants declared. A ceiling that makes it
+  inexpressible does not prevent it — it only stops it being written down. That is `→ seeded`
+  banned-by-omission again, occurring in the half of the ceiling that was added to fix
+  banning-by-omission.
+- **The catalog had the evidence and did not follow it.** It wrote "the odd one out" beside this very
+  row and never carried the observation into the grant table, which inherited the blind spot. A
+  flagged anomaly is a defect report, not a footnote.
+- **The table said this would happen.** Its own header calls it *"judgement transcribed, not a derived
+  fact … the most likely thing here to need a row added, and adding one should be an argued change
+  rather than a quiet widening."* It was right, and the argument is recorded next to the row, with a
+  test pinning the whole table so the next widening has to be argued too.
+
+**The extraction also cost something the first three did not: seams.** `assert-storage` is the first
+extension that touches a cluster and a cloud, and it needed four capabilities injected — a Linode
+token, an in-cluster client, a kubectl shell-out, and a step-summary sink (`volumes.Deps`). Every
+high-coupling candidate in the census below needs some subset of the same four. **That is the action
+ABI's requirements document, arrived at by extracting rather than by design.**
+
+A side effect worth naming: `AssertEncryption` and `ReconcileTags` were **0% covered** before, and
+not for want of trying — as package-`main` functions they reached for the token, the client and
+kubectl themselves, so a test could only have run them against a real cluster. Taking `Deps` as a
+parameter is what made them reachable, and the package went 64.8% → 85.3%. Delivering capabilities
+rather than letting code acquire them is a testability property before it is a security one.
+
 ## The cost of the interesting half
 
 Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
@@ -347,16 +411,21 @@ accident, and the reason is measurable.
 Counting the package-`main` symbols each candidate's files reference — its **closure**, not its file
 list:
 
-| candidate | shape it would exercise | coupling to package `main` | extracted? |
+| candidate | shape it exercises | coupling to package `main` | extracted? |
 |---|---|---:|:-:|
 | `guard-budgets` | `gate` · `read-repo` | 0 | ✅ |
 | `guard-docs` | `gate` · `read-repo` | 2 | ✅ |
 | `posture-at-rest` | **`invariant`** · `read-repo` | 2 | ✅ |
+| `assert-storage` | **`assertion`** + `invariant` ×2 · **`cloud-mutate`** · named | 16 → 4 seams | ✅ |
 | `template-sustain` | `transition` · **`own-paths`** | 26 | ✘ |
-| `assert-storage` | **`assertion`** + `transition` · `cloud-mutate` | 16 | ✘ |
 | `teardown` | `transition` + `assertion` · `destroyed` | 30 | ✘ |
 | `obj-encryption` | `transition:seeded` · **`secret-custody`** | 43 | ✘ |
-| `reconcile-actions` | `invariant` ×7 · **named bindings** | 62 | ✘ |
+| `reconcile-actions` | `invariant` ×7 · seven grant sets | 62 | ✘ |
+
+`assert-storage` is the calibration point: **16 raw references collapsed to 4 injected seams**, because
+most of the 16 were one-line wrappers around the same four capabilities. Treat the raw counts above
+as an upper bound on difficulty, not an estimate of it — but note that the four seams were *the same
+four* the next candidates need, so the collapse does not repeat for free.
 
 **The catalog's line counts are file counts, not closures**, and the gap between the two is where the
 remaining work is. The cheap extractions are all gates because a gate reaches nothing; every
@@ -371,26 +440,33 @@ Three consequences, and the first two change the plan:
   coverage at all. Size and difficulty are close to uncorrelated here.
 - **The action ABI has to come before the expensive extractions, not after.** Every high-coupling
   candidate is coupled through the same four things: a cluster client, a cloud client, a credential
-  handle, a kubectl seam. That list is the ABI's requirements document, and it was derivable only by
-  trying to extract something that needs them.
+  handle, a kubectl seam. `volumes.Deps` is that list, written down — the ABI's requirements
+  document, arrived at by extracting something that needs them rather than by design. A binding's
+  declared grants should eventually decide which fields are populated, so a capability the extension
+  was not granted arrives nil.
 - **`template-sustain` cannot be separated from what defines its grant.** It is the extension that
   would hold `own-paths`, and 26 of its references are into `ci_template_manifest.go` — which ADR
   0014's one-ownership-authority corollary pins as permanently core. The pairing pattern's two halves
   have different extraction costs, and this pair may not be separable at all.
 
-A fourth extraction was attempted and abandoned rather than forced. That is the honest state: the
-model's untested half stays untested until the ABI exists.
+One further extraction (`template-sustain`) was attempted and abandoned rather than forced: 26 of its
+references are into `ci_template_manifest.go`, which ADR 0014's one-ownership-authority corollary
+pins as permanently core. The extension that would hold `own-paths` may not be separable from the
+thing that defines it.
 
 ### What none of them proves
 
 Nothing is loaded, dispatched or disabled through the model. All three still run because `ci.go`
 registers their cobra commands, and the declarations are inert.
 
-Still unexercised: **`transition` and `assertion`** as binding kinds, **six of seven grants**,
-**multi-binding extensions** (the pairing pattern, the catalog's strongest structural signal),
-**named bindings**, and the `grantStates` table that says where a dangerous grant may appear. Every
-one of those needs a candidate from the lower half of the coupling table above, so the honest next
-step is the action ABI rather than a fourth extraction.
+Now exercised, by `assert-storage`: **`assertion`**, **multi-binding extensions**, **named
+bindings**, **`cloud-mutate`**, **`cluster-read`/`cloud-read`**, and the `grantStates` table — which
+turned out to be wrong and was corrected.
+
+Still unexercised: **`transition`** as a binding kind (every declared binding so far observes or
+holds; none moves the platform anywhere), **`own-paths`** and **`secret-custody`**, and the five
+lifecycle states between `scaffolded` and `verified`. All of those live in the lower half of the
+table above, so the honest next step remains the action ABI rather than a fifth extraction.
 
 ## What the catalog says
 
@@ -438,7 +514,7 @@ grants and the distribution is observed instead of assigned.
 > tidy version.
 
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first three, extracted](#the-first-three-extracted).
+   **Done** — [The first four, extracted](#the-first-four-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

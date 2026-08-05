@@ -54,7 +54,8 @@ COVERAGE_MINS := \
 	internal/pathglob=93 \
 	internal/preflight=95 \
 	internal/shquote=100 \
-	internal/terraform=95
+	internal/terraform=95 \
+	internal/volumes=85
 
 help:
 	@echo "lke-landing-zone — template repository targets"

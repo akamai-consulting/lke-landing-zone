@@ -54,7 +54,7 @@ doing its job. Links are still checked.
 | [apl-core-v6-migration](apl-core-v6-migration.md) | apl-core 5.x → 6.x. Pinned to GA `v6.0.0`; validate in lab before any non-lab environment. |
 | [apl-core-v61-upgrade](apl-core-v61-upgrade.md) | apl-core 6.0 → 6.1. Baseline moved, pinned to GA `v6.1.0`; same lab-first caveat. |
 | [apl-overlay-obj-native](apl-overlay-obj-native.md) | Adopting apl-core-native object storage; runtime behaviour still unconfirmed on a live cluster. |
-| [internal-extension-model](internal-extension-model.md) | Phases 1–2 — the declaration model (`tools/internal/extension`) and the first three extensions (`guard-budgets`, `guard-docs`, `posture-at-rest`, plus a registry and `llz extension list`). Nothing is dispatched through it yet: the declarations are inert and all three still run as cobra commands. Action ABI, manifest, per-instance enablement and the remote half did not land; issue #399 sequences them. |
+| [internal-extension-model](internal-extension-model.md) | Phases 1–2 — the declaration model (`tools/internal/extension`) and the first four extensions (`guard-budgets`, `guard-docs`, `posture-at-rest`, `assert-storage`, plus a registry and `llz extension list`). Nothing is dispatched through it yet: the declarations are inert and all four still run as cobra commands. Action ABI, manifest, per-instance enablement and the remote half did not land; issue #399 sequences them. |
 
 ### Proposed — analysed, not built
 

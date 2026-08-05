@@ -1,7 +1,6 @@
-package main
+package volumes
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -97,27 +96,26 @@ func TestReportVolumeEncryption(t *testing.T) {
 	good := judgeVolume(encPV("llz-openbao", "data-platform-openbao-0", "1"), encVol("enabled", wantTags...), wantTags, "")
 
 	t.Run("all compliant passes and writes no summary", func(t *testing.T) {
-		sum := withGHASummaryFile(t)
-		if err := reportVolumeEncryption([]volumeVerdict{good}, wantTags, "block-storage-retain"); err != nil {
+		d, sum := capturingDeps()
+		if err := reportVolumeEncryption(d, []volumeVerdict{good}, wantTags, "block-storage-retain"); err != nil {
 			t.Fatalf("a compliant fleet must pass: %v", err)
 		}
-		if b, _ := os.ReadFile(sum); len(b) != 0 {
-			t.Errorf("clean run must write no step summary, got %q", b)
+		if len(*sum) != 0 {
+			t.Errorf("clean run must write no step summary, got %q", *sum)
 		}
 	})
 
 	t.Run("any violation fails and names the remedy", func(t *testing.T) {
 		bad := judgeVolume(encPV("harbor", "data-harbor-redis-0", "17094415"), encVol("disabled", wantTags...), wantTags, "")
-		sum := withGHASummaryFile(t)
-		err := reportVolumeEncryption([]volumeVerdict{good, bad}, wantTags, "block-storage-retain")
+		d, sum := capturingDeps()
+		err := reportVolumeEncryption(d, []volumeVerdict{good, bad}, wantTags, "block-storage-retain")
 		if err == nil {
 			t.Fatal("an unencrypted Volume must fail the gate")
 		}
 		if !strings.Contains(err.Error(), "1 of 2") {
 			t.Errorf("error should count violations against the total, got %q", err)
 		}
-		b, _ := os.ReadFile(sum)
-		body := string(b)
+		body := strings.Join(*sum, "\n")
 		for _, want := range []string{
 			"data-harbor-redis-0",
 			"17094415",
@@ -261,4 +259,16 @@ func TestJudgeVolume_DryRunReap(t *testing.T) {
 			t.Error("a reap blind spot is a code bug, not a pending reconcile — it must not be waited on")
 		}
 	})
+}
+
+// capturingDeps hands the code under test a Summary sink it can read back.
+//
+// It replaces a helper that set GITHUB_STEP_SUMMARY to a temp file and read the
+// file afterwards. Injecting the sink is both simpler and stricter: the old shape
+// could not distinguish "wrote nothing" from "wrote to a path the test never
+// looked at", which is the failure mode a step-summary assertion is most likely to
+// have.
+func capturingDeps() (Deps, *[]string) {
+	var got []string
+	return Deps{Summary: func(lines ...string) error { got = append(got, lines...); return nil }}, &got
 }

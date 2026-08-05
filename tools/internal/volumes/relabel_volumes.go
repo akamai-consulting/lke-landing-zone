@@ -1,4 +1,4 @@
-package main
+package volumes
 
 // ci_relabel_volumes.go implements `llz ci relabel-volumes` — the Go port of the
 // linode-volume-labeler `relabel.sh` CronJob script. For every bound Linode-CSI
@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -37,36 +36,16 @@ type volumeLabeler interface {
 // relabelLinodeFn opens the Linode client. Seamed for tests.
 var relabelLinodeFn = func(token string) volumeLabeler { return linode.NewClient(token, 30*time.Second) }
 
-func ciRelabelVolumesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "relabel-volumes",
-		Short: "rename Linode Volumes to <region>-<ns>-<pvc> for every bound Linode-CSI PV",
-		Long: "In-cluster Linode Volume relabeler — the Go port of the linode-volume-labeler\n" +
-			"relabel.sh CronJob. Lists cluster PVs and, for each bound Linode-CSI volume,\n" +
-			"rewrites its Linode UI label from the CSI default pvc-<uuid> to a readable\n" +
-			"<REGION_SHORT>-<namespace>-<pvc-name> (sanitized to Linode's charset, truncated\n" +
-			"to 32 chars). Idempotent — already-correct labels are skipped; a volume deleted\n" +
-			"out-of-band (absent from the account list) is skipped. Env: REGION_SHORT,\n" +
-			"LINODE_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runRelabelVolumes(context.Background()) },
-	}
-}
-
-func runRelabelVolumes(ctx context.Context) error {
+func Relabel(ctx context.Context, d Deps) error {
 	regionShort := os.Getenv("REGION_SHORT")
 	if regionShort == "" {
 		return fmt.Errorf("REGION_SHORT must be set (e.g. pri|sec|sta|lab)")
 	}
-	token := inclusterLinodeToken()
+	token := d.Token
 	if token == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume)")
 	}
-
-	k, err := discoverKubeFn()
-	if err != nil {
-		return err
-	}
+	k := d.Kube
 	pvList, status, err := k.GetJSON(ctx, "/api/v1/persistentvolumes")
 	if err != nil {
 		return err

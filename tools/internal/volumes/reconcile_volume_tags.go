@@ -1,4 +1,4 @@
-package main
+package volumes
 
 // ci_reconcile_volume_tags.go is `llz ci reconcile-volume-tags` — the in-cluster
 // tag-heal backstop, also driven continuously by the llz-reconciler's
@@ -27,14 +27,19 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 // volumeTagsSCParam is the CSI parameter key carrying the class's desired tag set.
 const volumeTagsSCParam = "linodebs.csi.linode.com/volumeTags"
 
-// defaultVolumeTagsSC is the class bootstrap-cluster renders the lke<id> tag into.
-const defaultVolumeTagsSC = "block-storage-retain"
+// DefaultTagsSC is the class bootstrap-cluster renders the lke<id> tag into.
+// DefaultTagsSC is the StorageClass whose volumeTags parameter defines the
+// required tag set. Moved here with the code that reads it: it is a fact about
+// this repo's storage posture, not about any one command's flag default.
+const DefaultTagsSC = "block-storage-retain"
+
+// scStorageClassesPath is the API path the in-pod client reads StorageClasses at.
+const scStorageClassesPath = "/apis/storage.k8s.io/v1/storageclasses"
 
 // pvVolume is one Linode-CSI PV's backing Volume id (+ bound PVC, for logging).
 type pvVolume struct {
@@ -201,43 +206,16 @@ func reportAbandonedVolumes(ctx context.Context, c tagReconcileClient, lkeTag st
 	return abandoned, nil
 }
 
-func ciReconcileVolumeTagsCmd() *cobra.Command {
-	var scName string
-	c := &cobra.Command{
-		Use:   "reconcile-volume-tags",
-		Short: "heal StorageClass volumeTags onto every PV-backed Linode Volume",
-		Long: "One-shot tag reconciler (also the llz-reconciler's `volume-tags` lane): reads\n" +
-			"the desired tag set from the StorageClass's linodebs.csi.linode.com/volumeTags\n" +
-			"parameter, lists the cluster's Linode-CSI PVs, and PUTs any missing tags onto\n" +
-			"their backing Volumes (labels untouched — the volume-labels lane owns those).\n" +
-			"Exists for Volumes born untagged — e.g. a clone/snapshot PVC admitted while\n" +
-			"admission control was degraded (the Linode clone API takes no tags). Also\n" +
-			"reports (never deletes) this cluster's abandoned Retain Volumes: tagged\n" +
-			"lke<id> but referenced by no PV. Reads LINODE_TOKEN (env or the optional\n" +
-			"linode-api-token Secret volume) and the cluster's PVs + StorageClass through\n" +
-			"the in-pod ServiceAccount. Idempotent.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCIReconcileVolumeTags(cmd.Context(), scName)
-		},
-	}
-	c.Flags().StringVar(&scName, "storage-class", defaultVolumeTagsSC, "StorageClass whose volumeTags parameter defines the desired tag set")
-	return c
-}
-
-func runCIReconcileVolumeTags(ctx context.Context, scName string) error {
-	token := inclusterLinodeToken()
+func ReconcileTags(ctx context.Context, d Deps, scName string) error {
+	token := d.Token
 	if token == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume)")
 	}
 	if scName == "" {
-		scName = defaultVolumeTagsSC
+		scName = DefaultTagsSC
 	}
 
-	k, err := discoverKubeFn()
-	if err != nil {
-		return err
-	}
+	k := d.Kube
 	sc, status, err := k.GetJSON(ctx, scStorageClassesPath+"/"+scName)
 	if err != nil {
 		return err

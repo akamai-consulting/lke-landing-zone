@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 45,763 logic lines across 234 non-test files, 125 of them ci_*.go.
+    # 45,229 logic lines across 232 non-test files, 122 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -67,12 +67,15 @@ categories:
     #   45,763 / 234 files  posture-at-rest, the first extension that is not a
     #                       gate, plus the guardkit its extraction forced out.
     #                       -343.
+    #   45,229 / 232 files  assert-storage, the first extension that touches a
+    #                       cluster and a cloud — and the first whose extraction
+    #                       needed seams injected rather than none at all. -534.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 45763
+    budget: 45229
     exact: true
     include:
       - "tools/cmd/llz/*.go"

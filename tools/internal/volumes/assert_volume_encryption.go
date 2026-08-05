@@ -1,4 +1,4 @@
-package main
+package volumes
 
 // ci_assert_volume_encryption.go is `llz ci assert-volume-encryption` — the e2e
 // gate for the storage invariant. Every Linode Volume backing a PV in this cluster
@@ -44,7 +44,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 // volumeEncryptionEnabled is the Linode API's value for an encrypted Volume.
@@ -213,47 +212,13 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort 
 	return v
 }
 
-func ciAssertVolumeEncryptionCmd() *cobra.Command {
-	var scName string
-	c := &cobra.Command{
-		Use:   "assert-volume-encryption",
-		Short: "FAIL if any PV-backed Linode Volume is unencrypted, untagged, or still named pvc-<uuid>",
-		Long: "E2E gate for the storage invariant. Lists every Linode-CSI PV in the cluster,\n" +
-			"GETs its backing Volume from the Linode API, and fails unless EVERY one is\n" +
-			"encrypted, carries the tag set the StorageClass defines, and has been renamed\n" +
-			"off the CSI default pvc-<uuid> to a readable <region>-<ns>-<pvc>.\n" +
-			"\n" +
-			"Tags and labels are applied by reconciler lanes after CreateVolume, so those two\n" +
-			"get a bounded wait before failing. Encryption never does — it cannot change.\n" +
-			"\n" +
-			"Checks the Linode API rather than the PVC's storageClassName on purpose: the\n" +
-			"class name is a proxy for encryption, and it was a satisfied proxy the whole\n" +
-			"time a managed cluster was provisioning unencrypted Volumes. `encryption` on\n" +
-			"the Volume itself is the fact.\n" +
-			"\n" +
-			"Fails closed on every ambiguity, INCLUDING a cluster with no Linode-CSI PVs —\n" +
-			"a gate that passes having examined nothing is worse than no gate.\n" +
-			"\n" +
-			"A red run is not re-runnable: encryption is set inside CreateVolume and\n" +
-			"storageClassName is immutable once bound, so the fix is to re-roll the workload\n" +
-			"onto a class that encrypts (which destroys that volume's data).",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCIAssertVolumeEncryption(cmd.Context(), scName)
-		},
-	}
-	c.Flags().StringVar(&scName, "storage-class", defaultVolumeTagsSC,
-		"StorageClass whose volumeTags parameter defines the required tag set")
-	return c
-}
-
-func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
-	token := inclusterLinodeToken()
+func AssertEncryption(ctx context.Context, d Deps, scName string) error {
+	token := d.Token
 	if token == "" {
 		return fmt.Errorf("assert-volume-encryption: LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume) — without it this check cannot read Volume encryption state, and skipping it would be a silent pass")
 	}
 	if scName == "" {
-		scName = defaultVolumeTagsSC
+		scName = DefaultTagsSC
 	}
 
 	// REGION_SHORT is the volume-label prefix the relabeler uses. Optional here: when
@@ -271,7 +236,7 @@ func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
 	// reconcile-volume-tags lane uses: this runs on a CI runner against a fetched
 	// kubeconfig, like every other `llz ci assert-*` in the e2e suite. discoverKubeFn
 	// is in-cluster only and would fail here.
-	scRaw, err := execOutput("kubectl", "get", "storageclass", scName, "-o", "json")
+	scRaw, err := d.Kubectl("get", "storageclass", scName, "-o", "json")
 	if err != nil {
 		return fmt.Errorf("assert-volume-encryption: get storageclass %s: %w", scName, err)
 	}
@@ -284,7 +249,7 @@ func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
 		return err
 	}
 
-	pvRaw, err := execOutput("kubectl", "get", "persistentvolumes", "-o", "json")
+	pvRaw, err := d.Kubectl("get", "persistentvolumes", "-o", "json")
 	if err != nil {
 		return fmt.Errorf("assert-volume-encryption: list persistentvolumes: %w", err)
 	}
@@ -345,12 +310,12 @@ func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
 		assertVolumeSleep(volumeHealInterval)
 	}
 
-	return reportVolumeEncryption(verdicts, desired, scName)
+	return reportVolumeEncryption(d, verdicts, desired, scName)
 }
 
 // reportVolumeEncryption prints the verdict and returns the pass/fail. Split out so
 // the reporting is exercised by tests without a cluster or a Linode account.
-func reportVolumeEncryption(verdicts []volumeVerdict, desired []string, scName string) error {
+func reportVolumeEncryption(d Deps, verdicts []volumeVerdict, desired []string, scName string) error {
 	var bad []volumeVerdict
 	for _, v := range verdicts {
 		if !v.ok() {
@@ -409,7 +374,7 @@ func reportVolumeEncryption(verdicts []volumeVerdict, desired []string, scName s
 		"is Linode's unencrypted class and its PVCs name it explicitly. Check that",
 		"`llz ci bootstrap-cluster` recreated the stock classes encrypted, and that LKE has",
 		"not re-promoted its own unencrypted definitions since.")
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY", summary...); err != nil {
+	if err := d.Summary(summary...); err != nil {
 		return err
 	}
 	return fmt.Errorf("assert-volume-encryption: %d of %d PV-backed Linode Volume(s) are not encrypted-and-tagged", len(bad), len(verdicts))

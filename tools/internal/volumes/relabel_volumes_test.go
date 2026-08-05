@@ -1,4 +1,4 @@
-package main
+package volumes
 
 import (
 	"context"
@@ -104,12 +104,17 @@ func (f *fakeLinodeVols) UpdateVolumeLabel(_ context.Context, id uint64, label s
 	return nil
 }
 
-func withRelabelSeams(t *testing.T, kube kubeAPI, lc volumeLabeler) {
+// withRelabelSeams stubs the Linode client and returns the Deps the caller is
+// handed. The kube client is a FIELD now rather than a package-level var swapped
+// under the test: extraction turned that seam into a parameter, which is the whole
+// difference between a package that can be handed a capability and one that
+// reaches for it.
+func withRelabelSeams(t *testing.T, kube KubeGetter, lc volumeLabeler) Deps {
 	t.Helper()
-	origK, origL := discoverKubeFn, relabelLinodeFn
-	discoverKubeFn = func() (kubeAPI, error) { return kube, nil }
+	orig := relabelLinodeFn
 	relabelLinodeFn = func(string) volumeLabeler { return lc }
-	t.Cleanup(func() { discoverKubeFn = origK; relabelLinodeFn = origL })
+	t.Cleanup(func() { relabelLinodeFn = orig })
+	return Deps{Token: "tok", Kube: kube}
 }
 
 func TestRunRelabelVolumes(t *testing.T) {
@@ -127,10 +132,10 @@ func TestRunRelabelVolumes(t *testing.T) {
 		{"id": jnum("200"), "label": "pri-team-already-ok"},
 		// 300 intentionally absent
 	}}
-	withRelabelSeams(t, kube, lc)
+	d := withRelabelSeams(t, kube, lc)
 
-	if err := runRelabelVolumes(context.Background()); err != nil {
-		t.Fatalf("runRelabelVolumes: %v", err)
+	if err := Relabel(context.Background(), d); err != nil {
+		t.Fatalf("Relabel: %v", err)
 	}
 	if len(lc.renamed) != 1 || lc.renamed[100] != "pri-team-needs-rename" {
 		t.Fatalf("renamed = %v, want {100: pri-team-needs-rename}", lc.renamed)
@@ -139,9 +144,19 @@ func TestRunRelabelVolumes(t *testing.T) {
 
 func TestRunRelabelVolumesRequiresEnv(t *testing.T) {
 	t.Setenv("REGION_SHORT", "")
-	t.Setenv("LINODE_TOKEN", "tok")
-	if err := runRelabelVolumes(context.Background()); err == nil {
+	if err := Relabel(context.Background(), Deps{Token: "tok"}); err == nil {
 		t.Error("missing REGION_SHORT should error")
+	}
+}
+
+// The token is now HANDED to the lane rather than read from the environment, so
+// an empty one is a caller error and must be refused loudly. Before extraction
+// this was inclusterLinodeToken() returning "" — the same check, but the package
+// could not be asked the question without an environment.
+func TestRelabelRefusesAnEmptyToken(t *testing.T) {
+	t.Setenv("REGION_SHORT", "pri")
+	if err := Relabel(context.Background(), Deps{}); err == nil {
+		t.Error("an empty token must error rather than silently no-op")
 	}
 }
 
@@ -154,8 +169,8 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 		vols:      []map[string]any{{"id": jnum("100"), "label": "old"}},
 		updateErr: errors.New("linode 500"),
 	}
-	withRelabelSeams(t, kube, lc)
-	if err := runRelabelVolumes(context.Background()); err == nil {
+	d := withRelabelSeams(t, kube, lc)
+	if err := Relabel(context.Background(), d); err == nil {
 		t.Error("a rename error should surface a non-nil error (so the CronJob/alert fires)")
 	}
 }
@@ -175,7 +190,7 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 func TestReaperRecognisesRelabelerOutput(t *testing.T) {
 	// Deployment names of DIFFERENT LENGTHS. The first version of this guard used
 	// only "e2e" — exactly three characters, the one length at which the
-	// relabeler's first3(env) prefix and the reaper's env prefix are the same
+	// relabeler's linode.RegionShort(env) prefix and the reaper's env prefix are the same
 	// string. On "primary" the relabeler writes "pri-harbor-…" while the reaper
 	// looked for "primary-…", so the sweep stayed blind on every real deployment
 	// and the guard that existed to catch it passed. A coupling test that fixes
@@ -193,9 +208,9 @@ func TestReaperRecognisesRelabelerOutput(t *testing.T) {
 				{"monitoring", "storage-loki-0"},
 			} {
 				// desiredVolumeLabel takes REGION_SHORT, which is what `llz render`
-				// stamps into the reconciler — first3(env), NOT env. Feeding it env
+				// stamps into the reconciler — linode.RegionShort(env), NOT env. Feeding it env
 				// directly is precisely the mistake this test now exists to pin.
-				label := desiredVolumeLabel(first3(env), tc.ns, tc.pvc)
+				label := desiredVolumeLabel(linode.RegionShort(env), tc.ns, tc.pvc)
 				if !linode.VolumeIsCandidate(true, label, "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
 					t.Errorf("reap cannot see %q, which is exactly what the relabeler writes for %s/%s on deployment %q.\n"+
 						"The two must agree or orphaned Volumes accumulate invisibly.", label, tc.ns, tc.pvc, env)
@@ -221,13 +236,13 @@ func TestReaperRecognisesRelabelerOutput(t *testing.T) {
 }
 
 // TestRegionShortIsTheOneDerivation pins the two halves of the naming contract to
-// a single definition. `llz render` stamps first3(env) into REGION_SHORT and the
+// a single definition. `llz render` stamps linode.RegionShort(env) into REGION_SHORT and the
 // relabeler prefixes labels with it; the reaper accepts RegionShort(env). If those
 // ever diverge again the sweep goes blind, so they must be the same function.
 func TestRegionShortIsTheOneDerivation(t *testing.T) {
 	for _, env := range []string{"e2e", "primary", "secondary", "lab", "ab", ""} {
-		if got, want := first3(env), linode.RegionShort(env); got != want {
-			t.Errorf("first3(%q)=%q but linode.RegionShort(%q)=%q — the label written and the prefix accepted must come from one derivation",
+		if got, want := linode.RegionShort(env), linode.RegionShort(env); got != want {
+			t.Errorf("linode.RegionShort(%q)=%q but linode.RegionShort(%q)=%q — the label written and the prefix accepted must come from one derivation",
 				env, got, env, want)
 		}
 	}

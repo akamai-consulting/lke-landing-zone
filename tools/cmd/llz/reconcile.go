@@ -28,6 +28,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 )
 
 func reconcileCmd() *cobra.Command {
@@ -543,7 +545,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Volume whose tags need checking. Reads the desired set from the live
 			// StorageClass, so it needs no per-env config — only LINODE_TOKEN.
 			run: gate(requireLinodeToken(func(ctx context.Context) error {
-				return runCIReconcileVolumeTags(ctx, defaultVolumeTagsSC)
+				return runCIReconcileVolumeTags(ctx, volumes.DefaultTagsSC)
 			})),
 			// Same first-boot gap as volume-labels — see withLinodeTokenWait.
 			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {

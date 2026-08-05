@@ -70,9 +70,28 @@ var bindableStates = map[BindingKind][]State{
 // added, and adding one should be an argued change rather than a quiet widening.
 var grantStates = map[Grant][]State{
 	SecretCustody: {Seeded, Operating},
-	CloudMutate:   {Provisioned, Seeded, Converged, Destroyed},
+	CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
 	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
 }
+
+// `Operating` was ADDED to CloudMutate by the fourth extension, and the row is
+// worth reading as a worked example of the paragraph above.
+//
+// The original four states came from where the catalog places cloud-mutate — the
+// `→ provisioned` and `→ destroyed` groups, where it is obvious. `assert-storage`
+// then could not be declared: two of its three bindings are reconciler lanes wired
+// into reconcile.go that run in-pod, continuously, and PUT tags and labels onto
+// Linode Volumes. They SHIP. The model was refusing to describe code in production.
+//
+// Refusing it was not the conservative choice, it was wrong in the dangerous
+// direction. A continuously-running cloud mutator is precisely what a reviewer most
+// wants declared; a ceiling that makes it inexpressible does not prevent it, it
+// only stops it being written down — which is `→ seeded` banned-by-omission again,
+// in the half of the ceiling that exists to fix banning-by-omission.
+//
+// The catalog had the evidence and did not follow it: it flagged assert-storage as
+// "holds cloud-mutate — the odd one out" and never carried that into this table.
+// A flagged anomaly is a defect report, not a footnote.
 
 func kinds() []BindingKind { return []BindingKind{Transition, Assertion, Invariant, Gate} }
 

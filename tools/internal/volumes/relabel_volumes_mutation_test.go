@@ -1,4 +1,4 @@
-package main
+package volumes
 
 // Mutation-test gap closure for ci_relabel_volumes.go: the PV-list acceptance
 // window and the run's own tally. The relabeler mutates real Linode Volumes, so
@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -45,10 +47,10 @@ func TestRunRelabelVolumesPVListStatusWindow(t *testing.T) {
 			t.Setenv("REGION_SHORT", "pri")
 			t.Setenv("LINODE_TOKEN", "tok")
 			lc := &fakeLinodeVols{vols: []map[string]any{{"id": jnum("100"), "label": "old"}}}
-			withRelabelSeams(t, statusKube{pvList: list, status: tc.status}, lc)
+			d := withRelabelSeams(t, statusKube{pvList: list, status: tc.status}, lc)
 
 			var err error
-			captureStdout(t, func() { err = runRelabelVolumes(context.Background()) })
+			captureStdout(t, func() { err = Relabel(context.Background(), d) })
 			if tc.wantErr && err == nil {
 				t.Errorf("status %d must fail the run, not read as an empty PV list", tc.status)
 			}
@@ -79,10 +81,10 @@ func TestRunRelabelVolumesSummaryTally(t *testing.T) {
 		{"id": jnum("100"), "label": "pvc-olduuid"},
 		{"id": jnum("200"), "label": "pri-team-already-ok"},
 	}}
-	withRelabelSeams(t, kube, lc)
+	d := withRelabelSeams(t, kube, lc)
 
 	var err error
-	out := captureStdout(t, func() { err = runRelabelVolumes(context.Background()) })
+	out := captureStdout(t, func() { err = Relabel(context.Background(), d) })
 	if err != nil {
 		t.Fatalf("runRelabelVolumes: %v", err)
 	}
@@ -104,4 +106,23 @@ func TestLinodeCSIVolumesSkipsUnparseableHandles(t *testing.T) {
 			t.Errorf("volumeHandle %q yielded %+v, want it skipped (no id may be inferred)", handle, got)
 		}
 	}
+}
+
+// captureStdout is a local copy of package main's helper. The relabel lane prints
+// its per-Volume decisions to stdout and that output is the operator's only record
+// of what was renamed, so the mutation cases assert on it — which means the
+// package needs to be able to read it without depending on the CLI's test helpers.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = orig
+	b, _ := io.ReadAll(r)
+	return string(b)
 }
