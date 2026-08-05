@@ -156,21 +156,106 @@ func ciImageRef(org, image, tag string) string {
 // render --check` telling the operator to run `llz render` — which, on the pinned
 // release they had installed, changed nothing.
 //
-// `sha-<commit>` is immutable and is published for EVERY image on EVERY main push,
-// so a pin resolved from the template ref cannot drift out from under the tree.
+// `sha-<commit>` is immutable, so a pin resolved from the template ref cannot drift
+// out from under the tree.
 //
-// Existence is not checked here. `llz tokens` runs on an operator's machine, where
-// docker (what pinManifestExists needs) may not exist, and the tag is published by
-// construction for any commit on main. If one were ever missing the container pull
-// fails at the FIRST job with "manifest unknown" — loud, immediate, and unambiguous,
-// which is more than the floating tag ever offered.
-func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pinned bool) {
-	tag, pinned := pinnedImageTag(templateRepo, ref)
-	tfTag, kubeTag := tag, tag
-	if !pinned {
-		tfTag, kubeTag = ciTofuTag, ciKubernetesTag
+// EXISTENCE IS CHECKED, and that is not belt-and-braces. build-images.yml only grew
+// its "every main push" trigger in #102; releases before roughly v0.0.31 sit on
+// commits that never got a build, and `ci-tofu:sha-<that commit>` has never existed
+// (verified against GHCR: v0.0.38 and v0.0.39 resolve, v0.0.30 and earlier 404).
+// Pinning to it unconditionally would trade a stale-image failure for an unpullable
+// one — arguably worse, since the floating tag at least RUNS. An unpublished pin
+// therefore falls back to the floating tags and reports why, and the skew that
+// leaves is caught by name at the first job by `llz ci assert-image-fresh`.
+//
+// reason is non-empty exactly when pinned is false, and says WHICH of the two
+// happened: they need different remedies, and a caller that cannot tell them apart
+// can only print something vague.
+func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
+	floating := func(why string) (string, string, bool, string) {
+		return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
+			ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
+			false, why
 	}
-	return ciImageRef(defaultTemplateOrg, "ci-tofu", tfTag),
-		ciImageRef(defaultTemplateOrg, "ci-kubernetes", kubeTag),
-		pinned
+	tag, ok := pinnedImageTag(templateRepo, ref)
+	if !ok {
+		return floating(fmt.Sprintf("could not resolve the template pin %q to a commit in %s", ref, templateRepo))
+	}
+	tf := ciImageRef(defaultTemplateOrg, "ci-tofu", tag)
+	kube := ciImageRef(defaultTemplateOrg, "ci-kubernetes", tag)
+	for _, im := range []string{tf, kube} {
+		// asked=false (registry unreachable) must NOT downgrade the pin: an offline
+		// operator would then silently get the floating tag, which is the exact
+		// mis-configuration this function exists to stop producing. Only a definite
+		// "not there" falls back.
+		if published, asked := imagePublished(im); asked && !published {
+			return floating(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
+				"running on every main push (#102), or that build failed", im, ref))
+		}
+	}
+	return tf, kube, true, ""
+}
+
+// imagePublished reports whether an image reference resolves in the registry, and
+// whether the registry could be ASKED at all. The two are not the same and callers
+// must not conflate them (see computeCIImageVars).
+//
+// Deliberately NOT pinManifestExists, which shells out to `docker manifest
+// inspect`: this runs on an operator's laptop and inside the ci-tofu container,
+// neither guaranteed a docker daemon, and a missing daemon would read as a missing
+// image — downgrading a perfectly good pin over a tool that was never installed.
+// The first-party ci images are public, so an anonymous pull-scoped token answers
+// the same question over plain HTTP.
+//
+// Package var so tests substitute the round-trip.
+var imagePublished = func(image string) (published, asked bool) {
+	// ghcr.io/<owner>/<name>:<tag>
+	rest, tag, found := strings.Cut(strings.TrimPrefix(image, "ghcr.io/"), ":")
+	if !found || rest == "" || tag == "" {
+		return false, false
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	var tok struct {
+		Token string `json:"token"`
+	}
+	tokenURL := "https://ghcr.io/token?service=ghcr.io&scope=" + url.QueryEscape("repository:"+rest+":pull")
+	resp, err := client.Get(tokenURL)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&tok) != nil || tok.Token == "" {
+		return false, false
+	}
+
+	req, err := http.NewRequest(http.MethodHead, "https://ghcr.io/v2/"+rest+"/manifests/"+url.PathEscape(tag), nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.Token)
+	// The ci images are multi-arch (linux/amd64 + linux/arm64), so they are an INDEX,
+	// not a manifest. Omit these Accept types and the registry 404s an image that is
+	// plainly there — "no manifest in a media type you accept" reads identically to
+	// "no such tag", and this function would report every image missing.
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+	mResp, err := client.Do(req)
+	if err != nil {
+		return false, false
+	}
+	defer mResp.Body.Close()
+	switch {
+	case mResp.StatusCode >= 200 && mResp.StatusCode < 300:
+		return true, true
+	case mResp.StatusCode == http.StatusNotFound:
+		return false, true
+	default:
+		// 401/403/5xx: the registry did not answer the question we asked.
+		return false, false
+	}
 }

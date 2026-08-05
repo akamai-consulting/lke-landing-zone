@@ -59,16 +59,28 @@ func TestPinnedImageTag(t *testing.T) {
 	})
 }
 
+// stubImagePublished replaces the registry round-trip for the duration of a test.
+// Every computeCIImageVars test installs one — the default would otherwise reach
+// ghcr.io.
+func stubImagePublished(t *testing.T, fn func(image string) (bool, bool)) {
+	t.Helper()
+	prev := imagePublished
+	t.Cleanup(func() { imagePublished = prev })
+	imagePublished = fn
+}
+
 func TestComputeCIImageVars(t *testing.T) {
 	const sha = "b9fe2721b55e2cb196d418f8d0bc6069957e3bd3"
+	allPublished := func(string) (bool, bool) { return true, true }
 
 	// The regression this whole change exists for: a release-tag pin must produce an
 	// IMMUTABLE image, not the version tag main republishes on every push.
-	t.Run("a resolvable pin gives both images the same immutable commit", func(t *testing.T) {
+	t.Run("a resolvable published pin gives both images the same immutable commit", func(t *testing.T) {
 		stubTemplateCommit(t, func(string, string) (string, bool) { return sha, true })
-		tf, kube, pinned := computeCIImageVars("acme/tmpl", "v0.0.39")
-		if !pinned {
-			t.Error("pinned = false for a resolvable ref")
+		stubImagePublished(t, allPublished)
+		tf, kube, pinned, why := computeCIImageVars("acme/tmpl", "v0.0.39")
+		if !pinned || why != "" {
+			t.Errorf("pinned = %v, reason = %q; want true, \"\"", pinned, why)
 		}
 		if want := "ghcr.io/akamai-consulting/ci-tofu:sha-" + sha; tf != want {
 			t.Errorf("TF_IMAGE = %q, want %q", tf, want)
@@ -88,17 +100,80 @@ func TestComputeCIImageVars(t *testing.T) {
 	// reason to hand back an image reference that was never published.
 	t.Run("an unresolvable pin falls back to the floating version tags", func(t *testing.T) {
 		stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
-		tf, kube, pinned := computeCIImageVars("acme/tmpl", "v0.0.39")
-		if pinned {
-			t.Error("pinned = true for an unresolvable ref")
-		}
-		if want := "ghcr.io/akamai-consulting/ci-tofu:" + ciTofuTag; tf != want {
-			t.Errorf("TF_IMAGE = %q, want %q", tf, want)
-		}
-		if want := "ghcr.io/akamai-consulting/ci-kubernetes:" + ciKubernetesTag; kube != want {
-			t.Errorf("KUBE_IMAGE = %q, want %q", kube, want)
+		stubImagePublished(t, func(string) (bool, bool) {
+			t.Error("registry asked about an image we never resolved")
+			return false, false
+		})
+		tf, kube, pinned, why := computeCIImageVars("acme/tmpl", "v0.0.39")
+		assertFloating(t, tf, kube, pinned, why)
+		if !strings.Contains(why, "resolve") {
+			t.Errorf("reason = %q, want it to name the resolution failure", why)
 		}
 	})
+
+	// The case the adopter-pin gate turned up against real GHCR: v0.0.30 and earlier
+	// sit on commits that predate build-images.yml's every-push trigger, so their
+	// `sha-` images do not exist. Pinning to one would swap a stale image for an
+	// unpullable one, and the floating tag at least runs.
+	t.Run("an unpublished pin falls back rather than pinning an image that does not exist", func(t *testing.T) {
+		stubTemplateCommit(t, func(string, string) (string, bool) { return sha, true })
+		stubImagePublished(t, func(string) (bool, bool) { return false, true })
+		tf, kube, pinned, why := computeCIImageVars("acme/tmpl", "v0.0.30")
+		assertFloating(t, tf, kube, pinned, why)
+		if !strings.Contains(why, "never published") {
+			t.Errorf("reason = %q, want it to name the missing image", why)
+		}
+	})
+
+	// A MISSING kubectl image must downgrade both, not leave a half-pinned pair
+	// running two different trees.
+	t.Run("either image being absent downgrades both", func(t *testing.T) {
+		stubTemplateCommit(t, func(string, string) (string, bool) { return sha, true })
+		stubImagePublished(t, func(image string) (bool, bool) {
+			return !strings.Contains(image, "ci-kubernetes"), true
+		})
+		tf, kube, pinned, why := computeCIImageVars("acme/tmpl", "v0.0.30")
+		assertFloating(t, tf, kube, pinned, why)
+	})
+
+	// An unreachable registry must NOT downgrade: doing so would hand an offline
+	// operator the floating tag, which is precisely the mis-configuration this
+	// function exists to stop producing.
+	t.Run("an unreachable registry keeps the pin", func(t *testing.T) {
+		stubTemplateCommit(t, func(string, string) (string, bool) { return sha, true })
+		stubImagePublished(t, func(string) (bool, bool) { return false, false })
+		_, _, pinned, why := computeCIImageVars("acme/tmpl", "v0.0.39")
+		if !pinned || why != "" {
+			t.Errorf("pinned = %v, reason = %q; an unanswered registry must not downgrade the pin", pinned, why)
+		}
+	})
+}
+
+func assertFloating(t *testing.T, tf, kube string, pinned bool, why string) {
+	t.Helper()
+	if pinned {
+		t.Error("pinned = true, want the floating fallback")
+	}
+	if why == "" {
+		t.Error("reason is empty, but the caller has to be able to explain the fallback")
+	}
+	if want := "ghcr.io/akamai-consulting/ci-tofu:" + ciTofuTag; tf != want {
+		t.Errorf("TF_IMAGE = %q, want %q", tf, want)
+	}
+	if want := "ghcr.io/akamai-consulting/ci-kubernetes:" + ciKubernetesTag; kube != want {
+		t.Errorf("KUBE_IMAGE = %q, want %q", kube, want)
+	}
+}
+
+// The registry leg parses an image reference into the registry path + tag and
+// distinguishes 200 / 404 / everything-else. A malformed reference must be "could
+// not ask", never "not there" — the latter downgrades a pin on no evidence.
+func TestImagePublished(t *testing.T) {
+	for _, bad := range []string{"", "ghcr.io/acme/ci-tofu", "ghcr.io/:tag", "ghcr.io/acme/ci-tofu:"} {
+		if published, asked := imagePublished(bad); published || asked {
+			t.Errorf("imagePublished(%q) = %v,%v; want false,false", bad, published, asked)
+		}
+	}
 }
 
 func tagOf(ref string) string {
