@@ -1,4 +1,4 @@
-package main
+package budget
 
 import (
 	"os"
@@ -329,34 +329,6 @@ func TestCountMakefileRecipeLines(t *testing.T) {
 	}
 }
 
-func TestMatchGlob(t *testing.T) {
-	tests := []struct {
-		pattern, path string
-		want          bool
-	}{
-		{".github/workflows/*.yml", ".github/workflows/lint.yml", true},
-		{".github/workflows/*.yml", ".github/workflows/sub/x.yml", false},
-		{"template-scripts/**/*.sh", "template-scripts/lib.sh", true},
-		{"template-scripts/**/*.sh", "template-scripts/ci/install.sh", true},
-		{"template-scripts/**/*.sh", "template-scripts/a/b/c/x.sh", true},
-		{"template-scripts/**/*.py", "template-scripts/x.go", false},
-		{".github/actions/**/action.yml", ".github/actions/x/action.yml", true},
-		{".github/actions/**/action.yml", ".github/actions/x/y/action.yml", true},
-		{"a/**/b", "a/b", true},
-		{"a/**/b", "a/x/b", true},
-		{"a/**/b", "a/x/y/b", true},
-		{"x?.sh", "x1.sh", true},
-		{"x?.sh", "x12.sh", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.pattern+"~"+tt.path, func(t *testing.T) {
-			if got := matchGlob(tt.pattern, tt.path); got != tt.want {
-				t.Errorf("matchGlob(%q,%q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestScanUntestable_EndToEnd builds a tiny fake repo and checks the tallies,
 // exclusion, and the over-budget verdict.
 func TestScanUntestable_EndToEnd(t *testing.T) {
@@ -610,27 +582,5 @@ func TestCountMakefileRecipeLinesFreesDocumentation(t *testing.T) {
 		"\t@echo \"b\" >> out.txt\n"
 	if got := countMakefileRecipeLines(writes); got != 2 {
 		t.Errorf("redirecting echos must count, got %d, want 2", got)
-	}
-}
-
-// stripQuotedSpans is the half that makes the rule safe rather than merely
-// convenient: an operator inside quotes is text, the same character outside them
-// is syntax, and conflating the two either floods the tally or opens a hole.
-func TestStripQuotedSpans(t *testing.T) {
-	tests := []struct{ in, rest, quoted string }{
-		{`echo "a; b"`, "echo", "a; b"},
-		{`echo "a" > f`, "echo  > f", "a"},
-		{`echo 'x' "y"`, "echo", "xy"},
-		{`echo "esc \" inside"`, "echo", `esc \" inside`},
-		{`plain words`, "plain words", ""},
-		// An unterminated quote must not swallow the caller — it consumes to end
-		// of line, which is also what the shell would report an error about.
-		{`echo "unterminated`, "echo", "unterminated"},
-	}
-	for _, tt := range tests {
-		rest, quoted := stripQuotedSpans(tt.in)
-		if rest != tt.rest || quoted != tt.quoted {
-			t.Errorf("stripQuotedSpans(%q) = (%q, %q), want (%q, %q)", tt.in, rest, quoted, tt.rest, tt.quoted)
-		}
 	}
 }

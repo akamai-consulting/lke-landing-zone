@@ -17,6 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pathglob"
 )
 
 // upgradeAction is what `llz upgrade` does to a file of a given class once
@@ -242,7 +244,7 @@ func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) e
 		}
 		covered := false
 		for _, g := range protect {
-			if matchGlob(g, rel) {
+			if pathglob.Match(g, rel) {
 				covered = true
 				break
 			}
@@ -296,7 +298,7 @@ func (m templateManifest) checkCopierFencingReverse(files []string, p copierProt
 		if p.AnswersFile != "" && rel == p.AnswersFile {
 			continue // copier regenerates the answers tracker itself
 		}
-		if !matchAnyGlob(p.SkipIfExists, rel) {
+		if !pathglob.MatchAny(p.SkipIfExists, rel) {
 			continue
 		}
 		if c, ok := lookupTemplateClass(m.classify(rel)); ok && c.copierFenced {
@@ -323,7 +325,7 @@ func (m templateManifest) checkCopierFencingReverse(files []string, p copierProt
 	for _, g := range p.SkipIfExists {
 		matched := false
 		for _, rel := range files {
-			if matchGlob(g, rel) {
+			if pathglob.Match(g, rel) {
 				matched = true
 				break
 			}
@@ -399,7 +401,7 @@ func (m templateManifest) classify(rel string) string {
 	rel = strings.TrimPrefix(rel, "./")
 	var hit string
 	for _, rule := range m.rules {
-		if matchGlob(rule.pattern, rel) {
+		if pathglob.Match(rule.pattern, rel) {
 			hit = rule.class
 		}
 	}

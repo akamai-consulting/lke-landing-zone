@@ -1,4 +1,4 @@
-package main
+package budget
 
 // Mutation-resistant tests for the budget engine: the branches where a plausible
 // edit changes the VERDICT rather than the wording, and which the behavioural
@@ -52,7 +52,7 @@ func TestAllowEmptyDoesNotSuppressAnOverBudgetFailure(t *testing.T) {
 		map[string]string{"tools/cmd/llz/a.go": "package main\nvar x = 1\nvar y = 2\n"})
 
 	var out, errOut bytes.Buffer
-	if err := runBudgetGateTo("core-surface", root, "b.yaml", false, coreSurfaceRemedy, &out, &errOut); err == nil {
+	if err := RunTo("core-surface", root, "b.yaml", false, CoreSurfaceRemedy, &out, &errOut); err == nil {
 		t.Fatal("allowEmpty must not excuse a category that is over budget")
 	}
 }
@@ -95,7 +95,7 @@ func TestDeadCategoryIsReportedEvenThoughZeroIsWithinBudget(t *testing.T) {
 		map[string]string{"tools/cmd/llz/a.go": "package main\n"})
 
 	var out, errOut bytes.Buffer
-	err := runBudgetGateTo("core-surface", root, "b.yaml", false, coreSurfaceRemedy, &out, &errOut)
+	err := RunTo("core-surface", root, "b.yaml", false, CoreSurfaceRemedy, &out, &errOut)
 	if err == nil {
 		t.Fatal("0 is within a budget of 500, but the category is dead and must fail")
 	}
@@ -116,7 +116,7 @@ func TestExactBudgetFailsWhenThePackageShrinks(t *testing.T) {
 		return writeBudgetRepo(t, cfg+"    include:\n      - \"tools/cmd/llz/*.go\"\n", files)
 	}
 	var out, errOut bytes.Buffer
-	err := runBudgetGateTo("core-surface", mk(50, true), "b.yaml", false, coreSurfaceRemedy, &out, &errOut)
+	err := RunTo("core-surface", mk(50, true), "b.yaml", false, CoreSurfaceRemedy, &out, &errOut)
 	if err == nil {
 		t.Fatal("an exact budget above the measurement must fail — that slack is undeclared")
 	}
@@ -130,13 +130,13 @@ func TestExactBudgetFailsWhenThePackageShrinks(t *testing.T) {
 	// exactly equal passes
 	out.Reset()
 	errOut.Reset()
-	if err := runBudgetGateTo("core-surface", mk(2, true), "b.yaml", false, coreSurfaceRemedy, &out, &errOut); err != nil {
+	if err := RunTo("core-surface", mk(2, true), "b.yaml", false, CoreSurfaceRemedy, &out, &errOut); err != nil {
 		t.Errorf("an exact budget EQUAL to the measurement must pass: %v", err)
 	}
 	// and without exact, slack is the documented +3% convention untestable-loc uses
 	out.Reset()
 	errOut.Reset()
-	if err := runBudgetGateTo("untestable-loc", mk(50, false), "b.yaml", false, untestableRemedy, &out, &errOut); err != nil {
+	if err := RunTo("untestable-loc", mk(50, false), "b.yaml", false, UntestableRemedy, &out, &errOut); err != nil {
 		t.Errorf("without exact, headroom must remain legal: %v", err)
 	}
 }

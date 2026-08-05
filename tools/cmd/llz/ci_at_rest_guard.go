@@ -65,6 +65,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shquote"
 )
 
 // atRestRule is why one at-rest gap is allowed to stay open.
@@ -539,7 +541,7 @@ func stripHCLNoise(lines []string) []string {
 				continue
 			}
 		}
-		code, _ := stripQuotedSpans(l)
+		code, _ := shquote.StripSpans(l)
 		if k := strings.Index(code, "/*"); k >= 0 {
 			if e := strings.Index(code[k:], "*/"); e >= 0 {
 				code = code[:k] + code[k+e+2:]

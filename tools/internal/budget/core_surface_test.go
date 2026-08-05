@@ -1,4 +1,4 @@
-package main
+package budget
 
 import (
 	"bytes"
@@ -109,10 +109,10 @@ func TestCoreSurfaceFailsOverBudgetAndPassesUnder(t *testing.T) {
 	files := map[string]string{
 		"tools/cmd/llz/a.go": "package main\nfunc A() {}\nvar x = 1\n", // 3 logic lines
 	}
-	if err := runCoreSurface(writeCoreSurfaceRepo(t, 3, files), ".core-surface-budget.yaml", false); err != nil {
+	if err := Run("core-surface", writeCoreSurfaceRepo(t, 3, files), ".core-surface-budget.yaml", false, CoreSurfaceRemedy); err != nil {
 		t.Errorf("at exactly budget the gate must pass, got %v", err)
 	}
-	err := runCoreSurface(writeCoreSurfaceRepo(t, 2, files), ".core-surface-budget.yaml", false)
+	err := Run("core-surface", writeCoreSurfaceRepo(t, 2, files), ".core-surface-budget.yaml", false, CoreSurfaceRemedy)
 	if err == nil {
 		t.Fatal("over budget must fail")
 	}
@@ -125,15 +125,15 @@ func TestCoreSurfaceFailsOverBudgetAndPassesUnder(t *testing.T) {
 // .untestable-budget.yaml: the two gates push in opposite directions, so a
 // breach here must not tell the reader to move logic INTO tools/cmd/llz.
 func TestCoreSurfaceRemedyPointsOutOfPackageMain(t *testing.T) {
-	if strings.Contains(untestableRemedy, "internal") {
+	if strings.Contains(UntestableRemedy, "internal") {
 		t.Error("the untestable-loc remedy should point INTO tools/cmd/llz")
 	}
-	if !strings.Contains(untestableRemedy, "tools/cmd/llz") {
+	if !strings.Contains(UntestableRemedy, "tools/cmd/llz") {
 		t.Error("the untestable-loc remedy names tools/cmd/llz as the destination")
 	}
 	for _, want := range []string{"tools/internal", "extension", "{config}"} {
-		if !strings.Contains(coreSurfaceRemedy, want) {
-			t.Errorf("core-surface remedy should mention %q; got %q", want, coreSurfaceRemedy)
+		if !strings.Contains(CoreSurfaceRemedy, want) {
+			t.Errorf("core-surface remedy should mention %q; got %q", want, CoreSurfaceRemedy)
 		}
 	}
 }
@@ -159,7 +159,7 @@ func TestBudgetGateUsesConfigRemedy(t *testing.T) {
 	if parsed.Remedy != "MOVE IT OUT" {
 		t.Fatalf("remedy did not parse: %q", parsed.Remedy)
 	}
-	if err := runBudgetGate("core-surface", root, "b.yaml", false, coreSurfaceRemedy); err == nil {
+	if err := Run("core-surface", root, "b.yaml", false, CoreSurfaceRemedy); err == nil {
 		t.Error("budget 0 must fail")
 	}
 }
@@ -215,8 +215,8 @@ func budgetFixture(t *testing.T, budget int, remedy string) string {
 // of both. ci_guards.go documents this hazard; this asserts it.
 func TestBudgetGateEmitsAGitHubAnnotationAtLineStart(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := runBudgetGateTo("core-surface", budgetFixture(t, 1, ""), "b.yaml", false,
-		coreSurfaceRemedy, &out, &errOut)
+	err := RunTo("core-surface", budgetFixture(t, 1, ""), "b.yaml", false,
+		CoreSurfaceRemedy, &out, &errOut)
 	if err == nil {
 		t.Fatal("over budget must fail")
 	}
@@ -236,8 +236,8 @@ func TestBudgetGateEmitsAGitHubAnnotationAtLineStart(t *testing.T) {
 // "{config}" to operators.
 func TestBudgetGateSubstitutesTheConfigPlaceholder(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := runBudgetGateTo("core-surface", budgetFixture(t, 1, ""), "b.yaml", false,
-		coreSurfaceRemedy, &out, &errOut); err == nil {
+	if err := RunTo("core-surface", budgetFixture(t, 1, ""), "b.yaml", false,
+		CoreSurfaceRemedy, &out, &errOut); err == nil {
 		t.Fatal("over budget must fail")
 	}
 	got := errOut.String()
@@ -253,8 +253,8 @@ func TestBudgetGateSubstitutesTheConfigPlaceholder(t *testing.T) {
 // distinguishing two gates that otherwise print identically.
 func TestBudgetGateConfigRemedyWinsAndIsPrinted(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := runBudgetGateTo("core-surface", budgetFixture(t, 1, "MOVE-IT-OUT-{config}"), "b.yaml",
-		false, coreSurfaceRemedy, &out, &errOut); err == nil {
+	if err := RunTo("core-surface", budgetFixture(t, 1, "MOVE-IT-OUT-{config}"), "b.yaml",
+		false, CoreSurfaceRemedy, &out, &errOut); err == nil {
 		t.Fatal("over budget must fail")
 	}
 	if !strings.Contains(errOut.String(), "MOVE-IT-OUT-b.yaml") {
@@ -271,7 +271,7 @@ func TestCategoryMatchingNoFilesIsAHardFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	err := runBudgetGateTo("core-surface", root, "b.yaml", false, coreSurfaceRemedy, &out, &errOut)
+	err := RunTo("core-surface", root, "b.yaml", false, CoreSurfaceRemedy, &out, &errOut)
 	if err == nil {
 		t.Fatal("a category whose globs match nothing must fail — it can never fail otherwise")
 	}
@@ -291,7 +291,7 @@ func TestAllowEmptyOptsOutDeliberately(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if err := runBudgetGateTo("core-surface", root, "b.yaml", false, coreSurfaceRemedy, &out, &errOut); err != nil {
+	if err := RunTo("core-surface", root, "b.yaml", false, CoreSurfaceRemedy, &out, &errOut); err != nil {
 		t.Errorf("allowEmpty must permit an empty category: %v", err)
 	}
 }
@@ -313,7 +313,7 @@ func TestZeroTallyWithMatchedFilesIsNotDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if err := runBudgetGateTo("core-surface", root, "b.yaml", false, coreSurfaceRemedy, &out, &errOut); err != nil {
+	if err := RunTo("core-surface", root, "b.yaml", false, CoreSurfaceRemedy, &out, &errOut); err != nil {
 		t.Errorf("a matched-but-zero category is alive and within budget: %v\n%s", err, errOut.String())
 	}
 	if strings.Contains(out.String(), "MATCHED NOTHING") {

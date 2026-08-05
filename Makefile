@@ -28,6 +28,7 @@ RETRY := template-scripts/ci/with-retry.sh
 # Override on the CLI, e.g. `make coverage COVERAGE_MINS="cmd/llz=20"`.
 COVERAGE_MINS := \
 	cmd/llz=48 \
+	internal/budget=92 \
 	internal/cli=95 \
 	internal/clusterspec=95 \
 	internal/extension=95 \
@@ -36,7 +37,9 @@ COVERAGE_MINS := \
 	internal/linode=80 \
 	internal/metrics=95 \
 	internal/openbao=88 \
+	internal/pathglob=93 \
 	internal/preflight=95 \
+	internal/shquote=100 \
 	internal/terraform=95
 
 help:

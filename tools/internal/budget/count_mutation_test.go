@@ -1,4 +1,4 @@
-package main
+package budget
 
 import (
 	"os"
@@ -151,31 +151,6 @@ func TestCountMakefileRecipeLinesEdges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := countMakefileRecipeLines(tt.in); got != tt.want {
 				t.Errorf("countMakefileRecipeLines() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestMatchGlobStarAtPatternEdges covers the `*` lookahead at both ends of a
-// pattern — a leading `*` (there is nothing before it to inspect) and a trailing
-// `*` (there is nothing after it). Both are ordinary budget-config include
-// patterns, and either edge mishandled makes matchGlob's error path swallow the
-// pattern, silently dropping a whole category's files from the tally.
-func TestMatchGlobStarAtPatternEdges(t *testing.T) {
-	tests := []struct {
-		pattern, path string
-		want          bool
-	}{
-		{"*.sh", "lib.sh", true},
-		{"*.sh", "scripts/lib.sh", false}, // a single * stays within a segment
-		{"scripts/*", "scripts/deploy.sh", true},
-		{"scripts/*", "scripts/sub/deploy.sh", false},
-		{"**", "a/b/c.sh", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.pattern+"~"+tt.path, func(t *testing.T) {
-			if got := matchGlob(tt.pattern, tt.path); got != tt.want {
-				t.Errorf("matchGlob(%q,%q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
 			}
 		})
 	}

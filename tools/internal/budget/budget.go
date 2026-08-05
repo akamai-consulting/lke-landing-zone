@@ -1,6 +1,6 @@
-package main
+package budget
 
-// ci_budget_gate.go — the engine shared by every budget gate.
+// Package budget is the engine shared by every budget gate.
 //
 // A budget gate is the same shape every time: walk the repo once, tally matching
 // files per category with a counter chosen by `kind:`, compare each total to a
@@ -18,17 +18,26 @@ package main
 //
 // Everything here is deliberately gate-neutral. A third budget should need a
 // config file, a counter and a command — not a fork of this file.
+//
+// IT LIVES OUTSIDE PACKAGE MAIN BECAUSE ITS OWN GATE SAID SO. `llz ci
+// core-surface` counts Go logic in tools/cmd/llz and prescribes exactly this
+// move; running the gate on itself and then taking its advice is the cheapest
+// available proof that the advice is followable. The two cobra commands stay in
+// package main — a flag set and a remedy string each — and everything with a
+// test moved here. See docs/designs/internal-extensions.md, which lists
+// `guard-budgets` as the first extraction for this reason.
 
 import (
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pathglob"
 )
 
 // budgetConfig is the on-disk config for a budget gate. Each category names
@@ -123,15 +132,18 @@ func (r categoryResult) matchedNothing() bool { return r.matched == 0 && !r.allo
 // is the one thing the gate will not let you do by accident.
 func (r categoryResult) stale() bool { return r.exact && r.matched > 0 && r.total < r.budget }
 
-// runBudgetGate loads a budget config, tallies every category and fails when any
-// is over. Shared by `llz ci untestable-loc` and `llz ci core-surface`: the two
-// gates differ only in which config they read and what they tell you to do about
-// a breach, so everything else lives here once.
-func runBudgetGate(gate, root, configPath string, verbose bool, defaultRemedy string) error {
-	return runBudgetGateTo(gate, root, configPath, verbose, defaultRemedy, os.Stdout, os.Stderr)
+// Run loads a budget config, tallies every category and fails when any is over.
+// Shared by `llz ci untestable-loc` and `llz ci core-surface`: the two gates
+// differ only in which config they read and what they tell you to do about a
+// breach, so everything else lives here once.
+//
+// Gate names the gate in output and errors; DefaultRemedy is the guidance printed
+// on a breach when the config declares no `remedy:` key of its own.
+func Run(gate, root, configPath string, verbose bool, defaultRemedy string) error {
+	return RunTo(gate, root, configPath, verbose, defaultRemedy, os.Stdout, os.Stderr)
 }
 
-// runBudgetGateTo is runBudgetGate with its output injected.
+// RunTo is Run with its output injected.
 //
 // The writers are parameters because the gate's OUTPUT IS ITS PRODUCT. Everything
 // this command exists to do — name the over-budget category, print the remedy
@@ -144,7 +156,7 @@ func runBudgetGate(gate, root, configPath string, verbose bool, defaultRemedy st
 // hazard ci_guards.go documents — GitHub only parses an annotation command at the
 // START of a line — which is why that file keeps its logic in pure functions over
 // injected io.Writers. This one now does too.
-func runBudgetGateTo(gate, root, configPath string, verbose bool, defaultRemedy string, out, errOut io.Writer) error {
+func RunTo(gate, root, configPath string, verbose bool, defaultRemedy string, out, errOut io.Writer) error {
 	cfg, err := loadBudgetConfig(filepath.Join(root, configPath))
 	if err != nil {
 		return err
@@ -259,11 +271,11 @@ func scanBudgetCategories(root string, cfg budgetConfig) ([]categoryResult, erro
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if matchAnyGlob(cfg.Exclude, rel) {
+		if pathglob.MatchAny(cfg.Exclude, rel) {
 			return nil
 		}
 		for name, cat := range cfg.Categories {
-			if matchAnyGlob(cat.Include, rel) {
+			if pathglob.MatchAny(cat.Include, rel) {
 				perCat[name] = append(perCat[name], rel)
 			}
 		}
@@ -332,67 +344,4 @@ func countLinesSkippingComments(content, comment string) int {
 		total++
 	}
 	return total
-}
-
-func matchAnyGlob(patterns []string, path string) bool {
-	for _, p := range patterns {
-		if matchGlob(p, path) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchGlob matches a slash-path against a glob supporting `**` (any number of
-// path segments, including zero), `*` (within a segment), and `?`. Anchored at
-// both ends. filepath.Match lacks `**`, so we compile to a regexp.
-func matchGlob(pattern, path string) bool {
-	re, err := globToRegexp(pattern)
-	if err != nil {
-		return false
-	}
-	return re.MatchString(path)
-}
-
-var globCache = map[string]*regexp.Regexp{}
-
-func globToRegexp(pattern string) (*regexp.Regexp, error) {
-	if re, ok := globCache[pattern]; ok {
-		return re, nil
-	}
-	var b strings.Builder
-	b.WriteString("^")
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		switch c {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				// `**` — any sequence including slashes. Swallow a following
-				// slash so `a/**/b` also matches `a/b`.
-				i++
-				if i+1 < len(pattern) && pattern[i+1] == '/' {
-					i++
-					b.WriteString("(?:.*/)?")
-				} else {
-					b.WriteString(".*")
-				}
-			} else {
-				b.WriteString("[^/]*") // single * stays within a path segment
-			}
-		case '?':
-			b.WriteString("[^/]")
-		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\':
-			b.WriteByte('\\')
-			b.WriteByte(c)
-		default:
-			b.WriteByte(c)
-		}
-	}
-	b.WriteString("$")
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return nil, err
-	}
-	globCache[pattern] = re
-	return re, nil
 }

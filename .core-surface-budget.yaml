@@ -2,8 +2,8 @@
 #
 # WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
 # WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
-# WHAT A BREACH TELLS YOU:                   coreSurfaceRemedy, in
-#                                            tools/cmd/llz/ci_core_surface.go
+# WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
+#                                            tools/internal/budget/remedy.go
 #
 # This file is the operational half of that: the number, and the rule for
 # changing it. The argument lives in the ADR and is not repeated here.
@@ -35,21 +35,33 @@
 # what this repo wants more of.
 #
 # NO `remedy:` KEY, deliberately. The breach guidance lives only in
-# coreSurfaceRemedy: when it lived in both places the YAML copy silently won, and
-# an edit to the Go constant never reached an operator. The key stays supported
+# budget.CoreSurfaceRemedy: when it lived in both places the YAML copy silently
+# won, and an edit to the Go constant never reached an operator. The key stays supported
 # for a gate that needs to override the default; this one does not.
 
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 47,182 logic lines across 236 non-test files, 130 of them ci_*.go.
+    # 46,716 logic lines across 234 non-test files, 128 of them ci_*.go.
     #
-    # The first number this gate ever recorded was 41,803 across 215 files, taken
-    # on 2026-08-03. Rebasing onto main five weeks later moved it to 47,182 across
-    # 236 — +5,379 lines and +21 files with no decomposition in between, which is
-    # the trend the ADR predicted arriving on schedule. That is the point of the
-    # line: it is a measurement, and the measurement is what argues.
-    budget: 47182
+    # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
+    # matters about a ratchet:
+    #
+    #   41,803 / 215 files  2026-08-03. The first number the gate ever recorded.
+    #   47,182 / 236 files  2026-08-05, on rebase. +5,379 in five weeks of `main`
+    #                       with nothing extracted — the trend ADR 0014 predicted,
+    #                       arriving on schedule and restated by hand because the
+    #                       gate went red until someone did.
+    #   46,716 / 234 files  the guard-budgets EXTRACTION. The budget engine, the
+    #                       counters, the remedies and their tests are now
+    #                       tools/internal/budget; the two commands are a flag set
+    #                       each. -466, and the FIRST paydown.
+    #
+    # `exact: true` is what made this commit possible to get wrong and therefore
+    # possible to get right: extracting the code and forgetting this line fails the
+    # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
+    # rather than left as slack the next change grows into unremarked.
+    budget: 46716
     exact: true
     include:
       - "tools/cmd/llz/*.go"
