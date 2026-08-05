@@ -857,10 +857,32 @@ func githubAnchor(text string) string {
 
 // docAnchors returns every anchor the headings of a doc define. A repeated
 // heading text gets GitHub's `-1`, `-2` … suffixes, so those are registered too.
-func docAnchors(body string) map[string]bool {
-	out, seen, fence := map[string]bool{}, map[string]int{}, false
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "```") {
+// docHeading is one heading with the anchor GitHub will give it.
+type docHeading struct {
+	Level  int
+	Text   string
+	Anchor string
+	Line   int
+}
+
+// docHeadings walks a document's headings IN ORDER, assigning each the anchor
+// GitHub would. Both the TOC generator (`llz ci gen-toc`) and the TOC checker
+// call it, so there is exactly ONE slug implementation in the repo.
+//
+// That sharing is deliberate but not free: a checker that shares its rule with
+// the generator cannot catch a bug IN the rule — which is precisely how the
+// whitespace-collapse bug survived when the generator was a separate Python
+// script. TestGithubAnchor_MatchesGithubSlugger is what covers that gap, by
+// pinning githubAnchor against slugs captured from the real implementation.
+//
+// De-duplication is over ALL headings in document order, before any level
+// filtering — GitHub numbers the second "Notes" as `notes-1` whether or not a
+// TOC lists it.
+func docHeadings(body string) []docHeading {
+	var out []docHeading
+	seen, fence := map[string]int{}, false
+	for i, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fence = !fence
 			continue
 		}
@@ -871,16 +893,26 @@ func docAnchors(body string) map[string]bool {
 		if m == nil {
 			continue
 		}
-		a := githubAnchor(m[2])
-		if a == "" {
+		base := githubAnchor(m[2])
+		if base == "" {
 			continue
 		}
-		if n := seen[a]; n > 0 {
-			out[fmt.Sprintf("%s-%d", a, n)] = true
-		} else {
-			out[a] = true
+		a := base
+		if n := seen[base]; n > 0 {
+			a = fmt.Sprintf("%s-%d", base, n)
 		}
-		seen[a]++
+		seen[base]++
+		out = append(out, docHeading{
+			Level: len(m[1]), Text: strings.TrimRight(m[2], " "), Anchor: a, Line: i + 1,
+		})
+	}
+	return out
+}
+
+func docAnchors(body string) map[string]bool {
+	out := map[string]bool{}
+	for _, h := range docHeadings(body) {
+		out[h.Anchor] = true
 	}
 	return out
 }

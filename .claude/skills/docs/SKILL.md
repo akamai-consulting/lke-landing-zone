@@ -127,7 +127,8 @@ and a TOC is exactly that list. It is allowed only because it is **delimited**
 (regenerable) and **checked**:
 
 ```bash
-python3 template-scripts/gen-toc.py --level=2 docs/<file>.md   # inserts or refreshes
+cd tools && go run ./cmd/llz ci gen-toc --level=2 ../docs/<file>.md   # insert/refresh
+cd tools && go run ./cmd/llz ci gen-toc --check ../docs/<file>.md     # report staleness
 ```
 
 **The anchor rule is `github-slugger`, and it is not what you would guess.** It
@@ -142,11 +143,23 @@ It also **keeps** the U+FE0F variation selector, so `⚠️ Heading` slugs with 
 leading invisible character.
 
 I got this wrong, and the guard agreed with me — because the generator and the
-checker shared the rule, so a wrong anchor was compared against a wrong anchor.
-That is why `tools/cmd/llz/testdata/github_slugs.json` is an **oracle**: every
-heading in the repo paired with the slug the real implementation produced.
-**Only an oracle catches a shared-assumption bug.** Regenerate it with
-`github-slugger` if headings change substantially.
+checker each carried their own copy of the rule and both copies were wrong, so a
+wrong anchor was compared against a wrong anchor. That is why
+`tools/cmd/llz/testdata/github_slugs.json` is an **oracle**: every heading in the
+repo paired with the slug the real implementation produced. **Only an oracle
+catches a shared-assumption bug.** Regenerate it with `github-slugger` if
+headings change substantially.
+
+The generator and checker now share **one** walk (`docHeadings`), so they cannot
+disagree with each other — which also means the checker can no longer audit the
+rule. The oracle test is the only thing standing there; do not delete it.
+
+> **Do not write a helper like this as a shell or Python script.**
+> `.untestable-budget.yaml` caps non-Go logic per category and is a **ratchet** —
+> the first cut of this generator was a 74-line Python script and failed the
+> `untestable-loc` gate at 74/60 on its first CI run. The gate's message is
+> explicit that the fix is to move the logic into `tools/cmd/llz`, never to raise
+> the budget. `python-scripts` is now ratcheted to **0**.
 
 Do not add a TOC to every long doc. GitHub renders an outline button; a TOC
 nobody regenerates is worse than none. The ~15 that have one are the ones read
