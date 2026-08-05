@@ -188,7 +188,44 @@ ship to adopters too.
 Rule of thumb: if a row would still be there after the thing it describes is
 finished, it belongs in a sub-index, not the README.
 
-## Rule 9 — de-duplicate, but do not merge different questions
+## Rule 9 — historical content: which kind, and where
+
+Not all history is rot. A sweep of all ~111 files found the split is clean, and
+it is about **whether the reader can resolve the reference**:
+
+**Keep — "where did X go?" notes.** `secrets.md`'s *"`secret/harbor/admin` is NO
+LONGER seeded here — ESO writes it in-cluster via PushSecrets"*, or
+`linode-credential-rotation.md`'s *"`CLOUD_FIREWALL_TOKEN` was retired"*. An
+operator upgrading an older instance searches for the thing that vanished. These
+are load-bearing and should not be trimmed.
+
+**Delete — author-seat references.** **`this branch` / `this PR` in a live doc is
+always wrong the moment it merges.** `alerting.md` carried four, describing chart
+fixes that shipped many versions ago (`llz-openbao-platform` 0.1.18 → now 0.1.30)
+against an issue that is closed. A reader today cannot resolve "this branch" to
+anything.
+
+Rewrite as a **standing fact plus the version it landed in** — *"since chart
+0.1.18, the NetworkPolicy grants …"* — which stays true and still tells an
+operator on an older chart what they are missing.
+
+That rewrite also found a **real open gap the stale framing was hiding**: the doc
+said Harbor's alerts were "provisional pending a spot-check", when in fact the
+alerts shipped and it is the *scrape gate* that never landed — Harbor's
+ServiceMonitor is still absent from `defaultScrapeMonitors`, so nothing fails if
+its metrics stop. Stale status text is not just noise; it conceals current state.
+
+Two measurement traps when sweeping for this:
+
+- `#\d{2,4}` matches **mermaid hex colours** (`fill:#4285f4` → `#4285`). It made
+  `architecture/overview.md` look like it had 8 issue references; it has none.
+- Most `the old …` hits in rotation runbooks are **procedural**, not historical
+  ("revoke the old token *after* the new one authenticates"). Read them.
+
+Archival files — `docs/adr/`, `docs/designs/`, `docs/workflows/`,
+`lessons-learned.md` — are exempt. History is their content.
+
+## Rule 10 — de-duplicate, but do not merge different questions
 
 Real duplication: the `secrets: inherit` / `required: false` rationale was
 written at full length in **both** workflow docs — the second even said "same
@@ -199,7 +236,7 @@ Not duplication: three apl-core documents that look interchangeable in an index
 are a cutover **runbook** plus two version-pair **designs**. The audit proposed
 merging them; that was wrong. Label them by the question each answers instead.
 
-## Rule 10 — a chart README edit needs a Chart.yaml bump
+## Rule 11 — a chart README edit needs a Chart.yaml bump
 
 `chart-version-guard` fires on any edit inside a chart directory, because
 `publish-charts.yml` only pushes a **new** version. A README-only change still
