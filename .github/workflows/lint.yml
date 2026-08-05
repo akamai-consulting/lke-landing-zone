@@ -25,6 +25,19 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      # Markdown ANYWHERE. The `docs` job below runs docs-guard, whose corpus is
+      # every .md file in the repo — but no path here matched one, so the guard
+      # only ever ran when a PR happened to also touch code. A docs-only PR (the
+      # exact change class it was built for) got no CI at all, which is the
+      # vacuous pass docs/e2e-gates.md refuses, one level up: the gate existed,
+      # was tested, was wired into `make lint`, and nothing in CI could invoke it.
+      # Deliberately '**.md' rather than 'docs/**' — chart READMEs, AGENTS.md,
+      # instance-template/ prose and .claude/skills/ are all in the corpus. And
+      # '**.md', NOT '**/*.md': GitHub's matcher treats `**` as "any characters
+      # INCLUDING /", so `**/*.md` requires a separator and silently misses every
+      # ROOT-level file — AGENTS.md and README.md, both of which the guard reads.
+      # An under-matching filter is what this whole entry exists to fix.
+      - '**.md'
   push:
     branches: [main, master]
     paths:
@@ -43,6 +56,8 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      # Markdown anywhere — see the note on the pull_request copy above.
+      - '**.md'
   workflow_dispatch:
 
 name: Lint

@@ -36,9 +36,9 @@ runtime. The one deliberate exception is the pinned docs pointer, which
 This is not a style preference. A version restated in the scaffold adds that many
 lines to **every instance's upgrade diff, on every release, forever**. One real
 instance spent 45 of 53 changed lines on a content-free version bump — 27
-version-pinned doc permalinks, 10 workflow inputs, and prose — all restating the
-one fact copier already records. Nothing in CI objected, because each addition
-looked reasonable on its own.
+version-pinned doc permalinks, 10 `template-ref:` inputs, and prose — all
+restating the one fact copier already records. Nothing in CI objected, because
+each addition looked reasonable on its own.
 
 **Restating the pin in prose counts.** Link to `.copier-answers.yml` instead.
 

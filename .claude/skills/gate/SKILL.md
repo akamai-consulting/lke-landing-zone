@@ -113,10 +113,6 @@ true and useless and sent the reader to a live cluster.
 
 ## Step 5 — wiring a live lane
 
-> **`docs/e2e-gates.md` step 3 is stale here.** It describes a `lane` line plus a
-> separate result-collection loop in the vendored workflow. That inline bash is
-> gone. Follow this instead, and see the note at the bottom of this file.
-
 1. **Write the verb** as `tools/cmd/llz/ci_assert_<thing>.go`, registered in
    `ci.go`. Keep the judgement in a **pure function over parsed input** so it is
    testable without a cluster; keep the transport (kubectl, port-forward, API) in
@@ -160,9 +156,3 @@ Keep these in mind while writing; they are the shape of what gets missed.
 - **A rename on one side of a contract.** The commit that started renaming volumes
   edited the reaper's own file, ~19 lines from the prefix check it invalidated.
   Both sides had passing tests; each tested its own copy of the rule.
-
----
-
-**Known drift:** `docs/e2e-gates.md` "Adding an e2e gate" step 3 still describes
-the pre-`assert-suite` wiring. Worth a one-paragraph fix in a docs PR; this file
-carries the current procedure meanwhile.

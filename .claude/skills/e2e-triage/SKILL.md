@@ -29,21 +29,21 @@ dependency (cluster access, DNS, the whole health tree) failed, not each lane.
 ## Step 2 — let the classifiers name it before you guess
 
 Large classes of wedge are **already encoded** in
-`tools/internal/health/argo.go` and `tools/cmd/llz/ci_health.go`, with the
-reasoning in comments beside each verdict. Do not re-derive them by hand, and do
-not add a rival table to this file that would rot — read the code:
+`tools/internal/health/argo.go` and `tools/cmd/llz/ci_health.go`. Each verdict
+carries its reasoning in a comment beside it, and those comments are the
+authority — this is an index into them, not a substitute, and when the two
+disagree the code is right:
 
-| Verdict | Means |
+| Verdict | Roughly |
 |---|---|
-| `CatPending` + argocd-redis cache auth | repo-server↔redis password split — **transient**, polling |
-| `CatPending` + 256KB annotation limit | converge strips the oversized CRD annotation and re-polls |
-| `CatPending` + waiting on OpenBao bootstrap | ordering, not a fault |
+| `CatPending` | transient — poll. Redis cache auth, the 256KB annotation limit, waiting on OpenBao bootstrap, a Progressing rollout |
 | `CatDeferred` | deliberately not converged yet |
-| `CatInstance` | instance-owned via the operator escape hatch — reported, does **not** gate |
+| `CatInstance` | instance-owned via the operator escape hatch — reported, does **not** gate platform convergence |
 | `CatDrift` | workload functional; drift only |
 | `CatFail` | a real spec error |
 
-The distinctions are load-bearing. `IsRepoServerCacheAuthError` exists because a
+**Read the comment attached to whichever verdict you got** — the distinctions are
+load-bearing. `IsRepoServerCacheAuthError` exists because a
 `WRONGPASS`/`NOAUTH` `ComparisonError` makes **every** Application fail at once
 and looks like a fleet-wide config disaster; it is one never-restarted redis pod
 holding a stale `--requirepass` after the password rotated under it. The realign

@@ -53,8 +53,9 @@ adopter's dashboard as permanent `unknown` rows.
 
 ### 2. Pick the class honestly
 
-`credPaths` carries a class per path, and it answers exactly one question: **what
-lowers this credential's age once it exists?**
+`credPaths` (`reconcile_openbao.go`) carries a class per path, and it answers
+exactly one question: **what lowers this credential's age once it exists?** The
+`credClass*` constants beside it carry the full definition — this is the summary:
 
 | Class | Meaning |
 |---|---|

@@ -52,16 +52,11 @@ number", and the files say so in their own comments.
 
 ### `untestable-loc` — logic that cannot be unit-tested
 
-`.untestable-budget.yaml` caps six categories:
-
-| Category | Budget |
-|---|---|
-| `workflow-inline-bash` | 526 |
-| `shell-scripts` | 375 |
-| `python-scripts` | **0** |
-| `terraform-provisioner-bash` | 0 |
-| `makefile-recipe` | 28 |
-| `embedded-shell-in-yaml` | 23 |
+`.untestable-budget.yaml` caps six categories — inline workflow bash, shell
+scripts, Python scripts, Terraform provisioner heredocs, makefile recipes, and
+shell embedded in YAML block scalars. **Read the live budgets from the file, not
+from here**: they are a ratchet, and a number restated in a second place goes
+stale in the direction that reads as headroom you do not have.
 
 ```bash
 cd tools && go run ./cmd/llz ci untestable-loc --verbose   # per-file breakdown
@@ -74,15 +69,18 @@ justification** — that is the sanctioned escape, not a budget bump.
 It has been raised exactly once, to unblock six new e2e gates, and the debt was
 paid inside the same change so the net was still a ratchet down. That is the bar.
 
-> **Do not write a new helper as a shell or Python script.** `python-scripts` is
-> at 0. The first cut of one recent helper was a 74-line Python script and failed
-> this gate at 74/60 on its first CI run.
+> **Do not write a new helper as a shell or Python script.** The first cut of one
+> recent helper was a 74-line Python script and failed this gate on its first CI
+> run; the gate's own message says the fix is to move it into `tools/cmd/llz`.
+> Note the output is `used / budget` — a category reading `0 / 60` has **no
+> Python in the tree**, which is the state to preserve, not 60 lines of room to
+> spend.
 
 ### `check-coverage` — per-package floors
 
-`COVERAGE_MINS` in the [`Makefile`](../../../Makefile) holds a floor per package
-(`cmd/llz=48`, most `internal/*` at 78–95). Bump a floor **up** as coverage
-improves, never down.
+`COVERAGE_MINS` in the [`Makefile`](../../../Makefile) holds a floor per package.
+Bump a floor **up** as coverage improves, never down — so read the current floors
+there rather than from any copy.
 
 ```bash
 make coverage
@@ -104,7 +102,7 @@ in the post-`deliver-docs` instance. See the `docs` skill before fixing findings
 
 ## What each guard is actually asserting
 
-`make lint` composes ~25 named targets. When one goes red, `make help` gives the
+`make lint` composes dozens of named targets. When one goes red, `make help` gives the
 one-line summary and the target's own comment block in the
 [`Makefile`](../../../Makefile) gives the failure mode it was built against —
 those comments are the documentation, and they are usually specific about which
