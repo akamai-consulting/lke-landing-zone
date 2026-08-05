@@ -722,6 +722,22 @@ skipping it would leave ArgoCD syncing the *old* release's manifests under a
 new-release instance. `--no-render` opts out if you want to inspect the raw
 `copier update` result first; you then owe the tree an `llz render`.
 
+**The one step it cannot do for you: re-pin the CI images.** `TF_IMAGE` and
+`KUBE_IMAGE` are computed from the same pin (`ci-tofu:sha-<the commit the pin
+names>`), so they go stale on every upgrade for exactly the reason the
+kustomizations do — but CI reads them as GitHub repo **variables**, and `llz
+upgrade` pushes nothing. It detects the skew and prints both routes:
+
+```bash
+llz tokens --env <env> --yes    # re-pins + pushes them (and skips everything already set)
+# or the two commands it prints:
+gh variable set TF_IMAGE   --repo <owner>/<name> --body ghcr.io/<org>/ci-tofu:sha-<commit>
+gh variable set KUBE_IMAGE --repo <owner>/<name> --body ghcr.io/<org>/ci-kubernetes:sha-<commit>
+```
+
+Skip it and the first pipeline run after the upgrade fails `llz ci
+assert-image-fresh` with the same fix, 20 minutes later.
+
 Check how far behind you are any time:
 
 ```bash

@@ -231,6 +231,15 @@ copier update --trust --vcs-ref v0.0.39 -d llz_version=v0.0.39
 > syncing the previous release's shared manifests — a difference in what is
 > *deployed*, not just what is checked in.
 
+> **Re-pin `TF_IMAGE` / `KUBE_IMAGE` after every upgrade.** They are computed
+> from the template pin (`ghcr.io/<org>/ci-tofu:sha-<the commit the pin names>`),
+> so moving the pin leaves both naming the *previous* commit — the same
+> invalidation as the `?ref=` kustomizations above, but the value CI reads is a
+> GitHub repo **variable**, which `llz upgrade` does not push. It prints the two
+> `gh variable set` commands when it detects the skew; `llz tokens --env <env>
+> --yes` applies them for you. Leave it and the next pipeline run fails
+> `llz ci assert-image-fresh` — loudly and with the same fix, but 20 minutes in.
+
 Copier re-renders the old and new template versions and applies only the delta,
 so your local edits survive — conflicts appear (as `.rej`/merge markers) **only**
 where you changed a line the template also changed. The same `--trust`-gated task

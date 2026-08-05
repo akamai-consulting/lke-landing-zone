@@ -75,6 +75,24 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if n := prepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
+	// PRESENCE isn't CORRECTNESS either, for the two variables llz derives rather
+	// than gathers. `llz upgrade` moves the template pin, and TF_IMAGE/KUBE_IMAGE
+	// are computed FROM that pin — so an upgraded instance arrives here with both
+	// set, both satisfying every check below, and both naming the previous commit.
+	// Without this the one operator who has something to do is the one told
+	// "nothing to do", and their re-pin has no route that works: the fill at the
+	// bottom of this function skips anything already set, by design.
+	//
+	// A fresh instance costs nothing here — staleCIImageVars returns before its
+	// network round-trips when neither variable is recorded yet.
+	repin := staleCIImageVars(pinnedTemplateRef(), func(k string) string {
+		return firstNonEmpty(vars[k], instSt.value(k))
+	})
+	for _, s := range repin {
+		fmt.Printf("%s %s names an older template commit — re-pinning: %s → %s\n",
+			yellow("!"), s.Name, dim(s.Have), cyan(s.Want))
+		vars[s.Name] = s.Want
+	}
 	// Presence isn't validity: actively probe every gathered/cached credential so
 	// an expired/revoked/mistyped token surfaces in the VALID column (with "rotate
 	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
@@ -84,13 +102,14 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if invalidN > 0 {
 		fmt.Println(dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
-	if len(missing) == 0 {
+	if len(missing) == 0 && len(repin) == 0 {
 		_ = writeEnvFile(".llz/vars.env", vars)
 		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", green("✓"))
 		return nil
 	}
 	if g.dryRun {
-		fmt.Printf("\n%s\n", dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above.", len(missing))))
+		fmt.Printf("\n%s\n", dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above%s.",
+			len(missing), repinPlanNote(repin))))
 		return nil
 	}
 	if !g.yes {
@@ -465,6 +484,16 @@ func repoSlug(repo string) string {
 		return strings.ToLower(name)
 	}
 	return strings.ToLower(repo)
+}
+
+// repinPlanNote is the dry-run tail that keeps a repin-only run from reporting
+// "0 missing REQUIRED item(s)" and nothing else — which reads as "no work" for
+// precisely the run that has some.
+func repinPlanNote(repin []ciImageSkew) string {
+	if len(repin) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and re-pin %d ci image variable(s) to the current template pin", len(repin))
 }
 
 func firstNonEmpty(vals ...string) string {
