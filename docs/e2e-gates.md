@@ -187,18 +187,36 @@ of at e2e time.
    `ci_assert_openbao_audit.go` are the models.
 2. **Unit-test it** — the pure evaluator, the fail-closed arms (empty, malformed,
    unreachable), and the static half of the contract.
-3. **Wire it into the lane battery** — the `(e2e) assert suite` step in
-   `instance-template/.github/workflows/llz-bootstrap-openbao.yml`. Add the
-   `lane` line **and** the name to the result-collection loop; a lane missing from
-   that loop never fails the step.
+3. **Add the lane** to `assertSuiteLanes` in `tools/cmd/llz/ci_assert_suite.go`.
+   It is ONE list — a lane there is both run and collected — and every field is
+   load-bearing:
+   - `Steps` run in order and short-circuit at the first failure. Order them only
+     when a later step depends on a fact an earlier one just made true
+     (`scrape-reconciler` is the model); otherwise give them their own lane so
+     they run in parallel.
+   - `Gating: true` unless the lane is a diagnostic whose *output* is the
+     deliverable. `Gating: false` discards the exit status.
+   - `Why` — what the lane proves **and what stays green without it**. It prints
+     with the lane's `::group::`, so a failure carries its own rationale.
+
+   Check the table with `llz ci assert-suite --list`; no cluster needed. The
+   battery ships in the binary, not in each instance's vendored YAML, so a new
+   gate reaches every instance on the next release rather than when someone
+   remembers to edit their workflow.
 4. **Document the lane** in `docs/workflows/llz-bootstrap-openbao.md` — one
    bullet saying what it proves and what stays green without it.
 5. Check lane safety: mutating lanes must touch disjoint namespaces, and anything
    port-forwarding must bind local port `:0`.
 
-**A gate that isn't in the lane list does not exist.** It is the same vacuous
+**A gate that isn't in the lane table does not exist.** It is the same vacuous
 pass the doctrine above refuses, one level up — a check nothing runs reports
 nothing wrong.
+
+> This step used to describe a `lane` line plus a separate result-collection loop
+> in the bootstrap workflow, and warned that a lane missing from that loop would
+> run without ever being able to fail the step. That hazard is why the battery
+> moved into tested Go: the list is written once now, so the two halves cannot
+> disagree.
 
 ## Honesty about cost
 
