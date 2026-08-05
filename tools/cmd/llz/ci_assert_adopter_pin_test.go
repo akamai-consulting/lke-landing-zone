@@ -130,3 +130,48 @@ func TestAssertAdopterPinCmdWiring(t *testing.T) {
 		t.Error("--org is a no-op flag; it must not exist")
 	}
 }
+
+// The gate runs from the TEMPLATE repo, which has no .copier-answers.yml — so a
+// guard that reads the repo from the instance resolves against the first-party
+// default instead of the repo it was handed. On a FORK that means resolving the
+// fork's own release tag against upstream, where it does not exist.
+func TestAssertAdopterPinResolvesAgainstTheRepoItWasGiven(t *testing.T) {
+	writeInstanceDir(t, nil) // no answers file, exactly like a template checkout
+	stubImagePublished(t, func(string) (bool, bool) { return true, true })
+
+	var repos []string
+	stubTemplateCommit(t, func(repo, _ string) (string, bool) {
+		repos = append(repos, repo)
+		return pinSHA, true
+	})
+	if err := runAssertAdopterPin("myfork/lke-landing-zone", "v0.0.39"); err != nil {
+		t.Fatalf("runAssertAdopterPin = %v, want nil", err)
+	}
+	for _, got := range repos {
+		if got != "myfork/lke-landing-zone" {
+			t.Errorf("resolved against %q, want the repo the gate was given "+
+				"(a fork's tag does not exist upstream, and the miss is reported as a guard failure)", got)
+		}
+	}
+}
+
+// Leg 4 must not depend on the network. It used to re-run the full command, whose
+// resolve step degrades to warn-and-pass on a blip — and a passing NEGATIVE check
+// is exactly the verdict the gate reports as "the skew guard is not guarding".
+// A transient error must not be able to manufacture that.
+func TestAssertAdopterPinLegFourIsNotNetworkDependent(t *testing.T) {
+	stubImagePublished(t, func(string) (bool, bool) { return true, true })
+
+	calls := 0
+	stubTemplateCommit(t, func(string, string) (string, bool) {
+		calls++
+		// Resolve once (leg 1), then behave like a network that has gone away.
+		return pinSHA, calls == 1
+	})
+	if err := runAssertAdopterPin("acme/tmpl", "v0.0.39"); err != nil {
+		t.Fatalf("runAssertAdopterPin = %v; a blip after leg 1 must not change the verdict", err)
+	}
+	if calls != 1 {
+		t.Errorf("resolved %d time(s), want exactly 1 — legs 2-4 must reuse leg 1's answer", calls)
+	}
+}

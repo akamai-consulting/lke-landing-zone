@@ -30,8 +30,8 @@ package main
 //     pin, and REJECTS one stamped elsewhere. The tag-vs-dev-sha comparison is the
 //     path an adopter's every CI job takes and e2e's takes never
 //
-// It is deliberately cloud-free — three HTTP requests, no cluster — so it runs in
-// the lane's fast pre-flight job and gates the release before any spend.
+// It is deliberately cloud-free — a handful of HTTP requests, no cluster — so it
+// runs in the lane's fast pre-flight job and gates the release before any spend.
 
 import (
 	"fmt"
@@ -86,7 +86,10 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	fmt.Printf("  ✓ %s resolves to %s\n", ref, commit)
 
 	// 2. What `llz tokens` would write into the adopter's repo variables.
-	tfImage, kubeImage, pinned, why := computeCIImageVars(templateRepo, ref)
+	// ForCommit: leg 1 already resolved this tag. Re-resolving here would make the
+	// verdict depend on a second round-trip, and a blip on it reported "could not
+	// resolve" as a pin-computation failure — blaming the code for the network.
+	tfImage, kubeImage, pinned, why := computeCIImageVarsForCommit(commit, ref)
 	if !pinned {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
 		return fmt.Errorf("`llz tokens` would not pin an instance scaffolded at %s to an immutable image: %s.\n"+
@@ -125,10 +128,15 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	// 4. The comparison an adopter's every CI job makes. Asserting the NEGATIVE
 	//    matters as much as the positive: a guard that accepts everything would
 	//    satisfy the positive case and is exactly what shipped before.
-	if err := runAssertImageFresh("dev-"+commit, ref); err != nil {
+	// assertImageFreshResolved, not runAssertImageFresh: leg 1 already resolved this
+	// tag, so re-resolving would spend two more round-trips AND make the verdict
+	// network-dependent. A blip on the NEGATIVE call degrades to warn-and-pass,
+	// which reads here as "the guard accepted an unrelated commit" — a hard, false
+	// failure manufactured by a transient error.
+	if err := assertImageFreshResolved("dev-"+commit, ref, commit); err != nil {
 		return fmt.Errorf("assert-image-fresh rejects the image an adopter at %s would correctly be running: %w", ref, err)
 	}
-	if err := runAssertImageFresh("dev-"+foreignCommit(commit), ref); err == nil {
+	if err := assertImageFreshResolved("dev-"+foreignCommit(commit), ref, commit); err == nil {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline explaining the consequence
 		return fmt.Errorf("assert-image-fresh ACCEPTED a binary built at an unrelated commit against the %s pin.\n"+
 			"  The skew guard is not guarding: an adopter whose TF_IMAGE drifts off their pin would get no warning,\n"+

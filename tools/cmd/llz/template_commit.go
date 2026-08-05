@@ -206,15 +206,35 @@ func ciImageRef(org, image, tag string) string {
 // happened: they need different remedies, and a caller that cannot tell them apart
 // can only print something vague.
 func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
-	floating := func(why string) (string, string, bool, string) {
-		return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
-			ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
-			false, why
-	}
 	tag, ok := pinnedImageTag(templateRepo, ref)
 	if !ok {
-		return floating(fmt.Sprintf("could not resolve the template pin %q to a commit in %s", ref, templateRepo))
+		return floatingImageVars(fmt.Sprintf("could not resolve the template pin %q to a commit in %s", ref, templateRepo))
 	}
+	return ciImageVarsForTag(tag, ref)
+}
+
+// computeCIImageVarsForCommit is computeCIImageVars for a caller that has ALREADY
+// resolved the pin — it skips the round-trip rather than repeating it.
+//
+// Not an optimisation. `llz ci assert-adopter-pin` resolves the tag as its own
+// first step and then reports on what it finds; when this re-resolved
+// independently, a blip between the two produced "`llz tokens` would not pin …
+// could not resolve", a hard gate failure blaming the pin computation for a
+// transient network error. One resolution, one verdict.
+func computeCIImageVarsForCommit(commit, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
+	return ciImageVarsForTag("sha-"+commit, ref)
+}
+
+// floatingImageVars is the fallback pair: the version tags that track main.
+func floatingImageVars(why string) (string, string, bool, string) {
+	return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
+		ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
+		false, why
+}
+
+// ciImageVarsForTag builds the pinned pair for an image tag and verifies both are
+// pullable, falling back to the floating tags if either is definitively absent.
+func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
 	tf := ciImageRef(defaultTemplateOrg, "ci-tofu", tag)
 	kube := ciImageRef(defaultTemplateOrg, "ci-kubernetes", tag)
 	for _, im := range []string{tf, kube} {
@@ -223,7 +243,7 @@ func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pi
 		// mis-configuration this function exists to stop producing. Only a definite
 		// "not there" falls back.
 		if published, asked := imagePublished(im); asked && !published {
-			return floating(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
+			return floatingImageVars(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
 				"running on every main push (#102), or that build failed", im, ref))
 		}
 	}

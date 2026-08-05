@@ -194,15 +194,17 @@ jobs:
       - name: Adopter-shape gate — a release-tag pin runs the llz that rendered it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Empty on a dispatch; the gate then defaults to the latest published release.
+          # Through the ENVIRONMENT, never interpolated into the run: line. A tag name
+          # is attacker-influenceable text in the general case, and `${{ }}` inside a
+          # shell body is substituted before the shell ever sees it — the standard
+          # expression-injection shape. As an env var it is data.
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-          if [ -n "${RELEASE_TAG}" ]; then
-            bin/llz ci assert-adopter-pin --template-repo "${GITHUB_REPOSITORY}" --ref "${RELEASE_TAG}"
-          else
-            bin/llz ci assert-adopter-pin --template-repo "${GITHUB_REPOSITORY}"
-          fi
+        # An empty --ref is the dispatch case, not a bug: the expression above is empty
+        # off a release event and the gate reads that as "the latest published release".
+        # Passing it unconditionally keeps this one line — the if/else it replaces was
+        # four more lines of untestable workflow bash, which this repo budgets
+        # (untestable-loc-check) precisely to stop logic accreting out of tests' reach.
+        run: bin/llz ci assert-adopter-pin --template-repo "${GITHUB_REPOSITORY}" --ref "${RELEASE_TAG}"
 
   # ── 1. Instantiate the template into the throwaway E2E instance repo ──────────
   # Body lives in the shared reusable workflow, which release-e2e-warm.yml also

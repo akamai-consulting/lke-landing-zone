@@ -50,7 +50,7 @@ func TestRunAssertImageFresh(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			stubTemplateCommit(t, tc.resolve)
-			err := runAssertImageFresh(tc.baked, tc.ref)
+			err := runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl")
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runAssertImageFresh(%q,%q) = %v, want nil", tc.baked, tc.ref, err)
@@ -73,7 +73,7 @@ func TestAssertImageFreshSkewMessageIsActionable(t *testing.T) {
 	const pin = "b9fe2721b55e2cb196d418f8d0bc6069957e3bd3"
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pin, true })
 
-	err := runAssertImageFresh("dev-"+baked, "v0.0.39")
+	err := runAssertImageFresh("dev-"+baked, "v0.0.39", "acme/tmpl")
 	if err == nil {
 		t.Fatal("want skew error")
 	}
