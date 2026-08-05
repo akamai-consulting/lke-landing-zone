@@ -207,11 +207,22 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// so `llz doctor` shows + validates it and a stale PAT can't silently rot.)
 
 	// ── Computed vars ────────────────────────────────────────────────────────
+	tfImage, kubeImage, pinned := computeCIImageVars(instanceTemplateRepo(), pinnedTemplateRef())
 	if !have("TF_IMAGE", false) {
-		vars["TF_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-tofu:%s", strings.ToLower(defaultTemplateOrg), ciTofuTag)
+		vars["TF_IMAGE"] = tfImage
 	}
 	if !have("KUBE_IMAGE", false) {
-		vars["KUBE_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-kubernetes:%s", strings.ToLower(defaultTemplateOrg), ciKubernetesTag)
+		vars["KUBE_IMAGE"] = kubeImage
+	}
+	if !pinned {
+		// Not fatal — the floating tags are what every instance ran until now, and they
+		// are right whenever the tree is at main. But it is the shape that broke an
+		// adopter, so say so rather than let it look deliberate.
+		fmt.Printf("\n%s could not resolve template pin %q to a commit — TF_IMAGE/KUBE_IMAGE fall back to the\n"+
+			"      floating tags (%s/%s), which track main and can outrun this instance's pin.\n"+
+			"      Re-run once `gh` can reach %s, or pin them by hand to ghcr.io/%s/ci-tofu:sha-<commit>.\n",
+			yellow("!"), pinnedTemplateRef(), ciTofuTag, ciKubernetesTag,
+			instanceTemplateRepo(), strings.ToLower(defaultTemplateOrg))
 	}
 
 	// ── Optional secrets ─────────────────────────────────────────────────────

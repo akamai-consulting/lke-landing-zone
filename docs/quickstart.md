@@ -549,7 +549,7 @@ For what's missing it:
 | **State bucket** | lists your Linode OBJ clusters, you pick one, then **creates** the state bucket → `TF_STATE_BUCKET`, `TF_STATE_ENDPOINT` |
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
 | **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (the build writes the remaining infra secrets with it — see the permissions note below), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
-| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-tofu:<tag>` and `ghcr.io/<org>/ci-kubernetes:<tag>`) |
+| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE`, pinned to the **commit your template pin names** (`ghcr.io/<org>/ci-tofu:sha-<commit>`). The CI jobs run the `llz` baked into that image, so it has to be the same `llz` that rendered your committed manifests — a floating tag outruns your pin and the first pipeline run dies on `llz render --check` |
 | **Optional** | offers `LINODE_DNS_TOKEN` (Enter to skip — the cluster still bootstraps) |
 
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then

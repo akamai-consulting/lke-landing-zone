@@ -202,12 +202,23 @@ guards ad-hoc concurrent builds.
 
 1. **Image/template skew** (`Pre-flight — ci-tofu image matches the
    instance's template pin`). The instance pins `TF_IMAGE` (baked `llz`)
-   separately from its template pin. When the image lags, the checked-out
-   workflow calls `llz` commands/flags the baked binary lacks, surfacing far
-   downstream as a cryptic "unknown flag" or a silently no-op'd gate. `llz ci
-   assert-image-fresh` asserts they match, reading the pin from the instance's
-   own `.copier-answers.yml` — there is no third, hand-maintained copy of it to
-   skew.
+   separately from its template pin, and **both directions are fatal**. When the
+   image *lags*, the checked-out workflow calls `llz` commands/flags the baked
+   binary lacks, surfacing far downstream as a cryptic "unknown flag" or a
+   silently no-op'd gate. When it *leads*, its newer renderer disagrees with the
+   committed manifests and the very next step fails on `llz render --check`
+   drift that re-rendering locally cannot fix — the operator's `llz` **is** the
+   pinned release. `llz ci assert-image-fresh` asserts they match, reading the
+   pin from the instance's own `.copier-answers.yml` — there is no third,
+   hand-maintained copy of it to skew.
+
+   The pin is a release **tag** and the baked build is a **commit**, so the
+   guard resolves the tag against the (public) template repo to compare them at
+   all; the step gets `GH_TOKEN: ${{ github.token }}` for that, needing only
+   public read. A resolution it cannot make degrades to a warning, never a
+   failure. `llz tokens` computes `TF_IMAGE`/`KUBE_IMAGE` as
+   `sha-<commit of the pin>` precisely so this comparison is satisfied by
+   construction — see the fix line the guard prints if it is not.
 
 2. **Env secrets** (`Pre-flight — verify infra-<region> env secrets`) that the
    cluster-bootstrap apply needs: `APL_VALUES_REPO_TOKEN` and
