@@ -374,6 +374,11 @@ func ciCmd() *cobra.Command {
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())
+	// Release gate for the shape e2e structurally cannot produce: an instance pinned
+	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
+	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
+	// first-run to a live adopter with e2e green throughout.
+	c.AddCommand(ciAssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(ciCheckWorkflowShellsCmd())

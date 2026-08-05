@@ -173,6 +173,37 @@ jobs:
           LLZ_FUNCTIONAL_NET: "0"
         run: template-scripts/ci/llz-functional.sh
 
+      # ── The adopter's shape, which nothing else in this lane runs ──────────────
+      # Everything below this job pins the throwaway instance to ${{ github.sha }}
+      # and its TF_IMAGE to ci-tofu:sha-<that same sha> (e2e-instantiate.yml +
+      # `llz ci pin-instance-images`). Three legs, one commit, by construction — so
+      # the lane exercises precisely the one configuration in which the image pin
+      # cannot be wrong. An adopter has none of it: copier pins them at a release
+      # TAG and their TF_IMAGE is whatever `llz tokens` computed.
+      #
+      # That blind spot shipped. `llz tokens` computed a floating version tag, a
+      # release-pinned instance ran main's llz, and the adopter's FIRST pipeline run
+      # died on `llz render --check` drift — with every e2e run green throughout.
+      #
+      # Cloud-free (a few HTTP requests) and ahead of `instantiate`, so a release
+      # candidate that would hand adopters the wrong image fails before any spend.
+      # On a release event this checks the tag being cut; on a dispatch it falls
+      # back to the latest published release, which is what `llz new` scaffolds
+      # today and is worth re-checking anyway (a pruned or never-built image rots
+      # it long after the release was green).
+      - name: Adopter-shape gate — a release-tag pin runs the llz that rendered it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Empty on a dispatch; the gate then defaults to the latest published release.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG}" ]; then
+            bin/llz ci assert-adopter-pin --template-repo "${GITHUB_REPOSITORY}" --ref "${RELEASE_TAG}"
+          else
+            bin/llz ci assert-adopter-pin --template-repo "${GITHUB_REPOSITORY}"
+          fi
+
   # ── 1. Instantiate the template into the throwaway E2E instance repo ──────────
   # Body lives in the shared reusable workflow, which release-e2e-warm.yml also
   # calls, so the safety-critical copier-token render pass exists exactly once.
