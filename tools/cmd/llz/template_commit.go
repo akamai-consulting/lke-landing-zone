@@ -139,7 +139,7 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 // only when the environment is actually pointed at github.com, and `gh` is asked
 // for the github.com token by name.
 func githubToken() string {
-	if ghHost() == "github.com" {
+	if envIsGitHubDotCom() {
 		if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
 			return t
 		}
@@ -149,6 +149,31 @@ func githubToken() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// envIsGitHubDotCom reports whether the ambient environment's GitHub credentials
+// belong to github.com, so an env token may be sent to api.github.com.
+//
+// TWO signals, because neither covers the other's case:
+//
+//   - GH_HOST is what the operator/lane sets to point `gh` and llz at a forge. The
+//     GHES e2e lane sets it; an operator working an appliance sets it.
+//   - GITHUB_SERVER_URL is set by ACTIONS itself, to the forge that issued
+//     GITHUB_TOKEN. It is the only signal available inside the vendored instance
+//     workflows, which do NOT set GH_HOST today — the GHES instance-side plumbing
+//     is documented as not yet wired (release-e2e-lane.yml). Relying on GH_HOST
+//     alone would mean a GHE-hosted instance still shipped its appliance token to
+//     github.com the day that plumbing lands, which is precisely backwards: the
+//     scoping should already be correct when the host arrives, not one PR later.
+//
+// Unset means github.com — the overwhelmingly common case, and the historical
+// behaviour, so a laptop with neither variable keeps working.
+func envIsGitHubDotCom() bool {
+	if ghHost() != "github.com" {
+		return false
+	}
+	server := strings.TrimSpace(os.Getenv("GITHUB_SERVER_URL"))
+	return server == "" || server == "https://github.com" || server == "http://github.com"
 }
 
 // ownerRepoRe matches a bare GitHub `<owner>/<name>` slug and nothing else — not a
