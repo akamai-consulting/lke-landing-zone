@@ -5,7 +5,7 @@ description: Auditing, writing or restructuring this repo's Markdown. Use when a
 
 # Working on LLZ documentation
 
-Two full audits have been done. **PR #406** asked *is this true?* **PR #409**
+Two full audits have been done. **PR #406** asked *is this true?* **PR #411**
 asked *can this be read?* Both found real defects; both also got things wrong in
 ways worth not repeating. This file is the residue.
 
@@ -193,7 +193,7 @@ make instance-test          # if you touched instance-template/ or deliver-docs
 - Check `git status` for files you did not mean to commit. This branch swept up
   an untracked ADR belonging to another effort and needed a rebase to remove it.
 - **Publish corrections to your own audit.** #406 lowered the severity of its own
-  deprecated-flag finding in the PR body; #409 retracted four findings and two
+  deprecated-flag finding in the PR body; #411 retracted four findings and two
   Tier-3 recommendations. A report nobody can trust to correct itself is worth
   less than a shorter honest one.
 
