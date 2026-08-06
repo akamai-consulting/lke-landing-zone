@@ -24,6 +24,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
@@ -49,6 +50,7 @@ import (
 var declarations = []func() extension.Extension{
 	assertplatform.Extension,
 	assertreconciler.Extension,
+	assertregistry.Extension,
 	atrest.Extension,
 	brownfield.Extension,
 	budget.Extension,

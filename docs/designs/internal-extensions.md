@@ -183,7 +183,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
-| `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner` |
+| `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner`. **✅ Extracted** — closure **2**, the cleanest boundary of all seventeen. See [What `assert-registry` cost](#what-assert-registry-cost--nothing-and-that-is-the-finding).|
 | `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion |
 | `assert-database` | 194 | 1 | ✘ | pairs with `database-provisioner` |
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first sixteen, extracted
+## The first seventeen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -275,9 +275,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `token-inventory` extracted | 36,107 | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
 | `converge` extracted | 34,359 | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
 | `assert-platform` extracted | 33,877 | 185 | −482 — the first PURELY-assertion extension |
-| `assert-reconciler` extracted | **33,157** | 185 | −720 — the second OPT-IN, plus `promwire` |
+| `assert-reconciler` extracted | 33,157 | 185 | −720 — the second OPT-IN, plus `promwire` |
+| `assert-registry` extracted | **32,965** | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
 
-**Net −14,025 (29.7%) across sixteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −14,217 (30.1%) across seventeen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -985,6 +986,51 @@ sends an operator after a healthy reconciler.
 package `main`'s, so the test reads it at `../../cmd/llz/reconcile.go` — and when `reconciler-runtime`
 is extracted, a loud failure here is the **correct** outcome. A coupling guard that silently stops
 finding its subject is worse than one that breaks.
+
+### What `assert-registry` cost — nothing, and that is the finding
+
+Seventeenth, the **cheapest extraction of all of them**, and the only one that needed **no injected
+capabilities at all**.
+
+```
+assert-registry  assertion:verified "harbor-roundtrip" [cluster-read, secret-read]
+```
+
+It measured a **closure of 2**, both entries noise. Everything it does is an OCI distribution v2
+handshake over `net/http`, and the one cluster read it needs already had a home *and a seam* in
+`internal/harborauth`.
+
+**A `Deps` struct was written for it and then deleted.** The draft carried `ReadSecret` — duplicating
+`harborauth.ReadRobotSecret`, which is already a swappable package var the existing tests drive — and
+a `Now`/`Sleep` clock pair for a settle loop those same tests already exercise with millisecond
+budgets. Both were seams for capabilities that were **already seamed**.
+
+**That is three extractions running.** `converge`'s `LokiConfigText` was a plain cluster read the
+package could already do; `assert-reconciler`'s `leaseHolderRenew` was a pure function; this one's
+fields were redundant with an existing seam. The rule has earned a third clause:
+
+> Before adding a `Deps` field, ask three things. Can the package already do this with a grant it
+> holds? Is it a pure function rather than a capability? **Is it already injectable somewhere else?**
+> A redundant seam is not free — it splits one swap point into two, and lets a test stub half of it.
+
+**It is also the first extension declared *after* the `secret-read` split that needs the read half.**
+`assert-registry` reads the robot credential Secret and logs in with it. Under the single
+`secret-custody` word this binding would have been **inexpressible** for exactly the reason
+`validate-tokens` was: an assertion permits read grants only, and `secret-custody` was half a write
+grant. Two extractions later the vocabulary absorbs it without comment, which is what a good fix looks
+like.
+
+**The grant is the scar.** Managed instances once rendered `HARBOR_HOST` as `"harbor."` — non-empty,
+so it defeated every empty-string guard including the systeminfo fallback — and every push and pull
+401'd. Every credential in the chain was valid; the **host** was wrong. Nothing caught it because
+nothing ever *used* the credential: the provisioner asserted it had **created** a robot, not that the
+robot could **log in**. An assertion holding only `cluster-read` could not have caught that. It has to
+hold the credential and try — which is precisely what `secret-read` on this binding declares.
+
+**Second half-pair to land, and a cleaner illustration than the first.** `assert-reconciler` settled
+that capability/assertion pairs should not merge; this shows why more sharply. `harbor-provisioner`
+will hold `cloud-mutate` and `secret-custody` to **mint** the robot; this holds `cluster-read` and
+`secret-read` to **use** it. Nothing in a merged union would be true of either half.
 
 ## The cost of the interesting half
 

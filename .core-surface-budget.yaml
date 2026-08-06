@@ -108,12 +108,16 @@ categories:
     #                       first half of a capability/assertion pair. Plus
     #                       internal/promwire. -720, with no file-count change: the
     #                       moved lines came back as Deps wiring and shared packages.
+    #   32,965 / 185 files  assert-registry, the CHEAPEST extraction (closure 2) and
+    #                       the only one needing NO injected capabilities. -192, the
+    #                       smallest paydown so far — the cobra Long text is most of
+    #                       what came back.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 33157
+    budget: 32965
     exact: true
     include:
       - "tools/cmd/llz/*.go"

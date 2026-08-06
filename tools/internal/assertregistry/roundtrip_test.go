@@ -1,4 +1,4 @@
-package main
+package assertregistry
 
 import (
 	"encoding/base64"
@@ -39,7 +39,7 @@ type fakeOCIRegistry struct {
 }
 
 func newFakeOCIRegistry(t *testing.T) *fakeOCIRegistry {
-	f := &fakeOCIRegistry{grant: []harborauth.TokenAccess{{Type: "repository", Name: harborProbeRepo, Actions: []string{"pull", "push"}}}}
+	f := &fakeOCIRegistry{grant: []harborauth.TokenAccess{{Type: "repository", Name: ProbeRepo, Actions: []string{"pull", "push"}}}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -55,7 +55,7 @@ func newFakeOCIRegistry(t *testing.T) *fakeOCIRegistry {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
-			w.Header().Set("Location", "/v2/"+harborProbeRepo+"/blobs/uploads/abc123")
+			w.Header().Set("Location", "/v2/"+ProbeRepo+"/blobs/uploads/abc123")
 			w.WriteHeader(http.StatusAccepted)
 		case r.Method == http.MethodDelete:
 			f.sawCancel = true
@@ -92,7 +92,7 @@ func TestProbeHarborRoundTripHappyPath(t *testing.T) {
 	f := newFakeOCIRegistry(t)
 	seamHarborHTTP(t, f)
 	creds := harborauth.RobotCreds{Username: "robot$ci", Password: "p", RegistryHost: "harbor.example.com"}
-	if err := probeHarborRoundTrip(creds, harborProbeRepo); err != nil {
+	if err := probeHarborRoundTrip(creds, ProbeRepo); err != nil {
 		t.Fatalf("expected the round trip to succeed, got %v", err)
 	}
 	if !f.sawUpload {
@@ -110,7 +110,7 @@ func TestProbeHarborRoundTripRejectsTokenWithoutAccess(t *testing.T) {
 	f := newFakeOCIRegistry(t)
 	f.grant = nil
 	seamHarborHTTP(t, f)
-	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "robot$ci", Password: "p", RegistryHost: "h.example.com"}, harborProbeRepo)
+	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "robot$ci", Password: "p", RegistryHost: "h.example.com"}, ProbeRepo)
 	if err == nil {
 		t.Fatal("a 200 token carrying no access must NOT count as authorization")
 	}
@@ -125,9 +125,9 @@ func TestProbeHarborRoundTripRejectsTokenWithoutAccess(t *testing.T) {
 // A pull-only robot must fail the push half rather than quietly passing.
 func TestProbeHarborRoundTripRequiresBothActions(t *testing.T) {
 	f := newFakeOCIRegistry(t)
-	f.grant = []harborauth.TokenAccess{{Type: "repository", Name: harborProbeRepo, Actions: []string{"pull"}}}
+	f.grant = []harborauth.TokenAccess{{Type: "repository", Name: ProbeRepo, Actions: []string{"pull"}}}
 	seamHarborHTTP(t, f)
-	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, harborProbeRepo)
+	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, ProbeRepo)
 	if err == nil || !strings.Contains(err.Error(), "push") {
 		t.Errorf("a pull-only token must fail naming push, got %v", err)
 	}
@@ -137,7 +137,7 @@ func TestProbeHarborRoundTripRejectedCredential(t *testing.T) {
 	f := newFakeOCIRegistry(t)
 	f.rejectAuth = true
 	seamHarborHTTP(t, f)
-	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "robot$ci", Password: "wrong", RegistryHost: "h.example.com"}, harborProbeRepo)
+	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "robot$ci", Password: "wrong", RegistryHost: "h.example.com"}, ProbeRepo)
 	if err == nil || !strings.Contains(err.Error(), "REJECTED") {
 		t.Errorf("a 401 from the token service must be reported as a rejected credential, got %v", err)
 	}
@@ -150,7 +150,7 @@ func TestProbeHarborRoundTripPushDeniedDespiteToken(t *testing.T) {
 	f := newFakeOCIRegistry(t)
 	f.denyUpload = true
 	seamHarborHTTP(t, f)
-	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, harborProbeRepo)
+	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, ProbeRepo)
 	if err == nil || !strings.Contains(err.Error(), "PUSH DENIED") {
 		t.Errorf("an upload refused despite a push-granting token must fail, got %v", err)
 	}
@@ -169,7 +169,7 @@ func TestProbeHarborRoundTripUnauthenticatedRegistry(t *testing.T) {
 		req.URL.Scheme, req.URL.Host = base.Scheme, base.Host
 		return (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	}
-	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, harborProbeRepo)
+	err := probeHarborRoundTrip(harborauth.RobotCreds{Username: "r", Password: "p", RegistryHost: "h.example.com"}, ProbeRepo)
 	if err == nil || !strings.Contains(err.Error(), "unauthenticated") {
 		t.Errorf("an unauthenticated registry must be reported, got %v", err)
 	}
@@ -190,7 +190,7 @@ func seamHarborCluster(t *testing.T, nsPresent bool, nsErr error, secret []byte,
 // missing cannot catch a credential that stopped being delivered.
 func TestRunAssertHarborRoundTripMissingSecretFails(t *testing.T) {
 	seamHarborCluster(t, true, nil, nil, nil) // namespace there, Secret absent
-	err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond)
+	err := Run("ns", "name", "", ProbeRepo, 0, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "secret/harbor/robot") {
 		t.Errorf("a missing robot Secret must fail naming the OpenBao path, got %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRunAssertHarborRoundTripMissingSecretFails(t *testing.T) {
 // reds a correct cluster for a component it was never asked to run.
 func TestRunAssertHarborRoundTripSkipsWhenComponentAbsent(t *testing.T) {
 	seamHarborCluster(t, false, nil, nil, fmt.Errorf("must not be read"))
-	if err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond); err != nil {
+	if err := Run("ns", "name", "", ProbeRepo, 0, time.Millisecond); err != nil {
 		t.Errorf("an undeployed component must SKIP, not fail: %v", err)
 	}
 }
@@ -211,7 +211,7 @@ func TestRunAssertHarborRoundTripSkipsWhenComponentAbsent(t *testing.T) {
 // than skip, or a broken kubeconfig silently turns this gate off.
 func TestRunAssertHarborRoundTripFailsWhenNamespaceUnreadable(t *testing.T) {
 	seamHarborCluster(t, false, fmt.Errorf("connection refused"), nil, nil)
-	if err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond); err == nil {
+	if err := Run("ns", "name", "", ProbeRepo, 0, time.Millisecond); err == nil {
 		t.Error("an unreadable namespace check must fail, not degrade to a skip")
 	}
 }
@@ -229,7 +229,7 @@ func TestRunAssertHarborRoundTripRetriesTheSecretRead(t *testing.T) {
 		reads++
 		return nil, nil // always absent
 	}
-	_ = runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 50*time.Millisecond, 10*time.Millisecond)
+	_ = Run("ns", "name", "", ProbeRepo, 50*time.Millisecond, 10*time.Millisecond)
 	if reads < 2 {
 		t.Errorf("the Secret was read %d time(s) — absence must be retried within the settle budget, "+
 			"or the gate decides during the window ESO is documented to need", reads)

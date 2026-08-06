@@ -44,6 +44,7 @@ COVERAGE_MINS := \
 	internal/cli=95 \
 	internal/assertplatform=51 \
 	internal/assertreconciler=81 \
+	internal/assertregistry=68 \
 	internal/atrest=93 \
 	internal/clusterspec=95 \
 	internal/clusteraccess=74 \
