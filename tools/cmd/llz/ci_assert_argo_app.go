@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
 )
@@ -47,7 +48,7 @@ func ciAssertArgoAppCmd() *cobra.Command {
 			"cause). Uses kubectl with the ambient KUBECONFIG.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return assertArgoApp(newAplGateDeps(), namespace, app, parent, time.Duration(within)*time.Second)
+			return assertArgoApp(cigate.NewDeps(), namespace, app, parent, time.Duration(within)*time.Second)
 		},
 	}
 	cmd.Flags().StringVar(&app, "app", "", "Application that must appear (required)")
@@ -77,11 +78,11 @@ const gitAuthGrace = 2 * time.Minute
 // see such a transient ComparisonError we force an immediate `refresh=hard` (throttled)
 // so the re-fetch happens in seconds; a NON-transient ComparisonError (a real manifest
 // error) is left alone and surfaces at the deadline as before.
-func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Duration) error {
-	deadline := d.now().Add(within)
+func assertArgoApp(d cigate.Deps, namespace, app, parent string, within time.Duration) error {
+	deadline := d.Now().Add(within)
 	var lastRefresh, firstGitAuth time.Time
 	for {
-		if _, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app); ok {
+		if _, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", app); ok {
 			fmt.Printf("Application %s exists — proceeding to the pod wait.\n", app)
 			return nil
 		}
@@ -106,9 +107,9 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 		// from IsGitAuthError entirely and still rides the transient path.)
 		if health.IsGitAuthError(cerr) {
 			if firstGitAuth.IsZero() {
-				firstGitAuth = d.now()
-				fmt.Printf("→ %s reports a git-auth failure — holding %s to rule out the repo-Secret race: %s\n", parent, gitAuthGrace, firstLine(cerr))
-			} else if d.now().Sub(firstGitAuth) >= gitAuthGrace {
+				firstGitAuth = d.Now()
+				fmt.Printf("→ %s reports a git-auth failure — holding %s to rule out the repo-Secret race: %s\n", parent, gitAuthGrace, cigate.FirstLine(cerr))
+			} else if d.Now().Sub(firstGitAuth) >= gitAuthGrace {
 				fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s cannot authenticate to the source repo after %s — TERMINAL, polling will not fix a rejected credential. Check APL_VALUES_REPO_TOKEN → otomi.git.password → the argocd repo Secret (it arrives via an ExternalSecret, so it stays empty if external-secrets never installed). ComparisonError: %s | %s\n", app, parent, gitAuthGrace, cerr, argoParentDiag(d, namespace, parent))
 				return fmt.Errorf("%s cannot authenticate to the source repo (terminal) before %s was created", parent, app)
 			}
@@ -119,27 +120,27 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 		// Throttled to 20s (a failed fetch returns fast, so a fresh refresh each cycle
 		// is safe, but don't hammer): the previous fetch already failed by the time the
 		// ComparisonError is visible, so we're kicking a new attempt, not interrupting one.
-		if health.IsTransientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
-			d.kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
-			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, firstLine(cerr))
-			lastRefresh = d.now()
+		if health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
+			d.Kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, cigate.FirstLine(cerr))
+			lastRefresh = d.Now()
 		}
-		if !d.now().Before(deadline) {
+		if !d.Now().Before(deadline) {
 			// operationState is empty when the app-of-apps never started a sync
 			// (e.g. a child ComparisonError leaves it OutOfSync with no operation),
 			// so the real stall reason lives in sync/health/conditions — surface it.
 			fmt.Fprintf(os.Stderr, "::error::Application %s still does not exist after %s — the %s sync has not reached its wave. phase=%s operationState: %s | %s\n", app, within, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s not created within %s (parent phase %s)", app, within, phase)
 		}
-		d.sleep(10 * time.Second)
+		d.Sleep(10 * time.Second)
 	}
 }
 
 // argoOperationState returns the parent Application's operation phase and
 // message, best-effort ("" when unreadable — e.g. the parent doesn't exist
 // yet either, which the deadline path will surface).
-func argoOperationState(d aplGateDeps, namespace, parent string) (phase, message string) {
-	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+func argoOperationState(d cigate.Deps, namespace, parent string) (phase, message string) {
+	out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", parent,
 		"-o", "jsonpath={.status.operationState.phase}{\"\\t\"}{.status.operationState.message}")
 	if !ok {
 		return "", ""
@@ -158,8 +159,8 @@ func argoOperationState(d aplGateDeps, namespace, parent string) (phase, message
 // wedged OutOfSync/Missing on a child ComparisonError shows nothing there — but
 // its sync.status, health.status and condition messages carry the real reason.
 // Best-effort: returns a hint string when the parent is unreadable.
-func argoParentDiag(d aplGateDeps, namespace, parent string) string {
-	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+func argoParentDiag(d cigate.Deps, namespace, parent string) string {
+	out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", parent,
 		"-o", "jsonpath={.status.sync.status}/{.status.health.status}{range .status.conditions[*]} [{.type}: {.message}]{end}")
 	if out = strings.TrimSpace(out); !ok || out == "" {
 		return fmt.Sprintf("%s state unavailable (missing, or cluster unreachable)", parent)
@@ -171,23 +172,11 @@ func argoParentDiag(d aplGateDeps, namespace, parent string) string {
 // message (the "failed to generate manifest …" text), or "" when there is none.
 // A ComparisonError means Argo CD could not compute the target state at all —
 // distinct from a sync operation failure (argoOperationState).
-func argoComparisonError(d aplGateDeps, namespace, parent string) string {
-	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+func argoComparisonError(d cigate.Deps, namespace, parent string) string {
+	out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", parent,
 		"-o", `jsonpath={range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}`)
 	if !ok {
 		return ""
 	}
 	return strings.TrimSpace(out)
-}
-
-// firstLine truncates a multi-line/long condition message to a single readable line
-// for the progress log (the full text still lands in the deadline diagnostics).
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 140 {
-		s = s[:140] + "…"
-	}
-	return strings.TrimSpace(s)
 }

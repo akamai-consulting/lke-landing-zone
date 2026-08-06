@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
@@ -61,12 +62,12 @@ const (
 // assert-argo-app, force a throttled hard refresh on the parent while we wait.
 // A non-transient ComparisonError (a real manifest error) is left alone and
 // surfaces at the deadline; fail loud either way per the convergence contract.
-func waitForOpenbaoNamespace(d aplGateDeps, ns string, within time.Duration) error {
-	deadline := d.now().Add(within)
+func waitForOpenbaoNamespace(d cigate.Deps, ns string, within time.Duration) error {
+	deadline := d.Now().Add(within)
 	var lastRefresh time.Time
 	announced := false
 	for {
-		if _, ok := d.kubectl("get", "namespace", ns); ok {
+		if _, ok := d.Kubectl("get", "namespace", ns); ok {
 			return nil
 		}
 		if !announced {
@@ -76,19 +77,19 @@ func waitForOpenbaoNamespace(d aplGateDeps, ns string, within time.Duration) err
 		// Kick a stuck app-of-apps to re-fetch (throttled 20s); a failed fetch
 		// returns fast, so a fresh refresh each cycle re-attempts rather than
 		// interrupts. The namespace is created downstream once the re-fetch succeeds.
-		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
-			d.kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
-			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, firstLine(cerr))
-			lastRefresh = d.now()
+		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
+			d.Kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, cigate.FirstLine(cerr))
+			lastRefresh = d.Now()
 		}
-		if !d.now().Before(deadline) {
+		if !d.Now().Before(deadline) {
 			extra := ""
 			if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
-				extra = fmt.Sprintf(" (%s ComparisonError: %s)", openbaoNSParent, firstLine(cerr))
+				extra = fmt.Sprintf(" (%s ComparisonError: %s)", openbaoNSParent, cigate.FirstLine(cerr))
 			}
 			return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced%s", ns, within, extra)
 		}
-		d.sleep(openbaoNSInterval)
+		d.Sleep(openbaoNSInterval)
 	}
 }
 
@@ -129,7 +130,7 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := waitForOpenbaoNamespace(newAplGateDeps(), openbaoNS, openbaoNSWait); err != nil {
+	if err := waitForOpenbaoNamespace(cigate.NewDeps(), openbaoNS, openbaoNSWait); err != nil {
 		return err
 	}
 

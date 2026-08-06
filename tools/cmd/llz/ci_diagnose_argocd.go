@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
@@ -104,7 +105,7 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	// spun for ~49m after the runner was never allowlisted on the control-plane
 	// firewall, then the job was force-canceled). One bounded probe up front turns
 	// that into a ~10s clean skip so the ORIGINAL failure stays the visible one.
-	if !kubectlReachable() {
+	if !kubectlprobe.Reachable() {
 		fmt.Fprintln(os.Stderr, "::warning::apiserver unreachable (control-plane ACL not granted, or cluster gone) — skipping diagnostics to avoid a per-probe timeout pile-up")
 		return nil
 	}
@@ -352,7 +353,7 @@ func diagnoseNamespace(ns, release string) {
 	})
 	diagGroup(ns+" — recent events (by time)", func() {
 		if out, err := execOutput("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp"); err == nil {
-			fmt.Print(tailLines(string(out), 60))
+			fmt.Print(cigate.TailLines(string(out), 60))
 			fmt.Println()
 		}
 	})

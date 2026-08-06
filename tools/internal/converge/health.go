@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_health.go implements `llz ci health` and `llz ci converge` — the native
 // ports of check-cluster-health.sh and converge.sh. Every classification is the
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +18,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -32,7 +31,7 @@ import (
 // ("openbao", "observability", "cert-automation"), which meant the OpenBao,
 // observability, and cert-automation namespaces were never inspected at all:
 // no workload check, no default-deny NetworkPolicy check, no Service or Lease
-// check. The openbaoNamespace const eight lines below had the correct name the
+// check. The OpenbaoNamespace const eight lines below had the correct name the
 // whole time.
 //
 // Keep the llz- prefixed names in sync with the namespaces the components
@@ -41,12 +40,12 @@ import (
 // assuming.
 var healthNamespaces = []string{
 	"argocd", "kube-system", "cert-manager", "llz-cert-automation", "external-secrets",
-	openbaoNamespace, "llz-observability", "harbor", "istio-system",
+	OpenbaoNamespace, "llz-observability", "harbor", "istio-system",
 }
 
-const openbaoNamespace = "llz-openbao"
+const OpenbaoNamespace = "llz-openbao"
 
-func ciHealthCmd() *cobra.Command {
+func HealthCmd() *cobra.Command {
 	// failOnUnhealthy defaults true so a bare `llz ci health` keeps its
 	// convergence-contract exit semantics (existing callers unchanged). Passing
 	// --fail-on-unhealthy=false is REPORT-ONLY: it still runs every check and
@@ -92,7 +91,7 @@ func ciHealthCmd() *cobra.Command {
 	return c
 }
 
-func ciConvergeCmd() *cobra.Command {
+func ConvergeCmd() *cobra.Command {
 	var budget, interval, retryDelay int
 	c := &cobra.Command{
 		Use:   "converge",
@@ -180,7 +179,7 @@ func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
 	for _, item := range prevNonOK {
 		fmt.Fprintf(&b, "- %s\n", item)
 	}
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY", b.String()); err != nil {
+	if err := deps.Summary("GITHUB_STEP_SUMMARY", b.String()); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::converge long-pole: step-summary write failed (ignored): %v\n", err)
 	}
 }
@@ -244,7 +243,7 @@ func runConverge(budget, interval, retryDelay int) error {
 		if res.annotationWedge && !crdAnnotationsStripped {
 			crdAnnotationsStripped = true
 			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
-			teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
+			deps.StripOversizedCRDLastApplied()
 		}
 		switch step {
 		case health.ConvergeDone:
@@ -309,11 +308,11 @@ func runConverge(budget, interval, retryDelay int) error {
 // if the restart doesn't take.
 func realignArgocdRedis() {
 	fmt.Fprintln(os.Stderr, "::warning::argocd-redis auth split (WRONGPASS/NOAUTH) detected — restarting argocd-redis to re-read the current password")
-	if out, err := execOutput("kubectl", "-n", "argocd", "rollout", "restart", "deploy/argocd-redis"); err != nil {
+	if out, err := deps.Exec("kubectl", "-n", "argocd", "rollout", "restart", "deploy/argocd-redis"); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::argocd-redis rollout restart failed (%v): %s\n", err, strings.TrimSpace(string(out)))
 		return
 	}
-	if _, err := execOutput("kubectl", "-n", "argocd", "rollout", "status", "deploy/argocd-redis", "--timeout=120s"); err != nil {
+	if _, err := deps.Exec("kubectl", "-n", "argocd", "rollout", "status", "deploy/argocd-redis", "--timeout=120s"); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::argocd-redis rollout status wait failed (%v) — continuing to poll\n", err)
 	}
 }
@@ -347,7 +346,7 @@ func healthExitCode() int { return healthExitCodeState(nil).code }
 // carried fact is phase1Done (so the phase1 probes resolve once per run, not per
 // poll). Every poll runs the full set of checks below.
 func healthExitCodeState(st *convergeState) healthResult {
-	if !kubectlReachable() {
+	if !kubectlprobe.Reachable() {
 		// Exit 3 (not 1): an unreachable apiserver is an infrastructure transient,
 		// not a cluster hard-failure. The converge loop retries it against the
 		// budget instead of counting it as a hard strike (see runConverge).
@@ -370,7 +369,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 	}
 
 	if !inv.addNamespaces() {
-		// Exit 3, same as an unreachable apiserver: kubectlReachable() has already
+		// Exit 3, same as an unreachable apiserver: kubectlprobe.Reachable() has already
 		// passed, so a failed namespace list is a transient, not a verdict. Reading
 		// it as "no namespaces exist" would skip every per-namespace section and
 		// report a broken cluster as converged.
@@ -501,11 +500,6 @@ func printHealthSummary(r *health.Report) {
 
 // ── kubectl helpers ──────────────────────────────────────────────────────────
 
-func kubectlReachable() bool {
-	_, err := execOutput("kubectl", "version", "--request-timeout=10s")
-	return err == nil
-}
-
 func phase1OpenBaoBootstrapPending() bool {
 	// kExists retries an unanswerable probe (kubectl_probe.go), so a transient
 	// API/ACL blip no longer reads as a missing CA and mislabels the phase.
@@ -528,7 +522,7 @@ func openBaoClusterSecretStoreReadyWithRetry() bool {
 }
 
 func openBaoClusterSecretStoreReady() bool {
-	out, err := execOutput("kubectl", "get", "clustersecretstore", defaultSecretStore, "-o", "json")
+	out, err := deps.Exec("kubectl", "get", "clustersecretstore", defaultSecretStore, "-o", "json")
 	if err != nil {
 		return false
 	}
@@ -809,7 +803,7 @@ func checkLokiObjStorage(r *health.Report, phase1 bool) {
 		return
 	}
 	hdr("apl-overlay obj storage (Loki S3)")
-	cfg := lokiConfigText("loki")
+	cfg := LokiConfigText("loki")
 	if strings.TrimSpace(cfg) == "" {
 		record(r, health.CatOK, "Loki not deployed — no obj overlay to await")
 		return
@@ -838,8 +832,8 @@ func checkFirewallBootstrap(r *health.Report) {
 	// This is the one branch where absence means "pass the whole section", so it
 	// is the one that must not accept an unanswerable probe as absence: a blip on
 	// both reads would skip every firewall check with an OK.
-	depExists, depAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "deployment", firewallDeploymentName)
-	cmExists, cmAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "configmap", firewallConfigMapName)
+	depExists, depAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "deployment", deps.FirewallDeploymentName)
+	cmExists, cmAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName)
 	if !depAnswered || !cmAnswered {
 		record(r, health.CatPending, "could not read kube-system firewall-controller Deployment/ConfigMap — cannot tell 'component disabled' from 'unreadable cluster'")
 		return
@@ -874,13 +868,13 @@ func checkFirewallBootstrap(r *health.Report) {
 	// firewallConfigMapName (ci_firewall.go) is the single source of truth for the
 	// ConfigMap name the private chart renders (<fullname>-config =
 	// llz-linode-cidr-firewall-config) and `bootstrap-cloud-firewall` patches.
-	if !kubectlprobe.Exists("-n", "kube-system", "get", "configmap", firewallConfigMapName) {
-		record(r, health.CatFail, "ConfigMap kube-system/"+firewallConfigMapName+" missing")
+	if !kubectlprobe.Exists("-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName) {
+		record(r, health.CatFail, "ConfigMap kube-system/"+deps.FirewallConfigMapName+" missing")
 		return
 	}
-	record(r, health.CatOK, "ConfigMap kube-system/"+firewallConfigMapName+" exists")
+	record(r, health.CatOK, "ConfigMap kube-system/"+deps.FirewallConfigMapName+" exists")
 	for _, key := range []string{"LINODE_FIREWALL_ID", "LKE_CLUSTER_ID", "FIREWALL_TEMPLATE_ID", "RECONCILE_INTERVAL_SECS", "VPC_CIDR"} {
-		val := kubectlprobe.JSONPath("-n", "kube-system", "get", "configmap", firewallConfigMapName, "-o", "jsonpath={.data."+key+"}")
+		val := kubectlprobe.JSONPath("-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName, "-o", "jsonpath={.data."+key+"}")
 		cat := health.ClassifyFirewallConfigKey(key, val)
 		if cat == health.CatOK {
 			record(r, health.CatOK, "  "+key+" = "+val)
@@ -941,7 +935,7 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 	hdr("openbao seal / HA")
 	// A CatWarn skip never affects the verdict, so an unreadable STS would retire
 	// the entire seal check silently — demand an actual answer before skipping.
-	specReplicas, answered := kubectlprobe.JSONPathOK("-n", openbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")
+	specReplicas, answered := kubectlprobe.JSONPathOK("-n", OpenbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")
 	if !answered {
 		record(r, health.CatPending, "could not read openbao/platform-openbao StatefulSet — seal check inconclusive")
 		return
@@ -961,20 +955,20 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 	tunnelBlocked := false
 	for i := 0; i < replicas; i++ {
 		pod := fmt.Sprintf("platform-openbao-%d", i)
-		if !kubectlprobe.Exists("-n", openbaoNamespace, "get", "pod", pod) {
+		if !kubectlprobe.Exists("-n", OpenbaoNamespace, "get", "pod", pod) {
 			record(r, health.CatFail, "Pod openbao/"+pod+" missing")
 			continue
 		}
-		ready := kubectlprobe.JSONPath("-n", openbaoNamespace, "get", "pod", pod, "-o", `jsonpath={.status.containerStatuses[?(@.name=="openbao")].ready}`)
+		ready := kubectlprobe.JSONPath("-n", OpenbaoNamespace, "get", "pod", pod, "-o", `jsonpath={.status.containerStatuses[?(@.name=="openbao")].ready}`)
 		if ready != "true" {
 			record(r, health.CatPending, "Pod openbao/"+pod+" (openbao container not Ready — can't query seal status)")
 			continue
 		}
 		// Loopback listener + CA verification (baoLoopbackEnv): the network
 		// listener requires a client certificate, which an exec'd `bao` has not got.
-		execArgv := append([]string{"-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--", "env"}, baoLoopbackEnv()...)
+		execArgv := append([]string{"-n", OpenbaoNamespace, "exec", pod, "-c", "openbao", "--", "env"}, deps.BaoLoopbackEnv()...)
 		execArgv = append(execArgv, "bao", "status", "-format=json")
-		out, execErr := execOutput("kubectl", execArgv...)
+		out, execErr := deps.Exec("kubectl", execArgv...)
 		st, perr := health.ParseBaoStatus(out)
 		if perr != nil {
 			// `bao status` runs through `kubectl exec`, i.e. the konnectivity tunnel.
@@ -997,7 +991,7 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 			active++
 		}
 		if cat == health.CatOK && !phase1 {
-			if kubectlprobe.Exists("-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--", "test", "-s", "/openbao/audit/audit.log") {
+			if kubectlprobe.Exists("-n", OpenbaoNamespace, "exec", pod, "-c", "openbao", "--", "test", "-s", "/openbao/audit/audit.log") {
 				record(r, health.CatOK, "  audit device active on "+pod)
 			} else {
 				record(r, health.CatFail, "  audit device inactive on "+pod+" — /openbao/audit/audit.log missing or empty")
@@ -1565,4 +1559,37 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 func countReadyEndpoints(ns, svc string) int {
 	return health.CountReadyEndpoints(
 		kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
+}
+
+// MOVED HERE from ci_readiness.go rather than injected.
+//
+// The first draft made this a Deps field, which was the wrong seam: it is a plain
+// classified ConfigMap read, and converge already holds cluster-read. Injecting it
+// meant the package could not read Loki's config without being handed permission
+// to do the thing it is already permitted to do — and the fixture that resulted
+// returned "" for every test, so the S3-detection assertions ran against nothing.
+// A seam in the wrong place does not just add indirection; it manufactures a
+// vacuous fixture.
+
+// lokiConfigText concatenates the data values of every name-matching ConfigMap
+// (where the rendered Loki config lives) so the S3 detection can scan it.
+func LokiConfigText(match string) string {
+	re := regexp.MustCompile(match)
+	var b strings.Builder
+	for _, raw := range kubectlprobe.Items("get", "configmap", "-A") {
+		var cm struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Data map[string]string `json:"data"`
+		}
+		if json.Unmarshal(raw, &cm) != nil || !re.MatchString(cm.Metadata.Name) {
+			continue
+		}
+		for _, v := range cm.Data {
+			b.WriteString(v)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }

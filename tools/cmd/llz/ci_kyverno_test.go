@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 func TestKyvernoOptsFromEnv(t *testing.T) {
@@ -149,9 +151,9 @@ func fakeClock(step time.Duration) (func() time.Time, *time.Duration) {
 	return now, elapsed
 }
 
-func testDeps(f *fakeKubectl, step time.Duration) aplGateDeps {
+func testDeps(f *fakeKubectl, step time.Duration) cigate.Deps {
 	now, _ := fakeClock(step)
-	return aplGateDeps{kubectl: f.run, now: now, sleep: func(time.Duration) {}}
+	return cigate.Deps{Kubectl: f.run, Now: now, Sleep: func(time.Duration) {}}
 }
 
 func TestApplyKyvernoPolicy(t *testing.T) {

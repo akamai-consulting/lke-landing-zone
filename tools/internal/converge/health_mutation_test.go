@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_health_mutation_test.go pins the behaviours of the convergence gate that
 // ci_health_test.go exercises but does not ASSERT — the axes on which a mutated
@@ -87,7 +87,7 @@ func TestRunConvergeBudgetIsSecondsAndPollsCountUp(t *testing.T) {
 // ── converge long-pole: the step-summary write is reported only when it FAILS ─
 
 func TestReportConvergeLongPoleWarnsOnlyOnWriteFailure(t *testing.T) {
-	// No GITHUB_STEP_SUMMARY => appendGHAFile is a no-op returning nil. A warning
+	// No GITHUB_STEP_SUMMARY => deps.Summary is a no-op returning nil. A warning
 	// here would tell an operator the report was lost when it was never asked for.
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	quiet := captureStderr(t, func() { reportConvergeLongPole([]string{"monitoring-loki"}, 7) })
@@ -261,14 +261,14 @@ func TestCheckFirewallBootstrapConfigKeyCategories(t *testing.T) {
 	serve := func(vals map[string]string) func(string) ([]byte, error) {
 		return func(a string) ([]byte, error) {
 			switch {
-			case a == "-n kube-system get deployment "+firewallDeploymentName:
+			case a == "-n kube-system get deployment "+deps.FirewallDeploymentName:
 				// Absent (self-discovery-only cluster) => no token assertion, so the
 				// ConfigMap keys are the only findings this section can produce.
 				return nil, errors.New("NotFound")
-			case a == "-n kube-system get configmap "+firewallConfigMapName:
+			case a == "-n kube-system get configmap "+deps.FirewallConfigMapName:
 				return nil, nil
-			case strings.HasPrefix(a, "-n kube-system get configmap "+firewallConfigMapName+" -o jsonpath={.data."):
-				key := strings.TrimSuffix(strings.TrimPrefix(a, "-n kube-system get configmap "+firewallConfigMapName+" -o jsonpath={.data."), "}")
+			case strings.HasPrefix(a, "-n kube-system get configmap "+deps.FirewallConfigMapName+" -o jsonpath={.data."):
+				key := strings.TrimSuffix(strings.TrimPrefix(a, "-n kube-system get configmap "+deps.FirewallConfigMapName+" -o jsonpath={.data."), "}")
 				return []byte(vals[key]), nil
 			}
 			return nil, errors.New("nope")
@@ -326,8 +326,8 @@ func baoPods(t *testing.T, replicas int, haMode map[int]string) {
 				return []byte(`{"initialized":true,"sealed":false,"ha_enabled":true}`), nil
 			}
 			return nil, errors.New("no such pod")
-		case strings.HasPrefix(a, "-n "+openbaoNamespace+" get pod platform-openbao-"):
-			idx := strings.TrimPrefix(a, "-n "+openbaoNamespace+" get pod platform-openbao-")
+		case strings.HasPrefix(a, "-n "+OpenbaoNamespace+" get pod platform-openbao-"):
+			idx := strings.TrimPrefix(a, "-n "+OpenbaoNamespace+" get pod platform-openbao-")
 			if n := int(idx[0] - '0'); len(idx) == 1 && n >= 0 && n < replicas {
 				return []byte("ok"), nil
 			}

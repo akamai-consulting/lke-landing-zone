@@ -6,59 +6,10 @@ package main
 
 import (
 	"os"
-	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"gopkg.in/yaml.v3"
 )
-
-func TestProgressingCondition(t *testing.T) {
-	conds := []health.Condition{
-		{Type: "Available", Reason: "MinimumReplicasAvailable"},
-		{Type: "Progressing", Reason: "NewReplicaSetAvailable", Message: "rollout complete"},
-	}
-	if r, m := progressingCondition(conds); r != "NewReplicaSetAvailable" || m != "rollout complete" {
-		t.Errorf("got (%q,%q), want (NewReplicaSetAvailable, rollout complete)", r, m)
-	}
-	if r, m := progressingCondition([]health.Condition{{Type: "Available"}}); r != "" || m != "" {
-		t.Errorf("no Progressing condition should yield empty, got (%q,%q)", r, m)
-	}
-	if r, m := progressingCondition(nil); r != "" || m != "" {
-		t.Errorf("nil conditions should yield empty, got (%q,%q)", r, m)
-	}
-}
-
-func TestPrintHealthSummary(t *testing.T) {
-	hardFail := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Failed: []string{"openbao sealed"}, Drift: []string{"argocd OutOfSync"}})
-	})
-	if !strings.Contains(hardFail, "FAILED:   openbao sealed") || !strings.Contains(hardFail, "1 check(s) hard-failed.") {
-		t.Errorf("hard-fail summary wrong:\n%s", hardFail)
-	}
-	if !strings.Contains(hardFail, "drift:    argocd OutOfSync") {
-		t.Errorf("drift line missing:\n%s", hardFail)
-	}
-
-	inProgress := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Pending: []string{"cert Issuing"}})
-	})
-	if !strings.Contains(inProgress, "still converging") {
-		t.Errorf("in-progress summary wrong:\n%s", inProgress)
-	}
-
-	convergedDeferred := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Deferred: []string{"dns token"}})
-	})
-	if !strings.Contains(convergedDeferred, "1 operator-deferred item(s) remain") {
-		t.Errorf("deferred-converged summary wrong:\n%s", convergedDeferred)
-	}
-
-	clean := captureStdout(t, func() { printHealthSummary(&health.Report{}) })
-	if !strings.Contains(clean, "Cluster converged.") {
-		t.Errorf("clean summary wrong:\n%s", clean)
-	}
-}
 
 func TestSetScalarChild(t *testing.T) {
 	m := &yaml.Node{Kind: yaml.MappingNode}

@@ -37,6 +37,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // aplChartRepo is the public Helm repo apl-core publishes to (mirrors
@@ -57,7 +58,7 @@ var anyPlaceholderRe = regexp.MustCompile(`\$\{[a-zA-Z_][a-zA-Z0-9_]*\}`)
 var helmRunner = func(args ...string) (string, bool) {
 	cmd := exec.Command("helm", args...)
 	cmd.Env = os.Environ()
-	return runCombined(cmd)
+	return cigate.RunCombined(cmd)
 }
 
 func ciAplSchemaValidateCmd() *cobra.Command {

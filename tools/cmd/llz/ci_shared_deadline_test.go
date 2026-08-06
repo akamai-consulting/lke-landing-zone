@@ -10,8 +10,8 @@ package main
 //	                                                   // interval is discarded
 //	sleep: func(time.Duration) {}                      // never advances at all
 //
-// Discarding the interval is what let `d.sleep(10 * time.Second)` degrade to
-// `d.sleep(10 / time.Second)` unnoticed: that is integer division of 10 by 1e9,
+// Discarding the interval is what let `d.Sleep(10 * time.Second)` degrade to
+// `d.Sleep(10 / time.Second)` unnoticed: that is integer division of 10 by 1e9,
 // i.e. a ZERO interval. Every existing assertion stays color.Green, because they all
 // drive their loops by kubectl call count. In production a zero interval turns a
 // polite 10s poll into a hot spin against the apiserver; under a fake clock that
@@ -25,6 +25,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // pollRecorderEpoch is the fake clock's zero point — a fixed instant so a failure
@@ -45,11 +47,11 @@ type pollRecorder struct {
 func newPollRecorder() *pollRecorder { return &pollRecorder{now: pollRecorderEpoch} }
 
 // deps wires the recorder's clock into aplGateDeps behind the given kubectl script.
-func (p *pollRecorder) deps(kubectl kubectlRunner) aplGateDeps {
-	return aplGateDeps{
-		kubectl: kubectl,
-		now:     func() time.Time { return p.now },
-		sleep: func(d time.Duration) {
+func (p *pollRecorder) deps(kubectl cigate.Runner) cigate.Deps {
+	return cigate.Deps{
+		Kubectl: kubectl,
+		Now:     func() time.Time { return p.now },
+		Sleep: func(d time.Duration) {
 			p.sleeps = append(p.sleeps, d)
 			if d <= 0 {
 				p.now = p.now.Add(pollRecorderUnfreeze)

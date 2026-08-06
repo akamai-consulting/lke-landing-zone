@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest.
@@ -33,20 +35,20 @@ func withSeedRand(t *testing.T, fill byte) {
 // TestWaitForOpenbaoNamespace*.
 func withSeedNamespace(t *testing.T, present bool) {
 	t.Helper()
-	orig := newAplGateDeps
-	newAplGateDeps = func() aplGateDeps {
-		return aplGateDeps{
-			kubectl: func(args ...string) (string, bool) {
+	orig := cigate.NewDeps
+	cigate.NewDeps = func() cigate.Deps {
+		return cigate.Deps{
+			Kubectl: func(args ...string) (string, bool) {
 				if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
 					return "", present
 				}
 				return "", true
 			},
-			now:   time.Now,
-			sleep: func(time.Duration) {},
+			Now:   time.Now,
+			Sleep: func(time.Duration) {},
 		}
 	}
-	t.Cleanup(func() { newAplGateDeps = orig })
+	t.Cleanup(func() { cigate.NewDeps = orig })
 }
 
 // namespace appears after a few polls (no ComparisonError) → success.

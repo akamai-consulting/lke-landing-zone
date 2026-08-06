@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
@@ -30,7 +31,7 @@ var clusterReachable = func() (string, bool) {
 	}
 	// The diagnosis is kubectl's own; keep its first line, which is the useful
 	// one ("connection refused", "Unauthorized", "i/o timeout").
-	return firstLine(err.Error()), false
+	return cigate.FirstLine(err.Error()), false
 }
 
 // statusPreflight fails with the fix when the current context cannot reach a

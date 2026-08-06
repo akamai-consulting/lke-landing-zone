@@ -1,17 +1,19 @@
-package main
+package converge
 
 import (
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // aplTestDeps wires the shared fakeKubectl + fakeClock (ci_kyverno_test.go) into
 // aplGateDeps with no real sleeping.
-func aplTestDeps(f *fakeKubectl, step time.Duration) aplGateDeps {
+func aplTestDeps(f *fakeKubectl, step time.Duration) cigate.Deps {
 	now, _ := fakeClock(step)
-	return aplGateDeps{kubectl: f.run, now: now, sleep: func(time.Duration) {}}
+	return cigate.Deps{Kubectl: f.run, Now: now, Sleep: func(time.Duration) {}}
 }
 
 func TestWaitAplPipelineAllReady(t *testing.T) {
@@ -139,7 +141,7 @@ func TestRunCIWaitAplPipelineRequiresKubeconfig(t *testing.T) {
 	if err := runCIWaitAplPipeline(); err == nil || !strings.Contains(err.Error(), "KUBECONFIG_RAW") {
 		t.Errorf("err = %v, want KUBECONFIG_RAW-required error", err)
 	}
-	if c := ciWaitAplPipelineCmd(); c.Use != "wait-apl-pipeline" {
+	if c := WaitAplPipelineCmd(); c.Use != "wait-apl-pipeline" {
 		t.Errorf("Use = %q, want wait-apl-pipeline", c.Use)
 	}
 }

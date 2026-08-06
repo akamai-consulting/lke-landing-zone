@@ -4,20 +4,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // instanceCustomDeps builds seam deps whose kubectl answers from a per-call script
 // and whose clock advances by sleep, so deadline loops terminate without real waits.
-func instanceCustomDeps(script func(call int, args []string) (string, bool)) (aplGateDeps, *int) {
+func instanceCustomDeps(script func(call int, args []string) (string, bool)) (cigate.Deps, *int) {
 	now := time.Unix(0, 0)
 	calls := 0
-	return aplGateDeps{
-		kubectl: func(args ...string) (string, bool) {
+	return cigate.Deps{
+		Kubectl: func(args ...string) (string, bool) {
 			calls++
 			return script(calls, args)
 		},
-		now: func() time.Time { return now },
-		sleep: func(d time.Duration) {
+		Now: func() time.Time { return now },
+		Sleep: func(d time.Duration) {
 			if d <= 0 {
 				d = time.Hour // never freeze: a zero interval must fail an assertion, not hang
 			}
@@ -66,7 +68,7 @@ func TestAssertInstanceCustomNeverGeneratedFailsWithAppSetDiag(t *testing.T) {
 		t.Fatalf("want a not-generated failure, got %v", err)
 	}
 	// It must never probe sync/health for an app that never appeared.
-	if d.kubectl == nil { // guard against accidental nil in refactors
+	if d.Kubectl == nil { // guard against accidental nil in refactors
 		t.Fatal("kubectl seam went nil")
 	}
 }

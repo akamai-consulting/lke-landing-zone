@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // The grace is a deadline, not a suggestion: a refusal that has persisted for
@@ -101,23 +103,23 @@ func TestArgoOperationStateSplitsPhaseFromMessage(t *testing.T) {
 // cuts have an exact boundary: a leading newline means the first line is EMPTY,
 // and the length cap must not append an ellipsis to a message that already fits.
 func TestFirstLineCuts(t *testing.T) {
-	if got := firstLine("failed to list refs\nrepository not found"); got != "failed to list refs" {
-		t.Errorf("firstLine(multi-line) = %q", got)
+	if got := cigate.FirstLine("failed to list refs\nrepository not found"); got != "failed to list refs" {
+		t.Errorf("cigate.FirstLine(multi-line) = %q", got)
 	}
-	if got := firstLine("\nthe real text is on line 2"); got != "" {
-		t.Errorf("firstLine(leading newline) = %q, want \"\" — the first line is empty", got)
+	if got := cigate.FirstLine("\nthe real text is on line 2"); got != "" {
+		t.Errorf("cigate.FirstLine(leading newline) = %q, want \"\" — the first line is empty", got)
 	}
-	if got := firstLine(""); got != "" {
-		t.Errorf("firstLine(\"\") = %q, want empty", got)
+	if got := cigate.FirstLine(""); got != "" {
+		t.Errorf("cigate.FirstLine(\"\") = %q, want empty", got)
 	}
 
 	exactly140 := strings.Repeat("x", 140)
-	if got := firstLine(exactly140); got != exactly140 {
-		t.Errorf("firstLine(140 chars) truncated a message that fits: len=%d, ellipsis=%v", len(got), strings.Contains(got, "…"))
+	if got := cigate.FirstLine(exactly140); got != exactly140 {
+		t.Errorf("cigate.FirstLine(140 chars) truncated a message that fits: len=%d, ellipsis=%v", len(got), strings.Contains(got, "…"))
 	}
 	over := strings.Repeat("x", 141)
-	got := firstLine(over)
+	got := cigate.FirstLine(over)
 	if !strings.HasSuffix(got, "…") || strings.Count(got, "x") != 140 {
-		t.Errorf("firstLine(141 chars) = %q, want the first 140 plus an ellipsis", got)
+		t.Errorf("cigate.FirstLine(141 chars) = %q, want the first 140 plus an ellipsis", got)
 	}
 }

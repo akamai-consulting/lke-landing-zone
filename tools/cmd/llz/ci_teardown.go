@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 
@@ -34,12 +35,12 @@ func teardownDeps() teardown.Deps {
 		Client:         ciClient,
 		Token:          ciToken,
 		Exec:           execOutput,
-		TempKubeconfig: writeTempKubeconfig,
+		TempKubeconfig: cigate.WriteTempKubeconfig,
 		RegionTFVars:   func(dir, region string) (tf.TFVars, string, error) { return readRegionTFVars(dir, region) },
 		Combined: func(kubeconfigPath string, args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
 			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-			return runCombined(cmd)
+			return cigate.RunCombined(cmd)
 		},
 		Summary: appendGHAFile,
 		TFBin:   tfbin.Bin,

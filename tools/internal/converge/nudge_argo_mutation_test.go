@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"errors"
@@ -18,7 +18,7 @@ func TestRunCINudgeArgoReportsEveryBestEffortFailure(t *testing.T) {
 	})
 	var err error
 	errOut := captureStderr(t, func() {
-		err = runCINudgeArgo(globalOpts{}, nudgeOpts{apps: []string{"platform-bootstrap"}, store: "openbao", storeTimeout: 1})
+		err = runCINudgeArgo(false, nudgeOpts{apps: []string{"platform-bootstrap"}, store: "openbao", storeTimeout: 1})
 	})
 	if err != nil {
 		t.Fatalf("best-effort nudge must not return an error, got %v", err)
@@ -44,7 +44,7 @@ func TestRunCINudgeArgoQuietWhenEveryCallSucceeds(t *testing.T) {
 	var out string
 	errOut := captureStderr(t, func() {
 		out = captureStdout(t, func() {
-			err = runCINudgeArgo(globalOpts{}, nudgeOpts{apps: []string{"platform-bootstrap"}, store: "openbao", storeTimeout: 1})
+			err = runCINudgeArgo(false, nudgeOpts{apps: []string{"platform-bootstrap"}, store: "openbao", storeTimeout: 1})
 		})
 	})
 	if err != nil {

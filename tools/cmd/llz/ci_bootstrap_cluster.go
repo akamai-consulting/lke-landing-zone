@@ -22,7 +22,6 @@ package main
 // is unit-tested without a cluster.
 
 import (
-	"bytes"
 	_ "embed"
 	"encoding/base64"
 	"errors"
@@ -33,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
@@ -218,9 +218,9 @@ func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 		kubectl: func(args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
 			if kubeconfigPath != "" {
-				cmd.Env = envWithKubeconfig(kubeconfigPath)
+				cmd.Env = cigate.EnvWithKubeconfig(kubeconfigPath)
 			}
-			return runCombined(cmd)
+			return cigate.RunCombined(cmd)
 		},
 		apply: func(stdinYAML, fieldManager string, force bool) (string, bool) {
 			args := []string{"apply", "--server-side", "--field-manager=" + fieldManager}
@@ -230,10 +230,10 @@ func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 			args = append(args, "-f", "-")
 			cmd := exec.Command("kubectl", args...)
 			if kubeconfigPath != "" {
-				cmd.Env = envWithKubeconfig(kubeconfigPath)
+				cmd.Env = cigate.EnvWithKubeconfig(kubeconfigPath)
 			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
-			return runCombined(cmd)
+			return cigate.RunCombined(cmd)
 		},
 		now:   time.Now,
 		sleep: time.Sleep,
@@ -469,7 +469,7 @@ func resolveKubeconfig(path string) (string, func(), error) {
 	}
 	// 2. KUBECONFIG_RAW → spill to a 0600 tempfile → override.
 	if raw := os.Getenv("KUBECONFIG_RAW"); raw != "" {
-		path, cleanup, err := writeTempKubeconfig("llz-bootstrap-kubeconfig-*", []byte(raw))
+		path, cleanup, err := cigate.WriteTempKubeconfig("llz-bootstrap-kubeconfig-*", []byte(raw))
 		if err != nil {
 			return "", noop, err
 		}
@@ -483,19 +483,6 @@ func resolveKubeconfig(path string) (string, func(), error) {
 		return "", noop, fmt.Errorf("no usable kubeconfig: pass --kubeconfig, set a non-empty $KUBECONFIG or ~/.kube/config, or set KUBECONFIG_RAW")
 	}
 	return "", noop, nil
-}
-
-// runCombined runs cmd with stdout+stderr captured into one buffer and returns
-// (combined output, exit-0). The run MUST happen before the buffer is read:
-// `return buf.String(), cmd.Run() == nil` evaluates its operands left-to-right,
-// snapshotting the buffer EMPTY before the command ever executes. That exact
-// bug made every kubectl call return "" on the e2e bootstrap (the
-// "empty kubeconfig" color.Red herring) — see TestRunCombined_OutputAfterRun.
-func runCombined(cmd *exec.Cmd) (string, bool) {
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	ok := cmd.Run() == nil
-	return buf.String(), ok
 }
 
 // blockStorageBaseVolumeTags are the static tags every platform Volume carries;

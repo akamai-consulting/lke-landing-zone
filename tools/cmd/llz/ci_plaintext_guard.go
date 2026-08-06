@@ -282,7 +282,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"intercept. Pod-network callers can no longer reuse it even by mistake — the listener " +
 			"requires and verifies a client cert, so an unverified transport fails the handshake",
 	},
-	"tools/cmd/llz/ci_wait.go:apiProbeClient": {
+	"tools/internal/converge/wait.go:apiProbeClient": {
 		owner: "inherent",
 		reason: "probes the LKE-managed control-plane endpoint from OUTSIDE the cluster during " +
 			"provisioning, before a cluster exists to have a PKI. Reads a status line; carries no " +

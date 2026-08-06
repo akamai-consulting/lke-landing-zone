@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 func TestTailLines(t *testing.T) {
@@ -31,8 +33,8 @@ func TestTailLines(t *testing.T) {
 		{"blank-interior-lines", "a\n\nc\n", 3, "a\n\nc"},
 	}
 	for _, c := range cases {
-		if got := tailLines(c.s, c.n); got != c.want {
-			t.Errorf("%s: tailLines(%q, %d)\n got: %q\nwant: %q", c.name, c.s, c.n, got, c.want)
+		if got := cigate.TailLines(c.s, c.n); got != c.want {
+			t.Errorf("%s: cigate.TailLines(%q, %d)\n got: %q\nwant: %q", c.name, c.s, c.n, got, c.want)
 		}
 	}
 }

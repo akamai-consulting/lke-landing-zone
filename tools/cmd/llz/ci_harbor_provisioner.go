@@ -59,6 +59,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
@@ -147,12 +148,12 @@ func shutdownIstioSidecar() {
 
 func runCIHarborProvisioner() error {
 	ctx := context.Background()
-	apiURL := envOr("HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
+	apiURL := cigate.EnvOr("HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
 	registryHost := os.Getenv("HARBOR_HOST")
 
 	// Admin password: a missing/empty mounted file means Harbor's Helm release
 	// hasn't created harbor-admin-password yet — not an error, just "not yet".
-	passFile := envOr("HARBOR_ADMIN_PASSWORD_FILE", "/etc/harbor-admin/HARBOR_ADMIN_PASSWORD")
+	passFile := cigate.EnvOr("HARBOR_ADMIN_PASSWORD_FILE", "/etc/harbor-admin/HARBOR_ADMIN_PASSWORD")
 	passRaw, err := readAdminPasswordFile(passFile)
 	adminPass := strings.TrimSpace(string(passRaw))
 	if err != nil || adminPass == "" {

@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"errors"
@@ -14,19 +14,19 @@ import (
 func TestWaitPoll(t *testing.T) {
 	// Succeeds on the 3rd try.
 	n := 0
-	if !waitPoll(time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
-		t.Errorf("waitPoll succeeded=%v after %d tries, want true at 3", n == 3, n)
+	if !WaitPoll(time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
+		t.Errorf("WaitPoll succeeded=%v after %d tries, want true at 3", n == 3, n)
 	}
 	// A zero/negative budget still gets exactly one immediate try.
 	n = 0
-	if waitPoll(0, time.Millisecond, func() bool { n++; return false }) {
-		t.Error("waitPoll should be false when cond never holds")
+	if WaitPoll(0, time.Millisecond, func() bool { n++; return false }) {
+		t.Error("WaitPoll should be false when cond never holds")
 	}
 	if n != 1 {
-		t.Errorf("waitPoll tried %d times under a zero budget, want 1", n)
+		t.Errorf("WaitPoll tried %d times under a zero budget, want 1", n)
 	}
-	if !waitPoll(0, time.Millisecond, func() bool { return true }) {
-		t.Error("waitPoll should succeed on an immediate true even with a zero budget")
+	if !WaitPoll(0, time.Millisecond, func() bool { return true }) {
+		t.Error("WaitPoll should succeed on an immediate true even with a zero budget")
 	}
 }
 
@@ -65,8 +65,8 @@ func TestRunCIWaitPods(t *testing.T) {
 		return nil
 	})
 	var sawWorkloads, sawDescribe, sawEvents bool
-	origCombined := execCombined
-	execCombined = func(name string, args ...string) string {
+	origCombined := deps.ExecCombined
+	deps.ExecCombined = func(name string, args ...string) string {
 		a := strings.Join(args, " ")
 		switch {
 		case name == "kubectl" && strings.Contains(a, "get statefulset,pod"):
@@ -78,7 +78,7 @@ func TestRunCIWaitPods(t *testing.T) {
 		}
 		return "diag\n"
 	}
-	t.Cleanup(func() { execCombined = origCombined })
+	t.Cleanup(func() { deps.ExecCombined = origCombined })
 	if err := runCIWaitPods("ns", "Running", []string{"p-0"}, 0, 0); err == nil {
 		t.Errorf("wait-pods (stuck Pending) = %v, want an error", err)
 	}
@@ -143,9 +143,9 @@ func TestResolveExpectNodes(t *testing.T) {
 func TestRunCIWaitClusterReady(t *testing.T) {
 	// node-readiness jsonpath probe → "<node>=<Ready status>" per line.
 	const nodesArg = "get nodes -o "
-	origCombined := execCombined
-	execCombined = func(string, ...string) string { return "" }
-	t.Cleanup(func() { execCombined = origCombined })
+	origCombined := deps.ExecCombined
+	deps.ExecCombined = func(string, ...string) string { return "" }
+	t.Cleanup(func() { deps.ExecCombined = origCombined })
 
 	// Reachable AND the expected 2 nodes Ready → 0.
 	withKubectl(t, func(a string) ([]byte, error) {

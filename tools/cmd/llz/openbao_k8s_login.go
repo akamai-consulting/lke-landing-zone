@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -88,9 +89,9 @@ func newInClusterBaoHTTPClient() func() (*http.Client, error) {
 }
 
 func buildInClusterBaoHTTPClient() (*http.Client, error) {
-	caFile := envOr("OPENBAO_CA_FILE", defaultOpenBaoCAFile)
-	certFile := envOr("OPENBAO_CLIENT_CERT_FILE", defaultOpenBaoClientCert)
-	keyFile := envOr("OPENBAO_CLIENT_KEY_FILE", defaultOpenBaoClientKey)
+	caFile := cigate.EnvOr("OPENBAO_CA_FILE", defaultOpenBaoCAFile)
+	certFile := cigate.EnvOr("OPENBAO_CLIENT_CERT_FILE", defaultOpenBaoClientCert)
+	keyFile := cigate.EnvOr("OPENBAO_CLIENT_KEY_FILE", defaultOpenBaoClientKey)
 
 	// FromFiles, not the byte-slice form: this client is memoized for the life of
 	// the process, and the reconciler's process outlives a 90-day certificate. A
@@ -118,10 +119,10 @@ func buildInClusterBaoHTTPClient() (*http.Client, error) {
 // other — the cert says "you may speak to me", the token says "and this is what
 // you may read".
 func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, error) {
-	addr := envOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr)
-	mount := envOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
-	role := envOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
-	saFile := envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+	addr := cigate.EnvOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr)
+	mount := cigate.EnvOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
+	role := cigate.EnvOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
+	saFile := cigate.EnvOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 
 	httpClient, err := inClusterBaoHTTPClient()
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"sigs.k8s.io/yaml"
 )
@@ -18,7 +19,7 @@ import (
 // returned "" on the e2e bootstrap (misread as an empty kubeconfig). runCombined
 // must return the output the run itself produced, on success AND failure.
 func TestRunCombined_OutputAfterRun(t *testing.T) {
-	out, ok := runCombined(exec.Command("sh", "-c", "echo to-stdout; echo to-stderr >&2"))
+	out, ok := cigate.RunCombined(exec.Command("sh", "-c", "echo to-stdout; echo to-stderr >&2"))
 	if !ok {
 		t.Fatalf("runCombined(exit 0) reported failure (out=%q)", out)
 	}
@@ -26,7 +27,7 @@ func TestRunCombined_OutputAfterRun(t *testing.T) {
 		t.Fatalf("runCombined returned output snapshotted before the run (eval-order regression): %q", out)
 	}
 
-	out, ok = runCombined(exec.Command("sh", "-c", "echo boom >&2; exit 3"))
+	out, ok = cigate.RunCombined(exec.Command("sh", "-c", "echo boom >&2; exit 3"))
 	if ok {
 		t.Fatal("runCombined(exit 3) reported success")
 	}

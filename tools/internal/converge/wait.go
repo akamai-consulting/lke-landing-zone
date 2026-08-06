@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_wait.go implements `llz ci wait-pods` and `llz ci wait-cluster-ready` —
 // native ports of the inline kubectl polling loops the bootstrap/rotation
@@ -18,10 +18,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 )
 
-func ciWaitPodsCmd() *cobra.Command {
+func WaitPodsCmd() *cobra.Command {
 	var ns, phase string
 	var timeout, interval int
 	c := &cobra.Command{
@@ -49,7 +50,7 @@ func ciWaitPodsCmd() *cobra.Command {
 	return c
 }
 
-func ciWaitClusterReadyCmd() *cobra.Command {
+func WaitClusterReadyCmd() *cobra.Command {
 	var timeout, interval, requestTimeout, expectNodes int
 	var tfvarsPath string
 	c := &cobra.Command{
@@ -107,11 +108,11 @@ func resolveExpectNodes(tfvarsPath string, fallback int) int {
 	return fallback
 }
 
-// waitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
+// WaitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
 // until it returns true or timeout elapses, sleeping interval between tries with
 // an immediate first try. Returns whether cond succeeded within the budget.
-func waitPoll(timeout, interval time.Duration, cond func() bool) bool {
-	return pollUntil(time.Now, time.Sleep, timeout, interval, cond)
+func WaitPoll(timeout, interval time.Duration, cond func() bool) bool {
+	return cigate.PollUntil(time.Now, time.Sleep, timeout, interval, cond)
 }
 
 // runCIWaitPods returns nil once every pod reaches the phase, or an error (which
@@ -174,7 +175,7 @@ func dumpPodDiagnostics(ns, pod string) {
 		{"-n", ns, "get", "events", "--sort-by=.lastTimestamp"},
 	} {
 		fmt.Fprintf(os.Stderr, "\n# kubectl %s\n%s\n",
-			strings.Join(args, " "), tailLines(execCombined("kubectl", args...), 40))
+			strings.Join(args, " "), cigate.TailLines(deps.ExecCombined("kubectl", args...), 40))
 	}
 }
 
@@ -183,10 +184,10 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 		expectNodes = 1
 	}
 	var apiReachable bool
-	ok := waitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
+	ok := WaitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
 		// jsonpath: one "<node>=<Ready-condition-status>" line per node, so a
 		// reachable-but-empty pool prints nothing and parses to 0 Ready.
-		out, err := execOutput("kubectl", "get", "nodes",
+		out, err := deps.Exec("kubectl", "get", "nodes",
 			"-o", `jsonpath={range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}`,
 			fmt.Sprintf("--request-timeout=%ds", requestTimeout))
 		if err != nil {
@@ -205,10 +206,10 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 			// STDERR, so the first version of this printed "exit status 1: " with an
 			// empty reason on all 15 polls of run 30499831638 — a diagnostic that
 			// looked like one and carried nothing.
-			detail := firstLine(strings.TrimSpace(execCombined("kubectl", "get", "--raw", "/readyz",
+			detail := cigate.FirstLine(strings.TrimSpace(deps.ExecCombined("kubectl", "get", "--raw", "/readyz",
 				fmt.Sprintf("--request-timeout=%ds", requestTimeout))))
 			if detail == "" {
-				detail = firstLine(strings.TrimSpace(string(out)))
+				detail = cigate.FirstLine(strings.TrimSpace(string(out)))
 			}
 			fmt.Printf("Waiting for the control plane to accept the kubeconfig... (%v: %s)\n", err, detail)
 			return false
@@ -231,7 +232,7 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 		var err error
 		if apiReachable {
 			fmt.Fprintf(os.Stderr, "::error::control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up (check Linode capacity/quota for the requested type, or a node_pool_label ≥ 16 chars).\n", expectNodes, timeout)
-			fmt.Fprintf(os.Stderr, "\n# kubectl get nodes -o wide\n%s\n", tailLines(execCombined("kubectl", "get", "nodes", "-o", "wide"), 40))
+			fmt.Fprintf(os.Stderr, "\n# kubectl get nodes -o wide\n%s\n", cigate.TailLines(deps.ExecCombined("kubectl", "get", "nodes", "-o", "wide"), 40))
 			err = fmt.Errorf("control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up", expectNodes, timeout)
 		} else {
 			fmt.Fprintf(os.Stderr, "::error::cluster unreachable after %ds — investigate the kubeconfig before relying on CI.\n", timeout)
@@ -241,7 +242,7 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 		return err
 	}
 	fmt.Printf("Control plane is reachable and ≥%d node(s) Ready:\n", expectNodes)
-	fmt.Print(execCombined("kubectl", "get", "nodes", "-o", "wide"))
+	fmt.Print(deps.ExecCombined("kubectl", "get", "nodes", "-o", "wide"))
 	return nil
 }
 
@@ -265,7 +266,7 @@ func countReadyNodes(jsonpathOut string) int {
 // or the control-plane ACL (is this runner's egress IP opened?), not at a
 // still-provisioning API. Best-effort — no kubeconfig, no probe.
 func diagnoseAPIServer() {
-	out, err := execOutput("kubectl", "config", "view", "--minify",
+	out, err := deps.Exec("kubectl", "config", "view", "--minify",
 		"-o", "jsonpath={.clusters[0].cluster.server}")
 	server := strings.TrimSpace(string(out))
 	if err != nil || server == "" {

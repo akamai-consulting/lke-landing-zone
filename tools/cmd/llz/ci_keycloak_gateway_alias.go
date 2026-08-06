@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -253,7 +254,7 @@ func statefulSetHostAliasIP(ns, name, host string) (ip string, ok bool) {
 			fmt.Fprintf(os.Stderr, "::warning::runner-acl/keycloak-pin: %s/%s did not appear within %s (%d attempt(s)): %s — "+
 				"skipping the JWKS host pin. Team login will fail until it is applied, but the pod wait below "+
 				"reports the real problem if the StatefulSet never syncs.\n",
-				ns, name, statefulSetWait, attempt, firstLine(strings.TrimSpace(out)))
+				ns, name, statefulSetWait, attempt, cigate.FirstLine(strings.TrimSpace(out)))
 			return "", false
 		}
 		fmt.Printf("keycloak-pin: waiting for %s/%s to be created by Argo (attempt %d)...\n", ns, name, attempt)

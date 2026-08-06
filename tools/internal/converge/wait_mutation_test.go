@@ -1,4 +1,4 @@
-package main
+package converge
 
 // Gap-closing tests for ci_wait.go surfaced by mutation testing. Each one pins a
 // decision the wait gates make that was previously unasserted: the SIZE of the
@@ -71,9 +71,9 @@ func TestRunCIWaitPodsHandsTheRemainingBudgetToEachWait(t *testing.T) {
 // but registers nodes minutes later, so a gate that probes once and gives up is
 // the "bootstrap onto an empty pool" failure this command exists to prevent.
 func TestRunCIWaitClusterReadyKeepsPollingUntilNodesJoin(t *testing.T) {
-	origCombined := execCombined
-	execCombined = func(string, ...string) string { return "" }
-	t.Cleanup(func() { execCombined = origCombined })
+	origCombined := deps.ExecCombined
+	deps.ExecCombined = func(string, ...string) string { return "" }
+	t.Cleanup(func() { deps.ExecCombined = origCombined })
 
 	polls := 0
 	withKubectl(t, func(a string) ([]byte, error) {
@@ -104,9 +104,9 @@ func TestRunCIWaitClusterReadyKeepsPollingUntilNodesJoin(t *testing.T) {
 // zero turns the gate into a hot loop against the apiserver and lets it burn
 // through far more attempts than the budget allows.
 func TestRunCIWaitClusterReadyHonoursThePollInterval(t *testing.T) {
-	origCombined := execCombined
-	execCombined = func(string, ...string) string { return "" }
-	t.Cleanup(func() { execCombined = origCombined })
+	origCombined := deps.ExecCombined
+	deps.ExecCombined = func(string, ...string) string { return "" }
+	t.Cleanup(func() { deps.ExecCombined = origCombined })
 
 	polls := 0
 	withKubectl(t, func(a string) ([]byte, error) {

@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"errors"
@@ -22,9 +22,9 @@ import (
 // contract is "an unreadable cluster is not converged", and any wording change
 // should be free to happen without touching this test.
 func TestSectionsRefuseSilentGreen(t *testing.T) {
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
-	execOutput = func(_ string, _ ...string) ([]byte, error) {
+	orig := deps.Exec
+	t.Cleanup(func() { deps.Exec = orig })
+	deps.Exec = func(_ string, _ ...string) ([]byte, error) {
 		return nil, errors.New("the connection to the server was refused")
 	}
 
@@ -63,11 +63,13 @@ func TestSectionsRefuseSilentGreen(t *testing.T) {
 // obvious over-correction — treating every empty result as unreadable — would
 // make health permanently pending on a healthy cluster.
 func TestAnsweredEmptyStaysGreen(t *testing.T) {
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
-	execOutput = func(_ string, _ ...string) ([]byte, error) {
+	// withExecOutput, not a bare deps.Exec swap: checkPVCs reads through
+	// internal/kubectlprobe, which holds its OWN seam. Stubbing one leaves the
+	// other shelling out to a real cluster — which is what a 6-second "empty list
+	// reported inconclusive" failure actually was.
+	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
 		return []byte(`{"items":[]}`), nil
-	}
+	})
 
 	r := &health.Report{}
 	checkPVCs(r)

@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -180,19 +181,19 @@ func k8sSecretField(ns, name, key string) string {
 // into a CI log on the failure path, so it must stay that way: `-o jsonpath` over
 // `.data` keys, never over `.data.*` contents.
 func describeSecretForDiag(ns, name string) string {
-	if out, ok := runCombined(exec.Command("kubectl", "get", "namespace", ns)); !ok {
+	if out, ok := cigate.RunCombined(exec.Command("kubectl", "get", "namespace", ns)); !ok {
 		return fmt.Sprintf("namespace %q is not readable (%s) — cluster access or RBAC, not the Secret",
-			ns, firstLine(out))
+			ns, cigate.FirstLine(out))
 	}
-	out, ok := runCombined(exec.Command("kubectl", "-n", ns, "get", "secret", name,
+	out, ok := cigate.RunCombined(exec.Command("kubectl", "-n", ns, "get", "secret", name,
 		"-o", `jsonpath={range $k, $v := .data}{$k}{" "}{end}`))
 	if !ok {
 		// Name the alternatives: on managed vs self-install these Secrets differ, and
 		// that rename is exactly what broke keycloak-configure before.
-		names, _ := runCombined(exec.Command("kubectl", "-n", ns, "get", "secrets",
+		names, _ := cigate.RunCombined(exec.Command("kubectl", "-n", ns, "get", "secrets",
 			"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`))
 		return fmt.Sprintf("Secret %s/%s does not exist (%s). Secrets present in %s: %s",
-			ns, name, firstLine(out), ns, strings.Join(nonEmptyFields(names), ", "))
+			ns, name, cigate.FirstLine(out), ns, strings.Join(nonEmptyFields(names), ", "))
 	}
 	keys := nonEmptyFields(out)
 	if len(keys) == 0 {

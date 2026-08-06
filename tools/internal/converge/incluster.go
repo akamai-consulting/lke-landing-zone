@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_health_incluster.go — `llz ci health-incluster`: the KUBECTL-FREE sibling of
 // `llz ci health`, for a day-2 job that runs INSIDE the cluster on the slim
@@ -26,11 +26,10 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/spf13/cobra"
 )
 
-func ciHealthInClusterCmd() *cobra.Command {
+func HealthInClusterCmd() *cobra.Command {
 	// failOnUnhealthy defaults true (exit per the convergence contract). =false is
 	// report-only (always exit 0) — how a scheduled/report run drives it without a
 	// shell, since the distroless image can't do `… || true`.
@@ -64,16 +63,14 @@ func ciHealthInClusterCmd() *cobra.Command {
 
 // healthInClusterExitCode builds the in-cluster client, computes the convergence
 // report, prints it, and returns the exit code. apiserver-unreachable → 3.
+// The in-cluster client is built by the ConvergenceReport seam rather than here:
+// its construction and its use are one capability, and splitting them would put
+// the reconciler's client model in this package's imports for no gain.
 func healthInClusterExitCode(ctx context.Context, failOnUnhealthy bool) int {
-	client, err := kube.NewInCluster()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::cannot build in-cluster Kubernetes client (is this running in a pod with a ServiceAccount?): %v\n", err)
-		return 3
-	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	r, crdPresent, err := convergenceReport(cctx, client)
+	r, crdPresent, err := deps.ConvergenceReport(cctx)
 	if err != nil {
 		// A query failure here is apiserver-unreachable-class: exit 3 (transient),
 		// not a cluster hard-fail — matching `llz ci health`'s exit-3 contract.
@@ -86,18 +83,23 @@ func healthInClusterExitCode(ctx context.Context, failOnUnhealthy bool) int {
 	} else {
 		fmt.Fprintln(os.Stderr, "convergence: Application CRD not present — pre-bootstrap (in-progress).")
 	}
-	code := convergenceExit(r, crdPresent, failOnUnhealthy)
+	code := ConvergenceExit(r, crdPresent, failOnUnhealthy)
 	if !failOnUnhealthy && code != 0 {
 		fmt.Fprintf(os.Stderr, "::notice::health-incluster exit %d suppressed (--fail-on-unhealthy=false, report-only)\n", code)
 	}
 	return code
 }
 
-// convergenceExit is the PURE exit-code decision (unit-tested, no I/O): the
+// ConvergenceExit is the PURE exit-code decision (unit-tested, no I/O): the
 // report's verdict when the Application CRD is present, in-progress (2)
 // pre-bootstrap, and report-only suppression to 0. Exit 3 (apiserver unreachable)
 // is handled by the caller before this — report-only does NOT suppress it.
-func convergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {
+// EXPORTED because a coupling test spans the extraction boundary:
+// TestHealthInClusterGateRejectsEmptyCorpus drives the RECONCILER's
+// convergenceReport (package main) into THIS package's exit-code contract, and
+// that pairing is the thing worth testing — the two halves must agree that an
+// empty Applications corpus is in-progress rather than converged.
+func ConvergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {
 	code := health.InProgress.ExitCode() // pre-bootstrap: Application CRD not registered
 	if crdPresent {
 		code = r.ExitCode()

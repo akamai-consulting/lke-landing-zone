@@ -3,17 +3,19 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // recordingDeps is testDeps with the sleep seam recorded, so the poll CADENCE
 // (not just the fact that it polls) is observable.
-func recordingDeps(f *fakeKubectl, step time.Duration) (aplGateDeps, *[]time.Duration) {
+func recordingDeps(f *fakeKubectl, step time.Duration) (cigate.Deps, *[]time.Duration) {
 	now, _ := fakeClock(step)
 	var slept []time.Duration
-	return aplGateDeps{
-		kubectl: f.run,
-		now:     now,
-		sleep:   func(d time.Duration) { slept = append(slept, d) },
+	return cigate.Deps{
+		Kubectl: f.run,
+		Now:     now,
+		Sleep:   func(d time.Duration) { slept = append(slept, d) },
 	}, &slept
 }
 

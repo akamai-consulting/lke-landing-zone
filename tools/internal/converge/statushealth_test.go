@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"reflect"
@@ -7,7 +7,7 @@ import (
 
 func TestClassifyArgoApps(t *testing.T) {
 	required := []string{"platform-openbao", "platform-harbor"}
-	apps := []argoApp{
+	apps := []ArgoApp{
 		{"platform-openbao", "Synced", "Healthy"},   // required, ok
 		{"platform-harbor", "OutOfSync", "Healthy"}, // required, unhealthy
 		{"some-app", "Synced", "Degraded"},          // other, unhealthy
@@ -29,7 +29,7 @@ func TestClassifyArgoApps(t *testing.T) {
 
 func TestClassifyArgoAppsMissingRequired(t *testing.T) {
 	required := []string{"platform-openbao", "platform-loki"}
-	apps := []argoApp{{"platform-openbao", "Synced", "Healthy"}} // loki absent
+	apps := []ArgoApp{{"platform-openbao", "Synced", "Healthy"}} // loki absent
 	reqUnhealthy, missing, _ := classifyArgoApps(apps, required)
 	if len(reqUnhealthy) != 0 {
 		t.Errorf("reqUnhealthy = %v, want none", reqUnhealthy)
@@ -40,10 +40,10 @@ func TestClassifyArgoAppsMissingRequired(t *testing.T) {
 }
 
 func TestArgoAppHealthy(t *testing.T) {
-	if !(argoApp{"x", "Synced", "Healthy"}).healthy() {
+	if !(ArgoApp{"x", "Synced", "Healthy"}).Healthy() {
 		t.Error("Synced+Healthy should be healthy")
 	}
-	if (argoApp{"x", "Synced", "Progressing"}).healthy() {
+	if (ArgoApp{"x", "Synced", "Progressing"}).Healthy() {
 		t.Error("Progressing is not healthy")
 	}
 }

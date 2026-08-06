@@ -90,38 +90,6 @@ func TestHaveToolAndLookable(t *testing.T) {
 	}
 }
 
-func TestListArgoApps(t *testing.T) {
-	withExecOutput(t, func(string, ...string) ([]byte, error) {
-		return []byte(`{"items":[
-			{"metadata":{"name":"app1"},"status":{"sync":{"Status":"Synced"},"health":{"Status":"Healthy"}}},
-			{"metadata":{"name":"app2"},"status":{"sync":{"Status":"OutOfSync"},"health":{"Status":"Degraded"}}}
-		]}`), nil
-	})
-	apps, err := listArgoApps()
-	if err != nil || len(apps) != 2 {
-		t.Fatalf("listArgoApps = (%d apps, %v), want 2", len(apps), err)
-	}
-	if apps[0].Name != "app1" || !apps[0].healthy() {
-		t.Errorf("app1 = %+v, want Synced+Healthy", apps[0])
-	}
-	if apps[1].healthy() {
-		t.Errorf("app2 = %+v, want not healthy", apps[1])
-	}
-}
-
-func TestListArgoAppsErrors(t *testing.T) {
-	// Transport error propagates.
-	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no cluster") })
-	if _, err := listArgoApps(); err == nil {
-		t.Error("listArgoApps(exec error) = nil, want error")
-	}
-	// Malformed JSON is a parse error.
-	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("not json"), nil })
-	if _, err := listArgoApps(); err == nil {
-		t.Error("listArgoApps(bad json) = nil, want error")
-	}
-}
-
 func TestLatestRelease(t *testing.T) {
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) == 0 || args[0] != "release" {

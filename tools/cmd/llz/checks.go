@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 
@@ -176,7 +177,7 @@ func stepGoFmt(g globalOpts) error {
 	if g.dryRun {
 		return nil
 	}
-	out, _ := runCombined(exec.Command(argv[0], argv[1:]...))
+	out, _ := cigate.RunCombined(exec.Command(argv[0], argv[1:]...))
 	unformatted := goFmtUnformatted(out)
 	if len(unformatted) == 0 {
 		return nil

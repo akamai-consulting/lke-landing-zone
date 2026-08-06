@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/overlay"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
@@ -70,9 +71,9 @@ func aplOverlayConfigFromEnv() (aplOverlayConfig, error) {
 		// transient not-yet-synced state the caller no-ops on, not a misconfig.
 		token:        inclusterAplValuesRepoToken(),
 		env:          os.Getenv("REGION"),
-		sourceBranch: envOr("APL_VALUES_SOURCE_BRANCH", "main"),
+		sourceBranch: cigate.EnvOr("APL_VALUES_SOURCE_BRANCH", "main"),
 		targetBranch: os.Getenv("APL_VALUES_BRANCH"),
-		openbaoAddr:  envOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr),
+		openbaoAddr:  cigate.EnvOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr),
 	}
 	// GH_REPO/REGION are render-time static — their absence is a genuine misconfig.
 	// The token is ESO-synced and handled as a no-op below, not here.

@@ -5,22 +5,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
 
 // assertArgoAppDeps builds seam deps: kubectl answers from the script (keyed
 // by joined args prefix), a fake clock advanced by sleep.
-func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (string, bool)) (aplGateDeps, *int) {
+func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (string, bool)) (cigate.Deps, *int) {
 	t.Helper()
 	now := time.Unix(0, 0)
 	calls := 0
-	return aplGateDeps{
-		kubectl: func(args ...string) (string, bool) {
+	return cigate.Deps{
+		Kubectl: func(args ...string) (string, bool) {
 			calls++
 			return script(calls, args)
 		},
-		now: func() time.Time { return now },
-		sleep: func(d time.Duration) {
+		Now: func() time.Time { return now },
+		Sleep: func(d time.Duration) {
 			if d <= 0 {
 				d = time.Hour // never freeze: a zero interval must fail an assertion, not hang
 			}

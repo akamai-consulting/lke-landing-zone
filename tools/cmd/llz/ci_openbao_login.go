@@ -40,6 +40,7 @@ import (
 
 	"net/http"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
@@ -136,10 +137,10 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 // OpenBao's kubernetes auth method — the CI-agnostic in-cluster path.
 func kubernetesOpenBaoLogin(ctx context.Context, client *http.Client, addr, mount, role, saTokenFile string) (string, error) {
 	if mount == "" {
-		mount = envOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
+		mount = cigate.EnvOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
 	}
 	if saTokenFile == "" {
-		saTokenFile = envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+		saTokenFile = cigate.EnvOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 	}
 	jwt, err := os.ReadFile(saTokenFile)
 	if err != nil {

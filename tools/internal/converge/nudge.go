@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_nudge_argo.go implements `llz ci nudge-argo` — the native port of the
 // "Nudge Argo CD to converge secrets (post-seed)" inline-bash loop in
@@ -49,7 +49,7 @@ type nudgeOpts struct {
 	storeTimeout int    // seconds to wait for the store Ready condition
 }
 
-func ciNudgeArgoCmd() *cobra.Command {
+func NudgeArgoCmd() *cobra.Command {
 	o := nudgeOpts{}
 	c := &cobra.Command{
 		Use:   "nudge-argo",
@@ -66,7 +66,7 @@ func ciNudgeArgoCmd() *cobra.Command {
 			"call is best-effort; this never fails the job. Defaults to the llz-secret-store\n" +
 			"+ platform-bootstrap apps and the openbao store.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCINudgeArgo(gopts, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCINudgeArgo(deps.DryRun, o) },
 	}
 	c.Flags().StringSliceVar(&o.apps, "apps", defaultNudgeApps, "Argo CD Applications (argocd namespace) to refresh + sync")
 	c.Flags().StringVar(&o.store, "secret-store", defaultSecretStore, "ClusterSecretStore to revalidate and wait Ready (empty skips that half)")
@@ -74,10 +74,10 @@ func ciNudgeArgoCmd() *cobra.Command {
 	return c
 }
 
-func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
+func runCINudgeArgo(dryRun bool, o nudgeOpts) error {
 	const syncPatch = `{"operation":{"initiatedBy":{"username":"bootstrap-openbao"},"sync":{}}}`
 	for _, app := range o.apps {
-		if g.dryRun {
+		if dryRun {
 			fmt.Fprintf(os.Stderr, "→ (dry-run) would hard-refresh + sync application %s\n", app)
 			continue
 		}
@@ -85,11 +85,11 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 		// apiserver blip) must not fail the bootstrap — the in-cluster
 		// argo-resync-nudger CronJob is the standing safety net. Errors are
 		// logged, not returned.
-		if _, err := execOutput("kubectl", "-n", "argocd", "annotate", "application", app,
+		if _, err := deps.Exec("kubectl", "-n", "argocd", "annotate", "application", app,
 			"argocd.argoproj.io/refresh=hard", "--overwrite"); err != nil {
 			fmt.Fprintf(os.Stderr, "nudge %s: refresh annotate failed (ignored): %v\n", app, err)
 		}
-		if _, err := execOutput("kubectl", "-n", "argocd", "patch", "application", app,
+		if _, err := deps.Exec("kubectl", "-n", "argocd", "patch", "application", app,
 			"--type", "merge", "-p", syncPatch); err != nil {
 			fmt.Fprintf(os.Stderr, "nudge %s: sync patch failed (ignored): %v\n", app, err)
 		}
@@ -99,7 +99,7 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 	if o.store == "" {
 		return nil
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would revalidate clustersecretstore/%s and wait for it to go Ready\n", o.store)
 		return nil
 	}
@@ -110,7 +110,7 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 	// with it the validation), making the Ready wait below event-paced instead of
 	// timer-paced. Best-effort like everything else here.
 	stampStore := fmt.Sprintf("force-sync=%d", nowUnix())
-	if _, err := execOutput("kubectl", "annotate", "clustersecretstore", o.store,
+	if _, err := deps.Exec("kubectl", "annotate", "clustersecretstore", o.store,
 		stampStore, "--overwrite"); err != nil {
 		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s revalidation bump failed (ignored): %v\n", o.store, err)
 	}
@@ -118,7 +118,7 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 	// converge precondition CI is uniquely placed to assert, since it alone knows
 	// seeding just finished. Best-effort: a store that never reports Ready in the
 	// budget is left to converge to adjudicate.
-	if _, err := execOutput("kubectl", "wait", "--for=condition=Ready",
+	if _, err := deps.Exec("kubectl", "wait", "--for=condition=Ready",
 		"clustersecretstore/"+o.store, fmt.Sprintf("--timeout=%ds", o.storeTimeout)); err != nil {
 		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s not Ready within %ds (converge will adjudicate): %v\n", o.store, o.storeTimeout, err)
 	} else {

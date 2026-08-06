@@ -103,8 +103,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > `reconcile-actions` **44,171** with `teardown`, **43,817** with `template-sustain` and **40,827**
 > with `import-brownfield` and **38,821** with `obj-encryption`, **38,364** with `guard-charts` and
 > **37,483** with `cluster-access`, **37,131** with `health-sla` and **36,107** with
-> `token-inventory`. Thirteen extensions,
-> net −11,075 (23.5%) — now BELOW the
+> `token-inventory` and **34,359** with `converge`. Fourteen extensions,
+> net −12,823 (27.2%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)
@@ -274,7 +274,7 @@ a second fence appearing, not a bug fix.
   change available to #15.
 
 - **Run the acid test second, not last.** The catalog's most valuable single
-  split is inside `converge`: `ci_health.go` (1,097 lines) fuses the *action*
+  split is inside `converge`: `health.go` (1,097 lines) fuses the *action*
   with the *predicate*. Separating them — health becomes the core-registered
   `converged` assertion, converge stays the extension action — is where the
   binding model either holds or doesn't. Deferring it risks building a registry,

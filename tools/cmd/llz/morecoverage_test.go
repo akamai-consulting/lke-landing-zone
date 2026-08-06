@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op
@@ -147,10 +149,10 @@ func TestReportArgoHealthDryRun(t *testing.T) {
 		called = true
 		return nil, nil
 	})
-	if err := reportArgoHealth(globalOpts{dryRun: true}, false, 0); err != nil {
-		t.Errorf("reportArgoHealth(dry-run) = %v, want nil", err)
+	if err := converge.ReportArgoHealth(true, false, 0); err != nil {
+		t.Errorf("converge.ReportArgoHealth(dry-run) = %v, want nil", err)
 	}
 	if called {
-		t.Error("reportArgoHealth(dry-run) shelled out, want no exec")
+		t.Error("converge.ReportArgoHealth(dry-run) shelled out, want no exec")
 	}
 }

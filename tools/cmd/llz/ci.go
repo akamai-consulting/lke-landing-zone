@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
@@ -31,6 +32,10 @@ import (
 )
 
 func ciCmd() *cobra.Command {
+	// Install converge's capability set before any of its verbs can run. Here
+	// rather than in main() because gopts is populated by flag parsing, and DryRun
+	// is one of the capabilities.
+	installConvergeDeps(gopts)
 	c := &cobra.Command{
 		Use:   "ci",
 		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
@@ -43,7 +48,7 @@ func ciCmd() *cobra.Command {
 			"the thin orchestration over it.",
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
-		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
+		ciPreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
 		ciAssertAplVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
@@ -51,7 +56,7 @@ func ciCmd() *cobra.Command {
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciBaoBreakglassCmd(),
-		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd(),
+		ciExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), ciProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
 		ciKeycloakConfigureCmd(),
@@ -60,7 +65,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
-	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
+	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())
 	// Fail-fast gate ahead of wait-pods: a missing Argo Application means the
 	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
 	// operationState message instead of burning the 600s pod wait blind (PR #142).
@@ -378,7 +383,7 @@ func ciCmd() *cobra.Command {
 	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
 	// separately runnable (bootstrap-cluster calls them in-process), and
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
-	c.AddCommand(ciBootstrapClusterCmd(), ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
+	c.AddCommand(ciBootstrapClusterCmd(), converge.WaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
 	// apl-core 6.1.0's pre-upgrade prerequisite (the apl-operator sync-options
 	// annotation). bootstrap-cluster runs it on every apply; it stays separately

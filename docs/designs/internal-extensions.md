@@ -7,7 +7,7 @@ What it *is* is a measurement: what decomposition is available, and in what orde
 
 **Measured:** 2026-08-03, against `feat/core-surface-budget` (214 non-test files, 41,709 logic
 lines). Line counts are `llz ci core-surface --verbose`, so they are the same numbers the budget
-gate enforces and can be re-derived at any time. Spot-checked on merge: `ci_health.go` 1,097,
+gate enforces and can be re-derived at any time. Spot-checked on merge: `health.go` 1,097,
 `reconcile.go` 541, `ci_teardown.go` 492, and the eight `import-brownfield` files summing to
 exactly 3,133.
 
@@ -82,7 +82,7 @@ Three things worth reading off this rather than the raw total:
   handles badly: `guard-docs` is a clean gate, but `obj-proxy` is a *daemon* — no `kind:` in the old
   vocabulary describes it, which is the same omission that banned the `→ seeded` group.
 - **The 869 of drift inside existing files is the quieter number.** New files are visible in review;
-  a hundred lines added to `ci_health.go` is not. `exact: true` is what makes that visible at all.
+  a hundred lines added to `health.go` is not. `exact: true` is what makes that visible at all.
 
 ---
 
@@ -110,7 +110,7 @@ Two are load-bearing and stay:
 
 - **`ci_template_manifest.go` 284** *is* the `own-paths` grant implementation. ADR 0014's corollary
   says one ownership authority, so this is core by construction, not by inertia.
-- **`ci_shared.go` + `guard_walk.go` + `kubectl_probe.go`** are the shared libraries every extension
+- **`cigate.go` + `guard_walk.go` + `kubectl_probe.go`** are the shared libraries every extension
   links. They belong in `tools/internal/*`, not in an extension.
 
 Realistic settled core: **~2,900**.
@@ -163,7 +163,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test.** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `ci_health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
+| `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test. ✅ Extracted — the prediction held exactly; see [What `converge` settled](#what-converge-settled--the-acid-test-and-what-it-did-not-break).** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
 | `apl-upgrade` | 306 | 2 | ✔ | ✘ | `ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76. |
 | `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. |
 | `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first thirteen, extracted
+## The first fourteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -272,9 +272,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `guard-charts` extracted | 38,364 | 202 | −457, and `guardwalk` — the traversal ten guards share |
 | `cluster-access` extracted | 37,483 | 199 | −881, and the second `grantStates` widening — see below |
 | `health-sla` extracted | 37,131 | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
-| `token-inventory` extracted | **36,107** | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
+| `token-inventory` extracted | 36,107 | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
+| `converge` extracted | **34,359** | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
 
-**Net −11,075 (23.5%) across thirteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −12,823 (27.2%) across fourteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -699,9 +700,9 @@ health-sla  invariant:operating "rotation-sla"        [cluster-read, secret-cust
 ```
 
 **The row named three files; only two belong.** The catalog listed `ci_health_sla.go`,
-`ci_health_readiness.go` and `ci_health_incluster.go` as one extension. They share a filename prefix
+`ci_health_readiness.go` and `incluster.go` as one extension. They share a filename prefix
 and nothing else: `health-incluster` computes the **convergence verdict** over `internal/kube` with
-the pod ServiceAccount, sharing the exit-code contract and the classifier with `ci_health.go`. It is
+the pod ServiceAccount, sharing the exit-code contract and the classifier with `health.go`. It is
 part of `converge` and stayed behind for that extraction. **Grouping by name prefix is grouping by
 how someone once filed the code** — which is precisely the misfiling ADR 0014 says package `main` is
 full of. The catalog inherited the filing it was written to describe.
@@ -817,6 +818,77 @@ Environments` both moved with the wrong file — the first from `coverage_tier1_
 for a *coverage tier*), the second because it rode along with `token_capability_test.go` while its
 subject, the wizard's pre-filled PAT link, stayed in package `main`. Third and fourth instances of the
 same lesson: **a test's filename says where someone put it, not what it is about.**
+
+### What `converge` settled — the acid test, and what it did NOT break
+
+Fourteenth, and the one the catalog named the acid test two hundred declarations before it was
+attempted: *"`ci_health.go` fuses the converge ACTION with the health PREDICATE, and `internal/health`
+is the precedent for splitting them."*
+
+```
+converge  transition:converged "drive"            [cluster-read, cluster-write]
+          assertion:converged  "health"           [cluster-read]
+          assertion:converged  "health-incluster" [cluster-read]
+```
+
+**The prediction held exactly, and the split was available rather than invented.** `internal/health`
+was already 1,164 lines of pure classification; the commands were already the kubectl orchestration
+feeding it. The declaration writes down a separation the code had almost made.
+
+**And the split is not cosmetic.** `llz ci converge` polls toward the verdict *and acts on what it
+sees*: it patches Argo Applications, and it strips oversized `last-applied-configuration` annotations
+off CRDs when a sync hits the 256KB limit. Those are cluster writes performed from inside what reads
+like a health check — a reviewer running `llz ci health --wait` would reasonably assume it observes.
+The grant line is the correction, and **nothing said this anywhere before the declaration existed**.
+
+**No ceiling change.** `cluster-write` was already legal at `converged` — that row exists for exactly
+this transition. The acid test did not break the model.
+
+**What it strained instead was the ACTION ABI's absence.** Every extension before this takes `Deps`
+as a *parameter*. `converge` is 2,476 lines whose call tree runs six or seven frames from the entry
+point to the leaf that shells out, and the leaves are the health sections — small predicates whose
+entire content is a classification. Threading a capability argument through forty of them is the
+opposite of what the split is for, so the seams are package-level and installed once
+(`converge.Install`). That is what they already were in package `main`; the change is that they are
+now *named* as a capability set rather than ambient.
+
+The cost is real and is stated in `deps.go`: an installed seam is global mutable state, tests must
+restore it, and two callers cannot hold different `Deps` at once. Nothing needs that today — one
+binary, one cluster per invocation — **but "nothing needs it today" is the sentence that precedes an
+action ABI.** An ABI would hand each binding its own handle at dispatch, which is precisely what
+package-level installation cannot do. `cmd/llz/ci_converge.go` is the hand-written version of that
+dispatch, and it is the strongest argument for the real thing that these fourteen extractions have
+produced.
+
+**The one rule this extraction broke deliberately.** Every other extension lifts its cobra commands
+back to package `main`; `converge` exports its own constructors. The rule exists so the CLI's shape
+stays in the CLI, and it buys nothing here: the seven verbs share one flag vocabulary and one
+exit-code contract, and transcribing them would move ~280 lines of boilerplate across the boundary
+while leaving every decision they encode on the other side of it. What package `main` owns here is
+the capability set — which is what `ci_converge.go` now is.
+
+**Two seams were drawn in the wrong place, and the tests said so.** `LokiConfigText` started as a
+`Deps` field; it is a plain classified ConfigMap read, and `converge` already holds `cluster-read`.
+Injecting it meant the package needed permission to do what it was already permitted to do — and the
+fixture that resulted returned `""` for every test, so the S3-detection assertions ran against
+nothing. **A seam in the wrong place does not merely add indirection; it manufactures a vacuous
+fixture.** The second was `Summary`, defaulted to a no-op: a test asserting that an unwritable summary
+path *warns* can never pass against a default that cannot fail. Both are the vacuous-fixture bug two
+earlier extractions shipped — and the new lesson is that **an installed default is a fixture too**.
+
+**The tenth shared package.** `internal/cigate` — the kubectl/clock seam, the deadline poll loop
+every gate spells the same way, the kubeconfig tempfile spill — had **twelve** non-test callers.
+`readRegionTFVars` and `ciClient` did not come along: they know the repo's terraform layout and the
+CI PAT reader, and a shared package that knew either would be a shared package that knows this
+repo's shape.
+
+**The `TestMain` trap, for the second time and in a new form.** `internal/kubectlprobe` retries an
+unanswerable kubectl call three times with a 3s gap, and package `main` zeroed that delay in its own
+`TestMain`. The line did not travel, so every converge test paid **six real seconds** — the suite took
+**568 seconds** and then began tripping CI's 300s timeout outright. `cluster-access` lost the *re-exec*
+half of the same `TestMain` and hung. **Any extraction that moves code touching `kubectlprobe` needs
+that line**, and the general shape is worth stating plainly: a guard wired into one package's
+`TestMain` is invisible to the files being moved.
 
 ## The cost of the interesting half
 
@@ -957,7 +1029,7 @@ grants and the distribution is observed instead of assigned.
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
    **Done** — [The first ten, extracted](#the-first-ten-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
-   and the action/predicate split in `ci_health.go` on day one, which is where the design either
+   and the action/predicate split in `health.go` on day one, which is where the design either
    holds or doesn't.
 3. **`import-brownfield`** (3,133) — biggest single relief, genuinely optional, and the first real
    exercise of `alwaysEnabled: false`.

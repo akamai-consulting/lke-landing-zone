@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -72,7 +73,7 @@ func reportLinodeAccount(want []string) {
 		// token without the scope, or an account without the entitlement, looks
 		// like. Still advisory: it is also what a network blip looks like.
 		fmt.Printf("  %s  could not list LKE-Enterprise versions — check the PAT's scope and that the account is LKE-Enterprise entitled\n", color.Yellow("!"))
-		fmt.Printf("      %s\n", color.Dim(firstLine(err.Error())))
+		fmt.Printf("      %s\n", color.Dim(cigate.FirstLine(err.Error())))
 		return
 	case len(got) == 0:
 		fmt.Printf("  %s  the account reports NO LKE-Enterprise versions — an apply would have nothing to create\n", color.Yellow("!"))

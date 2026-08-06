@@ -90,7 +90,7 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 func TestRunCIWaitHarbor(t *testing.T) {
 	origBudget := harborWaitBudget
 	t.Cleanup(func() { harborWaitBudget = origBudget })
-	// Budget 0 so every case evaluates once: waitPoll probes before it checks the
+	// Budget 0 so every case evaluates once: converge.WaitPoll probes before it checks the
 	// deadline, so the rolled-out cases below still exercise the success path.
 	harborWaitBudget = 0
 
@@ -117,7 +117,7 @@ func TestRunCIWaitHarbor(t *testing.T) {
 	// because the convergence gate is the hard check. Previously this was a single
 	// 2m `rollout status` that hard-failed, which the caller then had to mask with
 	// continue-on-error — painting a color.Green check over a scary "timed out" that
-	// carried no signal either way. Budget 0 so waitPoll evaluates once instead of
+	// carried no signal either way. Budget 0 so converge.WaitPoll evaluates once instead of
 	// polling the real budget.
 	harborWaitBudget = 0
 	withKubectl(t, func(a string) ([]byte, error) {

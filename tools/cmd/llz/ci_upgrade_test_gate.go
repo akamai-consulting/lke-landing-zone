@@ -48,6 +48,7 @@ import (
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
@@ -444,7 +445,7 @@ func shortRef(r string) string {
 // The tail, because a traceback's exception line and copier's own message are
 // last while the head is a wall of file-creation noise.
 func indentedTail(s string, n int) string {
-	t := tailLines(s, n)
+	t := cigate.TailLines(s, n)
 	if t == "" {
 		return "      (no output)"
 	}

@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ func healthSLADeps() healthsla.Deps {
 			return baoExecFn(pod, addr, token, args...)
 		},
 		Exec:        execOutput,
-		Reachable:   kubectlReachable,
+		Reachable:   kubectlprobe.Reachable,
 		BaoExecArgv: baoExecArgv,
 		RootPod:     rootOpenbaoPod,
 	}

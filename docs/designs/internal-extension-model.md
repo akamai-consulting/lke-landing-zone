@@ -8,9 +8,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 `template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
 `obj-encryption` (`tools/internal/objenc`), `guard-charts`
 (`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`), `health-sla`
-(`tools/internal/healthsla`) and `token-inventory` (`tools/internal/tokeninv`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/healthsla`) `token-inventory` (`tools/internal/tokeninv`) and `converge`
+(`tools/internal/converge`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all thirteen still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all fourteen still run because `ci.go` and the reconciler register them, and the declarations are inert.
 All four kinds, seven states including `configured` (the last unclaimed one) and `seeded` — the group the old ceiling banned by omission — ALL EIGHT grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
@@ -207,14 +208,14 @@ from that repo. Asserting `upgraded` (template drift) and `promoted` follows the
 
 *It reaches the non-`verified` spine states, and the repo already demonstrates why.* `internal/health`
 is **1,164 logic lines** of pure classification — `argo.go`, `certs.go`, `matchers.go` — which
-`ci_health.go`'s own header calls "the tested `internal/health` predicate", describing itself as "the
+`health.go`'s own header calls "the tested `internal/health` predicate", describing itself as "the
 kubectl orchestration that feeds them". That separation is already built and already load-bearing;
 under this model the library half simply *is* an `assertion:converged` and the command half a
 `transition:converged`. `config-readiness` is the same shape for `configured`, which the catalog
 identified as "the `configured` predicate, mis-filed as a command". A rule admitting only `verified`
 would have nowhere to put either.
 
-(An earlier draft of this section claimed `ci_health.go` *fused* action and predicate and called that
+(An earlier draft of this section claimed `health.go` *fused* action and predicate and called that
 the catalog's most valuable split. It does not — the split happened before this design existed. The
 rule is unchanged; the evidence for it is stronger as a precedent than it was as a proposal.)
 
@@ -272,6 +273,16 @@ arrive as an argued change rather than a quiet widening. Two have: `cloud-mutate
 `grantstates_internal_test.go`. Both were found by extracting code that already ships — **not** by
 re-reading the catalog — which is the case for taking the expensive capabilities early.
 
+**THE ACTION ABI IS NOW THE BINDING CONSTRAINT.** Fourteen extractions have not needed one; the
+fourteenth showed why the next ones will. `converge` is 2,476 lines whose call tree runs six or seven
+frames from entry point to the leaf that shells out, so its capabilities are INSTALLED once
+(`converge.Install`) rather than threaded as a parameter the way every earlier extension does. That
+works, and its cost is stated in the package: an installed seam is global mutable state, tests must
+restore it, and two callers cannot hold different capability sets at once. An action ABI would hand
+each binding its own handle at dispatch time — which is exactly the thing package-level installation
+cannot do. `cmd/llz/ci_converge.go` is the hand-written version of that dispatch, and it is the
+clearest specification of the ABI these extractions have produced. Issue #399 sequences it.
+
 **The escape hatch is re-modelling, not an exception list.** The catalog contains exactly two
 entries that break the assertion rule, and flags both itself: `assert-storage` holds `cloud-mutate`
 ("the odd one out") and `wedge-gameday` holds `cluster-write` ("so not a plain assertion"). The
@@ -328,7 +339,7 @@ assertion enable and disable together, so they are one extension rather than two
 | always | no |
 | why it validates | the seeded transition declares the custody that transition is *defined* by; the assertion stays read-only |
 
-The acid test — the action and the predicate separated. `ci_health.go` fuses them today; under this
+The acid test — the action and the predicate separated. `health.go` fuses them today; under this
 model they come apart, which is why an `assertion` must be allowed to target `converged`:
 
 | | `converge` |

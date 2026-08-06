@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
@@ -112,7 +113,7 @@ func ciWedgeGamedayCmd() *cobra.Command {
 			"converge-only fast-path reuses one).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runWedgeGameday(newAplGateDeps(), wedgeOpts{
+			return runWedgeGameday(cigate.NewDeps(), wedgeOpts{
 				esRef:     externalSecret,
 				targetApp: targetApp,
 				namespace: namespace,
@@ -136,7 +137,7 @@ type wedgeOpts struct {
 
 // runWedgeGameday orchestrates the live game-day: verify healthy start, inject the
 // fault, watch, restore, and evaluate containment.
-func runWedgeGameday(d aplGateDeps, o wedgeOpts) error {
+func runWedgeGameday(d cigate.Deps, o wedgeOpts) error {
 	esNS, esName, ok := splitNSName(o.esRef)
 	if !ok {
 		return fmt.Errorf("--externalsecret must be <namespace>/<name>, got %q", o.esRef)
@@ -185,7 +186,7 @@ func runWedgeGameday(d aplGateDeps, o wedgeOpts) error {
 	// 3. Watch: snapshot the target + guarded Apps until the fault surfaces in the
 	//    target (contained success) or the deadline passes.
 	var snaps []gamedaySnapshot
-	deadline := d.now().Add(o.timeout)
+	deadline := d.Now().Add(o.timeout)
 	watch := append([]string{o.targetApp}, guarded...)
 	for {
 		snap := snapshotApps(d, o.namespace, watch)
@@ -198,10 +199,10 @@ func runWedgeGameday(d aplGateDeps, o wedgeOpts) error {
 		if v.faultPropagated {
 			break // fault reached the target and nothing else broke — contained.
 		}
-		if !d.now().Before(deadline) {
+		if !d.Now().Before(deadline) {
 			break
 		}
-		d.sleep(o.interval)
+		d.Sleep(o.interval)
 	}
 
 	// 4. Evaluate + report.
@@ -235,10 +236,10 @@ func siblingsOf(target string) []string {
 
 // snapshotApps reads (sync, health) for each named Application, best-effort (an
 // unreadable App is simply absent from the snapshot).
-func snapshotApps(d aplGateDeps, namespace string, apps []string) gamedaySnapshot {
+func snapshotApps(d cigate.Deps, namespace string, apps []string) gamedaySnapshot {
 	snap := gamedaySnapshot{}
 	for _, app := range apps {
-		out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app,
+		out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", app,
 			"-o", "jsonpath={.status.sync.status}{\"\\t\"}{.status.health.status}")
 		if !ok {
 			continue
@@ -254,8 +255,8 @@ func snapshotApps(d aplGateDeps, namespace string, apps []string) gamedaySnapsho
 }
 
 // esStoreRef returns the ExternalSecret's current spec.secretStoreRef.name.
-func esStoreRef(d aplGateDeps, ns, name string) (string, bool) {
-	out, ok := d.kubectl("-n", ns, "get", "externalsecret.external-secrets.io", name,
+func esStoreRef(d cigate.Deps, ns, name string) (string, bool) {
+	out, ok := d.Kubectl("-n", ns, "get", "externalsecret.external-secrets.io", name,
 		"-o", "jsonpath={.spec.secretStoreRef.name}")
 	if !ok {
 		return "", false
@@ -265,9 +266,9 @@ func esStoreRef(d aplGateDeps, ns, name string) (string, bool) {
 
 // patchESStore repoints the ExternalSecret's secretStoreRef.name — the injected
 // fault (a store that does not exist forces the ExternalSecret not-Ready).
-func patchESStore(d aplGateDeps, ns, name, store string) bool {
+func patchESStore(d cigate.Deps, ns, name, store string) bool {
 	patch := fmt.Sprintf(`{"spec":{"secretStoreRef":{"name":%q}}}`, store)
-	_, ok := d.kubectl("-n", ns, "patch", "externalsecret.external-secrets.io", name, "--type=merge", "-p", patch)
+	_, ok := d.Kubectl("-n", ns, "patch", "externalsecret.external-secrets.io", name, "--type=merge", "-p", patch)
 	return ok
 }
 
@@ -275,11 +276,11 @@ func patchESStore(d aplGateDeps, ns, name, store string) bool {
 // reports whether it was previously ON (so the caller only bothers restoring it when
 // it actually changed something). Best-effort: an unreadable/unpatchable App returns
 // false and the game-day proceeds (it may just be flakier against self-heal).
-func setSelfHeal(d aplGateDeps, namespace, app string, on bool) bool {
-	was, _ := d.kubectl("-n", namespace, "get", "application.argoproj.io", app,
+func setSelfHeal(d cigate.Deps, namespace, app string, on bool) bool {
+	was, _ := d.Kubectl("-n", namespace, "get", "application.argoproj.io", app,
 		"-o", "jsonpath={.spec.syncPolicy.automated.selfHeal}")
 	patch := fmt.Sprintf(`{"spec":{"syncPolicy":{"automated":{"selfHeal":%t}}}}`, on)
-	if _, ok := d.kubectl("-n", namespace, "patch", "application.argoproj.io", app, "--type=merge", "-p", patch); !ok {
+	if _, ok := d.Kubectl("-n", namespace, "patch", "application.argoproj.io", app, "--type=merge", "-p", patch); !ok {
 		return false
 	}
 	if on {
@@ -294,7 +295,7 @@ func setSelfHeal(d aplGateDeps, namespace, app string, on bool) bool {
 
 // restoreES puts the original secretStoreRef.name back. Best-effort but logged: a
 // leftover broken store would keep the App unhealthy.
-func restoreES(d aplGateDeps, ns, name, store string) {
+func restoreES(d cigate.Deps, ns, name, store string) {
 	if store == "" {
 		return
 	}

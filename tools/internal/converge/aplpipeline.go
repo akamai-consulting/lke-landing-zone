@@ -1,4 +1,4 @@
-package main
+package converge
 
 // ci_wait_apl_pipeline.go implements `llz ci wait-apl-pipeline` — the native
 // port of null_resource.apl_pipeline_ready's local-exec heredoc in
@@ -53,6 +53,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -97,7 +98,7 @@ func aplPipelineStages() []aplWaitStage {
 	}
 }
 
-func ciWaitAplPipelineCmd() *cobra.Command {
+func WaitAplPipelineCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "wait-apl-pipeline",
 		Short: "block until apl-operator's helmfile brings argocd/kyverno/cert-manager up (terraform local-exec body)",
@@ -119,16 +120,16 @@ func runCIWaitAplPipeline() error {
 	if raw == "" {
 		return fmt.Errorf("KUBECONFIG_RAW must be set")
 	}
-	kubeconfig, cleanup, err := writeTempKubeconfig("llz-apl-pipeline-kubeconfig-*", []byte(raw))
+	kubeconfig, cleanup, err := cigate.WriteTempKubeconfig("llz-apl-pipeline-kubeconfig-*", []byte(raw))
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return waitAplPipeline(aplPipelineStages(), newAplGateDepsFor(kubeconfig))
+	return waitAplPipeline(aplPipelineStages(), cigate.NewDepsFor(kubeconfig))
 }
 
-func waitAplPipeline(stages []aplWaitStage, d aplGateDeps) error {
+func waitAplPipeline(stages []aplWaitStage, d cigate.Deps) error {
 	for _, s := range stages {
 		fmt.Printf("Waiting for %s (%s)...\n", s.desc, s.resource)
 		if err := waitForAplResource(d, s); err != nil {
@@ -142,15 +143,15 @@ func waitAplPipeline(stages []aplWaitStage, d aplGateDeps) error {
 // waitForAplResource polls for the resource to EXIST, then waits for its
 // readiness condition. An existence timeout dumps apl-operator diagnostics;
 // both an existence timeout and a condition-wait failure are hard errors.
-func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
+func waitForAplResource(d cigate.Deps, s aplWaitStage) error {
 	var nsArgs []string
 	if s.namespace != "" {
 		nsArgs = []string{"-n", s.namespace}
 	}
 	// Poll for existence on a 10s cadence (mirrors the bash `until kubectl get …
 	// sleep 10` loop) before handing off to the condition wait.
-	if !pollUntil(d.now, d.sleep, s.existBudget, 10*time.Second, func() bool {
-		_, ok := d.kubectl(append(append([]string{}, nsArgs...), "get", s.resource)...)
+	if !cigate.PollUntil(d.Now, d.Sleep, s.existBudget, 10*time.Second, func() bool {
+		_, ok := d.Kubectl(append(append([]string{}, nsArgs...), "get", s.resource)...)
 		return ok
 	}) {
 		fmt.Fprintf(os.Stderr, "::error::%s did not appear within %s — apl-operator helmfile likely stalled.\n", s.resource, s.existBudget)
@@ -164,7 +165,7 @@ func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
 		forArg = s.forClause
 	}
 	waitArgs := append(append([]string{}, nsArgs...), "wait", "--for="+forArg, s.resource, "--timeout="+s.condTimeout)
-	if out, ok := d.kubectl(waitArgs...); !ok {
+	if out, ok := d.Kubectl(waitArgs...); !ok {
 		fmt.Fprint(os.Stderr, out)
 		return fmt.Errorf("%s did not reach %q within %s", s.resource, s.forClause, s.condTimeout)
 	}
@@ -173,11 +174,11 @@ func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
 
 // dumpAplOperatorDiagnostics prints apl-operator pods + recent operator logs to
 // stderr (best-effort) so an existence timeout shows WHY the helmfile stalled.
-func dumpAplOperatorDiagnostics(d aplGateDeps) {
-	if out, _ := d.kubectl("-n", "apl-operator", "get", "pods"); out != "" {
+func dumpAplOperatorDiagnostics(d cigate.Deps) {
+	if out, _ := d.Kubectl("-n", "apl-operator", "get", "pods"); out != "" {
 		fmt.Fprintln(os.Stderr, strings.TrimRight(out, "\n"))
 	}
-	if out, _ := d.kubectl("-n", "apl-operator", "logs", "deploy/apl-operator", "--tail=80"); out != "" {
+	if out, _ := d.Kubectl("-n", "apl-operator", "logs", "deploy/apl-operator", "--tail=80"); out != "" {
 		fmt.Fprintln(os.Stderr, strings.TrimRight(out, "\n"))
 	}
 }

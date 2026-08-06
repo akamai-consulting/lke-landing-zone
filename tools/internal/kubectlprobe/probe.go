@@ -241,3 +241,19 @@ func JSONPathOK(args ...string) (string, bool) {
 	}
 	return strings.TrimSpace(string(out)), true
 }
+
+// Reachable reports whether the apiserver answers at all.
+//
+// IT LIVES HERE, not in internal/converge where it was first extracted to, and
+// the reason is a bug that extraction caused: `llz ci diagnose-argocd` (package
+// main) and `health-sla` both gate on it, and once converge owned it behind
+// converge's OWN Exec seam, a test that stubbed main's kubectl no longer stubbed
+// this — so diagnose's reachability gate failed against a real cluster and every
+// downstream probe assertion came back empty.
+//
+// Three callers, one capability, and it is a kubectl probe. One seam covers all
+// of them precisely because it is the seam this package already owns.
+func Reachable() bool {
+	_, err := Exec("kubectl", "version", "--request-timeout=10s")
+	return err == nil
+}

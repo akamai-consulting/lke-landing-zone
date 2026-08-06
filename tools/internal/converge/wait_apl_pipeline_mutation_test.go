@@ -1,4 +1,4 @@
-package main
+package converge
 
 // Gap-closing tests for ci_wait_apl_pipeline.go surfaced by mutation testing.
 // The existing suite drives every stage to an IMMEDIATE success, which makes the
@@ -12,17 +12,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 )
 
 // aplPollDeps builds gate seams with a clock advanced BY SLEEP (never on a bare
 // read), so a test observes the poll cadence the gate actually asks for. The
 // returned pointer is the fake clock, for asserting how much time a wait consumed.
-func aplPollDeps(kubectl kubectlRunner) (aplGateDeps, *time.Time) {
+func aplPollDeps(kubectl cigate.Runner) (cigate.Deps, *time.Time) {
 	now := time.Unix(1_700_000_000, 0)
-	d := aplGateDeps{
-		kubectl: kubectl,
-		now:     func() time.Time { return now },
-		sleep:   func(step time.Duration) { now = now.Add(step) },
+	d := cigate.Deps{
+		Kubectl: kubectl,
+		Now:     func() time.Time { return now },
+		Sleep:   func(step time.Duration) { now = now.Add(step) },
 	}
 	return d, &now
 }
@@ -120,10 +122,10 @@ func TestWaitAplPipelineExistenceTimeoutSurfacesOperatorLogs(t *testing.T) {
 	// A clock that also advances on a bare read, so the budget expires no matter
 	// what the poll cadence is (this test must fail, never hang).
 	now, _ := fakeClock(1000 * time.Second)
-	d := aplGateDeps{
-		now:   now,
-		sleep: func(time.Duration) {},
-		kubectl: func(args ...string) (string, bool) {
+	d := cigate.Deps{
+		Now:   now,
+		Sleep: func(time.Duration) {},
+		Kubectl: func(args ...string) (string, bool) {
 			joined := strings.Join(args, " ")
 			switch {
 			case strings.Contains(joined, "get "+stages[0].resource):

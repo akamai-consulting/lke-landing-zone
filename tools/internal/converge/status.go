@@ -1,4 +1,4 @@
-package main
+package converge
 
 // statushealth.go ports report-argocd-health.sh into `llz status`: classify the
 // Argo CD Applications in the current cluster, flag the required support-plane
@@ -22,18 +22,18 @@ var requiredSupportApps = []string{
 	"platform-loki", "platform-prometheus", "platform-grafana",
 }
 
-type argoApp struct {
+type ArgoApp struct {
 	Name   string
 	Sync   string
 	Health string
 }
 
-func (a argoApp) healthy() bool { return a.Sync == "Synced" && a.Health == "Healthy" }
+func (a ArgoApp) Healthy() bool { return a.Sync == "Synced" && a.Health == "Healthy" }
 
 // classifyArgoApps splits the cluster's Applications into required-unhealthy,
 // missing-required, and other-unhealthy — the pure core (unit-tested).
-func classifyArgoApps(apps []argoApp, required []string) (reqUnhealthy, missing, otherUnhealthy []string) {
-	byName := make(map[string]argoApp, len(apps))
+func classifyArgoApps(apps []ArgoApp, required []string) (reqUnhealthy, missing, otherUnhealthy []string) {
+	byName := make(map[string]ArgoApp, len(apps))
 	for _, a := range apps {
 		byName[a.Name] = a
 	}
@@ -45,12 +45,12 @@ func classifyArgoApps(apps []argoApp, required []string) (reqUnhealthy, missing,
 			missing = append(missing, name)
 			continue
 		}
-		if !a.healthy() {
+		if !a.Healthy() {
 			reqUnhealthy = append(reqUnhealthy, fmt.Sprintf("%s sync=%s health=%s", a.Name, a.Sync, a.Health))
 		}
 	}
 	for _, a := range apps {
-		if reqSet[a.Name] || a.healthy() {
+		if reqSet[a.Name] || a.Healthy() {
 			continue
 		}
 		otherUnhealthy = append(otherUnhealthy, fmt.Sprintf("%s sync=%s health=%s", a.Name, a.Sync, a.Health))
@@ -60,19 +60,19 @@ func classifyArgoApps(apps []argoApp, required []string) (reqUnhealthy, missing,
 
 // listArgoApps runs `kubectl -n argocd get applications -o json` against the
 // current context and parses the Application sync/health states.
-func listArgoApps() ([]argoApp, error) {
-	out, err := execOutput("kubectl", "-n", "argocd", "get", "applications", "-o", "json")
+func listArgoApps() ([]ArgoApp, error) {
+	out, err := deps.Exec("kubectl", "-n", "argocd", "get", "applications", "-o", "json")
 	if err != nil {
 		return nil, fmt.Errorf("kubectl get applications: %w", err)
 	}
-	apps, err := parseArgoAppList(out)
+	apps, err := ParseArgoAppList(out)
 	if err != nil {
 		return nil, fmt.Errorf("parse applications JSON: %w", err)
 	}
 	return apps, nil
 }
 
-// parseArgoAppList reads `kubectl get applications -o json` into the name +
+// ParseArgoAppList reads `kubectl get applications -o json` into the name +
 // sync/health triple. The same anonymous struct and the same append loop were
 // written out twice, here and in selectPlatformApps (verify.go) — identical down
 // to the field tags.
@@ -80,7 +80,7 @@ func listArgoApps() ([]argoApp, error) {
 // Deliberately NOT health.ParseArgoApp: that one is richer (spec-error
 // conditions, automated-policy detection) and is the right tool where those
 // matter. These two callers want only the triple.
-func parseArgoAppList(raw []byte) ([]argoApp, error) {
+func ParseArgoAppList(raw []byte) ([]ArgoApp, error) {
 	var doc struct {
 		Items []struct {
 			Metadata struct {
@@ -95,19 +95,19 @@ func parseArgoAppList(raw []byte) ([]argoApp, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, err
 	}
-	apps := make([]argoApp, 0, len(doc.Items))
+	apps := make([]ArgoApp, 0, len(doc.Items))
 	for _, it := range doc.Items {
-		apps = append(apps, argoApp{it.Metadata.Name, it.Status.Sync.Status, it.Status.Health.Status})
+		apps = append(apps, ArgoApp{it.Metadata.Name, it.Status.Sync.Status, it.Status.Health.Status})
 	}
 	return apps, nil
 }
 
-// reportArgoHealth prints the Application-health summary for the current context.
+// ReportArgoHealth prints the Application-health summary for the current context.
 // With wait=true it polls every 20s until the required apps converge or timeout
 // (seconds) elapses, returning an error if they never do. Without wait it is a
 // one-shot report (error if required apps are unhealthy/missing right now).
-func reportArgoHealth(g globalOpts, wait bool, timeout int) error {
-	if g.dryRun {
+func ReportArgoHealth(dryRun bool, wait bool, timeout int) error {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl -n argocd get applications -o json (Application health)")
 		return nil
 	}

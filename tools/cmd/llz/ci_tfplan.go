@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
 
@@ -93,23 +94,9 @@ func runCITFPlan(out, title string, lines int, tfFlags []string) error {
 func tfPlanSummary(title, planOutput string, n int) string {
 	var b strings.Builder
 	b.WriteString("### " + title + "\n```\n")
-	if tail := tailLines(planOutput, n); tail != "" {
+	if tail := cigate.TailLines(planOutput, n); tail != "" {
 		b.WriteString(tail + "\n")
 	}
 	b.WriteString("```\n")
 	return b.String()
-}
-
-// tailLines returns the last n lines of s without a trailing newline
-// (`tail -N` semantics: a final newline terminates the last line rather than
-// starting an empty one). n <= 0 yields "".
-func tailLines(s string, n int) string {
-	if n <= 0 || s == "" {
-		return ""
-	}
-	all := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
-	if n < len(all) {
-		all = all[len(all)-n:]
-	}
-	return strings.Join(all, "\n")
 }

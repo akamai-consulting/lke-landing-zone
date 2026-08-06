@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"errors"
@@ -23,7 +23,7 @@ func TestRunCINudgeArgoRefreshesSyncsAndRevalidatesStore(t *testing.T) {
 		return nil, nil
 	})
 	o := nudgeOpts{apps: defaultNudgeApps, store: defaultSecretStore, storeTimeout: 300}
-	if err := runCINudgeArgo(globalOpts{}, o); err != nil {
+	if err := runCINudgeArgo(false, o); err != nil {
 		t.Fatalf("nudge-argo: %v", err)
 	}
 	// annotate+patch per app, plus the store revalidation bump and one store-wait.
@@ -73,7 +73,7 @@ func TestRunCINudgeArgoNeverForceSyncsExternalSecrets(t *testing.T) {
 		}
 		return nil, nil
 	})
-	if err := runCINudgeArgo(globalOpts{}, nudgeOpts{apps: nil, store: defaultSecretStore, storeTimeout: 1}); err != nil {
+	if err := runCINudgeArgo(false, nudgeOpts{apps: nil, store: defaultSecretStore, storeTimeout: 1}); err != nil {
 		t.Fatalf("best-effort nudge must not return error, got %v", err)
 	}
 	if strings.Contains(joined, "externalsecret") {
@@ -91,7 +91,7 @@ func TestRunCINudgeArgoBestEffort(t *testing.T) {
 		}
 		return nil, errors.New("the server could not find the requested resource")
 	})
-	if err := runCINudgeArgo(globalOpts{}, nudgeOpts{apps: []string{"a", "b", "c"}, store: defaultSecretStore, storeTimeout: 1}); err != nil {
+	if err := runCINudgeArgo(false, nudgeOpts{apps: []string{"a", "b", "c"}, store: defaultSecretStore, storeTimeout: 1}); err != nil {
 		t.Fatalf("best-effort nudge must not return error, got %v", err)
 	}
 	if apps != 3 {
@@ -105,7 +105,7 @@ func TestRunCINudgeArgoEmptyStoreSkipsStoreHalf(t *testing.T) {
 		joined += " | " + name + " " + strings.Join(args, " ")
 		return nil, nil
 	})
-	if err := runCINudgeArgo(globalOpts{}, nudgeOpts{apps: defaultNudgeApps, store: ""}); err != nil {
+	if err := runCINudgeArgo(false, nudgeOpts{apps: defaultNudgeApps, store: ""}); err != nil {
 		t.Fatalf("nudge-argo: %v", err)
 	}
 	if strings.Contains(joined, "wait") || strings.Contains(joined, "clustersecretstore") {
@@ -119,10 +119,10 @@ func TestRunCINudgeArgoDryRunAndWiring(t *testing.T) {
 		return nil, nil
 	})
 	o := nudgeOpts{apps: defaultNudgeApps, store: defaultSecretStore, storeTimeout: 300}
-	if err := runCINudgeArgo(globalOpts{dryRun: true}, o); err != nil {
+	if err := runCINudgeArgo(true, o); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	c := ciNudgeArgoCmd()
+	c := NudgeArgoCmd()
 	if c.Use != "nudge-argo" {
 		t.Errorf("Use = %q, want nudge-argo", c.Use)
 	}

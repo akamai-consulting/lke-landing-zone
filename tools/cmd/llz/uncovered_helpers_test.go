@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 
@@ -133,14 +134,14 @@ func TestValidGlyph(t *testing.T) {
 	}
 }
 
-// envWithKubeconfig must REPLACE any inherited KUBECONFIG rather than append a
+// cigate.EnvWithKubeconfig must REPLACE any inherited KUBECONFIG rather than append a
 // second one — with two entries the child process takes the first, so an append
 // would silently keep pointing at the operator's own cluster.
 func TestEnvWithKubeconfig(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/inherited/should/be/dropped")
 	t.Setenv("LLZ_ENV_MARKER", "kept")
 
-	env := envWithKubeconfig("/tmp/target.kubeconfig")
+	env := cigate.EnvWithKubeconfig("/tmp/target.kubeconfig")
 
 	var kubeconfigs []string
 	marker := false

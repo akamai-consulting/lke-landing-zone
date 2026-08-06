@@ -1,4 +1,4 @@
-package main
+package converge
 
 import (
 	"errors"
@@ -12,7 +12,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
-// withKubectl stubs the execOutput seam to answer kubectl invocations via a
+// withKubectl stubs the deps.Exec seam to answer kubectl invocations via a
 // handler keyed on the joined args; non-kubectl shell-outs error. An unstubbed
 // kubectl call returns an error, which the section helpers treat as "empty".
 func withKubectl(t *testing.T, h func(args string) ([]byte, error)) {
@@ -358,17 +358,17 @@ func TestCheckWorkloads(t *testing.T) {
 	// healthNamespaces entry that had gone stale when the platform namespaces were
 	// llz- prefixed — so it passed while the real check silently skipped the
 	// namespace on every run (the loop `continue`s on a namespace that isn't in
-	// the inventory). Using openbaoNamespace ties the fixture to the same const the
+	// the inventory). Using OpenbaoNamespace ties the fixture to the same const the
 	// production list uses, so the two cannot drift apart again.
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
 		case a == "get ns -o json":
-			return items(`{"metadata":{"name":"` + openbaoNamespace + `"},"status":{"phase":"Active"}}`), nil
-		case a == "-n "+openbaoNamespace+" get deploy -o json":
+			return items(`{"metadata":{"name":"` + OpenbaoNamespace + `"},"status":{"phase":"Active"}}`), nil
+		case a == "-n "+OpenbaoNamespace+" get deploy -o json":
 			return items(`{"metadata":{"name":"d"},"spec":{"replicas":2},"status":{"readyReplicas":1}}`), nil
-		case a == "-n "+openbaoNamespace+" get sts -o json":
+		case a == "-n "+OpenbaoNamespace+" get sts -o json":
 			return items(`{"metadata":{"name":"s"},"spec":{"replicas":1},"status":{"readyReplicas":1}}`), nil
-		case a == "-n "+openbaoNamespace+" get ds -o json":
+		case a == "-n "+OpenbaoNamespace+" get ds -o json":
 			return items(), nil
 		}
 		return nil, errors.New("nope")
@@ -388,7 +388,7 @@ func TestCheckWorkloads(t *testing.T) {
 // upstream-owned and are not.
 func TestHealthNamespacesAreLLZPrefixed(t *testing.T) {
 	stale := map[string]string{
-		"openbao":         openbaoNamespace,
+		"openbao":         OpenbaoNamespace,
 		"observability":   "llz-observability",
 		"cert-automation": "llz-cert-automation",
 	}

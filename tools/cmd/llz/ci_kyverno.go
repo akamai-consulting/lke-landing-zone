@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -74,26 +75,26 @@ func runCIApplyKyvernoPolicy() error {
 		return err
 	}
 
-	kubeconfig, cleanup, err := writeTempKubeconfig("llz-kyverno-kubeconfig-*", []byte(o.kubeconfigRaw))
+	kubeconfig, cleanup, err := cigate.WriteTempKubeconfig("llz-kyverno-kubeconfig-*", []byte(o.kubeconfigRaw))
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return applyKyvernoPolicy(o, newAplGateDepsFor(kubeconfig))
+	return applyKyvernoPolicy(o, cigate.NewDepsFor(kubeconfig))
 }
 
 func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
 	o := kyvernoPolicyOpts{
 		kubeconfigRaw:      getenv("KUBECONFIG_RAW"),
 		policyManifest:     getenv("POLICY_MANIFEST"),
-		fieldManager:       envOrDefault(getenv, "FIELD_MANAGER", "cluster-bootstrap-tf"),
+		fieldManager:       cigate.EnvOrDefault(getenv, "FIELD_MANAGER", "cluster-bootstrap-tf"),
 		waitForKyverno:     getenv("WAIT_FOR_KYVERNO") != "false", // default true
 		timeoutWarning:     getenv("TIMEOUT_WARNING"),
 		crdMissingWarning:  getenv("CRD_MISSING_WARNING"),
 		webhookRaceWarning: getenv("WEBHOOK_RACE_WARNING"),
 		retrofitConfigMap:  getenv("RETROFIT_CONFIGMAP"),
-		retrofitNamespace:  envOrDefault(getenv, "RETROFIT_NAMESPACE", "monitoring"),
+		retrofitNamespace:  cigate.EnvOrDefault(getenv, "RETROFIT_NAMESPACE", "monitoring"),
 		retrofitRollout:    getenv("RETROFIT_ROLLOUT"),
 	}
 	if o.kubeconfigRaw == "" {
@@ -139,14 +140,14 @@ func isKyvernoWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchSt
 // non-nil error ONLY on a hard apply failure (a non-race kubectl-apply error);
 // every readiness timeout, missing-CRD guard, and webhook race is a soft-fail
 // (::warning:: + nil) exactly as the bash exited 0.
-func applyKyvernoPolicy(o kyvernoPolicyOpts, d aplGateDeps) error {
+func applyKyvernoPolicy(o kyvernoPolicyOpts, d cigate.Deps) error {
 	if o.waitForKyverno {
 		// Poll until the CRD exists AND the admission controller is Available.
-		ready := pollUntil(d.now, d.sleep, o.waitTimeout, 5*time.Second, func() bool {
-			if _, ok := d.kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
+		ready := cigate.PollUntil(d.Now, d.Sleep, o.waitTimeout, 5*time.Second, func() bool {
+			if _, ok := d.Kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
 				return false
 			}
-			_, ok := d.kubectl("-n", "kyverno", "wait", "--for=condition=Available",
+			_, ok := d.Kubectl("-n", "kyverno", "wait", "--for=condition=Available",
 				"deployment/kyverno-admission-controller", "--timeout=5s")
 			return ok
 		})
@@ -155,13 +156,13 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d aplGateDeps) error {
 				"Kyverno admission controller not Ready within deadline — skipping policy apply. Re-run terraform apply once Kyverno is up."))
 			return nil
 		}
-	} else if _, ok := d.kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
+	} else if _, ok := d.Kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
 		warn(firstNonEmpty(o.crdMissingWarning,
 			"Kyverno ClusterPolicy CRD not present — skipping policy apply."))
 		return nil
 	}
 
-	out, ok := d.kubectl("apply", "--server-side", "--force-conflicts",
+	out, ok := d.Kubectl("apply", "--server-side", "--force-conflicts",
 		"--field-manager="+o.fieldManager, "-f", o.policyManifest)
 	if !ok {
 		if isKyvernoWebhookRace(out) {
@@ -180,7 +181,7 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d aplGateDeps) error {
 	// PVC-storageclass audit still backstops any escapees) rather than failing the
 	// apply, since the cluster is otherwise functional.
 	if name := policyName(o.policyManifest); name != "" {
-		if _, ok := d.kubectl("wait", "--for=condition=Ready", "clusterpolicy/"+name, "--timeout=60s"); ok {
+		if _, ok := d.Kubectl("wait", "--for=condition=Ready", "clusterpolicy/"+name, "--timeout=60s"); ok {
 			notice(fmt.Sprintf("clusterpolicy/%s is Ready (enforcing).", name))
 		} else {
 			warn(fmt.Sprintf("clusterpolicy/%s applied but did not report Ready within 60s — it may not be enforcing yet; the PVC-storageclass audit will flag any escapees.", name))
@@ -197,10 +198,10 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d aplGateDeps) error {
 // ConfigMap created by another controller: if the target predates the policy
 // (so the admission rule never fired on it), force one UPDATE through admission
 // and optionally roll the consumer. Best-effort — never returns an error.
-func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d aplGateDeps) {
+func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d cigate.Deps) {
 	ns := o.retrofitNamespace
-	present := pollUntil(d.now, d.sleep, o.retrofitWait, 5*time.Second, func() bool {
-		_, ok := d.kubectl("-n", ns, "get", "configmap", o.retrofitConfigMap)
+	present := cigate.PollUntil(d.Now, d.Sleep, o.retrofitWait, 5*time.Second, func() bool {
+		_, ok := d.Kubectl("-n", ns, "get", "configmap", o.retrofitConfigMap)
 		return ok
 	})
 	if !present {
@@ -209,13 +210,13 @@ func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d aplGateDeps) {
 		return
 	}
 	// A changing annotation value guarantees a real UPDATE (admission fires).
-	annotation := "llz.akamai.com/kyverno-retrofit=" + strconv.FormatInt(d.now().Unix(), 10)
-	if _, ok := d.kubectl("-n", ns, "annotate", "configmap", o.retrofitConfigMap, annotation, "--overwrite"); ok {
+	annotation := "llz.akamai.com/kyverno-retrofit=" + strconv.FormatInt(d.Now().Unix(), 10)
+	if _, ok := d.Kubectl("-n", ns, "annotate", "configmap", o.retrofitConfigMap, annotation, "--overwrite"); ok {
 		notice(fmt.Sprintf("retrofit: kicked pre-existing %s/%s through admission so %s mutates it.",
 			ns, o.retrofitConfigMap, policyName(o.policyManifest)))
 	}
 	if o.retrofitRollout != "" {
-		if _, ok := d.kubectl("-n", ns, "rollout", "restart", "deploy/"+o.retrofitRollout); ok {
+		if _, ok := d.Kubectl("-n", ns, "rollout", "restart", "deploy/"+o.retrofitRollout); ok {
 			notice(fmt.Sprintf("retrofit: rolled %s/deploy/%s to reload the mutated config.", ns, o.retrofitRollout))
 		}
 	}

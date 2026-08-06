@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -181,14 +182,14 @@ func variableSetArgv(name string) []string {
 // statusArgv is the read-only convergence check set (matches the verify steps in
 // docs/runbooks/bootstrap-openbao.md).
 //
-// The OpenBao namespace comes from openbaoNamespace, not a literal. It WAS the
+// The OpenBao namespace comes from converge.OpenbaoNamespace, not a literal. It WAS the
 // literal "openbao", which has not existed since the platform namespaces were
 // llz- prefixed — so `llz status <env>` reported nothing for the OpenBao pods and
 // looked like a cluster with none, on every invocation. Same class as the three
 // stale entries in healthNamespaces (#242).
 func statusArgv() [][]string {
 	return [][]string{
-		{"kubectl", "-n", openbaoNamespace, "get", "pods"},
+		{"kubectl", "-n", converge.OpenbaoNamespace, "get", "pods"},
 		{"kubectl", "-n", "argocd", "get", "applications"},
 		{"kubectl", "-n", "external-secrets", "get", "clustersecretstore"},
 	}
@@ -1149,7 +1150,7 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	}
 	// Argo CD Application health (report-only by default; --wait polls + gates).
 	fmt.Println()
-	if err := reportArgoHealth(g, wait, timeout); err != nil && firstErr == nil {
+	if err := converge.ReportArgoHealth(g.dryRun, wait, timeout); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	// Standing security-hygiene check: the OpenBao root token must not linger in

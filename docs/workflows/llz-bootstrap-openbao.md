@@ -681,7 +681,7 @@ converge poll is the verdict.
 
 ### Removed: the one-shot pre-converge "Realign argocd-redis on WRONGPASS" step
 
-The converge poll's own reactive realign (`ci_health.go`: on a detected
+The converge poll's own reactive realign (`health.go`: on a detected
 WRONGPASS/NOAUTH split it restarts argocd-redis once per run) already covers this —
 including a split present BEFORE converge, which it catches on poll 1 — so the pre-step
 only realigned ~one poll earlier while putting ~25 lines of warm-cluster (`KEEP_CLUSTER`)

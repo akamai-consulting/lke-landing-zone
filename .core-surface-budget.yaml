@@ -97,12 +97,15 @@ categories:
     #                       and the first extraction to add a WORD to the model
     #                       rather than a table row (secret-read, split out of
     #                       secret-custody). -1,024.
+    #   34,359 / 188 files  converge, THE ACID TEST — the transition/assertion split
+    #                       the catalog predicted, plus internal/cigate (12 callers).
+    #                       -1,748, the second-largest single move.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 36107
+    budget: 34359
     exact: true
     include:
       - "tools/cmd/llz/*.go"

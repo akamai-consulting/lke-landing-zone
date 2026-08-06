@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 
@@ -235,7 +236,7 @@ func TestHealthInClusterGateRejectsEmptyCorpus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convergenceReport: %v", err)
 	}
-	if got := convergenceExit(r, crdPresent, true); got != 2 {
+	if got := converge.ConvergenceExit(r, crdPresent, true); got != 2 {
 		t.Errorf("health-incluster on zero Applications: exit %d, want 2 (in-progress)", got)
 	}
 }

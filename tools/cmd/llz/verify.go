@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 )
 
 type verifyOpts struct {
@@ -81,7 +82,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 		v.fail("no platform-prefixed Applications found in argocd namespace")
 	}
 	for _, a := range apps {
-		if a.healthy() {
+		if a.Healthy() {
 			v.pass(fmt.Sprintf("%s  sync=%s  health=%s", a.Name, a.Sync, a.Health))
 		} else {
 			v.fail(fmt.Sprintf("%s  sync=%s  health=%s", a.Name, a.Sync, a.Health))
@@ -206,12 +207,12 @@ func knownHostsHas(knownHosts, host string) bool {
 }
 
 // selectPlatformApps returns the platform-* (or known llz-*) Applications.
-func selectPlatformApps(appsJSON string) []argoApp {
-	all, err := parseArgoAppList([]byte(appsJSON))
+func selectPlatformApps(appsJSON string) []converge.ArgoApp {
+	all, err := converge.ParseArgoAppList([]byte(appsJSON))
 	if err != nil {
 		return nil
 	}
-	var out []argoApp
+	var out []converge.ArgoApp
 	for _, a := range all {
 		if strings.HasPrefix(a.Name, "platform-") || platformAppRe.MatchString(a.Name) {
 			out = append(out, a)

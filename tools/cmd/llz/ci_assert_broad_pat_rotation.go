@@ -30,6 +30,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
@@ -207,7 +208,7 @@ func e2eRotationJobJSON(cronJobJSON []byte) ([]byte, error) {
 var kubectlApplyStdin = func(manifest []byte) (string, error) {
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = bytes.NewReader(manifest)
-	out, ok := runCombined(cmd)
+	out, ok := cigate.RunCombined(cmd)
 	if !ok {
 		return out, fmt.Errorf("kubectl apply failed")
 	}
