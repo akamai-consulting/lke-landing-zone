@@ -63,6 +63,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
@@ -116,7 +117,7 @@ func ciAssertNetworkEnforcementCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			return runCIAssertNetworkEnforcement(netEnforceOpts{
-				checks:     splitCSVList(checks),
+				checks:     cigate.SplitCSVList(checks),
 				image:      image,
 				namespace:  namespace,
 				allowed:    allowed,

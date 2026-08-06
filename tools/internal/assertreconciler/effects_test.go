@@ -1,4 +1,4 @@
-package main
+package assertreconciler
 
 import (
 	"errors"
@@ -196,10 +196,10 @@ func TestProbeReconcilerEffectsRequireFlagFailsOnAbsent(t *testing.T) {
 // unreachable apiserver. Every other test here seams readTokenInventory and so
 // cannot see the flag at all — this one exercises the default implementation.
 func TestReadTokenInventoryIgnoresNotFound(t *testing.T) {
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
+	orig := deps.Exec
+	t.Cleanup(func() { deps.Exec = orig })
 	var got []string
-	execOutput = func(name string, args ...string) ([]byte, error) {
+	deps.Exec = func(name string, args ...string) ([]byte, error) {
 		got = append([]string{name}, args...)
 		return nil, nil
 	}

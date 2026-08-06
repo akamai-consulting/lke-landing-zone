@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
 // fakeLeaseStore is an in-memory coordination Lease backing the elector tests.
@@ -305,7 +307,7 @@ func TestElectorLeaseTimestampIsMicroPrecision(t *testing.T) {
 
 // TestElectorDoesNotStealOnUnreadableRenewTime is a SPLIT-BRAIN regression test.
 //
-// leaseHolderRenew discarded its parse error, so a renewTime that was present but
+// kube.LeaseHolderRenew discarded its parse error, so a renewTime that was present but
 // unusable — unparseable, or not a string — produced the zero time. The elector
 // treats a zero renewTime as "takeable NOW", identically to a lease that was
 // never held. So an unreadable timestamp read as evidence the lease was FREE and
@@ -332,7 +334,7 @@ func TestElectorDoesNotStealOnUnreadableRenewTime(t *testing.T) {
 			}
 			obj := map[string]any{"spec": spec}
 
-			holder, renew, renewOK := leaseHolderRenew(obj)
+			holder, renew, renewOK := kube.LeaseHolderRenew(obj)
 			if holder != "peer-0" {
 				t.Fatalf("holder = %q, want peer-0", holder)
 			}

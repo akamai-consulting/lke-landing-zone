@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promwire"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
@@ -425,7 +426,7 @@ func TestPromFirstSampleReadsALabellessGauge(t *testing.T) {
 	]}}`)
 	// The helper the rest of this file uses cannot see it — pinned so the reason
 	// promFirstSample exists is visible rather than folklore.
-	if m, err := promVectorByLabel(raw, "cred"); err != nil || len(m) != 0 {
+	if m, err := promwire.VectorByLabel(raw, "cred"); err != nil || len(m) != 0 {
 		t.Fatalf("promVectorByLabel is expected to drop a label-less sample, got %v (%v)", m, err)
 	}
 	v, ok, err := promFirstSample(raw)

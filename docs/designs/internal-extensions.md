@@ -178,7 +178,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-observability` | 1,596 | 10 | ✔ | scrape 228, `ci_readiness` 225, alert-eval 213, log-ingestion 190, alert-delivery 193, grafana 164, `prom_query` 140, prom-rules 104, prom-metrics 70, `loki_query` 69 |
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
-| `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
+| `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime`. **✅ Extracted** — 1,044 lines, not 725. See [What `assert-reconciler` decided](#what-assert-reconciler-decided--the-pairing-question).|
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first fifteen, extracted
+## The first sixteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -274,9 +274,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `health-sla` extracted | 37,131 | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
 | `token-inventory` extracted | 36,107 | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
 | `converge` extracted | 34,359 | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
-| `assert-platform` extracted | **33,877** | 185 | −482 — the first PURELY-assertion extension |
+| `assert-platform` extracted | 33,877 | 185 | −482 — the first PURELY-assertion extension |
+| `assert-reconciler` extracted | **33,157** | 185 | −720 — the second OPT-IN, plus `promwire` |
 
-**Net −13,305 (28.2%) across fifteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −14,025 (29.7%) across sixteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -932,6 +933,58 @@ exported from `clusterspec` instead, and the reason not to merge is recorded nex
 in package `main` because that was "the side that owns both halves" — which stopped being true the
 moment this extension was extracted. It moved, and the comment was corrected rather than left to rot.
 **A comment explaining why code lives somewhere is a claim that expires when the code moves.**
+
+### What `assert-reconciler` decided — the pairing question
+
+Sixteenth, the **second opt-in extension** (`import-brownfield` was the first), and the first half of
+one of the catalog's four capability/assertion pairs to land.
+
+```
+assert-reconciler  assertion:operating "functional-health" [cluster-read]
+                   assertion:operating "effects"           [cluster-read]
+```
+
+**It answers a question the catalog left open.** The catalog observed that `reconciler-runtime` ↔
+`assert-reconciler`, `harbor-provisioner` ↔ `assert-registry` and two more pairs "turn on and off
+together", and suggested **one extension carrying both bindings** might beat two — *"worth deciding
+early, because it halves the count"*.
+
+**After extracting this half: they should stay separate.** `reconciler-runtime` will hold
+`cluster-write`, `secret-custody` and a leader election; this holds `cluster-read` and nothing else.
+One declaration would have a grant line that is the **union** — the over-granting per-binding grants
+exist to prevent — and the read-only assertion could no longer be reasoned about apart from the
+process it judges. **The pairing is real, but it is an ENABLEMENT relationship, not an identity.**
+Whatever the manifest ends up doing about co-enablement, it should not be done by merging.
+
+**Assertions at `operating`, which is the distinction most easily lost here.** `reconcile-actions`
+holds *invariants* at the same state. An invariant is a property an extension **maintains**; these
+only observe. Same state, opposite side of the fence — and if a lane here ever starts repairing what
+it finds, that half belongs in the runtime extension.
+
+**A seam in the wrong place, for the second extraction running.** `leaseHolderRenew` started as a
+`Deps` field. It is not a capability — it reaches nothing, it is a pure function over a decoded
+object — and the tests said so immediately: a capability default has to do *something* harmless, so it
+returned `("", zero, false)`, and every lease-freshness assertion ran against a parser that never
+parsed. It now lives in `internal/kube`, shared with the reconciler that **writes** the Lease this
+extension **judges** — which matters, because the `renewOK` contract encodes a real incident (an
+unreadable timestamp reading as "lease is free", so a live holder's lease gets stolen and two
+reconcilers run every write lane at once).
+
+`internal/converge` learned the identical lesson one extraction earlier with `LokiConfigText`. Stated
+once more, because twice is a pattern: **ask whether the package can already do this with a grant it
+holds. If yes, it is not a seam.**
+
+**The eleventh shared package.** `internal/promwire` — Prometheus instant-query decoding — is shared
+by this extension and `assert-rotation-health`, and `assert-observability` is built entirely on it.
+The property it protects is the same one `internal/kubectlprobe` protects for kubectl: **a query
+failure and an empty result are different answers.** "We could not ask" reading as "the lane is dead"
+sends an operator after a healthy reconciler.
+
+**A guard that now points across the boundary.** `TestReconcileFlagLaneTableMatchesReconcileGo` reads
+`reconcile.go` to check that the flag names and lane names have not drifted apart. That file is still
+package `main`'s, so the test reads it at `../../cmd/llz/reconcile.go` — and when `reconciler-runtime`
+is extracted, a loud failure here is the **correct** outcome. A coupling guard that silently stops
+finding its subject is worse than one that breaks.
 
 ## The cost of the interesting half
 

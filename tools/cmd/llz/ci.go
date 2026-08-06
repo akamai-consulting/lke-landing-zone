@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -38,6 +39,7 @@ func ciCmd() *cobra.Command {
 	// is one of the capabilities.
 	installConvergeDeps(gopts)
 	installAssertPlatformDeps()
+	installAssertReconcilerDeps()
 	c := &cobra.Command{
 		Use:   "ci",
 		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
@@ -257,12 +259,12 @@ func ciCmd() *cobra.Command {
 	// llz_reconcile_leader=1) — the silently-broken-loop class (pod Running yet
 	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
 	// both miss.
-	c.AddCommand(ciAssertReconcilerCmd())
+	c.AddCommand(assertreconciler.ReconcilerCmd())
 	// E2E gate: what the reconciler lanes DO, not that they are running. A lane can
 	// report a successful pass every cycle while its effect on the cluster is absent
 	// (reconciled onto the wrong object, reverted by Argo, computed from empty
 	// input) — assert-reconciler reads the lane's self-report and cannot see that.
-	c.AddCommand(ciAssertReconcilerEffectsCmd())
+	c.AddCommand(assertreconciler.EffectsCmd())
 	// ── Tier-2 delivery gates: does the data actually ARRIVE? ────────────────
 	// Each covers a pipeline whose failure mode is silence — the producer stays
 	// Running, the sink stays Ready, converge stays color.Green, and the thing simply

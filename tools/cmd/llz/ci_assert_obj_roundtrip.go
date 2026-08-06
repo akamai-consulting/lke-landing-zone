@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/spf13/cobra"
 )
@@ -141,7 +142,7 @@ func ciAssertObjRoundTripCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertObjRoundTrip(splitCSVList(only), keyPrefix,
+			return runCIAssertObjRoundTrip(cigate.SplitCSVList(only), keyPrefix,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}

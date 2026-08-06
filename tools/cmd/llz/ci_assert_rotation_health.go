@@ -70,6 +70,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promwire"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
@@ -267,7 +268,7 @@ func probeRotationHealth(prom, namespace string, strict bool) ([]credVerdict, er
 			return gerr
 		}
 		var perr error
-		ages, perr = promVectorByLabel(raw, "cred")
+		ages, perr = promwire.VectorByLabel(raw, "cred")
 		return perr
 	})
 	if err != nil {
@@ -453,7 +454,7 @@ func probePresenceHealth(prom, namespace string, require bool) ([]credVerdict, e
 		if gerr != nil {
 			return gerr
 		}
-		if configured, perr = promVectorByLabel(raw, "cred"); perr != nil {
+		if configured, perr = promwire.VectorByLabel(raw, "cred"); perr != nil {
 			return perr
 		}
 		raw, gerr = get("/api/v1/query?query=" +

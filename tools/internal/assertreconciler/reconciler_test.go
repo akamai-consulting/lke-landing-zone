@@ -1,4 +1,4 @@
-package main
+package assertreconciler
 
 import (
 	"errors"
@@ -9,41 +9,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestPromScalar(t *testing.T) {
-	one := []byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1720000000,"1"]}]}}`)
-	if v, ok, err := promScalar(one); !ok || v != 1 || err != nil {
-		t.Errorf("expected (1,true,nil), got (%v,%v,%v)", v, ok, err)
-	}
-	zero := []byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1720000000,"0"]}]}}`)
-	if v, ok, err := promScalar(zero); !ok || v != 0 || err != nil {
-		t.Errorf("expected (0,true,nil), got (%v,%v,%v)", v, ok, err)
-	}
-
-	// An empty result is a real ANSWER: Prometheus was asked and the series is
-	// genuinely absent. No query error.
-	empty := []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`)
-	if _, ok, err := promScalar(empty); ok || err != nil {
-		t.Errorf("empty result must be (no series, no error), got (ok=%v, err=%v)", ok, err)
-	}
-
-	// These are NOT answers about the series — the query itself failed. Folding
-	// them into "no series" is what made a Prometheus hiccup report as "the
-	// reconciler isn't reporting (pod down / not scraped)".
-	for _, tt := range []struct{ name, body string }{
-		{"prometheus returned an error", `{"status":"error","error":"bad"}`},
-		{"unparseable body", `not json`},
-		{"malformed sample tuple", `{"status":"success","data":{"result":[{"value":[1720000000]}]}}`},
-		{"non-string value", `{"status":"success","data":{"result":[{"value":[1720000000,7]}]}}`},
-		{"non-numeric value", `{"status":"success","data":{"result":[{"value":[1720000000,"NaNsense"]}]}}`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, ok, err := promScalar([]byte(tt.body)); ok || err == nil {
-				t.Errorf("must report a QUERY error, not an absent series; got (ok=%v, err=%v)", ok, err)
-			}
-		})
-	}
-}
 
 // TestEvalReconcilerGaugeBlamesTheRightThing pins the message split: an absent
 // series accuses the reconciler; a failed query must not.
@@ -95,12 +60,12 @@ func TestReconcilerProbeHealthy(t *testing.T) {
 	}
 }
 
-// seamReconcilerProm makes withPrometheus answer the up/leader queries from the
+// seamReconcilerProm makes deps.WithPrometheus answer the up/leader queries from the
 // supplied raw bodies (matched by which metric the query names).
 func seamReconcilerProm(t *testing.T, upBody, leaderBody []byte) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := deps.WithPrometheus
+	t.Cleanup(func() { deps.WithPrometheus = orig })
+	deps.WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.Contains(path, "llz_reconcile_leader") {
 				return leaderBody, nil
@@ -118,13 +83,13 @@ func TestRunAssertReconcilerHealthy(t *testing.T) {
 	}
 }
 
-// stubExecCombined records every execCombined call and returns reply, so a failed
+// stubExecCombined records every deps.ExecCombined call and returns reply, so a failed
 // assertion's diagnostic dump can be exercised without shelling real kubectl.
 func stubExecCombined(t *testing.T, reply string) *[][]string {
-	orig := execCombined
-	t.Cleanup(func() { execCombined = orig })
+	orig := deps.ExecCombined
+	t.Cleanup(func() { deps.ExecCombined = orig })
 	var calls [][]string
-	execCombined = func(name string, args ...string) string {
+	deps.ExecCombined = func(name string, args ...string) string {
 		calls = append(calls, append([]string{name}, args...))
 		return reply
 	}
@@ -296,9 +261,9 @@ func containsArg(args []string, want string) bool {
 }
 
 func TestRunAssertReconcilerUnreachable(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
+	orig := deps.WithPrometheus
+	t.Cleanup(func() { deps.WithPrometheus = orig })
+	deps.WithPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
 	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
@@ -339,10 +304,18 @@ func TestLanesFromDeploymentArgs(t *testing.T) {
 // gate's expected set is built from the mapping between them. If a lane is
 // renamed on one side only, the gate silently stops demanding it — the exact
 // failure mode the whole per-lane check exists to catch, one level up.
+//
+// THE PATH IS RELATIVE TO THIS PACKAGE AND POINTS ACROSS THE EXTRACTION BOUNDARY.
+// reconcile.go is still package main's — `reconciler-runtime` has not been
+// extracted yet — so the guard reads it where it lives. When that extraction
+// happens this path moves with it, and a hard failure here is the correct
+// outcome: a coupling guard that silently stops finding its subject is worse than
+// one that breaks loudly.
 func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
-	src, err := os.ReadFile("reconcile.go")
+	const reconcileGo = "../../cmd/llz/reconcile.go"
+	src, err := os.ReadFile(reconcileGo)
 	if err != nil {
-		t.Fatalf("reading reconcile.go: %v", err)
+		t.Fatalf("reading %s: %v — if reconciler-runtime was extracted, this path moves with it", reconcileGo, err)
 	}
 	body := string(src)
 
@@ -369,29 +342,6 @@ func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 	}
 	if !registered[alwaysOnReconcilerLane] {
 		t.Errorf("reconcile.go no longer registers the always-on lane %q", alwaysOnReconcilerLane)
-	}
-}
-
-func TestPromVectorByLabel(t *testing.T) {
-	raw := []byte(`{"status":"success","data":{"resultType":"vector","result":[
-	  {"metric":{"reconciler":"observe"},"value":[1,"1720000000"]},
-	  {"metric":{"reconciler":"apl-overlay"},"value":[1,"1720000300"]},
-	  {"metric":{},"value":[1,"5"]}
-	]}}`)
-	got, err := promVectorByLabel(raw, "reconciler")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 2 || got["observe"] != 1720000000 || got["apl-overlay"] != 1720000300 {
-		t.Errorf("unexpected vector: %v", got)
-	}
-	// A query failure must be an ERROR, not an empty map — an empty map would read
-	// as "every lane is dead" and fail the gate blaming the reconciler.
-	if _, err := promVectorByLabel([]byte(`{"status":"error","error":"boom"}`), "reconciler"); err == nil {
-		t.Error("a Prometheus error must not decode as an empty vector")
-	}
-	if _, err := promVectorByLabel([]byte(`nope`), "reconciler"); err == nil {
-		t.Error("an unparseable body must be an error")
 	}
 }
 
@@ -456,9 +406,9 @@ func TestRunAssertReconcilerFailsOnDeadLane(t *testing.T) {
 	  {"metric":{"reconciler":"volume-labels"},"value":[1,"3600"]}
 	]}}`)
 
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := deps.WithPrometheus
+	t.Cleanup(func() { deps.WithPrometheus = orig })
+	deps.WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			switch {
 			case strings.Contains(path, "last_success_timestamp"):

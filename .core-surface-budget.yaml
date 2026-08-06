@@ -104,12 +104,16 @@ categories:
     #                       four lanes, one read grant each, nothing that mutates.
     #                       Only -482: the fifth file the catalog named was template
     #                       -pin machinery and stayed. 
+    #   33,157 / 185 files  assert-reconciler, the SECOND opt-in extension and the
+    #                       first half of a capability/assertion pair. Plus
+    #                       internal/promwire. -720, with no file-count change: the
+    #                       moved lines came back as Deps wiring and shared packages.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 33877
+    budget: 33157
     exact: true
     include:
       - "tools/cmd/llz/*.go"

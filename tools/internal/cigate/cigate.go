@@ -208,3 +208,19 @@ func TailLines(s string, n int) string {
 	}
 	return strings.Join(all, "\n")
 }
+
+// SplitCSVList splits a comma-separated env value, trimming blanks and dropping
+// empties. TWELVE non-test callers — every ci verb that takes a list through the
+// environment spells this, and they all spelled it slightly differently before it
+// was collapsed here.
+
+// splitCSVList splits a comma-separated flag into trimmed, non-empty entries.
+func SplitCSVList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}

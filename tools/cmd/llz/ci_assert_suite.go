@@ -48,6 +48,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -342,7 +343,7 @@ func ciAssertSuiteCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertSuite(region, splitCSVList(only), list)
+			return runCIAssertSuite(region, cigate.SplitCSVList(only), list)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment/region passed to the lanes that need it (defaults to $REGION)")

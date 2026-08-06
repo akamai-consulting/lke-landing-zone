@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -90,7 +91,7 @@ func ciAssertLogIngestionCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertLogIngestion(loki, tenant, splitCSVList(namespaces), limit,
+			return runCIAssertLogIngestion(loki, tenant, cigate.SplitCSVList(namespaces), limit,
 				time.Duration(lookback)*time.Minute,
 				time.Duration(settle)*time.Second,
 				time.Duration(interval)*time.Second)

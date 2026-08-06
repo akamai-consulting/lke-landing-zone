@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -87,7 +88,7 @@ func ciAssertGrafanaDashboardsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertGrafanaDashboards(splitCSVList(dashboards),
+			return runCIAssertGrafanaDashboards(cigate.SplitCSVList(dashboards),
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}

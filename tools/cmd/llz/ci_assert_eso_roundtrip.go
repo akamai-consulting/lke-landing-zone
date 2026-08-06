@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +67,7 @@ func ciAssertESORoundTripCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertESORoundTrip(store, splitCSVList(namespaces),
+			return runCIAssertESORoundTrip(store, cigate.SplitCSVList(namespaces),
 				time.Duration(maxRefreshAge)*time.Minute,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},

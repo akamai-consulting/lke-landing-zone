@@ -49,6 +49,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
@@ -141,7 +142,7 @@ func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertAdmissionEnforcement(splitCSVList(checks))
+			return runCIAssertAdmissionEnforcement(cigate.SplitCSVList(checks))
 		},
 	}
 	c.Flags().StringVar(&checks, "checks", "signature,clone",

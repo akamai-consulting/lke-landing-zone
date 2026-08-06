@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
 // leaseClient is the slice of the kube client the elector needs.
@@ -189,7 +191,7 @@ func (e *leaderElector) tryAcquire(ctx context.Context) {
 		e.create(ctx)
 		return
 	}
-	holder, renew, renewOK := leaseHolderRenew(obj)
+	holder, renew, renewOK := kube.LeaseHolderRenew(obj)
 	switch {
 	case holder == e.identity:
 		e.patchHeld(ctx, false) // still ours — renew
@@ -279,38 +281,4 @@ func (e *leaderElector) release() {
 	defer cancel()
 	_ = e.client.MergePatch(ctx, e.leasePath(), map[string]any{"spec": map[string]any{"holderIdentity": nil}})
 	e.setLeader(false)
-}
-
-// leaseHolderRenew extracts holderIdentity and renewTime from a Lease object,
-// defensive against missing/oddly-typed fields.
-//
-// renewOK is false when a renewTime value is PRESENT but unusable — not a
-// string, or not parseable. That case must not be confused with an absent
-// renewTime, because the caller treats a zero renewTime as "takeable NOW": the
-// discarded parse error meant an unreadable timestamp read as evidence the lease
-// was FREE, and a live holder's lease would be stolen out from under it. Two
-// reconcilers then run every write lane at once, which is the exact thing leader
-// election exists to prevent.
-//
-// The old comment ("RFC3339 parses the RFC3339Nano we write") is true only while
-// WE are the sole writer. A Lease is a shared object — a manual kubectl edit, a
-// serialization change, or another actor makes it false, and the failure mode is
-// silent.
-func leaseHolderRenew(obj map[string]any) (holder string, renew time.Time, renewOK bool) {
-	spec, _ := obj["spec"].(map[string]any)
-	holder, _ = spec["holderIdentity"].(string)
-
-	raw, present := spec["renewTime"]
-	if !present || raw == nil {
-		return holder, time.Time{}, true // genuinely never renewed — a real answer
-	}
-	rt, isStr := raw.(string)
-	if !isStr || rt == "" {
-		return holder, time.Time{}, false // present but not a usable timestamp
-	}
-	t, err := time.Parse(time.RFC3339, rt) // RFC3339 also accepts the RFC3339Nano we write
-	if err != nil {
-		return holder, time.Time{}, false
-	}
-	return holder, t, true
 }

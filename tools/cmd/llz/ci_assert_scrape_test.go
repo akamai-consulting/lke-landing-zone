@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -206,11 +207,11 @@ func TestScrapeProbeAllWired(t *testing.T) {
 }
 
 func TestSplitCSVList(t *testing.T) {
-	got := splitCSVList(" a/b , , c/d ,")
+	got := cigate.SplitCSVList(" a/b , , c/d ,")
 	if len(got) != 2 || got[0] != "a/b" || got[1] != "c/d" {
 		t.Fatalf("splitCSVList mishandled trimming/empties: %v", got)
 	}
-	if len(splitCSVList("")) != 0 {
+	if len(cigate.SplitCSVList("")) != 0 {
 		t.Error("empty string should yield no entries")
 	}
 }

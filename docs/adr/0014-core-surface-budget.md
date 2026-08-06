@@ -104,7 +104,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > with `import-brownfield` and **38,821** with `obj-encryption`, **38,364** with `guard-charts` and
 > **37,483** with `cluster-access`, **37,131** with `health-sla` and **36,107** with
 > `token-inventory`, **34,359** with `converge` and **33,877** with `assert-platform`.
-> Fifteen extensions, net −13,305 (28.2%) — now BELOW the
+> and **33,157** with `assert-reconciler`.
+> Sixteen extensions, net −14,025 (29.7%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

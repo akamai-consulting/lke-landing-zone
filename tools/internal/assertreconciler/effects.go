@@ -1,4 +1,4 @@
-package main
+package assertreconciler
 
 // ci_assert_reconciler_effects.go implements `llz ci assert-reconciler-effects` —
 // the gate on what the reconciler lanes actually DO, as opposed to whether they
@@ -53,6 +53,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -64,7 +65,7 @@ const scDefaultClassAnnotation = "storageclass.kubernetes.io/is-default-class"
 // reconciler lane re-exposes.
 const tokenInventoryConfigMap = "llz-token-inventory"
 
-func ciAssertReconcilerEffectsCmd() *cobra.Command {
+func EffectsCmd() *cobra.Command {
 	var namespace, laneSet string
 	var tokenMaxAge, settle, interval int
 	var requireInventory bool
@@ -84,7 +85,7 @@ func ciAssertReconcilerEffectsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertReconcilerEffects(namespace, splitCSVList(laneSet), requireInventory,
+			return runCIAssertReconcilerEffects(namespace, cigate.SplitCSVList(laneSet), requireInventory,
 				time.Duration(tokenMaxAge)*time.Minute,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
@@ -251,7 +252,7 @@ func evalCIDRFirewall(raw []byte) effectVerdict {
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &cm); err != nil {
-		v.FailWhy = fmt.Sprintf("decoding the %s ConfigMap: %v", firewallConfigMapName, err)
+		v.FailWhy = fmt.Sprintf("decoding the %s ConfigMap: %v", deps.FirewallConfigMapName, err)
 		return v
 	}
 	var missing []string
@@ -260,12 +261,12 @@ func evalCIDRFirewall(raw []byte) effectVerdict {
 			missing = append(missing, k)
 		}
 	}
-	v.Detail = fmt.Sprintf("%s keys present: %v", firewallConfigMapName, sortedMapKeys(cm.Data))
+	v.Detail = fmt.Sprintf("%s keys present: %v", deps.FirewallConfigMapName, sortedMapKeys(cm.Data))
 	if len(missing) > 0 {
 		v.FailWhy = fmt.Sprintf("the %s ConfigMap is missing/blank for %s — the firewall-controller is running on its "+
 			"compiled defaults rather than this cluster's discovered values, which silently changes what the firewall admits. "+
 			"Check the cidr-firewall lane's logs for a Linode API or node-lookup failure",
-			firewallConfigMapName, strings.Join(missing, ", "))
+			deps.FirewallConfigMapName, strings.Join(missing, ", "))
 	}
 	return v
 }
@@ -285,18 +286,18 @@ func sortedMapKeys(m map[string]string) []string {
 // effectReaders are the kubectl reads each sub-check needs, seamed for tests.
 var (
 	readStorageClasses = func() ([]byte, error) {
-		return execOutput("kubectl", "get", "storageclass", "-o", "json")
+		return deps.Exec("kubectl", "get", "storageclass", "-o", "json")
 	}
 	// --ignore-not-found is load-bearing: it makes ABSENT (exit 0, empty stdout)
 	// distinguishable from UNREADABLE (non-zero exit). Without it both arrive as
 	// "exit status 1" and the check cannot tell a cluster whose writer has never
 	// run from one where the read is broken.
 	readTokenInventory = func(ns string) ([]byte, error) {
-		return execOutput("kubectl", "-n", ns, "get", "configmap", tokenInventoryConfigMap,
+		return deps.Exec("kubectl", "-n", ns, "get", "configmap", tokenInventoryConfigMap,
 			"--ignore-not-found", "-o", "json")
 	}
 	readFirewallConfig = func() ([]byte, error) {
-		return execOutput("kubectl", "-n", "kube-system", "get", "configmap", firewallConfigMapName, "-o", "json")
+		return deps.Exec("kubectl", "-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName, "-o", "json")
 	}
 )
 
@@ -343,7 +344,7 @@ func probeReconcilerEffects(namespace string, enabled map[string]bool, requireIn
 		if err != nil {
 			out = append(out, effectVerdict{Lane: "cidr-firewall",
 				FailWhy: fmt.Sprintf("could not read the %s ConfigMap in kube-system (%v) — the lane is enabled, so it must exist",
-					firewallConfigMapName, err)})
+					deps.FirewallConfigMapName, err)})
 		} else {
 			out = append(out, evalCIDRFirewall(raw))
 		}

@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +81,7 @@ func ciAssertScrapeTargetsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			return runCIAssertScrapeTargets(prom,
-				splitCSVList(monitors), splitCSVList(ruleGroups),
+				cigate.SplitCSVList(monitors), cigate.SplitCSVList(ruleGroups),
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
@@ -93,17 +94,6 @@ func ciAssertScrapeTargetsCmd() *cobra.Command {
 	c.Flags().IntVar(&settle, "settle", 180, "seconds to keep polling for the pipeline to come up before failing")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
 	return c
-}
-
-// splitCSVList splits a comma-separated flag into trimmed, non-empty entries.
-func splitCSVList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // activeTarget is the subset of a /api/v1/targets active target the gate reads.
