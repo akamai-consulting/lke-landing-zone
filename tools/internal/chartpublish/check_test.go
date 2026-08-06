@@ -1,4 +1,4 @@
-package main
+package chartpublish
 
 import (
 	"os"
@@ -94,13 +94,13 @@ func TestRunChartPublishCheck(t *testing.T) {
 		return true, nil
 	}
 	// Preflight mode (no --publish-if-missing): the unpublished pin fails.
-	if err := runChartPublishCheck(chartPublishOpts{root: root, published: fake}); err == nil {
+	if err := Run(Opts{Root: root, Published: fake}); err == nil {
 		t.Fatal("want failure for the unpublished llz-cluster-foundation:0.1.6, got nil")
 	}
 
 	// With everything published, it passes.
 	allOK := func(host, repoPath, version string) (bool, error) { return true, nil }
-	if err := runChartPublishCheck(chartPublishOpts{root: root, published: allOK}); err != nil {
+	if err := Run(Opts{Root: root, Published: allOK}); err != nil {
 		t.Fatalf("want pass when all published, got %v", err)
 	}
 }
@@ -129,9 +129,9 @@ func TestRunChartPublishCheck_PublishIfMissing(t *testing.T) {
 	check := func(host, repoPath, version string) (bool, error) { return published, nil }
 	sleep := func(time.Duration) { published = true } // publish-charts "completes" on the first wait
 
-	err := runChartPublishCheck(chartPublishOpts{
-		root: root, publishIfMissing: true, ref: "feat/x", templateRepo: "acme/lke-landing-zone",
-		retries: 5, published: check, dispatch: dispatch, sleep: sleep,
+	err := Run(Opts{
+		Root: root, PublishIfMissing: true, Ref: "feat/x", TemplateRepo: "acme/lke-landing-zone",
+		Retries: 5, Published: check, Dispatch: dispatch, Sleep: sleep,
 	})
 	if err != nil {
 		t.Fatalf("publish-if-missing should self-heal, got %v", err)
@@ -142,9 +142,9 @@ func TestRunChartPublishCheck_PublishIfMissing(t *testing.T) {
 
 	// --publish-if-missing without --ref/--template-repo is a usage error.
 	published = false
-	if err := runChartPublishCheck(chartPublishOpts{
-		root: root, publishIfMissing: true, retries: 1, published: func(string, string, string) (bool, error) { return false, nil },
-		dispatch: dispatch, sleep: func(time.Duration) {},
+	if err := Run(Opts{
+		Root: root, PublishIfMissing: true, Retries: 1, Published: func(string, string, string) (bool, error) { return false, nil },
+		Dispatch: dispatch, Sleep: func(time.Duration) {},
 	}); err == nil {
 		t.Error("want error when --publish-if-missing lacks --ref/--template-repo")
 	}

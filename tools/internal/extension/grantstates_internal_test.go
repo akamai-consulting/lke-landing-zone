@@ -10,11 +10,12 @@ package extension
 
 import "testing"
 
-// grantStates is judgement transcribed, and TWO extensions have now changed a row
-// in it. Pin the whole table: a widening should be an argued edit to this test and
-// its comment, not a quiet one that nothing notices. Both widenings arrived the
-// same way — an extraction of code that already shipped and could not be described
-// — so treat a failure here as evidence about the table, not about the caller.
+// grantStates is judgement transcribed, and FOUR extensions have now changed it —
+// three widenings and one added row. Pin the whole table: a change should be an
+// argued edit to this test and its comment, not a quiet one that nothing notices.
+// All four arrived the same way — an extraction of code that already shipped and
+// could not be described — so treat a failure here as evidence about the table,
+// not about the caller.
 //
 // The regressions this guards, in the order they were found:
 //
@@ -35,10 +36,17 @@ import "testing"
 //     runs, which is the only reason a repo write happens at all. It holds exactly
 //     the states one shipping extension proved and not the `promoted` that looks
 //     obvious; see the row's comment.
+//   - cloud-mutate gained `configured` (thirty-first, `chart-publish`). Correct,
+//     and it took two extractions to earn: env-topology wrote the same binding for
+//     a GitHub branch-policy PUT, was refused by this row, and moved the file back
+//     to package main rather than widen on one case. `configured` had been read as
+//     a purely local moment; it is not, because GitHub is configured before Linode
+//     is provisioned and "its inputs resolve" can require CREATING an input. Note
+//     what did NOT follow: cluster-write and secret-custody are still barred there.
 func TestGrantStatesTableIsPinned(t *testing.T) {
 	want := map[Grant][]State{
 		SecretCustody: {Provisioned, Seeded, Operating},
-		CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
+		CloudMutate:   {Configured, Provisioned, Seeded, Converged, Operating, Destroyed},
 		ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
 		WriteRepo:     {Scaffolded, Upgraded},
 	}
@@ -75,8 +83,16 @@ func TestGrantStatesTableIsPinned(t *testing.T) {
 	// cannot mutate anything at `verified` without changing what you are measuring.
 	// A repo exists before any substrate does, so it is not covered — and saying so
 	// out loud is cheaper than discovering it when the next grant is added.
+	// `configured` LEFT THIS LIST FOR cloud-mutate ONLY (thirty-first extraction,
+	// chart-publish): GitHub is configured before Linode is provisioned, and
+	// resolving an input can mean creating it. cluster-write and secret-custody
+	// stay barred there — no cluster exists yet, and a credential at configuration
+	// time is a hardcoded one.
 	for _, s := range []State{Scaffolded, Configured, Verified} {
 		for _, g := range []Grant{CloudMutate, ClusterWrite, SecretCustody} {
+			if g == CloudMutate && s == Configured {
+				continue
+			}
 			if containsState(grantStates[g], s) {
 				t.Errorf("%q became legal at %q — %q is where a substrate-mutating grant must not go", g, s, s)
 			}

@@ -92,7 +92,8 @@ COVERAGE_MINS := \
 	internal/assertidentity=24 \
 	internal/deliverdocs=93 \
 	internal/argodiag=86 \
-	internal/plaintext=91
+	internal/plaintext=91 \
+	internal/chartpublish=58
 
 help:
 	@echo "lke-landing-zone — template repository targets"

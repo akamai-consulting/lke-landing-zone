@@ -84,8 +84,30 @@ var grantStates = map[Grant][]State{
 	// of code that already shipped — which is the argument for extracting the
 	// expensive capabilities before trusting the ceiling, not after.
 	SecretCustody: {Provisioned, Seeded, Operating},
-	CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
-	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
+	// THIRD WIDENING, and the one that took longest to earn: `configured`, added
+	// for `chart-publish`'s --publish-if-missing dispatch.
+	//
+	// env-topology (twenty-first extraction) wrote this exact binding for
+	// branchpolicy.go's PUT against GitHub's deployment-branch-policy API, ran
+	// Validate(), was refused by this row, and moved the file back to package main
+	// rather than widen on one case. It predicted the second case would be `llz
+	// tokens`; it turned out to be a `gh workflow run` dispatch. That the
+	// prediction missed is itself evidence the shape is general rather than
+	// specific to branch policies.
+	//
+	// THE ARGUMENT THE ROW WAS MISSING. The other five states are where a LINODE
+	// cloud exists to mutate, and `configured` was read as a purely local moment —
+	// resolve some inputs, touch nothing. It is not. GitHub is configured before
+	// Linode is provisioned, and "its inputs resolve" can require CREATING an
+	// input rather than merely reading it: a pinned chart the registry never
+	// received, and a branch policy nobody locked, are both inputs that do not
+	// resolve until something writes.
+	//
+	// `scaffolded` is still absent and should stay absent — at scaffolding there is
+	// no configured credential to mutate anything WITH, which is the same reasoning
+	// that keeps secret-custody out of it.
+	CloudMutate:  {Configured, Provisioned, Seeded, Converged, Operating, Destroyed},
+	ClusterWrite: {Provisioned, Seeded, Converged, Operating, Destroyed},
 
 	// FIRST ROW ADDED RATHER THAN WIDENED, because write-repo is the first grant
 	// added since this table was written (see the Grant block in extension.go for

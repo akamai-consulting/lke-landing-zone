@@ -1,4 +1,4 @@
-package main
+package chartpublish
 
 import (
 	"errors"
@@ -81,11 +81,11 @@ func TestChartPublishCheckWaitLoopIsBounded(t *testing.T) {
 		return checks > 5, nil // publishes only well past the 2-retry budget
 	}
 	out := captureStdout(t, func() {
-		err := runChartPublishCheck(chartPublishOpts{
-			root: root, publishIfMissing: true, ref: "feat/x", templateRepo: "acme/lke-landing-zone",
-			retries: 2, published: published,
-			dispatch: func(string, string, string) error { return nil },
-			sleep:    func(time.Duration) { sleeps++ },
+		err := Run(Opts{
+			Root: root, PublishIfMissing: true, Ref: "feat/x", TemplateRepo: "acme/lke-landing-zone",
+			Retries: 2, Published: published,
+			Dispatch: func(string, string, string) error { return nil },
+			Sleep:    func(time.Duration) { sleeps++ },
 		})
 		if err == nil {
 			t.Error("a chart that publishes after the wait budget must still fail the check")
@@ -117,11 +117,11 @@ func TestChartPublishCheckWaitPropagatesRegistryError(t *testing.T) {
 	}
 	var err error
 	captureStdout(t, func() {
-		err = runChartPublishCheck(chartPublishOpts{
-			root: root, publishIfMissing: true, ref: "feat/x", templateRepo: "acme/lke-landing-zone",
-			retries: 3, published: published,
-			dispatch: func(string, string, string) error { return nil },
-			sleep:    func(time.Duration) {},
+		err = Run(Opts{
+			Root: root, PublishIfMissing: true, Ref: "feat/x", TemplateRepo: "acme/lke-landing-zone",
+			Retries: 3, Published: published,
+			Dispatch: func(string, string, string) error { return nil },
+			Sleep:    func(time.Duration) {},
 		})
 	})
 	if err == nil || !strings.Contains(err.Error(), "ghcr boom") {

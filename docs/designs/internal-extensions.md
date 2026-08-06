@@ -312,9 +312,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-identity` extracted | 25,274 | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
 | `deliver-docs` extracted | 25,020 | 156 | −254 — the smallest paydown, and the one that added a word |
 | `argocd-diagnostics` extracted | 24,807 | 155 | −213 — the first binding kind that is wrong on purpose |
-| `posture-plaintext` extracted | **24,203** | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
+| `posture-plaintext` extracted | 24,203 | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
+| `chart-publish` extracted | **23,898** | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
 
-**Net −22,979 (48.7%) across thirty extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −23,284 (49.3%) across thirty-one extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1695,6 +1696,61 @@ inventing one from a single case is what this campaign has now refused four time
 because the row is marked `ext? ✔` — a candidate for running as a pure-argv action later — and **an
 argv action cannot carry a compiled-in registry at all.** Whoever builds that half meets this question
 first.
+
+### What `chart-publish` unlocked — a row refused ten extractions earlier
+
+Thirty-first, and the extraction that finally paid off a debt `env-topology` recorded and could not
+settle.
+
+```
+chart-publish  assertion:configured  "pins-published"  [read-repo, cloud-read]
+               transition:configured "publish-missing" [read-repo, cloud-mutate]
+```
+
+**`cloud-mutate` at `configured` is now legal, and it took two independent extractions.**
+`env-topology` wrote *exactly* this binding for `branchpolicy.go` — a PUT against GitHub's
+deployment-branch-policy API — ran `Validate()`, and was refused:
+
+```
+"cloud-mutate" may only be asked for at provisioned, seeded, converged, operating, destroyed
+```
+
+It moved the file back to package `main` rather than widen a row on a single case, and predicted the
+second case would be `llz tokens`. It was this instead — a `gh workflow run` dispatch — and **the
+prediction missing is itself evidence the shape is general** rather than specific to branch policies.
+
+**The argument the row was missing.** Those five states are where a *Linode* cloud exists to mutate,
+and `configured` had been read as a purely local moment: resolve some inputs, touch nothing. It is
+not. GitHub is configured before Linode is provisioned, and *"its inputs resolve"* — the definition
+of `configured` — can require **creating** an input rather than merely reading it. A pinned chart the
+registry never received, and a branch policy nobody locked, are both inputs that do not resolve until
+something writes.
+
+What did *not* follow: `cluster-write` and `secret-custody` are still barred at `configured`, and
+`scaffolded` stays barred for all three. The pinning test now carries a per-grant exception rather
+than a blanket one, because the blanket version had become false.
+
+**`env-topology`'s third binding is now expressible**, and moving `branchpolicy.go` back is the
+obvious next paydown. Deliberately not done here — one extension per iteration.
+
+**Seventh catalog correction, and the second file out of the same row.** `chart-publish-check` is
+filed under `release-publish`, annotated *"template-repo-side, not instance-side"*. It is neither: it
+scans a **rendered instance's** apl-values Argo Application manifests for first-party chart pins and
+fails before bootstrap if the registry never received one — `e2e-instantiate.yml` runs it against
+`.e2e-instance`. `deliver-docs` came out of that same row for the same reason two extractions ago.
+One row, two files, mis-filed identically, which says the row was grouped by *"things that mention
+publishing"* rather than by what the code touches.
+
+**The split is the one `converge` and `token-inventory` found**, and it is forced rather than
+stylistic: the default run reads the OCI registry and reports; `--publish-if-missing` dispatches
+`publish-charts.yml` and waits. An assertion may hold read grants only, so a single binding would
+widen to the union and claim the write on every run.
+
+**A `Defaults` constructor kept four symbols unexported.** The first cut had the cobra command build
+`Opts` field by field, which meant exporting `chartPublishedFn`, `chartDispatchPublish`,
+`chartPublishSleep` and the retry arithmetic purely so the flag set could name them — four exported
+symbols whose only caller was the wiring. A constructor on the owning side leaves `main` with the two
+things it actually has: flag values and the environment.
 
 ## The cost of the interesting half
 

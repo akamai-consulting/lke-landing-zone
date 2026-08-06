@@ -174,12 +174,20 @@ categories:
     #                       double-quoted ones and a backtick inside a "..." ate
     #                       an arbitrary span. Every closure measured before that
     #                       fix is an UPPER BOUND.
+    #   23,898 / 153 files  chart-publish. -305, and the THIRD grantStates
+    #                       widening: cloud-mutate at `configured`. env-topology
+    #                       wrote that exact binding 10 extractions ago, was
+    #                       refused, and moved branchpolicy.go BACK to main rather
+    #                       than widen on one case. This is case two, so the row
+    #                       moved and env-topology's third binding is now
+    #                       expressible. 7th catalog correction, and the SECOND
+    #                       file pulled out of the `release-publish` row.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 24203
+    budget: 23898
     exact: true
     include:
       - "tools/cmd/llz/*.go"

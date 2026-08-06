@@ -34,6 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartpublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -84,6 +85,7 @@ var declarations = []func() extension.Extension{
 	tofudriver.Extension,
 	tokeninv.Extension,
 	objenc.Extension,
+	chartpublish.Extension,
 	plaintext.Extension,
 	promote.Extension,
 	reconcilelanes.Extension,

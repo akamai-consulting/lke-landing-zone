@@ -1,4 +1,4 @@
-package main
+package chartpublish
 
 // ci_chart_publish_check.go implements `llz ci chart-publish-check` — a runtime
 // companion to chart-pin-guard. Where chart-pin-guard asserts a pinned first-party
@@ -32,8 +32,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 )
@@ -69,53 +67,16 @@ var (
 	chartPublishSleep = func(d time.Duration) { time.Sleep(d) }
 )
 
-// chartPublishOpts carries the check + optional self-heal configuration.
-type chartPublishOpts struct {
-	root                     string
-	publishIfMissing         bool
-	ref, templateRepo, token string
-	interval                 time.Duration
-	retries                  int
-	published                func(host, repoPath, version string) (bool, error)
-	dispatch                 func(token, templateRepo, ref string) error
-	sleep                    func(time.Duration)
-}
-
-func ciChartPublishCheckCmd() *cobra.Command {
-	var root, ref, templateRepo string
-	var publishIfMissing bool
-	var interval, timeout int
-	c := &cobra.Command{
-		Use:   "chart-publish-check",
-		Short: "verify (or publish + wait for) the pinned first-party (llz-*) chart versions in GHCR",
-		Long: "Scans the apl-values Argo Application manifests for first-party (llz-*) chart\n" +
-			"pins (repoURL + chart + targetRevision/version) and fails if any pinned version\n" +
-			"is not present in its OCI registry. A pin the registry never received 404s at\n" +
-			"Argo sync time — on a cold bootstrap that silently strands the support-plane app\n" +
-			"and times out the OpenBao bootstrap on `namespaces \"llz-openbao\" not found`.\n" +
-			"As a preflight, an unpublished chart fails fast, not 15 minutes in. With\n" +
-			"--publish-if-missing it instead dispatches publish-charts.yml on --ref and waits\n" +
-			"for the pins to land (the chart analog of `pin-instance-images --build-if-missing`).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runChartPublishCheck(chartPublishOpts{
-				root: root, publishIfMissing: publishIfMissing, ref: ref, templateRepo: templateRepo,
-				// GHCR reads use whatever ghcrChartPublished finds in env; the DISPATCH
-				// needs actions:write, so prefer the workflow token over a read-only PAT.
-				token:     firstNonEmptyEnv("GH_TOKEN", "GITHUB_TOKEN", "GHCR_READ_TOKEN"),
-				interval:  time.Duration(interval) * time.Second,
-				retries:   timeout / cpMax1(interval),
-				published: chartPublishedFn, dispatch: chartDispatchPublish, sleep: chartPublishSleep,
-			})
-		},
-	}
-	c.Flags().StringVar(&root, "root", ".", "repository root to scan for apl-values chart pins")
-	c.Flags().BoolVar(&publishIfMissing, "publish-if-missing", false, "if a pinned chart is unpublished, dispatch publish-charts.yml on --ref and wait — instead of failing")
-	c.Flags().StringVar(&ref, "ref", "", "branch/tag to dispatch publish-charts.yml on (required with --publish-if-missing)")
-	c.Flags().StringVar(&templateRepo, "template-repo", "", "owner/name of the repo hosting publish-charts.yml (required with --publish-if-missing)")
-	c.Flags().IntVar(&interval, "interval", 20, "seconds between registry re-checks while waiting for a publish")
-	c.Flags().IntVar(&timeout, "timeout", 600, "max seconds to wait for the dispatched charts to publish")
-	return c
+// Opts carries the check + optional self-heal configuration.
+type Opts struct {
+	Root                     string
+	PublishIfMissing         bool
+	Ref, TemplateRepo, Token string
+	Interval                 time.Duration
+	Retries                  int
+	Published                func(host, repoPath, version string) (bool, error)
+	Dispatch                 func(token, templateRepo, ref string) error
+	Sleep                    func(time.Duration)
 }
 
 func cpMax1(n int) int {
@@ -169,8 +130,8 @@ func printMissingChart(m publishPin) {
 		m.File, m.Line, m.Chart, m.Version, m.RepoURL)
 }
 
-func runChartPublishCheck(o chartPublishOpts) error {
-	pins, err := scanPublishPins(o.root)
+func Run(o Opts) error {
+	pins, err := scanPublishPins(o.Root)
 	if err != nil {
 		return fmt.Errorf("scanning chart pins: %w", err)
 	}
@@ -179,9 +140,9 @@ func runChartPublishCheck(o chartPublishOpts) error {
 	// none; that vacuous color.Green is what hid this bug on every run.
 	if len(pins) == 0 {
 		return fmt.Errorf("chart-publish-check: found no first-party chart pins under %s (searched %s) — refusing to report every chart published having checked none",
-			o.root, strings.Join(publishPinTrees, ", "))
+			o.Root, strings.Join(publishPinTrees, ", "))
 	}
-	missing, checked, err := collectMissingPins(pins, o.published)
+	missing, checked, err := collectMissingPins(pins, o.Published)
 	if err != nil {
 		return err
 	}
@@ -191,7 +152,7 @@ func runChartPublishCheck(o chartPublishOpts) error {
 	}
 
 	// Preflight mode: report and fail (the operator publishes + re-runs).
-	if !o.publishIfMissing {
+	if !o.PublishIfMissing {
 		for _, m := range missing {
 			printMissingChart(m)
 		}
@@ -199,7 +160,7 @@ func runChartPublishCheck(o chartPublishOpts) error {
 	}
 
 	// Self-heal mode: dispatch publish-charts on the branch and wait for the pins.
-	if o.ref == "" || o.templateRepo == "" {
+	if o.Ref == "" || o.TemplateRepo == "" {
 		return fmt.Errorf("--publish-if-missing requires --ref and --template-repo")
 	}
 	names := make([]string, len(missing))
@@ -207,13 +168,13 @@ func runChartPublishCheck(o chartPublishOpts) error {
 		names[i] = m.Chart + ":" + m.Version
 	}
 	fmt.Printf("chart-publish-check: %d chart(s) unpublished (%s) — dispatching publish-charts.yml on %s and waiting...\n",
-		len(missing), strings.Join(names, ", "), o.ref)
-	if err := o.dispatch(o.token, o.templateRepo, o.ref); err != nil {
-		return fmt.Errorf("dispatching publish-charts.yml on %s: %w", o.ref, err)
+		len(missing), strings.Join(names, ", "), o.Ref)
+	if err := o.Dispatch(o.Token, o.TemplateRepo, o.Ref); err != nil {
+		return fmt.Errorf("dispatching publish-charts.yml on %s: %w", o.Ref, err)
 	}
-	for i := 0; i < cpMax1(o.retries); i++ {
-		o.sleep(o.interval)
-		still, _, cerr := collectMissingPins(missing, o.published)
+	for i := 0; i < cpMax1(o.Retries); i++ {
+		o.Sleep(o.Interval)
+		still, _, cerr := collectMissingPins(missing, o.Published)
 		if cerr != nil {
 			return cerr
 		}
@@ -406,7 +367,7 @@ func ghcrPullToken(client *http.Client, host, repoPath string) (string, error) {
 			Token string `json:"token"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-			return resp.StatusCode, "", fmt.Errorf("decoding pull token: %w", err)
+			return resp.StatusCode, "", fmt.Errorf("decoding pull Token: %w", err)
 		}
 		return resp.StatusCode, tok.Token, nil
 	}
@@ -439,4 +400,34 @@ func firstNonEmptyEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// Defaults returns an Opts with every seam wired to the real thing, and the
+// derived fields computed. Callers set only what the flags gave them.
+//
+// IT EXISTS SO PACKAGE MAIN DOES NOT HAVE TO KNOW THE SEAMS. The first cut of
+// this extraction had the cobra command construct Opts field by field, which
+// meant exporting chartPublishedFn, chartDispatchPublish, chartPublishSleep and
+// the retry arithmetic purely so the flag set could name them — four exported
+// symbols whose only caller was the wiring. A constructor on the owning side
+// keeps them unexported and leaves main with the two things it actually has:
+// flag values and the environment.
+func Defaults(o Opts, intervalSecs, timeoutSecs int) Opts {
+	o.Interval = time.Duration(intervalSecs) * time.Second
+	o.Retries = timeoutSecs / cpMax1(intervalSecs)
+	if o.Token == "" {
+		// GHCR reads use whatever ghcrChartPublished finds in env; the DISPATCH
+		// needs actions:write, so prefer the workflow token over a read-only PAT.
+		o.Token = firstNonEmptyEnv("GH_TOKEN", "GITHUB_TOKEN", "GHCR_READ_TOKEN")
+	}
+	if o.Published == nil {
+		o.Published = chartPublishedFn
+	}
+	if o.Dispatch == nil {
+		o.Dispatch = chartDispatchPublish
+	}
+	if o.Sleep == nil {
+		o.Sleep = chartPublishSleep
+	}
+	return o
 }
