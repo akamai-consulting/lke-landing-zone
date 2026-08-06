@@ -1,7 +1,7 @@
-package main
+package doctor
 
 // doctor_token_table_test.go — the half of token_validate_test.go that stayed,
-// because probeTokenValidities did: it is keyed by the wizard's `configreadiness.Requirement`
+// because ProbeTokenValidities did: it is keyed by the wizard's `configreadiness.Requirement`
 // and renders `llz doctor`'s table, not a CI verdict.
 
 import (
@@ -27,7 +27,7 @@ func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	// APL_VALUES_REPO_TOKEN is set on GitHub but has no local value.
 	inst := configreadiness.NewLiveState(nil, map[string]bool{"APL_VALUES_REPO_TOKEN": true}, nil, nil)
 
-	validity, invalid := probeTokenValidities(reqs, secrets, vars, inst, "")
+	validity, invalid := ProbeTokenValidities(reqs, secrets, vars, inst, "")
 	if invalid != 1 {
 		t.Errorf("invalid count = %d, want 1 (the dead Linode token)", invalid)
 	}

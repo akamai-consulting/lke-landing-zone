@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"os"
@@ -55,7 +55,7 @@ func TestCheckCrossOrgReuseFlagsAnInstance(t *testing.T) {
 	}
 
 	var err error
-	out := captureStdout(t, func() { err = checkCrossOrgReuse() })
+	out := captureStdout(t, func() { err = CheckCrossOrgReuse() })
 	if err == nil {
 		t.Fatalf("a cross-org `secrets: inherit` job in an instance must fail the doctor gate; stdout:\n%s", out)
 	}
@@ -72,7 +72,7 @@ func TestCheckCrossOrgReuseFlagsAnInstance(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(".github", "workflows", "terraform.yml"), []byte(sameOrg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	captureStdout(t, func() { err = checkCrossOrgReuse() })
+	captureStdout(t, func() { err = CheckCrossOrgReuse() })
 	if err != nil {
 		t.Errorf("a same-org call must pass, got: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // doctor_linode.go — the one thing `llz doctor` never asked: can this LINODE
 // ACCOUNT actually build what the spec describes?
@@ -53,9 +53,9 @@ var doctorLinodeClient = func() lkeVersionLister {
 	return linode.NewClient(tok, 20*time.Second)
 }
 
-// reportLinodeAccount prints doctor's "Linode account" section for the k8s
+// ReportLinodeAccount prints doctor's "Linode account" section for the k8s
 // versions the spec pins. Returns nothing: this section never fails the gate.
-func reportLinodeAccount(want []string) {
+func ReportLinodeAccount(want []string) {
 	fmt.Println("\n" + color.Bold("Linode account (advisory — never blocks the build):"))
 
 	c := doctorLinodeClient()
@@ -120,11 +120,11 @@ func majorMinor(v string) string {
 	return parts[0] + "." + parts[1]
 }
 
-// specK8sVersions returns the k8sVersion(s) doctor should check against the
+// SpecK8sVersions returns the k8sVersion(s) doctor should check against the
 // account: just the named env's when one is given, otherwise every env's,
 // de-duplicated. Silent on a repo with no spec — doctor runs there too.
-func specK8sVersions(env string) []string {
-	lz, present, err := loadSpec()
+func SpecK8sVersions(env string) []string {
+	lz, present, err := caps.LoadSpec()
 	if !present || err != nil || lz == nil {
 		return nil
 	}

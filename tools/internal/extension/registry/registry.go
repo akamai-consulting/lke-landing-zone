@@ -42,6 +42,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/gameday"
@@ -86,6 +87,7 @@ var declarations = []func() extension.Extension{
 	credcoverage.Extension,
 	envtopology.Extension,
 	docsguard.Extension,
+	doctor.Extension,
 	healthsla.Extension,
 	tofudriver.Extension,
 	tokeninv.Extension,

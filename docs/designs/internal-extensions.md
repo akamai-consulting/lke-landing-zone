@@ -260,7 +260,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 | `phase-timing` | 316 | 2 | ✔ | phase-mark/report 201, image-pulls 115. **✅ Extracted — and it settles the fifth-kind question by failing to answer it.** See [What `phase-timing` disproved](#what-phase-timing-disproved--diagnostic-is-not-a-kind). |
 | `dev-mutation-testing` | 265 | 1 | ✔ | `ci_mutate` — gremlins wrapper |
 | `verify-lab` | 239 | 2 | ✔ | `verify` 170, `sshcheck` 69 |
-| `doctor-probes` | 230 | 3 | ✔ | doctor-linode 93, doctor-crossorg 104, credentials-probe 33 |
+| `doctor-probes` | 230 | 3 | ✔ | doctor-linode 93, doctor-crossorg 104, credentials-probe 33. **✅ Extracted — and it closes the fifth-kind question.** See [What `doctor-probes` closed](#what-doctor-probes-closed--diagnostic-was-a-tone-of-voice). |
 
 ---
 
@@ -317,9 +317,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `guard-manifests` extracted | 23,653 | 150 | −245 — a declaration test found a lane that was not a gate |
 | `assert-objstore` extracted | 23,387 | 149 | −266 — six for six, and the first mutation that was never hidden |
 | `wedge-gameday` extracted | 23,205 | 148 | −182 — the first binding forced in BOTH its kind and its state |
-| `phase-timing` extracted | **22,964** | 146 | −241 — the second diagnostic, and the two disagree about shape |
+| `phase-timing` extracted | 22,964 | 146 | −241 — the second diagnostic, and the two disagree about shape |
+| `doctor-probes` extracted | **22,726** | 143 | −238 — case three of three; the diagnostic family splits a third way |
 
-**Net −24,218 (51.3%) across thirty-five extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −24,456 (51.8%) across thirty-six extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1959,6 +1960,53 @@ deliberately needs no grant: it goes to `$LLZ_PHASE_LOG` under `$RUNNER_TEMP`, a
 defined as the instance repo's **tracked** files — a temp dir needs no grant, the same way reading
 `/tmp` needs no `read-repo`. That definition was written from four cases that all wrote the repo;
 this is the first extraction on the other side of the line, and it holds.
+
+### What `doctor-probes` closed — "diagnostic" was a tone of voice
+
+Thirty-sixth, and **case three of three**. `argocd-diagnostics` opened the question — a check that
+always exits 0 and fits no binding kind — and named this row and `phase-timing` as the cases that
+would settle it. They have.
+
+```
+doctor-probes  gate:scaffolded      "cross-org-reuse"  [read-repo]
+               assertion:configured "credential-reach" [read-repo, cloud-read, secret-read]
+```
+
+| case | attaches to |
+|---|---|
+| `argocd-diagnostics` | the **failure** of `converged` |
+| `phase-timing` | **no state** — the boundaries *between* them |
+| `doctor-probes` | **two states**, `scaffolded` *and* `configured` — and one half **returns an error** |
+
+**Three cases, three different positions in the lifecycle.** Position in the lifecycle is the entire
+content of a binding, so a word covering all three would describe their *output* rather than their
+*attachment* — and the model already has a field for how a thing reads to a human. It is called
+`Short`.
+
+**"Diagnostic" was never a kind. It is a tone of voice** — prints for a human, phrased as advice — and
+this row proves it by containing three different things wearing that tone. The cross-org check reads
+`.github/workflows` for a `secrets: inherit` job crossing an org boundary, touches no network, and
+**fails `llz doctor`**. That is a gate by every clause of the definition. The Linode account probe and
+the LKE-version comparison ask a cloud whether the spec's declared inputs resolve — which is what
+`configured` means.
+
+So the fifth kind is not invented, and the reason is now **positive rather than cautious**: not
+"insufficient evidence" but "the evidence says these are three different things". That is the
+strongest form this campaign's two-part bar — *count* and *shape* — was written to produce.
+
+**The split within this row is forced, not stylistic.** A gate may hold `read-repo` and nothing else,
+so collapsing the halves would not merely over-grant the file scan — it would fail `Validate()`
+outright. Third row now needing two kinds at once, after `guard-manifests` and `chart-publish`.
+
+`secret-read` rather than `secret-custody`: the token table **reads** credentials and asks each issuer
+whether they still work. It places none. That distinction is the entire content of the split
+`token-inventory` forced into the vocabulary.
+
+**Fifth time the vacuous-default trap was caught by a test**, joining `teardown`'s `Summary`,
+`objenc`'s `SecretField`, `converge`'s installed default and `env-topology`'s `realGHAAppend`. Both
+`Deps` fields here defaulted to zero values; two tests failed immediately, because each writes a real
+file to a temp dir and asserts the reader finds it. **An installed default is a fixture too** — the
+defaults now read the spec and the copier answers for real.
 
 ## The cost of the interesting half
 

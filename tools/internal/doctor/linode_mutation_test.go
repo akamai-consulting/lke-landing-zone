@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // Gap-closing tests for doctor_linode.go: the token gate in front of the live
 // client, the deadline the probe runs under, the version parser's handling of a
@@ -36,7 +36,7 @@ func TestDoctorLinodeClientRequiresAToken(t *testing.T) {
 }
 
 // ctxRecordingLister records the state of the context AT CALL TIME — the caller
-// defers cancel(), so inspecting the context after reportLinodeAccount returns
+// defers cancel(), so inspecting the context after ReportLinodeAccount returns
 // would always show it cancelled.
 type ctxRecordingLister struct {
 	called      bool
@@ -59,7 +59,7 @@ func (l *ctxRecordingLister) ListLKEVersions(ctx context.Context, _ string) ([]s
 func TestReportLinodeAccountBoundsTheProbeWithALiveDeadline(t *testing.T) {
 	l := &ctxRecordingLister{}
 	withLKELister(t, l)
-	captureStdout(t, func() { reportLinodeAccount([]string{"v1.33.6+lke7"}) })
+	captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
 
 	if !l.called {
 		t.Fatal("the lister was never called")
@@ -105,21 +105,21 @@ func TestSpecK8sVersionsReadsAPresentSpec(t *testing.T) {
 		"lab":  clusterDef("lab", "    k8sVersion: v1.32.1+lke1\n"),
 	})
 
-	got := specK8sVersions("")
+	got := SpecK8sVersions("")
 	sort.Strings(got)
 	want := []string{"v1.32.1+lke1", "v1.33.6+lke7"}
 	if len(got) != len(want) {
-		t.Fatalf("specK8sVersions(\"\") = %v, want every env's pin %v", got, want)
+		t.Fatalf("SpecK8sVersions(\"\") = %v, want every env's pin %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("specK8sVersions(\"\") = %v, want %v", got, want)
+			t.Fatalf("SpecK8sVersions(\"\") = %v, want %v", got, want)
 		}
 	}
 
 	// A named env narrows it to that env's pin.
-	if one := specK8sVersions("lab"); len(one) != 1 || one[0] != "v1.32.1+lke1" {
-		t.Errorf("specK8sVersions(\"lab\") = %v, want [v1.32.1+lke1]", one)
+	if one := SpecK8sVersions("lab"); len(one) != 1 || one[0] != "v1.32.1+lke1" {
+		t.Errorf("SpecK8sVersions(\"lab\") = %v, want [v1.32.1+lke1]", one)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestSpecK8sVersionsReadsAPresentSpec(t *testing.T) {
 // repo too, and must stay silent there.
 func TestSpecK8sVersionsSilentWithoutASpec(t *testing.T) {
 	chdirTempDir(t)
-	if got := specK8sVersions(""); got != nil {
-		t.Errorf("specK8sVersions with no spec = %v, want nil", got)
+	if got := SpecK8sVersions(""); got != nil {
+		t.Errorf("SpecK8sVersions with no spec = %v, want nil", got)
 	}
 }

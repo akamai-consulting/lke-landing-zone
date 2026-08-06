@@ -14,6 +14,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
@@ -445,7 +446,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// `uses:` org differs from this instance's org while passing `secrets: inherit`
 	// runs with EMPTY secrets — a silent setup-time trap. Fail loudly here.
 	fmt.Println("\n" + color.Bold("Workflow reuse:"))
-	if err := checkCrossOrgReuse(); err != nil {
+	if err := doctor.CheckCrossOrgReuse(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -487,7 +488,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// this point is local or GitHub, so an unentitled Linode account or a retired
 	// `+lke` pin used to reach terraform apply unchallenged. Advisory only — it
 	// never touches errs. See doctor_linode.go.
-	reportLinodeAccount(specK8sVersions(env))
+	doctor.ReportLinodeAccount(doctor.SpecK8sVersions(env))
 
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.

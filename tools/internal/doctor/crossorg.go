@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // doctor_crossorg.go implements the cross-org reuse guardrail (#200): a `llz
 // doctor` preflight that fails loudly when an instance workflow calls a reusable
@@ -88,17 +88,17 @@ func crossOrgSecretInheritFindings(content, repoOwner, file string) ([]crossOrgR
 	return out, nil
 }
 
-// checkCrossOrgReuse is the doctor section. It no-ops (with a pass line) outside
+// CheckCrossOrgReuse is the doctor section. It no-ops (with a pass line) outside
 // an instance or when the instance's own org is unknown — there is nothing to
 // compare against there. Returns a non-nil error when any cross-org
 // `secrets: inherit` job is found, so doctor's overall gate fails.
-func checkCrossOrgReuse() error {
-	a, _ := readAnswers(".")
-	if a == nil || a.InstanceRepo == "" {
+func CheckCrossOrgReuse() error {
+	instanceRepo := caps.InstanceRepo()
+	if instanceRepo == "" {
 		report("workflow reuse (no instance repo to check)", true)
 		return nil
 	}
-	owner, _, ok := strings.Cut(a.InstanceRepo, "/")
+	owner, _, ok := strings.Cut(instanceRepo, "/")
 	if !ok || owner == "" {
 		report("workflow reuse (instance_repo has no owner)", true)
 		return nil

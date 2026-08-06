@@ -1,4 +1,4 @@
-package main
+package doctor
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func withLKELister(t *testing.T, l lkeVersionLister) {
 
 // The load-bearing property: this section is ADVISORY. Its response shape has
 // not been verified against an entitled account, so it must never be able to
-// fail a build that would have worked. reportLinodeAccount returns nothing —
+// fail a build that would have worked. ReportLinodeAccount returns nothing —
 // this test exists so a future refactor cannot quietly give it an error return
 // and wire it into doctor's errs.
 func TestReportLinodeAccountNeverBlocks(t *testing.T) {
@@ -46,13 +46,13 @@ func TestReportLinodeAccountNeverBlocks(t *testing.T) {
 		withLKELister(t, l)
 		// Compiles only while the function has no error return, and cannot panic
 		// on any of the four shapes.
-		captureStdout(t, func() { reportLinodeAccount([]string{"v1.33.6+lke7"}) })
+		captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
 	}
 }
 
 func TestReportLinodeAccountWithoutAToken(t *testing.T) {
 	withLKELister(t, nil)
-	out := captureStdout(t, func() { reportLinodeAccount([]string{"v1.33.6+lke7"}) })
+	out := captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
 	if !strings.Contains(out, "LINODE_TOKEN") {
 		t.Errorf("should say how to enable the check, got:\n%s", out)
 	}
@@ -66,7 +66,7 @@ func TestReportLinodeAccountWithoutAToken(t *testing.T) {
 // like, so it reports as uncertainty, not as a verdict.
 func TestReportLinodeAccountAuthFailureIsUncertainty(t *testing.T) {
 	withLKELister(t, &fakeLKELister{err: errors.New("GET /v4beta/... returned 401 (check the PAT scope): Invalid Token")})
-	out := captureStdout(t, func() { reportLinodeAccount([]string{"v1.33.6+lke7"}) })
+	out := captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
 	for _, want := range []string{"could not list", "entitled"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -76,7 +76,7 @@ func TestReportLinodeAccountAuthFailureIsUncertainty(t *testing.T) {
 
 func TestReportLinodeAccountFlagsAVersionTheAccountDoesNotOffer(t *testing.T) {
 	withLKELister(t, &fakeLKELister{versions: []string{"v1.32.4+lke2", "v1.31.8+lke5"}})
-	out := captureStdout(t, func() { reportLinodeAccount([]string{"v1.33.6+lke7"}) })
+	out := captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
 	if !strings.Contains(out, "NOT in the account") {
 		t.Errorf("a retired pin should be flagged:\n%s", out)
 	}
@@ -88,7 +88,7 @@ func TestReportLinodeAccountFlagsAVersionTheAccountDoesNotOffer(t *testing.T) {
 func TestReportLinodeAccountAsksTheEnterpriseTier(t *testing.T) {
 	f := &fakeLKELister{versions: []string{"v1.33.6+lke7"}}
 	withLKELister(t, f)
-	captureStdout(t, func() { reportLinodeAccount(nil) })
+	captureStdout(t, func() { ReportLinodeAccount(nil) })
 	if f.tier != "enterprise" {
 		t.Errorf("tier = %q, want enterprise — the standard catalog answers for a product LLZ does not use", f.tier)
 	}

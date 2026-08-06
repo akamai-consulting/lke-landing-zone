@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -100,7 +101,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// an expired/revoked/mistyped token surfaces in the VALID column (with "rotate
 	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
-	validity, invalidN := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	validity, invalidN := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
 	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if invalidN > 0 {
 		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
@@ -371,7 +372,7 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	// Actively probe validity, not just presence — a set-but-dead token is the
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
-	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	validity, invalid := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
 	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if len(missing) > 0 {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))

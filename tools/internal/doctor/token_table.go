@@ -1,4 +1,4 @@
-package main
+package doctor
 
 // doctor_token_table.go — the two halves of the old token_validate.go that did
 // NOT go to internal/tokeninv.
@@ -18,12 +18,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
 
-// probeTokenValidities probes every probeable requirement and returns a verdict
+// ProbeTokenValidities probes every probeable requirement and returns a verdict
 // keyed by credential NAME, plus the count of INVALID ones. It does NOT print —
 // configreadiness.ReportReadiness renders the results as the table's VALID column. A probeable
 // token with no locally-readable value gets a vSkipped verdict (probe it in CI);
 // non-credential requirements (plain vars, image refs) get no entry.
-func probeTokenValidities(reqs []configreadiness.Requirement, secrets, vars map[string]string, instance configreadiness.LiveState, ghcrUser string) (map[string]tokeninv.TokenValidity, int) {
+func ProbeTokenValidities(reqs []configreadiness.Requirement, secrets, vars map[string]string, instance configreadiness.LiveState, ghcrUser string) (map[string]tokeninv.TokenValidity, int) {
 	now := time.Now()
 	out := map[string]tokeninv.TokenValidity{}
 
