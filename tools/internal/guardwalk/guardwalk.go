@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -159,4 +160,34 @@ func SortFindings[T any](findings []T, key func(T) (file, secondary string)) {
 		}
 		return si < sj
 	})
+}
+
+// SEVEN non-test callers across the guard family plus internal/credcoverage.
+// It is the manifest-roots half of the same question Walk answers — where does
+// this repo keep the YAML a guard must scan — so it belongs beside it rather
+// than in whichever extension happened to be extracted first.
+
+// PlatformTreeDirs returns the three shared platform-bootstrap manifest roots the
+// wave/mesh guards scan: platform-apl/manifest (the always-on base) and
+// platform-apl/components (the per-component kustomize Components). Since the
+// platform-apl move they live at the repo ROOT, outside the instance scaffold.
+//
+// It said "two" until this extraction, while the body had returned three since
+// manifest-secret-store was added — the header was not updated with the fix it
+// documents below. Caught by writing the function's first direct test.
+func PlatformTreeDirs(root string) []string {
+	p := guardkit.RepoPath(root, "platform-apl")
+	// manifest-secret-store is a real deployed unit — ci_bootstrap_cluster_manifests
+	// gives it its own llz-secret-store Application ("path":
+	// "platform-apl/manifest-secret-store") — and it holds the two
+	// ClusterSecretStores every ExternalSecret in the repo binds to. It was absent
+	// here, so the four guards that share these roots (wave-health,
+	// wave-dependency, mesh-egress, and the refreshInterval check) never opened it.
+	// No live finding today; a negative-wave annotation added there would have been
+	// invisible to the #142 gate.
+	return []string{
+		filepath.Join(p, "manifest"),
+		filepath.Join(p, "manifest-secret-store"),
+		filepath.Join(p, "components"),
+	}
 }

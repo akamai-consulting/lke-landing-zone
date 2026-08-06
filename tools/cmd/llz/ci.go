@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
@@ -219,7 +220,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciUpgradeTestCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
-	c.AddCommand(ciExternalSecretPathsCmd())
+	c.AddCommand(credcoverage.ExternalSecretPathsCmd())
 	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(ciWaveHealthGuardCmd())
@@ -228,7 +229,7 @@ func ciCmd() *cobra.Command {
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).
-	c.AddCommand(ciCredentialCoverageGuardCmd())
+	c.AddCommand(credcoverage.CoverageGuardCmd())
 	// Static guard on ENCRYPTION AT REST for Terraform-declared resources: every
 	// root declares an encryption block, every node pool sets disk_encryption
 	// (Makefile at-rest-guard).

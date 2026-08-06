@@ -8,7 +8,7 @@ import (
 )
 
 // mtlsTree writes files under <root>/platform-apl/components/<rel> and returns
-// the root, matching the layout platformTreeDirs scans.
+// the root, matching the layout guardwalk.PlatformTreeDirs scans.
 func mtlsTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

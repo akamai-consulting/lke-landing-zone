@@ -116,12 +116,16 @@ categories:
     #                       unclaimed state. All ten now carry a binding. -232; the
     #                       os.WriteFile stayed in cmd/llz so the read-repo grant
     #                       remains true (3rd case, same resolution as gen-toc).
+    #   32,077 / 182 files  posture-credential-coverage, a GATE the catalog filed
+    #                       under `invariant: operating` — it reaches no cluster at
+    #                       all. 5th catalog correction, 1st about a STATE rather
+    #                       than a file list. -656, at 90.5% coverage.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 32733
+    budget: 32077
     exact: true
     include:
       - "tools/cmd/llz/*.go"

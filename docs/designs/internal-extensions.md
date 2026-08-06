@@ -200,7 +200,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `reconciler-runtime` | 1,094 | 5 | ✔ | ✘ | `reconcile` 541, leader 199, manager 146, health 125, convergence 83. The loop + leader election. **Should also become its own binary.** |
-| `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208 |
+| `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208. **✅ Extracted — and it is a GATE, not an invariant.** It reaches no cluster. See [What `posture-credential-coverage` corrected](#what-posture-credential-coverage-corrected--the-first-wrong-state).|
 | `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first ten, extracted](#the-first-ten-extracted). |
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78. **✅ Extracted — but only two of the three files.** `incluster` is part of `converge`, not this; grouping by filename prefix grouped it wrong. See [What `health-sla` corrected](#what-health-sla-corrected--a-catalog-row-that-grouped-by-filename).|
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first eighteen, extracted
+## The first nineteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -277,9 +277,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-platform` extracted | 33,877 | 185 | −482 — the first PURELY-assertion extension |
 | `assert-reconciler` extracted | 33,157 | 185 | −720 — the second OPT-IN, plus `promwire` |
 | `assert-registry` extracted | 32,965 | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
-| `promote-pipeline` extracted | **32,733** | 184 | −232 — binds `promoted`, **the last unclaimed state** |
+| `promote-pipeline` extracted | 32,733 | 184 | −232 — binds `promoted`, **the last unclaimed state** |
+| `posture-credential-coverage` extracted | **32,077** | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
 
-**Net −14,449 (30.6%) across eighteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −15,105 (32.0%) across nineteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1083,6 +1084,64 @@ helper, I wrote `open(p,'w').write(open(p).read() + …)` — which truncates be
 and destroyed the file. That exact line is recorded as a hard rule in the extraction notes from three
 sessions ago. Knowing a trap is not the same as not falling into it; the mitigation that works is the
 two-step `with open(...)` form, not the memory of having been bitten.
+
+### What `posture-credential-coverage` corrected — the first wrong STATE
+
+Nineteenth, and the fifth catalog correction — but the first about a **state** rather than a file list.
+
+```
+posture-credential-coverage  gate:scaffolded[read-repo]
+```
+
+The catalog files it under **`invariant: operating`**, in a section headed *"the binding the current
+design has no room for; without it these 4,283 lines stay core-special."* It is neither an invariant
+nor at `operating`. **It reaches no cluster and no cloud** — both checks are file scans over the
+repo's manifests, and the only I/O in the package is `os.ReadFile`.
+
+**Why this error is more interesting than the previous four.** Those were all *"these files do not
+belong together"*. This one groups the right files and puts them at the wrong **moment** — and the
+state is what tells a reader WHEN a check runs. Filed at `operating` it reads as continuous
+drift-detection against a live platform; it is a pre-commit file check that needs no platform to
+exist. A reader planning where to wire it would have reached the opposite conclusion.
+
+**A gate is the strictest claim in the model**, so it is checked rather than asserted:
+`TestPackageStaysFilesOnly` fails if the package ever grows a cluster client, a network call or a
+write path. `token-inventory`'s `validate-tokens` looked like a gate and was not — it probes GitHub,
+Linode and S3 — so the distinction is live, not theoretical.
+
+**Two checks, one binding**, per the `guard-charts` rule: a split needs divergent *capability*, not
+divergent subject matter. These are the two ends of one question — does every ExternalSecret path
+resolve, and is every credential measured by something.
+
+### The extraction that made four other packages testable
+
+`PlatformTreeDirs` came out with it into `internal/guardwalk` (seven callers), and writing its **first
+direct test** found the function's own header comment saying it returns *"the two shared manifest
+roots"* while the body had returned **three** since `manifest-secret-store` was added. The body even
+carries the scar note explaining that addition. The header was never updated with the fix it
+documents.
+
+That triggered a wider repair. Four shared packages had drifted below their coverage floors, all from
+the same cause: **helpers were moved into them without their tests**, so each new symbol was exercised
+only incidentally through callers.
+
+| package | was | now | the symbol that arrived untested |
+|---|---:|---:|---|
+| `internal/kube` | 78.0 | **88.1** | `LeaseHolderRenew` |
+| `internal/cigate` | 16.9 | **25.4** | `SplitCSVList` |
+| `internal/kubectlprobe` | 63.0 | **66.7** | `Reachable` |
+| `internal/guardwalk` | 42.0 | **46.0** | `PlatformTreeDirs` |
+| `internal/clusterspec` | 95.0 | **96.0** | `AplSemverLess` |
+
+Each now has a test pinning the property that actually matters, not just the line count —
+`LeaseHolderRenew`'s is the one worth reading: a renewTime that is **present but unusable** must not
+read as **absent**, because the caller treats a zero renewTime as "takeable now". An unreadable
+timestamp reading as *"lease is free"* got a live holder's lease stolen once, and two reconcilers then
+ran every write lane at the same time.
+
+**The general lesson: a shared package accumulates symbols faster than it accumulates tests**, because
+each one arrives as a side effect of an extraction whose attention is elsewhere. The floors caught it,
+which is the argument for having them — but only two extractions late.
 
 ## The cost of the interesting half
 

@@ -185,7 +185,7 @@ func runCIMeshEgressGuard(root string) error {
 // charts with values applied, so the namespace is a literal and the file is real
 // YAML. That is the same tree k8s-lint and k8s-validate already consume.
 func meshEgressScanDirs(root string) []string {
-	return append(platformTreeDirs(root), filepath.Join(root, renderedChartsDir))
+	return append(guardwalk.PlatformTreeDirs(root), filepath.Join(root, renderedChartsDir))
 }
 
 // renderedChartsDir mirrors the Makefile's RENDER_DIR default. The two must agree;

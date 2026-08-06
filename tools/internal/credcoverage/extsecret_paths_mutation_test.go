@@ -1,4 +1,4 @@
-package main
+package credcoverage
 
 // Mutation-coverage tests for ci_extsecret_paths.go.
 //

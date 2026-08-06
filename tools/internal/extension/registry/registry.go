@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
@@ -58,6 +59,7 @@ var declarations = []func() extension.Extension{
 	chartguard.Extension,
 	clusteraccess.Extension,
 	converge.Extension,
+	credcoverage.Extension,
 	docsguard.Extension,
 	healthsla.Extension,
 	tokeninv.Extension,

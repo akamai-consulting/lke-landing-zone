@@ -194,7 +194,7 @@ func runCIWaveHealthGuard(root string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
 	}
-	dirs := platformTreeDirs(root)
+	dirs := guardwalk.PlatformTreeDirs(root)
 	findings, examined, err := collectWaveHealthFindings(dirs, string(valuesRaw))
 	if err != nil {
 		return err

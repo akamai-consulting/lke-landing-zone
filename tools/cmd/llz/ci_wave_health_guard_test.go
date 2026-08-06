@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // The values fragment carrying every override the allowlist depends on —
@@ -208,7 +210,7 @@ func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	findings, examined, err := collectWaveHealthFindings(platformTreeDirs(root), waveGuardValuesAllOverrides)
+	findings, examined, err := collectWaveHealthFindings(guardwalk.PlatformTreeDirs(root), waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatalf("an absent tree is skipped, not a walk error: %v", err)
 	}

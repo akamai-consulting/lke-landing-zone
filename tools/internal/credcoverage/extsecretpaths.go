@@ -1,4 +1,4 @@
-package main
+package credcoverage
 
 // ci_extsecret_paths.go implements `llz ci externalsecret-paths` — the native
 // port of the former template-scripts/linting-and-validation/
@@ -52,27 +52,6 @@ const (
 	esBaoConfigureLabel = "llz ci bao-configure (ci_openbao_configure.go)"
 	esBaoConfigurePath  = "tools/cmd/llz/ci_openbao_configure.go"
 )
-
-// platformTreeDirs returns the two shared platform-bootstrap manifest roots the
-// wave/mesh guards scan: platform-apl/manifest (the always-on base) and
-// platform-apl/components (the per-component kustomize Components). Since the
-// platform-apl move they live at the repo ROOT, outside the instance scaffold.
-func platformTreeDirs(root string) []string {
-	p := guardkit.RepoPath(root, "platform-apl")
-	// manifest-secret-store is a real deployed unit — ci_bootstrap_cluster_manifests
-	// gives it its own llz-secret-store Application ("path":
-	// "platform-apl/manifest-secret-store") — and it holds the two
-	// ClusterSecretStores every ExternalSecret in the repo binds to. It was absent
-	// here, so the four guards that share these roots (wave-health,
-	// wave-dependency, mesh-egress, and the refreshInterval check) never opened it.
-	// No live finding today; a negative-wave annotation added there would have been
-	// invisible to the #142 gate.
-	return []string{
-		filepath.Join(p, "manifest"),
-		filepath.Join(p, "manifest-secret-store"),
-		filepath.Join(p, "components"),
-	}
-}
 
 // esRef is one (remoteRef.key, remoteRef.property) pair; hasProp distinguishes
 // "no property line" (whole-secret ref) from an empty property.
@@ -623,7 +602,7 @@ func checkESRefreshIntervals(root string, w io.Writer) int {
 	errors := 0
 	// The shared walk (*.yaml AND *.yml, absent dirs skipped): a PushSecret saved
 	// as *.yml was exempt from the propagation bound under the hand-rolled copy.
-	if _, walkErr := guardwalk.Walk(platformTreeDirs(root), func(p string, b []byte) error {
+	if _, walkErr := guardwalk.Walk(guardwalk.PlatformTreeDirs(root), func(p string, b []byte) error {
 		for _, doc := range strings.Split(string(b), "\n---") {
 			if !esKindRx.MatchString(doc) {
 				continue
@@ -658,7 +637,7 @@ func checkESRefreshIntervals(root string, w io.Writer) int {
 	return errors
 }
 
-func ciExternalSecretPathsCmd() *cobra.Command {
+func ExternalSecretPathsCmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
 		Use:   "externalsecret-paths",

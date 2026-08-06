@@ -1,4 +1,4 @@
-package main
+package credcoverage
 
 // ci_credential_coverage_guard.go implements `llz ci credential-coverage-guard` —
 // the static gate on credentials the platform holds but nothing measures.
@@ -160,7 +160,7 @@ func uncommented(body string) string {
 // `secrets: inherit` cannot match — the dot is required.
 var credSecretRef = regexp.MustCompile(`\bsecrets\.([A-Z][A-Z0-9_]*)\b`)
 
-func ciCredentialCoverageGuardCmd() *cobra.Command {
+func CoverageGuardCmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
 		Use:   "credential-coverage-guard",
@@ -318,4 +318,16 @@ func collectWorkflowSecretRefs(dir string) ([]string, int, error) {
 	}
 	sort.Strings(out)
 	return out, examined, nil
+}
+
+// firstNonEmpty returns the first non-empty string. A local three-liner rather
+// than an import: package main's copy lives in tokens.go, the credential
+// PROVISIONING wizard, and there is no behaviour here to drift.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

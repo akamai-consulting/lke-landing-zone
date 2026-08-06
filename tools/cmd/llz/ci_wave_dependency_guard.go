@@ -146,7 +146,7 @@ func ciWaveDependencyGuardCmd() *cobra.Command {
 }
 
 func runCIWaveDependencyGuard(root string) error {
-	dirs := platformTreeDirs(root)
+	dirs := guardwalk.PlatformTreeDirs(root)
 	inversions, examined, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		return err

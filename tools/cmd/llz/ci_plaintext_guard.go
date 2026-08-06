@@ -51,6 +51,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // plaintextRule is why one hop is allowed to stay unencrypted.
@@ -548,7 +549,7 @@ func runCIPlaintextGuard(root string) error {
 // exists to catch and would NOT have caught here (platform-apl alone keeps the
 // examined count above zero).
 func plaintextScanDirs(root string) []string {
-	dirs := platformTreeDirs(root)
+	dirs := guardwalk.PlatformTreeDirs(root)
 	dirs = append(dirs, guardkit.RepoPath(root, "kubernetes-charts"), guardkit.RepoPath(root, "tools"))
 	return dirs
 }

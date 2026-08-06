@@ -103,7 +103,7 @@ func ciCosignSubjectGuardCmd() *cobra.Command {
 func runCosignSubjectGuard(root string) error {
 	var refs []cosignSubjectRef
 
-	dirs := platformTreeDirs(root)
+	dirs := guardwalk.PlatformTreeDirs(root)
 	examined, err := guardwalk.Walk(dirs, func(path string, b []byte) error {
 		found := extractCosignSubjects(string(b))
 		if len(found) == 0 {

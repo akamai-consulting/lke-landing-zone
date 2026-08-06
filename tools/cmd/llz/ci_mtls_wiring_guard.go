@@ -139,7 +139,7 @@ type mtlsFinding struct {
 }
 
 func runCIMTLSWiringGuard(root string) error {
-	dirs := platformTreeDirs(root)
+	dirs := guardwalk.PlatformTreeDirs(root)
 	findings, examined, err := collectMTLSWiringFindings(dirs)
 	if err != nil {
 		return err

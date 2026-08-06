@@ -76,12 +76,3 @@ func TestLiveStateValue(t *testing.T) {
 		t.Errorf("value(missing) = %q, want empty", v)
 	}
 }
-
-func TestEsPropFilesSortKey(t *testing.T) {
-	if got := (esPropFiles{prop: "secret/x", hasProp: true}).sortKey(); got != "secret/x" {
-		t.Errorf("sortKey(hasProp) = %q, want secret/x", got)
-	}
-	if got := (esPropFiles{prop: "secret/x", hasProp: false}).sortKey(); got != "" {
-		t.Errorf("sortKey(!hasProp) = %q, want empty", got)
-	}
-}
