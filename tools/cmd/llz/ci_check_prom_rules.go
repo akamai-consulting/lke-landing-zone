@@ -31,6 +31,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // defaultPromRulesDirs are the roots that ship PrometheusRule CRDs (matched by
@@ -149,7 +151,7 @@ func checkRuleCRD(path string) error {
 // the walk would be indistinguishable from an absent rules dir — a real
 // PrometheusRule would go unvalidated and the guard would still print success.
 func walkPromRuleFiles(dir string) ([]string, error) {
-	return collectManifestPaths([]string{dir})
+	return guardwalk.CollectPaths([]string{dir})
 }
 
 // runCICheckPromRules validates the explicit file args, or — when none are

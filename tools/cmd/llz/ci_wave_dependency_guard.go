@@ -52,6 +52,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // wdSecretRef is one Secret reference by a container/volume, with its optionality.
@@ -190,9 +192,9 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 	}
 	var workloads []workload
 
-	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
+	examined, err = guardwalk.Walk(dirs, func(path string, raw []byte) error {
 		app, appWave := wdOwningApp(path) // same for every doc in a file
-		for _, doc := range decodeDocs(string(raw), func(d wdDoc) bool { return d.Kind != "" }) {
+		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d wdDoc) bool { return d.Kind != "" }) {
 			r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
 			ns := doc.Metadata.Namespace
 			switch {
@@ -249,7 +251,7 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 			})
 		}
 	}
-	sortGuardFindings(inversions, func(v wdInversion) (string, string) { return v.file, v.secret })
+	guardwalk.SortFindings(inversions, func(v wdInversion) (string, string) { return v.file, v.secret })
 	return inversions, examined, nil
 }
 

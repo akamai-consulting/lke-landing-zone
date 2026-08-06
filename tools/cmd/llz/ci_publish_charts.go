@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 )
 
 var pcDigestRe = regexp.MustCompile(`(?i)digest:\s*(sha256:[0-9a-f]+)`)
@@ -38,7 +40,7 @@ var (
 		if e != nil {
 			return "", "", fmt.Errorf("helm show chart %s: %w", dir, e)
 		}
-		return chartName(string(out)), chartVersion(string(out)), nil
+		return chartguard.ChartName(string(out)), chartguard.ChartVersion(string(out)), nil
 	}
 	// pcPublished reports whether ociRef:version already exists in the registry.
 	pcPublished = func(ociRef, version string) bool {

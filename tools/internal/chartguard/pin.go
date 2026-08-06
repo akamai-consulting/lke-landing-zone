@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 // ci_chart_pin_guard.go implements `llz ci chart-pin-guard` — the companion to
 // chart-version-guard. Where that guard asserts a changed chart bumps its
@@ -27,7 +27,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // chartPinScanRoots are the repo subtrees scanned for first-party chart pins:
@@ -67,27 +67,7 @@ type pinMismatch struct {
 	WantV string // the local Chart.yaml version the pin should match
 }
 
-func ciChartPinGuardCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "chart-pin-guard",
-		Short: "fail when an Argo chart pin drifts from the local Chart.yaml version",
-		Long: "Scans the live apl-values Argo Application manifests and the\n" +
-			"llz-argo-bootstrap-apps component list for first-party llz-* chart pins\n" +
-			"(targetRevision / version) and fails if any pin disagrees with that chart's\n" +
-			"kubernetes-charts/<chart>/Chart.yaml version. A pin ahead of (or behind) the\n" +
-			"published chart 404s at Argo sync time — on a cold bootstrap that silently\n" +
-			"strands the support-plane app and times out the OpenBao bootstrap.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runChartPinGuard(root)
-		},
-	}
-	c.Flags().StringVar(&root, "root", ".", "repository root")
-	return c
-}
-
-func runChartPinGuard(root string) error {
+func RunPinGuard(root string) error {
 	local, err := loadLocalChartVersions(root)
 	if err != nil {
 		return fmt.Errorf("reading kubernetes-charts versions: %w", err)
@@ -99,7 +79,7 @@ func runChartPinGuard(root string) error {
 		// templates/ (which hold Go-templated `chart: {{ ... }}` values, not literal
 		// pins), and matches both YAML extensions. Walked one root at a time so a
 		// failure still names the root it was scanning.
-		if _, walkErr := walkManifests([]string{filepath.Join(root, sub)}, func(path string, b []byte) error {
+		if _, walkErr := guardwalk.Walk([]string{filepath.Join(root, sub)}, func(path string, b []byte) error {
 			if pins := extractChartPins(string(b)); len(pins) > 0 {
 				rel, _ := filepath.Rel(root, path)
 				byFile[filepath.ToSlash(rel)] = pins
@@ -153,9 +133,9 @@ func extractChartPins(content string) []chartPin {
 		// silently exempting that chart from drift checking. chart-publish-check
 		// reads the same YAML with a bidirectional scan, so the two guards disagreed
 		// about which pins even exist.
-		if v := siblingValue(lines, i, indent, "targetRevision"); v != "" {
+		if v := SiblingValue(lines, i, indent, "targetRevision"); v != "" {
 			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
-		} else if v := siblingValue(lines, i, indent, "version"); v != "" {
+		} else if v := SiblingValue(lines, i, indent, "version"); v != "" {
 			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
 		}
 	}
@@ -179,7 +159,7 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 		if raw == "" {
 			continue
 		}
-		name, ver := chartName(raw), chartVersion(raw)
+		name, ver := ChartName(raw), ChartVersion(raw)
 		if name != "" && ver != "" {
 			out[name] = ver
 		}
@@ -187,10 +167,10 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 	return out, nil
 }
 
-// chartName extracts the top-level `name:` value from Chart.yaml content, or ""
-// when absent. Mirrors chartVersion (ci_chart_guard.go): only a column-0 key
+// ChartName extracts the top-level `name:` value from Chart.yaml content, or ""
+// when absent. Mirrors ChartVersion (ci_chart_guard.go): only a column-0 key
 // matches, so nested `name:` fields are not picked up.
-func chartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
+func ChartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
 
 // countFirstPartyPins counts the pins across all files that reference a chart
 // present in local — the denominator for the success message (third-party pins
@@ -227,4 +207,43 @@ func checkChartPins(byFile map[string][]chartPin, local map[string]string) []pin
 		}
 	}
 	return out
+}
+
+// SiblingValue reads a key from the same YAML block as line idx — scanning both
+// directions and stopping at a dedent.
+//
+// EXPORTED because `llz ci chart-publish-check` asks the same question about the
+// same files and stayed in package main (it is release-publish's territory, not
+// this extension's). Two scanners disagreeing about what "the same block" means is
+// how a pin gets read from the wrong chart.
+// siblingValue returns the value of `<indent>key: <value>` in the contiguous block
+// around idx at exactly the given indentation, scanning both directions and
+// stopping at the first line that dedents below indent.
+func SiblingValue(lines []string, idx int, indent, key string) string {
+	want := len(indent)
+	prefix := indent + key + ":"
+	scan := func(step int) string {
+		for j := idx + step; j >= 0 && j < len(lines); j += step {
+			ln := lines[j]
+			if strings.TrimSpace(ln) == "" {
+				continue // blank lines don't break a block
+			}
+			if LeadingIndent(ln) < want {
+				return "" // dedented out of the source block
+			}
+			if LeadingIndent(ln) == want && strings.HasPrefix(ln, prefix) {
+				return strings.Trim(strings.TrimSpace(strings.TrimPrefix(ln, prefix)), `"'`)
+			}
+		}
+		return ""
+	}
+	if v := scan(-1); v != "" {
+		return v
+	}
+	return scan(1)
+}
+
+// leadingIndent counts the leading spaces/tabs of a line.
+func LeadingIndent(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " \t"))
 }

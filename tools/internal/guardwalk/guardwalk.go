@@ -1,4 +1,17 @@
-package main
+// Package guardwalk is the shared traversal every manifest guard runs: find the
+// YAML under a set of roots, decode the documents that matter, and sort the
+// findings so two runs over the same tree print the same thing.
+//
+// TEN GUARDS CALL Walk. The catalog names guard_walk.go as one of the "shared
+// libraries every extension links" and says outright that it belongs in
+// tools/internal/* rather than in any one extension — this is that move, made when
+// the fourth gate extraction (guard-charts) needed it and the count made the case
+// by itself.
+//
+// SortFindings exists because output stability is a correctness property here, not
+// a nicety: a guard whose findings reorder between runs produces a diff on every
+// CI run and gets ignored.
+package guardwalk
 
 // guard_walk.go — the one manifest walk the tree-scanning guards share.
 //
@@ -32,7 +45,7 @@ import (
 // the guards disagreeing on this is the divergence this file exists to end.
 var manifestExts = []string{".yaml", ".yml"}
 
-// walkManifests calls fn(path, contents) for every YAML manifest under each dir,
+// Walk calls fn(path, contents) for every YAML manifest under each dir,
 // and returns how many files were read (the count requireCorpus gates on).
 //
 // A dir that does not exist is skipped, not an error: the guards run over layouts
@@ -41,7 +54,7 @@ var manifestExts = []string{".yaml", ".yml"}
 //
 // templates/ is skipped: Helm template dirs hold Go-templated YAML ("{{ ... }}"),
 // which is not a manifest and parses as garbage.
-func walkManifests(dirs []string, fn func(path string, raw []byte) error) (examined int, err error) {
+func Walk(dirs []string, fn func(path string, raw []byte) error) (examined int, err error) {
 	for _, dir := range dirs {
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			continue
@@ -56,7 +69,7 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 				}
 				return nil
 			}
-			if !hasManifestExt(path) {
+			if !hasExt(path) {
 				return nil
 			}
 			raw, readErr := os.ReadFile(path)
@@ -73,8 +86,8 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 	return examined, nil
 }
 
-// collectManifestPaths returns the sorted paths of every YAML manifest under the
-// given dirs — walkManifests for the callers that want the file LIST rather than
+// CollectPaths returns the sorted paths of every YAML manifest under the
+// given dirs — Walk for the callers that want the file LIST rather than
 // the contents. Same rules: absent dirs are skipped, templates/ is skipped, both
 // extensions match.
 //
@@ -83,9 +96,9 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 // read "no files" as the clean skip-or-succeed case, so returning nil on an
 // unreadable subtree would turn a partial scan into a silent color.Green — the walk
 // aborting is exactly when the corpus looks emptiest.
-func collectManifestPaths(dirs []string) ([]string, error) {
+func CollectPaths(dirs []string) ([]string, error) {
 	var paths []string
-	_, err := walkManifests(dirs, func(path string, _ []byte) error {
+	_, err := Walk(dirs, func(path string, _ []byte) error {
 		paths = append(paths, path)
 		return nil
 	})
@@ -93,8 +106,8 @@ func collectManifestPaths(dirs []string) ([]string, error) {
 	return paths, err
 }
 
-// hasManifestExt reports whether path carries a YAML manifest extension.
-func hasManifestExt(path string) bool {
+// hasExt reports whether path carries a YAML manifest extension.
+func hasExt(path string) bool {
 	for _, ext := range manifestExts {
 		if strings.HasSuffix(path, ext) {
 			return true
@@ -103,7 +116,7 @@ func hasManifestExt(path string) bool {
 	return false
 }
 
-// decodeDocs decodes every document of a multi-doc YAML file into T, returning
+// DecodeDocs decodes every document of a multi-doc YAML file into T, returning
 // the ones keep accepts. The guards each carried their own byte-identical copy
 // of this loop, one per doc type.
 //
@@ -114,7 +127,7 @@ func hasManifestExt(path string) bool {
 // the file entirely, so one odd document hid every manifest after it in the same
 // file. Any other decode error (EOF, or a syntax error the parser cannot resume
 // from) ends the file.
-func decodeDocs[T any](raw string, keep func(T) bool) []T {
+func DecodeDocs[T any](raw string, keep func(T) bool) []T {
 	var docs []T
 	dec := yaml.NewDecoder(strings.NewReader(raw))
 	for {
@@ -135,9 +148,9 @@ func decodeDocs[T any](raw string, keep func(T) bool) []T {
 	return docs
 }
 
-// sortGuardFindings orders findings by file, then by a per-guard secondary key,
+// SortFindings orders findings by file, then by a per-guard secondary key,
 // so a guard's annotations come out in a stable order regardless of walk order.
-func sortGuardFindings[T any](findings []T, key func(T) (file, secondary string)) {
+func SortFindings[T any](findings []T, key func(T) (file, secondary string)) {
 	sort.Slice(findings, func(i, j int) bool {
 		fi, si := key(findings[i])
 		fj, sj := key(findings[j])

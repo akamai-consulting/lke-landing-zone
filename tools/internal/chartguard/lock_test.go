@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 import (
 	"os"
@@ -130,7 +130,7 @@ func TestRunChartLockDrift(t *testing.T) {
 `), 0o644)
 
 	var out strings.Builder
-	if err := runChartLockDrift(root, []string{"charts/good"}, &out); err != nil {
+	if err := RunLockDrift(root, []string{"charts/good"}, &out); err != nil {
 		t.Errorf("expected pass, got %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestRunChartLockDrift(t *testing.T) {
     repository: https://example.com/charts
 `), 0o644)
 	out.Reset()
-	if err := runChartLockDrift(root, []string{"charts/good"}, &out); err == nil {
+	if err := RunLockDrift(root, []string{"charts/good"}, &out); err == nil {
 		t.Error("expected drift failure")
 	}
 }

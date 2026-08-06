@@ -1,4 +1,4 @@
-package main
+package guardwalk
 
 import (
 	"os"
@@ -27,7 +27,7 @@ func TestWalkManifestsEndsTheDivergences(t *testing.T) {
 	write("a/notes.md", "not yaml\n")
 
 	var seen []string
-	examined, err := walkManifests(
+	examined, err := Walk(
 		[]string{filepath.Join(root, "a"), filepath.Join(root, "does-not-exist")},
 		func(path string, raw []byte) error {
 			seen = append(seen, filepath.Base(path))
@@ -37,7 +37,7 @@ func TestWalkManifestsEndsTheDivergences(t *testing.T) {
 			return nil
 		})
 	if err != nil {
-		t.Fatalf("walkManifests: %v", err) // a missing dir must be skipped, not an error
+		t.Fatalf("Walk: %v", err) // a missing dir must be skipped, not an error
 	}
 	got := strings.Join(seen, ",")
 	if !strings.Contains(got, "one.yaml") || !strings.Contains(got, "two.yml") {

@@ -1,14 +1,15 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first nine
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first ten
 extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
 `posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
 `reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
 `template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
-`obj-encryption` (`tools/internal/objenc`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+`obj-encryption` (`tools/internal/objenc`) and `guard-charts`
+(`tools/internal/chartguard`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all nine still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all ten still run because `ci.go` and the reconciler register them, and the declarations are inert.
 All four kinds, five states including `seeded` — the group the old ceiling banned by omission — ALL SEVEN grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural

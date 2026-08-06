@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 import (
 	"reflect"
@@ -105,12 +105,12 @@ func TestCheckChartPinsAllMatch(t *testing.T) {
 
 func TestChartName(t *testing.T) {
 	yaml := "apiVersion: v2\nname: llz-openbao-platform\nversion: 0.1.3\n"
-	if got := chartName(yaml); got != "llz-openbao-platform" {
-		t.Errorf("chartName = %q, want llz-openbao-platform", got)
+	if got := ChartName(yaml); got != "llz-openbao-platform" {
+		t.Errorf("ChartName = %q, want llz-openbao-platform", got)
 	}
 	// A nested/indented name: must not be picked up as the chart name.
-	if got := chartName("maintainers:\n  - name: someone\n"); got != "" {
-		t.Errorf("chartName(nested only) = %q, want empty", got)
+	if got := ChartName("maintainers:\n  - name: someone\n"); got != "" {
+		t.Errorf("ChartName(nested only) = %q, want empty", got)
 	}
 }
 

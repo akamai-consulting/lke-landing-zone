@@ -36,6 +36,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // esManualPaths are KV paths intentionally seeded outside of any bootstrap
@@ -124,7 +126,7 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int,
 	// The walk error is returned, not dropped: requireCorpus only asserts
 	// examined > 0, so a walk that broke PARTWAY still yields a non-empty corpus
 	// and would pass the gate having validated only the files it reached.
-	sources, walkErr := collectManifestPaths(esScanDirs(root, renderDir))
+	sources, walkErr := guardwalk.CollectPaths(esScanDirs(root, renderDir))
 	examined := 0
 	for _, f := range sources {
 		if strings.Contains(filepath.ToSlash(f), "/charts/") {
@@ -621,7 +623,7 @@ func checkESRefreshIntervals(root string, w io.Writer) int {
 	errors := 0
 	// The shared walk (*.yaml AND *.yml, absent dirs skipped): a PushSecret saved
 	// as *.yml was exempt from the propagation bound under the hand-rolled copy.
-	if _, walkErr := walkManifests(platformTreeDirs(root), func(p string, b []byte) error {
+	if _, walkErr := guardwalk.Walk(platformTreeDirs(root), func(p string, b []byte) error {
 		for _, doc := range strings.Split(string(b), "\n---") {
 			if !esKindRx.MatchString(doc) {
 				continue

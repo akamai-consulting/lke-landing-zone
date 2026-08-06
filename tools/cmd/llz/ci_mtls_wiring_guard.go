@@ -36,6 +36,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // The file paths inClusterBaoHTTPClient() reads when the corresponding env var
@@ -160,8 +162,8 @@ func runCIMTLSWiringGuard(root string) error {
 func collectMTLSWiringFindings(dirs []string) ([]mtlsFinding, int, error) {
 	// Pass 1: every Secret a Certificate creates, keyed namespace/secretName.
 	certSecrets := map[string]bool{}
-	if _, err := walkManifests(dirs, func(_ string, raw []byte) error {
-		for _, c := range decodeDocs(string(raw), func(c certDoc) bool { return c.Kind == "Certificate" }) {
+	if _, err := guardwalk.Walk(dirs, func(_ string, raw []byte) error {
+		for _, c := range guardwalk.DecodeDocs(string(raw), func(c certDoc) bool { return c.Kind == "Certificate" }) {
 			certSecrets[c.Metadata.Namespace+"/"+c.Spec.SecretName] = true
 		}
 		return nil
@@ -170,8 +172,8 @@ func collectMTLSWiringFindings(dirs []string) ([]mtlsFinding, int, error) {
 	}
 
 	var findings []mtlsFinding
-	examined, err := walkManifests(dirs, func(path string, raw []byte) error {
-		for _, d := range decodeDocs(string(raw), func(d mtlsPodDoc) bool { return d.Kind != "" }) {
+	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
+		for _, d := range guardwalk.DecodeDocs(string(raw), func(d mtlsPodDoc) bool { return d.Kind != "" }) {
 			findings = append(findings, checkMTLSWiring(path, d, certSecrets)...)
 		}
 		return nil
@@ -179,7 +181,7 @@ func collectMTLSWiringFindings(dirs []string) ([]mtlsFinding, int, error) {
 	if err != nil {
 		return nil, examined, err
 	}
-	sortGuardFindings(findings, func(f mtlsFinding) (string, string) { return f.file, f.workload })
+	guardwalk.SortFindings(findings, func(f mtlsFinding) (string, string) { return f.file, f.workload })
 	return findings, examined, nil
 }
 

@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 // ci_chart_lock_guard.go implements `llz ci chart-lock-drift` — the native port
 // of template-scripts/linting-and-validation/check-chart-lock-drift.py (the
@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,26 +39,7 @@ type chartLockResult struct {
 	Warnings []string
 }
 
-func ciChartLockDriftCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "chart-lock-drift <chart-dir>...",
-		Short: "fail when a chart's committed Chart.lock drifts from its Chart.yaml dependencies",
-		Long: "Native port of check-chart-lock-drift.py (the Makefile's helm-dep-lock-check).\n" +
-			"For each chart directory, compares Chart.lock against the dependency\n" +
-			"declarations in Chart.yaml and fails if any dependency's name, version, or\n" +
-			"repository differs (or Chart.lock is missing) — meaning Chart.yaml was updated\n" +
-			"without re-running `helm dependency update`.",
-		Args: cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return runChartLockDrift(root, args, os.Stdout)
-		},
-	}
-	c.Flags().StringVar(&root, "root", ".", "repository root the chart dirs are relative to")
-	return c
-}
-
-func runChartLockDrift(root string, dirs []string, out io.Writer) error {
+func RunLockDrift(root string, dirs []string, out io.Writer) error {
 	total := 0
 	for _, dir := range dirs {
 		full := filepath.Join(root, dir)

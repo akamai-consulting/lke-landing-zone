@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 func TestDecodeMonitoringDocs(t *testing.T) {
@@ -21,7 +23,7 @@ kind: Deployment
 metadata:
   name: not-a-monitor
 `
-	docs := decodeDocs(raw, func(d monitoringDoc) bool { return d.Kind != "" })
+	docs := guardwalk.DecodeDocs(raw, func(d monitoringDoc) bool { return d.Kind != "" })
 	if len(docs) != 2 || docs[0].Kind != "ServiceMonitor" || docs[1].Kind != "Deployment" {
 		t.Fatalf("expected SM + Deployment, got %+v", docs)
 	}

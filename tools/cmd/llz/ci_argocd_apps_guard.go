@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // renderedArgoApp is the slice of a rendered ArgoCD Application/AppProject this
@@ -72,7 +74,7 @@ func ciArgoCDRenderedAppsCmd() *cobra.Command {
 func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 	// collectManifestPaths (shared with the other tree-scanning guards) also picks
 	// up *.yml, which this hand-rolled walk ignored.
-	files, err := collectManifestPaths([]string{renderDir})
+	files, err := guardwalk.CollectPaths([]string{renderDir})
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("argocd-rendered-apps: no rendered manifests under %s/ — run 'make render-charts' first", renderDir)
 	}
@@ -86,7 +88,7 @@ func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 		// Documents that do not parse as an Application shape are skipped without
 		// abandoning the rest of the file; schema validation owns malformed-manifest
 		// reporting.
-		for _, app := range decodeDocs(string(raw), func(a renderedArgoApp) bool {
+		for _, app := range guardwalk.DecodeDocs(string(raw), func(a renderedArgoApp) bool {
 			return a.Kind == "Application" || a.Kind == "AppProject"
 		}) {
 			apps++

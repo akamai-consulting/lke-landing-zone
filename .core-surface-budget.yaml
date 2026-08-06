@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 38,821 logic lines across 206 non-test files, 116 of them ci_*.go.
+    # 38,364 logic lines across 202 non-test files, 113 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -83,12 +83,14 @@ categories:
     #   38,821 / 206 files  obj-encryption, the first extension to bind `seeded` —
     #                       the group PR #15's ceiling banned by omission. -2,006,
     #                       plus internal/harborauth and internal/s3sig.
+    #   38,364 / 202 files  guard-charts, the fourth gate — plus internal/guardwalk,
+    #                       the manifest traversal TEN guards share. -457.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 38821
+    budget: 38364
     exact: true
     include:
       - "tools/cmd/llz/*.go"

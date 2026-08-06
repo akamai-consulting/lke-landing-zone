@@ -31,6 +31,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // placeholderHost is the example hostname the template ships. A rendered
@@ -101,7 +103,7 @@ func runCIPlaceholderGuard(renderDir string) error {
 // replaced printed but could not annotate).
 func collectPlaceholderFindings(dirs []string) ([]phFinding, int, error) {
 	var findings []phFinding
-	examined, err := walkManifests(dirs, func(path string, raw []byte) error {
+	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
 		sc := bufio.NewScanner(bytes.NewReader(raw))
 		// Rendered charts concatenate every template, so a single file can be
 		// large; the default 64KB token limit would error on one long line.

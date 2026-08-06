@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 // ci_chart_guard.go implements `llz ci chart-version-guard` — the release-hygiene
 // check that fails a PR when a file under a chart directory changes without that
@@ -21,33 +21,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/spf13/cobra"
 )
 
 const chartsRoot = "kubernetes-charts/"
 
-func ciChartVersionGuardCmd() *cobra.Command {
-	var base, root string
-	c := &cobra.Command{
-		Use:   "chart-version-guard",
-		Short: "fail when a chart changes without bumping its Chart.yaml version",
-		Long: "Diffs each kubernetes-charts/<chart>/ directory this PR touches against the\n" +
-			"PR base and fails if that chart's Chart.yaml version: is unchanged. publish-\n" +
-			"charts.yml publishes immutably (only a new version is pushed), so a chart change\n" +
-			"merged without a version bump is never published and clusters keep the stale\n" +
-			"chart. New charts (no Chart.yaml at the base) and removed charts are exempt.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runChartVersionGuard(base, root)
-		},
-	}
-	c.Flags().StringVar(&base, "base", "", "git ref/SHA of the PR base to diff against (required)")
-	c.Flags().StringVar(&root, "root", ".", "repository root")
-	return c
-}
-
-func runChartVersionGuard(base, root string) error {
+func RunVersionGuard(d Deps, base, root string) error {
 	if base == "" {
 		return fmt.Errorf("--base (PR base ref/SHA) is required")
 	}
@@ -58,7 +36,7 @@ func runChartVersionGuard(base, root string) error {
 	// compares the old chart set against new on-disk files and prints "No chart
 	// directories changed" for a chart the very next commit fails on. That false
 	// color.Green is the whole reason the other two sources are here.
-	committed, err := gitOutput(root, "diff", "--name-only", base+"...HEAD", "--", chartsRoot)
+	committed, err := d.GitOutput(root, "diff", "--name-only", base+"...HEAD", "--", chartsRoot)
 	if err != nil {
 		return fmt.Errorf("git diff against base %s: %w", base, err)
 	}
@@ -69,8 +47,8 @@ func runChartVersionGuard(base, root string) error {
 	// they fail is a broken repo the committed diff above would already have
 	// errored on. A failure degrades to CI's committed-only view, never to a
 	// pass-having-compared-nothing.
-	worktree, _ := gitOutput(root, "diff", "--name-only", "HEAD", "--", chartsRoot)
-	untracked, _ := gitOutput(root, "ls-files", "--others", "--exclude-standard", "--", chartsRoot)
+	worktree, _ := d.GitOutput(root, "diff", "--name-only", "HEAD", "--", chartsRoot)
+	untracked, _ := d.GitOutput(root, "ls-files", "--others", "--exclude-standard", "--", chartsRoot)
 
 	dirs := changedChartDirs(splitLines(committed + "\n" + worktree + "\n" + untracked))
 	if len(dirs) == 0 {
@@ -85,7 +63,7 @@ func runChartVersionGuard(base, root string) error {
 	// check every chart would look brand-new, and classifyChartBump exempts new
 	// charts from the bump requirement: the guard would pass the entire changeset
 	// having compared nothing.
-	if _, err := gitOutput(root, "rev-parse", "--verify", base+"^{commit}"); err != nil {
+	if _, err := d.GitOutput(root, "rev-parse", "--verify", base+"^{commit}"); err != nil {
 		return fmt.Errorf("chart-version-guard: base ref %q does not resolve (%v) — every chart would look new and skip the bump check; "+
 			"fetch the base commit (actions/checkout needs fetch-depth: 0 or an explicit base fetch)", base, err)
 	}
@@ -93,11 +71,11 @@ func runChartVersionGuard(base, root string) error {
 	var failed []string
 	for _, dir := range dirs {
 		// New version from the working tree; "" when the chart was removed.
-		newVer := chartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
+		newVer := ChartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
 		// Old version from the base; "" when the chart is new. Safe to discard the
 		// error now that the base ref itself is known good.
-		oldRaw, _ := gitOutput(root, "show", base+":"+dir+"/Chart.yaml")
-		oldVer := chartVersion(oldRaw)
+		oldRaw, _ := d.GitOutput(root, "show", base+":"+dir+"/Chart.yaml")
+		oldVer := ChartVersion(oldRaw)
 
 		ok, msg := classifyChartBump(dir, oldVer, newVer)
 		if ok {
@@ -163,10 +141,10 @@ func classifyChartBump(dir, oldVer, newVer string) (ok bool, msg string) {
 	}
 }
 
-// chartVersion extracts the top-level `version:` value from Chart.yaml content,
+// ChartVersion extracts the top-level `version:` value from Chart.yaml content,
 // or "" when absent. Only column-0 `version:` matches, so nested keys and
 // `appVersion:` are not mistaken for it.
-func chartVersion(chartYAML string) string { return chartScalar(chartYAML, "version:") }
+func ChartVersion(chartYAML string) string { return chartScalar(chartYAML, "version:") }
 
 // chartScalar reads a column-0 `<key> <value>` scalar out of Chart.yaml, with
 // surrounding quotes stripped.

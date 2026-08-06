@@ -32,6 +32,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // meshStrictNamespaces maps a namespace known to enforce Istio STRICT mTLS to the
@@ -212,8 +214,8 @@ func requireRenderedCharts(root string) error {
 // whose namespaceSelector targets a meshStrictNamespaces entry from a different
 // source namespace.
 func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined int, err error) {
-	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
-		for _, doc := range decodeDocs(string(raw), func(d meDoc) bool { return d.Kind == "NetworkPolicy" }) {
+	examined, err = guardwalk.Walk(dirs, func(path string, raw []byte) error {
+		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d meDoc) bool { return d.Kind == "NetworkPolicy" }) {
 			for _, e := range doc.Spec.Egress {
 				for _, to := range e.To {
 					if to.NamespaceSelector == nil {
@@ -238,6 +240,6 @@ func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined in
 	if err != nil {
 		return nil, examined, err
 	}
-	sortGuardFindings(findings, func(f meFinding) (string, string) { return f.file, f.targetNS })
+	guardwalk.SortFindings(findings, func(f meFinding) (string, string) { return f.file, f.targetNS })
 	return findings, examined, nil
 }

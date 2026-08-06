@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first nine, extracted](#the-first-nine-extracted). |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first ten, extracted](#the-first-ten-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -136,7 +136,7 @@ Realistic settled core: **~2,900**.
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `import-brownfield` | 3,133 | 8 | ✘ | ✔ | The single biggest movable block, and the only large one that is genuinely optional. Externalisable — its four non-trivial core calls become `llz render` / `llz new` argv. **Two bindings, not one:** import *writes an instance repo* (`transition:scaffolded[read-repo, cloud-read, own-paths]`) and *adopts cloud substrate* (`transition:provisioned[cloud-mutate]`). An earlier draft declared it as one transition to `provisioned` holding `own-paths`, which the validator rejects — own-paths is only meaningful where files are written.  **✅ Extracted** — the first opt-in, and `ext? ✔` was WRONG; see [The first nine, extracted](#the-first-nine-extracted).|
+| `import-brownfield` | 3,133 | 8 | ✘ | ✔ | The single biggest movable block, and the only large one that is genuinely optional. Externalisable — its four non-trivial core calls become `llz render` / `llz new` argv. **Two bindings, not one:** import *writes an instance repo* (`transition:scaffolded[read-repo, cloud-read, own-paths]`) and *adopts cloud substrate* (`transition:provisioned[cloud-mutate]`). An earlier draft declared it as one transition to `provisioned` holding `own-paths`, which the validator rejects — own-paths is only meaningful where files are written.  **✅ Extracted** — the first opt-in, and `ext? ✔` was WRONG; see [The first ten, extracted](#the-first-ten-extracted).|
 | `cluster-bootstrap` | 964 | 2 | ✔ | ✘ | `ci_bootstrap_cluster` 771 + manifests 193. ADR 0011's payload. |
 | `cluster-access` | 952 | 4 | ✔ | ✘ | `runner_acl` 458, `runner_acl_configmap` 201, `fetchkubeconfig_state` 192, `fetchkubeconfig` 101. |
 | `cloud-firewall` | 394 | 2 | ✔ | ✘ | `ci_discover_firewall` 215, `ci_firewall` 179. |
@@ -179,7 +179,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
-| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first nine, extracted](#the-first-nine-extracted). |
+| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74 |
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
@@ -201,11 +201,11 @@ The binding the current design has no room for; without it these 4,283 lines sta
 |---|---:|---:|:-:|:-:|---|
 | `reconciler-runtime` | 1,094 | 5 | ✔ | ✘ | `reconcile` 541, leader 199, manager 146, health 125, convergence 83. The loop + leader election. **Should also become its own binary.** |
 | `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208 |
-| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first nine, extracted](#the-first-nine-extracted). |
+| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first ten, extracted](#the-first-ten-extracted). |
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
-| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first nine, extracted](#the-first-nine-extracted). |
+| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first ten, extracted](#the-first-ten-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
@@ -213,8 +213,8 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
-| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first nine, extracted](#the-first-nine-extracted). |
-| `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first nine, extracted](#the-first-nine-extracted). |
+| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first ten, extracted](#the-first-ten-extracted). |
+| `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first ten, extracted](#the-first-ten-extracted). |
 | `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
 
 ## Gate — attach at `→ scaffolded` / `→ configured`, grants: `read-repo`
@@ -223,8 +223,8 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first nine, extracted](#the-first-nine-extracted). |
-| `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first ten, extracted](#the-first-ten-extracted). |
+| `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 **✅ Extracted** (cosign-subject stayed — it is release-publish territory); see [The first ten, extracted](#the-first-ten-extracted). |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
 | `guard-pins` | 279 | 2 | ✔ | version-pins 254, pin-coherence 25 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first nine, extracted
+## The first ten, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -268,9 +268,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `teardown` extracted | 44,171 | 226 | −655, and the first binding that MOVES the platform |
 | `template-sustain` extracted | 43,817 | 221 | −354, partial by construction — and the model grew a word for that |
 | `import-brownfield` extracted | 40,827 | 214 | **−2,990**, the largest single move — and the first opt-in |
-| `obj-encryption` extracted | **38,821** | 206 | −2,006, and the first binding at `seeded` |
+| `obj-encryption` extracted | 38,821 | 206 | −2,006, and the first binding at `seeded` |
+| `guard-charts` extracted | **38,364** | 202 | −457, and `guardwalk` — the traversal ten guards share |
 
-**Net −8,361 (17.7%) across nine extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −8,818 (18.7%) across ten extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -601,6 +602,32 @@ which sent every secret-reading case down the "credential missing" branch — th
 against nothing. Giving the fixture the *real* base64 decode is what made them mean anything. Same
 shape as the `Summary` stub in teardown: a seam stubbed to do nothing turns a test into a tautology.
 
+### What `guard-charts` showed — a routine one, and the library it dragged out
+
+The fourth gate, adding no new shape. It was taken now precisely for that: after nine extractions
+that each found something, the useful question is whether a routine extraction is routine **yet**.
+
+**It was.** One shape, no ceiling probe, no vocabulary argument, the smallest `Deps` in the repo —
+a single `GitOutput`. That is what a gate looks like when the pattern has settled: a gate reaches
+nothing, so the only capability it cannot supply itself is asking git what *changed*, which is the
+one question `chart-version-guard` is about.
+
+**Three checks, one binding.** `reconcile-actions` split into four named invariants because their
+grants differ; these three hold the same grant at the same moment, so naming them separately would
+buy nothing their own names do not already say. **The split is justified by divergent capability, not
+by count** — worth stating, because "one binding per check" is the obvious wrong generalisation from
+the reconciler.
+
+**And the seventh shared package, which is the real yield.** `internal/guardwalk` — find the YAML
+under a set of roots, decode the documents that matter, sort the findings — is called by **ten**
+guards. The catalog named `guard_walk.go` as one of the "shared libraries every extension links" and
+said it belongs in `tools/internal/*`; the count made the argument by itself once a fourth guard
+needed it. Every remaining `guard-*` and `assert-*` extraction now starts with that already done.
+
+`SortFindings` came with it, and is worth not losing: output stability is a **correctness** property
+for a guard, not a nicety. Findings that reorder between runs produce a diff on every CI run, and a
+gate whose output always differs is a gate people stop reading.
+
 ## The cost of the interesting half
 
 Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
@@ -738,7 +765,7 @@ grants and the distribution is observed instead of assigned.
 > tidy version.
 
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first nine, extracted](#the-first-nine-extracted).
+   **Done** — [The first ten, extracted](#the-first-ten-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

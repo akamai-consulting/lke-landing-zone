@@ -33,6 +33,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // waveHealthKindRule describes why a kind is safe at a negative sync wave.
@@ -235,8 +237,8 @@ func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFindin
 	// walkManifests also brings the missing-directory tolerance this guard alone
 	// lacked — it used to hard-error on a layout its three siblings skipped — and
 	// the *.yml extension it alone would have ignored.
-	examined, err := walkManifests(dirs, func(path string, raw []byte) error {
-		for _, doc := range decodeDocs(string(raw), func(d waveHealthDoc) bool { return d.Kind != "" }) {
+	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
+		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d waveHealthDoc) bool { return d.Kind != "" }) {
 			f, ok := classifyWaveHealthDoc(path, doc, values)
 			if ok {
 				findings = append(findings, f)
@@ -247,7 +249,7 @@ func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFindin
 	if err != nil {
 		return nil, examined, err
 	}
-	sortGuardFindings(findings, func(f waveHealthFinding) (string, string) { return f.file, f.name })
+	guardwalk.SortFindings(findings, func(f waveHealthFinding) (string, string) { return f.file, f.name })
 	return findings, examined, nil
 }
 

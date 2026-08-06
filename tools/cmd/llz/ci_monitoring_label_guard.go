@@ -26,6 +26,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // monitoringGuardKinds are the CR kinds apl-core's Prometheus label-selects.
@@ -100,8 +102,8 @@ func runMonitoringLabelGuard(roots []string) error {
 }
 
 func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelFinding, examined int, err error) {
-	examined, err = walkManifests(roots, func(path string, raw []byte) error {
-		for _, doc := range decodeDocs(string(raw), func(d monitoringDoc) bool { return monitoringGuardKinds[d.Kind] }) {
+	examined, err = guardwalk.Walk(roots, func(path string, raw []byte) error {
+		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d monitoringDoc) bool { return monitoringGuardKinds[d.Kind] }) {
 			if doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
 				findings = append(findings, monitoringLabelFinding{file: path, kind: doc.Kind, name: doc.Metadata.Name})
 			}
@@ -111,6 +113,6 @@ func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelF
 	if err != nil {
 		return nil, examined, err
 	}
-	sortGuardFindings(findings, func(f monitoringLabelFinding) (string, string) { return f.file, f.name })
+	guardwalk.SortFindings(findings, func(f monitoringLabelFinding) (string, string) { return f.file, f.name })
 	return findings, examined, nil
 }

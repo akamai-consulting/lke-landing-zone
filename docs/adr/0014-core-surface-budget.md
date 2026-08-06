@@ -101,8 +101,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > **And again: 46,106** with `guard-docs`, **45,763** with `posture-at-rest`, and
 > **45,229** with `assert-storage`, **44,826** with
 > `reconcile-actions` **44,171** with `teardown`, **43,817** with `template-sustain` and **40,827**
-> with `import-brownfield` and **38,821** with `obj-encryption`. Nine extensions,
-> net −8,361 (17.7%) — now BELOW the
+> with `import-brownfield` and **38,821** with `obj-encryption` and **38,364** with `guard-charts`. Ten extensions,
+> net −8,818 (18.7%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

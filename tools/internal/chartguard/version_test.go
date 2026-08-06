@@ -1,4 +1,4 @@
-package main
+package chartguard
 
 import (
 	"errors"
@@ -52,19 +52,19 @@ func TestClassifyChartBump(t *testing.T) {
 
 func TestChartVersion(t *testing.T) {
 	yaml := "apiVersion: v2\nname: foo\nversion: 0.4.1\nappVersion: \"latest\"\n"
-	if got := chartVersion(yaml); got != "0.4.1" {
-		t.Errorf("chartVersion = %q, want 0.4.1", got)
+	if got := ChartVersion(yaml); got != "0.4.1" {
+		t.Errorf("ChartVersion = %q, want 0.4.1", got)
 	}
 	// appVersion must not be mistaken for version.
-	if got := chartVersion("appVersion: 9.9.9\n"); got != "" {
-		t.Errorf("chartVersion(appVersion only) = %q, want empty", got)
+	if got := ChartVersion("appVersion: 9.9.9\n"); got != "" {
+		t.Errorf("ChartVersion(appVersion only) = %q, want empty", got)
 	}
-	if got := chartVersion("name: x\n"); got != "" {
-		t.Errorf("chartVersion(no version) = %q, want empty", got)
+	if got := ChartVersion("name: x\n"); got != "" {
+		t.Errorf("ChartVersion(no version) = %q, want empty", got)
 	}
 }
 
-// runChartVersionGuard reads the new version from the working tree and the old
+// RunVersionGuard reads the new version from the working tree and the old
 // version from `git show base:...`. Drive it with a temp root for the new files
 // and a stubbed execOutput for git, exercising both the pass and fail exits.
 func TestRunChartVersionGuard(t *testing.T) {
@@ -96,22 +96,22 @@ func TestRunChartVersionGuard(t *testing.T) {
 		return nil, nil
 	}
 
-	withExecOutput(t, stubGit)
+	d := withGit(t, stubGit)
 	// "unbumped" changed without a version bump → the guard must fail.
-	err := runChartVersionGuard("BASE", root)
+	err := RunVersionGuard(d, "BASE", root)
 	if err == nil || !strings.Contains(err.Error(), "unbumped") {
-		t.Fatalf("runChartVersionGuard = %v, want failure naming the unbumped chart", err)
+		t.Fatalf("RunVersionGuard = %v, want failure naming the unbumped chart", err)
 	}
 
 	// Bump it; now both charts are clean → guard passes.
 	writeChart("unbumped", "0.4.1")
-	if err := runChartVersionGuard("BASE", root); err != nil {
-		t.Fatalf("runChartVersionGuard after bump = %v, want nil", err)
+	if err := RunVersionGuard(d, "BASE", root); err != nil {
+		t.Fatalf("RunVersionGuard after bump = %v, want nil", err)
 	}
 
 	// Missing --base is an explicit error.
-	if err := runChartVersionGuard("", root); err == nil {
-		t.Error("runChartVersionGuard(no base) = nil, want error")
+	if err := RunVersionGuard(d, "", root); err == nil {
+		t.Error("RunVersionGuard(d, no base) = nil, want error")
 	}
 }
 
@@ -135,7 +135,7 @@ func TestRunChartVersionGuardFailsOnUnresolvableBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+	d := withGit(t, func(_ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.Contains(joined, "rev-parse"):
@@ -147,7 +147,7 @@ func TestRunChartVersionGuardFailsOnUnresolvableBase(t *testing.T) {
 		return nil, errors.New("fatal: invalid object name")
 	})
 
-	err := runChartVersionGuard("BASE", root)
+	err := RunVersionGuard(d, "BASE", root)
 	if err == nil {
 		t.Fatal("an unresolvable base must FAIL — every chart looks new, so the bump check silently applies to nothing")
 	}
@@ -173,13 +173,13 @@ func TestChartScalarStripsQuotes(t *testing.T) {
 		{"nested not matched", "dependencies:\n  version: 3.3.3\n", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := chartVersion(tt.yaml); got != tt.want {
-				t.Errorf("chartVersion = %q, want %q", got, tt.want)
+			if got := ChartVersion(tt.yaml); got != tt.want {
+				t.Errorf("ChartVersion = %q, want %q", got, tt.want)
 			}
 		})
 	}
-	if got := chartName("name: \"llz-foo\"\nversion: 0.1.0\n"); got != "llz-foo" {
-		t.Errorf("chartName = %q, want llz-foo (quotes stripped, as the pin side does)", got)
+	if got := ChartName("name: \"llz-foo\"\nversion: 0.1.0\n"); got != "llz-foo" {
+		t.Errorf("ChartName = %q, want llz-foo (quotes stripped, as the pin side does)", got)
 	}
 }
 
@@ -217,11 +217,11 @@ func TestRunChartVersionGuardSeesWorkingTree(t *testing.T) {
 		}
 		return nil, nil
 	}
-	withExecOutput(t, stubGit)
+	d := withGit(t, stubGit)
 
-	err := runChartVersionGuard("BASE", root)
+	err := RunVersionGuard(d, "BASE", root)
 	if err == nil || !strings.Contains(err.Error(), "wt-only") {
-		t.Fatalf("runChartVersionGuard = %v, want failure naming the uncommitted chart", err)
+		t.Fatalf("RunVersionGuard = %v, want failure naming the uncommitted chart", err)
 	}
 }
 
@@ -247,9 +247,9 @@ func TestRunChartVersionGuardUntrackedChart(t *testing.T) {
 		}
 		return nil, nil // no committed diff, no tracked-file diff, absent at base
 	}
-	withExecOutput(t, stubGit)
+	d := withGit(t, stubGit)
 
-	if err := runChartVersionGuard("BASE", root); err != nil {
-		t.Fatalf("runChartVersionGuard = %v, want nil (new chart is exempt from the bump rule)", err)
+	if err := RunVersionGuard(d, "BASE", root); err != nil {
+		t.Fatalf("RunVersionGuard = %v, want nil (new chart is exempt from the bump rule)", err)
 	}
 }

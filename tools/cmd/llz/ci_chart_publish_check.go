@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 )
 
 var (
@@ -300,48 +302,16 @@ func extractPublishPins(content string) []publishPin {
 			continue
 		}
 		indent, name := m[1], strings.Trim(m[2], `"'`)
-		repoURL := siblingValue(lines, i, indent, "repoURL")
-		version := siblingValue(lines, i, indent, "targetRevision")
+		repoURL := chartguard.SiblingValue(lines, i, indent, "repoURL")
+		version := chartguard.SiblingValue(lines, i, indent, "targetRevision")
 		if version == "" {
-			version = siblingValue(lines, i, indent, "version")
+			version = chartguard.SiblingValue(lines, i, indent, "version")
 		}
 		if repoURL != "" && version != "" {
 			pins = append(pins, publishPin{RepoURL: repoURL, Chart: name, Version: version, Line: i + 1})
 		}
 	}
 	return pins
-}
-
-// siblingValue returns the value of `<indent>key: <value>` in the contiguous block
-// around idx at exactly the given indentation, scanning both directions and
-// stopping at the first line that dedents below indent.
-func siblingValue(lines []string, idx int, indent, key string) string {
-	want := len(indent)
-	prefix := indent + key + ":"
-	scan := func(step int) string {
-		for j := idx + step; j >= 0 && j < len(lines); j += step {
-			ln := lines[j]
-			if strings.TrimSpace(ln) == "" {
-				continue // blank lines don't break a block
-			}
-			if leadingIndent(ln) < want {
-				return "" // dedented out of the source block
-			}
-			if leadingIndent(ln) == want && strings.HasPrefix(ln, prefix) {
-				return strings.Trim(strings.TrimSpace(strings.TrimPrefix(ln, prefix)), `"'`)
-			}
-		}
-		return ""
-	}
-	if v := scan(-1); v != "" {
-		return v
-	}
-	return scan(1)
-}
-
-// leadingIndent counts the leading spaces/tabs of a line.
-func leadingIndent(s string) int {
-	return len(s) - len(strings.TrimLeft(s, " \t"))
 }
 
 // parseOCIRef splits a chart repoURL + chart name into a registry host and the

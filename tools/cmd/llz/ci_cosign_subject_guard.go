@@ -51,6 +51,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
 // reCosignWorkflowSubject matches a keyless `subject:` whose identity is a
@@ -102,7 +104,7 @@ func runCosignSubjectGuard(root string) error {
 	var refs []cosignSubjectRef
 
 	dirs := platformTreeDirs(root)
-	examined, err := walkManifests(dirs, func(path string, b []byte) error {
+	examined, err := guardwalk.Walk(dirs, func(path string, b []byte) error {
 		found := extractCosignSubjects(string(b))
 		if len(found) == 0 {
 			return nil
