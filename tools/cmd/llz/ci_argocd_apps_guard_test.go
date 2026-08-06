@@ -185,7 +185,7 @@ func TestMissingSyncWave(t *testing.T) {
 }
 
 // TestSyncWaveIsCheckedPerDocument is the regression the fold fixes. The former
-// sync-wave-lint grepped whole FILES: one annotated Application satisfied the
+// sync-wave-lint grepped whole FILES: one annotated Application configreadiness.Satisfied the
 // check for every other Application rendered beside it. Helm routinely emits
 // several Applications into one file, so an un-waved one could ride along
 // invisibly.

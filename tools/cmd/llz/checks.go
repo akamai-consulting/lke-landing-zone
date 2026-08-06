@@ -12,6 +12,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
@@ -326,7 +328,7 @@ func stepVendoredFresh(_ globalOpts) error {
 //
 // Skips outside an instance (the template repo has no spec of its own).
 func stepRenderFresh(g globalOpts) error {
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil // no LandingZone spec — nothing renders here
 	}
@@ -672,7 +674,7 @@ func validateCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if env != "" {
 				// Thin back-compat alias — the readiness scan now lives in doctor.
-				return runEnvReadiness(env)
+				return configreadiness.RunEnvReadiness(env)
 			}
 			return runValidate(gopts)
 		},

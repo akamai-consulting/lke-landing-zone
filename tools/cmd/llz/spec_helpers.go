@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 )
 
 // loadSpec loads the assembled LandingZone spec at the instance root, reporting
@@ -18,7 +19,7 @@ import (
 // — callers fall back to reading the committed tfvars. A non-nil error means a spec
 // IS present but failed to load/parse (the caller should surface it).
 func loadSpec() (lz *clusterspec.LandingZone, present bool, err error) {
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
 		return nil, false, nil

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 )
@@ -222,7 +223,7 @@ func envRoleCmd() *cobra.Command {
 		Short: "print a deployment's OpenBao HA role (active|standby|standalone)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			deps, err := readTopology(tfDir)
 			if err != nil {
 				return err
@@ -243,7 +244,7 @@ func envPeerCmd() *cobra.Command {
 		Short: "print a deployment's HA peer (the other member of its ha_group); errors for standalone",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			deps, err := readTopology(tfDir)
 			if err != nil {
 				return err
@@ -277,7 +278,7 @@ func envResolveCmd() *cobra.Command {
 		Short: "emit role= and peer= GitHub Actions outputs for a deployment (HA role + peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			deps, err := readTopology(tfDir)
 			if err != nil {
 				return err

@@ -15,13 +15,14 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/spf13/cobra"
 )
 
 func promoteDeps() promote.Deps {
 	return promote.Deps{
-		Layout:          instanceLayout,
+		Layout:          instancelayout.Detect,
 		ListDeployments: listDeployments,
 		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
 		// Narrowed to the one field the extension reads. Handing over the whole

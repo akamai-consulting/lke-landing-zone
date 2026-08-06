@@ -277,7 +277,7 @@ func TestCredentialPresenceSurvivesReclassification(t *testing.T) {
 	if n := strings.Count(out, `llz_credential_presence_ok{cred="harbor-password"}`); n != 1 {
 		t.Errorf("got %d presence_ok series for one credential, want 1:\n%s", n, out)
 	}
-	// And the surviving verdict is the CURRENT one: optional is satisfied by an
+	// And the surviving verdict is the CURRENT one: optional is configreadiness.Satisfied by an
 	// absent credential, so nothing alerts.
 	if !strings.Contains(out, `llz_credential_presence_ok{cred="harbor-password"} 1`) {
 		t.Errorf("the latest classification must win:\n%s", out)

@@ -23,6 +23,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -53,7 +54,7 @@ func ciCmd() *cobra.Command {
 			"the thin orchestration over it.",
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
-		ciPreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
+		configreadiness.PreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
 		assertplatform.AplVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now

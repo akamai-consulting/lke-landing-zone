@@ -4,7 +4,7 @@ package main
 // an inferred one.
 //
 // WHY THIS EXISTS. assert-loki's other checks are all observational, and every one
-// of them can be satisfied by a Loki that has never written a byte. #397 is exactly
+// of them can be configreadiness.Satisfied by a Loki that has never written a byte. #397 is exactly
 // that state: Running, Ready, Synced, Healthy, S3-configured, and 403 AccessDenied on
 // every PutObject. Two successive attempts to catch it observationally both passed
 // vacuously on a real cluster — a 60s flush-error scan finds nothing when nothing has

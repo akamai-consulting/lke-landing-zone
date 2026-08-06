@@ -224,7 +224,7 @@ func configMapData(obj map[string]any, key string) string {
 // published series carries a verdict under an immutable label set rather than the
 // raw fact plus a label that says how to read it.
 //
-// `optional` is always satisfied: the Harbor robot pair is published by the
+// `optional` is always configreadiness.Satisfied: the Harbor robot pair is published by the
 // ACTIVE peer's provisioner, so a standby legitimately has neither until it has
 // run, and neither presence nor absence is a finding there.
 func presenceMatchesExpectation(expect string, present bool) bool {

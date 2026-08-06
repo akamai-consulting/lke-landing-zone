@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -53,41 +55,6 @@ type envAddOpts struct {
 	promotionRank    int    // code-promotion pipeline position; 0 = leave example's 0 (not in a pipeline)
 	dryRun           bool
 }
-
-// instanceLayout detects where the TF roots + overlays live and returns the
-// terraform-iac-bootstrap root, the apl-values root, and the prefix to show in
-// operator-facing paths. A template-repo checkout keeps them under
-// instance-template/; a rendered instance keeps them at the repo root.
-func instanceLayout() (tfDir, aplDir, relPrefix string) {
-	if fi, err := os.Stat(filepath.Join("instance-template", "terraform-iac-bootstrap")); err == nil && fi.IsDir() {
-		return filepath.Join("instance-template", "terraform-iac-bootstrap"),
-			filepath.Join("instance-template", "apl-values"), "instance-template/"
-	}
-	return "terraform-iac-bootstrap", "apl-values", ""
-}
-
-var tfRoots = []string{"cluster", "object-storage", "databases"}
-
-// optionalTFRoots are roots an instance may legitimately never apply. `llz render`
-// still writes a tfvars stub for them (render is per-root, not per-opt-in), but a
-// MISSING one is not a defect — so readiness must not report it as such.
-//
-// This matters for legacy (pre-spec) instances: they never run `llz render`, their
-// hand-authored <env>.tfvars are the tracked source of truth, and readiness does
-// flag a genuinely missing one for them. Without this set, adding `databases` to
-// tfRoots would have every such instance reporting a blocking "missing
-// databases/<env>.tfvars — run llz env add" for a database they never asked for.
-var optionalTFRoots = map[string]bool{"databases": true}
-
-// optionalTFVars reports whether path is a tfvars belonging to an optional root.
-func optionalTFVars(path string) bool {
-	return optionalTFRoots[filepath.Base(filepath.Dir(path))]
-}
-
-// validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
-// id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
-// spec validator reuses it.
-func validateOBJCluster(v string) error { return validate.OBJClusterID(v) }
 
 func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// Every path below is CWD-relative, so the wrong directory yields a complete
@@ -145,7 +112,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 	dryRun := o.dryRun || g.dryRun
 
-	tfDir, aplDir, relPrefix := instanceLayout()
+	tfDir, aplDir, relPrefix := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
 	overlayDst := filepath.Join(aplDir, name)
 	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
@@ -336,13 +303,13 @@ func printNextCommand(name string) {
 // This is the SOLE reporter of outstanding placeholders — see the note in
 // printEnvAddNextSteps for why.
 func printPlaceholderChecklist(aplDir, env string) {
-	var todo []finding
-	for _, f := range overlayScanFiles(filepath.Join(aplDir, env)) {
+	var todo []configreadiness.Finding
+	for _, f := range configreadiness.OverlayScanFiles(filepath.Join(aplDir, env)) {
 		// false: `env add` scans the freshly-rendered OVERLAY, never tfvars, so the
 		// ACL branch has nothing to say here — doctor owns that check.
-		fs, _ := scanForSentinels(f, false)
+		fs, _ := configreadiness.ScanForSentinels(f, false)
 		for _, fd := range fs {
-			if fd.blocking {
+			if fd.Blocking {
 				todo = append(todo, fd)
 			}
 		}
@@ -356,11 +323,11 @@ func printPlaceholderChecklist(aplDir, env string) {
 	fmt.Printf("\n%s %s\n", color.Yellow(fmt.Sprintf("Placeholders still to fill (%d in %d file(s))", len(groups), countFiles(todo))),
 		color.Dim("— then `llz doctor --env "+env+"`:"))
 	for _, g := range groups {
-		where := color.Cyan(g.first.loc())
+		where := color.Cyan(g.first.Loc())
 		if g.files > 1 {
-			where = color.Cyan(g.first.loc()) + color.Dim(fmt.Sprintf(" (+%d more file(s))", g.files-1))
+			where = color.Cyan(g.first.Loc()) + color.Dim(fmt.Sprintf(" (+%d more file(s))", g.files-1))
 		}
-		fmt.Printf("  %s %s  %s %s\n", color.Dim("•"), where, g.first.token, color.Dim("— "+g.first.hint))
+		fmt.Printf("  %s %s  %s %s\n", color.Dim("•"), where, g.first.Token, color.Dim("— "+g.first.Hint))
 	}
 }
 
@@ -368,7 +335,7 @@ func printPlaceholderChecklist(aplDir, env string) {
 // carry it — not how many times it occurs, which is a different number whenever
 // one file mentions the placeholder twice (instance-custom.yaml does).
 type findingGroup struct {
-	first finding
+	first configreadiness.Finding
 	files int
 }
 
@@ -380,16 +347,16 @@ type findingGroup struct {
 // nine identical lines under the heading "edit these" told the operator to do
 // the exact thing the hint tells them not to. One line per fix, with the file
 // count, makes the size of the job honest.
-func groupFindings(in []finding) []findingGroup {
+func groupFindings(in []configreadiness.Finding) []findingGroup {
 	var out []findingGroup
 	idx := map[string]int{}
 	seen := map[string]bool{} // group key + file — so a repeat in one file adds nothing
 	for _, f := range in {
-		key := f.token + "\x00" + f.hint
-		if seen[key+"\x00"+f.file] {
+		key := f.Token + "\x00" + f.Hint
+		if seen[key+"\x00"+f.File] {
 			continue
 		}
-		seen[key+"\x00"+f.file] = true
+		seen[key+"\x00"+f.File] = true
 		if i, ok := idx[key]; ok {
 			out[i].files++
 			continue
@@ -402,10 +369,10 @@ func groupFindings(in []finding) []findingGroup {
 
 // countFiles is the number of distinct files carrying any finding — what the
 // summary line claims to print.
-func countFiles(in []finding) int {
+func countFiles(in []configreadiness.Finding) int {
 	seen := map[string]bool{}
 	for _, f := range in {
-		seen[f.file] = true
+		seen[f.File] = true
 	}
 	return len(seen)
 }
@@ -437,12 +404,4 @@ func quote(s string) string { return `"` + s + `"` }
 func setHCLField(content, key, value string) string {
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=.*$`)
 	return re.ReplaceAllLiteralString(content, key+" = "+value)
-}
-
-func tfvarsPaths(tfDir, env string) []string {
-	var out []string
-	for _, root := range tfRoots {
-		out = append(out, filepath.Join(tfDir, root, env+".tfvars"))
-	}
-	return out
 }

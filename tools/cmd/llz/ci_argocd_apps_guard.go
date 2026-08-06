@@ -126,7 +126,7 @@ func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 // This absorbs the former `sync-wave-lint` Makefile target, which was FILE
 // scoped: it grepped the whole file for `^kind: (Application|AppProject)` and
 // then for the sync-wave string anywhere in that same file. Helm renders many
-// Applications per output file, so ONE annotated Application satisfied the check
+// Applications per output file, so ONE annotated Application configreadiness.Satisfied the check
 // for every other Application beside it. It also matched the annotation name in a
 // comment, never checked the value parsed as an integer, and never required it to
 // sit under metadata.annotations. Decoding per document fixes all four.

@@ -1,8 +1,8 @@
-package main
+package configreadiness
 
 // Shared model for "what does an e2e-ready instance need, and what's already
 // there?" — used by both `llz doctor` (report) and `llz tokens` (skip what's
-// satisfied). GitHub exposes variable VALUES but only secret NAMES, so we can
+// Satisfied). GitHub exposes variable VALUES but only secret NAMES, so we can
 // prepopulate vars.env with real values and, for secrets, only know presence.
 
 import (
@@ -16,7 +16,7 @@ import (
 )
 
 // requirement is one var/secret an e2e instance needs.
-type requirement struct {
+type Requirement struct {
 	Name     string
 	Secret   bool   // secret (value not readable) vs variable (value readable)
 	EnvScope bool   // infra-<env> environment vs repo-level
@@ -25,10 +25,10 @@ type requirement struct {
 	How      string // one-line: how the wizard provides it
 }
 
-// e2eRequirements is the single source of truth. admin adds the template-repo
+// E2ERequirements is the single source of truth. admin adds the template-repo
 // e2e-harness entries.
-func e2eRequirements(admin bool) []requirement {
-	reqs := []requirement{
+func E2ERequirements(admin bool) []Requirement {
+	reqs := []Requirement{
 		{"LINODE_API_TOKEN", true, true, true, false, "Linode PAT (also creates the state bucket)"},
 		{"TF_STATE_ACCESS_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
 		{"TF_STATE_SECRET_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
@@ -58,21 +58,21 @@ func e2eRequirements(admin bool) []requirement {
 	}
 	if admin {
 		reqs = append(reqs,
-			requirement{"E2E_INSTANCE_REPO", false, false, true, true, "the example repo"},
-			requirement{"E2E_LINODE_REGION", false, false, true, true, "region of the chosen cluster"},
-			requirement{"E2E_OBJ_CLUSTER", false, false, true, true, "the chosen OBJ cluster"},
-			requirement{"E2E_DISPATCH_TOKEN", true, false, true, true, "classic PAT scopes repo+workflow (Contents+Actions:write + workflow files) on the example repo"},
+			Requirement{"E2E_INSTANCE_REPO", false, false, true, true, "the example repo"},
+			Requirement{"E2E_LINODE_REGION", false, false, true, true, "region of the chosen cluster"},
+			Requirement{"E2E_OBJ_CLUSTER", false, false, true, true, "the chosen OBJ cluster"},
+			Requirement{"E2E_DISPATCH_TOKEN", true, false, true, true, "classic PAT scopes repo+workflow (Contents+Actions:write + workflow files) on the example repo"},
 		)
 	}
 	return reqs
 }
 
-// secretIsEnvScoped reports whether a secret belongs in the infra-<env>
+// SecretIsEnvScoped reports whether a secret belongs in the infra-<env>
 // environment rather than at repo level. Unknown names default to env-scoped,
 // which is what every instance secret was before the requirement table carried a
 // repo-level one.
-func secretIsEnvScoped(name string) bool {
-	for _, r := range e2eRequirements(true) {
+func SecretIsEnvScoped(name string) bool {
+	for _, r := range E2ERequirements(true) {
 		if r.Name == name && r.Secret {
 			return r.EnvScope
 		}
@@ -82,7 +82,7 @@ func secretIsEnvScoped(name string) bool {
 
 // liveState is the configured-on-GitHub state of one repo. Variable values are
 // captured; secrets are presence-only. Env maps cover the infra-<env> scope.
-type liveState struct {
+type LiveState struct {
 	repoVars    map[string]string
 	repoSecrets map[string]bool
 	envVars     map[string]string
@@ -91,7 +91,7 @@ type liveState struct {
 
 // has reports whether name is configured at all (env scope falls back to
 // repo-level, mirroring GitHub's resolution for environment jobs).
-func (s liveState) has(name string, secret bool) bool {
+func (s LiveState) Has(name string, secret bool) bool {
 	if secret {
 		return s.envSecrets[name] || s.repoSecrets[name]
 	}
@@ -100,32 +100,53 @@ func (s liveState) has(name string, secret bool) bool {
 	return okEnv || okRepo
 }
 
+// NewLiveState builds a LiveState from its four maps.
+//
+// The fields stay unexported: a caller that can see them can also ask questions
+// the type has no answer for, and the env→repo fallback in Has/Value is the whole
+// point of the type. But `llz doctor` legitimately needs to CONSTRUCT one — it
+// renders the readiness table from a state it fetched itself — so a constructor is
+// the narrow way to allow that without opening the maps.
+func NewLiveState(repoVars map[string]string, repoSecrets map[string]bool,
+	envVars map[string]string, envSecrets map[string]bool) LiveState {
+	return LiveState{repoVars: repoVars, repoSecrets: repoSecrets, envVars: envVars, envSecrets: envSecrets}
+}
+
+// HasRepoSecret reports whether name is set as a REPO-level secret specifically.
+//
+// Distinct from Has, which falls back env→repo. The wizard needs the narrow
+// question for E2E_DISPATCH_TOKEN: it is a repo-level secret by design, and an
+// env-scoped one of the same name would not serve the dispatch it gates. Added as
+// an accessor rather than by exporting repoSecrets — a caller that can see the map
+// can also ask questions the type has no answer for.
+func (s LiveState) HasRepoSecret(name string) bool { return s.repoSecrets[name] }
+
 // value returns a variable's configured value (env scope wins), "" if unset.
-func (s liveState) value(name string) string {
+func (s LiveState) Value(name string) string {
 	if v, ok := s.envVars[name]; ok {
 		return v
 	}
 	return s.repoVars[name]
 }
 
-// fetchLiveState queries repo + infra-<env> via gh. Missing env / 404s yield
+// FetchLiveState queries repo + infra-<env> via gh. Missing env / 404s yield
 // empty maps rather than errors (a fresh repo has no environment yet).
-func fetchLiveState(repo, env string) liveState {
-	s := liveState{
+func FetchLiveState(repo, env string) LiveState {
+	s := LiveState{
 		repoVars: map[string]string{}, repoSecrets: map[string]bool{},
 		envVars: map[string]string{}, envSecrets: map[string]bool{},
 	}
 	for _, v := range ghVars("repos/" + repo + "/actions/variables") {
 		s.repoVars[v.Name] = v.Value
 	}
-	for _, n := range ghSecretNames("repos/" + repo + "/actions/secrets") {
+	for _, n := range GHSecretNames("repos/" + repo + "/actions/secrets") {
 		s.repoSecrets[n] = true
 	}
 	if env != "" {
 		for _, v := range ghVars("repos/" + repo + "/environments/infra-" + env + "/variables") {
 			s.envVars[v.Name] = v.Value
 		}
-		for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+		for _, n := range GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 			s.envSecrets[n] = true
 		}
 	}
@@ -145,7 +166,7 @@ func ghVars(path string) []ghVar {
 	return out.Variables
 }
 
-func ghSecretNames(path string) []string {
+func GHSecretNames(path string) []string {
 	var out struct {
 		Secrets []struct {
 			Name string `json:"name"`
@@ -162,16 +183,16 @@ func ghSecretNames(path string) []string {
 // ghAPI runs `gh api <path>` and returns stdout (nil on error — callers treat a
 // failed/absent endpoint as "nothing configured").
 func ghAPI(path string) []byte {
-	out, err := execOutput("gh", "api", path)
+	out, err := deps.Exec("gh", "api", path)
 	if err != nil {
 		return nil
 	}
 	return out
 }
 
-// satisfied reports whether req is met by either the local .llz/*.env or the
+// Satisfied reports whether req is met by either the local .llz/*.env or the
 // live repo state — the same predicate doctor reports and the wizard skips on.
-func satisfied(req requirement, secrets, vars map[string]string, st liveState) bool {
+func Satisfied(req Requirement, secrets, vars map[string]string, st LiveState) bool {
 	if req.Secret {
 		if _, ok := secrets[req.Name]; ok {
 			return true
@@ -181,13 +202,13 @@ func satisfied(req requirement, secrets, vars map[string]string, st liveState) b
 			return true
 		}
 	}
-	return st.has(req.Name, req.Secret)
+	return st.Has(req.Name, req.Secret)
 }
 
-// prepopulateVars seeds vars.env with variable VALUES already on the repo
+// PrepopulateVars seeds vars.env with variable VALUES already on the repo
 // (instance + template) that aren't set locally — so the wizard reuses them
 // instead of recomputing/reprompting. Returns how many it filled in.
-func prepopulateVars(vars map[string]string, reqs []requirement, instance, template liveState) int {
+func PrepopulateVars(vars map[string]string, reqs []Requirement, instance, template LiveState) int {
 	n := 0
 	for _, r := range reqs {
 		if r.Secret {
@@ -200,7 +221,7 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 		if r.Template {
 			st = template
 		}
-		if v := st.value(r.Name); v != "" {
+		if v := st.Value(r.Name); v != "" {
 			vars[r.Name] = v
 			n++
 		}
@@ -208,17 +229,17 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 	return n
 }
 
-// reportReadiness prints the e2e-readiness table (doctor + the wizard's plan)
+// ReportReadiness prints the e2e-readiness table (doctor + the wizard's plan)
 // and returns the names of REQUIRED items still missing.
-// reportReadiness prints the plan and returns the REQUIRED items that are not yet
+// ReportReadiness prints the plan and returns the REQUIRED items that are not yet
 // configured ON GITHUB. Status reflects GitHub reality, not the local .llz cache:
 // a value present only in the cache shows "cached → will push" and still counts
 // as not-done, so the wizard pushes it instead of declaring "nothing to do".
-// (satisfied()/have() stay cache-aware so we don't re-prompt for cached values.)
+// (Satisfied()/have() stay cache-aware so we don't re-prompt for cached values.)
 // The `validity` map (name → probe verdict, from probeTokenValidities) drives the
 // VALID column; pass nil to omit active probing (the column then reads "unprobed"
 // for every credential).
-func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState, validity map[string]tokeninv.TokenValidity) []string {
+func ReportReadiness(reqs []Requirement, secrets, vars map[string]string, instance, template LiveState, validity map[string]tokeninv.TokenValidity) []string {
 	var missing []string
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
 	for _, r := range reqs {
@@ -226,7 +247,7 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Template {
 			st = template
 		}
-		onGitHub := st.has(r.Name, r.Secret)
+		onGitHub := st.Has(r.Name, r.Secret)
 		_, inCache := vars[r.Name]
 		if r.Secret {
 			_, inCache = secrets[r.Name]
@@ -270,7 +291,7 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 // validCell renders a requirement's VALID column: a short colored verdict. Long
 // detail goes in the per-problem notes printed after the table. Every credential
 // (kind != none) gets a verdict — never a bare "n/a".
-func validCell(r requirement, onGitHub bool, validity map[string]tokeninv.TokenValidity) (string, func(string) string) {
+func validCell(r Requirement, onGitHub bool, validity map[string]tokeninv.TokenValidity) (string, func(string) string) {
 	if tokeninv.KindFor(r.Name) == tokeninv.KindNone {
 		return "", color.Dim // not a credential — blank column
 	}
@@ -316,8 +337,8 @@ func padColor(plain string, paint func(string) string, width int) string {
 	return paint(plain)
 }
 
-// loadEnvFiles reads the gathered .llz/*.env (empty maps if absent).
-func loadEnvFiles() (secrets, vars map[string]string) {
+// LoadEnvFiles reads the gathered .llz/*.env (empty maps if absent).
+func LoadEnvFiles() (secrets, vars map[string]string) {
 	secrets = readEnvFile(".llz/secrets.env")
 	vars = readEnvFile(".llz/vars.env")
 	if secrets == nil {

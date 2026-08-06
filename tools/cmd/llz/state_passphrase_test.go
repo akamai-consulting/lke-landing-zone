@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 )
 
 // withStubbedInfraEnvs pins the environment listing so a test exercising the
@@ -168,7 +170,7 @@ func TestEnsureStatePassphraseHonoursAnEnvScopedCopy(t *testing.T) {
 	}
 }
 
-// The one that matters. ghAPI/ghSecretNames fold every failure into "not
+// The one that matters. ghAPI/GHSecretNames fold every failure into "not
 // configured", which for this secret would mean generate-and-clobber: overwriting
 // a live passphrase makes every existing state file permanently unreadable. An
 // unanswerable lookup must stop the run, not proceed on an assumption.
@@ -304,7 +306,7 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 	// of every deployment), and GitHub resolves a repo-level secret inside an
 	// infra-<env> job. An env-scoped copy would let a second deployment be
 	// provisioned with a different passphrase.
-	if secretIsEnvScoped(statePassphraseSecret) {
+	if configreadiness.SecretIsEnvScoped(statePassphraseSecret) {
 		t.Error("the state-encryption passphrase must be repo-level")
 	}
 	// Everything else is unchanged — this generalization must not move any
@@ -314,12 +316,12 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 		"OPENBAO_SECRETS_WRITE_TOKEN", "APL_VALUES_REPO_TOKEN", "LINODE_DNS_TOKEN",
 		"GHCR_READ_TOKEN",
 	} {
-		if !secretIsEnvScoped(n) {
+		if !configreadiness.SecretIsEnvScoped(n) {
 			t.Errorf("%s must stay env-scoped (infra-<env>)", n)
 		}
 	}
 	// An unknown name keeps the old default rather than silently going repo-level.
-	if !secretIsEnvScoped("SOMETHING_NOT_IN_THE_TABLE") {
+	if !configreadiness.SecretIsEnvScoped("SOMETHING_NOT_IN_THE_TABLE") {
 		t.Error("unknown secrets must default to env-scoped")
 	}
 }
@@ -329,7 +331,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 	// the table, so `llz doctor` reported a color.Green instance whose first build could
 	// not init.
 	var found bool
-	for _, r := range e2eRequirements(false) {
+	for _, r := range configreadiness.E2ERequirements(false) {
 		if r.Name != statePassphraseSecret {
 			continue
 		}
@@ -342,7 +344,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("%s missing from e2eRequirements — doctor cannot report it", statePassphraseSecret)
+		t.Fatalf("%s missing from configreadiness.E2ERequirements — doctor cannot report it", statePassphraseSecret)
 	}
 }
 

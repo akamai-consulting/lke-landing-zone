@@ -6,7 +6,7 @@ package main
 // fields with strings.Contains, and everything they do not name can change
 // silently. TestRenderEnvTfvars checks five substrings across two files; one
 // render of one environment emits 27 files. Substring matching is also weaker
-// than it reads — `strings.Contains(out, "node_count = 5")` is satisfied by
+// than it reads — `strings.Contains(out, "node_count = 5")` is configreadiness.Satisfied by
 // "node_count = 50", so the existing assertion passes on a ten-times-too-large
 // cluster.
 //

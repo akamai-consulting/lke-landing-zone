@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/spf13/cobra"
 )
@@ -81,7 +82,7 @@ func listDeployments(tfDir string) ([]string, error) {
 }
 
 func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	var names []string
 	switch {
 	case ordered:

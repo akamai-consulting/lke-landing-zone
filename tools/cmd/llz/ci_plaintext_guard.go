@@ -88,7 +88,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"pipeline was BROKEN as well as plaintext. Repaired to `monitoring`, where apl-core " +
 			"actually runs Loki — confirmed by apl-core's own otel-operator shipping to " +
 			"http://loki-gateway.monitoring/otlp. The TLS half of ADR 0010's instruction (\"whoever " +
-			"repairs the URL must give it TLS at the same time\") is NOT satisfied and cannot be from " +
+			"repairs the URL must give it TLS at the same time\") is NOT configreadiness.Satisfied and cannot be from " +
 			"here: the gateway is nginx serving plain HTTP with no TLS material from apl-core, so " +
 			"https:// would connect to nothing. This closes when the hop is meshed — i.e. when " +
 			"llz-openbao and monitoring are both enrolled in ambient",

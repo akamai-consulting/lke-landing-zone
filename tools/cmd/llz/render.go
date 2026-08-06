@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/spf13/cobra"
 
@@ -84,7 +85,7 @@ func envVPCCmd() *cobra.Command {
 				fmt.Println(e.Cluster.Network.VPC)
 				return nil
 			}
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			p := filepath.Join(tfDir, "cluster", env+".tfvars")
 			b, err := os.ReadFile(p)
 			if err != nil {
@@ -136,7 +137,7 @@ func wouldRenderPath(prefix, path string) {
 }
 
 func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
-	tfDir, aplDir, relPrefix := instanceLayout()
+	tfDir, aplDir, relPrefix := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
 		return fmt.Errorf("no LandingZone spec (%s) found — `llz render` needs a spec", clusterspec.LandingZoneFile)
@@ -288,7 +289,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			"object-storage": clusterspec.ObjectStorageTFVars(lz.ObjLabelPrefix(), name, e.Cluster),
 			"databases":      clusterspec.DatabasesTFVars(lz.ObjLabelPrefix(), name, e.Cluster),
 		}
-		for _, root := range tfRoots {
+		for _, root := range instancelayout.Roots {
 			base, err := tfrootExample(root)
 			if err != nil {
 				return nil, fmt.Errorf("render %s: read embedded %s tfvars.example: %w", name, root, err)
@@ -457,7 +458,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
 	// carried by LLZ on managed, but that is now proven harmless rather than a
 	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
-	// has been satisfied — the full observability stack (grafana, prometheus,
+	// has been configreadiness.Satisfied — the full observability stack (grafana, prometheus,
 	// loki→S3) converges Synced+Healthy on a managed cluster without them, because
 	// grafana-admin is apl-core's own and the otel ingress bearer is optional. So
 	// the previous ::warning:: here is retired; see docs/adr/0005-managed-app-platform.md.

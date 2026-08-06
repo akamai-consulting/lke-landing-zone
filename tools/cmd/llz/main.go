@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -390,7 +391,7 @@ func envPipelineCmd() *cobra.Command {
 			"ranked deployments to form a pipeline; runs only in a rendered instance.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			tfDir, _, relPrefix := instanceLayout()
+			tfDir, _, relPrefix := instancelayout.Detect()
 			changed, err := syncPromoteWorkflow(tfDir, relPrefix, check)
 			if err != nil {
 				return err

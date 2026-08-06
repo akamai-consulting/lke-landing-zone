@@ -8,7 +8,7 @@ package main
 //
 // It is idempotent: it first reads what's already configured (live repo +
 // .llz/*.env), prepopulates variable values, prints the readiness plan (the same
-// one `llz doctor` shows), and SKIPS anything already satisfied.
+// one `llz doctor` shows), and SKIPS anything already configreadiness.Satisfied.
 //
 // Default (adopter) mode targets one instance repo. --admin (maintainer) mode
 // additionally wires the template repo's e2e harness and defaults to the example
@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -64,17 +65,17 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if err := os.MkdirAll(".llz", 0o700); err != nil {
 		return err
 	}
-	secrets, vars := loadEnvFiles()
+	secrets, vars := configreadiness.LoadEnvFiles()
 
 	// Discover existing config (instance + template), pull variable VALUES into
 	// vars.env, then print the readiness plan (same as `llz doctor`).
-	reqs := e2eRequirements(admin)
-	instSt := fetchLiveState(instanceRepo, deployEnv)
-	var tmplSt liveState
+	reqs := configreadiness.E2ERequirements(admin)
+	instSt := configreadiness.FetchLiveState(instanceRepo, deployEnv)
+	var tmplSt configreadiness.LiveState
 	if admin {
-		tmplSt = fetchLiveState(templateRepo(), "")
+		tmplSt = configreadiness.FetchLiveState(templateRepo(), "")
 	}
-	if n := prepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
+	if n := configreadiness.PrepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
 	// PRESENCE isn't CORRECTNESS either, for the two variables llz derives rather
@@ -88,7 +89,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// A fresh instance costs nothing here — staleCIImageVars returns before its
 	// network round-trips when neither variable is recorded yet.
 	repin := staleCIImageVars(pinnedTemplateRef(), func(k string) string {
-		return firstNonEmpty(vars[k], instSt.value(k))
+		return firstNonEmpty(vars[k], instSt.Value(k))
 	})
 	for _, s := range repin {
 		fmt.Printf("%s %s names an older template commit — re-pinning: %s → %s\n",
@@ -98,9 +99,9 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// Presence isn't validity: actively probe every gathered/cached credential so
 	// an expired/revoked/mistyped token surfaces in the VALID column (with "rotate
 	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
-	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
+	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalidN := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if invalidN > 0 {
 		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
@@ -127,9 +128,9 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		return err
 	}
 
-	// have(name) — already satisfied (env file or live instance repo) → skip.
+	// have(name) — already configreadiness.Satisfied (env file or live instance repo) → skip.
 	have := func(name string, secret bool) bool {
-		return satisfied(requirement{Name: name, Secret: secret}, secrets, vars, instSt)
+		return configreadiness.Satisfied(configreadiness.Requirement{Name: name, Secret: secret}, secrets, vars, instSt)
 	}
 	in := bufio.NewScanner(os.Stdin)
 
@@ -240,7 +241,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// Gated on actually having something to compute. computeCIImageVars makes up to
 	// five network requests and can print a warning about a fallback, and this
 	// command's headline property is that a re-run "SKIPS anything already
-	// satisfied" — so doing that work for two variables it is not going to touch
+	// configreadiness.Satisfied" — so doing that work for two variables it is not going to touch
 	// both slows the idempotent path and, worse, warns that TF_IMAGE/KUBE_IMAGE are
 	// unpinned when they are already set to something the operator chose.
 	needTF, needKube := !have("TF_IMAGE", false), !have("KUBE_IMAGE", false)
@@ -359,19 +360,19 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if err := requireInstanceRepo(instanceRepo); err != nil {
 		return err
 	}
-	secrets, vars := loadEnvFiles()
-	reqs := e2eRequirements(admin)
-	instSt := fetchLiveState(instanceRepo, env)
-	var tmplSt liveState
+	secrets, vars := configreadiness.LoadEnvFiles()
+	reqs := configreadiness.E2ERequirements(admin)
+	instSt := configreadiness.FetchLiveState(instanceRepo, env)
+	var tmplSt configreadiness.LiveState
 	if admin {
-		tmplSt = fetchLiveState(templateRepo(), "")
+		tmplSt = configreadiness.FetchLiveState(templateRepo(), "")
 	}
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
 	// Actively probe validity, not just presence — a set-but-dead token is the
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
-	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
+	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if len(missing) > 0 {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
@@ -582,7 +583,7 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 // pushToRepo writes gathered secrets (infra-<env>) + variables (repo-level) into
 // instanceRepo. Skips variables whose value already matches the repo. Gated by
 // --yes; secret values pipe via stdin.
-func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string, st liveState) error {
+func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string, st configreadiness.LiveState) error {
 	fmt.Printf("\n%s %s\n", color.Bold("Configure"), repo)
 	type item struct {
 		argv []string
@@ -597,13 +598,13 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	// env-scoped default.
 	for _, k := range sortedKeys(secrets) {
 		argv := []string{"gh", "secret", "set", k, "--repo", repo}
-		if secretIsEnvScoped(k) {
+		if configreadiness.SecretIsEnvScoped(k) {
 			argv = append(argv, "--env", "infra-"+env)
 		}
 		items = append(items, item{argv, secrets[k]})
 	}
 	for _, k := range sortedKeys(vars) {
-		if st.value(k) == vars[k] {
+		if st.Value(k) == vars[k] {
 			continue // already set to this value
 		}
 		items = append(items, item{[]string{"gh", "variable", "set", k, "--repo", repo, "--body", vars[k]}, ""})
@@ -649,7 +650,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 
 // configureTemplateHarness sets the template repo's e2e vars + E2E_DISPATCH_TOKEN
 // (skipping anything already set).
-func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st liveState) error {
+func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st configreadiness.LiveState) error {
 	tr := templateRepo()
 	fmt.Printf("\n%s e2e harness on %s\n", color.Bold("[admin]"), tr)
 	want := map[string]string{
@@ -659,7 +660,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 	}
 	var items [][]string
 	for _, k := range sortedKeys(want) {
-		if want[k] == "" || st.value(k) == want[k] {
+		if want[k] == "" || st.Value(k) == want[k] {
 			continue
 		}
 		items = append(items, []string{"gh", "variable", "set", k, "--repo", tr, "--body", want[k]})
@@ -670,7 +671,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 
 	var dispArgv []string
 	var dispatch string
-	if !st.repoSecrets["E2E_DISPATCH_TOKEN"] {
+	if !st.HasRepoSecret("E2E_DISPATCH_TOKEN") {
 		owner := instanceRepo
 		if i := strings.IndexByte(instanceRepo, '/'); i > 0 {
 			owner = instanceRepo[:i]

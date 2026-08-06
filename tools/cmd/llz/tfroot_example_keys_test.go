@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 )
 
 // setHCLField rewrites EVERY matching `^<key> =` line, not just the first. That is
@@ -14,7 +16,7 @@ import (
 // files where a duplicate is easy to introduce (the databases example alone carries
 // a 30-line commented block). Assert it rather than trusting it.
 func TestTfrootExamples_NoDuplicateTopLevelKeys(t *testing.T) {
-	for _, root := range tfRoots {
+	for _, root := range instancelayout.Roots {
 		base, err := tfrootExample(root)
 		if err != nil {
 			t.Errorf("%s: %v", root, err)

@@ -1,4 +1,4 @@
-package main
+package configreadiness
 
 // ci_preflight.go implements `llz ci preflight` — the native port of
 // preflight-quota.sh: a read-only account-capacity / orphan scan run BEFORE a
@@ -37,7 +37,7 @@ type preflightOpts struct {
 	vcpuLimit       int
 }
 
-func ciPreflightCmd() *cobra.Command {
+func PreflightCmd() *cobra.Command {
 	var o preflightOpts
 	c := &cobra.Command{
 		Use:   "preflight",
@@ -68,7 +68,7 @@ func ciPreflightCmd() *cobra.Command {
 }
 
 func runCIPreflight(o preflightOpts) error {
-	token, err := ciToken()
+	token, err := deps.CloudToken()
 	if err != nil {
 		return err
 	}

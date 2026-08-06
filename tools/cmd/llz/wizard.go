@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -450,7 +452,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// gate an operator runs FIRST — surfacing it here means they meet a reserved-name
 	// mistake before a terraform op trips over it. See custom_layout.go.
 	fmt.Println("\n" + color.Bold("Custom resources:"))
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	customDir := filepath.Join(filepath.Dir(tfDir), clusterspec.CustomRoot)
 	if err := checkCustomLayout(customDir); err != nil {
 		report(clusterspec.CustomRoot+" layout", false)
@@ -499,9 +501,9 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// Folding it in makes doctor the one readiness gate. Run it whenever the env was
 	// asked for explicitly, or a scaffold for the default env already exists — so a
 	// bare `llz doctor` stays quiet when no deployment has been scaffolded.
-	if env != "" && (envExplicit || scaffoldExists(env)) {
+	if env != "" && (envExplicit || configreadiness.ScaffoldExists(env)) {
 		fmt.Println()
-		if err := runEnvReadiness(env); err != nil {
+		if err := configreadiness.RunEnvReadiness(env); err != nil {
 			errs = append(errs, err)
 		}
 	}

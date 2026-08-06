@@ -445,7 +445,7 @@ func TestComputeAndReportImageVars(t *testing.T) {
 	}
 
 	// Writes ONLY what was asked for. An operator's existing TF_IMAGE is theirs, and
-	// overwriting it would break this command's "skips anything already satisfied"
+	// overwriting it would break this command's "skips anything already configreadiness.Satisfied"
 	// contract in the one place it silently matters.
 	t.Run("fills only the requested variables", func(t *testing.T) {
 		vars := setup(t)

@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -91,7 +92,7 @@ func resolveOBJCluster(objCluster, region string) (string, string, error) {
 	ids, ok := objClustersInRegion(region)
 
 	if objCluster != "" {
-		if err := validateOBJCluster(objCluster); err != nil {
+		if err := instancelayout.ValidateOBJCluster(objCluster); err != nil {
 			return "", "", fmt.Errorf("--obj-cluster: %w", err)
 		}
 		if !ok || len(ids) == 0 {

@@ -107,7 +107,7 @@ func repoRootForTLSTest(t *testing.T) string {
 }
 
 // listsResource reports whether a kustomization declares `name` as a list entry,
-// ignoring comment lines. A bare strings.Contains would be satisfied by a comment
+// ignoring comment lines. A bare strings.Contains would be configreadiness.Satisfied by a comment
 // that merely mentions the file, which is exactly how the first version of this
 // guard stayed color.Green after the resource entry was deleted.
 func listsResource(kustomization, name string) bool {

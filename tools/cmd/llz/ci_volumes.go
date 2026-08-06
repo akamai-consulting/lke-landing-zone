@@ -77,7 +77,7 @@ func ciAssertVolumeEncryptionCmd() *cobra.Command {
 			"get a bounded wait before failing. Encryption never does — it cannot change.\n" +
 			"\n" +
 			"Checks the Linode API rather than the PVC's storageClassName on purpose: the\n" +
-			"class name is a proxy for encryption, and it was a satisfied proxy the whole\n" +
+			"class name is a proxy for encryption, and it was a configreadiness.Satisfied proxy the whole\n" +
 			"time a managed cluster was provisioning unencrypted Volumes. `encryption` on\n" +
 			"the Volume itself is the fact.\n" +
 			"\n" +

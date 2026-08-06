@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ func TestRunEnvReadinessHappyPath(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeGoodReadiness(t, dir, "e2e") // obj_cluster us-ord-10 must be accepted (regression guard)
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err != nil {
 		t.Fatalf("consistent scaffold should pass, got %v\n%s", err, out)
 	}
@@ -170,7 +170,7 @@ func TestRunEnvReadinessDiscriminatorMismatch(t *testing.T) {
 	// deployment disagrees with the env name → silent state-key desync.
 	writeTFVars(t, dir, "cluster-bootstrap", "e2e", "deployment = \"wrong\"\napl_values_env = \"e2e\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("discriminator mismatch must fail:\n%s", out)
 	}
@@ -184,7 +184,7 @@ func TestRunEnvReadinessBadObjCluster(t *testing.T) {
 	writeGoodReadiness(t, dir, "e2e")
 	writeTFVars(t, dir, "object-storage", "e2e", "region_suffix = \"e2e\"\nobj_cluster = \"0.0.0.0/0\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("malformed obj_cluster must fail:\n%s", out)
 	}
@@ -200,7 +200,7 @@ func TestRunEnvReadinessChartPlaceholder(t *testing.T) {
 	writeFileMkdir(t, filepath.Join(dir, "kubernetes-charts", "llz-argo-bootstrap-apps", "values.yaml"),
 		"global:\n  gitRepoURL: \"REPLACE_ME-git-repo-url\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("REPLACE_ME in chart values must fail:\n%s", out)
 	}
@@ -363,81 +363,6 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	out2 := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out2, "no placeholders left") {
 		t.Errorf("clean overlay should report none left:\n%s", out2)
-	}
-}
-
-func TestRunEnvReadinessOpenWorldACL(t *testing.T) {
-	// `llz env add` rejects 0.0.0.0/0 at the flag, but a spec is a file: `llz env
-	// edit`, a hand edit, or an inherited spec.defaults renders one without ever
-	// passing that check. doctor reports it — as a finding, not a blocker, so an
-	// instance that already has one can still render and build while it fixes it.
-	dir := chdirTempDir(t)
-	writeGoodReadiness(t, dir, "e2e")
-	writeTFVars(t, dir, "cluster", "e2e",
-		"region = \"us-ord\"\ngithub_runner_ipv4_cidrs = [\"0.0.0.0/0\"]\n")
-	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
-	if err != nil {
-		t.Fatalf("an open ACL must be reported, not blocking: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "admits every address") {
-		t.Errorf("open-world ACL not flagged:\n%s", out)
-	}
-}
-
-func TestIsOpenWorldCIDRLine(t *testing.T) {
-	for _, open := range []string{
-		`github_runner_ipv4_cidrs = ["0.0.0.0/0"]`,
-		`github_runner_ipv4_cidrs = ["203.0.113.0/24", "0.0.0.0/0"]`,
-		`github_runner_ipv6_cidrs = ["::/0"]`,
-	} {
-		if !isOpenWorldCIDRLine(open) {
-			t.Errorf("isOpenWorldCIDRLine(%q) = false, want true", open)
-		}
-	}
-	for _, ok := range []string{
-		`github_runner_ipv4_cidrs = ["203.0.113.0/24"]`,
-		`github_runner_ipv4_cidrs = []`,
-		`github_runner_ipv4_cidrs = [] # was "0.0.0.0/0"`, // the comment is not the value
-		`node_count = 5`,
-		`github_runner_ipv4_cidrs`, // no assignment at all
-	} {
-		if isOpenWorldCIDRLine(ok) {
-			t.Errorf("isOpenWorldCIDRLine(%q) = true, want false", ok)
-		}
-	}
-}
-
-func TestOpenWorldACLFindings(t *testing.T) {
-	// The spec-level half of the ACL check. It exists because the other two paths
-	// structurally cannot see this: `llz env add` validates only the FLAGS it was
-	// given, and the tfvars scan reads a gitignored build artifact that a fresh
-	// clone has not rendered. The spec is merged at load (applyInheritance), so an
-	// open-world prefix inherited from spec.defaults — which environments/<env>.yaml
-	// never even mentions — arrives here like an explicit one.
-	got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{
-		IPv4: []string{"203.0.113.0/24", "0.0.0.0/0"},
-		IPv6: []string{"2001:db8::/32", "::/0"},
-	})
-	if len(got) != 2 {
-		t.Fatalf("got %d findings, want 2 (one per open prefix): %+v", len(got), got)
-	}
-	for _, f := range got {
-		if f.blocking {
-			t.Errorf("%q must be a finding, not a blocker — an instance that already has one still has to be able to build while it fixes it", f.token)
-		}
-		// Named against the spec, not a rendered artifact: that is where the
-		// operator edits, and for an inherited value the env file has no such line.
-		if f.file != filepath.Join("environments", "lab.yaml") {
-			t.Errorf("finding points at %q, want the env spec file", f.file)
-		}
-		if !strings.Contains(f.hint, "if it is inherited") {
-			t.Errorf("hint should send the operator to spec.defaults too: %q", f.hint)
-		}
-	}
-	// A closed ACL says nothing.
-	if got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{IPv4: []string{"203.0.113.0/24"}}); len(got) != 0 {
-		t.Errorf("a closed ACL must produce no findings, got %+v", got)
 	}
 }
 

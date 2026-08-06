@@ -13,10 +13,16 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 	t.Helper()
 	orig, origProbe := execOutput, kubectlprobe.Exec
 	execOutput = fn
-	// The probe package holds its own reference (wired in exec.go's init), so
-	// stubbing only execOutput leaves internal/kubectlprobe shelling out for real.
+	// Both extracted packages hold their OWN reference to this seam (wired in the
+	// respective init()s), so stubbing only execOutput leaves them shelling out for
+	// real. internal/configreadiness reads through the same closure, so reinstalling
+	// its Deps after the swap is enough.
 	kubectlprobe.Exec = fn
-	t.Cleanup(func() { execOutput, kubectlprobe.Exec = orig, origProbe })
+	installConfigReadinessDeps()
+	t.Cleanup(func() {
+		execOutput, kubectlprobe.Exec = orig, origProbe
+		installConfigReadinessDeps()
+	})
 }
 
 func withLookPath(t *testing.T, fn func(file string) (string, error)) {

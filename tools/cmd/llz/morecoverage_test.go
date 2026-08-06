@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 )
 
@@ -62,7 +63,7 @@ func TestOverlayScanFiles(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(sub, "patch.json"), "{}")
 
-	files := overlayScanFiles(dir)
+	files := configreadiness.OverlayScanFiles(dir)
 	for _, f := range files {
 		if strings.EqualFold(filepath.Ext(f), ".md") {
 			t.Errorf("overlayScanFiles included a markdown file: %s", f)

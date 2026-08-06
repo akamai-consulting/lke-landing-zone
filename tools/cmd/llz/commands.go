@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -150,7 +152,7 @@ func buildArgv(env string) []string {
 // push` would give a second deployment a different passphrase.
 func secretSetArgv(env, name string) []string {
 	argv := []string{"gh", "secret", "set", name}
-	if secretIsEnvScoped(name) {
+	if configreadiness.SecretIsEnvScoped(name) {
 		argv = append(argv, "--env", "infra-"+env)
 	}
 	return argv
@@ -902,7 +904,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 // scaffold is at the new ref while apl-values still points at the old one — so it
 // says exactly that rather than surfacing the bare render error.
 func renderAfterUpgrade(g globalOpts) error {
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil
 	}
@@ -1173,7 +1175,7 @@ func warnIfRootTokenPresent(env string) {
 	if err != nil {
 		return
 	}
-	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+	for _, n := range configreadiness.GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
 			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", color.Yellow("⚠"), env)
 			fmt.Println(color.Dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))

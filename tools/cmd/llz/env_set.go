@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
@@ -27,7 +28,7 @@ func envSpecFile(env string) (string, error) {
 	if err := validateEnvName(env); err != nil {
 		return "", err
 	}
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	p := filepath.Join(filepath.Dir(tfDir), clusterspec.EnvironmentsDir, env+".yaml")
 	if _, err := os.Stat(p); err != nil {
 		return "", fmt.Errorf("no spec for %q (%s missing) — run `llz env add %s` first", env, p, env)
@@ -138,7 +139,7 @@ func specSetCmd() *cobra.Command {
 					return fmt.Errorf("%q is a per-env field — set it with `llz env set <env> %s=%s`", a[0], a[0], a[1])
 				}
 			}
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			lzPath := filepath.Join(filepath.Dir(tfDir), clusterspec.LandingZoneFile)
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
@@ -191,7 +192,7 @@ func networkAddCmd() *cobra.Command {
 			if region == "" {
 				return fmt.Errorf("--region is required (a Linode region, e.g. us-ord)")
 			}
-			tfDir, _, _ := instanceLayout()
+			tfDir, _, _ := instancelayout.Detect()
 			lzPath := filepath.Join(filepath.Dir(tfDir), clusterspec.LandingZoneFile)
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)

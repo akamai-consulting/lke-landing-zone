@@ -120,12 +120,16 @@ categories:
     #                       under `invariant: operating` — it reaches no cluster at
     #                       all. 5th catalog correction, 1st about a STATE rather
     #                       than a file list. -656, at 90.5% coverage.
+    #   31,372 / 182 files  config-readiness — the `configured` PREDICATE, which the
+    #                       catalog called right. Plus internal/instancelayout, a hub
+    #                       extracted to break a CYCLE rather than on caller count:
+    #                       it took env-topology's closure 21 -> 6. -705.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 32077
+    budget: 31372
     exact: true
     include:
       - "tools/cmd/llz/*.go"

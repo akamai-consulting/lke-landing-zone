@@ -130,7 +130,7 @@ Realistic settled core: **~2,900**.
 |---|---:|---:|:-:|:-:|---|
 | `token-inventory` | 1,473 | 6 | ✔ | ✘ | `tokens` 437, `ci_token_inventory` 330, `token_validate` 211, `ci_rotation_plan` 216, `token_capability` 167, `ci_validate_tokens` 112. **Wants splitting** — it contributes predicates at three states (`configured`, `seeded`, `operating`). Best single candidate for fine-graining. **✅ Extracted — five files, not six.** `tokens.go` is the credential PROVISIONING wizard and alone TRIPLED the closure. See [What `token-inventory` broke](#what-token-inventory-broke--one-word-doing-two-jobs).|
 | `env-topology` | 740 | 4 | ✔ | ✘ | `topology` 245, `env_set` 219, `branchpolicy` 165, `envlist` 111. |
-| `config-readiness` | 733 | 3 | ✔ | ✘ | `readiness` 255, `state` 242, `ci_preflight` 236. **This is the `configured` predicate** — the cleanest existing example of predicate code that's mis-filed as a command. |
+| `config-readiness` | 733 | 3 | ✔ | ✘ | **✅ Extracted.** `readiness` 255, `state` 242, `ci_preflight` 236. **This is the `configured` predicate** — the cleanest existing example of predicate code that's mis-filed as a command. |
 
 ## `→ provisioned` — grants: `cloud-mutate`
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first nineteen, extracted
+## The first twenty, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -278,9 +278,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-reconciler` extracted | 33,157 | 185 | −720 — the second OPT-IN, plus `promwire` |
 | `assert-registry` extracted | 32,965 | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
 | `promote-pipeline` extracted | 32,733 | 184 | −232 — binds `promoted`, **the last unclaimed state** |
-| `posture-credential-coverage` extracted | **32,077** | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
+| `posture-credential-coverage` extracted | 32,077 | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
+| `config-readiness` extracted | **31,372** | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
 
-**Net −15,105 (32.0%) across nineteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −15,810 (33.5%) across twenty extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1142,6 +1143,72 @@ ran every write lane at the same time.
 **The general lesson: a shared package accumulates symbols faster than it accumulates tests**, because
 each one arrives as a side effect of an extraction whose attention is elsewhere. The floors caught it,
 which is the argument for having them — but only two extractions late.
+
+### What `config-readiness` needed first — a hub extracted to break a cycle
+
+Twentieth, and the catalog called this one **right**: *"this is the `configured` predicate — the
+cleanest existing example of predicate code that's mis-filed as a command."* It is, and it needed no
+correction. Twenty extractions in, that is worth noting on its own.
+
+```
+config-readiness  assertion:configured[read-repo, cloud-read, secret-read]
+```
+
+An **assertion**, not a gate: it reads the repo, but it also asks GitHub which secrets and variables
+are set and Linode whether the account is reachable. The moment a check leaves the filesystem it stops
+being a gate — the same line `token-inventory` and `assert-platform` drew.
+
+**But it could not be extracted alone.** `scaffold-instance` (closure 38), `env-topology` (21) and
+`config-readiness` (18) were **circularly entangled**: each reached into `scaffold.go` for
+`instanceLayout` and friends, and `scaffold.go` reached back into `readiness.go` and `topology.go`. No
+ordering of the three made any of them cheap.
+
+**`internal/instancelayout` is the first shared package extracted to break a cycle rather than on
+caller count.** Every previous one — `guardwalk` at ten callers, `cigate` at twelve, `kubectlprobe` at
+ten — came out because a threshold was crossed. This one came out because the dependency graph
+demanded it. The measured effect:
+
+| candidate | closure before | after |
+|---|---:|---:|
+| `env-topology` | 21 | **6** |
+| `config-readiness` | 18 | **14** |
+| `scaffold-instance` | 38 | 38 |
+
+`scaffold-instance` is unchanged, and the reason is worth stating because it corrects a prediction
+made before the work: its closure points **outward**, so removing its own symbols from other
+candidates' closures does nothing for it. A hub helps the packages that *depend on* it, not the one it
+was carved out of.
+
+**Ten symbols were closure candidates; four became `Deps` fields.** Applying the three-clause rule the
+previous three extractions paid for — can the package already do this with a grant it holds? is it a
+pure function? is it already injectable elsewhere? — removed `orAll`, `validateEnvName`,
+`tfvarsValue`, `firstNonEmpty` (pure, localised), `statePassphraseSecret` (a const) and `readEnvFile`
+(a file read the package is already permitted to do). **The rule now removes more candidates than it
+admits.**
+
+**Two accessors were added rather than exporting fields.** `LiveState` keeps its four maps unexported
+because the env→repo fallback in `Has`/`Value` is the whole point of the type; `HasRepoSecret` answers
+the one narrower question the wizard genuinely has, and `NewLiveState` lets `llz doctor` construct one
+without seeing inside. A caller that can see the maps can also ask questions the type has no answer
+for.
+
+### The cost: this was the messiest extraction of the twenty
+
+Thirteen rounds of `go vet` before it was clean, and the errors were nearly all the same two shapes:
+
+- **Over-greedy regexes, three times.** A non-greedy `func Test\w+.*?
+}
+` match across a file of
+  same-shaped functions silently takes the wrong span — it swept four unrelated tests into one move,
+  then three more, then a `sustain` test into a `configreadiness` file. The mitigation that finally
+  worked was splitting on **line ranges computed from parsed function boundaries**, not on regex.
+- **Renaming a common word.** `indent` collided with a local variable in
+  `ci_chart_publish_check.go`; `catalog` hit a function definition in `wizard.go`; `f.file` hit four of
+  package `main`'s own finding types. Each needed a targeted revert.
+
+Eight tests were found stranded in files named for a **coverage metric** — `coverage_tier1_test.go`,
+`branch_coverage_test.go`, `morehelpers_test.go`, `uncovered_helpers_test.go`. That naming is now the
+single most reliable predictor of a test that has drifted from its subject.
 
 ## The cost of the interesting half
 

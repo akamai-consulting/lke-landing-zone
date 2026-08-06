@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -86,7 +87,7 @@ func checkRegion(region string) error {
 	// Phrased as a resemblance, not a fact: all this knows is that the value is
 	// "<a real region>-<ordinal>", which is the SHAPE of an OBJ cluster id — it
 	// has not asked the object-storage API whether this particular one exists.
-	if err := validateOBJCluster(region); err == nil && isOBJClusterID(region, ids) {
+	if err := instancelayout.ValidateOBJCluster(region); err == nil && isOBJClusterID(region, ids) {
 		base := region[:strings.LastIndex(region, "-")]
 		msg += fmt.Sprintf("\n  %q is shaped like an object-storage CLUSTER id in region %s — did you mean `--region %s --obj-cluster %s`?",
 			region, base, base, region)

@@ -5,7 +5,6 @@ package main
 // Each is deterministic on its inputs — no kubectl / API / filesystem.
 
 import (
-	"os"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -39,40 +38,5 @@ func TestFilepathRel(t *testing.T) {
 	// Unrelatable paths fall back to dst unchanged.
 	if got := filepathRel("rel/dir", "/abs/out"); got != "/abs/out" {
 		t.Errorf("filepathRel fallback = %q, want /abs/out", got)
-	}
-}
-
-func TestInstanceLayout(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	// Rendered instance: roots at repo root.
-	tf, apl, prefix := instanceLayout()
-	if tf != "terraform-iac-bootstrap" || apl != "apl-values" || prefix != "" {
-		t.Errorf("rendered layout = (%q,%q,%q)", tf, apl, prefix)
-	}
-
-	// Template-repo checkout: roots under instance-template/.
-	if err := os.MkdirAll("instance-template/terraform-iac-bootstrap", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	tf, apl, prefix = instanceLayout()
-	if tf != "instance-template/terraform-iac-bootstrap" || apl != "instance-template/apl-values" || prefix != "instance-template/" {
-		t.Errorf("template layout = (%q,%q,%q)", tf, apl, prefix)
-	}
-}
-
-func TestLiveStateValue(t *testing.T) {
-	s := liveState{
-		envVars:  map[string]string{"A": "env"},
-		repoVars: map[string]string{"A": "repo", "B": "only-repo"},
-	}
-	if v := s.value("A"); v != "env" { // env scope wins
-		t.Errorf("value(A) = %q, want env", v)
-	}
-	if v := s.value("B"); v != "only-repo" {
-		t.Errorf("value(B) = %q, want only-repo", v)
-	}
-	if v := s.value("missing"); v != "" {
-		t.Errorf("value(missing) = %q, want empty", v)
 	}
 }

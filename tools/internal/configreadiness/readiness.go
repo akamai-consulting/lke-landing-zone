@@ -1,4 +1,4 @@
-package main
+package configreadiness
 
 // readiness.go is the FILE-level readiness scan behind `llz doctor --env <env>`
 // (and the legacy `llz validate --env`) — the complement to the code-level
@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -40,9 +41,11 @@ import (
 // its own terms rather than string-matched inside the whole line.
 var quotedTokens = regexp.MustCompile(`"([^"]*)"`)
 
-// instanceRepoPlaceholder is the unrendered instance_repo answer. It reaches two
+// InstanceRepoPlaceholder is the unrendered instance_repo answer. It reaches two
 // very different kinds of file, which need two different fixes — see hintFor.
-const instanceRepoPlaceholder = "your-org/your-instance-repo"
+// InstanceRepoPlaceholder is EXPORTED because the CLI's grouping test asserts
+// against the same constant this package scans for — one fact, one definition.
+const InstanceRepoPlaceholder = "your-org/your-instance-repo"
 
 type sentinel struct {
 	token    string
@@ -53,7 +56,7 @@ type sentinel struct {
 var scaffoldSentinels = []sentinel{
 	{"REPLACE_PER_ENV", true, "fill in the per-env value (ACME email, GitOps repoUrl/branch/path, DNS domain)"},
 	{"REPLACE_ME", true, "replace the placeholder Helm registry URL / value"},
-	{instanceRepoPlaceholder, true, "repoint to your fork / instance repo (owner/name)"},
+	{InstanceRepoPlaceholder, true, "repoint to your fork / instance repo (owner/name)"},
 	{"your-env", true, "an env token escaped substitution — set it to the deployment name"},
 }
 
@@ -69,32 +72,36 @@ var chartValuesFiles = []string{
 	filepath.Join("kubernetes-charts", "llz-openbao-platform", "values.yaml"),
 }
 
-type finding struct {
-	file     string
-	line     int
-	token    string
-	hint     string
-	blocking bool
+// EXPORTED because the scaffolding path groups these for operator output:
+// cmd/llz/scaffold.go collapses findings sharing a token AND a remedy. The
+// grouping is presentation and stayed in the CLI; the finding itself is this
+// package's model.
+type Finding struct {
+	File     string
+	Line     int
+	Token    string
+	Hint     string
+	Blocking bool
 }
 
 // loc renders a finding's position. A spec-level finding has no line — the value
 // may be inherited from another file entirely — and printing "file:0" for it
 // reads as a bug in the reporter rather than as "somewhere in this file".
-func (f finding) loc() string {
-	if f.line <= 0 {
-		return f.file
+func (f Finding) Loc() string {
+	if f.Line <= 0 {
+		return f.File
 	}
-	return fmt.Sprintf("%s:%d", f.file, f.line)
+	return fmt.Sprintf("%s:%d", f.File, f.Line)
 }
 
-func runEnvReadiness(env string) error {
+func RunEnvReadiness(env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required (e.g. --env primary)")
 	}
 	if err := validateEnvName(env); err != nil {
 		return err
 	}
-	tfDir, aplDir, _ := instanceLayout()
+	tfDir, aplDir, _ := instancelayout.Detect()
 
 	overlay := filepath.Join(aplDir, env)
 	if fi, err := os.Stat(overlay); err != nil || !fi.IsDir() {
@@ -106,8 +113,8 @@ func runEnvReadiness(env string) error {
 	// before the file-level scan below — which reads the RENDERED output and would
 	// otherwise pass on stale tfvars after a spec edit that wasn't re-rendered.
 	specDriven := false // spec present AND this env defined in it
-	var specFindings []finding
-	if lz, present, perr := loadSpec(); present {
+	var specFindings []Finding
+	if lz, present, perr := deps.LoadSpec(); present {
 		fmt.Println(color.Bold("LandingZone spec:"))
 		if perr != nil {
 			fmt.Printf("  %s failed to load: %v\n", color.Red("✗"), perr)
@@ -128,7 +135,7 @@ func runEnvReadiness(env string) error {
 			// prefix is caught wherever it came from: a flag, a hand edit, or a
 			// spec.defaults entry that no per-env file even mentions.
 			specFindings = openWorldACLFindings(env, e.Cluster.APIServerAllowCIDRs)
-			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {
+			if err := deps.CheckManifestDrift(lz, aplDir, []string{env}); err != nil {
 				// checkManifestDrift already printed the drifted files + the
 				// `llz render` hint; surface it as the blocking failure.
 				return err
@@ -139,8 +146,8 @@ func runEnvReadiness(env string) error {
 		}
 	}
 
-	files := tfvarsPaths(tfDir, env)
-	files = append(files, overlayScanFiles(overlay)...)
+	files := instancelayout.TFVarsPaths(tfDir, env)
+	files = append(files, OverlayScanFiles(overlay)...)
 	// The apl-core values BASE is shared across envs (DRY), so any unfilled
 	// placeholder in it lives ONCE at apl-values/values.yaml rather than in the
 	// per-env overlay — scan it too (no-op on a tree without it). (The ACME email is
@@ -148,7 +155,7 @@ func runEnvReadiness(env string) error {
 	// contact is optional — so there's nothing to flag there. The cert/DNS tree that
 	// used to carry the REPLACE_ME webhook repoURL now lives at platform-apl/ and is
 	// fetched as a pinned remote ref, so it is no longer part of the instance.)
-	files = append(files, overlayScanFiles(filepath.Join(aplDir, "values.yaml"))...)
+	files = append(files, OverlayScanFiles(filepath.Join(aplDir, "values.yaml"))...)
 	for _, cf := range chartValuesFiles {
 		if fi, err := os.Stat(cf); err == nil && !fi.IsDir() {
 			files = append(files, cf)
@@ -163,14 +170,14 @@ func runEnvReadiness(env string) error {
 		// The rendered-tfvars ACL scan is for LEGACY instances only: a spec-driven
 		// one was already read from its spec above, and scanning both would report
 		// the same prefix twice, in two files, for one mistake.
-		fs, present := scanForSentinels(f, !specDriven)
+		fs, present := ScanForSentinels(f, !specDriven)
 		if !present {
 			// A spec-driven env renders its tfvars on demand (they are gitignored
 			// build artifacts), so an absent <env>.tfvars is normal, not a finding —
 			// the spec was already validated above. Legacy/manual instances still
 			// flag a genuinely missing tfvars — except for an OPT-IN root, which an
 			// instance may deliberately never apply (see optionalTFRoots).
-			if strings.HasSuffix(f, ".tfvars") && !specDriven && !optionalTFVars(f) {
+			if strings.HasSuffix(f, ".tfvars") && !specDriven && !instancelayout.Optional(f) {
 				fmt.Printf("  %s  %s %s\n", color.Red("✗ missing"), f, color.Dim("— run `llz env add "+env+"`"))
 				missing++
 			}
@@ -187,18 +194,18 @@ func runEnvReadiness(env string) error {
 	// cert-manager DNS-01 issuance (the Argo-synced letsencrypt ClusterIssuers),
 	// which only needs the ACME email + TF_VAR_linode_dns_token — settable after the
 	// first build. Split them out so the build isn't gated on them.
-	var deferred []finding
+	var deferred []Finding
 	for _, f := range findings {
-		if isDeferrable(f.file) {
+		if isDeferrable(f.File) {
 			deferred = append(deferred, f)
 			continue
 		}
 		mark := color.Yellow("⚠ warn ")
-		if f.blocking {
+		if f.Blocking {
 			mark = color.Red("✗ TODO ")
 			blocking++
 		}
-		fmt.Printf("  %s %s  %s %s\n", mark, f.loc(), f.token, color.Dim("— "+f.hint))
+		fmt.Printf("  %s %s  %s %s\n", mark, f.Loc(), f.Token, color.Dim("— "+f.Hint))
 	}
 
 	// obj_cluster must be shaped like a Linode OBJ cluster id — catch a malformed
@@ -206,7 +213,7 @@ func runEnvReadiness(env string) error {
 	objTfv := filepath.Join(tfDir, "object-storage", env+".tfvars")
 	if b, err := os.ReadFile(objTfv); err == nil {
 		if v := tfvarsValue(string(b), "obj_cluster"); v != "" {
-			if err := validateOBJCluster(v); err != nil {
+			if err := instancelayout.ValidateOBJCluster(v); err != nil {
 				fmt.Printf("  %s  %s %s\n", color.Red("✗ TODO"), objTfv, color.Dim("— "+err.Error()))
 				blocking++
 			}
@@ -241,7 +248,7 @@ func runEnvReadiness(env string) error {
 	case isMissingBinary(err):
 		fmt.Printf("  %s kubectl not found — skipped overlay render (install kubectl to enable)\n", color.Dim("–"))
 	default:
-		fmt.Printf("  %s kubectl kustomize %s/manifest failed:\n%s\n", color.Red("✗"), overlay, indent(err.Error(), "      "))
+		fmt.Printf("  %s kubectl kustomize %s/manifest failed:\n%s\n", color.Red("✗"), overlay, Indent(err.Error(), "      "))
 		blocking++
 	}
 
@@ -250,7 +257,7 @@ func runEnvReadiness(env string) error {
 	if len(deferred) > 0 {
 		fmt.Println("\n" + color.Bold("Deferred — cert/DNS issuance (non-blocking; set up after the build):"))
 		for _, f := range deferred {
-			fmt.Printf("  %s %s  %s %s\n", color.Cyan("○ later"), f.loc(), f.token, color.Dim("— "+f.hint))
+			fmt.Printf("  %s %s  %s %s\n", color.Cyan("○ later"), f.Loc(), f.Token, color.Dim("— "+f.Hint))
 		}
 		fmt.Println("  " + color.Dim("↳ fine to leave for now — set the ACME email + TF_VAR_linode_dns_token; the Argo-synced letsencrypt ClusterIssuers issue certs once both exist (quickstart §4)."))
 	}
@@ -280,21 +287,21 @@ func isDeferrable(file string) bool {
 	return strings.Contains(filepath.ToSlash(file), "/manifest/dns/")
 }
 
-// scaffoldExists reports whether an apl-values overlay directory exists for env.
+// ScaffoldExists reports whether an apl-values overlay directory exists for env.
 // `llz doctor` uses it to decide whether to run the file-level readiness scan for
 // its default env without erroring when no such deployment has been scaffolded.
-func scaffoldExists(env string) bool {
+func ScaffoldExists(env string) bool {
 	if env == "" {
 		return false
 	}
-	_, aplDir, _ := instanceLayout()
+	_, aplDir, _ := instancelayout.Detect()
 	fi, err := os.Stat(filepath.Join(aplDir, env))
 	return err == nil && fi.IsDir()
 }
 
-// overlayScanFiles returns the overlay's regular files except Markdown docs
+// OverlayScanFiles returns the overlay's regular files except Markdown docs
 // (READMEs legitimately mention the sentinels).
-func overlayScanFiles(overlay string) []string {
+func OverlayScanFiles(overlay string) []string {
 	var out []string
 	_ = filepath.Walk(overlay, func(p string, fi os.FileInfo, err error) error {
 		if err == nil && !fi.IsDir() && !strings.EqualFold(filepath.Ext(p), ".md") {
@@ -305,16 +312,16 @@ func overlayScanFiles(overlay string) []string {
 	return out
 }
 
-// scanForSentinels reports whether the file exists and any sentinel / empty-CIDR
+// ScanForSentinels reports whether the file exists and any sentinel / empty-CIDR
 // findings. Comment-only lines (trimmed starts with '#') are skipped — the
 // sentinels appear there as documentation, not as unfilled values.
-func scanForSentinels(path string, tfvarsACL bool) ([]finding, bool) {
+func ScanForSentinels(path string, tfvarsACL bool) ([]Finding, bool) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, false
 	}
 	defer fh.Close()
-	var out []finding
+	var out []Finding
 	sc := bufio.NewScanner(fh)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	ln := 0
@@ -327,11 +334,11 @@ func scanForSentinels(path string, tfvarsACL bool) ([]finding, bool) {
 		}
 		for _, s := range scaffoldSentinels {
 			if strings.Contains(line, s.token) {
-				out = append(out, finding{path, ln, s.token, hintFor(s, path), s.blocking})
+				out = append(out, Finding{path, ln, s.token, hintFor(s, path), s.blocking})
 			}
 		}
 		if isTfvars && isEmptyCIDRList(line) {
-			out = append(out, finding{path, ln, strings.TrimSpace(line),
+			out = append(out, Finding{path, ln, strings.TrimSpace(line),
 				"empty runner CIDR list — fine for github.com-hosted runners (they open their egress IP at runtime via `llz ci runner-acl open`); fill it for self-hosted runners with a fixed range", false})
 		}
 		// `llz env add` rejects an open-world ACL at the flag, but the spec is a
@@ -340,7 +347,7 @@ func scanForSentinels(path string, tfvarsACL bool) ([]finding, bool) {
 		// finding, not a blocker, because an instance that already has one must
 		// still be able to render and build while it fixes it.
 		if isTfvars && tfvarsACL && isOpenWorldCIDRLine(line) {
-			out = append(out, finding{path, ln, strings.TrimSpace(line), openWorldACLHint, false})
+			out = append(out, Finding{path, ln, strings.TrimSpace(line), openWorldACLHint, false})
 		}
 	}
 	return out, true
@@ -374,13 +381,13 @@ const openWorldACLHint = "the control-plane ACL admits every address — LKE-E a
 // rendered artifact, because that is where the operator has to fix it — and,
 // when the value is inherited, environments/<env>.yaml will not even contain it
 // (spec.defaults in landingzone.yaml will).
-func openWorldACLFindings(env string, acl clusterspec.AllowCIDRs) []finding {
-	var out []finding
+func openWorldACLFindings(env string, acl clusterspec.AllowCIDRs) []Finding {
+	var out []Finding
 	file := filepath.Join(clusterspec.EnvironmentsDir, env+".yaml")
 	for _, list := range [][]string{acl.IPv4, acl.IPv6} {
 		for _, c := range list {
 			if validate.IsOpenWorldCIDR(c) {
-				out = append(out, finding{file, 0, c, openWorldACLHint + " (or in spec.defaults, if it is inherited)", false})
+				out = append(out, Finding{file, 0, c, openWorldACLHint + " (or in spec.defaults, if it is inherited)", false})
 			}
 		}
 	}
@@ -397,10 +404,10 @@ func openWorldACLFindings(env string, acl clusterspec.AllowCIDRs) []finding {
 // spec.instance.repo, so the fix is one command, once, and the checklist should
 // say which one.
 func hintFor(s sentinel, path string) string {
-	if s.token != instanceRepoPlaceholder {
+	if s.token != InstanceRepoPlaceholder {
 		return s.hint
 	}
-	if _, aplDir, _ := instanceLayout(); strings.HasPrefix(filepath.Clean(path), filepath.Clean(aplDir)+string(filepath.Separator)) {
+	if _, aplDir, _ := instancelayout.Detect(); strings.HasPrefix(filepath.Clean(path), filepath.Clean(aplDir)+string(filepath.Separator)) {
 		return "rendered from spec.instance.repo — fix it once with `llz spec set instance.repo=<owner>/<name>` " +
 			"(editing this file by hand is undone by the next `llz render`)"
 	}
@@ -458,7 +465,7 @@ func isMissingBinary(err error) bool {
 	return ok
 }
 
-func indent(s, pad string) string {
+func Indent(s, pad string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for i := range lines {
 		lines[i] = pad + lines[i]

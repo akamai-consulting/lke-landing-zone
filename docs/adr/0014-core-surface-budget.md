@@ -108,7 +108,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **32,965** with `assert-registry`.
 > and **32,733** with `promote-pipeline`.
 > and **32,077** with `posture-credential-coverage`.
-> Nineteen extensions, net −15,105 (32.0%) — now BELOW the
+> and **31,372** with `config-readiness`.
+> Twenty extensions, net −15,810 (33.5%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

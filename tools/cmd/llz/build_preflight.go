@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -76,7 +77,7 @@ var ghAPIJSONPaged = func(path string, out any) error {
 // unknown degrades to nil (or an advisory line) so this can only ever fail a
 // build that was already going to fail.
 func buildPreflight(env string) error {
-	tfDir, aplDir, _ := instanceLayout()
+	tfDir, aplDir, _ := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
 		// No spec: either not an instance checkout, or a pre-spec instance whose

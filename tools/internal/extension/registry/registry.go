@@ -30,6 +30,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
@@ -58,6 +59,7 @@ var declarations = []func() extension.Extension{
 	budget.Extension,
 	chartguard.Extension,
 	clusteraccess.Extension,
+	configreadiness.Extension,
 	converge.Extension,
 	credcoverage.Extension,
 	docsguard.Extension,

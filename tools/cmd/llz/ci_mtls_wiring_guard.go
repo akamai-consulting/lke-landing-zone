@@ -6,7 +6,7 @@ package main
 //
 // WHY IT EXISTS. Deleting the reconciler's client-certificate volumeMount used
 // to pass EVERY gate in this repo: kustomize still rendered, kubeconform was
-// satisfied, `make lint-k8s` reported zero errors — and the pod could no longer
+// configreadiness.Satisfied, `make lint-k8s` reported zero errors — and the pod could no longer
 // reach OpenBao at all, because the listener requires a client certificate
 // (ADR 0010). Verified by mutation, not assumed. The other guards check
 // sync-wave health, schema validity and plaintext drift; nothing checked that a
