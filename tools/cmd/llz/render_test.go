@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 )
 
 // dealign collapses `tofu fmt`'s `=` column padding (key    = val → key = val) so
@@ -353,7 +354,7 @@ spec:
     objectStorage: { cluster: us-ord-1 }
 `)
 
-	got, err := listDeployments(tfDir)
+	got, err := envtopology.ListDeployments(tfDir)
 	if err != nil {
 		t.Fatalf("listDeployments: %v", err)
 	}

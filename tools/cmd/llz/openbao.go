@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
@@ -42,9 +43,9 @@ import (
 func openbaoClient(role string) (*openbao.Client, error) {
 	var addr, token string
 	switch role {
-	case roleActive:
+	case envtopology.RoleActive:
 		addr, token = os.Getenv("OPENBAO_ADDR_ACTIVE"), firstNonEmpty(os.Getenv("OPENBAO_TOKEN_ACTIVE"), os.Getenv("OPENBAO_TOKEN"))
-	case roleStandby:
+	case envtopology.RoleStandby:
 		addr, token = os.Getenv("OPENBAO_ADDR_STANDBY"), firstNonEmpty(os.Getenv("OPENBAO_TOKEN_STANDBY"), os.Getenv("OPENBAO_TOKEN"))
 	default:
 		return nil, fmt.Errorf("role must be 'active' or 'standby'; got %q", role)
@@ -80,7 +81,7 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 	}
 	// Auto-forward only the active cluster of a standalone deployment; anything
 	// else keeps openbaoClient's explicit-addressing contract (and error text).
-	if role != roleActive || standbyConfigured() {
+	if role != envtopology.RoleActive || standbyConfigured() {
 		c, err := openbaoClient(role)
 		return c, noop, err
 	}
@@ -242,7 +243,7 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 			fmt.Fprintln(os.Stderr, "  (dry-run — re-run with --yes to execute the write)")
 			return nil
 		}
-		active, cleanup, err := openbaoClientForward(roleActive)
+		active, cleanup, err := openbaoClientForward(envtopology.RoleActive)
 		if err != nil {
 			return err
 		}
@@ -259,12 +260,12 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 		fmt.Fprintln(os.Stderr, "  (dry-run — re-run with --yes to execute the transactional write)")
 		return nil
 	}
-	active, cleanup, err := openbaoClientForward(roleActive)
+	active, cleanup, err := openbaoClientForward(envtopology.RoleActive)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	standby, err := openbaoClient(roleStandby)
+	standby, err := openbaoClient(envtopology.RoleStandby)
 	if err != nil {
 		return err
 	}

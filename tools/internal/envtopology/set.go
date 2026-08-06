@@ -1,4 +1,4 @@
-package main
+package envtopology
 
 // env_set.go is the spec WRITE side — the counterpart to the read commands
 // (`llz env show`, `llz components`). `llz env set` mutates fields in
@@ -16,15 +16,16 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// envSpecFile returns the path to environments/<env>.yaml, erroring if it (or the
+// SpecFile returns the path to environments/<env>.yaml, erroring if it (or the
 // instance's spec) is absent.
-func envSpecFile(env string) (string, error) {
+func SpecFile(env string) (string, error) {
 	if err := validateEnvName(env); err != nil {
 		return "", err
 	}
@@ -36,9 +37,9 @@ func envSpecFile(env string) (string, error) {
 	return p, nil
 }
 
-func envSetCmd() *cobra.Command {
+func SetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set <deployment> <path=value>...",
+		Use:   "set <Deployment> <path=value>...",
 		Short: "set fields in environments/<env>.yaml + re-render (e.g. cluster.nodePool.count=8)",
 		Long: "Sets one or more spec.<path>=<value> fields in environments/<env>.yaml,\n" +
 			"preserving comments, then validates + re-renders. Paths are relative to the\n" +
@@ -49,22 +50,22 @@ func envSetCmd() *cobra.Command {
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := args[0]
-			assigns, err := parseAssignments(args[1:])
+			assigns, err := yamledit.ParseAssignments(args[1:])
 			if err != nil {
 				return err
 			}
 			for _, a := range assigns {
-				if !isPerEnvPath(a[0]) {
+				if !yamledit.IsPerEnvPath(a[0]) {
 					return fmt.Errorf("%q is an instance-level field — set it with `llz spec set %s=%s` (per-env paths are cluster.* / components.*)", a[0], a[0], a[1])
 				}
 			}
-			envFile, err := envSpecFile(env)
+			envFile, err := SpecFile(env)
 			if err != nil {
 				return err
 			}
-			if err := editSpecFile(envFile, func(doc *yaml.Node) error {
+			if err := yamledit.EditSpecFile(envFile, func(doc *yaml.Node) error {
 				for _, a := range assigns {
-					if err := setSpecPath(doc, a[0], a[1]); err != nil {
+					if err := yamledit.SetSpecPath(doc, a[0], a[1]); err != nil {
 						return err
 					}
 				}
@@ -76,19 +77,19 @@ func envSetCmd() *cobra.Command {
 				fmt.Printf("  %s spec.%s = %s\n", color.Green("set"), a[0], a[1])
 			}
 			fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
-			return runRender(gopts, env, false, false, false)
+			return caps.Render(env)
 		},
 	}
 }
 
-func envEditCmd() *cobra.Command {
+func EditCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "edit <deployment>",
+		Use:   "edit <Deployment>",
 		Short: "open environments/<env>.yaml in $EDITOR, then re-render on exit",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := args[0]
-			envFile, err := envSpecFile(env)
+			envFile, err := SpecFile(env)
 			if err != nil {
 				return err
 			}
@@ -103,16 +104,16 @@ func envEditCmd() *cobra.Command {
 			// parse error before render so the message is clear.
 			if b, rerr := os.ReadFile(envFile); rerr == nil {
 				if _, derr := clusterspec.DecodeClusterDefinition(b); derr != nil {
-					return fmt.Errorf("%s won't parse after your edit: %s\n  fix it, then `llz render %s`", envFile, cleanFieldErr(derr), env)
+					return fmt.Errorf("%s won't parse after your edit: %s\n  fix it, then `llz render %s`", envFile, yamledit.CleanFieldErr(derr), env)
 				}
 			}
 			fmt.Printf("%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
-			return runRender(gopts, env, false, false, false)
+			return caps.Render(env)
 		},
 	}
 }
 
-func specCmd() *cobra.Command {
+func SpecCmd() *cobra.Command {
 	c := &cobra.Command{Use: "spec", Short: "edit/validate the instance-level spec (landingzone.yaml)"}
 	c.AddCommand(specSetCmd(), specValidateCmd())
 	return c
@@ -130,12 +131,12 @@ func specSetCmd() *cobra.Command {
 			"  llz spec set defaults.cluster.nodePool.count=5 defaults.platform.externalIDP=true",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			assigns, err := parseAssignments(args)
+			assigns, err := yamledit.ParseAssignments(args)
 			if err != nil {
 				return err
 			}
 			for _, a := range assigns {
-				if isPerEnvPath(a[0]) {
+				if yamledit.IsPerEnvPath(a[0]) {
 					return fmt.Errorf("%q is a per-env field — set it with `llz env set <env> %s=%s`", a[0], a[0], a[1])
 				}
 			}
@@ -144,9 +145,9 @@ func specSetCmd() *cobra.Command {
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
 			}
-			if err := editSpecFile(lzPath, func(doc *yaml.Node) error {
+			if err := yamledit.EditSpecFile(lzPath, func(doc *yaml.Node) error {
 				for _, a := range assigns {
-					if err := setSpecPath(doc, a[0], a[1]); err != nil {
+					if err := yamledit.SetSpecPath(doc, a[0], a[1]); err != nil {
 						return err
 					}
 				}
@@ -158,7 +159,7 @@ func specSetCmd() *cobra.Command {
 				fmt.Printf("  %s spec.%s = %s\n", color.Green("set"), a[0], a[1])
 			}
 			fmt.Println("\n" + color.Bold("Reconciling (`llz render`):"))
-			return runRender(gopts, "", false, false, false)
+			return caps.Render("")
 		},
 	}
 }
@@ -168,11 +169,11 @@ func specValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "validate the LandingZone spec (alias for `llz render --check`)",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runRender(gopts, "", false, true, false) },
+		RunE:  func(_ *cobra.Command, _ []string) error { return caps.Render("") },
 	}
 }
 
-func networkCmd() *cobra.Command {
+func NetworkCmd() *cobra.Command {
 	c := &cobra.Command{Use: "network", Short: "manage shared VPCs (spec.networks)"}
 	c.AddCommand(networkAddCmd(), networkListCmd())
 	return c
@@ -197,15 +198,15 @@ func networkAddCmd() *cobra.Command {
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
 			}
-			if err := editSpecFile(lzPath, func(doc *yaml.Node) error {
-				return setSpecPath(doc, "networks."+name+".region", region)
+			if err := yamledit.EditSpecFile(lzPath, func(doc *yaml.Node) error {
+				return yamledit.SetSpecPath(doc, "networks."+name+".region", region)
 			}, func(b []byte) error { _, e := clusterspec.Decode(b); return e }); err != nil {
 				return err
 			}
 			fmt.Printf("  %s shared VPC %q (region %s) → spec.networks\n", color.Green("added"), name, region)
 			fmt.Printf("  %s  %s\n", color.Dim("attach an env:"), color.Cyan(fmt.Sprintf("llz env set <env> cluster.network.vpc=%s cluster.network.subnetCIDR=10.0.0.0/14", name)))
 			fmt.Println("\n" + color.Bold("Reconciling (`llz render`):"))
-			return runRender(gopts, "", false, false, false)
+			return caps.Render("")
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "Linode region for the VPC (e.g. us-ord)")
@@ -220,7 +221,7 @@ func networkListCmd() *cobra.Command {
 		Short: "list the shared VPCs declared in spec.networks (name → region)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			lz, present, err := loadSpec()
+			lz, present, err := caps.LoadSpec()
 			if !present {
 				return fmt.Errorf("no LandingZone spec found — run `llz env add <env>` first")
 			}

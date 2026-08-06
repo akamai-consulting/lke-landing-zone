@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 )
 
@@ -52,19 +53,19 @@ func TestReadTopologyFromSpec(t *testing.T) {
 		"lab":  clusterDef("lab", "    promotionRank: 1\n"),
 	})
 
-	deps, err := readTopology("terraform-iac-bootstrap")
+	deps, err := envtopology.ReadTopology("terraform-iac-bootstrap")
 	if err != nil {
 		t.Fatalf("readTopology: %v", err)
 	}
-	d, _ := findDeployment(deps, "east")
-	if d.haRole != "active" || d.haGroup != "prod" {
+	d, _ := envtopology.FindDeployment(deps, "east")
+	if d.HARole != "active" || d.HAGroup != "prod" {
 		t.Errorf("east from spec = %+v, want active/prod", d)
 	}
-	if peer, ok, err := peerOf(deps, "east"); err != nil || !ok || peer != "west" {
+	if peer, ok, err := envtopology.PeerOf(deps, "east"); err != nil || !ok || peer != "west" {
 		t.Errorf("peerOf(east) = %q,%v,%v, want west", peer, ok, err)
 	}
-	if lab, _ := findDeployment(deps, "lab"); lab.haRole != "standalone" {
-		t.Errorf("lab role = %q, want standalone default", lab.haRole)
+	if lab, _ := envtopology.FindDeployment(deps, "lab"); lab.HARole != "standalone" {
+		t.Errorf("lab role = %q, want standalone default", lab.HARole)
 	}
 
 	ranks, err := promote.PromotionRanks(promoteDeps(), "terraform-iac-bootstrap")

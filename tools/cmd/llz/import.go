@@ -18,6 +18,8 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 )
 
 func brownfieldDeps() brownfield.Deps {
@@ -35,11 +37,11 @@ func brownfieldDeps() brownfield.Deps {
 				subnetCIDR:      spec.SubnetCIDR,
 			})
 		},
-		EnvSpecFile: envSpecFile,
+		EnvSpecFile: envtopology.SpecFile,
 		EditSpec: func(path string, mutate func(*yamlv3.Node) error, parse func([]byte) error) error {
-			return editSpecFile(path, mutate, parse)
+			return yamledit.EditSpecFile(path, mutate, parse)
 		},
-		SetSpecPath:            setSpecPath,
+		SetSpecPath:            yamledit.SetSpecPath,
 		Render:                 func(env string) error { return runRender(gopts, env, false, false, false) },
 		KubectlOut:             kubectlOut,
 		Confirm:                func() bool { return gopts.yes },

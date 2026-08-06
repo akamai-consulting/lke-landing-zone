@@ -12,6 +12,8 @@ import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
@@ -65,7 +67,7 @@ func runAppToggle(env, app string, enable bool) error {
 		return fmt.Errorf("%q is a required component and cannot be disabled (the cluster would not converge)", app)
 	}
 
-	envFile, err := envSpecFile(env)
+	envFile, err := envtopology.SpecFile(env)
 	if err != nil {
 		return err
 	}
@@ -74,8 +76,8 @@ func runAppToggle(env, app string, enable bool) error {
 	if !enable {
 		value = "false"
 	}
-	if err := editSpecFile(envFile, func(doc *yaml.Node) error {
-		return setSpecPath(doc, path, value)
+	if err := yamledit.EditSpecFile(envFile, func(doc *yaml.Node) error {
+		return yamledit.SetSpecPath(doc, path, value)
 	}, func(b []byte) error { _, e := clusterspec.DecodeClusterDefinition(b); return e }); err != nil {
 		return err
 	}

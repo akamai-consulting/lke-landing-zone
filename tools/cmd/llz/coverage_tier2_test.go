@@ -5,13 +5,10 @@ package main
 // kubectl / API / subprocess mocking.
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestWriteEnvFile(t *testing.T) {
@@ -29,40 +26,6 @@ func TestWriteEnvFile(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("perm = %v, want 0600", fi.Mode().Perm())
-	}
-}
-
-func TestEditYAMLFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "spec.yaml")
-	if err := os.WriteFile(path, []byte("cluster:\n  name: old\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := editYAMLFile(path, func(doc *yaml.Node) error {
-		setScalarChild(doc.Content[0], "added", "yes")
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("editYAMLFile: %v", err)
-	}
-	b, _ := os.ReadFile(path)
-	if !strings.Contains(string(b), "added: yes") {
-		t.Errorf("mutation not written:\n%s", b)
-	}
-
-	// Error paths.
-	if err := editYAMLFile(filepath.Join(dir, "nope.yaml"), func(*yaml.Node) error { return nil }); err == nil {
-		t.Error("missing file should error")
-	}
-	empty := filepath.Join(dir, "empty.yaml")
-	os.WriteFile(empty, nil, 0o644)
-	if err := editYAMLFile(empty, func(*yaml.Node) error { return nil }); err == nil {
-		t.Error("empty doc should error")
-	}
-	sentinel := errors.New("mutate failed")
-	if err := editYAMLFile(path, func(*yaml.Node) error { return sentinel }); !errors.Is(err, sentinel) {
-		t.Errorf("mutate error should propagate, got %v", err)
 	}
 }
 

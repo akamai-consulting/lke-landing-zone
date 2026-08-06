@@ -14,6 +14,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -382,7 +383,7 @@ func pushSecrets(g globalOpts, env string) error {
 	}
 
 	if g.dryRun {
-		_ = lockInfraEnvBranchPolicy(g, "", env) // prints the plan, changes nothing
+		_ = lockInfraEnvBranchPolicy("", env) // prints the plan, changes nothing
 		return nil
 	}
 	if !g.yes {
@@ -393,7 +394,7 @@ func pushSecrets(g globalOpts, env string) error {
 	// Create + lock infra-<env> BEFORE pushing — `gh secret set --env` 404s if the
 	// environment doesn't exist yet, and lockInfraEnvBranchPolicy is what creates
 	// it. The lock is also the secret-injection boundary (main-only).
-	protErr := lockInfraEnvBranchPolicy(g, "", env)
+	protErr := lockInfraEnvBranchPolicy("", env)
 	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
 		return protErr
 	}
@@ -470,12 +471,12 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// whole-set rule: it reports, so a half-added pair (the expected state between
 	// the two `llz env add` calls) is surfaced without failing anything.
 	fmt.Println("\n" + color.Bold("HA topology:"))
-	if deps, terr := readTopology(tfDir); terr != nil {
+	if deps, terr := envtopology.ReadTopology(tfDir); terr != nil {
 		report("read cluster topology", false)
 		errs = append(errs, terr)
-	} else if len(haMembers(deps)) == 0 {
+	} else if len(envtopology.HAMembers(deps)) == 0 {
 		fmt.Println("  (no HA pair declared — nothing to check)")
-	} else if verr := validateTopology(deps); verr != nil {
+	} else if verr := envtopology.ValidateTopology(deps); verr != nil {
 		report("active/standby pairing", false)
 		fmt.Printf("     %s\n", verr)
 	} else {

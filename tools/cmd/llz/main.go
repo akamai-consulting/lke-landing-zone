@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
@@ -68,7 +69,7 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), componentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
@@ -373,7 +374,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.subnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
 	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envShowCmd(), envSetCmd(), envEditCmd(), envListCmd(), envRoleCmd(), envPeerCmd(), envResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
+	env.AddCommand(add, envShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 

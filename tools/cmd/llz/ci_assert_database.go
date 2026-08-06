@@ -34,6 +34,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -153,7 +154,7 @@ var dbBao struct {
 
 func dbBaoClient() (*openbao.Client, error) {
 	if !dbBao.opened {
-		dbBao.client, dbBao.cleanup, dbBao.err = openbaoClientForward(roleActive)
+		dbBao.client, dbBao.cleanup, dbBao.err = openbaoClientForward(envtopology.RoleActive)
 		dbBao.opened = true
 	}
 	return dbBao.client, dbBao.err

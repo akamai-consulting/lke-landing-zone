@@ -34,6 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -62,6 +63,7 @@ var declarations = []func() extension.Extension{
 	configreadiness.Extension,
 	converge.Extension,
 	credcoverage.Extension,
+	envtopology.Extension,
 	docsguard.Extension,
 	healthsla.Extension,
 	tokeninv.Extension,

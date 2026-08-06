@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/spf13/cobra"
@@ -23,7 +24,7 @@ import (
 func promoteDeps() promote.Deps {
 	return promote.Deps{
 		Layout:          instancelayout.Detect,
-		ListDeployments: listDeployments,
+		ListDeployments: envtopology.ListDeployments,
 		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
 		// Narrowed to the one field the extension reads. Handing over the whole
 		// `answers` struct would put package main's copier-answers model on the

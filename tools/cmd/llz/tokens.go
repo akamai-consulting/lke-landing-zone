@@ -617,7 +617,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		fmt.Fprintln(os.Stderr, "→ "+shellQuote(it.argv))
 	}
 	if g.dryRun {
-		_ = lockInfraEnvBranchPolicy(g, repo, env) // prints the plan only
+		_ = lockInfraEnvBranchPolicy(repo, env) // prints the plan only
 		return nil
 	}
 	if !g.yes {
@@ -631,7 +631,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	// after the push loop. It also restricts secret injection to ref=main (the
 	// real boundary that stops a feature-branch dispatch from exfiltrating the
 	// OpenBao unseal keys).
-	protErr := lockInfraEnvBranchPolicy(g, repo, env)
+	protErr := lockInfraEnvBranchPolicy(repo, env)
 	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
 		return protErr
 	}

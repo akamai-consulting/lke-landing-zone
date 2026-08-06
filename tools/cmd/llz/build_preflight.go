@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -170,7 +171,7 @@ func knownLocally(tfDir, env string) (bool, error) {
 		return false, fmt.Errorf("the LandingZone spec does not load, so the deployment set is unknown: %w\n"+
 			"  fix it (`llz doctor --env %s` reports the details), then re-run", err, env)
 	}
-	names, err := listDeployments(tfDir)
+	names, err := envtopology.ListDeployments(tfDir)
 	if err != nil {
 		return true, nil // unreadable tree — not this gate's business
 	}
@@ -196,7 +197,7 @@ func unknownDeploymentErr(tfDir, env string) error {
 			return nil
 		}
 	}
-	names, _ := listDeployments(tfDir)
+	names, _ := envtopology.ListDeployments(tfDir)
 	have := "none are scaffolded yet"
 	if len(names) > 0 {
 		have = "this instance has: " + strings.Join(names, ", ")

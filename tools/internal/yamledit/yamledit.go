@@ -1,6 +1,6 @@
-package main
+package yamledit
 
-// yamledit.go is the comment-preserving YAML mutation primitive behind the spec
+// Package yamledit is the comment-preserving YAML mutation primitive behind the spec
 // WRITE commands (`llz env set`, `llz network add`). They edit the declarative
 // source in place — landingzone.yaml / environments/<env>.yaml stay the source of
 // truth — using yaml.v3's Node API so an operator's comments survive a `set`.
@@ -16,17 +16,17 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// editSpecFile applies mutate to a spec file, but COMMITS only if the result still
+// EditSpecFile applies mutate to a spec file, but COMMITS only if the result still
 // parses strictly — so a typo'd / unknown-field path can't poison the file and
 // break every subsequent spec command. parse is the strict decoder for the file's
 // kind (rejects unknown fields). On failure it restores the original bytes and
 // returns a clear, reverted error.
-func editSpecFile(path string, mutate func(*yaml.Node) error, parse func([]byte) error) error {
+func EditSpecFile(path string, mutate func(*yaml.Node) error, parse func([]byte) error) error {
 	orig, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	if err := editYAMLFile(path, mutate); err != nil {
+	if err := EditYAMLFile(path, mutate); err != nil {
 		return err
 	}
 	edited, err := os.ReadFile(path)
@@ -36,14 +36,14 @@ func editSpecFile(path string, mutate func(*yaml.Node) error, parse func([]byte)
 	if perr := parse(edited); perr != nil {
 		_ = os.WriteFile(path, orig, 0o644) // roll back — never leave a poisoned file
 		return fmt.Errorf("change rejected — %s left unchanged: %s\n  (check the path against `llz env show` / docs/landing-zone-spec.md)",
-			filepath.Base(path), cleanFieldErr(perr))
+			filepath.Base(path), CleanFieldErr(perr))
 	}
 	return nil
 }
 
-// cleanFieldErr trims the raw json-unmarshal noise to the actionable bit (the
+// CleanFieldErr trims the raw json-unmarshal noise to the actionable bit (the
 // "unknown field …" / "cannot unmarshal …" tail).
-func cleanFieldErr(err error) string {
+func CleanFieldErr(err error) string {
 	s := err.Error()
 	for _, marker := range []string{"unknown field", "cannot unmarshal"} {
 		if i := strings.LastIndex(s, marker); i >= 0 {
@@ -53,10 +53,10 @@ func cleanFieldErr(err error) string {
 	return s
 }
 
-// isPerEnvPath reports whether a spec.<path> belongs in environments/<env>.yaml
+// IsPerEnvPath reports whether a spec.<path> belongs in environments/<env>.yaml
 // (cluster.* / components.*) vs. instance-wide landingzone.yaml (instance / dns /
 // defaults / networks). Drives the routing between `llz env set` and `llz spec set`.
-func isPerEnvPath(dotted string) bool {
+func IsPerEnvPath(dotted string) bool {
 	head := dotted
 	if i := strings.IndexByte(dotted, '.'); i >= 0 {
 		head = dotted[:i]
@@ -64,9 +64,9 @@ func isPerEnvPath(dotted string) bool {
 	return head == "cluster" || head == "components"
 }
 
-// editYAMLFile loads path as a YAML document, hands the document node to mutate,
+// EditYAMLFile loads path as a YAML document, hands the document node to mutate,
 // and writes it back with 2-space indent (matching the authored files).
-func editYAMLFile(path string, mutate func(doc *yaml.Node) error) error {
+func EditYAMLFile(path string, mutate func(doc *yaml.Node) error) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -91,11 +91,11 @@ func editYAMLFile(path string, mutate func(doc *yaml.Node) error) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
-// setSpecPath sets spec.<dotted> = value in a parsed document, creating any
+// SetSpecPath sets spec.<dotted> = value in a parsed document, creating any
 // intermediate mappings. The leaf's YAML type is inferred (bool/int/else string),
 // so `cluster.nodePool.count=8` writes an int and `components.harbor.enabled=false`
 // a bool. Comments on untouched nodes are preserved.
-func setSpecPath(doc *yaml.Node, dotted, value string) error {
+func SetSpecPath(doc *yaml.Node, dotted, value string) error {
 	keys := strings.Split(dotted, ".")
 	if dotted == "" || keys[0] == "" {
 		return fmt.Errorf("empty path")
@@ -166,8 +166,8 @@ func isInt(v string) bool {
 	return err == nil
 }
 
-// parseAssignments splits "a.b=c" CLI args into (path, value) pairs.
-func parseAssignments(args []string) ([][2]string, error) {
+// ParseAssignments splits "a.b=c" CLI args into (path, value) pairs.
+func ParseAssignments(args []string) ([][2]string, error) {
 	out := make([][2]string, 0, len(args))
 	for _, a := range args {
 		i := strings.IndexByte(a, '=')

@@ -124,12 +124,16 @@ categories:
     #                       catalog called right. Plus internal/instancelayout, a hub
     #                       extracted to break a CYCLE rather than on caller count:
     #                       it took env-topology's closure 21 -> 6. -705.
+    #   30,687 / 179 files  env-topology, plus internal/yamledit (3 callers). -685.
+    #                       branchpolicy.go went BACK to cmd/llz: its GitHub PUT is
+    #                       cloud-mutate at `configured`, which grantStates refuses,
+    #                       and one shipping case is below the two-case bar.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 31372
+    budget: 30687
     exact: true
     include:
       - "tools/cmd/llz/*.go"

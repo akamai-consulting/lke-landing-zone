@@ -1,8 +1,8 @@
-package main
+package envtopology
 
-// envlist.go implements `llz env list` — the deployment inventory the CI
-// workflows fan their per-deployment matrices out over. The set of deployments
-// is whatever `llz env add` has scaffolded: one `<name>.tfvars` per deployment
+// envlist.go implements `llz env list` — the Deployment inventory the CI
+// workflows fan their per-Deployment matrices out over. The set of deployments
+// is whatever `llz env add` has scaffolded: one `<name>.tfvars` per Deployment
 // under terraform-iac-bootstrap/cluster/ (see scaffold.go). Terraform is the
 // single source of truth — there is deliberately no hardcoded env list — so a
 // `discover` job runs `llz env list --json` and feeds the result straight into
@@ -24,17 +24,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// listDeployments returns the sorted deployment names from BOTH sources: the
-// committed <tfDir>/cluster/*.tfvars (one per deployment that owns a Linode
+// ListDeployments returns the sorted Deployment names from BOTH sources: the
+// committed <tfDir>/cluster/*.tfvars (one per Deployment that owns a Linode
 // cluster) AND the LandingZone spec's environments (the environments/<env>.yaml set)
 // when a landingzone.yaml is present. The union (dedup by name) means a
-// spec-driven deployment whose transient tfvars are rendered at build time still
+// spec-driven Deployment whose transient tfvars are rendered at build time still
 // shows up in the CI matrix. The template's own
 // terraform.tfvars[.example] and any non-conforming basename are skipped — the
 // latter with a stderr warning, so a stray file can never inject a poisoned value
 // into a CI matrix. Pure (takes tfDir; the spec is read from the sibling
 // instance root) so it is unit-testable against a temp dir.
-func listDeployments(tfDir string) ([]string, error) {
+func ListDeployments(tfDir string) ([]string, error) {
 	set := map[string]struct{}{}
 
 	matches, err := filepath.Glob(filepath.Join(tfDir, "cluster", "*.tfvars"))
@@ -88,19 +88,19 @@ func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
 	case ordered:
 		// Promotion order, not alphabetical: the sequence a promote-on-color.Green
 		// workflow walks (dev → staging → prod). Only ranked deployments appear.
-		stages, err := promote.ReadPromotion(promoteDeps(), tfDir)
+		stages, err := promote.ReadPromotion(caps.PromoteDeps(), tfDir)
 		if err != nil {
 			return err
 		}
 		names = promote.PromotionOrder(stages)
 	case haOnly || role != "":
-		deps, err := readTopology(tfDir)
+		deps, err := ReadTopology(tfDir)
 		if err != nil {
 			return err
 		}
 		names = haFilter(deps, haOnly, role)
 	default:
-		n, err := listDeployments(tfDir)
+		n, err := ListDeployments(tfDir)
 		if err != nil {
 			return err
 		}
@@ -109,7 +109,7 @@ func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
 	if jsonOut {
 		// A bare JSON array drops straight into `fromJSON(...)` →
 		// strategy.matrix.region with no wrapper to unpick. names is never nil
-		// (listDeployments seeds it to []), so this prints `[]`, never `null`.
+		// (ListDeployments seeds it to []), so this prints `[]`, never `null`.
 		b, err := json.Marshal(names)
 		if err != nil {
 			return err
@@ -123,20 +123,20 @@ func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
 	return nil
 }
 
-func envListCmd() *cobra.Command {
+func ListCmd() *cobra.Command {
 	var jsonOut, haOnly, ordered bool
 	var role string
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "list the scaffolded deployments (the CI matrix source of truth)",
-		Long: "Lists every deployment scaffolded by `llz env add`, from the UNION of two\n" +
+		Long: "Lists every Deployment scaffolded by `llz env add`, from the UNION of two\n" +
 			"sources: the LandingZone spec's environments/<name>.yaml (the source of\n" +
 			"truth you commit) and any terraform-iac-bootstrap/cluster/<name>.tfvars.\n" +
 			"The union matters because the tfvars are gitignored build artifacts —\n" +
-			"on a fresh clone the spec is the only source, so a spec-only deployment\n" +
+			"on a fresh clone the spec is the only source, so a spec-only Deployment\n" +
 			"must still appear. The CI workflows' `discover` job runs\n" +
-			"`llz env list --json` and feeds it into each per-deployment matrix, so a\n" +
-			"new deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
+			"`llz env list --json` and feeds it into each per-Deployment matrix, so a\n" +
+			"new Deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
 			"OpenBao HA members (ha_role != standalone); --role filters by exact role.\n" +
 			"--ordered emits only the deployments that declare a promotion_rank, in\n" +
 			"ascending promotion order (dev → staging → prod) — the sequence a\n" +
@@ -146,7 +146,7 @@ func envListCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error { return runEnvList(jsonOut, haOnly, ordered, role) },
 	}
 	f := c.Flags()
-	f.BoolVar(&jsonOut, "json", false, "emit a JSON array of deployment names (for `fromJSON` in a workflow matrix)")
+	f.BoolVar(&jsonOut, "json", false, "emit a JSON array of Deployment names (for `fromJSON` in a workflow matrix)")
 	f.BoolVar(&haOnly, "ha", false, "only deployments in an HA pair (ha_role active|standby)")
 	f.BoolVar(&ordered, "ordered", false, "only ranked deployments, in promotion order (ascending promotion_rank)")
 	f.StringVar(&role, "role", "", "only deployments with this exact ha_role (active|standby|standalone)")

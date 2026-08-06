@@ -8,7 +8,7 @@ package main
 // `gh api`, like every other GitHub op in llz) closes that gap.
 //
 // WHY IT MATTERS: GitHub resolves an `environment:`'s secrets at job start, before
-// any runtime `if:` check. Without a deployment-branch-policy, anyone with write
+// any runtime `if:` check. Without a Deployment-branch-policy, anyone with write
 // access can dispatch a workflow from a feature branch, select infra-<env>, and
 // have GitHub inject the OpenBao unseal keys into a job their branch controls. The
 // branch policy is the real boundary — it gates secret injection itself.
@@ -35,12 +35,10 @@ var errEnvProtectionUnsupported = errors.New("environment branch protection unsu
 // lockInfraEnvBranchPolicy restricts the infra-<env> GitHub Environment to
 // deployments from `main` only. Idempotent: skips an env that already has a
 // custom `main` policy. Respects --dry-run (prints, changes nothing).
-func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
+func lockInfraEnvBranchPolicy(repo, env string) error {
 	const branch = "main"
 	if repo == "" {
-		if a, _ := readAnswers("."); a != nil {
-			repo = a.InstanceRepo
-		}
+		repo = instanceRepoFromAnswers()
 	}
 	if repo == "" {
 		return fmt.Errorf("cannot lock branch policy: instance repo unknown (no .copier-answers.yml)")
@@ -48,7 +46,7 @@ func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
 	envName := "infra-" + env
 
 	fmt.Fprintf(os.Stderr, "→ lock %s/environments/%s to ref=%s only\n", repo, envName, branch)
-	if g.dryRun {
+	if gopts.dryRun {
 		return nil
 	}
 
@@ -112,7 +110,7 @@ func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
 
 	// 4. Add the `main` rule. POST returns 422 if it already exists — tolerate.
 	if out, err := exec.Command("gh", "api", "-X", "POST",
-		"repos/"+repo+"/environments/"+envName+"/deployment-branch-policies",
+		"repos/"+repo+"/environments/"+envName+"/Deployment-branch-policies",
 		"-f", "name="+branch, "-f", "type=branch").CombinedOutput(); err != nil {
 		s := string(out)
 		switch {
@@ -153,9 +151,7 @@ func isPlanLimitErr(out string) bool {
 // once the plan allows. Printed at the END of the run so it isn't buried.
 func warnEnvProtectionUnsupported(repo, env string) {
 	if repo == "" {
-		if a, _ := readAnswers("."); a != nil {
-			repo = a.InstanceRepo
-		}
+		repo = instanceRepoFromAnswers()
 	}
 	envName := "infra-" + env
 	fmt.Fprintf(os.Stderr, "\n%s could not restrict %s to deployments from `main`.\n", color.Yellow("⚠ branch protection skipped"), envName)
@@ -164,7 +160,7 @@ func warnEnvProtectionUnsupported(repo, env string) {
 	fmt.Fprintln(os.Stderr, color.Dim("  feature-branch workflow_dispatch could select "+envName+" and read them."))
 	fmt.Fprintln(os.Stderr, "  Lock it once the plan allows (UI: Settings → Environments → "+envName+" → Deployment branch policy), or:")
 	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X PUT repos/"+repo+"/environments/"+envName+" -F deployment_branch_policy[custom_branch_policies]=true -F deployment_branch_policy[protected_branches]=false"))
-	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/deployment-branch-policies -f name=main -f type=branch"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/Deployment-branch-policies -f name=main -f type=branch"))
 }
 
 // policyKind classifies the deployment_branch_policy of an environment config.
@@ -185,7 +181,7 @@ func policyKind(envCfg map[string]any) string {
 // hasMainBranchRule reports whether the env's custom branch policies include a
 // rule named `branch`.
 func hasMainBranchRule(repo, envName, branch string) bool {
-	out, err := ghAPIOut("repos/" + repo + "/environments/" + envName + "/deployment-branch-policies")
+	out, err := ghAPIOut("repos/" + repo + "/environments/" + envName + "/Deployment-branch-policies")
 	if err != nil {
 		return false
 	}
@@ -230,4 +226,14 @@ func sliceOr(v any) []any {
 		return s
 	}
 	return []any{}
+}
+
+// instanceRepoFromAnswers reads `instance_repo` from .copier-answers.yml, or ""
+// when absent.
+func instanceRepoFromAnswers() string {
+	a, _ := readAnswers(".")
+	if a == nil {
+		return ""
+	}
+	return a.InstanceRepo
 }

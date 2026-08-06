@@ -23,6 +23,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -76,7 +77,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if name == o.templateEnv {
 		return fmt.Errorf("new env must differ from --template-env (%s)", o.templateEnv)
 	}
-	if err := validateHAFlags(o.haRole, o.haGroup); err != nil {
+	if err := envtopology.ValidateHAFlags(o.haRole, o.haGroup); err != nil {
 		return err
 	}
 	// Spec-first must-sets: the spec validates these, so require them up front

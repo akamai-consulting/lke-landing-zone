@@ -129,7 +129,7 @@ Realistic settled core: **~2,900**.
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `token-inventory` | 1,473 | 6 | ✔ | ✘ | `tokens` 437, `ci_token_inventory` 330, `token_validate` 211, `ci_rotation_plan` 216, `token_capability` 167, `ci_validate_tokens` 112. **Wants splitting** — it contributes predicates at three states (`configured`, `seeded`, `operating`). Best single candidate for fine-graining. **✅ Extracted — five files, not six.** `tokens.go` is the credential PROVISIONING wizard and alone TRIPLED the closure. See [What `token-inventory` broke](#what-token-inventory-broke--one-word-doing-two-jobs).|
-| `env-topology` | 740 | 4 | ✔ | ✘ | `topology` 245, `env_set` 219, `branchpolicy` 165, `envlist` 111. |
+| `env-topology` | 740 | 4 | ✔ | ✘ | **✅ Extracted — three of four files.** `branchpolicy` stayed: its GitHub PUT is `cloud-mutate` at `configured`, which the ceiling refuses. See [What `env-topology` refused to invent](#what-env-topology-refused-to-invent--one-case-is-not-two). `topology` 245, `env_set` 219, `branchpolicy` 165, `envlist` 111. |
 | `config-readiness` | 733 | 3 | ✔ | ✘ | **✅ Extracted.** `readiness` 255, `state` 242, `ci_preflight` 236. **This is the `configured` predicate** — the cleanest existing example of predicate code that's mis-filed as a command. |
 
 ## `→ provisioned` — grants: `cloud-mutate`
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty, extracted
+## The first twenty-one, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -279,9 +279,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-registry` extracted | 32,965 | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
 | `promote-pipeline` extracted | 32,733 | 184 | −232 — binds `promoted`, **the last unclaimed state** |
 | `posture-credential-coverage` extracted | 32,077 | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
-| `config-readiness` extracted | **31,372** | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
+| `config-readiness` extracted | 31,372 | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
+| `env-topology` extracted | **30,687** | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
 
-**Net −15,810 (33.5%) across twenty extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −16,495 (35.0%) across twenty-one extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1209,6 +1210,58 @@ Thirteen rounds of `go vet` before it was clean, and the errors were nearly all 
 Eight tests were found stranded in files named for a **coverage metric** — `coverage_tier1_test.go`,
 `branch_coverage_test.go`, `morehelpers_test.go`, `uncovered_helpers_test.go`. That naming is now the
 single most reliable predictor of a test that has drifted from its subject.
+
+### What `env-topology` refused to invent — one case is not two
+
+Twenty-first. **A third binding was written and then removed, and that is the finding.**
+
+```
+env-topology  transition:configured "env-set"  [read-repo]
+              assertion:configured  "topology" [read-repo]
+```
+
+`branchpolicy.go` locks the `infra-<env>` GitHub Environment to `main` — a PUT against GitHub's
+deployment-branch-policy API, which is a mutation of infrastructure this repo does not contain. The
+honest declaration is `transition:configured[read-repo, cloud-mutate]`, and `Validate()` refused it:
+
+```
+"cloud-mutate" may only be asked for at provisioned, seeded, converged, operating, destroyed
+```
+
+**The row is arguably wrong.** Those five states are where a *Linode* cloud exists to mutate, and the
+table was written from a catalog that read `configured` as a purely local moment. But **GitHub is
+configured before Linode is provisioned**, and locking a branch policy is exactly the kind of external
+mutation a reviewer would want declared.
+
+**It was not widened, because one shipping case is not two.** The bar this branch set for a
+`grantStates` row is two independent shipping cases and an argument. There is one. The second is
+*predicted* — `llz tokens` creates OBJ buckets and GitHub secrets at configuration time — but
+predicted is not shipping, and both rows widened so far (`cloud-mutate`@`operating`,
+`secret-custody`@`provisioned`) had code in front of them.
+
+So `branchpolicy.go` went back to package `main`, and this is recorded as **case #1**.
+`TestPackageDoesNotMutateExternalInfrastructure` fails if it comes back without the row being argued
+first.
+
+**Four times now the answer has been "move the code to the side whose declaration is true"** —
+`guard-docs` and `promote-pipeline` for the missing `write-repo` grant, `gen-toc` before them, and now
+this for `cloud-mutate`@`configured`. That consistency is itself evidence: **the model's boundaries
+are in roughly the right place even where its vocabulary is short.** A model that needed a new word
+every third extraction would be a model that had not found its joints.
+
+### `env_set_test.go` contained no tests for `env_set.go`
+
+The twelfth shared package, `internal/yamledit` (three callers), came out with this — and splitting
+its tests turned up the sharpest instance yet of the stranded-test pattern.
+
+`env_set_test.go` held six functions. **Every one of them tested something else**: four tested
+`yamledit` (`SetSpecPath`, `EditSpecFile`, `IsPerEnvPath`, `ParseAssignments`), one was a package-main
+helper, one tested `lineDiff` from `render.go`. Zero tested `env_set.go`.
+
+The `coverage_tier*` files are mis-filed because they are named for a **metric**. This one is
+mis-filed because it is named for the **command whose implementation happens to call the code** —
+a different cause with an identical effect: a test whose location says nothing about its subject. Ten
+tests have now been relocated across this branch, and the two naming patterns account for all of them.
 
 ## The cost of the interesting half
 

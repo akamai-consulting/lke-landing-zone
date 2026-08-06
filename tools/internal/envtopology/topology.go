@@ -1,4 +1,4 @@
-package main
+package envtopology
 
 // topology.go reads the OpenBao HA topology declared in the cluster tfvars
 // (ha_role + ha_group, see terraform-iac-bootstrap/cluster/variables.tf) and
@@ -11,8 +11,8 @@ package main
 //   • ha_role = standalone — a single self-contained OpenBao (no peer).
 //
 // `llz env role <name>` and `llz env peer <name>` expose this to the workflows;
-// `validateTopology` enforces the active/standby pairing. Pure helpers (take a
-// tfDir / a []deployment) so they unit-test against a temp dir.
+// `ValidateTopology` enforces the active/standby pairing. Pure helpers (take a
+// tfDir / a []Deployment) so they unit-test against a temp dir.
 
 import (
 	"fmt"
@@ -29,16 +29,18 @@ import (
 )
 
 const (
-	roleActive     = "active"
-	roleStandby    = "standby"
+	RoleActive     = "active"
+	RoleStandby    = "standby"
 	roleStandalone = "standalone"
 )
 
-// deployment is one cluster's declared HA identity.
-type deployment struct {
-	name    string
-	haRole  string // active | standby | standalone
-	haGroup string // pair id; "" for standalone
+// Deployment is one cluster's declared HA identity.
+// EXPORTED because FindDeployment/PeerOf are, and a caller handed an opaque value
+// it cannot read is a caller that has to re-derive the answer.
+type Deployment struct {
+	Name    string
+	HARole  string // active | standby | standalone
+	HAGroup string // pair id; "" for standalone
 }
 
 // hclStringField matches `field = "value"` in a tfvars line (the read-only twin
@@ -51,31 +53,31 @@ func hclStringField(body, field string) (string, bool) {
 	return "", false
 }
 
-// readTopology returns every deployment with its declared ha_role/ha_group (role
+// ReadTopology returns every Deployment with its declared ha_role/ha_group (role
 // defaults to standalone when absent). It reads the LandingZone spec when one is
 // present — the source of truth, so `llz env role`/`peer` stay correct even when
 // the committed tfvars lag a spec edit — and falls back to <tfDir>/cluster/*.tfvars
-// otherwise (reusing listDeployments' name discovery so the set is identical).
+// otherwise (reusing ListDeployments' name discovery so the set is identical).
 // It deliberately does NOT enforce the whole-set pairing contract. `llz env add`
 // writes an HA pair one half at a time — scaffold.go defers the render with
 // "HA group %q still needs its %s peer" precisely because that half-formed state
-// is expected — and `llz env resolve` runs for EVERY deployment at the head of
+// is expected — and `llz env resolve` runs for EVERY Deployment at the head of
 // the OpenBao bootstrap job. Validating the whole set here would make one
 // incomplete group fail role/peer/resolve for every cluster in the repo,
-// including unrelated standalone ones. peerOf enforces what it needs, where the
+// including unrelated standalone ones. PeerOf enforces what it needs, where the
 // answer would otherwise be a guess.
-func readTopology(tfDir string) ([]deployment, error) {
-	if lz, present, err := loadSpec(); present {
+func ReadTopology(tfDir string) ([]Deployment, error) {
+	if lz, present, err := caps.LoadSpec(); present {
 		if err != nil {
 			return nil, err
 		}
 		return topologyFromSpec(lz), nil
 	}
-	names, err := listDeployments(tfDir)
+	names, err := ListDeployments(tfDir)
 	if err != nil {
 		return nil, err
 	}
-	deps := make([]deployment, 0, len(names))
+	deps := make([]Deployment, 0, len(names))
 	for _, name := range names {
 		body, err := os.ReadFile(filepath.Join(tfDir, "cluster", name+".tfvars"))
 		if err != nil {
@@ -86,42 +88,42 @@ func readTopology(tfDir string) ([]deployment, error) {
 			role = roleStandalone
 		}
 		group, _ := hclStringField(string(body), "ha_group")
-		deps = append(deps, deployment{name: name, haRole: role, haGroup: group})
+		deps = append(deps, Deployment{Name: name, HARole: role, HAGroup: group})
 	}
 	return deps, nil
 }
 
 // topologyFromSpec builds the HA topology from the assembled spec (the merged
 // per-env ha.role/ha.group), sorted by name to match the tfvars path's ordering.
-func topologyFromSpec(lz *clusterspec.LandingZone) []deployment {
-	deps := make([]deployment, 0, len(lz.Spec.Environments))
+func topologyFromSpec(lz *clusterspec.LandingZone) []Deployment {
+	deps := make([]Deployment, 0, len(lz.Spec.Environments))
 	for name, e := range lz.Spec.Environments {
 		role := e.Cluster.HA.Role
 		if role == "" {
 			role = roleStandalone
 		}
-		deps = append(deps, deployment{name: name, haRole: role, haGroup: e.Cluster.HA.Group})
+		deps = append(deps, Deployment{Name: name, HARole: role, HAGroup: e.Cluster.HA.Group})
 	}
-	sort.Slice(deps, func(i, j int) bool { return deps[i].name < deps[j].name })
+	sort.Slice(deps, func(i, j int) bool { return deps[i].Name < deps[j].Name })
 	return deps
 }
 
-func findDeployment(deps []deployment, name string) (deployment, bool) {
+func FindDeployment(deps []Deployment, name string) (Deployment, bool) {
 	for _, d := range deps {
-		if d.name == name {
+		if d.Name == name {
 			return d, true
 		}
 	}
-	return deployment{}, false
+	return Deployment{}, false
 }
 
-// haMembers returns the names of deployments that belong to an HA pair
+// HAMembers returns the names of deployments that belong to an HA pair
 // (role != standalone), sorted.
-func haMembers(deps []deployment) []string {
+func HAMembers(deps []Deployment) []string {
 	out := []string{}
 	for _, d := range deps {
-		if d.haRole != roleStandalone {
-			out = append(out, d.name)
+		if d.HARole != roleStandalone {
+			out = append(out, d.Name)
 		}
 	}
 	sort.Strings(out)
@@ -129,43 +131,43 @@ func haMembers(deps []deployment) []string {
 }
 
 // byRole returns the names of deployments with the given ha_role, sorted.
-func byRole(deps []deployment, role string) []string {
+func byRole(deps []Deployment, role string) []string {
 	out := []string{}
 	for _, d := range deps {
-		if d.haRole == role {
-			out = append(out, d.name)
+		if d.HARole == role {
+			out = append(out, d.Name)
 		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// peerOf returns the other member of name's HA group. ok is false for a
-// standalone deployment, an unknown name, or a group whose other half has not
+// PeerOf returns the other member of name's HA group. ok is false for a
+// standalone Deployment, an unknown name, or a group whose other half has not
 // been added yet.
 //
 // An AMBIGUOUS group is an error, not an arbitrary answer. This used to return
 // the first other member, so a group holding two standbys silently resolved to
 // whichever came first — and `llz env peer` is what tells CI which cluster to
 // seed Harbor creds from and exchange CAs with, so guessing seeds from the wrong
-// cluster. validateHAFlags cannot catch this: it runs at `llz env add` and sees
-// one env, never the cross-deployment pairing.
-func peerOf(deps []deployment, name string) (string, bool, error) {
-	self, found := findDeployment(deps, name)
-	if !found || self.haRole == roleStandalone || self.haGroup == "" {
+// cluster. ValidateHAFlags cannot catch this: it runs at `llz env add` and sees
+// one env, never the cross-Deployment pairing.
+func PeerOf(deps []Deployment, name string) (string, bool, error) {
+	self, found := FindDeployment(deps, name)
+	if !found || self.HARole == roleStandalone || self.HAGroup == "" {
 		return "", false, nil
 	}
 	var peers []string
 	for _, d := range deps {
-		if d.name != name && d.haGroup == self.haGroup {
-			peers = append(peers, d.name)
+		if d.Name != name && d.HAGroup == self.HAGroup {
+			peers = append(peers, d.Name)
 		}
 	}
 	if len(peers) > 1 {
 		sort.Strings(peers)
 		return "", false, fmt.Errorf("ha_group %q holds more than one peer for %q (%s) — exactly one "+
 			"active and one standby are required; refusing to guess which cluster to pair with",
-			self.haGroup, name, strings.Join(peers, ", "))
+			self.HAGroup, name, strings.Join(peers, ", "))
 	}
 	if len(peers) == 0 {
 		return "", false, nil
@@ -173,32 +175,32 @@ func peerOf(deps []deployment, name string) (string, bool, error) {
 	return peers[0], true, nil
 }
 
-// validateTopology enforces the pairing contract: every non-empty ha_group has
+// ValidateTopology enforces the pairing contract: every non-empty ha_group has
 // exactly one active and one standby; standalone carries no group.
-func validateTopology(deps []deployment) error {
-	groups := map[string][]deployment{}
+func ValidateTopology(deps []Deployment) error {
+	groups := map[string][]Deployment{}
 	for _, d := range deps {
-		switch d.haRole {
+		switch d.HARole {
 		case roleStandalone:
-			if d.haGroup != "" {
-				return fmt.Errorf("deployment %q is standalone but sets ha_group=%q", d.name, d.haGroup)
+			if d.HAGroup != "" {
+				return fmt.Errorf("Deployment %q is standalone but sets ha_group=%q", d.Name, d.HAGroup)
 			}
-		case roleActive, roleStandby:
-			if d.haGroup == "" {
-				return fmt.Errorf("deployment %q is %s but has no ha_group", d.name, d.haRole)
+		case RoleActive, RoleStandby:
+			if d.HAGroup == "" {
+				return fmt.Errorf("Deployment %q is %s but has no ha_group", d.Name, d.HARole)
 			}
-			groups[d.haGroup] = append(groups[d.haGroup], d)
+			groups[d.HAGroup] = append(groups[d.HAGroup], d)
 		default:
-			return fmt.Errorf("deployment %q has invalid ha_role %q (want active|standby|standalone)", d.name, d.haRole)
+			return fmt.Errorf("Deployment %q has invalid ha_role %q (want active|standby|standalone)", d.Name, d.HARole)
 		}
 	}
 	for g, members := range groups {
 		var actives, standbys []string
 		for _, d := range members {
-			if d.haRole == roleActive {
-				actives = append(actives, d.name)
+			if d.HARole == RoleActive {
+				actives = append(actives, d.Name)
 			} else {
-				standbys = append(standbys, d.name)
+				standbys = append(standbys, d.Name)
 			}
 		}
 		if len(actives) != 1 || len(standbys) != 1 {
@@ -209,55 +211,55 @@ func validateTopology(deps []deployment) error {
 	return nil
 }
 
-// validateHAFlags checks the `llz env add` --ha-role/--ha-group combination
+// ValidateHAFlags checks the `llz env add` --ha-role/--ha-group combination
 // before any files are written. The rule lives in internal/validate so the
 // LandingZone spec validator enforces the same active/standby pairing (with
 // spec-field names in its messages).
-func validateHAFlags(role, group string) error {
+func ValidateHAFlags(role, group string) error {
 	return validate.HATopology(role, group, "--ha-role", "--ha-group")
 }
 
-func envRoleCmd() *cobra.Command {
+func RoleCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "role <deployment>",
-		Short: "print a deployment's OpenBao HA role (active|standby|standalone)",
+		Use:   "role <Deployment>",
+		Short: "print a Deployment's OpenBao HA role (active|standby|standalone)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			tfDir, _, _ := instancelayout.Detect()
-			deps, err := readTopology(tfDir)
+			deps, err := ReadTopology(tfDir)
 			if err != nil {
 				return err
 			}
-			d, ok := findDeployment(deps, args[0])
+			d, ok := FindDeployment(deps, args[0])
 			if !ok {
-				return fmt.Errorf("no such deployment %q (run `llz env list`)", args[0])
+				return fmt.Errorf("no such Deployment %q (run `llz env list`)", args[0])
 			}
-			fmt.Println(d.haRole)
+			fmt.Println(d.HARole)
 			return nil
 		},
 	}
 }
 
-func envPeerCmd() *cobra.Command {
+func PeerCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "peer <deployment>",
-		Short: "print a deployment's HA peer (the other member of its ha_group); errors for standalone",
+		Use:   "peer <Deployment>",
+		Short: "print a Deployment's HA peer (the other member of its ha_group); errors for standalone",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			tfDir, _, _ := instancelayout.Detect()
-			deps, err := readTopology(tfDir)
+			deps, err := ReadTopology(tfDir)
 			if err != nil {
 				return err
 			}
-			if _, ok := findDeployment(deps, args[0]); !ok {
-				return fmt.Errorf("no such deployment %q (run `llz env list`)", args[0])
+			if _, ok := FindDeployment(deps, args[0]); !ok {
+				return fmt.Errorf("no such Deployment %q (run `llz env list`)", args[0])
 			}
-			peer, ok, err := peerOf(deps, args[0])
+			peer, ok, err := PeerOf(deps, args[0])
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return fmt.Errorf("deployment %q is standalone — it has no HA peer", args[0])
+				return fmt.Errorf("Deployment %q is standalone — it has no HA peer", args[0])
 			}
 			fmt.Println(peer)
 			return nil
@@ -265,21 +267,21 @@ func envPeerCmd() *cobra.Command {
 	}
 }
 
-// envResolveCmd is the combined role+peer probe the bootstrap-openbao "Resolve
+// ResolveCmd is the combined role+peer probe the bootstrap-openbao "Resolve
 // role + peer" step ran as inline bash (two `llz env role`/`env peer` calls plus
 // a defensive case-guard against a stale binary printing help into
 // $GITHUB_OUTPUT). It emits role=/peer= to $GITHUB_OUTPUT in one call — peer is
-// empty for a standalone deployment (expected, not an error). The stale-binary
+// empty for a standalone Deployment (expected, not an error). The stale-binary
 // guard is unnecessary by construction: a binary too old to know this subcommand
 // fails cleanly with "unknown command" rather than corrupting the output file.
-func envResolveCmd() *cobra.Command {
+func ResolveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "resolve <deployment>",
-		Short: "emit role= and peer= GitHub Actions outputs for a deployment (HA role + peer)",
+		Use:   "resolve <Deployment>",
+		Short: "emit role= and peer= GitHub Actions outputs for a Deployment (HA role + peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			tfDir, _, _ := instancelayout.Detect()
-			deps, err := readTopology(tfDir)
+			deps, err := ReadTopology(tfDir)
 			if err != nil {
 				return err
 			}
@@ -288,17 +290,17 @@ func envResolveCmd() *cobra.Command {
 	}
 }
 
-// writeHAResolution emits role=/peer= to $GITHUB_OUTPUT for one deployment
-// (peer empty for a standalone) and prints a human line. Split from envResolveCmd
+// writeHAResolution emits role=/peer= to $GITHUB_OUTPUT for one Deployment
+// (peer empty for a standalone) and prints a human line. Split from ResolveCmd
 // so the output logic is unit-testable without an on-disk instance layout.
-func writeHAResolution(deps []deployment, name string) error {
-	d, ok := findDeployment(deps, name)
+func writeHAResolution(deps []Deployment, name string) error {
+	d, ok := FindDeployment(deps, name)
 	if !ok {
-		return fmt.Errorf("no such deployment %q (run `llz env list`)", name)
+		return fmt.Errorf("no such Deployment %q (run `llz env list`)", name)
 	}
 	// Empty peer is expected for a standalone or a half-added pair; an ambiguous
 	// group is not — this value drives which cluster CI pairs with.
-	peer, _, err := peerOf(deps, name)
+	peer, _, err := PeerOf(deps, name)
 	if err != nil {
 		return err
 	}
@@ -306,21 +308,21 @@ func writeHAResolution(deps []deployment, name string) error {
 	if shown == "" {
 		shown = "<none>"
 	}
-	fmt.Printf("Resolved %s: role=%s peer=%s\n", name, d.haRole, shown)
-	return appendGHAFile("GITHUB_OUTPUT", "role="+d.haRole, "peer="+peer)
+	fmt.Printf("Resolved %s: role=%s peer=%s\n", name, d.HARole, shown)
+	return caps.Summary("GITHUB_OUTPUT", "role="+d.HARole, "peer="+peer)
 }
 
-// haFilter narrows a deployment-name list per the `llz env list` flags.
-func haFilter(deps []deployment, haOnly bool, role string) []string {
+// haFilter narrows a Deployment-name list per the `llz env list` flags.
+func haFilter(deps []Deployment, haOnly bool, role string) []string {
 	switch {
 	case role != "":
 		return byRole(deps, role)
 	case haOnly:
-		return haMembers(deps)
+		return HAMembers(deps)
 	default:
 		names := make([]string, 0, len(deps))
 		for _, d := range deps {
-			names = append(names, d.name)
+			names = append(names, d.Name)
 		}
 		sort.Strings(names)
 		return names
