@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 // #397 in one test: Ready pods and an S3-shaped config, and not one byte written.
@@ -114,15 +116,15 @@ type proveHarness struct {
 
 func (h *proveHarness) install(t *testing.T) {
 	t.Helper()
-	oc, ocr, ops, on, ofl, onew, osl, obud := lokiChunksTarget, objEncConsumerCreds, lokiPodStart,
+	oc, ocr, ops, on, ofl, onew, osl, obud := lokiChunksTarget, objenc.ObjEncConsumerCreds, lokiPodStart,
 		lokiNow, lokiFlushIngester, lokiNewestObject, lokiProveSleep, lokiProveBudget
 	t.Cleanup(func() {
-		lokiChunksTarget, objEncConsumerCreds, lokiPodStart, lokiNow, lokiFlushIngester,
+		lokiChunksTarget, objenc.ObjEncConsumerCreds, lokiPodStart, lokiNow, lokiFlushIngester,
 			lokiNewestObject, lokiProveSleep, lokiProveBudget = oc, ocr, ops, on, ofl, onew, osl, obud
 	})
 	lokiProveBudget = 20 * time.Second
 	lokiChunksTarget = func(string) (string, string) { return "platform-loki-chunks-e2e", "us-ord-10.linodeobjects.com" }
-	objEncConsumerCreds = func(string, string, string) (string, string, error) { return "ak", "sk", nil }
+	objenc.ObjEncConsumerCreds = func(objenc.Deps, string, string, string) (string, string, error) { return "ak", "sk", nil }
 	lokiPodStart = func(string, string) (time.Time, error) { return h.start, nil }
 	lokiNow = func() time.Time { return h.now }
 	// Virtual clock: sleeping advances it, so the poll loop terminates without

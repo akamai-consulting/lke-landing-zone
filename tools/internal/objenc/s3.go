@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // s3_object.go — a SigV4-signed PUT / GET / DELETE of a single object, so a gate
 // can prove a bucket is WRITABLE by the credential its consumer actually holds.
@@ -22,20 +22,22 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
-// s3ObjectRequest performs one SigV4-signed request against <endpoint>/<bucket>/<key>
+// S3ObjectRequest performs one SigV4-signed request against <endpoint>/<bucket>/<key>
 // and returns the status, the S3 error code, and the body.
 //
 // Package var so the round-trip logic is testable without network.
-var s3ObjectRequest = func(method, accessKey, secretKey, endpoint, bucket, key string, payload []byte) (int, string, []byte, error) {
-	host := s3Host(endpoint)
-	region := s3Region(endpoint)
+var S3ObjectRequest = func(method, accessKey, secretKey, endpoint, bucket, key string, payload []byte) (int, string, []byte, error) {
+	host := s3sig.Host(endpoint)
+	region := s3sig.Region(endpoint)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
-	payloadHash := sha256Hex(string(payload))
+	payloadHash := s3sig.SHA256Hex(string(payload))
 
 	canonicalURI := "/" + bucket + "/" + key
 	canonicalHeaders := "host:" + host + "\n" +
@@ -48,9 +50,9 @@ var s3ObjectRequest = func(method, accessKey, secretKey, endpoint, bucket, key s
 
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	signature := hex.EncodeToString(hmacSHA256(sigV4SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
+	signature := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
 	auth := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		accessKey, scope, signedHeaders, signature)
 
@@ -79,7 +81,7 @@ var s3ObjectRequest = func(method, accessKey, secretKey, endpoint, bucket, key s
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	s3c := resp.Header.Get("x-amz-error-code")
 	if s3c == "" && len(respBody) > 0 {
-		s3c = s3ErrorCode(string(respBody))
+		s3c = s3sig.ErrorCode(string(respBody))
 	}
 	return resp.StatusCode, s3c, respBody, nil
 }
@@ -95,7 +97,7 @@ type s3RoundTripResult struct {
 // OK reports a proven writable bucket.
 func (r s3RoundTripResult) OK() bool { return r.Wrote && r.ReadBack }
 
-// s3ObjectRoundTrip writes a probe object, reads it back, verifies the bytes, and
+// S3ObjectRoundTrip writes a probe object, reads it back, verifies the bytes, and
 // deletes it.
 //
 // READING BACK IS NOT REDUNDANT. A PUT that returns 200 against the wrong
@@ -109,22 +111,22 @@ func (r s3RoundTripResult) OK() bool { return r.Wrote && r.ReadBack }
 // Cleanup is best-effort: a probe object left behind is a few bytes of litter,
 // while failing the gate because a DELETE did not land would report a write
 // problem that is not one.
-func s3ObjectRoundTrip(accessKey, secretKey, endpoint, bucket, key string, payload []byte) s3RoundTripResult {
+func S3ObjectRoundTrip(accessKey, secretKey, endpoint, bucket, key string, payload []byte) s3RoundTripResult {
 	var r s3RoundTripResult
 
-	code, s3c, _, err := s3ObjectRequest(http.MethodPut, accessKey, secretKey, endpoint, bucket, key, payload)
+	code, s3c, _, err := S3ObjectRequest(http.MethodPut, accessKey, secretKey, endpoint, bucket, key, payload)
 	switch {
 	case err != nil:
 		r.FailWhy = fmt.Sprintf("PUT %s/%s failed at the transport (%v) — the endpoint is unreachable from here", bucket, key, err)
 		return r
 	case code < 200 || code >= 300:
 		r.FailWhy = fmt.Sprintf("PUT %s/%s returned HTTP %d%s — %s",
-			bucket, key, code, s3CodeSuffix(s3c), explainS3Write(code, s3c, bucket, endpoint))
+			bucket, key, code, s3CodeSuffix(s3c), ExplainS3Write(code, s3c, bucket, endpoint))
 		return r
 	}
 	r.Wrote = true
 
-	code, s3c, got, err := s3ObjectRequest(http.MethodGet, accessKey, secretKey, endpoint, bucket, key, nil)
+	code, s3c, got, err := S3ObjectRequest(http.MethodGet, accessKey, secretKey, endpoint, bucket, key, nil)
 	switch {
 	case err != nil:
 		r.FailWhy = fmt.Sprintf("the object was written but GET %s/%s failed at the transport (%v)", bucket, key, err)
@@ -143,7 +145,7 @@ func s3ObjectRoundTrip(accessKey, secretKey, endpoint, bucket, key string, paylo
 	}
 	r.ReadBack = true
 
-	if code, _, _, err := s3ObjectRequest(http.MethodDelete, accessKey, secretKey, endpoint, bucket, key, nil); err == nil && code < 300 {
+	if code, _, _, err := S3ObjectRequest(http.MethodDelete, accessKey, secretKey, endpoint, bucket, key, nil); err == nil && code < 300 {
 		r.Cleaned = true
 	}
 	return r
@@ -156,8 +158,8 @@ func s3CodeSuffix(s3Code string) string {
 	return " (" + s3Code + ")"
 }
 
-// explainS3Write turns an S3 write failure into the thing to go and check.
-func explainS3Write(code int, s3Code, bucket, endpoint string) string {
+// ExplainS3Write turns an S3 write failure into the thing to go and check.
+func ExplainS3Write(code int, s3Code, bucket, endpoint string) string {
 	switch s3Code {
 	case "NoSuchBucket":
 		return fmt.Sprintf("bucket %q does not exist AT %s. It may exist at a DIFFERENT endpoint — that is the "+

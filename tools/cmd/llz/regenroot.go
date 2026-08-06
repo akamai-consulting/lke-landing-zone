@@ -11,7 +11,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,12 +18,9 @@ import (
 	"strings"
 
 	"golang.org/x/term"
-)
 
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return fmt.Sprintf("%x", sum)
-}
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
+)
 
 const openbaoNS = "llz-openbao"
 
@@ -163,7 +159,7 @@ func updateRootGHASecret(region, newRoot string, o regenRootOpts) error {
 		emitRecoveryToken(newRoot, "env-secret on infra-"+region+" NOT updated (--env likely ignored; create the env / grant env-admin scope)")
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN not present on infra-%s after set — --env was ignored", region)
 	}
-	sum := sha256Hex(newRoot)
+	sum := s3sig.SHA256Hex(newRoot)
 	fmt.Printf("OPENBAO_ROOT_TOKEN written to infra-%s environment secret. sha256=%s\n", region, sum)
 	fmt.Printf("\nNext: run bootstrap-openbao.yml for region=%s (preserve_root_on_failure=true), then delete OPENBAO_ROOT_TOKEN from infra-%s once it succeeds.\n", region, region)
 	return nil

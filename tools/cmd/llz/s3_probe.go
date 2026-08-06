@@ -13,15 +13,14 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 // s3BucketProbe issues a SigV4-signed HEAD of bucket at the OBJ endpoint and
@@ -29,14 +28,14 @@ import (
 // Package var so tests exercise probeS3Pair/classifyS3 without network. code 0 =
 // unreachable.
 var s3BucketProbe = func(accessKey, secretKey, endpoint, bucket string) (code int, s3Code string, err error) {
-	host := s3Host(endpoint)
-	region := s3Region(endpoint)
+	host := s3sig.Host(endpoint)
+	region := s3sig.Region(endpoint)
 	client := &http.Client{Timeout: 20 * time.Second}
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
-	payloadHash := sha256Hex("") // empty body
+	payloadHash := s3sig.SHA256Hex("") // empty body
 
 	canonicalURI := "/" + bucket
 	canonicalHeaders := "host:" + host + "\n" +
@@ -49,9 +48,9 @@ var s3BucketProbe = func(accessKey, secretKey, endpoint, bucket string) (code in
 
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	signature := hex.EncodeToString(hmacSHA256(sigV4SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
+	signature := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
 	auth := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		accessKey, scope, signedHeaders, signature)
 
@@ -73,7 +72,7 @@ var s3BucketProbe = func(accessKey, secretKey, endpoint, bucket string) (code in
 	s3c := resp.Header.Get("x-amz-error-code")
 	if s3c == "" {
 		if body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096)); len(body) > 0 {
-			s3c = s3ErrorCode(string(body))
+			s3c = s3sig.ErrorCode(string(body))
 		}
 	}
 	return resp.StatusCode, s3c, nil
@@ -121,49 +120,3 @@ func classifyS3(code int, s3Code string) (validityStatus, string) {
 }
 
 // ── SigV4 primitives (unit-tested against AWS's documented example) ────────────
-
-func hmacSHA256(key []byte, data string) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write([]byte(data))
-	return m.Sum(nil)
-}
-
-// sigV4SigningKey derives the AWS SigV4 signing key (the documented HMAC chain).
-func sigV4SigningKey(secret, dateStamp, region, service string) []byte {
-	kDate := hmacSHA256([]byte("AWS4"+secret), dateStamp)
-	kRegion := hmacSHA256(kDate, region)
-	kService := hmacSHA256(kRegion, service)
-	return hmacSHA256(kService, "aws4_request")
-}
-
-// s3Host strips the scheme from an OBJ endpoint → us-ord-1.linodeobjects.com.
-func s3Host(endpoint string) string {
-	h := strings.TrimPrefix(endpoint, "https://")
-	h = strings.TrimPrefix(h, "http://")
-	return strings.TrimRight(h, "/")
-}
-
-// s3Region derives the SigV4 region from a Linode OBJ endpoint: the leading host
-// label (us-ord-1.linodeobjects.com → us-ord-1), which is the region Linode's
-// S3-compatible gateway signs against. Falls back to us-east-1 (the Ceph default)
-// when the host isn't a recognizable linodeobjects.com endpoint.
-func s3Region(endpoint string) string {
-	h := s3Host(endpoint)
-	if i := strings.Index(h, ".linodeobjects.com"); i > 0 {
-		return h[:i]
-	}
-	if i := strings.IndexByte(h, '.'); i > 0 {
-		return h[:i]
-	}
-	return "us-east-1"
-}
-
-var s3ErrCodeRe = regexp.MustCompile(`<Code>([^<]+)</Code>`)
-
-// s3ErrorCode extracts the <Code> element from an S3 error XML body ("" if none).
-func s3ErrorCode(body string) string {
-	if m := s3ErrCodeRe.FindStringSubmatch(body); m != nil {
-		return m[1]
-	}
-	return ""
-}

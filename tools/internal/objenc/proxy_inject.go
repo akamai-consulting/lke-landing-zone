@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // objproxy_inject.go — the SSE-C header injection rules, as a pure function.
 //

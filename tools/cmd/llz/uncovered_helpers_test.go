@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // base64Auth builds the docker-config auth field. A swapped order or separator
@@ -49,22 +51,22 @@ func TestBase64Auth(t *testing.T) {
 }
 
 func TestTruncateForError(t *testing.T) {
-	if got := truncateForError(nil); got != "(empty body)" {
+	if got := harborauth.TruncateForError(nil); got != "(empty body)" {
 		t.Errorf("nil body = %q", got)
 	}
-	if got := truncateForError([]byte("   \n\t ")); got != "(empty body)" {
+	if got := harborauth.TruncateForError([]byte("   \n\t ")); got != "(empty body)" {
 		t.Errorf("whitespace-only body must read as empty, got %q", got)
 	}
-	if got := truncateForError([]byte("  boom  ")); got != "boom" {
+	if got := harborauth.TruncateForError([]byte("  boom  ")); got != "boom" {
 		t.Errorf("body must be trimmed, got %q", got)
 	}
 	// The 200-byte boundary: exactly 200 is NOT truncated, 201 is.
 	at := strings.Repeat("x", 200)
-	if got := truncateForError([]byte(at)); got != at {
+	if got := harborauth.TruncateForError([]byte(at)); got != at {
 		t.Errorf("exactly 200 bytes must pass through untouched, got %d bytes", len(got))
 	}
 	over := strings.Repeat("x", 201)
-	got := truncateForError([]byte(over))
+	got := harborauth.TruncateForError([]byte(over))
 	if got != strings.Repeat("x", 200)+"…" {
 		t.Errorf("201 bytes must truncate to 200 plus an ellipsis, got %d bytes", len(got))
 	}

@@ -15,6 +15,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 // platform-ci: read-only KV v2 — used by the ESO ClusterSecretStore. Paths
@@ -811,7 +813,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// secret encoding, gh CLI truncation, …). Common invalid-token cause: a
 	// stale OPENBAO_ROOT_TOKEN env secret left over from a prior bootstrap
 	// (root is revoked at the end of every run).
-	fmt.Printf("Token sha256 from env-secret: %s (len=%d)\n", sha256Hex(token), len(token))
+	fmt.Printf("Token sha256 from env-secret: %s (len=%d)\n", s3sig.SHA256Hex(token), len(token))
 
 	// `token lookup` (no args = self) succeeds for any valid token and needs
 	// no special caps; `-self` isn't supported on every OpenBao version.

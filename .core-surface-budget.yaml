@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 40,827 logic lines across 214 non-test files, 120 of them ci_*.go.
+    # 38,821 logic lines across 206 non-test files, 116 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -80,12 +80,15 @@ categories:
     #   40,827 / 214 files  import-brownfield, the first OPT-IN extension and the
     #                       largest single move: -2,990. Below the 41,803 this
     #                       gate first recorded, and below the pre-rebase number.
+    #   38,821 / 206 files  obj-encryption, the first extension to bind `seeded` —
+    #                       the group PR #15's ceiling banned by omission. -2,006,
+    #                       plus internal/harborauth and internal/s3sig.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 40827
+    budget: 38821
     exact: true
     include:
       - "tools/cmd/llz/*.go"

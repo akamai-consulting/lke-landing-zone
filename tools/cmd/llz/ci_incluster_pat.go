@@ -52,6 +52,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 const (
@@ -134,7 +136,7 @@ func ciMintBootstrapPATCmd() *cobra.Command {
 func runCIMintBootstrapPAT(region string) error {
 	// CI, inside the instance checkout — the label is instance-scoped so a peer
 	// instance's monthly drain cannot revoke this deployment's live PAT.
-	prefix, err := objLabelPrefixFor("mint-bootstrap-pat")
+	prefix, err := objenc.LabelPrefixFor("mint-bootstrap-pat")
 	if err != nil {
 		return err
 	}
@@ -199,7 +201,7 @@ func runCIRotateInclusterPAT() error {
 	// Runs from the instance checkout (llz-secret-rotation.yml), so the
 	// instance-scoped label comes from the spec — see inclusterPATLabel for why it
 	// must not be a bare llz-incluster-<env>.
-	prefix, err := objLabelPrefixFor("rotate-incluster-pat")
+	prefix, err := objenc.LabelPrefixFor("rotate-incluster-pat")
 	if err != nil {
 		return err
 	}

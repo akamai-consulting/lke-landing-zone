@@ -1,4 +1,4 @@
-package main
+package objenc
 
 import (
 	"encoding/base64"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // pod builds a harbor-registry pod list. certDirs maps container name -> the
@@ -41,25 +43,28 @@ func fullyMutatedPods() string {
 		map[string]bool{"registry": true, "registryctl": true}, true)
 }
 
-func withObjEncKubectl(t *testing.T, out string, err error) {
+// withObjEncKubectl RETURNS the Deps rather than swapping a package-level var —
+// the seam is a parameter now, so two cases can hold different cluster fixtures at
+// once and neither has to clean up after itself.
+func withObjEncKubectl(t *testing.T, out string, err error) Deps {
 	t.Helper()
-	prev := objEncKubectl
-	objEncKubectl = func(...string) (string, error) { return out, err }
-	t.Cleanup(func() { objEncKubectl = prev })
+	d := testDeps(t)
+	d.KubectlOut = func(...string) (string, error) { return out, err }
+	return d
 }
 
 // A pod admitted while Kyverno was down carries neither the env nor the volume, and
 // nothing else in the system notices. This is the check that exists for the
 // failurePolicy: Ignore race.
 func TestAssertObjEncryptionCatchesPodMissingTheCA(t *testing.T) {
-	withObjEncKubectl(t, podJSON("harbor-registry-abc", nil, nil, false), nil)
-	f := checkRegistryPodsCarryCA()
+	d := withObjEncKubectl(t, podJSON("harbor-registry-abc", nil, nil, false), nil)
+	f := CheckRegistryPodsCarryCA(d)
 	if len(f) < 2 {
 		t.Fatalf("want findings for the missing volume AND both containers, got %+v", f)
 	}
 	joined := ""
 	for _, x := range f {
-		joined += x.problem
+		joined += x.Problem
 	}
 	if !strings.Contains(joined, "llz-obj-proxy-ca") || !strings.Contains(joined, "registry") {
 		t.Errorf("findings must name the gaps: %+v", f)
@@ -73,32 +78,32 @@ func TestAssertObjEncryptionCatchesPodMissingTheCA(t *testing.T) {
 // pod has a lane that silently cannot reach object storage.
 func TestAssertObjEncryptionCatchesPartialMutation(t *testing.T) {
 	ca := "/etc/ssl/certs:/etc/pki/tls/certs:/etc/llz/ca"
-	withObjEncKubectl(t, podJSON("harbor-registry-abc",
+	d := withObjEncKubectl(t, podJSON("harbor-registry-abc",
 		map[string]string{"registry": ca},             // registryctl MISSING
 		map[string]bool{"registry": true}, true), nil) // and unmounted
-	f := checkRegistryPodsCarryCA()
+	f := CheckRegistryPodsCarryCA(d)
 	if len(f) != 1 {
 		t.Fatalf("a half-mutated pod must produce exactly one finding, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, "registryctl") {
-		t.Errorf("the finding must name the container that is missing it: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, "registryctl") {
+		t.Errorf("the finding must name the container that is missing it: %q", f[0].Problem)
 	}
-	if !strings.Contains(f[0].fix, "GC") {
+	if !strings.Contains(f[0].Fix, "GC") {
 		t.Error("the fix must say why registryctl matters, or it reads as pedantry")
 	}
 }
 
 // A container that has no business reaching S3 must not be required to trust the CA.
 func TestAssertObjEncryptionIgnoresUnrelatedContainers(t *testing.T) {
-	withObjEncKubectl(t, fullyMutatedPods(), nil)
-	if f := checkRegistryPodsCarryCA(); len(f) != 0 {
+	d := withObjEncKubectl(t, fullyMutatedPods(), nil)
+	if f := CheckRegistryPodsCarryCA(d); len(f) != 0 {
 		t.Errorf("istio-proxy lacking the CA must not be a finding, got %+v", f)
 	}
 }
 
 func TestAssertObjEncryptionPassesAFullyMutatedPod(t *testing.T) {
-	withObjEncKubectl(t, fullyMutatedPods(), nil)
-	if f := checkRegistryPodsCarryCA(); len(f) != 0 {
+	d := withObjEncKubectl(t, fullyMutatedPods(), nil)
+	if f := CheckRegistryPodsCarryCA(d); len(f) != 0 {
 		t.Errorf("a correctly mutated pod must produce no findings, got %+v", f)
 	}
 }
@@ -106,17 +111,17 @@ func TestAssertObjEncryptionPassesAFullyMutatedPod(t *testing.T) {
 // A gate that examined nothing must not report color.Green — the same rule the sibling
 // guards' requireCorpus enforces.
 func TestAssertObjEncryptionFailsWhenNoRegistryPodsExist(t *testing.T) {
-	withObjEncKubectl(t, `{"items":[{"metadata":{"name":"other"},"spec":{"containers":[],"volumes":[]}}]}`, nil)
-	f := checkRegistryPodsCarryCA()
-	if len(f) != 1 || !strings.Contains(f[0].problem, "no harbor-registry pods") {
+	d := withObjEncKubectl(t, `{"items":[{"metadata":{"name":"other"},"spec":{"containers":[],"volumes":[]}}]}`, nil)
+	f := CheckRegistryPodsCarryCA(d)
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "no harbor-registry pods") {
 		t.Errorf("zero pods examined must fail, got %+v", f)
 	}
 }
 
 // Undecodable output is not a pass.
 func TestAssertObjEncryptionFailsOnUndecodablePodList(t *testing.T) {
-	withObjEncKubectl(t, "not json", nil)
-	if f := checkRegistryPodsCarryCA(); len(f) != 1 || !strings.Contains(f[0].problem, "decode") {
+	d := withObjEncKubectl(t, "not json", nil)
+	if f := CheckRegistryPodsCarryCA(d); len(f) != 1 || !strings.Contains(f[0].Problem, "decode") {
 		t.Errorf("a gate that cannot read the pods must fail, got %+v", f)
 	}
 }
@@ -124,28 +129,28 @@ func TestAssertObjEncryptionFailsOnUndecodablePodList(t *testing.T) {
 // The failure that looks exactly like success: everything Healthy, nothing routed
 // through the proxy, every byte plaintext.
 func TestAssertObjEncryptionCatchesMissingDNSRewrite(t *testing.T) {
-	withObjEncKubectl(t, "{}", nil)
-	f := checkEndpointResolvesToProxy("us-ord-10.linodeobjects.com")
-	if len(f) != 1 || !strings.Contains(f[0].problem, "going DIRECT") {
+	d := withObjEncKubectl(t, "{}", nil)
+	f := checkEndpointResolvesToProxy(d, "us-ord-10.linodeobjects.com")
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "going DIRECT") {
 		t.Fatalf("a missing rewrite must fail loudly, got %+v", f)
 	}
-	if !strings.Contains(f[0].fix, "LAST") {
+	if !strings.Contains(f[0].Fix, "LAST") {
 		t.Error("the fix must preserve the ordering constraint — flipping DNS before trust breaks the registry")
 	}
 }
 
 func TestAssertObjEncryptionAcceptsAPresentRewrite(t *testing.T) {
-	withObjEncKubectl(t,
+	d := withObjEncKubectl(t,
 		`{"objproxy.include":"rewrite name us-ord-10.linodeobjects.com obj-proxy.obj-proxy.svc.cluster.local\n"}`, nil)
-	if f := checkEndpointResolvesToProxy("us-ord-10.linodeobjects.com"); len(f) != 0 {
+	if f := checkEndpointResolvesToProxy(d, "us-ord-10.linodeobjects.com"); len(f) != 0 {
 		t.Errorf("a live rewrite must pass, got %+v", f)
 	}
 }
 
 // A rewrite that names the endpoint but sends it somewhere else is not a pass.
 func TestAssertObjEncryptionCatchesRewriteToTheWrongTarget(t *testing.T) {
-	withObjEncKubectl(t, `{"objproxy.include":"rewrite name us-ord-10.linodeobjects.com somewhere-else.svc\n"}`, nil)
-	if f := checkEndpointResolvesToProxy("us-ord-10.linodeobjects.com"); len(f) != 1 {
+	d := withObjEncKubectl(t, `{"objproxy.include":"rewrite name us-ord-10.linodeobjects.com somewhere-else.svc\n"}`, nil)
+	if f := checkEndpointResolvesToProxy(d, "us-ord-10.linodeobjects.com"); len(f) != 1 {
 		t.Error("a rewrite pointing away from the proxy must fail")
 	}
 }
@@ -159,38 +164,39 @@ func TestAssertObjEncryptionCatchesRewriteToTheWrongTarget(t *testing.T) {
 func withSSECSample(t *testing.T, keys []string, listErr error, verdict func(string) ssecVerdict) {
 	t.Helper()
 	cutover := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	refs := make([]s3ObjectRef, 0, len(keys))
+	refs := make([]ObjectRef, 0, len(keys))
 	for i, k := range keys {
-		refs = append(refs, s3ObjectRef{Key: k, LastModified: cutover.Add(time.Duration(i+1) * time.Hour)})
+		refs = append(refs, ObjectRef{Key: k, LastModified: cutover.Add(time.Duration(i+1) * time.Hour)})
 	}
 	withSSECSampleAt(t, cutover, refs, listErr, verdict)
 }
 
-func withSSECSampleAt(t *testing.T, cutover time.Time, refs []s3ObjectRef, listErr error, verdict func(string) ssecVerdict) {
+func withSSECSampleAt(t *testing.T, cutover time.Time, refs []ObjectRef, listErr error, verdict func(string) ssecVerdict) {
 	t.Helper()
-	pk, pl, pc := s3ObjectSSECProbe, s3SampleObjectKeys, objProxyCutoverTime
-	s3SampleObjectKeys = func(_, _, _, b string, _ int) ([]s3ObjectRef, error) {
-		out := make([]s3ObjectRef, len(refs))
+	pk, pl, pc := ObjectSSECProbe, SampleObjectKeys, objProxyCutoverTime
+	SampleObjectKeys = func(_, _, _, b string, _ int) ([]ObjectRef, error) {
+		out := make([]ObjectRef, len(refs))
 		copy(out, refs)
 		for i := range out {
 			out[i].Bucket = b
 		}
 		return out, listErr
 	}
-	s3ObjectSSECProbe = func(_, _, _, _, key string) (ssecVerdict, string) { return verdict(key), "stub" }
-	objProxyCutoverTime = func() (time.Time, error) { return cutover, nil }
-	prevCreds := objEncConsumerCreds
-	objEncConsumerCreds = func(_, _, _ string) (string, string, error) { return "ak", "sk", nil }
+	ObjectSSECProbe = func(_, _, _, _, key string) (ssecVerdict, string) { return verdict(key), "stub" }
+	objProxyCutoverTime = func(Deps) (time.Time, error) { return cutover, nil }
+	prevCreds := ObjEncConsumerCreds
+	ObjEncConsumerCreds = func(_ Deps, _, _, _ string) (string, string, error) { return "ak", "sk", nil }
 	t.Cleanup(func() {
-		s3ObjectSSECProbe, s3SampleObjectKeys, objProxyCutoverTime, objEncConsumerCreds = pk, pl, pc, prevCreds
+		ObjectSSECProbe, SampleObjectKeys, objProxyCutoverTime, ObjEncConsumerCreds = pk, pl, pc, prevCreds
 	})
 }
 
 func allEncrypted(string) ssecVerdict { return ssecEncrypted }
 
 func TestCheckObjectsEncryptedPassesWhenTheWholeSampleIsEncrypted(t *testing.T) {
+	d := testDeps(t)
 	withSSECSample(t, []string{"a", "b", "c"}, nil, allEncrypted)
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
+	if f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
 		t.Errorf("a clean sample must pass, got %+v", f)
 	}
 }
@@ -198,6 +204,7 @@ func TestCheckObjectsEncryptedPassesWhenTheWholeSampleIsEncrypted(t *testing.T) 
 // THE regression this rewrite exists for. A single-object sample reported color.Green on
 // a bucket that is 1-in-N plaintext; the whole sample must be probed.
 func TestCheckObjectsEncryptedCatchesOnePlaintextAmongMany(t *testing.T) {
+	d := testDeps(t)
 	keys := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "rotten"}
 	withSSECSample(t, keys, nil, func(k string) ssecVerdict {
 		if k == "rotten" {
@@ -205,27 +212,28 @@ func TestCheckObjectsEncryptedCatchesOnePlaintextAmongMany(t *testing.T) {
 		}
 		return ssecEncrypted
 	})
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
-	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
+	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "PLAINTEXT") {
 		t.Fatalf("one plaintext object among ten must fail, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, "1 of 10") {
-		t.Errorf("the finding must report the COUNT — that is the auditable number: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, "1 of 10") {
+		t.Errorf("the finding must report the COUNT — that is the auditable number: %q", f[0].Problem)
 	}
-	if !strings.Contains(f[0].fix, "bypassing") {
+	if !strings.Contains(f[0].Fix, "bypassing") {
 		t.Error("these are post-cutover writes, so the fix must say the traffic is bypassing the proxy")
 	}
 }
 
 // A key deleted between LIST and HEAD (compaction) is not evidence of plaintext.
 func TestCheckObjectsEncryptedToleratesObjectsThatVanish(t *testing.T) {
+	d := testDeps(t)
 	withSSECSample(t, []string{"a", "gone"}, nil, func(k string) ssecVerdict {
 		if k == "gone" {
 			return ssecAbsent
 		}
 		return ssecEncrypted
 	})
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
+	if f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
 		t.Errorf("a raced deletion must not fail the gate, got %+v", f)
 	}
 }
@@ -233,16 +241,18 @@ func TestCheckObjectsEncryptedToleratesObjectsThatVanish(t *testing.T) {
 // An empty bucket and a correctly-encrypted bucket are indistinguishable to every
 // other check, so this one must not shrug at zero objects.
 func TestCheckObjectsEncryptedFailsOnAnEmptyBucket(t *testing.T) {
+	d := testDeps(t)
 	withSSECSample(t, nil, nil, allEncrypted)
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
-	if len(f) != 1 || !strings.Contains(f[0].problem, "EMPTY") {
+	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "EMPTY") {
 		t.Errorf("an empty bucket proves nothing and must not pass, got %+v", f)
 	}
 }
 
 func TestCheckObjectsEncryptedFailsWhenUnclassifiable(t *testing.T) {
+	d := testDeps(t)
 	withSSECSample(t, []string{"k"}, nil, func(string) ssecVerdict { return ssecUnknown })
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 1 {
+	if f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 1 {
 		t.Error("an unclassifiable response is not a pass")
 	}
 }
@@ -251,36 +261,38 @@ func TestCheckObjectsEncryptedFailsWhenUnclassifiable(t *testing.T) {
 // assert-suite those are the Terraform STATE bucket's key, which cannot list the
 // data buckets — the first revision reported that 403 as an encryption finding.
 func TestCheckObjectsEncryptedFailsWhenConsumerCredsUnreadable(t *testing.T) {
-	prev := objEncConsumerCreds
-	objEncConsumerCreds = func(_, _, _ string) (string, string, error) {
+	d := testDeps(t)
+	prev := ObjEncConsumerCreds
+	ObjEncConsumerCreds = func(_ Deps, _, _, _ string) (string, string, error) {
 		return "", "", errors.New("secrets \"loki-s3-linode-credentials\" not found")
 	}
-	t.Cleanup(func() { objEncConsumerCreds = prev })
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	t.Cleanup(func() { ObjEncConsumerCreds = prev })
+	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 {
 		t.Fatalf("unreadable consumer creds must be one finding, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, lokiObjSecretRef) {
-		t.Errorf("the finding must name the Secret it could not read: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, LokiObjSecretRef) {
+		t.Errorf("the finding must name the Secret it could not read: %q", f[0].Problem)
 	}
-	if !strings.Contains(f[0].fix, "NOT the SSE-C key") {
-		t.Errorf("the fix must say the probe needs bucket creds but NOT the encryption key: %q", f[0].fix)
+	if !strings.Contains(f[0].Fix, "NOT the SSE-C key") {
+		t.Errorf("the fix must say the probe needs bucket creds but NOT the encryption key: %q", f[0].Fix)
 	}
 }
 
 // No Harbor on the cluster means there is nothing whose writes must be encrypted —
 // a skip, not a finding.
 func TestCheckHarborPathSkipsWhenHarborIsAbsent(t *testing.T) {
-	prev := namespaceExists
+	d := testDeps(t)
+	prev := harborauth.NamespaceExists
 	var asked []string
-	namespaceExists = func(ns string) (bool, error) { asked = append(asked, ns); return false, nil }
-	t.Cleanup(func() { namespaceExists = prev })
-	if f := checkHarborPath("h", "bucket"); len(f) != 0 {
+	harborauth.NamespaceExists = func(ns string) (bool, error) { asked = append(asked, ns); return false, nil }
+	t.Cleanup(func() { harborauth.NamespaceExists = prev })
+	if f := checkHarborPath(d, "h", "bucket"); len(f) != 0 {
 		t.Errorf("no Harbor on the cluster must not fail the gate, got %+v", f)
 	}
-	if len(asked) != 1 || asked[0] != harborNS {
+	if len(asked) != 1 || asked[0] != HarborNS {
 		t.Errorf("guarded on %v, want a single check of %q — the SUBJECT is Harbor, not whichever "+
-			"namespace happens to hold a credential", asked, harborNS)
+			"namespace happens to hold a credential", asked, HarborNS)
 	}
 }
 
@@ -291,22 +303,25 @@ func TestCheckHarborPathSkipsWhenHarborIsAbsent(t *testing.T) {
 // explanation each time. A skip that is structural rather than occasional is not a
 // skip, it is a check that does not exist.
 func TestCheckHarborPathRunsOnManagedWhereTheRobotNamespaceCannotExist(t *testing.T) {
-	prevNS, prevSecret, prevKubectl := namespaceExists, readHarborRobotSecret, objEncKubectl
-	t.Cleanup(func() { namespaceExists, readHarborRobotSecret, objEncKubectl = prevNS, prevSecret, prevKubectl })
+	d := testDeps(t)
+	prevNS, prevSecret := harborauth.NamespaceExists, harborauth.ReadRobotSecret
+	t.Cleanup(func() {
+		harborauth.NamespaceExists, harborauth.ReadRobotSecret = prevNS, prevSecret
+	})
 
-	namespaceExists = func(ns string) (bool, error) { return ns == harborNS, nil } // managed: no llz-cert-automation
-	readHarborRobotSecret = func(ns, name string) ([]byte, error) {
-		if ns == harborNS && name == harborAdminSecretName {
+	harborauth.NamespaceExists = func(ns string) (bool, error) { return ns == HarborNS, nil } // managed: no llz-cert-automation
+	harborauth.ReadRobotSecret = func(ns, name string) ([]byte, error) {
+		if ns == HarborNS && name == harborAdminSecretName {
 			return []byte(`{"data":{"HARBOR_ADMIN_PASSWORD":"` +
 				base64.StdEncoding.EncodeToString([]byte("s3cret")) + `"}}`), nil
 		}
 		return nil, errors.New("not found")
 	}
-	objEncKubectl = func(...string) (string, error) {
+	d.KubectlOut = func(...string) (string, error) {
 		return `{"items":[{"spec":{"hostnames":["harbor.lke1.akamai-apl.net"]}}]}`, nil
 	}
 
-	creds, findings := harborProbeCreds()
+	creds, findings := harborProbeCreds(d)
 	if len(findings) > 0 {
 		t.Fatalf("managed must fall back to Harbor's own admin credential, got findings %+v", findings)
 	}
@@ -324,33 +339,33 @@ func TestCheckHarborPathRunsOnManagedWhereTheRobotNamespaceCannotExist(t *testin
 // break in a credential path assert-harbor-roundtrip owns — and would quietly push
 // with a much heavier credential than the gate needs.
 func TestCheckHarborPathPrefersTheRobotAndDoesNotMaskItsFailure(t *testing.T) {
-	prevNS, prevSecret := namespaceExists, readHarborRobotSecret
-	t.Cleanup(func() { namespaceExists, readHarborRobotSecret = prevNS, prevSecret })
+	d := testDeps(t)
+	prevNS, prevSecret := harborauth.NamespaceExists, harborauth.ReadRobotSecret
+	t.Cleanup(func() { harborauth.NamespaceExists, harborauth.ReadRobotSecret = prevNS, prevSecret })
 
-	namespaceExists = func(string) (bool, error) { return true, nil } // self-installed: both present
-	readHarborRobotSecret = func(ns, name string) ([]byte, error) {
-		if ns == harborRobotSecretNS {
+	harborauth.NamespaceExists = func(string) (bool, error) { return true, nil } // self-installed: both present
+	harborauth.ReadRobotSecret = func(ns, name string) ([]byte, error) {
+		if ns == harborauth.RobotSecretNS {
 			return nil, errors.New("the robot Secret is unreadable")
 		}
-		t.Errorf("fell back to %s/%s while %s exists — that masks the robot failure", ns, name, harborRobotSecretNS)
+		t.Errorf("fell back to %s/%s while %s exists — that masks the robot failure", ns, name, harborauth.RobotSecretNS)
 		return nil, errors.New("unreachable")
 	}
 
-	_, findings := harborProbeCreds()
-	if len(findings) != 1 || !strings.Contains(findings[0].problem, harborRobotSecretNS) {
-		t.Fatalf("an unreadable robot Secret must stay one finding naming %s, got %+v", harborRobotSecretNS, findings)
+	_, findings := harborProbeCreds(d)
+	if len(findings) != 1 || !strings.Contains(findings[0].Problem, harborauth.RobotSecretNS) {
+		t.Fatalf("an unreadable robot Secret must stay one finding naming %s, got %+v", harborauth.RobotSecretNS, findings)
 	}
 }
 
-// A host that fails usableRegistryHost is the "harbor." truncation class (PR #342):
+// A host that fails harborauth.UsableRegistryHost is the "harbor." truncation class (PR #342):
 // non-empty, so it satisfies every `== ""` guard on its way to 401ing every push.
 func TestHarborPublicHostRejectsAnUnusableHostname(t *testing.T) {
-	prev := objEncKubectl
-	t.Cleanup(func() { objEncKubectl = prev })
-	objEncKubectl = func(...string) (string, error) {
+	d := testDeps(t)
+	d.KubectlOut = func(...string) (string, error) {
 		return `{"items":[{"spec":{"hostnames":["harbor."]}},{"spec":{"rules":[{"host":"harbor.real.example"}]}}]}`, nil
 	}
-	got, err := harborPublicHost()
+	got, err := harborPublicHost(d)
 	if err != nil {
 		t.Fatalf("an Ingress rule should have supplied the host after the bad HTTPRoute: %v", err)
 	}
@@ -364,7 +379,8 @@ func TestHarborPublicHostRejectsAnUnusableHostname(t *testing.T) {
 // missing argument and reported it as an encryption failure. A cluster that cannot
 // say which deployment it is cannot say whether the gateway is enabled on it.
 func TestAssertObjEncryptionSkipsWithNoRegion(t *testing.T) {
-	if err := runAssertObjEncryption("", "", "", "", 50); err != nil {
+	d := testDeps(t)
+	if err := RunAssertEncryption(d, "", "", "", "", 50); err != nil {
 		t.Fatalf("no --region must SKIP, not fail: %v", err)
 	}
 }
@@ -380,46 +396,15 @@ func TestSSECVerdictStrings(t *testing.T) {
 	}
 }
 
-// The lane must be in the battery, GATING, and it must carry the harbor-bucket —
-// without which the CA-chain check silently does not run. The lane list is the one
-// place a new gate can be declared and never actually run.
-func TestObjEncryptionLaneIsRegisteredAndGating(t *testing.T) {
-	lanes := assertSuiteLanes("e2e")
-	var found *suiteLane
-	for i := range lanes {
-		if lanes[i].Name == "obj-encryption" {
-			found = &lanes[i]
-		}
-	}
-	if found == nil {
-		t.Fatal("obj-encryption is not in assertSuiteLanes — nothing would ever run the gate")
-	}
-	if !found.Gating {
-		t.Error("the lane must GATE: a report-only encryption check is a check nobody acts on")
-	}
-	flat := strings.Join(found.Steps[0], " ")
-	if !strings.Contains(flat, "assert-obj-encryption") || !strings.Contains(flat, "--region") {
-		t.Errorf("lane step must invoke the gate with a region: %q", flat)
-	}
-	// It must carry NOTHING else. Endpoint and bucket names are derived from the
-	// spec; the earlier revision passed them from three env vars that no workflow
-	// exported, so the lane would have failed on a missing flag rather than on
-	// encryption — a gate misconfigured into always-color.Red teaches people to ignore it.
-	for _, invented := range []string{"OBJ_ENDPOINT_HOST", "LOKI_CHUNKS_BUCKET", "HARBOR_REGISTRY_BUCKET"} {
-		if strings.Contains(flat, invented) {
-			t.Errorf("lane still reads %s, which nothing sets: %q", invented, flat)
-		}
-	}
-}
-
 // The gate self-skips when the component is off, and the skip must be LOUD — a
 // silent pass is indistinguishable from a real one, and would mean disabling the
 // component silences the gate that guards it.
 func TestAssertObjEncryptionSkipsLoudlyWhenComponentDisabled(t *testing.T) {
+	d := testDeps(t)
 	// No spec on disk in the test working dir, so LoadInstance fails — which proves
 	// the region path is reached at all. The behavioural contract (skip vs run) is
 	// exercised through ssecSeedEnabled's own tests.
-	if err := runAssertObjEncryption("h", "b", "", "no-such-env", 5); err == nil {
+	if err := RunAssertEncryption(d, "h", "b", "", "no-such-env", 5); err == nil {
 		t.Skip("no instance spec in the test dir; component gating covered by the seeder tests")
 	}
 }
@@ -428,23 +413,25 @@ func TestAssertObjEncryptionSkipsLoudlyWhenComponentDisabled(t *testing.T) {
 // present with no --harbor-bucket IS, because that is the CA-chain check being
 // skipped on a cluster that needs it.
 func TestCheckHarborPathSkipsWhenNamespaceAbsent(t *testing.T) {
-	prev := namespaceExists
-	namespaceExists = func(string) (bool, error) { return false, nil }
-	t.Cleanup(func() { namespaceExists = prev })
-	if f := checkHarborPath("h", ""); len(f) != 0 {
+	d := testDeps(t)
+	prev := harborauth.NamespaceExists
+	harborauth.NamespaceExists = func(string) (bool, error) { return false, nil }
+	t.Cleanup(func() { harborauth.NamespaceExists = prev })
+	if f := checkHarborPath(d, "h", ""); len(f) != 0 {
 		t.Errorf("an absent harbor namespace must not fail the gate, got %+v", f)
 	}
 }
 
 func TestCheckHarborPathFailsWhenBucketOmittedButHarborPresent(t *testing.T) {
-	prev := namespaceExists
-	namespaceExists = func(string) (bool, error) { return true, nil }
-	t.Cleanup(func() { namespaceExists = prev })
-	f := checkHarborPath("h", "")
-	if len(f) != 1 || !strings.Contains(f[0].problem, "CA-chain check did not run") {
+	d := testDeps(t)
+	prev := harborauth.NamespaceExists
+	harborauth.NamespaceExists = func(string) (bool, error) { return true, nil }
+	t.Cleanup(func() { harborauth.NamespaceExists = prev })
+	f := checkHarborPath(d, "h", "")
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "CA-chain check did not run") {
 		t.Fatalf("omitting --harbor-bucket on a Harbor cluster must fail, got %+v", f)
 	}
-	if !strings.Contains(f[0].fix, "samples Loki") {
+	if !strings.Contains(f[0].Fix, "samples Loki") {
 		t.Error("the fix must explain WHY the other checks do not cover this")
 	}
 }
@@ -528,8 +515,9 @@ func TestLooksLikeTLSFailure(t *testing.T) {
 // across clusters) and produced a failure whose own fix text argued it might be
 // fine — which is how a gate becomes something people skip rather than read.
 func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) {
+	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []s3ObjectRef{
+	refs := []ObjectRef{
 		{Key: "written-after", LastModified: cutover.Add(time.Hour)},
 		{Key: "predates-1", LastModified: cutover.Add(-240 * time.Hour)},
 		{Key: "predates-2", LastModified: cutover.Add(-99 * time.Hour)},
@@ -540,7 +528,7 @@ func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) 
 		}
 		return ssecPlaintext // the pre-cutover residue
 	})
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
+	if f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
 		t.Errorf("plaintext objects older than the cutover are documented residue, not a breach: %+v", f)
 	}
 }
@@ -548,8 +536,9 @@ func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) 
 // The mirror image, and the property that keeps the filter honest: an object written
 // AFTER the gateway went live has no excuse for being plaintext.
 func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *testing.T) {
+	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []s3ObjectRef{
+	refs := []ObjectRef{
 		{Key: "predates", LastModified: cutover.Add(-time.Hour)},
 		{Key: "leaked", LastModified: cutover.Add(time.Minute)},
 	}
@@ -559,12 +548,12 @@ func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *tes
 		}
 		return ssecEncrypted
 	})
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
-	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
+	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "PLAINTEXT") {
 		t.Fatalf("a post-cutover plaintext write must fail, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, "1 of 1") {
-		t.Errorf("the count must be out of the objects actually JUDGED, not the whole sample: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, "1 of 1") {
+		t.Errorf("the count must be out of the objects actually JUDGED, not the whole sample: %q", f[0].Problem)
 	}
 }
 
@@ -574,20 +563,21 @@ func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *tes
 // cluster, where Loki was failing every PutObject and the bucket held only a
 // previous cluster's data.
 func TestCheckObjectsEncryptedReportsWhenNothingWasWrittenSinceTheCutover(t *testing.T) {
+	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []s3ObjectRef{{Key: "old", LastModified: cutover.Add(-time.Hour)}}
+	refs := []ObjectRef{{Key: "old", LastModified: cutover.Add(-time.Hour)}}
 	withSSECSampleAt(t, cutover, refs, nil, allEncrypted)
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 {
 		t.Fatalf("nothing written since the cutover must be reported, not passed, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, "proves nothing") {
-		t.Errorf("the finding must say it proved nothing: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, "proves nothing") {
+		t.Errorf("the finding must say it proved nothing: %q", f[0].Problem)
 	}
 	// The Harbor push runs BEFORE this check and writes a blob, so it is the first
 	// thing to suspect when the sample has nothing post-cutover in it.
-	if !strings.Contains(f[0].fix, "Harbor push") {
-		t.Errorf("the fix must point at the guaranteed writer first: %q", f[0].fix)
+	if !strings.Contains(f[0].Fix, "Harbor push") {
+		t.Errorf("the fix must point at the guaranteed writer first: %q", f[0].Fix)
 	}
 }
 
@@ -606,7 +596,7 @@ func TestSampleReturnsNewestFirst(t *testing.T) {
 	s3SignedRequest = func(_, _, _, _, _, _ string) (int, string, error) { return 200, body, nil }
 	t.Cleanup(func() { s3SignedRequest = prev })
 
-	got, err := s3SampleObjectKeys("ak", "sk", "e", "b", 2)
+	got, err := SampleObjectKeys("ak", "sk", "e", "b", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,41 +614,42 @@ func TestSampleReturnsNewestFirst(t *testing.T) {
 // and the check reported "nothing written since the gateway went live" on a fleet
 // that was encrypting correctly.
 func TestObjEncryptionSamplesEveryBucketAndAttributesFindings(t *testing.T) {
+	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 19, 41, 0, 0, time.UTC)
-	prevList, prevProbe, prevCut, prevCreds := s3SampleObjectKeys, s3ObjectSSECProbe, objProxyCutoverTime, objEncConsumerCreds
+	prevList, prevProbe, prevCut, prevCreds := SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds
 	t.Cleanup(func() {
-		s3SampleObjectKeys, s3ObjectSSECProbe, objProxyCutoverTime, objEncConsumerCreds = prevList, prevProbe, prevCut, prevCreds
+		SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds = prevList, prevProbe, prevCut, prevCreds
 	})
-	objProxyCutoverTime = func() (time.Time, error) { return cutover, nil }
-	objEncConsumerCreds = func(string, string, string) (string, string, error) { return "ak", "sk", nil }
+	objProxyCutoverTime = func(Deps) (time.Time, error) { return cutover, nil }
+	ObjEncConsumerCreds = func(Deps, string, string, string) (string, string, error) { return "ak", "sk", nil }
 
 	var sampled []string
-	s3SampleObjectKeys = func(_, _, _, b string, _ int) ([]s3ObjectRef, error) {
+	SampleObjectKeys = func(_, _, _, b string, _ int) ([]ObjectRef, error) {
 		sampled = append(sampled, b)
 		switch b {
 		case "harbor-bucket": // the gate's own probe blob — always post-cutover
-			return []s3ObjectRef{{Key: "blobs/data", LastModified: cutover.Add(time.Minute), Bucket: b}}, nil
+			return []ObjectRef{{Key: "blobs/data", LastModified: cutover.Add(time.Minute), Bucket: b}}, nil
 		default: // Loki has not flushed yet: only a previous cluster's objects
-			return []s3ObjectRef{{Key: "old/chunk", LastModified: cutover.Add(-240 * time.Hour), Bucket: b}}, nil
+			return []ObjectRef{{Key: "old/chunk", LastModified: cutover.Add(-240 * time.Hour), Bucket: b}}, nil
 		}
 	}
-	s3ObjectSSECProbe = func(_, _, _, bucket, _ string) (ssecVerdict, string) {
+	ObjectSSECProbe = func(_, _, _, bucket, _ string) (ssecVerdict, string) {
 		if bucket == "harbor-bucket" {
 			return ssecPlaintext, "stub" // so the finding has to name its bucket
 		}
 		return ssecEncrypted, "stub"
 	}
 
-	f := checkObjectsAreEncrypted("ep", []string{"harbor-bucket", "loki-bucket"}, 50)
+	f := checkObjectsAreEncrypted(d, "ep", []string{"harbor-bucket", "loki-bucket"}, 50)
 
 	if len(sampled) != 2 {
 		t.Fatalf("sampled %v — both buckets must be listed, or a dead consumer makes the check unsatisfiable", sampled)
 	}
-	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
+	if len(f) != 1 || !strings.Contains(f[0].Problem, "PLAINTEXT") {
 		t.Fatalf("the post-cutover harbor object was plaintext and must fail, got %+v", f)
 	}
-	if !strings.Contains(f[0].problem, "harbor-bucket/blobs/data") {
-		t.Errorf("the finding must name the BUCKET and key it found: %q", f[0].problem)
+	if !strings.Contains(f[0].Problem, "harbor-bucket/blobs/data") {
+		t.Errorf("the finding must name the BUCKET and key it found: %q", f[0].Problem)
 	}
 }
 
@@ -666,13 +657,13 @@ func TestObjEncryptionSamplesEveryBucketAndAttributesFindings(t *testing.T) {
 // object this gate can guarantee, so sampling first samples a bucket nothing has
 // written to yet — which is the ordering bug that failed e2e run 30844253067.
 func TestHarborPushRunsBeforeTheObjectSample(t *testing.T) {
-	src, err := os.ReadFile("ci_assert_obj_encryption.go")
+	src, err := os.ReadFile("assert.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
-	harbor := strings.Index(body, "findings = append(findings, checkHarborPath(")
-	object := strings.Index(body, "findings = append(findings, checkObjectsAreEncrypted(")
+	harbor := strings.Index(body, "findings = append(findings, checkHarborPath(d, ")
+	object := strings.Index(body, "findings = append(findings, checkObjectsAreEncrypted(d, ")
 	if harbor < 0 || object < 0 {
 		t.Fatal("could not find both call sites — this test's premise no longer holds, revisit it")
 	}
@@ -680,7 +671,7 @@ func TestHarborPushRunsBeforeTheObjectSample(t *testing.T) {
 		t.Error("checkObjectsAreEncrypted runs before checkHarborPath: the sample then predates the probe blob " +
 			"that guarantees it has post-cutover material, and the check fails on a healthy cluster")
 	}
-	if !strings.Contains(body, "checkObjectsAreEncrypted(endpoint, []string{harborBucket, bucket}") {
+	if !strings.Contains(body, "checkObjectsAreEncrypted(d, endpoint, []string{harborBucket, bucket}") {
 		t.Error("the object sample must cover BOTH buckets — Loki's alone is empty on a young cluster")
 	}
 }

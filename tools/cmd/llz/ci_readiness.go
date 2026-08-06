@@ -16,7 +16,10 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 func ciAssertLokiCmd() *cobra.Command {
@@ -399,7 +402,7 @@ func lokiFlushFailures(nameMatch string) []string {
 		}
 		for _, line := range strings.Split(raw, "\n") {
 			if strings.Contains(line, "failed to flush") {
-				out = append(out, strings.TrimSpace(truncateForError([]byte(p.ns+"/"+p.name+": "+line))))
+				out = append(out, strings.TrimSpace(harborauth.TruncateForError([]byte(p.ns+"/"+p.name+": "+line))))
 			}
 		}
 	}
@@ -562,22 +565,22 @@ func retrofitHarborObjProxyCA() {
 	if _, err := harborCARetrofitKubectl("get", "clusterpolicy", objProxyCAPolicy); err != nil {
 		return
 	}
-	findings := checkRegistryPodsCarryCA()
+	findings := objenc.CheckRegistryPodsCarryCA(objencDeps())
 	if len(findings) == 0 {
 		fmt.Printf("harbor-registry pods already trust the obj-proxy CA (clusterpolicy/%s).\n", objProxyCAPolicy)
 		return
 	}
 	for _, f := range findings {
-		fmt.Printf("retrofit: %s\n", f.problem)
+		fmt.Printf("retrofit: %s\n", f.Problem)
 	}
 
 	fmt.Printf("::notice::harbor-registry pods predate clusterpolicy/%s — rolling them so the mutation applies.\n", objProxyCAPolicy)
 	for _, d := range health.HarborRegistryDeployments() {
-		if _, err := harborCARetrofitKubectl("-n", harborNS, "rollout", "restart", "deploy/"+d); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::could not roll harbor/%s to pick up the obj-proxy CA (%v) — `kubectl -n %s rollout restart deploy/%s` by hand before relying on Harbor.\n", d, err, harborNS, d)
+		if _, err := harborCARetrofitKubectl("-n", objenc.HarborNS, "rollout", "restart", "deploy/"+d); err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::could not roll harbor/%s to pick up the obj-proxy CA (%v) — `kubectl -n %s rollout restart deploy/%s` by hand before relying on Harbor.\n", d, err, objenc.HarborNS, d)
 			return
 		}
-		if !waitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborCARetrofitRolledOut(harborNS, d) }) {
+		if !waitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborCARetrofitRolledOut(objenc.HarborNS, d) }) {
 			fmt.Fprintf(os.Stderr, "::warning::harbor/%s did not finish rolling within %s after the obj-proxy CA retrofit.\n", d, harborWaitBudget)
 			return
 		}
@@ -586,9 +589,9 @@ func retrofitHarborObjProxyCA() {
 	// Re-read rather than assume: the restart is only a fix if the new pods actually
 	// came back mutated. If Kyverno was down, they did not, and saying so here is the
 	// difference between a warning and a silent Harbor outage.
-	if findings := checkRegistryPodsCarryCA(); len(findings) > 0 {
+	if findings := objenc.CheckRegistryPodsCarryCA(objencDeps()); len(findings) > 0 {
 		for _, f := range findings {
-			fmt.Fprintf(os.Stderr, "::warning::obj-proxy CA retrofit did not take: %s\n", f.problem)
+			fmt.Fprintf(os.Stderr, "::warning::obj-proxy CA retrofit did not take: %s\n", f.Problem)
 		}
 		return
 	}

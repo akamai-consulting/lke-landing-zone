@@ -1,4 +1,4 @@
-package main
+package objenc
 
 import (
 	"crypto/ecdsa"
@@ -64,13 +64,14 @@ func TestNewSSECKeyRejectsWrongLength(t *testing.T) {
 //
 // This drives the SEEDER's real output through the PROXY's real reader.
 func TestSSECKeyRoundTripsFromSeederToProxy(t *testing.T) {
+	d := testDeps(t)
 	var seeded map[string]string
-	prevPut, prevGet, prevGen := baoKVPutFn, baoKVGetFieldOKFn, newSSECKeyMaterial
-	baoKVPutFn = func(_ string, f map[string]string) error { seeded = f; return nil }
-	baoKVGetFieldOKFn = func(string, string) (string, baoReadVerdict) { return "", baoReadAbsent }
-	t.Cleanup(func() { baoKVPutFn, baoKVGetFieldOKFn, newSSECKeyMaterial = prevPut, prevGet, prevGen })
+	prevPut, prevGet, prevGen := d.KVPut, d.KVGet, newSSECKeyMaterial
+	d.KVPut = func(_ string, f map[string]string) error { seeded = f; return nil }
+	d.KVGet = func(string, string) (string, KVVerdict) { return "", KVAbsent }
+	t.Cleanup(func() { d.KVPut, d.KVGet, newSSECKeyMaterial = prevPut, prevGet, prevGen })
 
-	if err := seedSSECKeyInto(); err != nil {
+	if err := seedSSECKeyInto(d); err != nil {
 		t.Fatal(err)
 	}
 	if seeded["key"] == "" {
@@ -190,7 +191,7 @@ func TestInjectSSECAddsCopySourceHeaders(t *testing.T) {
 	if h.Get(hdrCopySrcSSECAlgo) != "AES256" ||
 		h.Get(hdrCopySrcSSECKey) != k.b64 ||
 		h.Get(hdrCopySrcSSECKeyMD5) != k.md5B64 {
-		t.Errorf("copy-source headers missing — this is the case that fails 400 upstream: %v", redactSSEC(h))
+		t.Errorf("copy-source headers missing — this is the case that fails 400 Upstream: %v", redactSSEC(h))
 	}
 }
 
@@ -300,7 +301,7 @@ func TestObjProxyForwardsWithHeadersAndIntactBody(t *testing.T) {
 	c := &objProxyCounters{}
 	// Point the proxy at the httptest server's host; the scheme is overridden to
 	// https by the Director, so swap the transport for the test's plain one.
-	rp, err := buildObjProxy(objProxyOpts{upstream: u.Host}, k, c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: u.Host}, k, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +417,7 @@ func TestObjProxyServingTLSMinVersion(t *testing.T) {
 // catches it on the first returning request.
 func TestObjProxyRefusesALoopedRequest(t *testing.T) {
 	c := &objProxyCounters{}
-	rp, err := buildObjProxy(objProxyOpts{upstream: "example.invalid"}, testKey(t), c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: "example.invalid"}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +454,7 @@ func TestObjProxyMarksOutboundRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &objProxyCounters{}
-	rp, err := buildObjProxy(objProxyOpts{upstream: u.Host}, testKey(t), c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: u.Host}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +479,7 @@ func TestObjProxyMarksOutboundRequests(t *testing.T) {
 // change that would arm this silently. It must fail closed instead.
 func TestObjProxyRefusesVirtualHostStyleAddressing(t *testing.T) {
 	c := &objProxyCounters{}
-	rp, err := buildObjProxy(objProxyOpts{upstream: "us-ord-10.linodeobjects.com"}, testKey(t), c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: "us-ord-10.linodeobjects.com"}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +507,7 @@ func TestObjProxyAcceptsThePathStyleHostItFronts(t *testing.T) {
 	defer upstream.Close()
 	host := strings.TrimPrefix(upstream.URL, "http://")
 
-	rp, err := buildObjProxy(objProxyOpts{upstream: host}, testKey(t), c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: host}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}

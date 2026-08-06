@@ -47,6 +47,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // defaultAuditLokiService is the Loki gateway the OpenBao promtail sidecar ships
@@ -142,7 +144,7 @@ func evalAuditStreams(selector string, streams []lokiStream) auditProbe {
 			if auditRecordRe.MatchString(e.Line) {
 				p.Records++
 			} else if p.Anomaly == "" {
-				p.Anomaly = truncateForError([]byte(e.Line))
+				p.Anomaly = harborauth.TruncateForError([]byte(e.Line))
 			}
 			if e.At.After(p.Newest) {
 				p.Newest = e.At

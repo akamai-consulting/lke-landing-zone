@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // ci_seed_ssec_key.go implements `llz ci seed-ssec-key --region <env>` — the
 // bootstrap seed for the obj-proxy's SSE-C encryption key.
@@ -44,26 +44,22 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // objProxyComponent is the spec.components key that gates this seed.
 const objProxyComponent = "objProxy"
 
-// ssecKVPath is where the proxy's ExternalSecret reads the key from. Kept as a
+// SSECKVPath is where the proxy's ExternalSecret reads the key from. Kept as a
 // const so the ExternalSecret, the OpenBao read policy and this seed cannot drift.
-const ssecKVPath = "secret/obj/ssec"
+const SSECKVPath = "secret/obj/ssec"
 
 // ssecKeyRawBytes is AES-256, which is the only key size SSE-C accepts.
 const ssecKeyRawBytes = 32
 
-// baoKVGetFieldOKFn is the read seam. It exists so the refuse-to-write-on-unknown
+// The read seam is now Deps.KVGet. It exists so the refuse-to-write-on-unknown
 // property below is unit-testable: that branch is the one that protects the whole
-// object store, and it is unreachable in a test that has to talk to a real
-// OpenBao.
-var baoKVGetFieldOKFn = baoKVGetFieldOK
+// object store, and it is unreachable in a test that has to talk to a real OpenBao.
 
 // newSSECKeyMaterial is a seam for tests; production reads crypto/rand.
 var newSSECKeyMaterial = func() ([]byte, error) {
@@ -84,30 +80,7 @@ func ssecSeedEnabled(lz *clusterspec.LandingZone, region string) bool {
 	return clusterspec.ComponentEnabled(e.Components, objProxyComponent)
 }
 
-func ciSeedSSECKeyCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "seed-ssec-key",
-		Short: "generate and seed the obj-proxy SSE-C key when the objProxy component is enabled",
-		Long: "Bootstrap seed for the object-storage encryption key.\n\n" +
-			"No-ops unless spec.components.objProxy is enabled for --region. When enabled,\n" +
-			"generates a 32-byte AES-256 key and writes it to " + ssecKVPath + " (key=),\n" +
-			"where the proxy's ExternalSecret reads it.\n\n" +
-			"STRICTLY ADDITIVE. An existing key is never overwritten: Linode discards\n" +
-			"SSE-C keys on receipt and they are per-object, so replacing this value does\n" +
-			"not rotate anything — it orphans every object already written, unreadably and\n" +
-			"silently. Re-runs are therefore safe and do nothing.\n\n" +
-			"KEY LOSS IS DATA LOSS. Back the printed key up offline on first generation,\n" +
-			"with the same discipline as OPENBAO_SEAL_KEY.\n" +
-			"Env: OPENBAO_* (root-token bootstrap posture).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCISeedSSECKey(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose objProxy toggle gates the seed (required)")
-	return c
-}
-
-func runCISeedSSECKey(region string) error {
+func RunSeedSSECKey(d Deps, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -120,14 +93,14 @@ func runCISeedSSECKey(region string) error {
 			objProxyComponent, region)
 		return nil
 	}
-	return seedSSECKeyInto()
+	return seedSSECKeyInto(d)
 }
 
 // seedSSECKeyInto is the read-classify-write core, split from the spec-loading
 // wrapper so the branch that refuses to write on an indeterminate read — the one
 // standing between a transient OpenBao blip and an unrecoverable object store — is
 // unit-testable.
-func seedSSECKeyInto() error {
+func seedSSECKeyInto(d Deps) error {
 	// Read first, and CLASSIFY the read — this is the whole safety property, and it
 	// is why bao_read.go's three-way verdict exists rather than a "" return.
 	//
@@ -138,19 +111,19 @@ func seedSSECKeyInto() error {
 	// layer, every log chunk — would become permanently unreadable, with Linode
 	// holding no copy of the discarded key to fall back on.
 	//
-	// So only baoReadAbsent, which is OpenBao ANSWERING that the path is empty,
+	// So only KVAbsent, which is OpenBao ANSWERING that the path is empty,
 	// authorizes a write. Unknown fails closed: the cost of failing is a re-run, and
 	// the cost of guessing is the whole object store.
-	existing, verdict := baoKVGetFieldOKFn(ssecKVPath, "key")
+	existing, verdict := d.KVGet(SSECKVPath, "key")
 	switch verdict {
-	case baoReadFound:
+	case KVFound:
 		_ = existing
-		fmt.Printf("seed-ssec-key: %s already holds a key — left untouched.\n", ssecKVPath)
+		fmt.Printf("seed-ssec-key: %s already holds a key — left untouched.\n", SSECKVPath)
 		fmt.Println("  Replacing it would NOT rotate anything: SSE-C keys are per-object, so every")
 		fmt.Println("  object already written would become unreadable. Rekeying is a bucket-wide")
 		fmt.Println("  rewrite, not a reseed.")
 		return nil
-	case baoReadAbsent:
+	case KVAbsent:
 		// The only state that authorizes generating a key.
 	default:
 		return fmt.Errorf(
@@ -159,7 +132,7 @@ func seedSSECKeyInto() error {
 				"REFUSING TO SEED. If a key IS present and this wrote a new one, every object already "+
 				"encrypted under the old key would be unrecoverable — Linode keeps no copy. Fix the "+
 				"OpenBao read path and re-run; a re-run is free, a wrong guess is not",
-			ssecKVPath)
+			SSECKVPath)
 	}
 
 	raw, err := newSSECKeyMaterial()
@@ -168,7 +141,7 @@ func seedSSECKeyInto() error {
 	}
 	b64 := base64.StdEncoding.EncodeToString(raw)
 
-	// The path is spelled as a LITERAL here, not as ssecKVPath, because
+	// The path is spelled as a LITERAL here, not as SSECKVPath, because
 	// ci_extsecret_paths.go's seed detector matches the put call on the SOURCE TEXT
 	// and a const reference is invisible to it. An undetected seed reads as
 	// "nothing seeds this path", which is exactly the gate that would otherwise
@@ -177,14 +150,14 @@ func seedSSECKeyInto() error {
 	//
 	// (Deliberately no example of the matched form in this comment: the detector
 	// reads comments too, and a sample call here registers as a seeded path.)
-	if err := baoKVPutFn("secret/obj/ssec", map[string]string{
+	if err := d.KVPut("secret/obj/ssec", map[string]string{
 		"key": b64,
 	}); err != nil {
-		return fmt.Errorf("seed %s: %w", ssecKVPath, err)
+		return fmt.Errorf("seed %s: %w", SSECKVPath, err)
 	}
 
-	maskGHALines(b64)
-	fmt.Printf("seed-ssec-key: generated a new %d-byte SSE-C key and seeded %s.\n", ssecKeyRawBytes, ssecKVPath)
+	d.MaskGHALines(b64)
+	fmt.Printf("seed-ssec-key: generated a new %d-byte SSE-C key and seeded %s.\n", ssecKeyRawBytes, SSECKVPath)
 	fmt.Println()
 	fmt.Println("  ┌─ BACK THIS UP OFFLINE, NOW ─────────────────────────────────────────────┐")
 	fmt.Println("  │ Linode DISCARDS SSE-C keys on receipt. If this value is lost, every      │")

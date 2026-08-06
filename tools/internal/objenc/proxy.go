@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // objproxy.go — `llz obj-proxy`, the in-cluster S3 gateway that makes Linode
 // Object Storage encrypted at rest for writers that cannot ask for it themselves.
@@ -47,8 +47,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 // objProxyLoopHeader marks a request as having already passed through this proxy.
@@ -67,19 +65,19 @@ import (
 // be mistaken for a request parameter.
 const objProxyLoopHeader = "X-Llz-Obj-Proxy"
 
-type objProxyOpts struct {
-	listen      string
-	upstream    string
-	keyFile     string
-	tlsCert     string
-	tlsKey      string
-	healthAddr  string
-	upstreamCAs string
-	credsFile   string
-	creds       objProxyCreds
+type ProxyOpts struct {
+	Listen      string
+	Upstream    string
+	KeyFile     string
+	TlsCert     string
+	TlsKey      string
+	HealthAddr  string
+	UpstreamCAs string
+	CredsFile   string
+	Creds       objProxyCreds
 	// credsFn, when set, is consulted per request so a rotated credential is picked
 	// up without a restart. Tests set creds directly instead.
-	credsFn func() objProxyCreds
+	CredsFn func() objProxyCreds
 }
 
 // objProxyCounters are the numbers an operator needs to answer "is it actually
@@ -99,55 +97,19 @@ type objProxyCounters struct {
 	misdirected atomic.Uint64
 }
 
-func objProxyCmd() *cobra.Command {
-	var o objProxyOpts
-	c := &cobra.Command{
-		Use:   "obj-proxy",
-		Short: "S3 gateway that adds SSE-C encryption to Linode Object Storage writes",
-		Long: "Reverse-proxies S3 traffic to Linode Object Storage, injecting SSE-C\n" +
-			"encryption headers that Loki and Harbor cannot emit themselves. Linode\n" +
-			"implements no other server-side encryption mode (SSE-S3 is rejected 400;\n" +
-			"PutBucketEncryption is 501), so this is what makes those buckets encrypted\n" +
-			"at rest — with a key Linode never stores.\n\n" +
-			"Bodies are streamed and never inspected; the proxy performs no cryptography\n" +
-			"of its own and does not re-sign requests (SSE-C headers are honoured outside\n" +
-			"SigV4 SignedHeaders, which is why callers must reach this at the real\n" +
-			"endpoint hostname via DNS rather than at a Service name).\n\n" +
-			"KEY LOSS IS DATA LOSS: Linode discards SSE-C keys on receipt, so an object\n" +
-			"written under a lost key is unrecoverable by anyone. Escrow --key-file with\n" +
-			"the same discipline as the OpenBao seal key.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return runObjProxy(cmd.Context(), o) },
-	}
-	f := c.Flags()
-	f.StringVar(&o.listen, "listen", ":8443", "HTTPS listen address for S3 clients")
-	f.StringVar(&o.upstream, "upstream", "", "real Object Storage endpoint host, e.g. us-ord-10.linodeobjects.com (required)")
-	f.StringVar(&o.credsFile, "creds-file", "",
-		"optional file holding the object-storage AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY this proxy may "+
-			"re-sign with. Enables the #397 repair: requests sent in the aws-chunked trailer-checksum framing "+
-			"Linode rejects are de-chunked and re-signed AS THE SAME ACCESS KEY. Without it the proxy never "+
-			"re-signs and such requests fail upstream exactly as they do today")
-	f.StringVar(&o.keyFile, "key-file", "", "file holding the 32-byte raw SSE-C key (required)")
-	f.StringVar(&o.tlsCert, "tls-cert", "", "serving certificate for the endpoint hostname (required)")
-	f.StringVar(&o.tlsKey, "tls-key", "", "serving private key (required)")
-	f.StringVar(&o.healthAddr, "health-addr", ":8080", "plaintext /healthz + /stats address for kubelet probes")
-	f.StringVar(&o.upstreamCAs, "upstream-ca-file", "", "optional CA bundle for verifying the upstream (default: system roots)")
-	return c
-}
-
-func runObjProxy(ctx context.Context, o objProxyOpts) error {
+func RunProxy(ctx context.Context, o ProxyOpts) error {
 	for _, req := range []struct{ name, val string }{
-		{"--upstream", o.upstream}, {"--key-file", o.keyFile},
-		{"--tls-cert", o.tlsCert}, {"--tls-key", o.tlsKey},
+		{"--upstream", o.Upstream}, {"--key-file", o.KeyFile},
+		{"--tls-cert", o.TlsCert}, {"--tls-key", o.TlsKey},
 	} {
 		if req.val == "" {
 			return fmt.Errorf("%s is required", req.name)
 		}
 	}
 
-	o.upstream = upstreamHostOnly(o.upstream)
+	o.Upstream = upstreamHostOnly(o.Upstream)
 
-	raw, err := os.ReadFile(o.keyFile)
+	raw, err := os.ReadFile(o.KeyFile)
 	if err != nil {
 		return fmt.Errorf("read SSE-C key: %w", err)
 	}
@@ -164,23 +126,23 @@ func runObjProxy(ctx context.Context, o objProxyOpts) error {
 	// no credentials the proxy never re-signs and behaves exactly as it did before
 	// #397. An UNREADABLE file is a fault, though — it means someone intended the
 	// repair and it silently would not happen.
-	if o.credsFile != "" {
-		rawCreds, err := os.ReadFile(o.credsFile)
+	if o.CredsFile != "" {
+		rawCreds, err := os.ReadFile(o.CredsFile)
 		if err != nil {
 			return fmt.Errorf("read object-storage credentials: %w", err)
 		}
-		o.creds = parseObjProxyCreds(rawCreds)
-		loader := &credsLoader{path: o.credsFile}
-		o.credsFn = loader.get
-		if !o.creds.usable() {
+		o.Creds = parseObjProxyCreds(rawCreds)
+		loader := &credsLoader{path: o.CredsFile}
+		o.CredsFn = loader.get
+		if !o.Creds.usable() {
 			return fmt.Errorf("%s holds no usable AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY pair — "+
-				"the #397 re-signing repair would be silently off", o.credsFile)
+				"the #397 re-signing repair would be silently off", o.CredsFile)
 		}
 		fmt.Printf("obj-proxy: re-signing enabled for access key %s (repairs the aws-chunked trailer framing Linode rejects)\n",
-			o.creds.AccessKeyID)
+			o.Creds.AccessKeyID)
 	}
 
-	if err := assertNotSelf(o.upstream); err != nil {
+	if err := assertNotSelf(o.Upstream); err != nil {
 		return err
 	}
 
@@ -191,12 +153,12 @@ func runObjProxy(ctx context.Context, o objProxyOpts) error {
 	}
 
 	srv := &http.Server{
-		Addr:              o.listen,
-		Handler:           objProxyHandlerForHost(proxy, counters, o.upstream),
+		Addr:              o.Listen,
+		Handler:           objProxyHandlerForHost(proxy, counters, o.Upstream),
 		ReadHeaderTimeout: 15 * time.Second,
-		TLSConfig:         objProxyServingTLS(o.tlsCert, o.tlsKey),
+		TLSConfig:         objProxyServingTLS(o.TlsCert, o.TlsKey),
 	}
-	health := &http.Server{Addr: o.healthAddr, Handler: objProxyHealth(counters), ReadHeaderTimeout: 5 * time.Second}
+	health := &http.Server{Addr: o.HealthAddr, Handler: objProxyHealth(counters), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -216,7 +178,7 @@ func runObjProxy(ctx context.Context, o objProxyOpts) error {
 		}
 	}()
 	fmt.Printf("obj-proxy: listening on %s, upstream https://%s, SSE-C key %d bytes (md5 %s)\n",
-		o.listen, o.upstream, sseCustomerKeyRawBytes, key.md5B64)
+		o.Listen, o.Upstream, sseCustomerKeyRawBytes, key.md5B64)
 
 	select {
 	case err := <-errc:
@@ -276,19 +238,19 @@ func parseSSECKeyFile(raw []byte) ([]byte, error) {
 // handler against an httptest upstream instead of only the injection function.
 // resolveCreds prefers the live loader (so a rotation is seen without a restart)
 // and falls back to the static value tests supply.
-func resolveCreds(o objProxyOpts) objProxyCreds {
-	if o.credsFn != nil {
-		return o.credsFn()
+func resolveCreds(o ProxyOpts) objProxyCreds {
+	if o.CredsFn != nil {
+		return o.CredsFn()
 	}
-	return o.creds
+	return o.Creds
 }
 
-func buildObjProxy(o objProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.ReverseProxy, error) {
-	target, err := url.Parse("https://" + o.upstream)
+func buildObjProxy(o ProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.ReverseProxy, error) {
+	target, err := url.Parse("https://" + o.Upstream)
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream: %w", err)
 	}
-	transport, err := objProxyTransport(o.upstreamCAs)
+	transport, err := objProxyTransport(o.UpstreamCAs)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +262,7 @@ func buildObjProxy(o objProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.
 			// Host is deliberately UNCHANGED from what the client signed. The client
 			// addressed the real endpoint name (DNS sent it here), so preserving it is
 			// what keeps its SigV4 signature valid without re-signing.
-			r.Host = o.upstream
+			r.Host = o.Upstream
 			c.total.Add(1)
 			if r.Header.Get(hdrCopySource) != "" {
 				c.copySrc.Add(1)
@@ -316,7 +278,7 @@ func buildObjProxy(o objProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.
 			// possible. Failure here is non-fatal: the original request is forwarded
 			// untouched and the upstream's own 403 is a truer verdict than a rewrite
 			// we could not complete.
-			if ok, err := resignForUpstream(r, resolveCreds(o), o.upstream); err != nil {
+			if ok, err := resignForUpstream(r, resolveCreds(o), o.Upstream); err != nil {
 				c.resignErr.Add(1)
 				fmt.Fprintf(os.Stderr, "obj-proxy: could not re-sign %s %s (%v) — forwarding as-is\n", r.Method, r.URL.Path, err)
 			} else if ok {

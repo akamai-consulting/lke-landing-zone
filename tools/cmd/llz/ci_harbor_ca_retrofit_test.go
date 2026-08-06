@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 // errRetrofitNotFound stands in for kubectl's "NotFound" exit.
@@ -19,19 +21,19 @@ func harborPodsJSON(t *testing.T, withCA bool) string {
 	container := func(name string) map[string]any {
 		c := map[string]any{"name": name}
 		if withCA {
-			c["env"] = []map[string]any{{"name": ssecCertDirEnv, "value": "/etc/ssl/certs:" + objProxyCAMount}}
-			c["volumeMounts"] = []map[string]any{{"name": objProxyCAVolume, "mountPath": objProxyCAMount}}
+			c["env"] = []map[string]any{{"name": objenc.SsecCertDirEnv, "value": "/etc/ssl/certs:" + objenc.ObjProxyCAMount}}
+			c["volumeMounts"] = []map[string]any{{"name": objenc.ObjProxyCAVolume, "mountPath": objenc.ObjProxyCAMount}}
 		}
 		return c
 	}
 	pod := map[string]any{
-		"metadata": map[string]any{"name": harborRegistryLabel + "-7d9f-abcde"},
+		"metadata": map[string]any{"name": objenc.HarborRegistryLabel + "-7d9f-abcde"},
 		"spec": map[string]any{
 			"containers": []map[string]any{container("registry"), container("registryctl")},
 		},
 	}
 	if withCA {
-		pod["spec"].(map[string]any)["volumes"] = []map[string]any{{"name": objProxyCAVolume}}
+		pod["spec"].(map[string]any)["volumes"] = []map[string]any{{"name": objenc.ObjProxyCAVolume}}
 	}
 	raw, err := json.Marshal(map[string]any{"items": []any{pod}})
 	if err != nil {
@@ -51,14 +53,14 @@ type retrofitHarness struct {
 
 func (h *retrofitHarness) install(t *testing.T) {
 	t.Helper()
-	origRead, origWrite, origRolled, origBudget := objEncKubectl, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget
+	origRead, origWrite, origRolled, origBudget := objencDeps, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget
 	t.Cleanup(func() {
-		objEncKubectl, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget = origRead, origWrite, origRolled, origBudget
+		objencDeps, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget = origRead, origWrite, origRolled, origBudget
 	})
 	harborWaitBudget = 50 * time.Millisecond
 
 	reads := 0
-	objEncKubectl = func(args ...string) (string, error) {
+	readPods := func(args ...string) (string, error) {
 		h.calls = append(h.calls, strings.Join(args, " "))
 		i := reads
 		reads++
@@ -67,6 +69,12 @@ func (h *retrofitHarness) install(t *testing.T) {
 		}
 		return harborPodsJSON(t, h.podsCA[i]), nil
 	}
+	// Swap the whole capability set rather than one package-level var: the pod
+	// read the retrofit drives is objenc's, and objenc takes it as a Deps field.
+	base := origRead()
+	base.KubectlOut = readPods
+	objencDeps = func() objenc.Deps { return base }
+
 	harborCARetrofitKubectl = func(args ...string) (string, error) {
 		joined := strings.Join(args, " ")
 		h.calls = append(h.calls, joined)

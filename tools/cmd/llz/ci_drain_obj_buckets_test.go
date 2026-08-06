@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 // drain-obj-buckets refuses without --yes, deliberately: it deletes every log chunk
@@ -59,14 +61,14 @@ func TestDrainObjBucketsRequiresARegion(t *testing.T) {
 // withDrainStubs fakes the LIST/DELETE pair so the convergence logic is testable.
 func withDrainStubs(t *testing.T, remaining *int, survivePerRound int) *int {
 	t.Helper()
-	oList, oDel, oSleep := s3SampleObjectKeys, s3DeleteObjects, drainSleep
-	t.Cleanup(func() { s3SampleObjectKeys, s3DeleteObjects, drainSleep = oList, oDel, oSleep })
+	oList, oDel, oSleep := objenc.SampleObjectKeys, s3DeleteObjects, drainSleep
+	t.Cleanup(func() { objenc.SampleObjectKeys, s3DeleteObjects, drainSleep = oList, oDel, oSleep })
 	drainSleep = func(time.Duration) {}
 	rounds := 0
-	s3SampleObjectKeys = func(_, _, _, _ string, _ int) ([]s3ObjectRef, error) {
-		out := make([]s3ObjectRef, 0, *remaining)
+	objenc.SampleObjectKeys = func(_, _, _, _ string, _ int) ([]objenc.ObjectRef, error) {
+		out := make([]objenc.ObjectRef, 0, *remaining)
 		for i := 0; i < *remaining; i++ {
-			out = append(out, s3ObjectRef{Key: fmt.Sprintf("k%d", i)})
+			out = append(out, objenc.ObjectRef{Key: fmt.Sprintf("k%d", i)})
 		}
 		return out, nil
 	}
@@ -89,13 +91,13 @@ func withDrainStubs(t *testing.T, remaining *int, survivePerRound int) *int {
 func TestDrainRetriesKeysThatSurviveATransientDeleteError(t *testing.T) {
 	remaining := 3
 	calls := 0
-	oList, oDel, oSleep := s3SampleObjectKeys, s3DeleteObjects, drainSleep
-	t.Cleanup(func() { s3SampleObjectKeys, s3DeleteObjects, drainSleep = oList, oDel, oSleep })
+	oList, oDel, oSleep := objenc.SampleObjectKeys, s3DeleteObjects, drainSleep
+	t.Cleanup(func() { objenc.SampleObjectKeys, s3DeleteObjects, drainSleep = oList, oDel, oSleep })
 	drainSleep = func(time.Duration) {}
-	s3SampleObjectKeys = func(_, _, _, _ string, _ int) ([]s3ObjectRef, error) {
-		out := make([]s3ObjectRef, 0, remaining)
+	objenc.SampleObjectKeys = func(_, _, _, _ string, _ int) ([]objenc.ObjectRef, error) {
+		out := make([]objenc.ObjectRef, 0, remaining)
 		for i := 0; i < remaining; i++ {
-			out = append(out, s3ObjectRef{Key: fmt.Sprintf("k%d", i)})
+			out = append(out, objenc.ObjectRef{Key: fmt.Sprintf("k%d", i)})
 		}
 		return out, nil
 	}

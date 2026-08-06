@@ -48,6 +48,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 const (
@@ -105,7 +107,7 @@ func classifyCloneCanary(out string, err error) enforcementVerdict {
 		v.Detail = clonePolicyName + " rejected the clone-sourced canary — the policy is bound and enforcing"
 	default:
 		v.FailWhy = "the canary was rejected, but NOT by " + clonePolicyName +
-			" — so this run did not observe clone-deny enforcement. Output: " + truncateForError([]byte(out))
+			" — so this run did not observe clone-deny enforcement. Output: " + harborauth.TruncateForError([]byte(out))
 	}
 	return v
 }
@@ -255,7 +257,7 @@ func classifySignatureCanary(out string, err error) enforcementVerdict {
 		// Denied, but not by the policy under test. We did not observe enforcement.
 		v.FailWhy = "the canary was rejected, but NOT by " + signaturePolicyName +
 			" — so this run did not observe signature enforcement. A denial from PSS, a quota, or an " +
-			"unrelated policy proves nothing about the one under test. Output: " + truncateForError([]byte(out))
+			"unrelated policy proves nothing about the one under test. Output: " + harborauth.TruncateForError([]byte(out))
 	}
 	return v
 }

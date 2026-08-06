@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // objprefix.go — resolve the instance's Object Storage label prefix for the CI
 // verbs that take a deployment name rather than a loaded spec.
@@ -17,9 +17,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
-// objLabelPrefixFor loads the instance spec and returns its label prefix. The
+// LabelPrefixFor loads the instance spec and returns its label prefix. The
 // error names the spec, because that is the only place the answer can come from.
-func objLabelPrefixFor(what string) (string, error) {
+func LabelPrefixFor(what string) (string, error) {
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
 		return "", errObjPrefixUnresolved(what, err)

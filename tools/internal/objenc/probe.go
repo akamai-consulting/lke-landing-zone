@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // s3_ssec_probe.go — is this object actually encrypted?
 //
@@ -29,6 +29,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 // ssecVerdict is what the probe learned about one object.
@@ -57,7 +59,7 @@ func (v ssecVerdict) String() string {
 // s3SignedRequest issues a SigV4-signed request and returns status + body. Kept
 // separate from s3BucketProbe (which only ever HEADs a bucket root) so object-level
 // probes do not have to re-derive the signing chain.
-// s3EscapePath URI-encodes a path the way SigV4 requires: every byte outside the
+// S3EscapePath URI-encodes a path the way SigV4 requires: every byte outside the
 // unreserved set percent-encoded, with `/` preserved as the segment separator.
 //
 // Concatenating the raw path (the first revision) is correct only while every key
@@ -69,7 +71,7 @@ func (v ssecVerdict) String() string {
 //
 // Go's own url escaping is not usable here: it leaves `$&+,;=:@` unescaped in paths,
 // while SigV4's canonical form requires them encoded.
-func s3EscapePath(path string) string {
+func S3EscapePath(path string) string {
 	const unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
 	var b strings.Builder
 	for i := 0; i < len(path); i++ {
@@ -87,13 +89,13 @@ func s3EscapePath(path string) string {
 }
 
 var s3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query string) (int, string, error) {
-	host := s3Host(endpoint)
-	region := s3Region(endpoint)
+	host := s3sig.Host(endpoint)
+	region := s3sig.Region(endpoint)
 
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
-	payloadHash := sha256Hex("")
+	payloadHash := s3sig.SHA256Hex("")
 
 	canonicalHeaders := "host:" + host + "\n" +
 		"x-amz-content-sha256:" + payloadHash + "\n" +
@@ -101,16 +103,16 @@ var s3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query s
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 	// The SAME escaped form is signed and sent. Deriving them separately is how a
 	// canonical request drifts from the wire request.
-	escapedPath := s3EscapePath(path)
+	escapedPath := S3EscapePath(path)
 	canonicalRequest := strings.Join([]string{
 		method, escapedPath, query, canonicalHeaders, signedHeaders, payloadHash,
 	}, "\n")
 
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	signature := hex.EncodeToString(hmacSHA256(sigV4SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
+	signature := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(secretKey, dateStamp, region, "s3"), stringToSign))
 	auth := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		accessKey, scope, signedHeaders, signature)
 
@@ -146,8 +148,8 @@ var s3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query s
 var s3ListEntryRe = regexp.MustCompile(`(?s)<Key>([^<]+)</Key>.*?<LastModified>([^<]+)</LastModified>`)
 var s3ListTokenRe = regexp.MustCompile(`<NextContinuationToken>([^<]+)</NextContinuationToken>`)
 
-// s3ObjectRef is one listed object.
-type s3ObjectRef struct {
+// ObjectRef is one listed object.
+type ObjectRef struct {
 	Key          string
 	LastModified time.Time
 	// Bucket is filled by the CALLER, not the lister — one sample can span several
@@ -160,7 +162,7 @@ type s3ObjectRef struct {
 // one check into thousands of requests. The bound is reported, never silent.
 const s3SamplePageCap = 10
 
-// s3SampleObjectKeys returns up to max object keys from the bucket.
+// SampleObjectKeys returns up to max object keys from the bucket.
 //
 // SAMPLING PROVES FAILURE, NOT SUCCESS — and the first revision of this got that
 // backwards by fetching exactly ONE key. That is adequate for a bucket that should
@@ -173,11 +175,11 @@ const s3SamplePageCap = 10
 // finding text rather than hidden, because the number that matters to an auditor
 // is "how many did you look at", and a checker that implies full coverage from a
 // sample is worse than one that admits the bound.
-var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max int) ([]s3ObjectRef, error) {
+var SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max int) ([]ObjectRef, error) {
 	if max < 1 {
 		max = 1
 	}
-	var refs []s3ObjectRef
+	var refs []ObjectRef
 	token := ""
 	for page := 0; page < s3SamplePageCap; page++ {
 		query := "list-type=2&max-keys=1000"
@@ -199,7 +201,7 @@ var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max
 			return nil, err
 		}
 		if code != http.StatusOK {
-			return nil, fmt.Errorf("listing %s returned HTTP %d (%s)", bucket, code, s3ErrorCode(body))
+			return nil, fmt.Errorf("listing %s returned HTTP %d (%s)", bucket, code, s3sig.ErrorCode(body))
 		}
 		for _, m := range s3ListEntryRe.FindAllStringSubmatch(body, -1) {
 			ts, err := time.Parse(time.RFC3339, m[2])
@@ -209,7 +211,7 @@ var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max
 				// Treat it as brand new so it IS judged.
 				ts = time.Now()
 			}
-			refs = append(refs, s3ObjectRef{Key: m[1], LastModified: ts})
+			refs = append(refs, ObjectRef{Key: m[1], LastModified: ts})
 		}
 		t := s3ListTokenRe.FindStringSubmatch(body)
 		if t == nil {
@@ -229,8 +231,8 @@ var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max
 	return refs, nil
 }
 
-// s3ObjectSSECProbe HEADs one object WITHOUT SSE-C headers and classifies the answer.
-var s3ObjectSSECProbe = func(accessKey, secretKey, endpoint, bucket, key string) (ssecVerdict, string) {
+// ObjectSSECProbe HEADs one object WITHOUT SSE-C headers and classifies the answer.
+var ObjectSSECProbe = func(accessKey, secretKey, endpoint, bucket, key string) (ssecVerdict, string) {
 	code, body, err := s3SignedRequest(http.MethodHead, accessKey, secretKey, endpoint,
 		"/"+bucket+"/"+key, "")
 	if err != nil {
@@ -245,6 +247,6 @@ var s3ObjectSSECProbe = func(accessKey, secretKey, endpoint, bucket, key string)
 	case http.StatusNotFound:
 		return ssecAbsent, "HTTP 404"
 	default:
-		return ssecUnknown, fmt.Sprintf("HTTP %d (%s)", code, s3ErrorCode(body))
+		return ssecUnknown, fmt.Sprintf("HTTP %d (%s)", code, s3sig.ErrorCode(body))
 	}
 }

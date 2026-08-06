@@ -43,6 +43,12 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 func ciDrainObjBucketsCmd() *cobra.Command {
@@ -191,7 +197,7 @@ func waitObjKeyUsable(ak, sk, endpoint string, buckets []string) error {
 	deadline := drainNow().Add(objKeyReadyBudget)
 	var last error
 	for attempt := 1; ; attempt++ {
-		if _, err := s3SampleObjectKeys(ak, sk, endpoint, probe, 1); err == nil {
+		if _, err := objenc.SampleObjectKeys(ak, sk, endpoint, probe, 1); err == nil {
 			if attempt > 1 {
 				fmt.Printf("drain key became usable after %d attempt(s).\n", attempt)
 			}
@@ -261,11 +267,11 @@ func drainOneBucket(ak, sk, endpoint, bucket string) (int, error) {
 
 // listWithRetry lists a page, retrying transient authorization failures within a
 // bounded budget. A key that is genuinely mis-scoped exhausts it and fails.
-func listWithRetry(ak, sk, endpoint, bucket string) ([]s3ObjectRef, error) {
+func listWithRetry(ak, sk, endpoint, bucket string) ([]objenc.ObjectRef, error) {
 	deadline := drainNow().Add(objKeyReadyBudget)
 	var last error
 	for {
-		refs, err := s3SampleObjectKeys(ak, sk, endpoint, bucket, drainBatch)
+		refs, err := objenc.SampleObjectKeys(ak, sk, endpoint, bucket, drainBatch)
 		if err == nil {
 			return refs, nil
 		}
@@ -295,12 +301,12 @@ const (
 // put a body path through code whose whole value is that it is simple enough to
 // trust.
 var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (int, string, error) {
-	host := s3Host(endpoint)
-	region := s3Region(endpoint)
+	host := s3sig.Host(endpoint)
+	region := s3sig.Region(endpoint)
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
-	payloadHash := sha256Hex(string(body))
+	payloadHash := s3sig.SHA256Hex(string(body))
 	sum := md5.Sum(body) //nolint:gosec // Content-MD5 is required by the DeleteObjects API, not a security choice
 	contentMD5 := base64.StdEncoding.EncodeToString(sum[:])
 
@@ -309,15 +315,15 @@ var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (in
 		"x-amz-content-sha256:" + payloadHash + "\n" +
 		"x-amz-date:" + amzDate + "\n"
 	signedHeaders := "content-md5;host;x-amz-content-sha256;x-amz-date"
-	escapedPath := s3EscapePath(path)
+	escapedPath := objenc.S3EscapePath(path)
 	canonicalRequest := strings.Join([]string{
-		"POST", escapedPath, s3CanonicalQuery(query), canonicalHeaders, signedHeaders, payloadHash,
+		"POST", escapedPath, objenc.S3CanonicalQuery(query), canonicalHeaders, signedHeaders, payloadHash,
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	sig := hex.EncodeToString(hmacSHA256(sigV4SigningKey(sk, dateStamp, region, "s3"), stringToSign))
+	sig := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(sk, dateStamp, region, "s3"), stringToSign))
 
 	req, err := http.NewRequest(http.MethodPost, "https://"+host, bytes.NewReader(body))
 	if err != nil {
@@ -367,7 +373,7 @@ var s3DeleteObjects = func(ak, sk, endpoint, bucket string, keys []string) (int,
 		return 0, err
 	}
 	if code < 200 || code >= 300 {
-		return 0, fmt.Errorf("DeleteObjects returned HTTP %d: %s", code, truncateForError([]byte(respBody)))
+		return 0, fmt.Errorf("DeleteObjects returned HTTP %d: %s", code, harborauth.TruncateForError([]byte(respBody)))
 	}
 	// PER-KEY FAILURES ARE NOT A DEAD END. Quiet mode reports only failures, and Ceph
 	// returns a transient InternalError for individual keys under load — observed

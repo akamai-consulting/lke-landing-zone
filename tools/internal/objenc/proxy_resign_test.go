@@ -1,8 +1,9 @@
-package main
+package objenc
 
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 const testAKID = "AKIAEXAMPLEKEYID"
@@ -34,12 +37,12 @@ func signAsClient(t *testing.T, r *http.Request, c objProxyCreds, host string) {
 		"x-amz-date:" + amzDate + "\n"
 	sh := strings.Join(signed, ";")
 	cr := strings.Join([]string{
-		r.Method, s3EscapePath(r.URL.Path), s3CanonicalQuery(r.URL.RawQuery), canonical, sh,
+		r.Method, S3EscapePath(r.URL.Path), S3CanonicalQuery(r.URL.RawQuery), canonical, sh,
 		r.Header.Get("X-Amz-Content-Sha256"),
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
-	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(cr)}, "\n")
-	sig := hex.EncodeToString(hmacSHA256(sigV4SigningKey(c.SecretAccessKey, dateStamp, region, "s3"), sts))
+	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(cr)}, "\n")
+	sig := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(c.SecretAccessKey, dateStamp, region, "s3"), sts))
 	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+c.AccessKeyID+"/"+scope+
 		", SignedHeaders="+sh+", Signature="+sig)
 }
@@ -139,7 +142,7 @@ func TestResignIsInertWithoutCredentials(t *testing.T) {
 // Ordinary requests are the overwhelming majority and must not be touched at all.
 func TestResignLeavesNormalRequestsAlone(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, "https://us-ord-10.linodeobjects.com/b/k", strings.NewReader("plain"))
-	r.Header.Set("X-Amz-Content-Sha256", sha256Hex("plain"))
+	r.Header.Set("X-Amz-Content-Sha256", s3sig.SHA256Hex("plain"))
 	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+testAKID+"/20260803/us-ord/s3/aws4_request, Signature=x")
 
 	done, err := resignForUpstream(r, testCreds(), "us-ord-10.linodeobjects.com")
@@ -202,7 +205,7 @@ func TestProxyResignsAndStillInjectsSSEC(t *testing.T) {
 
 	host := strings.TrimPrefix(upstream.URL, "http://")
 	c := &objProxyCounters{}
-	rp, err := buildObjProxy(objProxyOpts{upstream: host, creds: testCreds()}, testKey(t), c)
+	rp, err := buildObjProxy(ProxyOpts{Upstream: host, Creds: testCreds()}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,17 +266,17 @@ func TestFailedResignLeavesTheBodyIntactForThePassThrough(t *testing.T) {
 // upstream cannot reproduce — so multipart uploads would 403 while single-part
 // writes worked, which reads as flaky object storage rather than as a bug here.
 func TestCanonicalQuerySortsAndEncodesForSigning(t *testing.T) {
-	if got := s3CanonicalQuery("uploadId=ZZZ&partNumber=1"); got != "partNumber=1&uploadId=ZZZ" {
+	if got := S3CanonicalQuery("uploadId=ZZZ&partNumber=1"); got != "partNumber=1&uploadId=ZZZ" {
 		t.Errorf("canonical query = %q, want the SORTED form", got)
 	}
 	// A space is %20 in SigV4, not the '+' net/url's Encode would produce.
-	if got := s3CanonicalQuery("k=a b"); got != "k=a%20b" {
+	if got := S3CanonicalQuery("k=a b"); got != "k=a%20b" {
 		t.Errorf("space encoded as %q, want %%20 — '+' is a different byte to the signer", got)
 	}
-	if got := s3CanonicalQuery("flag&b=2"); got != "b=2&flag=" {
+	if got := S3CanonicalQuery("flag&b=2"); got != "b=2&flag=" {
 		t.Errorf("valueless key rendered %q, want `flag=`", got)
 	}
-	if got := s3CanonicalQuery(""); got != "" {
+	if got := S3CanonicalQuery(""); got != "" {
 		t.Errorf("empty query = %q", got)
 	}
 }
@@ -314,7 +317,7 @@ func TestResignRefusesWithoutADeclaredLength(t *testing.T) {
 // The canonical form must be used BY the signer, not merely exist. Parameter order
 // is the client's choice and the canonical form is order-independent, so the same
 // multipart PUT written two ways must produce the SAME signature. Testing
-// s3CanonicalQuery alone leaves the call site free to keep signing RawQuery.
+// S3CanonicalQuery alone leaves the call site free to keep signing RawQuery.
 func TestResignSignsTheCanonicalQueryNotTheArrivalOrder(t *testing.T) {
 	prev := objProxyResignNow
 	t.Cleanup(func() { objProxyResignNow = prev })
@@ -405,7 +408,7 @@ func TestCredsLoaderKeepsLastGoodOnReadFailure(t *testing.T) {
 	l.get()
 
 	mod = mod.Add(time.Minute)
-	objProxyReadFile = func(string) ([]byte, error) { return nil, errRetrofitNotFound }
+	objProxyReadFile = func(string) ([]byte, error) { return nil, errNotFound }
 	if got := l.get(); got.AccessKeyID != "A" {
 		t.Errorf("a transient read error dropped the credential: %+v", got)
 	}
@@ -454,9 +457,9 @@ func TestProxyConsultsTheCredentialLoaderPerRequest(t *testing.T) {
 	c := &objProxyCounters{}
 	// creds is deliberately left ZERO: the static fallback must not be what makes
 	// this pass, or a regression to it would go unnoticed.
-	rp, err := buildObjProxy(objProxyOpts{
-		upstream: host,
-		credsFn:  func() objProxyCreds { return current },
+	rp, err := buildObjProxy(ProxyOpts{
+		Upstream: host,
+		CredsFn:  func() objProxyCreds { return current },
 	}, testKey(t), c)
 	if err != nil {
 		t.Fatal(err)
@@ -581,10 +584,10 @@ func TestResignVerifiesARequestSignedOverDuplicateHeaders(t *testing.T) {
 		"x-amz-content-sha256:" + sha256StreamingUnsignedTrailer + "\n" +
 		"x-amz-date:" + amzDate + "\n" +
 		"x-amz-meta-tag:first,second\n"
-	cr := strings.Join([]string{r.Method, s3EscapePath(r.URL.Path), "", canonical, sh, sha256StreamingUnsignedTrailer}, "\n")
+	cr := strings.Join([]string{r.Method, S3EscapePath(r.URL.Path), "", canonical, sh, sha256StreamingUnsignedTrailer}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
-	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(cr)}, "\n")
-	sig := hex.EncodeToString(hmacSHA256(sigV4SigningKey(testCreds().SecretAccessKey, dateStamp, region, "s3"), sts))
+	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(cr)}, "\n")
+	sig := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(testCreds().SecretAccessKey, dateStamp, region, "s3"), sts))
 	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+testAKID+"/"+scope+", SignedHeaders="+sh+", Signature="+sig)
 
 	done, err := resignForUpstream(r, testCreds(), host)
@@ -592,3 +595,8 @@ func TestResignVerifiesARequestSignedOverDuplicateHeaders(t *testing.T) {
 		t.Fatalf("a correctly signed request with a duplicated header must verify: done=%v err=%v", done, err)
 	}
 }
+
+// errNotFound stands in for kubectl's "NotFound" exit. A local copy of package
+// main's errRetrofitNotFound: a one-line sentinel, and a test fixture cannot cross
+// a package boundary.
+var errNotFound = errors.New("Error from server (NotFound)")

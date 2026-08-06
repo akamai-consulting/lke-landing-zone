@@ -28,6 +28,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 var forwardPortRe = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
@@ -131,7 +133,7 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("GET %s: %s returned HTTP %d: %s",
-				apiPath, target.name, resp.StatusCode, truncateForError(body))
+				apiPath, target.name, resp.StatusCode, harborauth.TruncateForError(body))
 		}
 		return body, nil
 	}
@@ -206,15 +208,3 @@ func readForwardPort(r io.Reader) (string, error) {
 }
 
 // truncateForError keeps an error message readable when the body is an HTML error
-// page or a long JSON envelope.
-func truncateForError(b []byte) string {
-	const max = 200
-	t := strings.TrimSpace(string(b))
-	if t == "" {
-		return "(empty body)"
-	}
-	if len(t) > max {
-		return t[:max] + "…"
-	}
-	return t
-}

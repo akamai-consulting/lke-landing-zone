@@ -58,6 +58,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // Seams for tests.
@@ -121,7 +123,7 @@ func shutdownIstioSidecar() {
 	_ = resp.Body.Close()
 }
 
-// usableRegistryHost reports whether HARBOR_HOST carries a real registry host.
+// harborauth.UsableRegistryHost reports whether HARBOR_HOST carries a real registry host.
 //
 // It exists because the two ways HARBOR_HOST goes wrong both produce a NON-EMPTY
 // value, which used to sail past this command's `host == ""` discovery fallback and
@@ -140,10 +142,8 @@ func shutdownIstioSidecar() {
 // Deliberately narrow: it rejects a value with an empty final label or the known
 // placeholder, and nothing else. A single-label host ("harbor") stays usable — that
 // is a legitimate in-cluster registry name, not a rendering accident.
-func usableRegistryHost(h string) bool {
-	s := strings.TrimSpace(h)
-	return s != "" && s != "REPLACE_ME" && !strings.HasSuffix(s, ".")
-}
+// usableRegistryHost moved to internal/harborauth when objenc needed the registry
+// client; this is the one caller left on this side.
 
 func runCIHarborProvisioner() error {
 	ctx := context.Background()
@@ -214,7 +214,7 @@ func runCIHarborProvisioner() error {
 	// fix, arrives as the unusable "harbor."); ask Harbor for its own external
 	// registry host (ground truth). Harbor is confirmed reachable here (the project
 	// ensure above just succeeded).
-	if !usableRegistryHost(registryHost) {
+	if !harborauth.UsableRegistryHost(registryHost) {
 		if strings.TrimSpace(registryHost) != "" {
 			fmt.Printf("HARBOR_HOST is %q — not a usable registry host; ignoring it and asking Harbor for its own.\n", registryHost)
 		}
@@ -352,7 +352,7 @@ func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string, error) {
 // and pull 401s while the loop says steady state. This command is a convergence
 // loop, so a field that drifted out of the valid set gets reconciled like any other.
 //
-// Deliberately repairs only the UNUSABLE (see usableRegistryHost) — never a value
+// Deliberately repairs only the UNUSABLE (see harborauth.UsableRegistryHost) — never a value
 // that is merely different from what discovery reports. An operator may have
 // pointed a cluster at a registry on purpose, and a loop that fights them every
 // five minutes is worse than the bug.
@@ -367,7 +367,7 @@ func repairRegistryHost(ctx context.Context, bao baoStore, h *harborAPI, envHost
 		if err != nil {
 			return fmt.Errorf("read %s registry_host: %w", p, err)
 		}
-		if !usableRegistryHost(cur) {
+		if !harborauth.UsableRegistryHost(cur) {
 			fmt.Printf("%s has registry_host %q — not a usable registry host; repairing.\n", p, cur)
 			broken = append(broken, p)
 		}
@@ -380,7 +380,7 @@ func repairRegistryHost(ctx context.Context, bao baoStore, h *harborAPI, envHost
 	// otherwise ask Harbor for its own. Harbor being unreachable is not an error —
 	// the next tick retries, exactly like the seeding path's not-ready exits.
 	host := envHost
-	if !usableRegistryHost(host) {
+	if !harborauth.UsableRegistryHost(host) {
 		discovered, err := h.systemInfoRegistryHost()
 		if err != nil || discovered == "" {
 			fmt.Printf("cannot resolve the registry host to repair with (systeminfo: %v) — retrying next tick.\n", err)

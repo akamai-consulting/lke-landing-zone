@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/spf13/cobra"
 )
 
@@ -373,7 +374,7 @@ func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict
 	key := fmt.Sprintf("%s%s-%d", keyPrefix, c.Name, now.UnixNano())
 	payload := []byte(fmt.Sprintf("llz obj round-trip probe for %s at %s\n", c.Name, now.UTC().Format(time.RFC3339)))
 
-	r := s3ObjectRoundTrip(access, secret, endpoint, bucket, key, payload)
+	r := objenc.S3ObjectRoundTrip(access, secret, endpoint, bucket, key, payload)
 	if !r.OK() {
 		v.FailWhy = r.FailWhy
 		return v

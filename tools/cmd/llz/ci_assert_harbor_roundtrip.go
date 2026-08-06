@@ -14,7 +14,7 @@ package main
 // used the credential — the provisioner asserted it had CREATED a robot, not that
 // the robot could log in anywhere.
 //
-// `usableRegistryHost` (ci_harbor_provisioner.go) is the static half of the fix
+// `harborauth.UsableRegistryHost` (ci_harbor_provisioner.go) is the static half of the fix
 // and it is good, but it can only reject hosts that look malformed to it. This is
 // the empirical half: present the credential to the registry and see.
 //
@@ -45,8 +45,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,13 +54,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 const (
-	// harborRobotSecretNS/Name is the Secret ESO materializes from
+	// harborauth.RobotSecretNS/Name is the Secret ESO materializes from
 	// secret/harbor/robot (llz-cert-automation chart, harborDockerConfig).
-	harborRobotSecretNS   = "llz-cert-automation"
-	harborRobotSecretName = "harbor-docker-config"
 	// harborProbeRepo is the repository the scope is requested against. It need
 	// not exist: a token scoped to a repository is granted (or refused) on the
 	// robot's policy, and tags/list on a missing repo is a clean NAME_UNKNOWN.
@@ -95,8 +93,8 @@ func ciAssertHarborRoundTripCmd() *cobra.Command {
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
-	c.Flags().StringVar(&secretNS, "secret-namespace", harborRobotSecretNS, "namespace of the robot credential Secret")
-	c.Flags().StringVar(&secretName, "secret-name", harborRobotSecretName, "name of the robot credential Secret")
+	c.Flags().StringVar(&secretNS, "secret-namespace", harborauth.RobotSecretNS, "namespace of the robot credential Secret")
+	c.Flags().StringVar(&secretName, "secret-name", harborauth.RobotSecretName, "name of the robot credential Secret")
 	c.Flags().StringVar(&registry, "registry", "", "registry host override (default: the Secret's registry_host)")
 	c.Flags().StringVar(&repo, "repo", harborProbeRepo, "repository the pull+push scope is requested against")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
@@ -104,228 +102,11 @@ func ciAssertHarborRoundTripCmd() *cobra.Command {
 	return c
 }
 
-// harborRobotCreds is what the round trip needs.
-type harborRobotCreds struct {
-	Username     string
-	Password     string
-	RegistryHost string
-}
-
-// decodeRobotSecret extracts the robot credential from a Secret's JSON. Pure.
-//
-// It rejects a registry_host that usableRegistryHost refuses, using the SAME
-// predicate the provisioner uses rather than restating it — a gate that
-// re-implemented "looks like a host" would drift from the guard it is backing up,
-// and "harbor." passing one but not the other is precisely the bug.
-func decodeRobotSecret(raw []byte) (harborRobotCreds, error) {
-	var s struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return harborRobotCreds{}, fmt.Errorf("decoding the robot Secret: %w", err)
-	}
-	get := func(k string) (string, error) {
-		v, ok := s.Data[k]
-		if !ok {
-			return "", fmt.Errorf("the robot Secret has no %q key — ESO has not materialized it from secret/harbor/robot", k)
-		}
-		b, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return "", fmt.Errorf("the robot Secret's %q is not valid base64: %w", k, err)
-		}
-		return string(b), nil
-	}
-	var c harborRobotCreds
-	var err error
-	if c.Username, err = get("username"); err != nil {
-		return c, err
-	}
-	if c.Password, err = get("password"); err != nil {
-		return c, err
-	}
-	if c.RegistryHost, err = get("registry_host"); err != nil {
-		return c, err
-	}
-	if !usableRegistryHost(c.RegistryHost) {
-		return c, fmt.Errorf("registry_host %q is not a usable registry host — this is the truncation class "+
-			"(\"harbor.\" is non-empty, so every == \"\" guard passes it) and every push and pull will 401", c.RegistryHost)
-	}
-	return c, nil
-}
-
-// bearerChallenge is the parsed Www-Authenticate header.
-type bearerChallenge struct {
-	Realm   string
-	Service string
-}
-
-// parseBearerChallenge parses a `Bearer realm="…",service="…"` header. Pure.
-func parseBearerChallenge(h string) (bearerChallenge, error) {
-	if !strings.HasPrefix(strings.ToLower(h), "bearer ") {
-		return bearerChallenge{}, fmt.Errorf("not a Bearer challenge: %q", h)
-	}
-	var c bearerChallenge
-	for _, part := range strings.Split(h[len("Bearer "):], ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok {
-			continue
-		}
-		v = strings.Trim(v, `"`)
-		switch strings.ToLower(k) {
-		case "realm":
-			c.Realm = v
-		case "service":
-			c.Service = v
-		}
-	}
-	if c.Realm == "" {
-		return c, fmt.Errorf("bearer challenge carried no realm: %q", h)
-	}
-	return c, nil
-}
-
-// tokenAccess is the access grant inside a token-service response.
-type tokenAccess struct {
-	Type    string   `json:"type"`
-	Name    string   `json:"name"`
-	Actions []string `json:"actions"`
-}
-
-// parseTokenResponse extracts the token and its granted access. Pure.
-func parseTokenResponse(raw []byte) (string, []tokenAccess, error) {
-	var r struct {
-		Token       string        `json:"token"`
-		AccessToken string        `json:"access_token"`
-		Access      []tokenAccess `json:"access"`
-	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return "", nil, fmt.Errorf("decoding the token response: %w", err)
-	}
-	tok := firstNonEmpty(r.Token, r.AccessToken)
-	if tok == "" {
-		return "", nil, fmt.Errorf("the token service returned no token")
-	}
-	// THE ACCESS LIST IS IN THE JWT, NOT THE ENVELOPE. Harbor's /service/token
-	// answers with {token, access_token, expires_in, issued_at} — measured; there is
-	// no `access` key in the body at all, and the distribution token spec does not
-	// put one there. The granted scope is a CLAIM inside the token.
-	//
-	// Reading r.Access therefore always yielded an empty list, so grantedActions
-	// always returned nothing and every caller concluded the credential held no
-	// push scope. The comment at the call site had the mechanism exactly right —
-	// "Harbor returns a valid token with an empty access list when the credential
-	// lacks the scope" — which is what made the empty result look like a diagnosis
-	// instead of a bug: the check reported the one failure it was written to detect,
-	// on every credential, including ones that could demonstrably push.
-	//
-	// It survived because both callers were guarded on a namespace that does not
-	// exist on managed clusters, so neither ever reached this line where we run.
-	//
-	// The body is still preferred when it does carry an access list: a registry that
-	// states the grant explicitly is more authoritative than our reading of its token.
-	if len(r.Access) > 0 {
-		return tok, r.Access, nil
-	}
-	return tok, jwtAccessClaims(tok), nil
-}
-
-// jwtAccessClaims pulls the `access` claim out of an unverified JWT payload.
-//
-// UNVERIFIED IS CORRECT HERE, and it is worth being explicit about why. We are not
-// making an authorization decision — the registry does that when the token is
-// presented, and the push either succeeds or 401s. This only reads what the token
-// SAYS it grants, to turn a coming 401 into a message that names the missing scope.
-// A forged token would fail at the registry regardless; verifying the signature here
-// would mean fetching Harbor's signing key to improve an error string.
-//
-// Returns nil for anything unparseable: the caller then reports no granted actions,
-// which is the same conservative answer as before.
-func jwtAccessClaims(token string) []tokenAccess {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-	// JWT uses base64url WITHOUT padding; RawURLEncoding is the matching decoder.
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil
-	}
-	var claims struct {
-		Access []tokenAccess `json:"access"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil
-	}
-	return claims.Access
-}
-
-// grantedActions returns the actions granted for a repository across the access
-// list. Pure.
-func grantedActions(access []tokenAccess, repo string) map[string]bool {
-	out := map[string]bool{}
-	for _, a := range access {
-		if a.Name != repo {
-			continue
-		}
-		for _, act := range a.Actions {
-			out[act] = true
-		}
-	}
-	return out
-}
-
-// missingActions reports which of want are absent from granted, sorted by want's
-// order so the message is stable.
-func missingActions(granted map[string]bool, want ...string) []string {
-	var out []string
-	for _, w := range want {
-		if !granted[w] {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
-// ── cluster + registry I/O (seamed) ──────────────────────────────────────────
-
-var readHarborRobotSecret = func(ns, name string) ([]byte, error) {
-	// --ignore-not-found so an ABSENT Secret comes back (empty, nil) and is
-	// distinguishable from an unreadable one. The caller retries absence and
-	// fails on a real read error; without this both are "exit status 1".
-	return execOutput("kubectl", "-n", ns, "get", "secret", name, "--ignore-not-found", "-o", "json")
-}
-
-// namespaceExists reports whether the component's namespace is on this cluster at
-// all. Seamed alongside the Secret read.
-//
-// The distinction it buys is the whole reason this gate can be honest. An absent
-// llz-cert-automation namespace means the component was never deployed — managed
-// App Platform renders a MINIMAL app set and simply does not include it — and a
-// gate that failed on that would color.Red every such cluster for a component it was
-// never asked to run. An absent Secret INSIDE a present namespace is the real
-// finding: ESO is not materializing secret/harbor/robot.
-var namespaceExists = func(ns string) (bool, error) {
-	out, err := execOutput("kubectl", "get", "namespace", ns, "--ignore-not-found", "-o", "name")
-	if err != nil {
-		return false, err
-	}
-	return len(bytes.TrimSpace(out)) > 0, nil
-}
-
-// harborHTTP performs a request against the registry. Seamed so the whole
-// handshake is testable against an httptest server or canned responses.
-var harborHTTP = func(req *http.Request) (*http.Response, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	return client.Do(req)
-}
-
-// readSecretWithSettle polls for the robot Secret until it appears or the budget
-// runs out. Absence is retried; an unreadable cluster fails immediately, because
-// "cannot ask" is not the same answer as "not there yet".
+// harborauth.RobotCreds is what the round trip needs.
 func readSecretWithSettle(ns, name string, settle, interval time.Duration) ([]byte, error) {
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
-		raw, err := readHarborRobotSecret(ns, name)
+		raw, err := harborauth.ReadRobotSecret(ns, name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "::error::could not read Secret %s/%s (%v)\n", ns, name, err)
 			return nil, fmt.Errorf("could not read Secret %s/%s: %w", ns, name, err)
@@ -345,7 +126,7 @@ func readSecretWithSettle(ns, name string, settle, interval time.Duration) ([]by
 }
 
 // probeHarborRoundTrip runs the full handshake once.
-func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
+func probeHarborRoundTrip(creds harborauth.RobotCreds, repo string) error {
 	base := "https://" + creds.RegistryHost
 
 	// 1. Unauthenticated /v2/ → Bearer challenge.
@@ -353,7 +134,7 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := harborHTTP(req)
+	resp, err := harborauth.HTTP(req)
 	if err != nil {
 		return fmt.Errorf("GET %s/v2/: %w — the registry host is unreachable, which for a host that "+
 			"passed the format guard usually means DNS or the ingress, not the credential", base, err)
@@ -370,7 +151,7 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 	if status != http.StatusUnauthorized {
 		return fmt.Errorf("GET %s/v2/ returned HTTP %d, expected a 401 auth challenge", base, status)
 	}
-	ch, err := parseBearerChallenge(challengeHeader)
+	ch, err := harborauth.ParseBearerChallenge(challengeHeader)
 	if err != nil {
 		return fmt.Errorf("%s/v2/: %w", base, err)
 	}
@@ -392,7 +173,7 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 		return err
 	}
 	treq.SetBasicAuth(creds.Username, creds.Password)
-	tresp, err := harborHTTP(treq)
+	tresp, err := harborauth.HTTP(treq)
 	if err != nil {
 		return fmt.Errorf("token request to %s: %w", ch.Realm, err)
 	}
@@ -403,9 +184,9 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 			"robot %q cannot authenticate to %s", creds.Username, creds.RegistryHost)
 	}
 	if tresp.StatusCode < 200 || tresp.StatusCode >= 300 {
-		return fmt.Errorf("token request returned HTTP %d: %s", tresp.StatusCode, truncateForError(tbody))
+		return fmt.Errorf("token request returned HTTP %d: %s", tresp.StatusCode, harborauth.TruncateForError(tbody))
 	}
-	token, access, err := parseTokenResponse(tbody)
+	token, access, err := harborauth.ParseTokenResponse(tbody)
 	if err != nil {
 		return err
 	}
@@ -413,8 +194,8 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 	// 3. The token must actually GRANT what was asked for. Harbor answers 200
 	//    with a valid JWT and an empty access list when the robot lacks the
 	//    scope, so the status code proves nothing.
-	granted := grantedActions(access, repo)
-	if missing := missingActions(granted, "pull", "push"); len(missing) > 0 {
+	granted := harborauth.GrantedActions(access, repo)
+	if missing := harborauth.MissingActions(granted, "pull", "push"); len(missing) > 0 {
 		return fmt.Errorf("the token service issued a token for robot %q that does NOT grant %s on %s "+
 			"(granted: %v). A 200 here is not authorization — Harbor returns a valid token with an empty "+
 			"access list when the credential lacks the scope, so the robot's project permissions are the thing to check",
@@ -431,7 +212,7 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 
 	// PUSH: open a blob upload session, then cancel it. This is the cheapest
 	// operation that requires genuine push authorization and it leaves nothing.
-	loc, err := harborUploadSession(base, repo, token)
+	loc, err := harborauth.UploadSession(base, repo, token)
 	if err != nil {
 		return err
 	}
@@ -445,7 +226,7 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 		creq, err := http.NewRequest(http.MethodDelete, cancelURL, nil)
 		if err == nil {
 			creq.Header.Set("Authorization", "Bearer "+token)
-			if cresp, err := harborHTTP(creq); err == nil {
+			if cresp, err := harborauth.HTTP(creq); err == nil {
 				_, _ = io.Copy(io.Discard, cresp.Body)
 				cresp.Body.Close()
 			}
@@ -455,29 +236,6 @@ func probeHarborRoundTrip(creds harborRobotCreds, repo string) error {
 }
 
 // harborUploadSession opens a blob upload and returns its Location.
-func harborUploadSession(base, repo, token string) (string, error) {
-	req, err := http.NewRequest(http.MethodPost, base+"/v2/"+repo+"/blobs/uploads/", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := harborHTTP(req)
-	if err != nil {
-		return "", fmt.Errorf("opening a blob upload session: %w", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("PUSH DENIED: opening a blob upload on %s returned HTTP %d even though the token "+
-			"granted push — the registry and the token service disagree about this robot's rights: %s",
-			repo, resp.StatusCode, truncateForError(body))
-	}
-	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("opening a blob upload on %s returned HTTP %d, expected 202: %s",
-			repo, resp.StatusCode, truncateForError(body))
-	}
-	return resp.Header.Get("Location"), nil
-}
 
 // harborAuthedProbe issues an authenticated request and requires one of okStatus.
 func harborAuthedProbe(method, u, token string, okStatus map[int]bool, what string) error {
@@ -486,7 +244,7 @@ func harborAuthedProbe(method, u, token string, okStatus map[int]bool, what stri
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := harborHTTP(req)
+	resp, err := harborauth.HTTP(req)
 	if err != nil {
 		return fmt.Errorf("%s probe (%s): %w", what, u, err)
 	}
@@ -494,10 +252,10 @@ func harborAuthedProbe(method, u, token string, okStatus map[int]bool, what stri
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("%s DENIED: %s returned HTTP %d with a token that granted it — %s",
-			strings.ToUpper(what), u, resp.StatusCode, truncateForError(body))
+			strings.ToUpper(what), u, resp.StatusCode, harborauth.TruncateForError(body))
 	}
 	if !okStatus[resp.StatusCode] {
-		return fmt.Errorf("%s probe %s returned HTTP %d: %s", what, u, resp.StatusCode, truncateForError(body))
+		return fmt.Errorf("%s probe %s returned HTTP %d: %s", what, u, resp.StatusCode, harborauth.TruncateForError(body))
 	}
 	return nil
 }
@@ -518,7 +276,7 @@ func runCIAssertHarborRoundTrip(secretNS, secretName, registry, repo string, set
 	// lke638103 the namespace simply did not exist ("namespaces
 	// \"llz-cert-automation\" not found"). That is a deployment shape, not a
 	// broken credential.
-	switch present, err := namespaceExists(secretNS); {
+	switch present, err := harborauth.NamespaceExists(secretNS); {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "::error::could not tell whether namespace %s exists (%v)\n", secretNS, err)
 		return fmt.Errorf("could not determine whether namespace %s exists: %w", secretNS, err)
@@ -538,7 +296,7 @@ func runCIAssertHarborRoundTrip(secretNS, secretName, registry, repo string, set
 	if err != nil {
 		return err
 	}
-	creds, err := decodeRobotSecret(raw)
+	creds, err := harborauth.DecodeRobotSecret(raw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::%v\n", err)
 		return err

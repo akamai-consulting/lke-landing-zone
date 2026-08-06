@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 // ── assert-obj-roundtrip ─────────────────────────────────────────────────────
@@ -117,12 +119,12 @@ type fakeObjStore struct {
 }
 
 func seamObjS3(t *testing.T, f *fakeObjStore) {
-	orig := s3ObjectRequest
-	t.Cleanup(func() { s3ObjectRequest = orig })
+	orig := objenc.S3ObjectRequest
+	t.Cleanup(func() { objenc.S3ObjectRequest = orig })
 	if f.objects == nil {
 		f.objects = map[string][]byte{}
 	}
-	s3ObjectRequest = func(method, _, _, _, bucket, key string, payload []byte) (int, string, []byte, error) {
+	objenc.S3ObjectRequest = func(method, _, _, _, bucket, key string, payload []byte) (int, string, []byte, error) {
 		full := bucket + "/" + key
 		switch method {
 		case http.MethodPut:
@@ -155,7 +157,7 @@ func seamObjS3(t *testing.T, f *fakeObjStore) {
 func TestS3ObjectRoundTrip(t *testing.T) {
 	f := &fakeObjStore{}
 	seamObjS3(t, f)
-	r := s3ObjectRoundTrip("AK", "SK", "us-ord-10.linodeobjects.com", "b", "k", []byte("payload"))
+	r := objenc.S3ObjectRoundTrip("AK", "SK", "us-ord-10.linodeobjects.com", "b", "k", []byte("payload"))
 	if !r.OK() || !r.Cleaned {
 		t.Fatalf("a healthy bucket must round-trip and clean up: %+v", r)
 	}
@@ -169,7 +171,7 @@ func TestS3ObjectRoundTrip(t *testing.T) {
 func TestS3ObjectRoundTripFailsWhenReadBackDiffers(t *testing.T) {
 	f := &fakeObjStore{corrupt: true}
 	seamObjS3(t, f)
-	r := s3ObjectRoundTrip("AK", "SK", "ep", "b", "k", []byte("payload"))
+	r := objenc.S3ObjectRoundTrip("AK", "SK", "ep", "b", "k", []byte("payload"))
 	if r.OK() {
 		t.Fatal("bytes that come back different must fail — a PUT can succeed against the wrong endpoint")
 	}
@@ -180,7 +182,7 @@ func TestS3ObjectRoundTripFailsWhenReadBackDiffers(t *testing.T) {
 
 func TestS3ObjectRoundTripNoSuchBucketExplainsTheSplit(t *testing.T) {
 	seamObjS3(t, &fakeObjStore{putStatus: 404, putCode: "NoSuchBucket"})
-	r := s3ObjectRoundTrip("AK", "SK", "us-ord.linodeobjects.com", "llz-loki-chunks", "k", []byte("x"))
+	r := objenc.S3ObjectRoundTrip("AK", "SK", "us-ord.linodeobjects.com", "llz-loki-chunks", "k", []byte("x"))
 	if r.OK() {
 		t.Fatal("NoSuchBucket must fail")
 	}
@@ -200,7 +202,7 @@ func TestExplainS3Write(t *testing.T) {
 		{"InvalidAccessKeyId", "revoked or rotated"},
 		{"SignatureDoesNotMatch", "revoked or rotated"},
 	} {
-		if got := explainS3Write(403, tc.code, "b", "e"); !strings.Contains(got, tc.want) {
+		if got := objenc.ExplainS3Write(403, tc.code, "b", "e"); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: expected %q in %q", tc.code, tc.want, got)
 		}
 	}

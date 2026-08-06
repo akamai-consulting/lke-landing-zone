@@ -62,6 +62,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 const (
@@ -528,7 +530,7 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 	manifest := probePodManifest(o.namespace, image, o.allowed, o.denied, o.mtlsTarget, o.timeout)
 	if out, err := applyProbeManifest(manifest); err != nil {
 		fmt.Fprintf(os.Stderr, "::error::could not create the probe: %v\n", err)
-		return fmt.Errorf("creating the network probe: %w (%s)", err, truncateForError([]byte(out)))
+		return fmt.Errorf("creating the network probe: %w (%s)", err, harborauth.TruncateForError([]byte(out)))
 	}
 
 	// The pod terminates Failed by design (the denied dial exits 1), so both

@@ -32,6 +32,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // withLoki opens a single kubectl port-forward to the Loki gateway named by spec
@@ -92,10 +94,10 @@ func parseLokiStreams(raw []byte) ([]lokiStream, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decoding Loki response: %w (%s)", err, truncateForError(raw))
+		return nil, fmt.Errorf("decoding Loki response: %w (%s)", err, harborauth.TruncateForError(raw))
 	}
 	if resp.Status != "" && resp.Status != "success" {
-		return nil, fmt.Errorf("query_range: Loki returned status %q: %s", resp.Status, truncateForError(raw))
+		return nil, fmt.Errorf("query_range: Loki returned status %q: %s", resp.Status, harborauth.TruncateForError(raw))
 	}
 	if rt := resp.Data.ResultType; rt != "" && rt != "streams" {
 		return nil, fmt.Errorf("query_range: Loki returned resultType %q, expected \"streams\" — the selector is not a log query", rt)

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 func TestContainsString(t *testing.T) {
@@ -142,11 +144,11 @@ func TestQuote(t *testing.T) {
 
 func TestSha256Hex(t *testing.T) {
 	// Known vectors.
-	if got := sha256Hex(""); got != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
-		t.Errorf("sha256Hex(empty) = %q", got)
+	if got := s3sig.SHA256Hex(""); got != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Errorf("s3sig.SHA256Hex(empty) = %q", got)
 	}
-	if got := sha256Hex("abc"); got != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
-		t.Errorf("sha256Hex(abc) = %q", got)
+	if got := s3sig.SHA256Hex("abc"); got != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Errorf("s3sig.SHA256Hex(abc) = %q", got)
 	}
 }
 

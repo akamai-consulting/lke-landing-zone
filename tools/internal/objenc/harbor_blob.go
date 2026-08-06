@@ -1,9 +1,9 @@
-package main
+package objenc
 
 // ci_obj_encryption_harbor.go — the check that proves the CA chain, by making
 // HARBOR write a blob rather than writing one ourselves.
 //
-// WHY THIS EXISTS SEPARATELY FROM THE OTHER THREE CHECKS. checkRegistryPodsCarryCA
+// WHY THIS EXISTS SEPARATELY FROM THE OTHER THREE CHECKS. CheckRegistryPodsCarryCA
 // proves the Kyverno mutation LANDED — the env and the volume are on the pod. It
 // does not prove the CA in that volume actually validates the proxy's certificate.
 // A wrong CA, a cert with the wrong SAN, an expired bundle: every one of those
@@ -42,6 +42,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // harborPushStage is WHERE a probe push failed. It exists because the fix text is
@@ -97,9 +99,9 @@ const harborEncProbeRepo = "library/llz-obj-encryption-probe"
 // that a previous run already put there — a deduplicated push would return success
 // without the storage driver touching S3 at all, which is exactly the false pass
 // this check exists to avoid.
-func pushProbeBlobThroughHarbor(creds harborRobotCreds, repo string, nonce []byte) (string, error) {
+func pushProbeBlobThroughHarbor(d Deps, creds harborauth.RobotCreds, repo string, nonce []byte) (string, error) {
 	base := "https://" + creds.RegistryHost
-	token, err := harborPushToken(creds, repo)
+	token, err := harborPushToken(d, creds, repo)
 	if err != nil {
 		stage := pushStageAuth
 		if strings.Contains(err.Error(), "reaching the registry") {
@@ -108,7 +110,7 @@ func pushProbeBlobThroughHarbor(creds harborRobotCreds, repo string, nonce []byt
 		return "", &harborPushError{stage: stage, err: err}
 	}
 
-	loc, err := harborUploadSession(base, repo, token)
+	loc, err := harborauth.UploadSession(base, repo, token)
 	if err != nil {
 		return "", &harborPushError{stage: pushStageSession, err: err}
 	}
@@ -137,7 +139,7 @@ func pushProbeBlobThroughHarbor(creds harborRobotCreds, repo string, nonce []byt
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.ContentLength = int64(len(nonce))
 
-	resp, err := harborHTTP(req)
+	resp, err := harborauth.HTTP(req)
 	if err != nil {
 		return "", &harborPushError{stage: pushStageComplete, err: fmt.Errorf("completing the blob upload: %w", err)}
 	}
@@ -153,7 +155,7 @@ func pushProbeBlobThroughHarbor(creds harborRobotCreds, repo string, nonce []byt
 			stage: pushStageComplete,
 			body:  string(body),
 			err: fmt.Errorf("the registry REFUSED to complete a blob upload (HTTP %d): %s",
-				resp.StatusCode, truncateForError(body)),
+				resp.StatusCode, harborauth.TruncateForError(body)),
 		}
 	}
 	return digest, nil
@@ -164,13 +166,13 @@ func pushProbeBlobThroughHarbor(creds harborRobotCreds, repo string, nonce []byt
 // without the access is refused here for the same reason it is there: Harbor
 // returns a valid JWT with an EMPTY access list when the robot lacks the scope, so
 // "I got a token" is not proof of authorization.
-func harborPushToken(creds harborRobotCreds, repo string) (string, error) {
+func harborPushToken(d Deps, creds harborauth.RobotCreds, repo string) (string, error) {
 	base := "https://" + creds.RegistryHost
 	req, err := http.NewRequest(http.MethodGet, base+"/v2/", nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := harborHTTP(req)
+	resp, err := harborauth.HTTP(req)
 	if err != nil {
 		return "", fmt.Errorf("reaching the registry at %s: %w", base, err)
 	}
@@ -179,7 +181,7 @@ func harborPushToken(creds harborRobotCreds, repo string) (string, error) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		return "", fmt.Errorf("GET /v2/ returned HTTP %d, expected 401 with a Bearer challenge", resp.StatusCode)
 	}
-	ch, err := parseBearerChallenge(challenge)
+	ch, err := harborauth.ParseBearerChallenge(challenge)
 	if err != nil {
 		return "", err
 	}
@@ -187,7 +189,7 @@ func harborPushToken(creds harborRobotCreds, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if missing := missingActions(grantedActions(access, repo), "push", "pull"); len(missing) > 0 {
+	if missing := harborauth.MissingActions(harborauth.GrantedActions(access, repo), "push", "pull"); len(missing) > 0 {
 		return "", fmt.Errorf("the robot's token does not grant %v on %s — this is an authorization "+
 			"problem, not an encryption one; assert-harbor-roundtrip covers it", missing, repo)
 	}
@@ -205,29 +207,29 @@ func harborBlobStorageKey(digest string) string {
 	return fmt.Sprintf("docker/registry/v2/blobs/sha256/%s/%s/data", hexsum[:2], hexsum)
 }
 
-// checkHarborBlobIsEncrypted is the whole check: push through Harbor, then read
+// checkHarborBlobIsEncrypted is the whole Check:   push through Harbor, then read
 // the resulting object back with a keyless HEAD.
 //
 // The two failures it separates are the reason it exists. If the push FAILS, the CA
 // chain is broken. If the push SUCCEEDS but the blob is plaintext, the CA is fine
 // and the traffic bypassed the proxy. Those need different fixes and every other
 // check in this gate conflates them.
-func checkHarborBlobIsEncrypted(endpoint, bucket string, creds harborRobotCreds, nonce []byte) []objEncryptionFinding {
-	digest, err := pushProbeBlobThroughHarbor(creds, harborEncProbeRepo, nonce)
+func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harborauth.RobotCreds, nonce []byte) []Finding {
+	digest, err := pushProbeBlobThroughHarbor(d, creds, harborEncProbeRepo, nonce)
 	if err != nil {
-		return []objEncryptionFinding{{
-			check:   "harbor-push",
-			problem: err.Error(),
-			fix:     harborPushFix(err),
+		return []Finding{{
+			Check:   "harbor-push",
+			Problem: err.Error(),
+			Fix:     harborPushFix(err),
 		}}
 	}
 	key := harborBlobStorageKey(digest)
-	ak, sk, cerr := objEncBucketReadCreds()
+	ak, sk, cerr := objEncBucketReadCreds(d)
 	if cerr != nil {
-		return []objEncryptionFinding{{
-			check:   "harbor-push",
-			problem: "pushed a blob through Harbor but cannot verify it: " + cerr.Error(),
-			fix: "the readback needs only HEAD on " + bucket + ", and NOT the SSE-C key. " +
+		return []Finding{{
+			Check:   "harbor-push",
+			Problem: "pushed a blob through Harbor but cannot verify it: " + cerr.Error(),
+			Fix: "the readback needs only HEAD on " + bucket + ", and NOT the SSE-C key. " +
 				"This is the same Secret the [object] check reads",
 		}}
 	}
@@ -236,33 +238,33 @@ func checkHarborBlobIsEncrypted(endpoint, bucket string, creds harborRobotCreds,
 	// a separate LIST/HEAD, so poll briefly rather than racing it.
 	deadline := objEncNow().Add(30 * time.Second)
 	for {
-		verdict, detail := s3ObjectSSECProbe(ak, sk, endpoint, bucket, key)
+		verdict, detail := ObjectSSECProbe(ak, sk, endpoint, bucket, key)
 		switch verdict {
 		case ssecEncrypted:
 			fmt.Printf("  harbor-push: blob %s written BY HARBOR is encrypted — the CA chain and the proxy both work\n", digest[:19])
 			return nil
 		case ssecPlaintext:
-			return []objEncryptionFinding{{
-				check:   "harbor-push",
-				problem: fmt.Sprintf("Harbor wrote %s and it landed in PLAINTEXT (%s)", key, detail),
-				fix: "the CA chain is FINE (the push succeeded) — the traffic bypassed obj-proxy. " +
+			return []Finding{{
+				Check:   "harbor-push",
+				Problem: fmt.Sprintf("Harbor wrote %s and it landed in PLAINTEXT (%s)", key, detail),
+				Fix: "the CA chain is FINE (the push succeeded) — the traffic bypassed obj-proxy. " +
 					"Check the CoreDNS rewrite resolves the endpoint to the proxy Service and that " +
 					"llz_objproxy_ssec_injected_total is climbing",
 			}}
 		case ssecAbsent:
 			if objEncNow().After(deadline) {
-				return []objEncryptionFinding{{
-					check:   "harbor-push",
-					problem: fmt.Sprintf("Harbor reported the blob written but %s never appeared in %s", key, bucket),
-					fix:     "the registry may be writing to a different bucket or endpoint than this check reads; compare its config.yml regionendpoint with --endpoint",
+				return []Finding{{
+					Check:   "harbor-push",
+					Problem: fmt.Sprintf("Harbor reported the blob written but %s never appeared in %s", key, bucket),
+					Fix:     "the registry may be writing to a different bucket or endpoint than this check reads; compare its config.yml regionendpoint with --endpoint",
 				}}
 			}
 			objEncSleep(3 * time.Second)
 		default:
-			return []objEncryptionFinding{{
-				check:   "harbor-push",
-				problem: fmt.Sprintf("could not classify the pushed blob %s: %s", key, detail),
-				fix:     "an unclassifiable response is not a pass; check the credential's permissions on " + bucket,
+			return []Finding{{
+				Check:   "harbor-push",
+				Problem: fmt.Sprintf("could not classify the pushed blob %s: %s", key, detail),
+				Fix:     "an unclassifiable response is not a pass; check the credential's permissions on " + bucket,
 			}}
 		}
 	}
@@ -288,13 +290,13 @@ func checkHarborBlobIsEncrypted(endpoint, bucket string, creds harborRobotCreds,
 // can read; the keys are account-scoped, so the consumer credential reaches both
 // buckets. Verified: a HEAD with it against the harbor bucket answers 400
 // (SSE-C required), not 403.
-func objEncBucketReadCreds() (string, string, error) {
-	if ak, sk, err := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"); err == nil && ak != "" && sk != "" {
+func objEncBucketReadCreds(d Deps) (string, string, error) {
+	if ak, sk, err := ObjEncConsumerCreds(d, LokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"); err == nil && ak != "" && sk != "" {
 		return ak, sk, nil
 	}
 	ak, sk := objEncAccessKey(), objEncSecretKey()
 	if ak == "" || sk == "" {
-		return "", "", fmt.Errorf("no object-storage credentials: %s is unreadable and AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are unset", lokiObjSecretRef)
+		return "", "", fmt.Errorf("no object-storage credentials: %s is unreadable and AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are unset", LokiObjSecretRef)
 	}
 	return ak, sk, nil
 }
@@ -303,10 +305,10 @@ func objEncBucketReadCreds() (string, string, error) {
 // sequence inside probeHarborRoundTrip rather than refactoring that function:
 // assert-harbor-roundtrip is a shipped, tested gate on the authorization path, and
 // carving a helper out of it to serve a new caller risks changing its behaviour for
-// a benefit that is only tidiness. The PURE parts (parseBearerChallenge,
-// parseTokenResponse, grantedActions, missingActions) are shared, which is where
+// a benefit that is only tidiness. The PURE parts (harborauth.ParseBearerChallenge,
+// harborauth.ParseTokenResponse, harborauth.GrantedActions, harborauth.MissingActions) are shared, which is where
 // the drift risk actually lives.
-func requestHarborToken(ch bearerChallenge, creds harborRobotCreds, repo string) (string, []tokenAccess, error) {
+func requestHarborToken(ch harborauth.BearerChallenge, creds harborauth.RobotCreds, repo string) (string, []harborauth.TokenAccess, error) {
 	tokURL, err := url.Parse(ch.Realm)
 	if err != nil {
 		return "", nil, fmt.Errorf("token realm %q is not a URL: %w", ch.Realm, err)
@@ -323,7 +325,7 @@ func requestHarborToken(ch bearerChallenge, creds harborRobotCreds, repo string)
 		return "", nil, err
 	}
 	req.SetBasicAuth(creds.Username, creds.Password)
-	resp, err := harborHTTP(req)
+	resp, err := harborauth.HTTP(req)
 	if err != nil {
 		return "", nil, fmt.Errorf("token request to %s: %w", ch.Realm, err)
 	}
@@ -333,9 +335,9 @@ func requestHarborToken(ch bearerChallenge, creds harborRobotCreds, repo string)
 		return "", nil, fmt.Errorf("the robot credential was REJECTED by the token service (HTTP 401)")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("token request returned HTTP %d: %s", resp.StatusCode, truncateForError(body))
+		return "", nil, fmt.Errorf("token request returned HTTP %d: %s", resp.StatusCode, harborauth.TruncateForError(body))
 	}
-	return parseTokenResponse(body)
+	return harborauth.ParseTokenResponse(body)
 }
 
 // Seams. The push path is the one part of this gate that cannot be exercised

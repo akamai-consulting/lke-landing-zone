@@ -24,6 +24,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 func ciCmd() *cobra.Command {
@@ -433,7 +435,7 @@ func runCIVerifyObjectStorage(region string) error {
 	// From the spec, never a constant: these have to be THIS instance's buckets. A
 	// hardcoded prefix would let the gate pass on another adopter's identically
 	// named buckets in the same region (clusterspec/objlabels.go).
-	prefix, err := objLabelPrefixFor("verify-object-storage")
+	prefix, err := objenc.LabelPrefixFor("verify-object-storage")
 	if err != nil {
 		return err
 	}
@@ -1015,7 +1017,7 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	if err != nil {
 		return err
 	}
-	prefix, err := objLabelPrefixFor("reap-env-creds")
+	prefix, err := objenc.LabelPrefixFor("reap-env-creds")
 	if err != nil {
 		return err
 	}

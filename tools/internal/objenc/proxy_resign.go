@@ -1,4 +1,4 @@
-package main
+package objenc
 
 // objproxy_resign.go — the fix for #397.
 //
@@ -51,6 +51,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
 // The payload markers that mean "aws-chunked framing, body hash not signed".
@@ -168,13 +170,13 @@ func verifyClientSigV4(r *http.Request, secretKey, host string) error {
 	}
 	payloadHash := r.Header.Get("X-Amz-Content-Sha256")
 	canonicalRequest := strings.Join([]string{
-		r.Method, s3EscapePath(r.URL.Path), s3CanonicalQuery(r.URL.RawQuery),
+		r.Method, S3EscapePath(r.URL.Path), S3CanonicalQuery(r.URL.RawQuery),
 		canonical.String(), signedHeaders, payloadHash,
 	}, "\n")
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", r.Header.Get("X-Amz-Date"), scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", r.Header.Get("X-Amz-Date"), scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	got := hex.EncodeToString(hmacSHA256(sigV4SigningKey(secretKey, dateStamp, region, service), stringToSign))
+	got := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(secretKey, dateStamp, region, service), stringToSign))
 	// Constant-time: this is a signature comparison, and a timing oracle here would
 	// hand back exactly what the check exists to withhold.
 	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
@@ -332,11 +334,11 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 	r.ContentLength = int64(len(body))
 	r.Header.Set("Content-Length", strconv.Itoa(len(body)))
 
-	payloadHash := sha256Hex(string(body))
+	payloadHash := s3sig.SHA256Hex(string(body))
 	now := objProxyResignNow().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
-	region := s3Region(upstreamHost)
+	region := s3sig.Region(upstreamHost)
 
 	// A MINIMAL signed set — host, payload hash, date — for the same reason the
 	// SSE-C headers are added outside SignedHeaders: everything not signed is still
@@ -348,7 +350,7 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 		"x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
-	escapedPath := s3EscapePath(r.URL.Path)
+	escapedPath := S3EscapePath(r.URL.Path)
 	// The CANONICAL query, not the raw one. SigV4 signs parameters sorted by name and
 	// RFC3986-encoded; the client sends them in whatever order it likes. A multipart
 	// PUT carries `?partNumber=N&uploadId=…`, and signing them in arrival order
@@ -358,13 +360,13 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 	// The wire still carries the original order: the server canonicalises before
 	// verifying, so the two need not match.
 	canonicalRequest := strings.Join([]string{
-		r.Method, escapedPath, s3CanonicalQuery(r.URL.RawQuery), canonicalHeaders, signedHeaders, payloadHash,
+		r.Method, escapedPath, S3CanonicalQuery(r.URL.RawQuery), canonicalHeaders, signedHeaders, payloadHash,
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest),
+		"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(canonicalRequest),
 	}, "\n")
-	signature := hex.EncodeToString(hmacSHA256(sigV4SigningKey(creds.SecretAccessKey, dateStamp, region, "s3"), stringToSign))
+	signature := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(creds.SecretAccessKey, dateStamp, region, "s3"), stringToSign))
 
 	// Signed and sent must be the same bytes; see s3SignedRequest for why RawPath is
 	// set alongside Path rather than trusting Go to re-escape identically.
@@ -388,12 +390,12 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 // under the pod's 512Mi limit even with several requests in flight.
 const objProxyResignMaxBody = 32 << 20 // 32 MiB
 
-// s3CanonicalQuery renders a query string in SigV4 canonical form: every parameter
+// S3CanonicalQuery renders a query string in SigV4 canonical form: every parameter
 // URI-encoded, sorted by name, valueless keys kept as `k=`.
 //
 // net/url is not usable here — url.Values.Encode() sorts correctly but escapes with
 // QueryEscape, which encodes a space as `+` where SigV4 requires `%20`.
-func s3CanonicalQuery(raw string) string {
+func S3CanonicalQuery(raw string) string {
 	if raw == "" {
 		return ""
 	}

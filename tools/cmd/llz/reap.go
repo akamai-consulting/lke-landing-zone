@@ -18,6 +18,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 type reapOpts struct {
@@ -128,7 +130,7 @@ func runReap(g globalOpts, o reapOpts) error {
 		// The prefix namespaces the key labels this reaps. Read it from the spec —
 		// an exact-label match under the wrong prefix would delete ANOTHER
 		// instance's keys, which is the one mistake a reaper must never make.
-		prefix, perr := objLabelPrefixFor("reap")
+		prefix, perr := objenc.LabelPrefixFor("reap")
 		if perr != nil {
 			return perr
 		}

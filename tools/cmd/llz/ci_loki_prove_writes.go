@@ -29,6 +29,10 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 const (
@@ -61,9 +65,9 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 	if bucket == "" || endpoint == "" {
 		return []lokiWriteMsg{{"SKIP: no chunks bucket/endpoint for this deployment (--region given? spec readable?) — the write path is unmeasured here", false}}
 	}
-	ak, sk, err := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+	ak, sk, err := objenc.ObjEncConsumerCreds(objencDeps(), objenc.LokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 	if err != nil {
-		return []lokiWriteMsg{{"SKIP: could not read " + lokiObjSecretRef + " (" + err.Error() + ") — the write path is unmeasured here", false}}
+		return []lokiWriteMsg{{"SKIP: could not read " + objenc.LokiObjSecretRef + " (" + err.Error() + ") — the write path is unmeasured here", false}}
 	}
 
 	// Cheap evidence first. A cluster that has written since its ingesters started
@@ -177,7 +181,7 @@ func lokiFlushFailuresSince(nameMatch string, t time.Time) []string {
 		}
 		for _, line := range strings.Split(raw, "\n") {
 			if strings.Contains(line, "failed to flush") {
-				out = append(out, strings.TrimSpace(truncateForError([]byte(p.ns+"/"+p.name+": "+line))))
+				out = append(out, strings.TrimSpace(harborauth.TruncateForError([]byte(p.ns+"/"+p.name+": "+line))))
 			}
 		}
 	}
@@ -196,10 +200,10 @@ func lokiIngesterPods(nameMatch string) []lokiPod {
 	return out
 }
 
-// lokiNewestObject returns the newest object in the bucket. s3SampleObjectKeys sorts
+// lokiNewestObject returns the newest object in the bucket. objenc.SampleObjectKeys sorts
 // newest-first, so one key is enough.
 var lokiNewestObject = func(ak, sk, endpoint, bucket string) (time.Time, bool) {
-	refs, err := s3SampleObjectKeys(ak, sk, endpoint, bucket, 1)
+	refs, err := objenc.SampleObjectKeys(ak, sk, endpoint, bucket, 1)
 	if err != nil || len(refs) == 0 {
 		return time.Time{}, false
 	}
@@ -248,7 +252,7 @@ var lokiFlushIngester = func(p lokiPod) error {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("POST %s returned HTTP %d: %s", lokiFlushPath, resp.StatusCode, truncateForError(body))
+		return fmt.Errorf("POST %s returned HTTP %d: %s", lokiFlushPath, resp.StatusCode, harborauth.TruncateForError(body))
 	}
 	return nil
 }
