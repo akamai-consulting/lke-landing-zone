@@ -120,7 +120,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **24,807** with `argocd-diagnostics`.
 > and **24,203** with `posture-plaintext`.
 > and **23,898** with `chart-publish`.
-> Thirty-one extensions, net −23,284 (49.3%) — now BELOW the
+> and **23,653** with `guard-manifests`.
+> Thirty-two extensions, net −23,529 (49.9%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

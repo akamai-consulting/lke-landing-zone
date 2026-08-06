@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"path/filepath"
@@ -17,7 +17,7 @@ func TestRunValidateAplValuesVarContractPassesOnACleanFile(t *testing.T) {
 	mustWrite(t, values, "apps:\n  loki:\n    enabled: true\n")
 
 	var err error
-	out := captureStdout(t, func() { err = runValidateAplValues(values, "", true) })
+	out := captureStdout(t, func() { err = RunValidateAplValues(values, "", true) })
 	if err != nil {
 		t.Fatalf("a values file with no unwired placeholders must pass, got %v", err)
 	}

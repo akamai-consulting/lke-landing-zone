@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"path/filepath"
@@ -40,7 +40,7 @@ func TestRunValidateAplValuesVarContractFails(t *testing.T) {
 	dir := t.TempDir()
 	values := filepath.Join(dir, "values.yaml")
 	mustWrite(t, values, "repoUrl: ${apl_values_repo_url}\n")
-	err := runValidateAplValues(values, "", true) // no chart version, skip schema
+	err := RunValidateAplValues(values, "", true) // no chart version, skip schema
 	if err == nil || !strings.Contains(err.Error(), "apl_values_repo_url") {
 		t.Fatalf("want unwired-placeholder error, got %v", err)
 	}

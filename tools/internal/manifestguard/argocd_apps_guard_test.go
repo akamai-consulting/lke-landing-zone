@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"os"
@@ -113,7 +113,7 @@ metadata:
 	}
 
 	var out strings.Builder
-	if err := runArgoCDRenderedApps(dir, &out); err != nil {
+	if err := RunArgoCDRenderedApps(dir, &out); err != nil {
 		t.Errorf("expected pass, got %v", err)
 	}
 	if !strings.Contains(out.String(), "1 rendered ArgoCD Application(s)/AppProject(s) passed") {
@@ -135,12 +135,12 @@ spec:
 `
 	os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(dup), 0o644)
 	out.Reset()
-	if err := runArgoCDRenderedApps(dir, &out); err == nil {
+	if err := RunArgoCDRenderedApps(dir, &out); err == nil {
 		t.Error("expected duplicate-parameter failure")
 	}
 
 	// An empty render dir is an error (the gate guards against a skipped render).
-	if err := runArgoCDRenderedApps(filepath.Join(dir, "empty"), &out); err == nil {
+	if err := RunArgoCDRenderedApps(filepath.Join(dir, "empty"), &out); err == nil {
 		t.Error("expected error for missing render dir")
 	}
 }
@@ -207,7 +207,7 @@ metadata:
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	err := runArgoCDRenderedApps(dir, &out)
+	err := RunArgoCDRenderedApps(dir, &out)
 	if err == nil {
 		t.Fatal("an un-waved Application sharing a file with a waved one must FAIL — that is exactly what the file-scoped grep missed")
 	}

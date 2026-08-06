@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 // ci_placeholder_guard.go implements `llz ci placeholder-guard` — reject
 // unsubstituted `placeholder.example.com` hostnames in the rendered manifests.
@@ -25,10 +25,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"path/filepath"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 
@@ -46,36 +43,7 @@ type phFinding struct {
 	text string
 }
 
-func ciPlaceholderGuardCmd() *cobra.Command {
-	var root, renderDir string
-	cmd := &cobra.Command{
-		Use:   "placeholder-guard",
-		Short: "fail when a rendered manifest still carries placeholder.example.com",
-		Long: "Rejects unsubstituted `placeholder.example.com` hostnames in the rendered\n" +
-			"manifests. Anything Argo CD reconciles into a cluster must carry real addresses,\n" +
-			"never the template's example placeholders. Fails closed on an empty corpus: a\n" +
-			"guard that scanned nothing must not report the same color.Green as one that scanned\n" +
-			"everything and found none.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			// --render-dir is documented as relative to --root, but an ABSOLUTE
-			// path must survive: filepath.Join(".", "/tmp/x") cleans to "tmp/x",
-			// silently retargeting the scan at a relative path that does not exist
-			// — which then trips the empty-corpus failure and reads like a broken
-			// render rather than a mangled flag.
-			dir := renderDir
-			if !filepath.IsAbs(dir) {
-				dir = filepath.Join(root, dir)
-			}
-			return runCIPlaceholderGuard(dir)
-		},
-	}
-	cmd.Flags().StringVar(&root, "root", ".", "repository root")
-	cmd.Flags().StringVar(&renderDir, "render-dir", "rendered", "rendered-manifests directory (relative to --root)")
-	return cmd
-}
-
-func runCIPlaceholderGuard(renderDir string) error {
+func RunPlaceholderGuard(renderDir string) error {
 	dirs := []string{renderDir}
 	findings, examined, err := collectPlaceholderFindings(dirs)
 	if err != nil {

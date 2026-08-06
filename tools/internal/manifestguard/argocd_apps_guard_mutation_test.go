@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"os"
@@ -30,7 +30,7 @@ metadata:
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	if err := runArgoCDRenderedApps(dir, &out); err != nil {
+	if err := RunArgoCDRenderedApps(dir, &out); err != nil {
 		t.Fatalf("both documents are well-formed: %v", err)
 	}
 	const want = "2 rendered ArgoCD Application(s)/AppProject(s) passed semantic validation.\n"
@@ -51,7 +51,7 @@ func TestRunArgoCDRenderedAppsAnnotationNamesTheApp(t *testing.T) {
 		}
 		var out strings.Builder
 		var err error
-		errOut := captureStderr(t, func() { err = runArgoCDRenderedApps(dir, &out) })
+		errOut := captureStderr(t, func() { err = RunArgoCDRenderedApps(dir, &out) })
 		if err == nil {
 			t.Fatal("an un-waved Application must fail the guard")
 		}
@@ -71,7 +71,7 @@ func TestRunArgoCDRenderedAppsAnnotationNamesTheApp(t *testing.T) {
 		}
 		var out strings.Builder
 		var err error
-		errOut := captureStderr(t, func() { err = runArgoCDRenderedApps(dir, &out) })
+		errOut := captureStderr(t, func() { err = RunArgoCDRenderedApps(dir, &out) })
 		if err == nil {
 			t.Fatal("an un-waved Application must fail the guard")
 		}

@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 // ci_apl_schema.go implements `llz ci validate-apl-values` — the offline,
 // no-cloud port of the two apl-values checks that were previously Release-E2E-
@@ -10,7 +10,7 @@ package main
 //     rendered file that is NOT in that set is a stale template the bootstrap
 //     can't fill (the ${apl_values_repo_url} class — a real 2026-07-02 apply
 //     failure). We assert every unescaped ${...} still in the rendered values is
-//     one of bootstrapValuePlaceholders (the same Go constant bootstrap-cluster
+//     one of BootstrapValuePlaceholders (the same Go constant bootstrap-cluster
 //     fills) — no terraform, no main.tf parsing.
 //
 //  2. apl-core schema. bootstrap-cluster's `helm upgrade --install apl` validates
@@ -34,10 +34,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // aplChartRepo is the public Helm repo apl-core publishes to (mirrors
@@ -61,33 +60,24 @@ var helmRunner = func(args ...string) (string, bool) {
 	return cigate.RunCombined(cmd)
 }
 
-func ciAplSchemaValidateCmd() *cobra.Command {
-	var valuesPath, chartVersion string
-	var skipSchema bool
-	cmd := &cobra.Command{
-		Use:   "validate-apl-values",
-		Short: "check a rendered apl-values file's runtime-placeholder contract + apl-core schema (no cluster)",
-		Long: "Two offline checks on a rendered apl-values values.yaml, shifted left from\n" +
-			"Release-E2E: (1) every unescaped ${...} still in the file is one of the\n" +
-			"secrets-only runtime placeholders `llz ci bootstrap-cluster` fills (else the\n" +
-			"bootstrap can't fill it — the ${apl_values_repo_url} class); (2) the values\n" +
-			"pass apl-core's chart schema via `helm template apl/apl`, pinned to\n" +
-			"--chart-version — or, when that is omitted, to the baseline an unpinned env\n" +
-			"actually deploys. The schema check self-skips only on --skip-schema or no helm\n" +
-			"on PATH; the var-contract check always runs.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runValidateAplValues(valuesPath, chartVersion, skipSchema)
-		},
-	}
-	cmd.Flags().StringVar(&valuesPath, "values", "", "path to the rendered apl-values values.yaml (required)")
-	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "apl-core chart version to pin the schema check (from spec.cluster.bootstrap.aplChartVersion)")
-	cmd.Flags().BoolVar(&skipSchema, "skip-schema", false, "skip the helm schema check (var-contract only)")
-	_ = cmd.MarkFlagRequired("values")
-	return cmd
+// BootstrapValuePlaceholders is defined HERE, in the guard, and imported by
+// cmd/llz's bootstrap-cluster — not the other way round. Same reasoning as
+// docsguard.DeliveredDocs: a check that validates a set against the tree is
+// meaningless if it runs against a different set than the producer ships, so the
+// set is defined once, next to the check.
+//
+// BootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens a committed
+// apl-values file may still carry after `llz render`. It remains the single source
+// of truth for `llz ci validate-apl-values`'s offline var-contract check
+// (ci_apl_schema.go), which asserts a rendered file references no OTHER ${...}.
+var BootstrapValuePlaceholders = []string{
+	"apl_values_repo_password",
+	"linode_dns_token",
+	"coredns_cluster_ip",
+	"loki_admin_password",
 }
 
-func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) error {
+func RunValidateAplValues(valuesPath, chartVersion string, skipSchema bool) error {
 	valuesRaw, err := os.ReadFile(valuesPath)
 	if err != nil {
 		return fmt.Errorf("read values %s: %w", valuesPath, err)
@@ -118,18 +108,18 @@ func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) erro
 	// version an unpinned env runs, so the check now covers the default path
 	// instead of quietly abandoning it.
 	if chartVersion == "" {
-		chartVersion = defaultAplChartVersion
+		chartVersion = clusterspec.BaselineAplChartVersion
 		fmt.Printf("no --chart-version — validating against the baseline apl-core %s (an unpinned env deploys this)\n", chartVersion)
 	}
 	return validateAplSchema(string(valuesRaw), chartVersion)
 }
 
-// placeholderSet is the set form of bootstrapValuePlaceholders (the secrets-only
+// placeholderSet is the set form of BootstrapValuePlaceholders (the secrets-only
 // ${...} tokens bootstrap-cluster fills) — the single source of truth this guard
 // checks a rendered values file against.
 func placeholderSet() map[string]bool {
-	keys := make(map[string]bool, len(bootstrapValuePlaceholders))
-	for _, k := range bootstrapValuePlaceholders {
+	keys := make(map[string]bool, len(BootstrapValuePlaceholders))
+	for _, k := range BootstrapValuePlaceholders {
 		keys[k] = true
 	}
 	return keys

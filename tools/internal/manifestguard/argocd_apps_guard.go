@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 // ci_argocd_apps_guard.go implements `llz ci argocd-rendered-apps` — the native
 // port of validate-argocd-rendered-apps.py (the Makefile's
@@ -16,12 +16,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
@@ -48,30 +45,7 @@ type argoSource struct {
 	} `yaml:"helm"`
 }
 
-func ciArgoCDRenderedAppsCmd() *cobra.Command {
-	var root, renderDir string
-	c := &cobra.Command{
-		Use:   "argocd-rendered-apps",
-		Short: "reject rendered ArgoCD Applications with duplicate Helm parameters",
-		Long: "Native port of validate-argocd-rendered-apps.py (the Makefile's\n" +
-			"argocd-rendered-apps-check, run after render-charts). Parses every rendered\n" +
-			"manifest under the render dir and fails if any ArgoCD Application names the\n" +
-			"same Helm parameter twice — a duplicate silently shadows the earlier value at\n" +
-			"sync time, which schema validation does not catch.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			if renderDir == "" {
-				renderDir = "rendered"
-			}
-			return runArgoCDRenderedApps(filepath.Join(root, renderDir), os.Stdout)
-		},
-	}
-	c.Flags().StringVar(&root, "root", ".", "repository root")
-	c.Flags().StringVar(&renderDir, "render-dir", "rendered", "rendered-manifests directory (relative to --root)")
-	return c
-}
-
-func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
+func RunArgoCDRenderedApps(renderDir string, out io.Writer) error {
 	// collectManifestPaths (shared with the other tree-scanning guards) also picks
 	// up *.yml, which this hand-rolled walk ignored.
 	files, err := guardwalk.CollectPaths([]string{renderDir})

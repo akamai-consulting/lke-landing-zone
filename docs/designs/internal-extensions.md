@@ -249,7 +249,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 | `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first ten, extracted](#the-first-ten-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 **✅ Extracted** (cosign-subject stayed — it is release-publish territory); see [The first ten, extracted](#the-first-ten-extracted). |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
-| `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
+| `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40. **✅ Extracted — three lanes of four, and NOT one binding.** See [What `guard-manifests` split](#what-guard-manifests-split--a-test-that-read-the-declaration). |
 | `guard-pins` | 279 | 2 | ✔ | version-pins 254, pin-coherence 25 |
 | `guard-workflows` | 101 | 1 | ✔ | check-workflow-shells |
 
@@ -313,9 +313,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `deliver-docs` extracted | 25,020 | 156 | −254 — the smallest paydown, and the one that added a word |
 | `argocd-diagnostics` extracted | 24,807 | 155 | −213 — the first binding kind that is wrong on purpose |
 | `posture-plaintext` extracted | 24,203 | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
-| `chart-publish` extracted | **23,898** | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
+| `chart-publish` extracted | 23,898 | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
+| `guard-manifests` extracted | **23,653** | 150 | −245 — a declaration test found a lane that was not a gate |
 
-**Net −23,284 (49.3%) across thirty-one extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −23,529 (49.9%) across thirty-two extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1751,6 +1752,64 @@ widen to the union and claim the write on every run.
 `chartPublishSleep` and the retry arithmetic purely so the flag set could name them — four exported
 symbols whose only caller was the wiring. A constructor on the owning side leaves `main` with the two
 things it actually has: flag values and the environment.
+
+### What `guard-manifests` split — a test that read the declaration
+
+Thirty-second, and **the first extraction where a test I wrote to check the declaration corrected
+it.**
+
+```
+guard-manifests  gate:scaffolded      "rendered-manifests" [read-repo]
+                 assertion:configured "apl-schema"         [read-repo, cloud-read]
+```
+
+The first cut declared all three moved lanes as one `gate:scaffolded[read-repo]`, on the rule
+`guard-charts` settled: a split needs divergent **capability**, not divergent subject matter, and
+three manifest checks at one moment looked like one question in three halves.
+`TestPackageStaysFilesOnly` — copied from `posture-plaintext` an extraction earlier — then failed:
+
+```
+apl_schema.go reaches os/exec — a gate may hold read-repo and nothing else
+```
+
+It was right. That lane shells out to `helm` to resolve the apl-core chart before validating the
+committed values against its schema, so it needs a chart a registry has to serve. A gate is **defined
+by cost and reach** — fast, local, files only, findings out — and that lane does not earn it. The
+capability genuinely is divergent, so the same rule that argued for one binding argues for two.
+
+> The pin was written to stop a *future* change from quietly invalidating a grant line. It caught the
+> declaration being wrong on the day it was written, which is a better argument for the pin than the
+> one I wrote it with.
+
+**Eighth catalog correction, and the second about a row's *kind*.** The row groups four lanes under
+one guard heading; one of them is not a guard. `posture-credential-coverage` was the first kind-level
+correction (filed as an invariant, actually a gate); this is the first row needing **two different
+kinds at once**.
+
+**The fourth lane did not come.** `dropped-apiversions` is entangled with `checks.go` in both
+directions — it calls that file's `scanDroppedAPIVersions`, `reportDroppedAPIVersions` and
+`scannedManifestTrees`, and `checks_test.go` in turn drives its entry point. Extracting it means
+moving a piece of `llz check`, which belongs to a different extension. `Incomplete` says so, and a
+test fails if the note is dropped — the same shape as `reconcile-actions` and `template-sustain`.
+
+**The planned extraction was not this one, and measuring first is why.** The handoff note said the
+next move was `env-topology`'s third binding: `chart-publish` had just widened `cloud-mutate` to
+`configured`, so `branchpolicy.go` could finally come out. **The premise was wrong.**
+`lockInfraEnvBranchPolicy` has three inbound callers and none is `env-topology` — it is called from
+`tokens.go` and `wizard.go`, the credential-seeding path. `env-topology`'s own comment claims the file
+as its would-be third binding, and that claim is a **mis-attribution**: the extension that wanted to
+declare the GitHub write is not the extension that calls it. The debt is real and still open; it
+belongs to `forge-env-seed`, whose GitHub API primitives have six other callers and need a shared
+package first — the `internal/keycloak` shape.
+
+The method already says re-measure before trusting the catalog. This extends it: **re-measure before
+trusting a plan you wrote yourself**, especially one written from a comment rather than a scan.
+
+**The placeholder set moved to the validator's side.** `bootstrapValuePlaceholders` is the secrets-only
+set of `${...}` tokens bootstrap-cluster substitutes, and apl-schema validates that committed values
+use only those. It now lives in the guard and `cmd/llz` imports it — the same resolution
+`deliver-docs` reached for `docsguard.DeliveredDocs`. A check that validates a set is meaningless if
+it runs against a different set than the producer ships.
 
 ## The cost of the interesting half
 

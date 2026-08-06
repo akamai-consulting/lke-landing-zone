@@ -44,6 +44,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
@@ -86,6 +87,7 @@ var declarations = []func() extension.Extension{
 	tokeninv.Extension,
 	objenc.Extension,
 	chartpublish.Extension,
+	manifestguard.Extension,
 	plaintext.Extension,
 	promote.Extension,
 	reconcilelanes.Extension,

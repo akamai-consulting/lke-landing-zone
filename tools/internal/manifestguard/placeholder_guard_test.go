@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"os"
@@ -21,7 +21,7 @@ func writeManifest(t *testing.T, dir, name, body string) {
 func TestPlaceholderGuardCleanTree(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, "chart-a.yaml", "apiVersion: v1\nkind: ConfigMap\ndata:\n  host: real.example.org\n")
-	if err := runCIPlaceholderGuard(dir); err != nil {
+	if err := RunPlaceholderGuard(dir); err != nil {
 		t.Fatalf("clean tree should pass, got: %v", err)
 	}
 }
@@ -30,7 +30,7 @@ func TestPlaceholderGuardFindsUnsubstitutedHost(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, "chart-a.yaml", "apiVersion: v1\nkind: ConfigMap\ndata:\n  host: real.example.org\n")
 	writeManifest(t, dir, "chart-b.yaml", "apiVersion: v1\nkind: Ingress\nspec:\n  rules:\n    - host: api.placeholder.example.com\n")
-	err := runCIPlaceholderGuard(dir)
+	err := RunPlaceholderGuard(dir)
 	if err == nil {
 		t.Fatal("a surviving placeholder host must fail the guard")
 	}
@@ -44,7 +44,7 @@ func TestPlaceholderGuardFindsUnsubstitutedHost(t *testing.T) {
 // placeholders found" — the same clean pass as a fully-rendered tree with none.
 func TestPlaceholderGuardFailsOnEmptyCorpus(t *testing.T) {
 	dir := t.TempDir() // exists but holds no manifests
-	err := runCIPlaceholderGuard(dir)
+	err := RunPlaceholderGuard(dir)
 	if err == nil {
 		t.Fatal("an empty corpus must fail, not report a vacuous pass")
 	}
@@ -54,7 +54,7 @@ func TestPlaceholderGuardFailsOnEmptyCorpus(t *testing.T) {
 }
 
 func TestPlaceholderGuardFailsOnMissingRenderDir(t *testing.T) {
-	err := runCIPlaceholderGuard(filepath.Join(t.TempDir(), "never-rendered"))
+	err := RunPlaceholderGuard(filepath.Join(t.TempDir(), "never-rendered"))
 	if err == nil {
 		t.Fatal("a missing render dir must fail (the tree was never rendered)")
 	}
@@ -93,20 +93,5 @@ func TestPlaceholderGuardScansYmlToo(t *testing.T) {
 	}
 	if len(findings) != 1 {
 		t.Errorf("a .yml manifest must be scanned, findings = %d", len(findings))
-	}
-}
-
-// An absolute --render-dir must survive the --root join: filepath.Join(".",
-// "/abs") cleans to "abs", which would silently retarget the scan at a relative
-// path that does not exist and surface as a bogus empty-corpus failure.
-func TestPlaceholderGuardAcceptsAbsoluteRenderDir(t *testing.T) {
-	dir := t.TempDir() // t.TempDir() is absolute
-	writeManifest(t, dir, "c.yaml", "host: placeholder.example.com\n")
-	cmd := ciPlaceholderGuardCmd()
-	cmd.SetArgs([]string{"--render-dir", dir})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("absolute --render-dir should have been scanned and found the placeholder")
-	} else if strings.Contains(err.Error(), "examined 0") {
-		t.Fatalf("absolute path was mangled by the --root join: %v", err)
 	}
 }

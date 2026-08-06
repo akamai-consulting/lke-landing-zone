@@ -66,16 +66,13 @@ var vapPVCDenyCloneBindingYAML []byte
 // skew. Bump the clusterspec constant; this follows.
 const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
 
-// bootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens a committed
-// apl-values file may still carry after `llz render`. It remains the single source
-// of truth for `llz ci validate-apl-values`'s offline var-contract check
-// (ci_apl_schema.go), which asserts a rendered file references no OTHER ${...}.
-var bootstrapValuePlaceholders = []string{
-	"apl_values_repo_password",
-	"linode_dns_token",
-	"coredns_cluster_ip",
-	"loki_admin_password",
-}
+// The secrets-only placeholder set moved to internal/manifestguard.
+//
+// IT LIVES WITH THE GUARD THAT VALIDATES IT, not with the code that substitutes
+// it, and that is the same resolution `deliver-docs` reached for its keep-set: the
+// check is meaningless if it runs against a different set than the producer ships,
+// so the set is defined once, next to the check, and the producer imports it. Two
+// copies is exactly the drift this constant exists to prevent.
 
 // bootstrapFlags are the raw CLI inputs (identity via flags, secrets via env).
 type bootstrapFlags struct {
