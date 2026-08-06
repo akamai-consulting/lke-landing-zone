@@ -1,4 +1,4 @@
-package main
+package assertidentity
 
 // ci_assert_certificates.go implements `llz ci assert-certificates` — the gate on
 // cert-manager Certificate readiness and expiry.
@@ -37,7 +37,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciAssertCertificatesCmd() *cobra.Command {
+func CertificatesCmd() *cobra.Command {
 	var minDays, settle, interval int
 	c := &cobra.Command{
 		Use:   "assert-certificates",
@@ -146,7 +146,7 @@ func evalCertificates(raw []byte, now time.Time, minLeft time.Duration) ([]certV
 
 // readCertificates lists cert-manager Certificates cluster-wide. Seamed.
 var readCertificates = func() ([]byte, error) {
-	return execOutput("kubectl", "get", "certificates.cert-manager.io", "--all-namespaces", "-o", "json")
+	return caps.Exec("kubectl", "get", "certificates.cert-manager.io", "--all-namespaces", "-o", "json")
 }
 
 func failedCerts(vs []certVerdict) []string {

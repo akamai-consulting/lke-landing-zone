@@ -16,19 +16,16 @@ package main
 // Keycloak API shape can never wedge the bootstrap it runs inside. See ADR 0004.
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +37,7 @@ const (
 	// keycloakDeviceClientID is the public OIDC client `llz openbao login` uses;
 	// overridable there via --client-id / OPENBAO_OIDC_CLIENT_ID.
 	keycloakDeviceClientID = "llz"
-	// keycloakAdminSecret holds the MASTER-realm admin creds (keycloakAdminToken
+	// keycloakAdminSecret holds the MASTER-realm admin creds (keycloak.AdminToken
 	// direct-grants against /realms/master with client admin-cli). On managed
 	// apl-core that is `keycloak-initial-admin` — the secret the Keycloak.X
 	// StatefulSet consumes as KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD. The old
@@ -57,11 +54,9 @@ const (
 // converge the `openid` client scope before wiring the device client. ~5 min
 // (30 × 10s) — apl-core Keycloak is usually up well before then. Vars (not
 // consts) so tests can shrink them.
-var (
-	keycloakScopeAttempts = 30
-	keycloakScopeInterval = 10 * time.Second
-	keycloakSleepFn       = time.Sleep
-)
+// The poll bounds themselves now live in internal/keycloak (exported vars, so the
+// mutation test can still shrink them). Only the sleep seam stays here.
+var keycloakSleepFn = time.Sleep
 
 // portForwardKeycloakFn opens a port-forward to the Keycloak pod's HTTP port and
 // returns the local base URL + teardown. A package var so tests seam it.
@@ -87,257 +82,38 @@ func portForwardKeycloak() (string, func(), error) {
 	return "http://127.0.0.1:" + localPort, stop, nil
 }
 
-// kcClient is a thin Keycloak admin-REST client bound to one realm.
-type kcClient struct {
-	hc    *http.Client
-	base  string
-	token string
-	realm string
-}
-
-func (k *kcClient) do(method, apiPath string, body any) (*http.Response, error) {
-	var r io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		r = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, k.base+apiPath, r)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+k.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return k.hc.Do(req)
-}
-
-// keycloakAdminToken exchanges the admin username/password for an access token
-// via the master realm's direct-grant flow (client admin-cli).
-func keycloakAdminToken(hc *http.Client, base, user, pass string) (string, error) {
-	form := url.Values{
-		"grant_type": {"password"}, "client_id": {"admin-cli"},
-		"username": {user}, "password": {pass},
-	}
-	resp, err := hc.PostForm(base+"/realms/master/protocol/openid-connect/token", form)
-	if err != nil {
-		return "", fmt.Errorf("keycloak admin token: %w", err)
-	}
-	defer resp.Body.Close()
-	// 401/403 is a PERMANENT auth failure (wrong/disabled admin) — flag it so the
-	// readiness retry fails fast instead of masking it as a not-ready timeout. Other
-	// non-200s (5xx, 404 during realm import) are treated as transient (retryable).
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("%w: HTTP %d: %s", errKeycloakAuthDenied, resp.StatusCode, readSnippet(resp.Body))
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("keycloak admin token: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	var out struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("parse keycloak admin token: %w", err)
-	}
-	if out.AccessToken == "" {
-		return "", fmt.Errorf("keycloak admin token response had no access_token")
-	}
-	return out.AccessToken, nil
-}
-
 // ensureDeviceClient makes the public device-flow client exist and returns its
 // UUID (idempotent: returns the existing client's id when already present).
-func (k *kcClient) ensureDeviceClient(clientID string) (string, error) {
-	uuid, err := k.getOrCreateClient(clientID)
-	if err != nil {
-		return "", err
-	}
-	// Reconcile the `openid` default scope, which carries apl-core's `groups`
-	// claim. Do this even for a PRE-EXISTING client: `defaultClientScopes` in the
-	// create body is honored only if the scope existed at create time, so a client
-	// created before apl-core converged its `openid` scope would otherwise be
-	// stuck without the groups claim and `llz openbao login` would 403 forever.
-	if err := k.ensureClientDefaultScope(uuid, "openid"); err != nil {
-		return uuid, err
-	}
-	// Stamp `aud: llz` so the OpenBao keycloak role's bound_audiences accepts this
-	// client's tokens (and rejects arbitrary other-client realm tokens).
-	if err := k.ensureAudienceMapper(uuid, keycloakDeviceClientID); err != nil {
-		return uuid, err
-	}
-	return uuid, nil
-}
 
 // ensureAudienceMapper adds an OIDC audience protocol mapper that stamps
 // `aud: <audience>` into the client's id + access tokens, so OpenBao's keycloak
 // role (bound_audiences=[llz]) accepts tokens this client mints and rejects
 // tokens minted for any other realm client. Idempotent: a 409 (mapper already
 // present) is success.
-func (k *kcClient) ensureAudienceMapper(clientUUID, audience string) error {
-	body := map[string]any{
-		"name":           "llz-openbao-audience",
-		"protocol":       "openid-connect",
-		"protocolMapper": "oidc-audience-mapper",
-		"config": map[string]string{
-			"included.client.audience": audience,
-			"id.token.claim":           "true",
-			"access.token.claim":       "true",
-		},
-	}
-	resp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/clients/"+clientUUID+"/protocol-mappers/models", body)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
-		return fmt.Errorf("add audience mapper to client %s: HTTP %d: %s", clientUUID, resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
 
 // getOrCreateClient returns the UUID of clientID, creating the public device-flow
 // client (idempotent) when it doesn't exist yet.
-func (k *kcClient) getOrCreateClient(clientID string) (string, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/clients?clientId="+url.QueryEscape(clientID), nil)
-	if err != nil {
-		return "", err
-	}
-	var existing []struct {
-		ID string `json:"id"`
-	}
-	if err := decodeJSON(resp, &existing); err != nil {
-		return "", err
-	}
-	if len(existing) > 0 && existing[0].ID != "" {
-		return existing[0].ID, nil
-	}
-	body := map[string]any{
-		"clientId":                  clientID,
-		"protocol":                  "openid-connect",
-		"publicClient":              true,
-		"standardFlowEnabled":       false,
-		"directAccessGrantsEnabled": false,
-		"attributes":                map[string]string{"oauth2.device.authorization.grant.enabled": "true"},
-		// Best-effort at create time; ensureClientDefaultScope is the authority
-		// (it also fixes a client created before apl-core's `openid` scope existed).
-		"defaultClientScopes": []string{"openid", "email", "profile"},
-	}
-	cresp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/clients", body)
-	if err != nil {
-		return "", err
-	}
-	defer cresp.Body.Close()
-	if cresp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("create client %s: HTTP %d: %s", clientID, cresp.StatusCode, readSnippet(cresp.Body))
-	}
-	// Keycloak returns the new resource in the Location header.
-	if loc := cresp.Header.Get("Location"); loc != "" {
-		return path.Base(loc), nil
-	}
-	// Fallback: re-query (won't recurse past the create — the client now exists).
-	return k.getOrCreateClient(clientID)
-}
 
 // ensureClientDefaultScope attaches realm client scope `name` to the client as a
 // DEFAULT scope if not already assigned (idempotent). Returns an actionable error
 // when the realm scope doesn't exist yet (apl-core hasn't converged Keycloak) —
 // the caller warns and the bootstrap re-run fixes it once the scope appears.
-func (k *kcClient) ensureClientDefaultScope(clientUUID, name string) error {
-	base := "/admin/realms/" + k.realm + "/clients/" + clientUUID + "/default-client-scopes"
-	resp, err := k.do(http.MethodGet, base, nil)
-	if err != nil {
-		return err
-	}
-	var assigned []struct {
-		Name string `json:"name"`
-	}
-	if err := decodeJSON(resp, &assigned); err != nil {
-		return err
-	}
-	for _, s := range assigned {
-		if s.Name == name {
-			return nil // already a default scope
-		}
-	}
-	scopeID, err := k.findClientScopeID(name)
-	if err != nil {
-		return err
-	}
-	if scopeID == "" {
-		return fmt.Errorf("realm client scope %q not found — apl-core may not have converged Keycloak yet; the device client lacks the groups claim until it exists (re-run once apl-core is up)", name)
-	}
-	presp, err := k.do(http.MethodPut, base+"/"+scopeID, nil)
-	if err != nil {
-		return err
-	}
-	defer presp.Body.Close()
-	if presp.StatusCode != http.StatusNoContent && presp.StatusCode != http.StatusOK {
-		return fmt.Errorf("assign default scope %s: HTTP %d: %s", name, presp.StatusCode, readSnippet(presp.Body))
-	}
-	return nil
-}
 
 // findClientScopeID returns the realm client-scope id for name, or "" if the
 // realm has no such scope yet.
-func (k *kcClient) findClientScopeID(name string) (string, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/client-scopes", nil)
-	if err != nil {
-		return "", err
-	}
-	var scopes []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := decodeJSON(resp, &scopes); err != nil {
-		return "", err
-	}
-	for _, s := range scopes {
-		if s.Name == name {
-			return s.ID, nil
-		}
-	}
-	return "", nil
-}
 
 // waitForClientScope blocks until the realm client scope `name` exists (apl-core
-// provisions it asynchronously), polling keycloakScopeAttempts times with
-// keycloakScopeInterval between tries. It guards the bootstrap ordering race: we
+// provisions it asynchronously), polling keycloak.ScopeAttempts times with
+// keycloak.ScopeInterval between tries. It guards the bootstrap ordering race: we
 // must not wire the device client before its groups-carrying scope exists, or the
 // client is created scope-less and `llz openbao login` 403s. Returns an
 // actionable error if the scope never appears (the caller warns, best-effort).
-func (k *kcClient) waitForClientScope(name string, sleep func(time.Duration)) error {
-	for i := 0; i < keycloakScopeAttempts; i++ {
-		id, err := k.findClientScopeID(name)
-		if err != nil {
-			return err
-		}
-		if id != "" {
-			return nil
-		}
-		if i < keycloakScopeAttempts-1 {
-			sleep(keycloakScopeInterval)
-		}
-	}
-	return fmt.Errorf("realm client scope %q did not appear after ~%s — apl-core Keycloak has not converged it; re-run `llz ci keycloak-configure` once apl-core is up", name, time.Duration(keycloakScopeAttempts)*keycloakScopeInterval)
-}
 
 // NOTE: we deliberately do NOT create realm groups or a `groups` claim mapper.
 // apl-core owns both: it provisions a `team-<name>` group + realm role from the
 // teamConfig `llz render` emits, and its default `openid` client scope already
 // carries a `groups` realm-role claim. This command's only job is the one thing
 // apl-core won't do — a PUBLIC device-flow client for `llz openbao login`.
-
-// decodeJSON reads a JSON array/object body, requiring a 2xx status.
-func decodeJSON(resp *http.Response, v any) error {
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	return json.NewDecoder(resp.Body).Decode(v)
-}
 
 func ciKeycloakConfigureCmd() *cobra.Command {
 	var region string
@@ -397,18 +173,18 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 		return nil
 	}
 	defer cleanup()
-	k := &kcClient{hc: hc, base: base, token: token, realm: keycloakRealm}
+	k := &keycloak.Client{HC: hc, Base: base, Token: token, Realm: keycloakRealm}
 
 	// Ordering guard: wait for apl-core to converge the `openid` client scope
 	// (which carries the groups claim) BEFORE wiring the client, so a bootstrap
 	// that runs ahead of apl-core doesn't create a scope-less client that 403s at
 	// login. Best-effort — if it never appears, warn + exit 0 (the re-run fixes it).
-	if err := k.waitForClientScope("openid", keycloakSleepFn); err != nil {
+	if err := k.WaitForClientScope("openid", keycloakSleepFn); err != nil {
 		warnKeycloakSkip(region, err)
 		return nil
 	}
 
-	if _, err := k.ensureDeviceClient(keycloakDeviceClientID); err != nil {
+	if _, err := k.EnsureDeviceClient(keycloakDeviceClientID); err != nil {
 		warnKeycloakSkip(region, fmt.Errorf("ensure device client %s: %w", keycloakDeviceClientID, err))
 		return nil
 	}
@@ -416,40 +192,27 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 	return nil
 }
 
-// keycloakConnect port-forwards to Keycloak and master-realm direct-grants an
-// admin token, retrying the pair until it succeeds or the ~5m keycloakScope budget
-// expires. keycloak-configure runs early in bootstrap, ahead of apl-core bringing
-// Keycloak up, so a single attempt would skip on a not-yet-ready server — a
-// successful admin token is the readiness signal. Returns the live port-forward's
-// base URL + admin token + its cleanup (a no-op cleanup on failure). Best-effort:
-// the caller warns + exits 0 on a persistent failure.
-// errKeycloakAuthDenied marks a PERMANENT admin-token failure (401/403: wrong or
-// disabled master admin) so keycloakConnect fails fast rather than retrying it as
-// a transient not-ready condition (which would burn the ~5m budget and misreport
-// a credential problem as a readiness timeout).
-var errKeycloakAuthDenied = errors.New("keycloak admin auth denied")
-
 func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duration)) (base, token string, cleanup func(), err error) {
-	for i := 0; i < keycloakScopeAttempts; i++ {
+	for i := 0; i < keycloak.ScopeAttempts; i++ {
 		b, c, e := portForwardKeycloakFn()
 		if e == nil {
-			tok, te := keycloakAdminToken(hc, b, user, pass)
+			tok, te := keycloak.AdminToken(hc, b, user, pass)
 			if te == nil {
 				return b, tok, c, nil
 			}
 			c() // this port-forward is done
-			if errors.Is(te, errKeycloakAuthDenied) {
+			if errors.Is(te, keycloak.ErrAuthDenied) {
 				return "", "", func() {}, fmt.Errorf("keycloak admin creds rejected (check %s/%s) — not a readiness problem: %w", keycloakNS, keycloakAdminSecret, te)
 			}
 			err = te // transient (5xx / not-ready) — retry
 		} else {
 			err = e
 		}
-		if i < keycloakScopeAttempts-1 {
-			sleep(keycloakScopeInterval)
+		if i < keycloak.ScopeAttempts-1 {
+			sleep(keycloak.ScopeInterval)
 		}
 	}
-	return "", "", func() {}, fmt.Errorf("keycloak %s/%s did not become ready after ~%s (%w) — apl-core Keycloak has not converged; re-run `llz ci keycloak-configure` once it is up", keycloakNS, keycloakPod, time.Duration(keycloakScopeAttempts)*keycloakScopeInterval, err)
+	return "", "", func() {}, fmt.Errorf("keycloak %s/%s did not become ready after ~%s (%w) — apl-core Keycloak has not converged; re-run `llz ci keycloak-configure` once it is up", keycloakNS, keycloakPod, time.Duration(keycloak.ScopeAttempts)*keycloak.ScopeInterval, err)
 }
 
 func warnKeycloakSkip(region string, err error) {

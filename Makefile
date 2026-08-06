@@ -87,7 +87,9 @@ COVERAGE_MINS := \
 	internal/wavehealth=74 \
 	internal/tofudriver=68 \
 	internal/assertobs=67 \
-	internal/assertsecrets=63
+	internal/assertsecrets=63 \
+	internal/keycloak=49 \
+	internal/assertidentity=24
 
 help:
 	@echo "lke-landing-zone — template repository targets"

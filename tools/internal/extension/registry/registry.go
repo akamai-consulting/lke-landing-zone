@@ -22,6 +22,7 @@ package registry
 import (
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
@@ -59,6 +60,7 @@ import (
 var declarations = []func() extension.Extension{
 	assertobs.Extension,
 	assertsecrets.Extension,
+	assertidentity.Extension,
 	assertnetwork.Extension,
 	assertplatform.Extension,
 	assertreconciler.Extension,

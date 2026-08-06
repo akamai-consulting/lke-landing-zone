@@ -140,12 +140,18 @@ categories:
     #   26,174 / 158 files  assert-secrets. -982. Grepped for hidden writes BEFORE
     #                       declaring and found one: the broad-PAT drill applies a
     #                       Job. Four extractions, four hidden mutations.
+    #   25,274 / 157 files  assert-identity. -900. FIVE for five on hidden
+    #                       mutations: the "smoke test" CREATES a Keycloak client
+    #                       and a user. First extraction the LANGUAGE forced into
+    #                       a shared package — Go will not let two packages define
+    #                       methods on a type neither owns, so internal/keycloak
+    #                       had to come out first.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 26174
+    budget: 25274
     exact: true
     include:
       - "tools/cmd/llz/*.go"

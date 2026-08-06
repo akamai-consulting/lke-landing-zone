@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 )
 
 func TestRunUsersAdd_Guards(t *testing.T) {
@@ -84,13 +85,13 @@ func (f *fakeUserKC) server() *httptest.Server {
 	}))
 }
 
-func newFakeKCClient(t *testing.T, f *fakeUserKC) (*kcClient, func()) {
+func newFakeKCClient(t *testing.T, f *fakeUserKC) (*keycloak.Client, func()) {
 	f.t = t
 	if f.usersByName == nil {
 		f.usersByName = map[string]string{}
 	}
 	srv := f.server()
-	return &kcClient{hc: srv.Client(), base: srv.URL, token: "adm.tok", realm: "otomi"}, srv.Close
+	return &keycloak.Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}, srv.Close
 }
 
 func TestFindRealmRole(t *testing.T) {
@@ -98,11 +99,11 @@ func TestFindRealmRole(t *testing.T) {
 	k, done := newFakeKCClient(t, f)
 	defer done()
 
-	rep, err := k.findRealmRole("team-platform")
+	rep, err := k.FindRealmRole("team-platform")
 	if err != nil || rep == nil || rep.Name != "team-platform" {
 		t.Fatalf("findRealmRole(existing) = (%v, %v), want the role", rep, err)
 	}
-	rep, err = k.findRealmRole("team-missing")
+	rep, err = k.FindRealmRole("team-missing")
 	if err != nil || rep != nil {
 		t.Fatalf("findRealmRole(missing) = (%v, %v), want (nil, nil)", rep, err)
 	}
@@ -113,12 +114,12 @@ func TestEnsureUser_CreateAndConflict(t *testing.T) {
 	k, done := newFakeKCClient(t, f)
 	defer done()
 
-	uid, created, err := k.ensureUser(identity.UserRep{Username: "alice@corp.com", Enabled: true})
+	uid, created, err := k.EnsureUser(identity.UserRep{Username: "alice@corp.com", Enabled: true})
 	if err != nil || !created || uid != "user-new" {
 		t.Fatalf("create = (%q, %v, %v), want (user-new, true, nil)", uid, created, err)
 	}
 	// A second create for the same username 409s → found via lookup, created=false.
-	uid, created, err = k.ensureUser(identity.UserRep{Username: "alice@corp.com", Enabled: true})
+	uid, created, err = k.EnsureUser(identity.UserRep{Username: "alice@corp.com", Enabled: true})
 	if err != nil || created || uid == "" {
 		t.Fatalf("conflict = (%q, %v, %v), want (existing id, false, nil)", uid, created, err)
 	}

@@ -1,4 +1,4 @@
-package main
+package assertidentity
 
 import (
 	"encoding/base64"
@@ -78,55 +78,6 @@ func smokeServer(t *testing.T, idToken string) (*httptest.Server, *[]string) {
 	return srv, &audit
 }
 
-func TestSmokeHelpers_ProvisionGrantTeardown(t *testing.T) {
-	idToken := makeJWT(t, []string{"team-platform"})
-	srv, audit := smokeServer(t, idToken)
-	defer srv.Close()
-	k := &kcClient{hc: srv.Client(), base: srv.URL, token: "adm.tok", realm: "otomi"}
-
-	gid, err := k.findGroupID("team-platform")
-	if err != nil || gid != "gid-1" {
-		t.Fatalf("findGroupID = (%q, %v), want gid-1", gid, err)
-	}
-	// A group that doesn't exactly match must return "" (not a substring hit).
-	// The fake echoes search into name, so a distinct search still returns that
-	// name — exercise the exact-match path with the same name.
-	cuuid, err := k.ensureDirectGrantClient("llz-smoke-x")
-	if err != nil || cuuid != "cuuid" {
-		t.Fatalf("ensureDirectGrantClient = (%q, %v), want cuuid", cuuid, err)
-	}
-	uid, err := k.createSmokeUser("llz-smoke-x", "pw")
-	if err != nil || uid != "uid-1" {
-		t.Fatalf("createSmokeUser = (%q, %v), want uid-1", uid, err)
-	}
-	if err := k.addUserToGroup(uid, gid); err != nil {
-		t.Fatalf("addUserToGroup: %v", err)
-	}
-	idt, err := k.passwordGrant("llz-smoke-x", "llz-smoke-x", "pw")
-	if err != nil || idt != idToken {
-		t.Fatalf("passwordGrant err=%v", err)
-	}
-	g, _ := decodeJWTGroups(idt)
-	if !containsString(g, "team-platform") {
-		t.Errorf("granted token groups = %v, want team-platform", g)
-	}
-	if err := k.deleteUser(uid); err != nil {
-		t.Fatalf("deleteUser: %v", err)
-	}
-	if err := k.deleteClient(cuuid); err != nil {
-		t.Fatalf("deleteClient: %v", err)
-	}
-	want := []string{"create client", "add audience mapper", "create user", "add to group", "delete user", "delete client"}
-	if len(*audit) != len(want) {
-		t.Fatalf("audit = %v, want %v", *audit, want)
-	}
-	for i := range want {
-		if (*audit)[i] != want[i] {
-			t.Errorf("audit[%d] = %q, want %q", i, (*audit)[i], want[i])
-		}
-	}
-}
-
 func TestIsDenied(t *testing.T) {
 	for _, tc := range []struct {
 		msg  string
@@ -146,24 +97,3 @@ func TestIsDenied(t *testing.T) {
 
 // TestRealmRoleExists gates the admin-path skip: platform-admin present → check runs,
 // absent (unconverged realm) → skipped, not a hard error.
-func TestRealmRoleExists(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/admin/realms/otomi/roles/platform-admin":
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "role-1", "name": "platform-admin"})
-		case "/admin/realms/otomi/roles/team-missing":
-			http.Error(w, "not found", http.StatusNotFound)
-		default:
-			http.Error(w, "unexpected", http.StatusInternalServerError)
-		}
-	}))
-	defer srv.Close()
-	k := &kcClient{hc: srv.Client(), base: srv.URL, token: "adm.tok", realm: "otomi"}
-
-	if ok, err := k.realmRoleExists("platform-admin"); err != nil || !ok {
-		t.Errorf("realmRoleExists(platform-admin) = (%v, %v), want (true, nil)", ok, err)
-	}
-	if ok, err := k.realmRoleExists("team-missing"); err != nil || ok {
-		t.Errorf("realmRoleExists(team-missing) = (%v, %v), want (false, nil)", ok, err)
-	}
-}

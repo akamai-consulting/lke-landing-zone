@@ -32,14 +32,13 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/spf13/cobra"
 )
 
@@ -156,7 +155,7 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 		return err
 	}
 	defer cleanup()
-	k := &kcClient{hc: hc, base: base, token: token, realm: keycloakRealm}
+	k := &keycloak.Client{HC: hc, Base: base, Token: token, Realm: keycloakRealm}
 
 	res, err := identity.AddUser(kcAdmin{k}, identity.AddRequest{
 		Username:  username,
@@ -262,114 +261,29 @@ func consoleURLFor(region string) string {
 // the exported interface method set over kcClient's unexported methods
 // (findGroupID/addUserToGroup are shared with the ci keycloak commands and keep
 // their existing names).
-type kcAdmin struct{ k *kcClient }
+type kcAdmin struct{ k *keycloak.Client }
 
-func (a kcAdmin) FindRealmRole(name string) (*identity.Role, error)     { return a.k.findRealmRole(name) }
-func (a kcAdmin) EnsureUser(rep identity.UserRep) (string, bool, error) { return a.k.ensureUser(rep) }
+func (a kcAdmin) FindRealmRole(name string) (*identity.Role, error)     { return a.k.FindRealmRole(name) }
+func (a kcAdmin) EnsureUser(rep identity.UserRep) (string, bool, error) { return a.k.EnsureUser(rep) }
 func (a kcAdmin) AssignRealmRoles(uid string, r []identity.Role) error {
-	return a.k.assignRealmRoles(uid, r)
+	return a.k.AssignRealmRoles(uid, r)
 }
-func (a kcAdmin) FindGroupID(name string) (string, error)  { return a.k.findGroupID(name) }
-func (a kcAdmin) AddUserToGroup(uid, gid string) error     { return a.k.addUserToGroup(uid, gid) }
-func (a kcAdmin) SendUpdatePasswordEmail(uid string) error { return a.k.sendUpdatePasswordEmail(uid) }
+func (a kcAdmin) FindGroupID(name string) (string, error)  { return a.k.FindGroupID(name) }
+func (a kcAdmin) AddUserToGroup(uid, gid string) error     { return a.k.AddUserToGroup(uid, gid) }
+func (a kcAdmin) SendUpdatePasswordEmail(uid string) error { return a.k.SendUpdatePasswordEmail(uid) }
 
 // findRealmRole returns the realm role representation for an EXACT name, or nil
 // when the realm has no such role.
-func (k *kcClient) findRealmRole(name string) (*identity.Role, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/roles/"+url.PathEscape(name), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	var role identity.Role
-	if err := decodeJSON(resp, &role); err != nil {
-		return nil, err
-	}
-	if role.ID == "" {
-		return nil, nil
-	}
-	return &role, nil
-}
 
 // ensureUser creates the user, returning (id, created). On a 409 (already exists)
 // it looks the user up by username and returns (id, false) so the caller can
 // grant roles add-only without clobbering the existing password.
-func (k *kcClient) ensureUser(rep identity.UserRep) (string, bool, error) {
-	resp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/users", rep)
-	if err != nil {
-		return "", false, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusCreated:
-		uid := path.Base(resp.Header.Get("Location"))
-		if uid == "" || uid == "." {
-			return "", true, fmt.Errorf("no Location header on created user")
-		}
-		return uid, true, nil
-	case http.StatusConflict:
-		uid, ferr := k.findUserByUsername(rep.Username)
-		if ferr != nil {
-			return "", false, fmt.Errorf("user exists (409) but lookup failed: %w", ferr)
-		}
-		if uid == "" {
-			return "", false, fmt.Errorf("user reported as existing (409) but not found by username %q", rep.Username)
-		}
-		return uid, false, nil
-	default:
-		return "", false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-}
 
 // findUserByUsername returns the id of the user with an EXACT username, or "".
-func (k *kcClient) findUserByUsername(username string) (string, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/users?exact=true&username="+url.QueryEscape(username), nil)
-	if err != nil {
-		return "", err
-	}
-	var users []struct{ ID, Username string }
-	if err := decodeJSON(resp, &users); err != nil {
-		return "", err
-	}
-	for _, u := range users {
-		if u.Username == username {
-			return u.ID, nil
-		}
-	}
-	return "", nil
-}
 
 // assignRealmRoles grants the given realm roles to the user (idempotent —
 // re-granting an already-held role is a no-op 204). A nil/empty slice is a no-op.
-func (k *kcClient) assignRealmRoles(userID string, roles []identity.Role) error {
-	if len(roles) == 0 {
-		return nil
-	}
-	resp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/users/"+userID+"/role-mappings/realm", roles)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("assign realm roles: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
 
 // sendUpdatePasswordEmail triggers Keycloak's execute-actions email for the user,
 // carrying the UPDATE_PASSWORD action (the set-password invite link). Requires
 // the realm's SMTP to be configured.
-func (k *kcClient) sendUpdatePasswordEmail(userID string) error {
-	resp, err := k.do(http.MethodPut, "/admin/realms/"+k.realm+"/users/"+userID+"/execute-actions-email", []string{"UPDATE_PASSWORD"})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("execute-actions-email: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}

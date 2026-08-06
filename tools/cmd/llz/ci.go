@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
@@ -71,7 +72,7 @@ func ciCmd() *cobra.Command {
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
 		ciKeycloakConfigureCmd(),
-		ciTeamLoginSmokeCmd())
+		assertidentity.TeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
@@ -326,7 +327,7 @@ func ciCmd() *cobra.Command {
 	// assert-certificates consumes a signal that already existed and nothing read:
 	// llz_certificates_not_ready is published and alerted on, but alert-eval is
 	// report-only and --strict ignores FIRING, so a stuck Certificate reds nothing.
-	c.AddCommand(ciAssertCertificatesCmd())
+	c.AddCommand(assertidentity.CertificatesCmd())
 	// assert-database proves the seeded admin credential is still ACCEPTED.
 	// rotate-db-admin resets the password in place with no overlap window, so the
 	// failure is a live endpoint that rejects the credential every consumer holds.

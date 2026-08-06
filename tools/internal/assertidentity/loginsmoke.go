@@ -1,4 +1,4 @@
-package main
+package assertidentity
 
 // ci_keycloak_smoke.go — `llz ci team-login-smoke`, an END-TO-END validation of
 // the team-scoped OpenBao write path, browser-free. It exercises the exact chain
@@ -25,20 +25,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
 
-func ciTeamLoginSmokeCmd() *cobra.Command {
+// kc wraps the shared Keycloak client so this package can hang its own smoke
+// helpers off it. Go will not let us add methods to keycloak.Client from here —
+// which is the same constraint that forced the client into its own package, seen
+// from the other side. An embedded struct is the idiomatic answer and costs one
+// conversion at the call site.
+type kc struct{ *keycloak.Client }
+
+func TeamLoginSmokeCmd() *cobra.Command {
 	var region, team string
 	c := &cobra.Command{
 		Use:   "team-login-smoke",
@@ -55,7 +61,7 @@ func ciTeamLoginSmokeCmd() *cobra.Command {
 			"path. Tears down the users + client. Meant for the e2e lane (needs cluster\n" +
 			"access + a converged apl-core Keycloak). See docs/runbooks/openbao-team-login.md.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runTeamLoginSmoke(gopts, region, team) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runTeamLoginSmoke(region, team) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose domainSuffix gives the public Keycloak URL (required)")
 	c.Flags().StringVar(&team, "team", "", "team to validate (default: the first spec.teams entry)")
@@ -94,7 +100,7 @@ func smokeTargets(region, teamFlag string) (base, team, subtree string, err erro
 	if domain == "" && env.Cluster.Bootstrap.ManagedAppPlatform {
 		// Managed App Platform: Linode owns the domain (no spec domainSuffix); the
 		// smoke test runs against the live cluster, so discover it from apl-core.
-		domain = discoverManagedDomain()
+		domain = caps.ManagedDomain()
 	}
 	if domain == "" {
 		return "", "", "", fmt.Errorf("region %q has no cluster.bootstrap.domainSuffix (and no managed domain could be discovered) — can't form the public Keycloak URL", region)
@@ -102,13 +108,13 @@ func smokeTargets(region, teamFlag string) (base, team, subtree string, err erro
 	return "https://keycloak." + domain, pick.Name, pick.OpenbaoSubtree, nil
 }
 
-func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
+func runTeamLoginSmoke(region, teamFlag string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
 	// No teams declared → nothing to validate. A clean no-op (like keycloak-configure
 	// / bao-configure) so the e2e team-write gate passes for teamless instances.
-	if len(specTeams()) == 0 {
+	if len(caps.SpecTeams()) == 0 {
 		fmt.Println("No spec.teams declared — nothing to validate (team-login smoke skipped).")
 		return nil
 	}
@@ -116,25 +122,25 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	if err != nil {
 		return err
 	}
-	user := k8sSecretField(keycloakNS, keycloakAdminSecret, "username")
-	pass := k8sSecretField(keycloakNS, keycloakAdminSecret, "password")
+	user := caps.SecretField(keycloak.NS, keycloak.AdminSecret, "username")
+	pass := caps.SecretField(keycloak.NS, keycloak.AdminSecret, "password")
 	if user == "" || pass == "" {
 		// k8sSecretField returns "" for every failure mode alike, so say which one this
 		// is — otherwise the e2e team-write lane dead-ends on an unactionable line.
 		return fmt.Errorf("admin creds not readable from %s/%s (want keys username/password): %s",
-			keycloakNS, keycloakAdminSecret, describeSecretForDiag(keycloakNS, keycloakAdminSecret))
+			keycloak.NS, keycloak.AdminSecret, caps.DescribeSecret(keycloak.NS, keycloak.AdminSecret))
 	}
-	fmt.Fprintf(os.Stderr, "→ team-login smoke: team %q, subtree %q, realm %s at %s\n", team, subtree, keycloakRealm, base)
+	fmt.Fprintf(os.Stderr, "→ team-login smoke: team %q, subtree %q, realm %s at %s\n", team, subtree, keycloak.Realm, base)
 
 	hc := &http.Client{Timeout: 30 * time.Second}
-	adminTok, err := keycloakAdminToken(hc, base, user, pass)
+	adminTok, err := keycloak.AdminToken(hc, base, user, pass)
 	if err != nil {
 		return fmt.Errorf("keycloak admin token: %w", err)
 	}
-	k := &kcClient{hc: hc, base: base, token: adminTok, realm: keycloakRealm}
+	k := &kc{&keycloak.Client{HC: hc, Base: base, Token: adminTok, Realm: keycloak.Realm}}
 
 	group := "team-" + team
-	gid, err := k.findGroupID(group)
+	gid, err := k.FindGroupID(group)
 	if err != nil {
 		return fmt.Errorf("look up group %s: %w", group, err)
 	}
@@ -144,19 +150,19 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	password := "Smoke-" + suffix + "-Aa1!" // satisfy any realm password policy
 	clientID := "llz-smoke-" + suffix
 
-	clientUUID, err := k.ensureDirectGrantClient(clientID)
+	clientUUID, err := k.EnsureDirectGrantClient(clientID)
 	if err != nil {
 		return fmt.Errorf("create smoke client: %w", err)
 	}
 	defer func() {
-		if err := k.deleteClient(clientUUID); err != nil {
+		if err := k.DeleteClient(clientUUID); err != nil {
 			fmt.Fprintf(os.Stderr, "::error::failed to delete smoke client %s: %v — it is a public ROPC client with aud:llz (a standing login path into the OpenBao mount); delete it manually.\n", clientID, err)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "  torn down smoke client %s\n", clientID)
 	}()
 
-	uid, err := k.createSmokeUser(username, password)
+	uid, err := k.CreateSmokeUser(username, password)
 	if err != nil {
 		return fmt.Errorf("create test user: %w", err)
 	}
@@ -164,8 +170,8 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 		// Neutralize before deleting: a disabled orphan can't authenticate even if
 		// the delete fails. Surface any teardown failure LOUDLY — a lingering enabled
 		// member of the team-<name> group is a standing OpenBao-write credential.
-		disabled := k.disableUser(uid) == nil
-		if err := k.deleteUser(uid); err != nil {
+		disabled := k.DisableUser(uid) == nil
+		if err := k.DeleteUser(uid); err != nil {
 			state := "DISABLED"
 			if !disabled {
 				state = "still-ENABLED"
@@ -184,11 +190,11 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	// the ROLE, not the group, so both yield the identical claim (verified live). This
 	// lets the smoke validate a team before anyone is onboarded.
 	if gid != "" {
-		if err := k.addUserToGroup(uid, gid); err != nil {
+		if err := k.AddUserToGroup(uid, gid); err != nil {
 			return fmt.Errorf("add user to %s: %w", group, err)
 		}
 	} else {
-		if err := k.addRealmRoleToUser(uid, group); err != nil {
+		if err := k.AddRealmRoleToUser(uid, group); err != nil {
 			return fmt.Errorf("grant realm role %s: %w", group, err)
 		}
 		fmt.Printf("  team-%s group not provisioned yet (created lazily on first onboarded member) — granted realm role %s directly\n", team, group)
@@ -196,7 +202,7 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 
 	// Mint the id_token (browser-free stand-in for the device flow) and prove it
 	// carries the apl group→role→claim wiring the OpenBao role binds on.
-	idToken, err := k.passwordGrant(clientID, username, password)
+	idToken, err := k.PasswordGrant(clientID, username, password)
 	if err != nil {
 		return fmt.Errorf("password grant: %w", err)
 	}
@@ -210,9 +216,9 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	fmt.Printf("✓ id_token carries groups=%v (contains %s)\n", groups, group)
 
 	// Exchange at OpenBao + assert the scope.
-	addr, cleanup, err := portForwardOpenbaoFn()
+	addr, cleanup, err := caps.PortForwardOpenbao()
 	if err != nil {
-		return fmt.Errorf("port-forward to %s/%s: %w", openbaoNS, rootOpenbaoPod, err)
+		return fmt.Errorf("port-forward to %s/%s: %w", "llz-openbao", "platform-openbao-0", err)
 	}
 	defer cleanup()
 	ctx := context.Background()
@@ -277,14 +283,14 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	fmt.Printf("✓ eso role denied %s (reader scoped to the team subtree + platform-ci)\n", denyPath)
 
 	// ── Admin path: apl-core's built-in platform admin carries the all-teams realm
-	// role `platform-admin` (aplPlatformAdminRole), NOT the team's own group. The
+	// role `platform-admin` (keycloak.PlatformAdminRole), NOT the team's own group. The
 	// OpenBao role now binds groups on {team-<name>, platform-admin}, so an admin
 	// must ALSO be able to mint this team's writer token and write its subtree
 	// WITHOUT being enrolled in team-<name>. Prove it end-to-end. Skipped only if the
 	// built-in role is absent (an unconverged realm), mirroring the team-role
 	// fallback above.
-	adminRole := aplPlatformAdminRole
-	if ok, err := k.realmRoleExists(adminRole); err != nil {
+	adminRole := keycloak.PlatformAdminRole
+	if ok, err := k.RealmRoleExists(adminRole); err != nil {
 		return fmt.Errorf("look up realm role %s: %w", adminRole, err)
 	} else if !ok {
 		fmt.Printf("  %s realm role absent (unconverged realm) — admin-path check skipped\n", adminRole)
@@ -292,13 +298,13 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 		aSuffix := fmt.Sprintf("%d", time.Now().UnixNano())
 		aUser := "llz-smoke-admin-" + aSuffix
 		aPass := "Smoke-" + aSuffix + "-Aa1!"
-		aUID, err := k.createSmokeUser(aUser, aPass)
+		aUID, err := k.CreateSmokeUser(aUser, aPass)
 		if err != nil {
 			return fmt.Errorf("create admin test user: %w", err)
 		}
 		defer func() {
-			disabled := k.disableUser(aUID) == nil
-			if err := k.deleteUser(aUID); err != nil {
+			disabled := k.DisableUser(aUID) == nil
+			if err := k.DeleteUser(aUID); err != nil {
 				state := "DISABLED"
 				if !disabled {
 					state = "still-ENABLED"
@@ -308,10 +314,10 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 			}
 			fmt.Fprintf(os.Stderr, "  torn down admin test user %s\n", aUser)
 		}()
-		if err := k.addRealmRoleToUser(aUID, adminRole); err != nil {
+		if err := k.AddRealmRoleToUser(aUID, adminRole); err != nil {
 			return fmt.Errorf("grant realm role %s: %w", adminRole, err)
 		}
-		aIDToken, err := k.passwordGrant(clientID, aUser, aPass)
+		aIDToken, err := k.PasswordGrant(clientID, aUser, aPass)
 		if err != nil {
 			return fmt.Errorf("admin password grant: %w", err)
 		}
@@ -344,21 +350,6 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 }
 
 // realmRoleExists reports whether an EXACT realm role name is present in the realm.
-func (k *kcClient) realmRoleExists(name string) (bool, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/roles/"+url.PathEscape(name), nil)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, fmt.Errorf("look up realm role %s: HTTP %d: %s", name, resp.StatusCode, readSnippet(resp.Body))
-	}
-}
 
 func isDenied(err error) bool {
 	s := strings.ToLower(err.Error())
@@ -380,7 +371,7 @@ const esoServiceAccount = "external-secrets"
 // output-capturing shell-out — this is not one of the interactive/stdin call
 // sites that deliberately keep calling os/exec directly.
 func mintServiceAccountToken(ns, sa string) (string, error) {
-	out, err := execOutput("kubectl", "create", "token", sa, "-n", ns, "--duration=10m")
+	out, err := caps.Exec("kubectl", "create", "token", sa, "-n", ns, "--duration=10m")
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return "", fmt.Errorf("kubectl create token %s/%s: %s", ns, sa, strings.TrimSpace(string(ee.Stderr)))
@@ -411,205 +402,23 @@ func decodeJWTGroups(jwt string) ([]string, error) {
 	return claims.Groups, nil
 }
 
-// ── kcClient smoke helpers (admin REST) ──────────────────────────────────────
+// ── keycloak.Client smoke helpers (admin REST) ──────────────────────────────────────
 
 // findGroupID returns the realm group id for an EXACT name, or "" if absent.
-func (k *kcClient) findGroupID(name string) (string, error) {
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/groups?search="+url.QueryEscape(name), nil)
-	if err != nil {
-		return "", err
-	}
-	var groups []struct{ ID, Name string }
-	if err := decodeJSON(resp, &groups); err != nil {
-		return "", err
-	}
-	for _, g := range groups {
-		if g.Name == name { // search is substring — require exact
-			return g.ID, nil
-		}
-	}
-	return "", nil
-}
 
 // ensureDirectGrantClient makes a PUBLIC client with direct access grants + the
 // openid scope (so its password-grant tokens carry the groups claim). Returns the
 // client uuid. Idempotent enough for the smoke (a fresh suffixed id each run).
-func (k *kcClient) ensureDirectGrantClient(clientID string) (string, error) {
-	body := map[string]any{
-		"clientId":                  clientID,
-		"protocol":                  "openid-connect",
-		"publicClient":              true,
-		"standardFlowEnabled":       false,
-		"directAccessGrantsEnabled": true,
-		"defaultClientScopes":       []string{"openid", "email", "profile"},
-	}
-	resp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/clients", body)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("create client %s: HTTP %d: %s", clientID, resp.StatusCode, readSnippet(resp.Body))
-	}
-	uuid := path.Base(resp.Header.Get("Location"))
-	if uuid == "" || uuid == "." {
-		return "", fmt.Errorf("create client %s: no Location header", clientID)
-	}
-	// Belt: ensure the openid scope is actually attached (carries the groups claim).
-	if err := k.ensureClientDefaultScope(uuid, "openid"); err != nil {
-		return uuid, err
-	}
-	// Stamp `aud: llz` so the smoke token satisfies OpenBao's bound_audiences —
-	// this throwaway client mints tokens under its own id, but the role only
-	// accepts the llz audience (see keycloakRoleBody.BoundAudiences).
-	if err := k.ensureAudienceMapper(uuid, keycloakDeviceClientID); err != nil {
-		return uuid, err
-	}
-	return uuid, nil
-}
 
 // createSmokeUser makes an enabled realm user with an inline non-temporary
 // password, returning its id.
-func (k *kcClient) createSmokeUser(username, password string) (string, error) {
-	// Fully set the user up so the direct-grant login isn't blocked by the realm's
-	// DEFAULT required actions (VERIFY_EMAIL / UPDATE_PASSWORD / UPDATE_PROFILE /
-	// CONFIGURE_TOTP) — those surface as "Account is not fully set up" at token time.
-	// emailVerified + a profile (names) satisfy the profile/email checks; an explicit
-	// empty requiredActions overrides the realm defaults; the credential is permanent.
-	body := map[string]any{
-		"username":        username,
-		"email":           username + "@llz-smoke.invalid",
-		"emailVerified":   true,
-		"firstName":       "LLZ",
-		"lastName":        "Smoke",
-		"enabled":         true,
-		"requiredActions": []string{},
-		"credentials": []map[string]any{
-			{"type": "password", "value": password, "temporary": false},
-		},
-	}
-	resp, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/users", body)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("create user %s: HTTP %d: %s", username, resp.StatusCode, readSnippet(resp.Body))
-	}
-	uid := path.Base(resp.Header.Get("Location"))
-	if uid == "" || uid == "." {
-		return "", fmt.Errorf("create user %s: no Location header", username)
-	}
-	return uid, nil
-}
-
-func (k *kcClient) addUserToGroup(userID, groupID string) error {
-	resp, err := k.do(http.MethodPut, "/admin/realms/"+k.realm+"/users/"+userID+"/groups/"+groupID, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("add user to group: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
 
 // addRealmRoleToUser grants the named realm role to the user — the direct-grant
 // equivalent of team-<name> group membership for the groups claim, used when the
 // team's group is not provisioned yet (a fresh team before its first member).
-func (k *kcClient) addRealmRoleToUser(userID, roleName string) error {
-	// The role representation (id + name) POST body role-mappings/realm requires.
-	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/roles/"+url.PathEscape(roleName), nil)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		resp.Body.Close()
-		return fmt.Errorf("realm role %q not found — apl-core has not provisioned the team role yet", roleName)
-	}
-	var role struct{ ID, Name string }
-	if err := decodeJSON(resp, &role); err != nil {
-		return err
-	}
-	pr, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/users/"+userID+"/role-mappings/realm",
-		[]map[string]string{{"id": role.ID, "name": role.Name}})
-	if err != nil {
-		return err
-	}
-	defer pr.Body.Close()
-	if pr.StatusCode != http.StatusNoContent && pr.StatusCode != http.StatusOK {
-		return fmt.Errorf("assign realm role %s: HTTP %d: %s", roleName, pr.StatusCode, readSnippet(pr.Body))
-	}
-	return nil
-}
-
-func (k *kcClient) deleteUser(userID string) error {
-	resp, err := k.do(http.MethodDelete, "/admin/realms/"+k.realm+"/users/"+userID, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	// Previously the status was ignored, so a failed delete looked like success and
-	// left a real team-member user standing. Surface non-success (404 = already gone).
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("delete user %s: HTTP %d: %s", userID, resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
 
 // disableUser sets enabled:false — a belt on smoke teardown so an orphan that
 // can't be deleted at least can't authenticate as a team member.
-func (k *kcClient) disableUser(userID string) error {
-	resp, err := k.do(http.MethodPut, "/admin/realms/"+k.realm+"/users/"+userID, map[string]any{"enabled": false})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("disable user %s: HTTP %d: %s", userID, resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
-
-func (k *kcClient) deleteClient(clientUUID string) error {
-	resp, err := k.do(http.MethodDelete, "/admin/realms/"+k.realm+"/clients/"+clientUUID, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	// Check the status like deleteUser: a leaked smoke client is a PUBLIC,
-	// ROPC-enabled client stamped with aud:llz — a standing password-grant login
-	// path into the OpenBao mount — so a silently-failed delete must not look clean.
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("delete client %s: HTTP %d: %s", clientUUID, resp.StatusCode, readSnippet(resp.Body))
-	}
-	return nil
-}
 
 // passwordGrant runs the OAuth2 Resource-Owner-Password-Credentials grant against
 // the realm (public client, scope openid), returning the id_token.
-func (k *kcClient) passwordGrant(clientID, username, password string) (string, error) {
-	form := url.Values{
-		"grant_type": {"password"}, "client_id": {clientID},
-		"username": {username}, "password": {password}, "scope": {"openid"},
-	}
-	resp, err := k.hc.PostForm(k.base+"/realms/"+k.realm+"/protocol/openid-connect/token", form)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("password grant: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	var out struct {
-		IDToken string `json:"id_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("parse token response: %w", err)
-	}
-	if out.IDToken == "" {
-		return "", fmt.Errorf("password grant returned no id_token (is the openid scope attached + a groups mapper present?)")
-	}
-	return out.IDToken, nil
-}

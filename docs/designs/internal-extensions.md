@@ -180,7 +180,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-network` | 840 | 4 | ✔ | **✅ Extracted.** network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77. See [What `assert-network` corrected](#what-assert-network-corrected--a-name-that-read-like-a-capability). |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime`. **✅ Extracted** — 1,044 lines, not 725. See [What `assert-reconciler` decided](#what-assert-reconciler-decided--the-pairing-question).|
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
-| `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
+| `assert-identity` | 627 | 2 | ✔ | **✅ Extracted.** See [What `assert-identity` forced](#what-assert-identity-forced--the-first-extraction-the-language-decided). team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
 | `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner`. **✅ Extracted** — closure **2**, the cleanest boundary of all seventeen. See [What `assert-registry` cost](#what-assert-registry-cost--nothing-and-that-is-the-finding).|
@@ -285,9 +285,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `wave-health` extracted | 29,450 | 174 | −403 — closure **3**, and the second state-level catalog correction |
 | `tofu-driver` extracted | 29,230 | 172 | −220 — three verbs the catalog gave one row and one grant |
 | `assert-observability` extracted | 27,156 | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
-| `assert-secrets` extracted | **26,174** | 158 | −982 — grepped for hidden writes FIRST, and found one |
+| `assert-secrets` extracted | 26,174 | 158 | −982 — grepped for hidden writes FIRST, and found one |
+| `assert-identity` extracted | **25,274** | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
 
-**Net −21,008 (44.5%) across twenty-six extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −21,908 (46.4%) across twenty-seven extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1436,6 +1437,59 @@ being learned; it took four instances to earn that.
 
 `secret-read` is used by its fifth extension here, and still holds: these lanes read credential
 material to judge it, and none of them places any.
+
+### What `assert-identity` forced — the first extraction the language decided
+
+Twenty-seventh, and the first where **the order of the work was not mine to choose**. Every previous
+extraction moved code because the declaration wanted it moved. This one moved code because Go would
+not compile the alternative.
+
+```
+assert-identity  assertion:verified   "certificates" [cluster-read]
+                 transition:converged "login-smoke"  [cluster-read, cluster-write, secret-read]
+```
+
+**The constraint.** The Keycloak admin client is a struct with methods, and three separate places
+extend it: the login smoke test, the `configure` verb, and `llz users add`. Go will not let a package
+define a method on a type it does not own, so there was no way to move *one* of those three into
+`tools/internal/assertidentity` and leave the other two in package `main` — the type has to live
+somewhere both sides can reach before either can move. `tools/internal/keycloak` came out first, as
+the thirteenth shared package, and only then could this extension be extracted at all.
+
+That is a different kind of forcing function from the twelve shared packages before it. Those came
+out because *duplication* made them worth sharing — `internal/color`, `internal/kubectlprobe`,
+`internal/cigate` were each a judgement call about how many callers justify a package. This one came
+out because the language left no other arrangement, and the judgement was already made.
+
+**Five for five on hidden mutations.** `login-smoke` creates a Keycloak client and a user, then tears
+both down. It is spelled "smoke test":
+
+| extension | the mutation | where it hid |
+|---|---|---|
+| `converge` | patches Argo Applications | a health check |
+| `assert-storage` | mutates Linode Volumes | the catalog's own flagged anomaly |
+| `assert-observability` | `kubectl rollout restart` | a file called "readiness" |
+| `assert-secrets` | applies and deletes a Job | a lane called `assert-` |
+| `assert-identity` | creates a Keycloak client and a user | a lane called "smoke test" |
+
+Hence the split binding: `certificates` is an `assertion` and reads nothing but cluster state;
+`login-smoke` is a `transition` holding `cluster-write`, because provisioning an OIDC client to prove
+OIDC works is a mutation regardless of what happens afterward.
+
+**A second instance of a gap already recorded.** `login-smoke` also writes to *Keycloak* — an
+external service the platform owns, reached over its admin API rather than through the cluster.
+`cluster-write` is the nearest true grant and it is not exactly right. The Loki `/flush` POST in
+`assert-observability` was the first instance of the same shape; this is the second. Two cases is the
+threshold for saying the vocabulary has a hole and not the threshold for knowing its shape, so
+nothing was invented — the same disposition `write-repo` got, three times, before the file split
+answered it.
+
+**A classifier blind spot, worth naming.** Splitting the moved tests between the two new packages was
+mechanical except for two: `TestKeycloakConnect_RetriesUntilServing` and its `FailsFastOnAuthDenied`
+sibling *mention* the admin client but *drive* `portForwardKeycloakFn`, a port-forward seam the
+`configure` verb owns. They belong in package `main` and were returned there. A test can reference a
+package's symbols while being about something else entirely — the only case in seven files where
+"which symbols does this test touch" gave the wrong answer.
 
 ## The cost of the interesting half
 
