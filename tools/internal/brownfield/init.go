@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_init.go is the second phase of the migration flow: `llz import init`
 // consumes an import-report.yaml (from `llz import scan`) and runs the COMPLETE
@@ -11,7 +11,7 @@ package main
 // source APL/k8s versions describe the platform being left behind. k8s is left at
 // the template default and flagged (a +lke version must be valid in the account).
 //
-// The apl-core target tracks the platform baseline (defaultAplChartVersion) rather
+// The apl-core target tracks the platform baseline (d.DefaultAplChartVersion) rather
 // than a literal of its own. It used to pin 5.0.0, which stopped being a target the
 // moment the baseline moved to 6.x: `llz ci assert-apl-version` refuses anything
 // below the floor, so every imported instance was scaffolded DEAD ON ARRIVAL and
@@ -27,81 +27,53 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 	sigyaml "sigs.k8s.io/yaml"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// importInitAplChartVersion is the apl-core version `llz import init` scaffolds:
-// the platform baseline, so an imported instance is born on a SUPPORTED chart.
-const importInitAplChartVersion = defaultAplChartVersion
+// d.DefaultAplChartVersion was a const naming the platform baseline apl-core
+// version, so an imported instance is born on a SUPPORTED chart. It is now
+// Deps.DefaultAplChartVersion: the value lives in package main because
+// ci_bootstrap_cluster reads it too, and a second copy here is exactly the
+// two-authorities shape every extraction so far has found.
 
-type importInitOpts struct {
-	report string
-	dir    string
-	env    string
-	org    string
-	ref    string
+type InitOpts struct {
+	Report string
+	Dir    string
+	Env    string
+	Org    string
+	Ref    string
 }
 
-func importInitCmd() *cobra.Command {
-	var o importInitOpts
-	c := &cobra.Command{
-		Use:   "init",
-		Short: "scaffold a new LLZ instance from an import-report.yaml (new + spec + render + TODO)",
-		Long: "Consumes the report from `llz import scan` and runs the full scaffold: it\n" +
-			"`llz new`s the instance, authors landingzone.yaml + environments/<env>.yaml\n" +
-			"from the report (region, node pool, domain, object storage, components),\n" +
-			"renders, and writes MIGRATION-TODO.md listing what a scan can't carry over\n" +
-			"(secret values, PV/database data, IDP, Gitea→Git, Tekton→Argo, workload\n" +
-			"redeploy). Renders the migration TARGET versions: apl-core " + importInitAplChartVersion + ", and\n" +
-			"leaves k8s_version at the template default (set a valid +lke version by hand).",
-		Example: "  llz import init --report import-report.yaml --dir ./gsap-llz --env prod",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cmd.Flags().NFlag() == 0 {
-				return cmd.Help()
-			}
-			return runImportInit(gopts, o)
-		},
-	}
-	c.Flags().StringVar(&o.report, "report", defaultImportReport, "the import-report.yaml to scaffold from")
-	c.Flags().StringVar(&o.dir, "dir", "lke-instance", "directory to scaffold the new instance into")
-	c.Flags().StringVar(&o.env, "env", "prod", "deployment/environment name to author")
-	c.Flags().StringVar(&o.org, "org", defaultTemplateOrg, "template org to scaffold from")
-	c.Flags().StringVar(&o.ref, "ref", "", "template release tag (default: this llz binary's version)")
-	return c
-}
-
-func runImportInit(g globalOpts, o importInitOpts) error {
-	if err := validateEnvName(o.env); err != nil {
+func RunInit(d Deps, o InitOpts) error {
+	if err := d.ValidateEnvName(o.Env); err != nil {
 		return err
 	}
-	rep, err := loadImportReport(o.report)
+	rep, err := loadImportReport(o.Report)
 	if err != nil {
 		return err
 	}
 
 	// 1. Scaffold the instance (copier prompts for identity the report can't supply).
-	if err := runNew(g, o.org, o.ref, o.dir, false); err != nil {
+	if err := d.New(o.Org, o.Ref, o.Dir); err != nil {
 		return err
 	}
 
 	// 2. Author the spec from the report, then render (the `llz env add` path).
-	if err := withinDir(o.dir, func() error {
-		if err := runEnvAdd(g, o.env, reportToEnvAddOpts(rep)); err != nil {
+	if err := withinDir(o.Dir, func() error {
+		if err := d.EnvAdd(o.Env, reportToEnvSpec(d, rep)); err != nil {
 			return fmt.Errorf("author spec: %w", err)
 		}
 		// 3. Apply the component toggles the scan found (comment-preserving, re-render once).
 		if assigns := enabledComponentAssignments(rep); len(assigns) > 0 {
-			if err := applyComponentToggles(g, o.env, assigns); err != nil {
+			if err := applyComponentToggles(d, o.Env, assigns); err != nil {
 				return fmt.Errorf("set components: %w", err)
 			}
 		}
 		// 4. Write the migration checklist.
-		if err := os.WriteFile(migrationTodoFile, []byte(buildMigrationTodo(rep, o.env)), 0o644); err != nil {
+		if err := os.WriteFile(migrationTodoFile, []byte(buildMigrationTodo(d, rep, o.Env)), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", migrationTodoFile, err)
 		}
 		return nil
@@ -109,9 +81,9 @@ func runImportInit(g globalOpts, o importInitOpts) error {
 		return err
 	}
 
-	fmt.Printf("\n%s\n", color.Bold("Imported into "+o.dir))
-	fmt.Printf("  spec authored for env %q from %s; review %s/%s for the manual steps.\n", o.env, o.report, o.dir, migrationTodoFile)
-	fmt.Printf("  apl-core pinned to %s; k8s_version left at the template default — set a valid +lke version.\n", importInitAplChartVersion)
+	fmt.Printf("\n%s\n", color.Bold("Imported into "+o.Dir))
+	fmt.Printf("  spec authored for env %q from %s; review %s/%s for the manual steps.\n", o.Env, o.Report, o.Dir, migrationTodoFile)
+	fmt.Printf("  apl-core pinned to %s; k8s_version left at the template default — set a valid +lke version.\n", d.DefaultAplChartVersion)
 	return nil
 }
 
@@ -148,22 +120,22 @@ func withinDir(dir string, fn func() error) error {
 // applyComponentToggles sets the components.<name>.enabled=true assignments on the
 // env spec file (preserving comments, the same building blocks `llz env set` uses)
 // and re-renders.
-func applyComponentToggles(g globalOpts, env string, assigns []string) error {
-	if g.dryRun {
+func applyComponentToggles(d Deps, env string, assigns []string) error {
+	if !d.Confirm() {
 		fmt.Printf("  %s would set: %s\n", color.Dim("(dry-run)"), strings.Join(assigns, " "))
 		return nil
 	}
-	envFile, err := envSpecFile(env)
+	envFile, err := d.EnvSpecFile(env)
 	if err != nil {
 		return err
 	}
-	if err := editSpecFile(envFile, func(doc *yamlv3.Node) error {
+	if err := d.EditSpec(envFile, func(doc *yamlv3.Node) error {
 		for _, a := range assigns {
 			i := strings.IndexByte(a, '=')
 			if i < 0 {
 				continue
 			}
-			if err := setSpecPath(doc, a[:i], a[i+1:]); err != nil {
+			if err := d.SetSpecPath(doc, a[:i], a[i+1:]); err != nil {
 				return err
 			}
 		}
@@ -174,7 +146,7 @@ func applyComponentToggles(g globalOpts, env string, assigns []string) error {
 	for _, a := range assigns {
 		fmt.Printf("  %s spec.%s\n", color.Green("set"), a)
 	}
-	return runRender(g, env, false, false, false)
+	return d.Render(env)
 }
 
 // ── pure mapping (unit-tested) ───────────────────────────────────────────────
@@ -182,21 +154,21 @@ func applyComponentToggles(g globalOpts, env string, assigns []string) error {
 // reportToEnvAddOpts maps the scan report onto the `llz env add` inputs. It uses
 // the migration TARGET apl-core version and deliberately leaves k8sVersion unset
 // (the source version isn't a valid LKE target).
-func reportToEnvAddOpts(rep importReport) envAddOpts {
-	o := envAddOpts{
-		region:          firstNonEmpty(linodeRegion(rep), rep.Cluster.Region),
-		clusterDomain:   rep.DNS.DomainSuffix,
-		objCluster:      reportObjCluster(rep),
-		aplChartVersion: importInitAplChartVersion,
+func reportToEnvSpec(d Deps, rep importReport) EnvSpec {
+	o := EnvSpec{
+		Region:          firstNonEmpty(linodeRegion(rep), rep.Cluster.Region),
+		ClusterDomain:   rep.DNS.DomainSuffix,
+		ObjCluster:      reportObjCluster(rep),
+		AplChartVersion: d.DefaultAplChartVersion,
 	}
 	if nt, nc := largestPool(rep); nt != "" {
-		o.nodeType = nt
+		o.NodeType = nt
 		if nc > 0 {
-			o.nodeCount = strconv.Itoa(nc)
+			o.NodeCount = strconv.Itoa(nc)
 		}
 	}
 	if rep.Linode != nil && rep.Linode.VPC != nil && len(rep.Linode.VPC.Subnets) > 0 {
-		o.subnetCIDR = rep.Linode.VPC.Subnets[0]
+		o.SubnetCIDR = rep.Linode.VPC.Subnets[0]
 	}
 	return o
 }
@@ -274,7 +246,7 @@ func enabledComponentAssignments(rep importReport) []string {
 
 // buildMigrationTodo renders the markdown checklist of everything a scan can't
 // carry into the new instance — so nothing is silently dropped.
-func buildMigrationTodo(rep importReport, env string) string {
+func buildMigrationTodo(d Deps, rep importReport, env string) string {
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }
 
@@ -283,7 +255,7 @@ func buildMigrationTodo(rep importReport, env string) string {
 	w("spec are rendered; the items below are the migration work a scan cannot do.\n\n")
 
 	w("## Source\n")
-	w("- APL/Otomi version: **%s** (migrating onto apl-core %s)\n", orNA(rep.Platform.AplVersion), importInitAplChartVersion)
+	w("- APL/Otomi version: **%s** (migrating onto apl-core %s)\n", orNA(rep.Platform.AplVersion), d.DefaultAplChartVersion)
 	w("- Cluster: k8s %s, region %s, %d node(s)\n", orNA(rep.Cluster.KubernetesVersion), orNA(rep.Cluster.Region), rep.Cluster.NodeCount)
 	w("- Domain: %s\n\n", orNA(rep.DNS.DomainSuffix))
 

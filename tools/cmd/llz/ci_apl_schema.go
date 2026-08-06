@@ -35,6 +35,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 )
 
 // aplChartRepo is the public Helm repo apl-core publishes to (mirrors
@@ -94,7 +96,7 @@ func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) erro
 	keys := placeholderSet()
 	if unwired := unwiredPlaceholders(string(valuesRaw), keys); len(unwired) > 0 {
 		return fmt.Errorf("%s references ${%s} not in the runtime-placeholder set (%s) — bootstrap-cluster cannot fill it (the apl_values_repo_url class)",
-			valuesPath, strings.Join(unwired, "}, ${"), strings.Join(sortedSetKeys(keys), " "))
+			valuesPath, strings.Join(unwired, "}, ${"), strings.Join(brownfield.SortedSetKeys(keys), " "))
 	}
 	fmt.Printf("runtime-placeholder var-contract ok (%d placeholders, all leftover placeholders wired)\n", len(keys))
 

@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_cluster.go holds the deeper cluster-introspection parsers for `llz
 // import scan`: node-pool layout, storage classes, routing/domains (Istio +
@@ -6,7 +6,7 @@ package main
 // operators (from CRDs), app versions (from image tags), the cert-manager
 // ClusterIssuer, and per-team resource quotas. Every function here is pure (raw
 // kubectl JSON in, struct out) so the mapping is unit-tested; the kubectl calls
-// live in runImportScan.
+// live in RunScan.
 
 import (
 	"encoding/json"
@@ -399,7 +399,7 @@ func parseCRDOperators(js string) (operators []string, components map[string]boo
 			components[c] = true
 		}
 	}
-	return sortedSetKeys(opSet), components
+	return SortedSetKeys(opSet), components
 }
 
 // ── app versions from images (pure) ──────────────────────────────────────────
@@ -518,7 +518,7 @@ func parseClusterIssuers(js string) (acmeEmail string, solvers []string) {
 			}
 		}
 	}
-	return acmeEmail, sortedSetKeys(solverSet)
+	return acmeEmail, SortedSetKeys(solverSet)
 }
 
 // ── resource quotas (pure) ───────────────────────────────────────────────────

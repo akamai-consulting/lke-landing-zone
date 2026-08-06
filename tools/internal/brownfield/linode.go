@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_linode.go adds the Linode-API source to `llz import scan`. The live
 // cluster (kubectl) and the repos can't see how the cluster was PROVISIONED —
@@ -267,7 +267,7 @@ func lkeFirewallInfo(fw map[string]any) lkeFirewall {
 			set[cidr] = true
 		}
 	}
-	out.InboundCIDRs = sortedSetKeys(set)
+	out.InboundCIDRs = SortedSetKeys(set)
 	return out
 }
 

@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 import (
 	"strings"
@@ -71,12 +71,12 @@ func TestLargestPoolEmptyLinodePoolsFallsThrough(t *testing.T) {
 // authoring a literal "0" — a spec that would provision a cluster with no nodes.
 func TestReportToEnvAddOptsZeroNodeCountLeftUnset(t *testing.T) {
 	rep := importReport{Linode: &importLinode{NodePools: []lkePool{{Type: "g6-standard-4", Count: 0}}}}
-	o := reportToEnvAddOpts(rep)
-	if o.nodeType != "g6-standard-4" {
-		t.Errorf("nodeType=%q, want g6-standard-4", o.nodeType)
+	o := reportToEnvSpec(Deps{}, rep)
+	if o.NodeType != "g6-standard-4" {
+		t.Errorf("nodeType=%q, want g6-standard-4", o.NodeType)
 	}
-	if o.nodeCount != "" {
-		t.Errorf("nodeCount=%q, want \"\" — a zero count must leave the scaffold default, not author a 0-node pool", o.nodeCount)
+	if o.NodeCount != "" {
+		t.Errorf("nodeCount=%q, want \"\" — a zero count must leave the scaffold default, not author a 0-node pool", o.NodeCount)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestLinodeRegionPrefersLinodeOverKube(t *testing.T) {
 	if got := linodeRegion(withLinode); got != "us-ord" {
 		t.Errorf("linodeRegion=%q, want us-ord", got)
 	}
-	if got := reportToEnvAddOpts(withLinode).region; got != "us-ord" {
+	if got := reportToEnvSpec(Deps{}, withLinode).Region; got != "us-ord" {
 		t.Errorf("region=%q, want the Linode region us-ord", got)
 	}
 
@@ -101,7 +101,7 @@ func TestLinodeRegionPrefersLinodeOverKube(t *testing.T) {
 	if got := linodeRegion(noLinode); got != "" {
 		t.Errorf("linodeRegion with no Linode section=%q, want \"\"", got)
 	}
-	if got := reportToEnvAddOpts(noLinode).region; got != "us-east" {
+	if got := reportToEnvSpec(Deps{}, noLinode).Region; got != "us-east" {
 		t.Errorf("region=%q, want the kube-derived us-east", got)
 	}
 }
@@ -122,7 +122,7 @@ func TestReportToEnvAddOptsSubnetCIDR(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := reportToEnvAddOpts(c.rep).subnetCIDR; got != c.want {
+			if got := reportToEnvSpec(Deps{}, c.rep).SubnetCIDR; got != c.want {
 				t.Errorf("subnetCIDR=%q, want %q", got, c.want)
 			}
 		})
@@ -146,7 +146,7 @@ func emptyTodoReport() importReport {
 // section. A guard that always fires would emit a heading claiming "0 database(s)"
 // or an empty disabled-apps list — a TODO that misdescribes the source.
 func TestBuildMigrationTodoOmitsEmptySections(t *testing.T) {
-	md := buildMigrationTodo(emptyTodoReport(), "prod")
+	md := buildMigrationTodo(Deps{}, emptyTodoReport(), "prod")
 	mustNotContain := []string{
 		"disabled in the source",   // :298 — no APL signals at all
 		"Platform differences",     // :306 — no warnings
@@ -177,7 +177,7 @@ func TestBuildMigrationTodoEmptyOptionalSubsections(t *testing.T) {
 	rep.Linode = &importLinode{Region: "us-ord", ObjectStorage: nil}
 	rep.Storage = importStorage{Databases: []dbInfo{{Namespace: "gitea", Name: "gitea-db", Engine: "postgres", Kind: "CNPG", Clients: nil}}}
 
-	md := buildMigrationTodo(rep, "prod")
+	md := buildMigrationTodo(Deps{}, rep, "prod")
 	if strings.Contains(md, "disabled in the source") {
 		t.Errorf("APL signals with NO disabled apps must not emit the disabled-apps section\n---\n%s", md)
 	}
@@ -210,7 +210,7 @@ func TestBuildMigrationTodoPresentSections(t *testing.T) {
 	}}
 	rep.Platform.HelmReleases = []helmRelease{{Namespace: "harbor", Name: "harbor", Chart: "harbor", ChartVersion: "1.13.0"}}
 
-	md := buildMigrationTodo(rep, "prod")
+	md := buildMigrationTodo(Deps{}, rep, "prod")
 	mustContain := []string{
 		"disabled in the source",                                        // :298
 		"- [ ] alertmanager",                                            // the actual list

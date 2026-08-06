@@ -38,6 +38,7 @@ RETRY := template-scripts/ci/with-retry.sh
 # say which in the comment, as here.
 COVERAGE_MINS := \
 	cmd/llz=48 \
+	internal/brownfield=80 \
 	internal/budget=92 \
 	internal/cli=95 \
 	internal/atrest=93 \

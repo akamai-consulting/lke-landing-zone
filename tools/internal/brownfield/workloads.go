@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_workloads.go adds the migration-planning parsers for `llz import scan`:
 // the per-team secret/credential checklist, the container-image inventory (the
@@ -6,7 +6,7 @@ package main
 // data-migration plan), the security posture (NetworkPolicies/RBAC/Istio mTLS),
 // and the authoritative installed-chart inventory decoded from Helm release
 // secrets. All pure (raw kubectl JSON in, structs out) and unit-tested; kubectl
-// calls live in runImportScan.
+// calls live in RunScan.
 
 import (
 	"bytes"
@@ -386,7 +386,7 @@ func parsePodSecretRefs(podsJSON string) []podSecretUse {
 		out = append(out, podSecretUse{
 			Namespace: p.Metadata.Namespace,
 			Workload:  workloadFromOwner(p.Metadata.OwnerReferences, p.Metadata.Name),
-			Secrets:   sortedSetKeys(set),
+			Secrets:   SortedSetKeys(set),
 		})
 	}
 	return out
@@ -413,7 +413,7 @@ func attachDBClients(dbs []dbInfo, uses []podSecretUse) []dbInfo {
 				}
 			}
 		}
-		dbs[i].Clients = sortedSetKeys(set)
+		dbs[i].Clients = SortedSetKeys(set)
 	}
 	return dbs
 }
@@ -511,7 +511,7 @@ func parsePeerAuthModes(js string) []string {
 			set[m] = true
 		}
 	}
-	return sortedSetKeys(set)
+	return SortedSetKeys(set)
 }
 
 // totalCount sums a per-namespace count map.

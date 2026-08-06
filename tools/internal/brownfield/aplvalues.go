@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_aplvalues.go parses the APL/Otomi "DOWNLOAD PLATFORM VALUES" file — the
 // merged, resolved platform configuration — into aplSignals. It is the preferred

@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 import (
 	"strings"
@@ -60,19 +60,5 @@ func TestReportBucketsFallbackToApl(t *testing.T) {
 func TestSanitizeEnvKey(t *testing.T) {
 	if got := sanitizeEnvKey("lke579582-loki"); got != "lke579582_loki" {
 		t.Errorf("got %q", got)
-	}
-}
-
-func TestImportPlanNoFlagsShowsHelp(t *testing.T) {
-	cmd := importPlanCmd()
-	var out strings.Builder
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs(nil)
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("bare plan should not error: %v", err)
-	}
-	if !strings.Contains(out.String(), "Usage:") {
-		t.Errorf("expected help, got:\n%s", out.String())
 	}
 }

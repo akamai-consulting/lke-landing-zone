@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 )
 
 // The runtime-placeholder set is exactly the four secrets-only tokens
@@ -11,7 +13,7 @@ import (
 func TestPlaceholderSet(t *testing.T) {
 	keys := placeholderSet()
 	want := []string{"apl_values_repo_password", "coredns_cluster_ip", "linode_dns_token", "loki_admin_password"}
-	if got := sortedSetKeys(keys); strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := brownfield.SortedSetKeys(keys); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("placeholderSet = %v, want %v", got, want)
 	}
 }

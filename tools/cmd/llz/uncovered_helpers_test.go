@@ -48,128 +48,6 @@ func TestBase64Auth(t *testing.T) {
 	}
 }
 
-func TestControlPlaneSummary(t *testing.T) {
-	yes, no := true, false
-	for _, tc := range []struct {
-		name string
-		cp   clusterspec.ControlPlane
-		want string
-	}{
-		{"nothing set", clusterspec.ControlPlane{}, ""},
-		{"HA only", clusterspec.ControlPlane{HighAvailability: &yes}, "HA"},
-		{"audit only", clusterspec.ControlPlane{AuditLogsEnabled: &yes}, "audit logs"},
-		{"both", clusterspec.ControlPlane{HighAvailability: &yes, AuditLogsEnabled: &yes}, "HA, audit logs"},
-		// Explicit false must read the same as unset: a pointer that is non-nil
-		// but false is the case a plain nil-check would get wrong.
-		{"explicit false", clusterspec.ControlPlane{HighAvailability: &no, AuditLogsEnabled: &no}, ""},
-		{"HA false, audit true", clusterspec.ControlPlane{HighAvailability: &no, AuditLogsEnabled: &yes}, "audit logs"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := controlPlaneSummary(tc.cp); got != tc.want {
-				t.Errorf("controlPlaneSummary = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestOptSubnetAndOrDash(t *testing.T) {
-	if got := optSubnet(""); got != "" {
-		t.Errorf("optSubnet(empty) = %q, want empty (no stray parens)", got)
-	}
-	if got := optSubnet("10.0.0.0/24"); got != " (10.0.0.0/24)" {
-		t.Errorf("optSubnet = %q — the leading space separates it from the label", got)
-	}
-	if got := orDash(""); got != "—" {
-		t.Errorf("orDash(empty) = %q, want an em dash", got)
-	}
-	if got := orDash("us-ord"); got != "us-ord" {
-		t.Errorf("orDash passthrough = %q", got)
-	}
-}
-
-func TestSuggestedInstanceDir(t *testing.T) {
-	if got := suggestedInstanceDir(importReport{}); got != "lke-instance" {
-		t.Errorf("no Linode section: got %q, want the fallback", got)
-	}
-	// A present-but-unlabelled cluster must fall back too — the nil check alone
-	// is not enough, and an empty label would otherwise become an empty dirname.
-	if got := suggestedInstanceDir(importReport{Linode: &importLinode{}}); got != "lke-instance" {
-		t.Errorf("empty label: got %q, want the fallback", got)
-	}
-	if got := suggestedInstanceDir(importReport{Linode: &importLinode{Label: "prod-ord"}}); got != "prod-ord" {
-		t.Errorf("labelled cluster: got %q", got)
-	}
-}
-
-func TestVPCCIDRSummary(t *testing.T) {
-	if got := vpcCIDRSummary(nil); got != "" {
-		t.Errorf("nil VPC must be empty, got %q", got)
-	}
-	if got := vpcCIDRSummary(&lkeVPC{}); got != "" {
-		t.Errorf("VPC with no subnets must be empty, got %q", got)
-	}
-	if got := vpcCIDRSummary(&lkeVPC{Subnets: []string{"10.0.0.0/24"}}); got != "10.0.0.0/24" {
-		t.Errorf("single subnet: got %q (no trailing separator)", got)
-	}
-	if got := vpcCIDRSummary(&lkeVPC{Subnets: []string{"10.0.0.0/24", "10.0.1.0/24"}}); got != "10.0.0.0/24,10.0.1.0/24" {
-		t.Errorf("multiple subnets: got %q", got)
-	}
-}
-
-// poolsSuffix annotates a cluster line only when there is more than one pool, so
-// the interesting input is exactly one — the boundary.
-func TestPoolsSuffix(t *testing.T) {
-	for _, tc := range []struct {
-		n    int
-		want string
-	}{{0, ""}, {1, ""}, {2, " (2 pools)"}, {5, " (5 pools)"}} {
-		if got := poolsSuffix(make([]nodePool, tc.n)); got != tc.want {
-			t.Errorf("poolsSuffix(%d pools) = %q, want %q", tc.n, got, tc.want)
-		}
-	}
-}
-
-func TestFindCluster(t *testing.T) {
-	clusters := []map[string]any{
-		{"id": float64(101), "label": "a"},
-		{"id": float64(202), "label": "b"},
-	}
-	got, ok := findCluster(clusters, 202)
-	if !ok || got["label"] != "b" {
-		t.Errorf("findCluster(202) = %v, %v — want the second cluster", got, ok)
-	}
-	if _, ok := findCluster(clusters, 999); ok {
-		t.Error("a missing id must report not-found rather than the zero cluster")
-	}
-	if _, ok := findCluster(nil, 101); ok {
-		t.Error("an empty list must report not-found")
-	}
-	// Returning the FIRST match matters: ids are unique upstream, but a
-	// last-match-wins search would silently pick a different cluster if they
-	// ever were not.
-	dupes := []map[string]any{{"id": float64(7), "label": "first"}, {"id": float64(7), "label": "second"}}
-	if got, _ := findCluster(dupes, 7); got["label"] != "first" {
-		t.Errorf("duplicate ids: got %q, want the first match", got["label"])
-	}
-}
-
-// lkeVPCInfo maps three fields out of an untyped API object. A transposed pair
-// is invisible here and surfaces as a VPC attached to the wrong region.
-func TestLKEVPCInfo(t *testing.T) {
-	got := lkeVPCInfo(map[string]any{"id": float64(42), "label": "vpc-ord", "region": "us-ord"})
-	if got.ID != 42 || got.Label != "vpc-ord" || got.Region != "us-ord" {
-		t.Errorf("lkeVPCInfo = %+v — fields are transposed or dropped", got)
-	}
-	// Label and Region are both strings, so a swap type-checks; assert they are
-	// not interchangeable.
-	if got.Label == got.Region {
-		t.Error("label and region resolved to the same value")
-	}
-	if empty := lkeVPCInfo(map[string]any{}); empty.ID != 0 || empty.Label != "" || empty.Region != "" {
-		t.Errorf("missing keys must zero-value, got %+v", empty)
-	}
-}
-
 func TestTruncateForError(t *testing.T) {
 	if got := truncateForError(nil); got != "(empty body)" {
 		t.Errorf("nil body = %q", got)
@@ -303,5 +181,49 @@ func TestEnvWithKubeconfig(t *testing.T) {
 	}
 	if !marker {
 		t.Error("the rest of the environment must be preserved")
+	}
+}
+
+// Moved BACK from internal/brownfield: optSubnet lives in components_cmd.go and
+// stayed. It travelled out because it shared a test file with brownfield symbols —
+// the same "neighbours, not relatives" mistake the teardown extraction found, and
+// the second time an iterative move has needed correcting.
+
+func TestOptSubnetAndOrDash(t *testing.T) {
+	if got := optSubnet(""); got != "" {
+		t.Errorf("optSubnet(empty) = %q, want empty (no stray parens)", got)
+	}
+	if got := optSubnet("10.0.0.0/24"); got != " (10.0.0.0/24)" {
+		t.Errorf("optSubnet = %q — the leading space separates it from the label", got)
+	}
+	if got := orDash(""); got != "—" {
+		t.Errorf("orDash(empty) = %q, want an em dash", got)
+	}
+	if got := orDash("us-ord"); got != "us-ord" {
+		t.Errorf("orDash passthrough = %q", got)
+	}
+}
+
+func TestControlPlaneSummary(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name string
+		cp   clusterspec.ControlPlane
+		want string
+	}{
+		{"nothing set", clusterspec.ControlPlane{}, ""},
+		{"HA only", clusterspec.ControlPlane{HighAvailability: &yes}, "HA"},
+		{"audit only", clusterspec.ControlPlane{AuditLogsEnabled: &yes}, "audit logs"},
+		{"both", clusterspec.ControlPlane{HighAvailability: &yes, AuditLogsEnabled: &yes}, "HA, audit logs"},
+		// Explicit false must read the same as unset: a pointer that is non-nil
+		// but false is the case a plain nil-check would get wrong.
+		{"explicit false", clusterspec.ControlPlane{HighAvailability: &no, AuditLogsEnabled: &no}, ""},
+		{"HA false, audit true", clusterspec.ControlPlane{HighAvailability: &no, AuditLogsEnabled: &yes}, "audit logs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := controlPlaneSummary(tc.cp); got != tc.want {
+				t.Errorf("controlPlaneSummary = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

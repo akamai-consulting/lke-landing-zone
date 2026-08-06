@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_repo.go is the repo-scanning half of `llz import scan`: given a local
 // clone of an arbitrary repo, it walks the tree and builds an inventory of the
@@ -164,8 +164,8 @@ func scanRepoTree(fsys fs.FS) repoInventory {
 	inv := repoInventory{}
 	if sawTF {
 		tf.Vars = selectedTFVars(tfvars)
-		tf.Modules = sortedSetKeys(modules)
-		tf.Providers = sortedSetKeys(providers)
+		tf.Modules = SortedSetKeys(modules)
+		tf.Providers = SortedSetKeys(providers)
 		if len(tf.Resources) == 0 {
 			tf.Resources = nil
 		}
@@ -175,7 +175,7 @@ func scanRepoTree(fsys fs.FS) repoInventory {
 		inv.Terraform = tf
 	}
 	if sawKube {
-		kube.Namespaces = sortedSetKeys(namespaces)
+		kube.Namespaces = SortedSetKeys(namespaces)
 		kube.HelmCharts = dedupeSorted(charts)
 		if len(kube.Kinds) == 0 {
 			kube.Kinds = nil
@@ -433,7 +433,7 @@ func extractAplSignals(m map[string]any, sig *aplSignals) {
 
 // ── small helpers ────────────────────────────────────────────────────────────
 
-func sortedSetKeys(set map[string]bool) []string {
+func SortedSetKeys(set map[string]bool) []string {
 	if len(set) == 0 {
 		return nil
 	}

@@ -128,7 +128,7 @@ NOTE: `+"`llz import init`"+` scaffolds apl-core %s (this release's baseline), w
 already above this floor — so a rejection here means an EXISTING pin was carried
 across an llz upgrade, not that the scaffolder produced it.`,
 			v, env, minSupportedAplChartVersion,
-			v, v, minSupportedAplChartVersion, env, v, importInitAplChartVersion)
+			v, v, minSupportedAplChartVersion, env, v, defaultAplChartVersion)
 	}
 	return nil
 }

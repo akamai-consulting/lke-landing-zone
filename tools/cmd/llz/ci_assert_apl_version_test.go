@@ -31,8 +31,8 @@ func TestAplVersionSupported(t *testing.T) {
 		}
 		// The import path pins 5.0.0, so the message must call that out — it is how an
 		// imported instance reaches this state by default.
-		if !strings.Contains(msg, importInitAplChartVersion) {
-			t.Errorf("rejection should name the import-init pin %s; got:\n%s", importInitAplChartVersion, msg)
+		if !strings.Contains(msg, defaultAplChartVersion) {
+			t.Errorf("rejection should name the import-init pin %s; got:\n%s", defaultAplChartVersion, msg)
 		}
 	}
 

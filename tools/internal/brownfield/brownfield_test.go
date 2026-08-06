@@ -1,9 +1,7 @@
-package main
+package brownfield
 
 import (
-	"bytes"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -283,16 +281,16 @@ func TestBuildReport(t *testing.T) {
 }
 
 func TestKubectlCtx(t *testing.T) {
-	orig := execOutput
-	defer func() { execOutput = orig }()
+	// The seam is a Deps field now, not a package-level var — so no swap and no
+	// cleanup, and two tests could hold different stubs at once.
 	var gotArgs []string
-	execOutput = func(_ string, args ...string) ([]byte, error) {
+	d := Deps{KubectlOut: func(args ...string) (string, error) {
 		gotArgs = args
-		return []byte("ok"), nil
-	}
+		return "ok", nil
+	}}
 
 	// kubeconfig + context are both prepended, in that order.
-	if _, err := kubectlCtx("/tmp/kc", "old-apl", "get", "nodes"); err != nil {
+	if _, err := kubectlCtx(d, "/tmp/kc", "old-apl", "get", "nodes"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(gotArgs, []string{"--kubeconfig", "/tmp/kc", "--context", "old-apl", "get", "nodes"}) {
@@ -300,7 +298,7 @@ func TestKubectlCtx(t *testing.T) {
 	}
 
 	// Only a kubeconfig, no context.
-	if _, err := kubectlCtx("/tmp/kc", "", "get", "pods"); err != nil {
+	if _, err := kubectlCtx(d, "/tmp/kc", "", "get", "pods"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(gotArgs, []string{"--kubeconfig", "/tmp/kc", "get", "pods"}) {
@@ -308,25 +306,11 @@ func TestKubectlCtx(t *testing.T) {
 	}
 
 	// Neither: args untouched (kubectl uses its own defaults).
-	if _, err := kubectlCtx("", "", "get", "svc"); err != nil {
+	if _, err := kubectlCtx(d, "", "", "get", "svc"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(gotArgs, []string{"get", "svc"}) {
 		t.Errorf("args=%v, want get svc", gotArgs)
-	}
-}
-
-func TestImportScanNoFlagsShowsHelp(t *testing.T) {
-	cmd := importScanCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs(nil)
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("bare scan should not error, got %v", err)
-	}
-	if !strings.Contains(out.String(), "Usage:") {
-		t.Errorf("expected help output, got:\n%s", out.String())
 	}
 }
 
@@ -337,4 +321,90 @@ func containsStr(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Moved with brownfield.go — suggestedInstanceDir reads an importReport, and both
+// live here now.
+
+func TestSuggestedInstanceDir(t *testing.T) {
+	if got := suggestedInstanceDir(importReport{}); got != "lke-instance" {
+		t.Errorf("no Linode section: got %q, want the fallback", got)
+	}
+	// A present-but-unlabelled cluster must fall back too — the nil check alone
+	// is not enough, and an empty label would otherwise become an empty dirname.
+	if got := suggestedInstanceDir(importReport{Linode: &importLinode{}}); got != "lke-instance" {
+		t.Errorf("empty label: got %q, want the fallback", got)
+	}
+	if got := suggestedInstanceDir(importReport{Linode: &importLinode{Label: "prod-ord"}}); got != "prod-ord" {
+		t.Errorf("labelled cluster: got %q", got)
+	}
+}
+
+func TestVPCCIDRSummary(t *testing.T) {
+	if got := vpcCIDRSummary(nil); got != "" {
+		t.Errorf("nil VPC must be empty, got %q", got)
+	}
+	if got := vpcCIDRSummary(&lkeVPC{}); got != "" {
+		t.Errorf("VPC with no subnets must be empty, got %q", got)
+	}
+	if got := vpcCIDRSummary(&lkeVPC{Subnets: []string{"10.0.0.0/24"}}); got != "10.0.0.0/24" {
+		t.Errorf("single subnet: got %q (no trailing separator)", got)
+	}
+	if got := vpcCIDRSummary(&lkeVPC{Subnets: []string{"10.0.0.0/24", "10.0.1.0/24"}}); got != "10.0.0.0/24,10.0.1.0/24" {
+		t.Errorf("multiple subnets: got %q", got)
+	}
+}
+
+// poolsSuffix annotates a cluster line only when there is more than one pool, so
+// the interesting input is exactly one — the boundary.
+func TestPoolsSuffix(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{{0, ""}, {1, ""}, {2, " (2 pools)"}, {5, " (5 pools)"}} {
+		if got := poolsSuffix(make([]nodePool, tc.n)); got != tc.want {
+			t.Errorf("poolsSuffix(%d pools) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestFindCluster(t *testing.T) {
+	clusters := []map[string]any{
+		{"id": float64(101), "label": "a"},
+		{"id": float64(202), "label": "b"},
+	}
+	got, ok := findCluster(clusters, 202)
+	if !ok || got["label"] != "b" {
+		t.Errorf("findCluster(202) = %v, %v — want the second cluster", got, ok)
+	}
+	if _, ok := findCluster(clusters, 999); ok {
+		t.Error("a missing id must report not-found rather than the zero cluster")
+	}
+	if _, ok := findCluster(nil, 101); ok {
+		t.Error("an empty list must report not-found")
+	}
+	// Returning the FIRST match matters: ids are unique upstream, but a
+	// last-match-wins search would silently pick a different cluster if they
+	// ever were not.
+	dupes := []map[string]any{{"id": float64(7), "label": "first"}, {"id": float64(7), "label": "second"}}
+	if got, _ := findCluster(dupes, 7); got["label"] != "first" {
+		t.Errorf("duplicate ids: got %q, want the first match", got["label"])
+	}
+}
+
+// lkeVPCInfo maps three fields out of an untyped API object. A transposed pair
+// is invisible here and surfaces as a VPC attached to the wrong region.
+func TestLKEVPCInfo(t *testing.T) {
+	got := lkeVPCInfo(map[string]any{"id": float64(42), "label": "vpc-ord", "region": "us-ord"})
+	if got.ID != 42 || got.Label != "vpc-ord" || got.Region != "us-ord" {
+		t.Errorf("lkeVPCInfo = %+v — fields are transposed or dropped", got)
+	}
+	// Label and Region are both strings, so a swap type-checks; assert they are
+	// not interchangeable.
+	if got.Label == got.Region {
+		t.Error("label and region resolved to the same value")
+	}
+	if empty := lkeVPCInfo(map[string]any{}); empty.ID != 0 || empty.Label != "" || empty.Region != "" {
+		t.Errorf("missing keys must zero-value, got %+v", empty)
+	}
 }

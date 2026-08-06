@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 // import_plan.go is the data-migration half of the flow: `llz import plan` reads
 // an import-report.yaml and emits a runnable MIGRATION-PLAN.md with concrete
@@ -15,57 +15,30 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-const migrationPlanFile = "MIGRATION-PLAN.md"
+const MigrationPlanFile = "MIGRATION-PLAN.md"
 
-type importPlanOpts struct {
-	report string
-	output string
+type PlanOpts struct {
+	Report string
+	Output string
 }
 
-func importPlanCmd() *cobra.Command {
-	var o importPlanOpts
-	c := &cobra.Command{
-		Use:   "plan",
-		Short: "emit a data-migration runbook (OBJ buckets + databases) from an import-report.yaml",
-		Long: "Reads the report from `llz import scan` and writes MIGRATION-PLAN.md: concrete,\n" +
-			"copy-pasteable commands to move the Object Storage buckets (rclone) and the\n" +
-			"databases (CNPG, per owning app) from the source account/cluster to the target\n" +
-			"LLZ cluster. Target endpoints/credentials/bucket names are ${PLACEHOLDER} env\n" +
-			"vars you fill. Read-only; generates a plan, runs nothing.",
-		Example: "  llz import plan --report import-report.yaml -o MIGRATION-PLAN.md\n" +
-			"  llz import plan --report import-report.yaml -o -   # print to stdout",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cmd.Flags().NFlag() == 0 {
-				return cmd.Help()
-			}
-			return runImportPlan(o)
-		},
-	}
-	c.Flags().StringVar(&o.report, "report", defaultImportReport, "the import-report.yaml to plan from")
-	c.Flags().StringVarP(&o.output, "output", "o", migrationPlanFile, `path to write the plan ("-" for stdout)`)
-	return c
-}
-
-func runImportPlan(o importPlanOpts) error {
-	rep, err := loadImportReport(o.report)
+func RunPlan(o PlanOpts) error {
+	rep, err := loadImportReport(o.Report)
 	if err != nil {
 		return err
 	}
 	plan := buildMigrationPlan(rep)
-	if o.output == "-" {
+	if o.Output == "-" {
 		fmt.Print(plan)
 		return nil
 	}
-	if err := os.WriteFile(o.output, []byte(plan), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", o.output, err)
+	if err := os.WriteFile(o.Output, []byte(plan), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", o.Output, err)
 	}
-	fmt.Printf("%s wrote %s — review, fill the ${...} target values, then run the steps.\n", color.Green("✓"), o.output)
+	fmt.Printf("%s wrote %s — review, fill the ${...} target values, then run the steps.\n", color.Green("✓"), o.Output)
 	return nil
 }
 

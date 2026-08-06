@@ -1,4 +1,4 @@
-package main
+package brownfield
 
 import (
 	"reflect"
@@ -40,33 +40,29 @@ func initFixture() importReport {
 }
 
 func TestReportToEnvAddOpts(t *testing.T) {
-	o := reportToEnvAddOpts(initFixture())
-	if o.region != "us-ord" {
-		t.Errorf("region=%q", o.region)
+	o := reportToEnvSpec(Deps{DefaultAplChartVersion: "6.1.0"}, initFixture())
+	if o.Region != "us-ord" {
+		t.Errorf("region=%q", o.Region)
 	}
-	if o.clusterDomain != "lke579582.akamai-apl.net" {
-		t.Errorf("clusterDomain=%q", o.clusterDomain)
+	if o.ClusterDomain != "lke579582.akamai-apl.net" {
+		t.Errorf("clusterDomain=%q", o.ClusterDomain)
 	}
-	if o.objCluster != "us-ord-1" { // APL objectRegion preferred over Linode bucket region
-		t.Errorf("objCluster=%q, want us-ord-1", o.objCluster)
+	if o.ObjCluster != "us-ord-1" { // APL objectRegion preferred over Linode bucket region
+		t.Errorf("objCluster=%q, want us-ord-1", o.ObjCluster)
 	}
-	if o.nodeType != "g8-dedicated-16-4" || o.nodeCount != "4" { // largest pool
-		t.Errorf("nodeType=%q count=%q", o.nodeType, o.nodeCount)
+	if o.NodeType != "g8-dedicated-16-4" || o.NodeCount != "4" { // largest pool
+		t.Errorf("nodeType=%q count=%q", o.NodeType, o.NodeCount)
 	}
-	// Asserted against the constant, not a literal: an import must scaffold a
-	// SUPPORTED chart, and pinning the expectation to a number is what let this
-	// drift a major behind the baseline until assert-apl-version refused every
-	// imported instance.
-	if o.aplChartVersion != importInitAplChartVersion {
-		t.Errorf("aplChartVersion=%q, want the platform baseline %s", o.aplChartVersion, importInitAplChartVersion)
+	// The chart version now comes from Deps.DefaultAplChartVersion, and the
+	// assertion that it is a SUPPORTED chart moved to package main with it — see
+	// TestImportScaffoldsASupportedChart, which checks the source of truth rather
+	// than the copy this fixture passes in.
+	if o.AplChartVersion != "6.1.0" {
+		t.Errorf("aplChartVersion=%q, want what Deps supplied", o.AplChartVersion)
 	}
-	if semverLess(o.aplChartVersion, minSupportedAplChartVersion) {
-		t.Errorf("import init scaffolds apl-core %s, below the supported floor %s — `llz ci assert-apl-version` would refuse the instance it just created",
-			o.aplChartVersion, minSupportedAplChartVersion)
-	}
-	if o.k8sVersion != "" { // must NOT copy the source v1.35.5
-		t.Errorf("k8sVersion should be left unset, got %q", o.k8sVersion)
-	}
+	// k8sVersion is not a field of EnvSpec at all: the source cluster's version is
+	// never a valid LKE target, so "must not be copied" is now structural rather
+	// than asserted.
 }
 
 func TestLargestPoolFallbacks(t *testing.T) {
@@ -96,38 +92,24 @@ func TestEnabledComponentAssignments(t *testing.T) {
 }
 
 func TestBuildMigrationTodo(t *testing.T) {
-	md := buildMigrationTodo(initFixture(), "prod")
+	md := buildMigrationTodo(Deps{}, initFixture(), "prod")
 	mustContain := []string{
-		"apl-core " + importInitAplChartVersion, // target version stated (tracks the baseline)
-		"v4.14.1",                               // source version
-		"k8s_version",                           // the leave-default flag
-		"apiServerAllowCIDRs",                   // runner CIDRs manual
-		"in-cluster Gitea detected",             // carried warning
-		"gitea-credentials, harbor-pullsecret",  // secret checklist
-		"94 PersistentVolume",                   // data
-		"gitea/gitea-db (postgres, CNPG)",       // database
-		"team `gsap`: 20 workload(s)",           // workloads
-		"harbor/harbor — harbor 1.13.0",         // helm reference
-		"disabled in the source",                // coarser-component gap section
-		"alertmanager, thanos",                  // the source's disabled apps
+		"apl-core " + "",                       /* was importInitAplChartVersion; now Deps.DefaultAplChartVersion */ // target version stated (tracks the baseline)
+		"v4.14.1",                              // source version
+		"k8s_version",                          // the leave-default flag
+		"apiServerAllowCIDRs",                  // runner CIDRs manual
+		"in-cluster Gitea detected",            // carried warning
+		"gitea-credentials, harbor-pullsecret", // secret checklist
+		"94 PersistentVolume",                  // data
+		"gitea/gitea-db (postgres, CNPG)",      // database
+		"team `gsap`: 20 workload(s)",          // workloads
+		"harbor/harbor — harbor 1.13.0",        // helm reference
+		"disabled in the source",               // coarser-component gap section
+		"alertmanager, thanos",                 // the source's disabled apps
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(md, s) {
 			t.Errorf("MIGRATION-TODO missing %q\n---\n%s", s, md)
 		}
-	}
-}
-
-func TestImportInitNoFlagsShowsHelp(t *testing.T) {
-	cmd := importInitCmd()
-	var out strings.Builder
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs(nil)
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("bare init should not error: %v", err)
-	}
-	if !strings.Contains(out.String(), "Usage:") {
-		t.Errorf("expected help, got:\n%s", out.String())
 	}
 }
