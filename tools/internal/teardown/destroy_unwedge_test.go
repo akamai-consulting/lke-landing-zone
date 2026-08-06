@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"reflect"
@@ -121,16 +121,15 @@ func TestRunCIDestroyUnwedgeRequiresKubeconfigAndWiring(t *testing.T) {
 	// No KUBECONFIG_B64 / KUBECONFIG / --region → can't locate a kubeconfig.
 	t.Setenv("KUBECONFIG_B64", "")
 	t.Setenv("KUBECONFIG", "")
-	if err := runCIDestroyUnwedge(""); err == nil || !strings.Contains(err.Error(), "KUBECONFIG_B64") {
+	if err := RunDestroyUnwedge(testDeps(t), ""); err == nil || !strings.Contains(err.Error(), "KUBECONFIG_B64") {
 		t.Errorf("err = %v, want a KUBECONFIG_B64/KUBECONFIG/--region requirement", err)
 	}
 	t.Setenv("KUBECONFIG_B64", "!!not base64!!")
-	if err := runCIDestroyUnwedge(""); err == nil || !strings.Contains(err.Error(), "base64") {
+	if err := RunDestroyUnwedge(testDeps(t), ""); err == nil || !strings.Contains(err.Error(), "base64") {
 		t.Errorf("err = %v, want invalid-base64 error", err)
 	}
-	if c := ciDestroyUnwedgeCmd(); c.Use != "destroy-unwedge" {
-		t.Errorf("Use = %q, want destroy-unwedge", c.Use)
-	}
+	// The cobra wiring assertion moved to package main with the command itself;
+	// this package no longer knows what the verb is called, which is the point.
 }
 
 // --region resolves the kubeconfig by label; an already-reaped cluster (found=false)
@@ -139,9 +138,9 @@ func TestRunCIDestroyUnwedgeRegionSkipsWhenClusterGone(t *testing.T) {
 	t.Setenv("KUBECONFIG_B64", "")
 	t.Setenv("KUBECONFIG", "")
 	prev := unwedgeResolveKubeconfigFn
-	unwedgeResolveKubeconfigFn = func(string) (string, bool, error) { return "", false, nil }
+	unwedgeResolveKubeconfigFn = func(Deps, string) (string, bool, error) { return "", false, nil }
 	t.Cleanup(func() { unwedgeResolveKubeconfigFn = prev })
-	if err := runCIDestroyUnwedge("primary"); err != nil {
+	if err := RunDestroyUnwedge(testDeps(t), "primary"); err != nil {
 		t.Errorf("a gone cluster should be a clean no-op, got %v", err)
 	}
 }

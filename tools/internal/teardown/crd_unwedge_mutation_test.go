@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import "testing"
 
@@ -10,7 +10,7 @@ import "testing"
 func TestStripOversizedCRDLastAppliedStripsAtExactlyTheThreshold(t *testing.T) {
 	body := crdListJSON(t, map[string]int{"exact.example.com": crdUnwedgeThreshold})
 	var annotated []string
-	got := stripOversizedCRDLastApplied(func(args ...string) (string, bool) {
+	got := StripOversizedCRDLastApplied(func(args ...string) (string, bool) {
 		if args[0] == "get" {
 			return body, true
 		}

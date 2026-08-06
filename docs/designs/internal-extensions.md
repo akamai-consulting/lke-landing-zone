@@ -213,7 +213,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
-| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 |
+| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first six, extracted](#the-first-six-extracted). |
 | `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. |
 | `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
 
@@ -517,17 +517,29 @@ thing that defines it.
 
 ### What none of them proves
 
-Nothing is loaded, dispatched or disabled through the model. All three still run because `ci.go`
-registers their cobra commands, and the declarations are inert.
+Nothing is loaded, dispatched or disabled through the model. All six still run because `ci.go` and
+the reconciler register them, and every declaration is inert.
 
-Now exercised, by `assert-storage`: **`assertion`**, **multi-binding extensions**, **named
-bindings**, **`cloud-mutate`**, **`cluster-read`/`cloud-read`**, and the `grantStates` table — which
-turned out to be wrong and was corrected.
+**Now exercised:** all four binding kinds (`gate`, `assertion`, `invariant`, `transition`);
+multi-binding extensions and named bindings, up to four on one extension; six of seven grants
+(`read-repo`, `cluster-read`, `cluster-write`, `cloud-read`, `cloud-mutate`, `secret-custody`); four
+states (`scaffolded`, `verified`, `operating`, `destroyed`); and `grantStates` in both directions —
+one row wrong and corrected, three right and serving as controls.
 
-Still unexercised: **`transition`** as a binding kind (every declared binding so far observes or
-holds; none moves the platform anywhere), **`own-paths`** and **`secret-custody`**, and the five
-lifecycle states between `scaffolded` and `verified`. All of those live in the lower half of the
-table above, so the honest next step remains the action ABI rather than a fifth extraction.
+**Still unexercised:** `own-paths`, `alwaysEnabled: false` (every extension so far ships `always`),
+and the states between `scaffolded` and `verified`.
+
+**And three things the model cannot express**, all found by declaring rather than by design:
+
+1. a binding that **writes repository files** — no `write-repo`, and `own-paths` is a copier fence
+   explicitly *not* a write permit (`llz ci gen-toc`, `promote-pipeline`);
+2. an extension that is **partial** — `reconcile-actions` declares four bindings and reads as
+   complete while four more of its lanes are still core;
+3. the difference between **granted and confirmed** — `cloud-mutate` permits a deletion; nothing says
+   a human authorised *this* one (`teardown.Deps.Confirm`).
+
+None is invented here. (1) and (2) each wait for a second independent case; (3) is a question for the
+action ABI rather than a missing grant.
 
 ## What the catalog says
 

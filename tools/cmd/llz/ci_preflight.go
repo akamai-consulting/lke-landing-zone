@@ -18,6 +18,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/preflight"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 )
 
 type preflightOpts struct {
@@ -108,11 +110,11 @@ func runCIPreflight(o preflightOpts) error {
 	// what `llz reap --region <r>` can actually clean — falling back to --region,
 	// then account-wide.
 	volumeRegion := firstNonEmpty(o.volumeRegion, o.region)
-	scan, err := scanOrphans(ctx, client, o.region, volumeRegion, o.env)
+	scan, err := teardown.ScanOrphans(ctx, client, o.region, volumeRegion, o.env)
 	if err != nil {
 		return err
 	}
-	orphans := scan.orphans()
+	orphans := scan.Orphans()
 
 	volNote := ""
 	if volumeRegion != "" && volumeRegion != o.region {
@@ -122,10 +124,10 @@ func runCIPreflight(o preflightOpts) error {
 	if o.clusterLabel != "" {
 		labelNote = fmt.Sprintf(" — %d matching %q (e2e)", sameLabel, o.clusterLabel)
 	}
-	fmt.Printf("  Live LKE clusters : %d total (shared account)%s\n", scan.liveClusters, labelNote)
-	fmt.Printf("  Volumes           : %3d total, %3d orphaned (unattached pvc-*)%s\n", scan.vol.total, scan.vol.orphan, volNote)
-	fmt.Printf("  NodeBalancers     : %3d total, %3d orphaned (lke<id> gone / ccm 0-backend)\n", scan.nb.total, scan.nb.orphan)
-	fmt.Printf("  VPCs              : %3d total, %3d orphaned (lke<id>, cluster gone)\n", scan.vpc.total, scan.vpc.orphan)
+	fmt.Printf("  Live LKE clusters : %d total (shared account)%s\n", scan.LiveClusters, labelNote)
+	fmt.Printf("  Volumes           : %3d total, %3d orphaned (unattached pvc-*)%s\n", scan.Vol.Total, scan.Vol.Orphan, volNote)
+	fmt.Printf("  NodeBalancers     : %3d total, %3d orphaned (lke<id> gone / ccm 0-backend)\n", scan.NB.Total, scan.NB.Orphan)
+	fmt.Printf("  VPCs              : %3d total, %3d orphaned (lke<id>, cluster gone)\n", scan.VPC.Total, scan.VPC.Orphan)
 	orphanCount := fmt.Sprintf("%3d", orphans)
 	if orphans > 0 {
 		orphanCount = yellow(orphanCount)
@@ -141,12 +143,12 @@ func runCIPreflight(o preflightOpts) error {
 	}
 
 	// (b) VPC quota — the confirmed root cause; LKE-E creates one VPC/cluster.
-	fmt.Printf("  VPCs in account      : %d total\n  This apply adds      : 1 VPC\n", scan.vpc.total)
+	fmt.Printf("  VPCs in account      : %d total\n  This apply adds      : 1 VPC\n", scan.VPC.Total)
 	if o.vpcLimit > 0 {
 		fmt.Printf("  Account VPC limit    : %d\n", o.vpcLimit)
-		if preflight.VPCQuotaExceeded(scan.vpc.total, 1, o.vpcLimit) {
-			fmt.Fprintf(os.Stderr, "::error::preflight: account VPC quota would be exceeded — %d existing + 1 for this cluster > %d limit. LKE-E can't allocate the VPC, so cluster-create HANGS. Reap orphaned VPCs (llz reap --region %s) or raise the limit, then retry.\n", scan.vpc.total, o.vpcLimit, o.region)
-			return fmt.Errorf("preflight failed: VPC quota would be exceeded (%d + 1 > %d)", scan.vpc.total, o.vpcLimit)
+		if preflight.VPCQuotaExceeded(scan.VPC.Total, 1, o.vpcLimit) {
+			fmt.Fprintf(os.Stderr, "::error::preflight: account VPC quota would be exceeded — %d existing + 1 for this cluster > %d limit. LKE-E can't allocate the VPC, so cluster-create HANGS. Reap orphaned VPCs (llz reap --region %s) or raise the limit, then retry.\n", scan.VPC.Total, o.vpcLimit, o.region)
+			return fmt.Errorf("preflight failed: VPC quota would be exceeded (%d + 1 > %d)", scan.VPC.Total, o.vpcLimit)
 		}
 	} else {
 		fmt.Println(dim("  (set --vpc-limit to your account's VPC limit to fail fast when an apply would exceed it)"))
@@ -199,109 +201,4 @@ func orQ(s string, unknown bool) string {
 		return "?"
 	}
 	return s
-}
-
-// orphanScanner is the slice of the Linode client the orphan census needs —
-// seamed so scanOrphans (and the destroy-job assert-no-orphans gate) is
-// unit-testable without the live API.
-type orphanScanner interface {
-	LiveClusterIDs(ctx context.Context) (map[string]bool, error)
-	ListVolumes(ctx context.Context) ([]map[string]any, error)
-	ListNodeBalancers(ctx context.Context) ([]map[string]any, error)
-	NodeBalancerBackendCount(ctx context.Context, id uint64) (int, error)
-	ListVPCs(ctx context.Context) ([]map[string]any, error)
-}
-
-// resourceTally is per-type total + orphan counts for the census report.
-type resourceTally struct{ total, orphan int }
-
-// orphanScan is the account- (or region-) scoped orphan census that both
-// `llz ci preflight` reports and the destroy job's gate asserts on.
-type orphanScan struct {
-	liveClusters int
-	vol, nb, vpc resourceTally
-}
-
-func (s orphanScan) orphans() int { return s.vol.orphan + s.nb.orphan + s.vpc.orphan }
-
-// scanOrphans counts orphaned Volumes / NodeBalancers / VPCs using the SAME
-// identity heuristics `llz reap` drives — unattached pvc-* Volumes, CCM
-// NodeBalancers whose cluster is gone (or 0-backend), and lke<id> VPCs whose
-// cluster is gone. NodeBalancers and VPCs are scoped to region ("" =
-// account-wide): they carry a cluster-id tag/label, so a gone-cluster orphan is
-// unambiguous and safe to count account-wide. Volumes are scoped SEPARATELY to
-// volumeRegion because a detached relabeled Volume carries no cluster id and can't
-// be attributed — in a shared account an account-wide count pulls in other
-// regions'/teams' detached Volumes that `llz reap` (which refuses an unscoped
-// Volume sweep and only acts per --region) will never clean, so the gate would
-// disagree with reap. volumeRegion="" preserves the account-wide volume count.
-// env is the DEPLOYMENT name and widens the Volume filter to that deployment's
-// RELABELED Volumes. Without it the census accepts only the CSI default "pvc-"
-// prefix, so every Volume the volume-labels reconciler has renamed — all of them,
-// on a converged cluster — is invisible to the count. That is not a cosmetic gap:
-// assert-no-orphans is the destroy job's final gate, so a leak of exactly the
-// Volumes this deployment created would report zero orphans and pass.
-// Read-only.
-func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion, env string) (orphanScan, error) {
-	inRegion := func(r string) bool { return region == "" || region == r }
-	inVolumeRegion := func(r string) bool { return volumeRegion == "" || volumeRegion == r }
-	volPrefixes := linode.VolumeLabelPrefixes(env)
-
-	live, err := client.LiveClusterIDs(ctx)
-	if err != nil {
-		return orphanScan{}, fmt.Errorf("list LKE clusters: %w", err)
-	}
-	s := orphanScan{liveClusters: len(live)}
-
-	vols, err := client.ListVolumes(ctx)
-	if err != nil {
-		return orphanScan{}, fmt.Errorf("list Volumes: %w", err)
-	}
-	for _, v := range vols {
-		if !inVolumeRegion(linode.MapString(v, "region")) {
-			continue
-		}
-		s.vol.total++
-		if linode.VolumeIsCandidate(linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"),
-			linode.MapString(v, "region"), linode.MapTags(v), volumeRegion, nil, linode.MapIDString(v), "",
-			volPrefixes...) {
-			s.vol.orphan++
-		}
-	}
-
-	nbs, err := client.ListNodeBalancers(ctx)
-	if err != nil {
-		return orphanScan{}, fmt.Errorf("list NodeBalancers: %w", err)
-	}
-	for _, nb := range nbs {
-		if !inRegion(linode.MapString(nb, "region")) {
-			continue
-		}
-		s.nb.total++
-		switch linode.ClassifyNodeBalancer(linode.LKEClusterIDFromNB(nb), linode.MapTags(nb), linode.MapString(nb, "label"), live) {
-		case linode.NBKeep:
-			continue
-		case linode.NBCheckBackends:
-			n, err := client.NodeBalancerBackendCount(ctx, linode.MapUint(nb, "id"))
-			if err != nil || n != 0 {
-				continue
-			}
-		}
-		s.nb.orphan++
-	}
-
-	vpcs, err := client.ListVPCs(ctx)
-	if err != nil {
-		return orphanScan{}, fmt.Errorf("list VPCs: %w", err)
-	}
-	for _, vpc := range vpcs {
-		if !inRegion(linode.MapString(vpc, "region")) {
-			continue
-		}
-		s.vpc.total++
-		if linode.VPCIsOrphan(linode.MapString(vpc, "label"), live) {
-			s.vpc.orphan++
-		}
-	}
-	return s, nil
 }

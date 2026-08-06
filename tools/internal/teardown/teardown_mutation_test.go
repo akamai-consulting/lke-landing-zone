@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"errors"
@@ -45,10 +45,10 @@ func TestTeardownForceDeleteReportsRealOutcomes(t *testing.T) {
 		firewalls: []map[string]any{{"id": float64(42), "label": "e2e-lke-nodes"}},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
+	d := stubTerraformOutputs(t, map[string]string{})
 
 	out, errOut := captureStdoutStderr(t, func() {
-		if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+		if err := RunForceDelete(d, "e2e", dir); err != nil {
 			t.Errorf("force-delete: %v", err)
 		}
 	})
@@ -69,7 +69,7 @@ func TestTeardownForceDeleteReportsRealOutcomes(t *testing.T) {
 	fake.clusters = []uint64{777}
 	fake.deleteErr = map[string]error{"/v4/networking/firewalls/42": errors.New("boom")}
 	out, errOut = captureStdoutStderr(t, func() {
-		if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+		if err := RunForceDelete(d, "e2e", dir); err != nil {
 			t.Errorf("force-delete with a failing delete must warn, not error: %v", err)
 		}
 	})
@@ -83,7 +83,7 @@ func TestTeardownForceDeleteReportsRealOutcomes(t *testing.T) {
 	// No cluster on the account → the explicit "already deleted" line.
 	fake.clusters = nil
 	out, _ = captureStdoutStderr(t, func() {
-		if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+		if err := RunForceDelete(d, "e2e", dir); err != nil {
 			t.Errorf("force-delete: %v", err)
 		}
 	})
@@ -103,7 +103,7 @@ func TestForceDeleteClusterSleepsBetweenAttemptsOnly(t *testing.T) {
 		deleteErr: map[string]error{"/v4beta/lke/clusters/777": errors.New("cluster stuck deleting")},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
+	d := stubTerraformOutputs(t, map[string]string{})
 
 	prevA := forceDeleteClusterAttempts
 	forceDeleteClusterAttempts = 3
@@ -113,7 +113,7 @@ func TestForceDeleteClusterSleepsBetweenAttemptsOnly(t *testing.T) {
 	teardownSleep = func(time.Duration) { sleeps++ } // withTeardown restores the original
 
 	captureStdoutStderr(t, func() {
-		if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+		if err := RunForceDelete(d, "e2e", dir); err != nil {
 			t.Errorf("wedged cluster must warn, not error: %v", err)
 		}
 	})
@@ -132,10 +132,10 @@ func TestDeleteVPCRetryReportsEveryInterveningFailure(t *testing.T) {
 		deleteErr: map[string]error{"/v4/vpcs/55": errors.New("409 in use")},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
+	d := stubTerraformOutputs(t, map[string]string{})
 
 	out, errOut := captureStdoutStderr(t, func() {
-		if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, false); err != nil {
+		if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
 			t.Errorf("exhausted retries should warn, not error: %v", err)
 		}
 	})
@@ -157,13 +157,13 @@ func TestDeleteVPCRetryDelayIsSeconds(t *testing.T) {
 		deleteErr: map[string]error{"/v4/vpcs/55": errors.New("409 in use")},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
+	d := stubTerraformOutputs(t, map[string]string{})
 
 	// 2 attempts ⇒ exactly one 1-second back-off. time.Sleep is called directly
 	// here (no seam), so the elapsed time is the only observable.
 	start := time.Now()
 	captureStdoutStderr(t, func() {
-		if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 2, 1, false); err != nil {
+		if err := RunDeleteVPC(d, "e2e", dir, "", 2, 1, false); err != nil {
 			t.Errorf("delete-vpc: %v", err)
 		}
 	})

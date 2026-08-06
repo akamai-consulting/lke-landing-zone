@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"errors"
@@ -13,12 +13,12 @@ func TestResolveUnwedgeKubeconfigPropagatesResolverErrors(t *testing.T) {
 	t.Setenv("KUBECONFIG_B64", "")
 	t.Setenv("KUBECONFIG", "")
 	prev := unwedgeResolveKubeconfigFn
-	unwedgeResolveKubeconfigFn = func(string) (string, bool, error) {
+	unwedgeResolveKubeconfigFn = func(Deps, string) (string, bool, error) {
 		return "", false, errors.New("linode api: 500 internal server error")
 	}
 	t.Cleanup(func() { unwedgeResolveKubeconfigFn = prev })
 
-	path, cleanup, skip, err := resolveUnwedgeKubeconfig("primary")
+	path, cleanup, skip, err := resolveUnwedgeKubeconfig(testDeps(t), "primary")
 	if err == nil || !strings.Contains(err.Error(), "500 internal server error") {
 		t.Errorf("err = %v, want the resolver error propagated", err)
 	}
@@ -36,13 +36,13 @@ func TestResolveUnwedgeKubeconfigWritesResolvedMaterial(t *testing.T) {
 	t.Setenv("KUBECONFIG_B64", "")
 	t.Setenv("KUBECONFIG", "")
 	prev := unwedgeResolveKubeconfigFn
-	unwedgeResolveKubeconfigFn = func(string) (string, bool, error) {
+	unwedgeResolveKubeconfigFn = func(Deps, string) (string, bool, error) {
 		// base64 of a minimal kubeconfig (KubeconfigContent decodes it).
 		return "YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnCg==", true, nil
 	}
 	t.Cleanup(func() { unwedgeResolveKubeconfigFn = prev })
 
-	path, cleanup, skip, err := resolveUnwedgeKubeconfig("primary")
+	path, cleanup, skip, err := resolveUnwedgeKubeconfig(testDeps(t), "primary")
 	if cleanup != nil {
 		t.Cleanup(cleanup)
 	}

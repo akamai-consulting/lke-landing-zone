@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"context"
@@ -91,20 +91,26 @@ func withTeardown(t *testing.T, fake *fakeTeardownClient, tfvars string) (string
 	return dir, ghaEnv
 }
 
-// stubTerraformOutputs makes execOutput answer `terraform output -raw <name>`
-// from the map (missing name errors, like a real absent output) and rejects
-// everything else.
-func stubTerraformOutputs(t *testing.T, outputs map[string]string) {
+// stubTerraformOutputs returns Deps whose Exec answers `terraform output -raw
+// <name>` from the map (a missing name errors, like a real absent output) and
+// rejects everything else.
+//
+// It RETURNS Deps rather than swapping a package-level var, which is the whole
+// difference the extraction made: the seam is a parameter, so two tests can hold
+// different stubs at once and neither has to clean up after itself.
+func stubTerraformOutputs(t *testing.T, outputs map[string]string) Deps {
 	t.Helper()
-	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
-		if name != tfBin() || len(args) != 4 || args[1] != "output" {
+	d := testDeps(t)
+	d.Exec = func(name string, args ...string) ([]byte, error) {
+		if name != d.TFBin() || len(args) != 4 || args[1] != "output" {
 			return nil, errors.New("unexpected command")
 		}
 		if v, ok := outputs[args[3]]; ok {
 			return []byte(v + "\n"), nil
 		}
 		return nil, errors.New("no such output")
-	})
+	}
+	return d
 }
 
 const teardownTFVars = "cluster_label = \"e2e-lke\"\n"
@@ -121,6 +127,7 @@ func TestNumericOrEmpty(t *testing.T) {
 }
 
 func TestTeardownCapture(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeTeardownClient{
 		clusters: []uint64{777},
 		pools: []map[string]any{
@@ -152,7 +159,7 @@ func TestTeardownCapture(t *testing.T) {
 		},
 	}
 	dir, ghaEnv := withTeardown(t, fake, teardownTFVars)
-	if err := runCITeardownCapture("e2e", dir); err != nil {
+	if err := RunCapture(d, "e2e", dir); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	got, _ := os.ReadFile(ghaEnv)
@@ -163,9 +170,10 @@ func TestTeardownCapture(t *testing.T) {
 }
 
 func TestTeardownCaptureClusterAlreadyGone(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeTeardownClient{}
 	dir, ghaEnv := withTeardown(t, fake, teardownTFVars)
-	if err := runCITeardownCapture("e2e", dir); err != nil {
+	if err := RunCapture(d, "e2e", dir); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	got, _ := os.ReadFile(ghaEnv)
@@ -185,10 +193,10 @@ func TestTeardownForceDelete(t *testing.T) {
 		},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{}) // no outputs in state
+	d := stubTerraformOutputs(t, map[string]string{}) // no outputs in state
 
 	// --yes deletes the cluster and the label-resolved firewall.
-	if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
 		t.Fatalf("force-delete: %v", err)
 	}
 	want := []string{"/v4beta/lke/clusters/777", "/v4/networking/firewalls/42"}
@@ -199,7 +207,7 @@ func TestTeardownForceDelete(t *testing.T) {
 	// A failed delete warns but does not error (always()-path cleanup).
 	fake.deletes = nil
 	fake.deleteErr = map[string]error{"/v4beta/lke/clusters/777": errors.New("boom")}
-	if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
 		t.Errorf("force-delete with failing delete should warn, not error: %v", err)
 	}
 }
@@ -209,8 +217,8 @@ func TestTeardownForceDeletePrefersExactIDOutput(t *testing.T) {
 		firewalls: []map[string]any{{"id": float64(42), "label": "e2e-lke-nodes"}},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{"node_firewall_id": "9001"})
-	if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+	d := stubTerraformOutputs(t, map[string]string{"node_firewall_id": "9001"})
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
 		t.Fatalf("force-delete: %v", err)
 	}
 	if len(fake.deletes) != 1 || fake.deletes[0] != "/v4/networking/firewalls/9001" {
@@ -221,8 +229,12 @@ func TestTeardownForceDeletePrefersExactIDOutput(t *testing.T) {
 func TestTeardownForceDeleteDryRun(t *testing.T) {
 	fake := &fakeTeardownClient{clusters: []uint64{777}}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
-	if err := runCITeardownForceDelete(globalOpts{}, "e2e", dir); err != nil {
+	d := stubTerraformOutputs(t, map[string]string{})
+	// Opt OUT of Confirm: the fixture defaults it to true so the destructive path
+	// is what a test exercises unless it says otherwise. This is the one case that
+	// wants the other branch, and it has to say so.
+	d.Confirm = func() bool { return false }
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
 		t.Fatalf("force-delete dry-run: %v", err)
 	}
 	if len(fake.deletes) != 0 {
@@ -239,13 +251,13 @@ func TestTeardownForceDeleteWedgedClusterRetriesThenWarns(t *testing.T) {
 		deleteErr: map[string]error{"/v4beta/lke/clusters/777": errors.New("cluster stuck deleting")},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
+	d := stubTerraformOutputs(t, map[string]string{})
 
 	prevA := forceDeleteClusterAttempts
 	forceDeleteClusterAttempts = 3
 	t.Cleanup(func() { forceDeleteClusterAttempts = prevA })
 
-	if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
 		t.Fatalf("wedged cluster must warn, not error (always()-path cleanup): %v", err)
 	}
 	got := 0
@@ -284,8 +296,8 @@ func TestTeardownDeleteVPC(t *testing.T) {
 		vpcs: []map[string]any{{"id": float64(55), "label": "e2e-lke-vpc"}},
 	}
 	dir, _ := withTeardown(t, fake, teardownTFVars)
-	stubTerraformOutputs(t, map[string]string{})
-	if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, false); err != nil {
+	d := stubTerraformOutputs(t, map[string]string{})
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
 		t.Fatalf("delete-vpc: %v", err)
 	}
 	if len(fake.deletes) != 1 || fake.deletes[0] != "/v4/vpcs/55" {
@@ -295,7 +307,7 @@ func TestTeardownDeleteVPC(t *testing.T) {
 	// In-use 409s retry up to --attempts, then warn without failing.
 	fake.deletes = nil
 	fake.deleteErr = map[string]error{"/v4/vpcs/55": errors.New("409 in use")}
-	if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, false); err != nil {
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
 		t.Errorf("exhausted retries should warn, not error: %v", err)
 	}
 	if len(fake.deletes) != 3 {
@@ -304,13 +316,13 @@ func TestTeardownDeleteVPC(t *testing.T) {
 
 	// --require-deleted turns exhausted retries into a hard failure.
 	fake.deletes = nil
-	if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, true); err == nil {
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, true); err == nil {
 		t.Error("--require-deleted should fail when the VPC is still undeletable")
 	}
 
 	// VPC gone entirely → clean no-op.
 	fake.vpcs, fake.deletes = nil, nil
-	if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, false); err != nil || len(fake.deletes) != 0 {
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil || len(fake.deletes) != 0 {
 		t.Errorf("absent VPC should no-op (err=%v deletes=%v)", err, fake.deletes)
 	}
 
@@ -319,53 +331,12 @@ func TestTeardownDeleteVPC(t *testing.T) {
 	t.Setenv("LKE_CLUSTER_ID", "616722")
 	fake.vpcs = []map[string]any{{"id": float64(77), "label": "lke616722"}}
 	fake.deletes = nil
-	if err := runCITeardownDeleteVPC(globalOpts{yes: true}, "e2e", dir, "", 3, 0, false); err != nil {
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
 		t.Fatalf("delete-vpc via env cluster id: %v", err)
 	}
 	if len(fake.deletes) != 1 || fake.deletes[0] != "/v4/vpcs/77" {
 		t.Errorf("env-resolved lke616722 VPC: deletes = %v, want /v4/vpcs/77", fake.deletes)
 	}
-}
-
-func TestWaitVolumesDetached(t *testing.T) {
-	origInterval := volumeDetachPollInterval
-	volumeDetachPollInterval = 0
-	t.Cleanup(func() { volumeDetachPollInterval = origInterval })
-
-	// Already detached → returns without sleeping.
-	fake := &fakeTeardownClient{volumes: []map[string]any{
-		{"id": float64(1), "label": "pvc-a", "linode_id": nil},
-	}}
-	waitVolumesDetached(context.Background(), fake, "1", 0)
-
-	// Still attached + zero budget → gives up after the immediate check.
-	fake.volumes = []map[string]any{{"id": float64(1), "label": "pvc-a", "linode_id": float64(7)}}
-	waitVolumesDetached(context.Background(), fake, "1", 0)
-}
-
-// fakeOrphanScanner implements orphanScanner from canned data.
-type fakeOrphanScanner struct {
-	live     map[string]bool
-	volumes  []map[string]any
-	nbs      []map[string]any
-	vpcs     []map[string]any
-	backends map[uint64]int
-}
-
-func (f *fakeOrphanScanner) LiveClusterIDs(context.Context) (map[string]bool, error) {
-	return f.live, nil
-}
-func (f *fakeOrphanScanner) ListVolumes(context.Context) ([]map[string]any, error) {
-	return f.volumes, nil
-}
-func (f *fakeOrphanScanner) ListNodeBalancers(context.Context) ([]map[string]any, error) {
-	return f.nbs, nil
-}
-func (f *fakeOrphanScanner) NodeBalancerBackendCount(_ context.Context, id uint64) (int, error) {
-	return f.backends[id], nil
-}
-func (f *fakeOrphanScanner) ListVPCs(context.Context) ([]map[string]any, error) {
-	return f.vpcs, nil
 }
 
 func TestScanOrphans(t *testing.T) {
@@ -387,18 +358,18 @@ func TestScanOrphans(t *testing.T) {
 			{"id": float64(21), "label": "lke100", "region": "us-ord"}, // keep
 		},
 	}
-	scan, err := scanOrphans(context.Background(), fake, "", "", "")
+	scan, err := ScanOrphans(context.Background(), fake, "", "", "")
 	if err != nil {
 		t.Fatalf("scanOrphans: %v", err)
 	}
-	if scan.liveClusters != 1 {
-		t.Errorf("liveClusters = %d, want 1", scan.liveClusters)
+	if scan.LiveClusters != 1 {
+		t.Errorf("liveClusters = %d, want 1", scan.LiveClusters)
 	}
-	if scan.vol.orphan != 1 || scan.nb.orphan != 1 || scan.vpc.orphan != 1 {
-		t.Errorf("orphan counts = vol %d / nb %d / vpc %d, want 1/1/1", scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan)
+	if scan.Vol.Orphan != 1 || scan.NB.Orphan != 1 || scan.VPC.Orphan != 1 {
+		t.Errorf("orphan counts = vol %d / nb %d / vpc %d, want 1/1/1", scan.Vol.Orphan, scan.NB.Orphan, scan.VPC.Orphan)
 	}
-	if scan.orphans() != 3 {
-		t.Errorf("orphans() = %d, want 3", scan.orphans())
+	if scan.Orphans() != 3 {
+		t.Errorf("orphans() = %d, want 3", scan.Orphans())
 	}
 
 	// The Volume orphan lives in us-ord; scoping Volumes to a DIFFERENT region
@@ -406,15 +377,15 @@ func TestScanOrphans(t *testing.T) {
 	// preflight-vs-reap alignment fix: a detached pvc-* Volume in another region
 	// must not be counted against a us-ord apply that `llz reap --region us-ord`
 	// would never clean.
-	volElsewhere, err := scanOrphans(context.Background(), fake, "", "us-east", "")
+	volElsewhere, err := ScanOrphans(context.Background(), fake, "", "us-east", "")
 	if err != nil {
-		t.Fatalf("scanOrphans(volumeRegion): %v", err)
+		t.Fatalf("ScanOrphans(volumeRegion): %v", err)
 	}
-	if volElsewhere.vol.orphan != 0 {
-		t.Errorf("volume orphan scoped to us-east = %d, want 0 (the orphan is in us-ord)", volElsewhere.vol.orphan)
+	if volElsewhere.Vol.Orphan != 0 {
+		t.Errorf("volume orphan scoped to us-east = %d, want 0 (the orphan is in us-ord)", volElsewhere.Vol.Orphan)
 	}
-	if volElsewhere.nb.orphan != 1 || volElsewhere.vpc.orphan != 1 {
-		t.Errorf("NB/VPC should stay account-wide: nb %d / vpc %d, want 1/1", volElsewhere.nb.orphan, volElsewhere.vpc.orphan)
+	if volElsewhere.NB.Orphan != 1 || volElsewhere.VPC.Orphan != 1 {
+		t.Errorf("NB/VPC should stay account-wide: nb %d / vpc %d, want 1/1", volElsewhere.NB.Orphan, volElsewhere.VPC.Orphan)
 	}
 
 	// Region filter excludes the orphans parked in another region.
@@ -427,12 +398,12 @@ func TestScanOrphans(t *testing.T) {
 	for _, m := range fake.vpcs {
 		m["region"] = "us-east"
 	}
-	scoped, err := scanOrphans(context.Background(), fake, "us-ord", "us-ord", "")
+	scoped, err := ScanOrphans(context.Background(), fake, "us-ord", "us-ord", "")
 	if err != nil {
-		t.Fatalf("scanOrphans(region): %v", err)
+		t.Fatalf("ScanOrphans(region): %v", err)
 	}
-	if scoped.orphans() != 0 {
-		t.Errorf("region-scoped orphans() = %d, want 0", scoped.orphans())
+	if scoped.Orphans() != 0 {
+		t.Errorf("region-scoped orphans() = %d, want 0", scoped.Orphans())
 	}
 }
 

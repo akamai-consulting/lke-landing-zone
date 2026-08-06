@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"encoding/json"
@@ -45,7 +45,7 @@ func TestStripOversizedCRDLastApplied(t *testing.T) {
 			"certificates.cert-manager.io":         under, // present but small
 		})
 		var stripped []string
-		got := stripOversizedCRDLastApplied(func(args ...string) (string, bool) {
+		got := StripOversizedCRDLastApplied(func(args ...string) (string, bool) {
 			if len(args) >= 2 && args[0] == "get" && args[1] == "crd" {
 				return body, true
 			}
@@ -68,7 +68,7 @@ func TestStripOversizedCRDLastApplied(t *testing.T) {
 	})
 
 	t.Run("no CRDs / read failure is a no-op", func(t *testing.T) {
-		got := stripOversizedCRDLastApplied(func(args ...string) (string, bool) {
+		got := StripOversizedCRDLastApplied(func(args ...string) (string, bool) {
 			return "", false // e.g. fresh cluster, CRD API not up yet
 		})
 		if got != nil {
@@ -78,7 +78,7 @@ func TestStripOversizedCRDLastApplied(t *testing.T) {
 
 	t.Run("annotate failure is non-fatal and not counted", func(t *testing.T) {
 		body := crdListJSON(t, map[string]int{"httproutes.gateway.networking.k8s.io": over})
-		got := stripOversizedCRDLastApplied(func(args ...string) (string, bool) {
+		got := StripOversizedCRDLastApplied(func(args ...string) (string, bool) {
 			if args[0] == "get" {
 				return body, true
 			}

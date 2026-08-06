@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 44,826 logic lines across 228 non-test files, 122 of them ci_*.go.
+    # 44,171 logic lines across 226 non-test files, 120 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -73,12 +73,13 @@ categories:
     #   44,826 / 228 files  reconcile-actions, four of the reconciler's eight
     #                       lanes. The four that stayed are the finding; see the
     #                       declaration. -403.
+    #   44,171 / 226 files  teardown, the first TRANSITION binding. -655.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 44826
+    budget: 44171
     exact: true
     include:
       - "tools/cmd/llz/*.go"

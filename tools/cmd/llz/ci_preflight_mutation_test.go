@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 )
 
 // The census reports "N of M" per resource type: the orphan count is only
@@ -31,37 +33,37 @@ func TestScanOrphansTotalsFollowTheirOwnRegionScope(t *testing.T) {
 	ctx := context.Background()
 
 	// Account-wide: every resource is counted.
-	all, err := scanOrphans(ctx, fake, "", "", "")
+	all, err := teardown.ScanOrphans(ctx, fake, "", "", "")
 	if err != nil {
 		t.Fatalf("scanOrphans: %v", err)
 	}
-	if all.vol.total != 3 || all.nb.total != 2 || all.vpc.total != 3 {
+	if all.Vol.Total != 3 || all.NB.Total != 2 || all.VPC.Total != 3 {
 		t.Errorf("account-wide totals = vol %d / nb %d / vpc %d, want 3/2/3",
-			all.vol.total, all.nb.total, all.vpc.total)
+			all.Vol.Total, all.NB.Total, all.VPC.Total)
 	}
-	if all.liveClusters != 1 {
-		t.Errorf("liveClusters = %d, want 1", all.liveClusters)
+	if all.LiveClusters != 1 {
+		t.Errorf("liveClusters = %d, want 1", all.LiveClusters)
 	}
 
 	// volumeRegion narrows ONLY the Volume total, and to that region's Volumes.
-	scoped, err := scanOrphans(ctx, fake, "", "us-ord", "")
+	scoped, err := teardown.ScanOrphans(ctx, fake, "", "us-ord", "")
 	if err != nil {
-		t.Fatalf("scanOrphans(volumeRegion): %v", err)
+		t.Fatalf("teardown.ScanOrphans(volumeRegion): %v", err)
 	}
-	if scoped.vol.total != 2 {
-		t.Errorf("us-ord volume total = %d, want 2 (the two us-ord Volumes)", scoped.vol.total)
+	if scoped.Vol.Total != 2 {
+		t.Errorf("us-ord volume total = %d, want 2 (the two us-ord Volumes)", scoped.Vol.Total)
 	}
-	if scoped.nb.total != 2 || scoped.vpc.total != 3 {
+	if scoped.NB.Total != 2 || scoped.VPC.Total != 3 {
 		t.Errorf("volumeRegion must not narrow NB/VPC: nb %d / vpc %d, want 2/3",
-			scoped.nb.total, scoped.vpc.total)
+			scoped.NB.Total, scoped.VPC.Total)
 	}
 
 	// --region narrows NodeBalancers and VPCs.
-	east, err := scanOrphans(ctx, fake, "us-east", "", "")
+	east, err := teardown.ScanOrphans(ctx, fake, "us-east", "", "")
 	if err != nil {
-		t.Fatalf("scanOrphans(region): %v", err)
+		t.Fatalf("teardown.ScanOrphans(region): %v", err)
 	}
-	if east.nb.total != 0 || east.vpc.total != 1 {
-		t.Errorf("us-east totals = nb %d / vpc %d, want 0/1", east.nb.total, east.vpc.total)
+	if east.NB.Total != 0 || east.VPC.Total != 1 {
+		t.Errorf("us-east totals = nb %d / vpc %d, want 0/1", east.NB.Total, east.VPC.Total)
 	}
 }

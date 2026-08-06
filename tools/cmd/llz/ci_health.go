@@ -16,6 +16,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 )
 
 // healthNamespaces are the namespaces this repo touches — iterated for the
@@ -239,7 +241,7 @@ func runConverge(budget, interval, retryDelay int) error {
 		if res.annotationWedge && !crdAnnotationsStripped {
 			crdAnnotationsStripped = true
 			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
-			stripOversizedCRDLastApplied(kubectlBoolViaExec)
+			teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		}
 		switch step {
 		case health.ConvergeDone:

@@ -1,4 +1,4 @@
-package main
+package teardown
 
 // ci_destroy_unwedge.go implements `llz ci destroy-unwedge` — the native port of
 // null_resource.unwedge_namespace_finalizers_on_destroy's local-exec heredoc in
@@ -36,41 +36,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
-	"github.com/spf13/cobra"
 )
 
-func ciDestroyUnwedgeCmd() *cobra.Command {
-	var region string
-	cmd := &cobra.Command{
-		Use:   "destroy-unwedge",
-		Short: "clear Argo/discovery/CNPG finalizer deadlocks before helm uninstalls apl (destroy-time)",
-		Long: "Native port of null_resource.unwedge_namespace_finalizers_on_destroy's\n" +
-			"local-exec heredoc, now a standalone CI destroy step. Runs while the cluster is\n" +
-			"still up and clears the wedges that otherwise make `helm uninstall apl`'s\n" +
-			"--wait time out: scales down Argo CD, strips resources-finalizer.argocd from\n" +
-			"Applications/AppProjects, deletes stale aggregated APIServices (dead backing\n" +
-			"Service → Available=False → discovery failure), and strips CNPG cluster/pooler\n" +
-			"finalizers. All best-effort and non-fatal (always exit 0); a subsequent\n" +
-			"cluster delete reaps everything regardless.\n\n" +
-			"Kubeconfig source, in order: $KUBECONFIG_B64 (base64), then $KUBECONFIG (a\n" +
-			"file), then --region — which resolves the cluster by its <region>.tfvars\n" +
-			"label via the Linode API (LINODE_TOKEN / LINODE_API_TOKEN). When --region\n" +
-			"finds no live cluster (already reaped), this is a clean no-op.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDestroyUnwedge(region) },
-	}
-	cmd.Flags().StringVar(&region, "region", "", "tfvars prefix (e.g. primary); resolve the cluster kubeconfig by label via the Linode API when KUBECONFIG_B64/KUBECONFIG are unset")
-	return cmd
-}
-
-func runCIDestroyUnwedge(region string) error {
-	kubeconfigPath, cleanup, skip, err := resolveUnwedgeKubeconfig(region)
+func RunDestroyUnwedge(d Deps, region string) error {
+	kubeconfigPath, cleanup, skip, err := resolveUnwedgeKubeconfig(d, region)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -82,23 +56,18 @@ func runCIDestroyUnwedge(region string) error {
 		return nil
 	}
 
-	kubectl := func(args ...string) (string, bool) {
-		cmd := exec.Command("kubectl", args...)
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-		return runCombined(cmd)
-	}
-	return destroyUnwedge(kubectl)
+	return destroyUnwedge(d.KubectlFor(kubeconfigPath))
 }
 
 // unwedgeResolveKubeconfigFn resolves a cluster kubeconfig (base64) by its
 // <region>.tfvars label via the Linode API. found=false means no live cluster
 // (already reaped) → the caller skips, best-effort. Seamed for tests.
-var unwedgeResolveKubeconfigFn = func(region string) (b64 string, found bool, err error) {
-	token, err := ciToken()
+var unwedgeResolveKubeconfigFn = func(d Deps, region string) (b64 string, found bool, err error) {
+	token, err := d.Token()
 	if err != nil {
 		return "", false, fmt.Errorf("%w — needed so --region can resolve the cluster kubeconfig by label", err)
 	}
-	vars, _, err := readRegionTFVars("", region)
+	vars, _, err := d.RegionTFVars("", region)
 	if err != nil {
 		return "", false, err
 	}
@@ -123,13 +92,13 @@ var unwedgeResolveKubeconfigFn = func(region string) (b64 string, found bool, er
 // cleanup func (nil when nothing to remove). skip=true means there is nothing to
 // unwedge (no live cluster); the caller exits 0. Sources, in order: $KUBECONFIG_B64,
 // $KUBECONFIG, then --region label resolution via the Linode API.
-func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip bool, err error) {
+func resolveUnwedgeKubeconfig(d Deps, region string) (path string, cleanup func(), skip bool, err error) {
 	if b64 := os.Getenv("KUBECONFIG_B64"); b64 != "" {
 		raw, derr := base64.StdEncoding.DecodeString(b64)
 		if derr != nil {
 			return "", nil, false, fmt.Errorf("KUBECONFIG_B64 is not valid base64: %w", derr)
 		}
-		path, cleanup, werr := writeTempKubeconfig(unwedgeKubeconfigPattern, raw)
+		path, cleanup, werr := d.TempKubeconfig(unwedgeKubeconfigPattern, raw)
 		return path, cleanup, false, werr
 	}
 	if kc := os.Getenv("KUBECONFIG"); kc != "" {
@@ -138,7 +107,7 @@ func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip 
 	if region == "" {
 		return "", nil, false, fmt.Errorf("set KUBECONFIG_B64, KUBECONFIG, or --region to locate the cluster kubeconfig")
 	}
-	b64, found, rerr := unwedgeResolveKubeconfigFn(region)
+	b64, found, rerr := unwedgeResolveKubeconfigFn(d, region)
 	if rerr != nil {
 		return "", nil, false, rerr
 	}
@@ -149,7 +118,7 @@ func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip 
 	if stub {
 		return "", nil, true, nil // no kubeconfig material — skip
 	}
-	path, cleanup, werr := writeTempKubeconfig(unwedgeKubeconfigPattern, raw)
+	path, cleanup, werr := d.TempKubeconfig(unwedgeKubeconfigPattern, raw)
 	return path, cleanup, false, werr
 }
 
@@ -165,7 +134,7 @@ var (
 	cnpgFinalizerKinds = []string{"clusters.postgresql.cnpg.io", "poolers.postgresql.cnpg.io"}
 )
 
-func destroyUnwedge(kubectl kubectlRunner) error {
+func destroyUnwedge(kubectl Kubectl) error {
 	// If the cluster is already gone (orphaned state, re-run after a prior
 	// destroy) there is nothing to unwedge — exit cleanly.
 	if _, ok := kubectl("get", "--raw=/healthz", "--request-timeout=15s"); !ok {
@@ -217,7 +186,7 @@ func destroyUnwedge(kubectl kubectlRunner) error {
 // stripFinalizers lists every <kind> across all namespaces and patches its
 // finalizers to []. Best-effort: a list/patch failure is logged-by-omission and
 // skipped (the cluster delete reaps the resource regardless).
-func stripFinalizers(kubectl kubectlRunner, kind string) {
+func stripFinalizers(kubectl Kubectl, kind string) {
 	out, ok := kubectl("get", kind, "-A",
 		"-o", `jsonpath={range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}`,
 		"--request-timeout=30s")

@@ -55,6 +55,7 @@ COVERAGE_MINS := \
 	internal/preflight=95 \
 	internal/reconcilelanes=78 \
 	internal/shquote=100 \
+	internal/teardown=80 \
 	internal/terraform=95 \
 	internal/volumes=85
 

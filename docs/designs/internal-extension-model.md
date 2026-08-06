@@ -1,14 +1,15 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first five
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first six
 extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
 `posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
-`reconcile-actions` (`tools/internal/reconcilelanes`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+`reconcile-actions` (`tools/internal/reconcilelanes`) and `teardown` (`tools/internal/teardown`)
+declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all five still run because `ci.go` and the reconciler register them, and the declarations are inert.
-Three kinds, three states, six grants, multi-binding extensions, named bindings and the
-`grantStates` table are exercised; `transition` and `own-paths` are not — and [the
+all six still run because `ci.go` and the reconciler register them, and the declarations are inert.
+All four kinds, four states, six grants, multi-binding extensions, named bindings and the
+`grantStates` table are exercised; `own-paths` and `alwaysEnabled: false` are not — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
 rather than incidental. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
@@ -27,6 +28,12 @@ ceiling built to fix banning-by-omission.
 PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
 lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
 what is missing. Recorded, not fixed; it becomes actionable at the second partial extension.
+
+**A third thing the model cannot say, found by the sixth extension:** the difference between
+GRANTED and CONFIRMED. `cloud-mutate` permits a binding to delete cloud resources; nothing expresses
+whether a human authorised *this* deletion (`teardown.Deps.Confirm` — `--yes`). A destroy verb that is
+granted but unconfirmed must dry-run rather than proceed, so the two bits must not be one. Unlike the
+other two this is probably not a missing grant but a missing axis, and it belongs to the action ABI.
 
 **One known gap, found by the second extension:** there is no `write-repo` grant, so a binding that
 writes files in the repository cannot say so. `own-paths` is a copier fence, not a write permit. Two
