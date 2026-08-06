@@ -70,6 +70,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promwire"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
@@ -262,7 +263,7 @@ func failedCreds(vs []credVerdict) []string {
 func probeRotationHealth(prom, namespace string, strict bool) ([]credVerdict, error) {
 	q := fmt.Sprintf(`llz_credential_age_days{namespace=%q}`, namespace)
 	var ages map[string]float64
-	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	err := assertobs.WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		raw, gerr := get("/api/v1/query?query=" + url.QueryEscape(q))
 		if gerr != nil {
 			return gerr
@@ -448,7 +449,7 @@ func probePresenceHealth(prom, namespace string, require bool) ([]credVerdict, e
 	var probeOK float64
 	var probeSeen bool
 	var perr error
-	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	err := assertobs.WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		raw, gerr := get("/api/v1/query?query=" +
 			url.QueryEscape(fmt.Sprintf(`llz_credential_configured{namespace=%q}`, namespace)))
 		if gerr != nil {

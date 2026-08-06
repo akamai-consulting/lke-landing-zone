@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_alert_eval.go implements `llz ci alert-eval` — a live-cluster diagnostic that
 // EVALUATES every deployed PrometheusRule alert expr against the in-cluster
@@ -32,7 +32,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciAlertEvalCmd() *cobra.Command {
+func AlertEvalCmd() *cobra.Command {
 	var match, prom, summary string
 	var strict bool
 	cmd := &cobra.Command{
@@ -93,7 +93,7 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 		return fmt.Errorf("invalid --match regex: %w", err)
 	}
 
-	rulesJSON, err := execOutput("kubectl", "get", "prometheusrules.monitoring.coreos.com", "-A", "-o", "json")
+	rulesJSON, err := caps.Exec("kubectl", "get", "prometheusrules.monitoring.coreos.com", "-A", "-o", "json")
 	if err != nil {
 		return vacuous(strict, "could not list PrometheusRules (%v) — is this pointed at the cluster?", err)
 	}
@@ -105,7 +105,7 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 	// One port-forward session serves the metric-name fetch AND every per-expr
 	// query (20+), instead of a fresh kubectl per query.
 	var out []evalVerdict
-	ferr := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	ferr := WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		// The full metric-name set powers DEAD? detection (an expr whose named
 		// metrics are all absent can never fire). If this fetch fails, `known` is
 		// empty and exprMetricsExist stops claiming DEAD? at all — which silently
@@ -268,7 +268,7 @@ func printAlertEval(out []evalVerdict, summary string, strict bool) error {
 	if summary != "" {
 		block := append([]string{fmt.Sprintf("## %s", summary), "", "```"}, lines...)
 		block = append(block, tally, "```")
-		if err := appendGHAFile("GITHUB_STEP_SUMMARY", block...); err != nil {
+		if err := caps.Summary("GITHUB_STEP_SUMMARY", block...); err != nil {
 			return err
 		}
 	}

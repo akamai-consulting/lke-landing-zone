@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // loki_query.go — shared read access to the in-cluster Loki HTTP API, for the
 // `assert-openbao-audit` gate. Same transport as prom_query.go (one ephemeral
@@ -36,10 +36,10 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
-// withLoki opens a single kubectl port-forward to the Loki gateway named by spec
+// WithLoki opens a single kubectl port-forward to the Loki gateway named by spec
 // ("<namespace>/<service>:<port>"), invokes fn with a getter bound to it, and
 // tears the forward down on return. Package var so tests can seam it.
-var withLoki = func(spec, tenant string, fn func(get func(apiPath string) ([]byte, error)) error) error {
+var WithLoki = func(spec, tenant string, fn func(get func(apiPath string) ([]byte, error)) error) error {
 	return withForwardedAPI(spec, forwardedService{
 		name:      "Loki",
 		readyPath: "/ready",
@@ -47,22 +47,25 @@ var withLoki = func(spec, tenant string, fn func(get func(apiPath string) ([]byt
 	}, fn)
 }
 
-// lokiEntry is one log line and the timestamp Loki stored it under.
-type lokiEntry struct {
+// LokiEntry is one log line and the timestamp Loki stored it under.
+// EXPORTED because the openbao-audit assert lane in package main parses the same
+// Loki response shape. One decoder, so a change to how Loki reports entries
+// cannot be applied in one lane and missed in the other.
+type LokiEntry struct {
 	At   time.Time
 	Line string
 }
 
-// lokiStream is one label-set and its entries from a query_range response.
-type lokiStream struct {
+// LokiStream is one label-set and its entries from a query_range response.
+type LokiStream struct {
 	Labels  map[string]string
-	Entries []lokiEntry
+	Entries []LokiEntry
 }
 
-// lokiQueryRangePath builds the query_range URL for a LogQL selector over
+// LokiQueryRangePath builds the query_range URL for a LogQL selector over
 // [start, end]. Timestamps go as nanosecond epochs — Loki accepts RFC3339 too,
 // but the ns integer has no timezone/precision ambiguity to get wrong. Pure.
-func lokiQueryRangePath(selector string, start, end time.Time, limit int) string {
+func LokiQueryRangePath(selector string, start, end time.Time, limit int) string {
 	v := url.Values{}
 	v.Set("query", selector)
 	v.Set("start", strconv.FormatInt(start.UnixNano(), 10))
@@ -74,7 +77,7 @@ func lokiQueryRangePath(selector string, start, end time.Time, limit int) string
 	return "/loki/api/v1/query_range?" + v.Encode()
 }
 
-// parseLokiStreams decodes a query_range response into streams.
+// ParseLokiStreams decodes a query_range response into streams.
 //
 // A parse failure is an ERROR, not an empty result. That distinction is the
 // whole point: "the pipeline delivered nothing" and "we could not tell" are
@@ -82,7 +85,7 @@ func lokiQueryRangePath(selector string, start, end time.Time, limit int) string
 // vacuously on a response it never understood. Likewise a non-`streams`
 // resultType (a metric query reached here, or Loki changed shape) is an error
 // rather than zero streams.
-func parseLokiStreams(raw []byte) ([]lokiStream, error) {
+func ParseLokiStreams(raw []byte) ([]LokiStream, error) {
 	var resp struct {
 		Status string `json:"status"`
 		Data   struct {
@@ -102,9 +105,9 @@ func parseLokiStreams(raw []byte) ([]lokiStream, error) {
 	if rt := resp.Data.ResultType; rt != "" && rt != "streams" {
 		return nil, fmt.Errorf("query_range: Loki returned resultType %q, expected \"streams\" — the selector is not a log query", rt)
 	}
-	out := make([]lokiStream, 0, len(resp.Data.Result))
+	out := make([]LokiStream, 0, len(resp.Data.Result))
 	for _, r := range resp.Data.Result {
-		s := lokiStream{Labels: r.Stream}
+		s := LokiStream{Labels: r.Stream}
 		for _, v := range r.Values {
 			if len(v) < 2 {
 				continue
@@ -113,7 +116,7 @@ func parseLokiStreams(raw []byte) ([]lokiStream, error) {
 			if err != nil {
 				return nil, fmt.Errorf("decoding Loki entry timestamp %q: %w", v[0], err)
 			}
-			s.Entries = append(s.Entries, lokiEntry{At: time.Unix(0, ns), Line: v[1]})
+			s.Entries = append(s.Entries, LokiEntry{At: time.Unix(0, ns), Line: v[1]})
 		}
 		out = append(out, s)
 	}

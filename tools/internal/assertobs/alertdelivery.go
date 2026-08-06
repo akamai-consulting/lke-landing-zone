@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_assert_alert_delivery.go implements `llz ci assert-alert-delivery` — the
 // gate that a firing alert actually gets somewhere.
@@ -52,7 +52,7 @@ import (
 // defaultAlertmanagerSpec is apl-core's Alertmanager Service.
 const defaultAlertmanagerSpec = "monitoring/alertmanager-operated:9093"
 
-func ciAssertAlertDeliveryCmd() *cobra.Command {
+func AlertDeliveryCmd() *cobra.Command {
 	var prom, am string
 	var settle, interval int
 	c := &cobra.Command{
@@ -171,7 +171,7 @@ func (p alertDeliveryProbe) OK() bool { return p.FailWhy == "" }
 func probeAlertDelivery(prom, am string) (alertDeliveryProbe, error) {
 	var p alertDeliveryProbe
 
-	if err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	if err := WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		raw, err := get("/api/v1/alertmanagers")
 		if err != nil {
 			return err

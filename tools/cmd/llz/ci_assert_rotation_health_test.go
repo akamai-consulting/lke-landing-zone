@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promwire"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
@@ -162,11 +163,11 @@ func TestEvalRotationHealthStrictGatesInfoClasses(t *testing.T) {
 }
 
 func TestRunAssertRotationHealthFailsOnMissingSeries(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
+	orig := assertobs.WithPrometheus
+	t.Cleanup(func() { assertobs.WithPrometheus = orig })
 	// Prometheus answers with an EMPTY vector: every declared credential is
 	// unobserved. The alertable ones must fail.
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	assertobs.WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(string) ([]byte, error) {
 			return []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`), nil
 		})
@@ -180,9 +181,9 @@ func TestRunAssertRotationHealthFailsOnMissingSeries(t *testing.T) {
 // A Prometheus failure must not be reported as "the credentials are unobserved" —
 // the same could-not-ask-is-not-an-answer split the other gauge gates make.
 func TestRunAssertRotationHealthFailsOnUnreachablePrometheus(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := assertobs.WithPrometheus
+	t.Cleanup(func() { assertobs.WithPrometheus = orig })
+	assertobs.WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(string) ([]byte, error) {
 			return []byte(`{"status":"error","error":"query timed out"}`), nil
 		})
@@ -453,9 +454,9 @@ func TestPromFirstSampleDistinguishesEmptyFromError(t *testing.T) {
 // lane actually evaluates. The previous implementation passed every pure test
 // while failing this one.
 func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := assertobs.WithPrometheus
+	t.Cleanup(func() { assertobs.WithPrometheus = orig })
+	assertobs.WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(q string) ([]byte, error) {
 			if strings.Contains(q, "secret_probe_ok") {
 				return []byte(`{"status":"success","data":{"resultType":"vector","result":[

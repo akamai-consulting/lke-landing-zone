@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_assert_grafana_dashboards.go implements `llz ci assert-grafana-dashboards` —
 // the gate that the landing zone's Grafana dashboards are DISCOVERABLE by the
@@ -43,15 +43,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// grafanaSidecarLabels are the two dashboard-sidecar selectors a dashboard must
+// GrafanaSidecarLabels are the two dashboard-sidecar selectors a dashboard must
 // satisfy to render on both stacks. Keep in step with the label block on the
 // dashboard ConfigMaps (platform-apl/components/observability/*-dashboard.yaml).
-var grafanaSidecarLabels = map[string]string{
+var GrafanaSidecarLabels = map[string]string{
 	"grafana_dashboard": "1",                  // self-install: kube-prometheus-stack
 	"release":           "grafana-dashboards", // managed App Platform sidecar
 }
 
-// defaultGrafanaDashboards are the landing-zone dashboard ConfigMaps that must be
+// DefaultGrafanaDashboards are the landing-zone dashboard ConfigMaps that must be
 // present and discoverable, as namespace/name.
 //
 // A KNOWN list, not "every ConfigMap carrying the label" — the label IS the thing
@@ -61,12 +61,12 @@ var grafanaSidecarLabels = map[string]string{
 // TestDefaultGrafanaDashboardsMatchTheManifests pins this list against the
 // ConfigMaps platform-apl actually ships, so a renamed or added dashboard fails
 // at PR time rather than being quietly ungated.
-var defaultGrafanaDashboards = []string{
+var DefaultGrafanaDashboards = []string{
 	"llz-observability/llz-day2-dashboard",
 	"llz-observability/llz-credential-inventory-dashboard",
 }
 
-func ciAssertGrafanaDashboardsCmd() *cobra.Command {
+func GrafanaDashboardsCmd() *cobra.Command {
 	var dashboards string
 	var settle, interval int
 	c := &cobra.Command{
@@ -92,7 +92,7 @@ func ciAssertGrafanaDashboardsCmd() *cobra.Command {
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
-	c.Flags().StringVar(&dashboards, "dashboards", strings.Join(defaultGrafanaDashboards, ","),
+	c.Flags().StringVar(&dashboards, "dashboards", strings.Join(DefaultGrafanaDashboards, ","),
 		"comma-separated dashboard ConfigMaps (namespace/name) that must be present and discoverable")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
@@ -125,9 +125,9 @@ func evalDashboardConfigMap(name string, raw []byte) dashboardVerdict {
 	}
 
 	var missing []string
-	for _, k := range sortedMapKeys(grafanaSidecarLabels) {
-		if cm.Metadata.Labels[k] != grafanaSidecarLabels[k] {
-			missing = append(missing, fmt.Sprintf("%s=%q (found %q)", k, grafanaSidecarLabels[k], cm.Metadata.Labels[k]))
+	for _, k := range sortedMapKeys(GrafanaSidecarLabels) {
+		if cm.Metadata.Labels[k] != GrafanaSidecarLabels[k] {
+			missing = append(missing, fmt.Sprintf("%s=%q (found %q)", k, GrafanaSidecarLabels[k], cm.Metadata.Labels[k]))
 		}
 	}
 	if len(missing) > 0 {
@@ -162,7 +162,7 @@ func evalDashboardConfigMap(name string, raw []byte) dashboardVerdict {
 
 // readDashboardConfigMap fetches one dashboard ConfigMap. Seamed for tests.
 var readDashboardConfigMap = func(namespace, name string) ([]byte, error) {
-	return execOutput("kubectl", "-n", namespace, "get", "configmap", name, "-o", "json")
+	return caps.Exec("kubectl", "-n", namespace, "get", "configmap", name, "-o", "json")
 }
 
 // probeGrafanaDashboards evaluates every expected dashboard.

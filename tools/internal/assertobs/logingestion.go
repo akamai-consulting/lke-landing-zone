@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_assert_log_ingestion.go implements `llz ci assert-log-ingestion` — the gate
 // that every landing-zone namespace's pod logs are actually reaching Loki.
@@ -72,7 +72,7 @@ var defaultLogNamespaces = []string{"llz-reconciler", "llz-openbao"}
 // tenant actually partitions reads. A read with no header answers "no org id".
 const defaultCollectorTenant = "admins"
 
-func ciAssertLogIngestionCmd() *cobra.Command {
+func LogIngestionCmd() *cobra.Command {
 	var loki, tenant, namespaces string
 	var lookback, settle, interval, limit int
 	c := &cobra.Command{
@@ -130,7 +130,7 @@ func logIngestionSelector(ns string) string {
 // namespace look like from the outside — and on a converged cluster neither
 // llz-reconciler (a 30s sample loop that logs every pass) nor llz-openbao is ever
 // genuinely silent for the lookback window.
-func evalNamespaceIngestion(ns string, streams []lokiStream) nsIngestion {
+func evalNamespaceIngestion(ns string, streams []LokiStream) nsIngestion {
 	v := nsIngestion{Namespace: ns}
 	for _, s := range streams {
 		for _, e := range s.Entries {
@@ -154,11 +154,11 @@ func probeLogIngestion(get func(string) ([]byte, error), namespaces []string,
 
 	out := make([]nsIngestion, 0, len(namespaces))
 	for _, ns := range namespaces {
-		raw, err := get(lokiQueryRangePath(logIngestionSelector(ns), now.Add(-lookback), now, limit))
+		raw, err := get(LokiQueryRangePath(logIngestionSelector(ns), now.Add(-lookback), now, limit))
 		if err != nil {
 			return nil, err
 		}
-		streams, perr := parseLokiStreams(raw)
+		streams, perr := ParseLokiStreams(raw)
 		if perr != nil {
 			return nil, perr
 		}
@@ -184,7 +184,7 @@ func probeLogIngestion(get func(string) ([]byte, error), namespaces []string,
 // Best-effort and non-fatal — the verdict is already decided by the time this runs.
 func printTenantDiagnosis(loki, tenant string) {
 	fmt.Printf("\n-- diagnosis: what does tenant %q actually hold? --\n", tenant)
-	err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+	err := WithLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
 		raw, err := get("/loki/api/v1/labels")
 		if err != nil {
 			return err
@@ -247,7 +247,7 @@ func runCIAssertLogIngestion(loki, tenant string, namespaces []string, limit int
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
 		var vs []nsIngestion
-		err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+		err := WithLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
 			var perr error
 			vs, perr = probeLogIngestion(get, namespaces, limit, lookback, time.Now())
 			return perr

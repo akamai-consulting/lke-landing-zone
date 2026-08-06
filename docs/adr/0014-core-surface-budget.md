@@ -113,7 +113,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **29,853** with `assert-network`.
 > and **29,450** with `wave-health`.
 > and **29,230** with `tofu-driver`.
-> Twenty-four extensions, net −17,952 (38.0%) — now BELOW the
+> and **27,156** with `assert-observability`.
+> Twenty-five extensions, net −20,026 (42.4%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

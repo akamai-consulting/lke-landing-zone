@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_loki_prove_writes.go — make "Loki persists logs" a PROVEN property rather than
 // an inferred one.
@@ -65,7 +65,7 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 	if bucket == "" || endpoint == "" {
 		return []lokiWriteMsg{{"SKIP: no chunks bucket/endpoint for this deployment (--region given? spec readable?) — the write path is unmeasured here", false}}
 	}
-	ak, sk, err := objenc.ObjEncConsumerCreds(objencDeps(), objenc.LokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+	ak, sk, err := objenc.ObjEncConsumerCreds(caps.ObjEncDeps(), objenc.LokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 	if err != nil {
 		return []lokiWriteMsg{{"SKIP: could not read " + objenc.LokiObjSecretRef + " (" + err.Error() + ") — the write path is unmeasured here", false}}
 	}
@@ -232,7 +232,7 @@ var lokiFlushIngester = func(p lokiPod) error {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	local, err := readForwardPortTimeout(stdout, forwardEstablishTimeout)
+	local, err := ReadForwardPortTimeout(stdout, ForwardEstablishTimeout)
 	if err != nil {
 		return err
 	}
@@ -262,14 +262,14 @@ var lokiFlushIngester = func(p lokiPod) error {
 // rather than timing out against a port nothing listens on — and a timeout would be
 // reported as "unmeasured", quietly costing the proof this file exists to provide.
 func lokiIngesterHTTPPort(p lokiPod) string {
-	out, err := kubectlOut("-n", p.ns, "get", "pod", p.name, "-o",
+	out, err := caps.KubectlOut("-n", p.ns, "get", "pod", p.name, "-o",
 		`jsonpath={.spec.containers[*].ports[?(@.name=="http-metrics")].containerPort}`)
 	if err == nil {
 		if port := strings.Fields(strings.TrimSpace(out)); len(port) > 0 {
 			return port[0]
 		}
 	}
-	out, err = kubectlOut("-n", p.ns, "get", "pod", p.name, "-o",
+	out, err = caps.KubectlOut("-n", p.ns, "get", "pod", p.name, "-o",
 		`jsonpath={.spec.containers[*].ports[?(@.name=="http")].containerPort}`)
 	if err == nil {
 		if port := strings.Fields(strings.TrimSpace(out)); len(port) > 0 {

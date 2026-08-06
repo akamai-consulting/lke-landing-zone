@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 import (
 	"errors"
@@ -216,20 +216,20 @@ func TestSplitCSVList(t *testing.T) {
 	}
 }
 
-// probeScrapeState + the poll loop are seamed through withPrometheus; verify a
+// probeScrapeState + the poll loop are seamed through WithPrometheus; verify a
 // transport error surfaces (retryable) and a wired cluster resolves the probe.
 func TestProbeScrapeState(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
 
-	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
+	WithPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
 	if _, err := probeScrapeState("ns/svc:9090", []string{"a/b"}, []string{"g"}); err == nil {
 		t.Error("transport error should propagate for retry")
 	}
 
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.HasPrefix(path, "/api/v1/targets") {
 				return []byte(`{"data":{"activeTargets":[{"scrapePool":"serviceMonitor/n/m/0","health":"up"}]}}`), nil
@@ -249,9 +249,9 @@ func TestProbeScrapeState(t *testing.T) {
 // A zero settle budget must still probe once and (here) fail closed on a
 // never-discovered monitor rather than hang.
 func TestRunAssertScrapeFailsClosedFast(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.HasPrefix(path, "/api/v1/targets") {
 				return []byte(`{"data":{"activeTargets":[]}}`), nil // nothing discovered
@@ -266,9 +266,9 @@ func TestRunAssertScrapeFailsClosedFast(t *testing.T) {
 
 // A fully wired cluster passes on the first probe (no retry, exit 0).
 func TestRunAssertScrapePassesWhenWired(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.HasPrefix(path, "/api/v1/targets") {
 				return []byte(`{"data":{"activeTargets":[{"scrapePool":"serviceMonitor/n/m/0","health":"up"}]}}`), nil
@@ -284,9 +284,9 @@ func TestRunAssertScrapePassesWhenWired(t *testing.T) {
 // Exercises both remaining FAIL arms in one probe: a discovered-but-down monitor
 // and a missing rule group. Zero settle so it fails closed on the first probe.
 func TestRunAssertScrapeReportsDownAndMissing(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.HasPrefix(path, "/api/v1/targets") {
 				return []byte(`{"data":{"activeTargets":[{"scrapePool":"serviceMonitor/n/m/0","health":"down","lastError":"x509"}]}}`), nil
@@ -301,9 +301,9 @@ func TestRunAssertScrapeReportsDownAndMissing(t *testing.T) {
 
 // A transport error that never clears within the settle budget exits 1.
 func TestRunAssertScrapeFailsOnUnreachable(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
 	if err := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, nil, 0, time.Second); err == nil {

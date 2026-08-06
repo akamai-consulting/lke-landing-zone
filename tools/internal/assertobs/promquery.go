@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // prom_query.go — shared access to in-cluster HTTP APIs behind a Service, for
 // the `prom-metrics` / `alert-eval` diagnostics and the assert-* gates.
@@ -10,7 +10,7 @@ package main
 // fetch fails with "RBAC: access denied" despite an SSAR saying it's allowed. The
 // pods/portforward subresource IS allowed, so port-forward is the portable path.
 //
-// withPrometheus opens ONE port-forward for the lifetime of a command's queries
+// WithPrometheus opens ONE port-forward for the lifetime of a command's queries
 // (alert-eval runs 20+), rather than a fresh kubectl per query.
 //
 // withForwardedAPI is the same machinery with the far end named rather than
@@ -34,10 +34,10 @@ import (
 
 var forwardPortRe = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
 
-// forwardEstablishTimeout bounds how long we wait for kubectl to announce its
+// ForwardEstablishTimeout bounds how long we wait for kubectl to announce its
 // local port — a hung kubectl (auth prompt, stuck apiserver) must not hang the
 // diagnostic forever.
-const forwardEstablishTimeout = 30 * time.Second
+const ForwardEstablishTimeout = 30 * time.Second
 
 // forwardedService describes the far end of a port-forward: what to call it in
 // errors, which path to warm the tunnel against, and any headers every request
@@ -48,14 +48,17 @@ type forwardedService struct {
 	headers   map[string]string // sent on every request (Loki's X-Scope-OrgID)
 }
 
-// withPrometheus opens a single kubectl port-forward to the Prometheus named by
+// WithPrometheus opens a single kubectl port-forward to the Prometheus named by
 // promSpec ("<namespace>/<service>:<port>"), invokes fn with a getter bound to
 // it, and tears the forward down on return. Package var so tests can seam it.
-var withPrometheus = func(promSpec string, fn func(get func(apiPath string) ([]byte, error)) error) error {
+// EXPORTED as a SEAM, not just a function: the rotation-health and reconciler
+// assert lanes still in package main open Prometheus through it, and their tests
+// stub it. One place decides how this repo reaches Prometheus.
+var WithPrometheus = func(promSpec string, fn func(get func(apiPath string) ([]byte, error)) error) error {
 	return withForwardedAPI(promSpec, forwardedService{name: "Prometheus", readyPath: "/-/ready"}, fn)
 }
 
-// withForwardedAPI is withPrometheus's body, generalized over the service on the
+// withForwardedAPI is WithPrometheus's body, generalized over the service on the
 // other end. See forwardedService.
 func withForwardedAPI(spec string, target forwardedService, fn func(get func(apiPath string) ([]byte, error)) error) error {
 	if target.name == "" {
@@ -78,10 +81,10 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 		return fmt.Errorf("kubectl port-forward: %w", err)
 	}
 	// Kill + reap on return; killing closes stdout, which unblocks the reader
-	// goroutine in readForwardPortTimeout (no leak).
+	// goroutine in ReadForwardPortTimeout (no leak).
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	localPort, err := readForwardPortTimeout(stdout, forwardEstablishTimeout)
+	localPort, err := ReadForwardPortTimeout(stdout, ForwardEstablishTimeout)
 	if err != nil {
 		return err
 	}
@@ -171,10 +174,10 @@ func parsePromSpec(spec string) (ns, svc, port string, err error) {
 	return ns, svc, port, nil
 }
 
-// readForwardPortTimeout returns the local port kubectl announced, or an error if
+// ReadForwardPortTimeout returns the local port kubectl announced, or an error if
 // it doesn't announce within d. The reader goroutine unblocks when the caller
 // kills the process (closing stdout).
-func readForwardPortTimeout(r io.Reader, d time.Duration) (string, error) {
+func ReadForwardPortTimeout(r io.Reader, d time.Duration) (string, error) {
 	type result struct {
 		port string
 		err  error

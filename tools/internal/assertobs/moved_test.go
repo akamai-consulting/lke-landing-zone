@@ -1,6 +1,14 @@
-package main
+package assertobs
+
+// Tests moved here by the classify-then-split-by-line-range pass: each references
+// a symbol this package defines. Fifteen stranded tests found this way across the
+// branch, and the two naming patterns still account for every one.
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -8,11 +16,147 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
-// #397 in one test: Ready pods and an S3-shaped config, and not one byte written.
-// Before this check, BOTH of assert-loki's conditions passed in exactly that state —
-// 238 flush failures on a single ingester, a chunks bucket whose newest object
-// predated the cluster by ten days, and a color.Green lane throughout. Checks 1 and 2 are
-// properties of the cluster's INTENT; this is the only one that asks about outcome.
+func TestHarborCARetrofitRollsPodsThatPredateThePolicy(t *testing.T) {
+	h := &retrofitHarness{policy: true, podsCA: []bool{false, true}}
+	h.install(t)
+
+	retrofitHarborObjProxyCA()
+
+	if !h.did("rollout restart deploy/harbor-registry") {
+		t.Errorf("pods were missing the CA and the retrofit did not roll them; calls: %v", h.calls)
+	}
+}
+
+// Restarting harbor-registry is a brief interruption to every image push and pull.
+// Paying it on every bootstrap — when the pods were already admitted correctly —
+// would make the gate itself the outage it is meant to prevent.
+func TestHarborCARetrofitDoesNothingWhenPodsAlreadyTrustTheCA(t *testing.T) {
+	h := &retrofitHarness{policy: true, podsCA: []bool{true}}
+	h.install(t)
+
+	retrofitHarborObjProxyCA()
+
+	if h.did("rollout restart") {
+		t.Errorf("pods already carried the CA but the retrofit rolled them anyway — that is a needless "+
+			"registry outage on every run; calls: %v", h.calls)
+	}
+}
+
+// objProxy is default-disabled. On a cluster without it there is no policy, no CA,
+// and no reason for this to touch Harbor at all — least of all to read every pod in
+// the namespace and conclude they are all "missing" a mount nothing ever adds.
+func TestHarborCARetrofitIsInertWithoutTheComponent(t *testing.T) {
+	h := &retrofitHarness{policy: false, podsCA: []bool{false}}
+	h.install(t)
+
+	retrofitHarborObjProxyCA()
+
+	if h.did("rollout restart") || h.did("get pods") {
+		t.Errorf("the objProxy ClusterPolicy is absent, so the component is not enabled here, yet the "+
+			"retrofit still went looking at Harbor; calls: %v", h.calls)
+	}
+}
+
+// The restart is only a fix if the replacement pods actually came back mutated. If
+// Kyverno was down they did not, and reporting success there is the difference
+// between a warning an operator can act on and a silent Harbor outage.
+func harborPodsJSON(t *testing.T, withCA bool) string {
+	t.Helper()
+	container := func(name string) map[string]any {
+		c := map[string]any{"name": name}
+		if withCA {
+			c["env"] = []map[string]any{{"name": objenc.SsecCertDirEnv, "value": "/etc/ssl/certs:" + objenc.ObjProxyCAMount}}
+			c["volumeMounts"] = []map[string]any{{"name": objenc.ObjProxyCAVolume, "mountPath": objenc.ObjProxyCAMount}}
+		}
+		return c
+	}
+	pod := map[string]any{
+		"metadata": map[string]any{"name": objenc.HarborRegistryLabel + "-7d9f-abcde"},
+		"spec": map[string]any{
+			"containers": []map[string]any{container("registry"), container("registryctl")},
+		},
+	}
+	if withCA {
+		pod["spec"].(map[string]any)["volumes"] = []map[string]any{{"name": objenc.ObjProxyCAVolume}}
+	}
+	raw, err := json.Marshal(map[string]any{"items": []any{pod}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// retrofitHarness swaps in the read/write seams and records the kubectl verbs the
+// retrofit issues.
+type retrofitHarness struct {
+	calls    []string
+	podsCA   []bool // successive answers to "do the running pods carry the CA?"
+	policy   bool
+	rollFail bool
+}
+
+func (h *retrofitHarness) install(t *testing.T) {
+	t.Helper()
+	origRead, origWrite, origRolled, origBudget := caps.ObjEncDeps, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget
+	t.Cleanup(func() {
+		caps.ObjEncDeps, harborCARetrofitKubectl, harborCARetrofitRolledOut, harborWaitBudget = origRead, origWrite, origRolled, origBudget
+	})
+	harborWaitBudget = 50 * time.Millisecond
+
+	reads := 0
+	readPods := func(args ...string) (string, error) {
+		h.calls = append(h.calls, strings.Join(args, " "))
+		i := reads
+		reads++
+		if i >= len(h.podsCA) {
+			i = len(h.podsCA) - 1
+		}
+		return harborPodsJSON(t, h.podsCA[i]), nil
+	}
+	// Swap the whole capability set rather than one package-level var: the pod
+	// read the retrofit drives is objenc's, and objenc takes it as a Deps field.
+	base := origRead()
+	base.KubectlOut = readPods
+	caps.ObjEncDeps = func() objenc.Deps { return base }
+
+	harborCARetrofitKubectl = func(args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		h.calls = append(h.calls, joined)
+		if strings.Contains(joined, "clusterpolicy") && !h.policy {
+			return "", errRetrofitNotFound
+		}
+		if strings.Contains(joined, "rollout restart") && h.rollFail {
+			return "", errRetrofitNotFound
+		}
+		return "", nil
+	}
+	harborCARetrofitRolledOut = func(string, string) bool { return !h.rollFail }
+}
+
+func (h *retrofitHarness) did(substr string) bool {
+	for _, c := range h.calls {
+		if strings.Contains(c, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// The retrofit exists for exactly one situation: harbor-registry pods that apl-core
+// started BEFORE the Kyverno policy existed. Admission-time mutation cannot reach a
+// running pod, so nothing else in the component fixes them — and once the CoreDNS
+// rewrite is live they cannot complete a single S3 call. They do not crash, so
+// nothing restarts them and nothing reports it.
+func TestHarborCARetrofitReportsWhenTheRestartDidNotTake(t *testing.T) {
+	h := &retrofitHarness{policy: true, podsCA: []bool{false, false}}
+	h.install(t)
+
+	out := captureStderr(t, retrofitHarborObjProxyCA)
+
+	if !strings.Contains(out, "::warning::") {
+		t.Errorf("pods still lacked the CA after the roll and nothing was reported; stderr: %q", out)
+	}
+}
 func TestLokiFlushFailuresCatchesTheWriteOutage(t *testing.T) {
 	orig, prev := lokiLogs, lokiPodsFn
 	t.Cleanup(func() { lokiLogs, lokiPodsFn = orig, prev })
@@ -174,6 +318,69 @@ func proveVerdict(t *testing.T, allowFlush bool) (fatal bool, text string) {
 // nothing observational can distinguish "healthy but hasn't flushed" from "cannot
 // write". Asking Loki to flush and watching a chunk land collapses that into a
 // positive result — and this is the case both previous revisions passed vacuously.
+func TestLokiWriteOutageIsReportedButDoesNotFailTheLaneWhileDeferred(t *testing.T) {
+	if lokiWriteChecksGating {
+		t.Skip("gating is on — #397 presumably landed; this test's premise is gone")
+	}
+	orig, prev := lokiLogs, lokiPodsFn
+	t.Cleanup(func() { lokiLogs, lokiPodsFn = orig, prev })
+	lokiLogs = func(string, string, time.Duration) (string, error) {
+		return `level=error msg="failed to flush" err="StatusCode: 403 AccessDenied"` + "\n", nil
+	}
+	lokiPodsFn = func(string) []lokiPod { return []lokiPod{{ns: "monitoring", name: "loki-ingester-0"}} }
+
+	// Pods-Ready and S3-config are stubbed out of the picture by lokiPodsFn returning
+	// a Ready-less pod, so assert on the write half specifically.
+	var sawFinding, sawReason bool
+	for _, m := range lokiWriteFindings("loki", "e2e", false) {
+		if strings.Contains(m.text, "failing to flush") {
+			sawFinding = true
+		}
+		if strings.Contains(m.text, "REPORTED, NOT GATING") || strings.Contains(m.text, lokiWriteChecksOpenIssue) {
+			sawReason = true
+		}
+		_ = sawReason
+	}
+	if !sawFinding {
+		t.Error("the outage must still be reported in full")
+	}
+}
+
+// Flipping the flag must actually restore gating — otherwise the deferral is
+// permanent by accident and the comment on lokiWriteChecksGating is a lie.
+func TestFlippingLokiWriteChecksGatingRestoresTheGate(t *testing.T) {
+	orig := lokiWriteChecksGating
+	t.Cleanup(func() { lokiWriteChecksGating = orig })
+	outage := []lokiWriteMsg{{"FAIL: Loki is failing to flush chunks to object storage", true}}
+
+	lokiWriteChecksGating = false
+	deferredFailed, deferredLines := applyLokiWriteVerdict(outage)
+	lokiWriteChecksGating = true
+	gatingFailed, _ := applyLokiWriteVerdict(outage)
+
+	if !gatingFailed {
+		t.Error("with gating ON a flush outage must fail the lane")
+	}
+	if deferredFailed {
+		t.Error("with gating OFF the same outage must be reported without failing the lane")
+	}
+	var explained bool
+	for _, l := range deferredLines {
+		if strings.Contains(l, lokiWriteChecksOpenIssue) {
+			explained = true
+		}
+	}
+	if !explained {
+		t.Errorf("a real failure that fails nothing must name why (%s): %v", lokiWriteChecksOpenIssue, deferredLines)
+	}
+}
+
+// THE PARTIAL-FAILURE HOLE. A fleet where two ingesters write and a third cannot is
+// a cluster silently dropping a share of its logs. The first version returned PROVEN
+// the moment ANY object appeared, so the broken replica's errors were never read —
+// this gate was producing the partial failure it exists to surface. lokiFlushIngester
+// flushes every ingester individually for exactly this reason, and the verdict has to
+// honour that.
 func TestLokiProveWritesForcesAFlushAndProvesTheChunkLanded(t *testing.T) {
 	now := time.Date(2026, 8, 3, 19, 50, 0, 0, time.UTC)
 	h := &proveHarness{
@@ -330,69 +537,6 @@ func TestLokiWriteVerdictStaysFatalEvenWhileDeferred(t *testing.T) {
 
 // While deferred, the lane must PASS and must say why — an unexplained real failure
 // in the log is how a deferral turns into folklore.
-func TestLokiWriteOutageIsReportedButDoesNotFailTheLaneWhileDeferred(t *testing.T) {
-	if lokiWriteChecksGating {
-		t.Skip("gating is on — #397 presumably landed; this test's premise is gone")
-	}
-	orig, prev := lokiLogs, lokiPodsFn
-	t.Cleanup(func() { lokiLogs, lokiPodsFn = orig, prev })
-	lokiLogs = func(string, string, time.Duration) (string, error) {
-		return `level=error msg="failed to flush" err="StatusCode: 403 AccessDenied"` + "\n", nil
-	}
-	lokiPodsFn = func(string) []lokiPod { return []lokiPod{{ns: "monitoring", name: "loki-ingester-0"}} }
-
-	// Pods-Ready and S3-config are stubbed out of the picture by lokiPodsFn returning
-	// a Ready-less pod, so assert on the write half specifically.
-	var sawFinding, sawReason bool
-	for _, m := range lokiWriteFindings("loki", "e2e", false) {
-		if strings.Contains(m.text, "failing to flush") {
-			sawFinding = true
-		}
-		if strings.Contains(m.text, "REPORTED, NOT GATING") || strings.Contains(m.text, lokiWriteChecksOpenIssue) {
-			sawReason = true
-		}
-		_ = sawReason
-	}
-	if !sawFinding {
-		t.Error("the outage must still be reported in full")
-	}
-}
-
-// Flipping the flag must actually restore gating — otherwise the deferral is
-// permanent by accident and the comment on lokiWriteChecksGating is a lie.
-func TestFlippingLokiWriteChecksGatingRestoresTheGate(t *testing.T) {
-	orig := lokiWriteChecksGating
-	t.Cleanup(func() { lokiWriteChecksGating = orig })
-	outage := []lokiWriteMsg{{"FAIL: Loki is failing to flush chunks to object storage", true}}
-
-	lokiWriteChecksGating = false
-	deferredFailed, deferredLines := applyLokiWriteVerdict(outage)
-	lokiWriteChecksGating = true
-	gatingFailed, _ := applyLokiWriteVerdict(outage)
-
-	if !gatingFailed {
-		t.Error("with gating ON a flush outage must fail the lane")
-	}
-	if deferredFailed {
-		t.Error("with gating OFF the same outage must be reported without failing the lane")
-	}
-	var explained bool
-	for _, l := range deferredLines {
-		if strings.Contains(l, lokiWriteChecksOpenIssue) {
-			explained = true
-		}
-	}
-	if !explained {
-		t.Errorf("a real failure that fails nothing must name why (%s): %v", lokiWriteChecksOpenIssue, deferredLines)
-	}
-}
-
-// THE PARTIAL-FAILURE HOLE. A fleet where two ingesters write and a third cannot is
-// a cluster silently dropping a share of its logs. The first version returned PROVEN
-// the moment ANY object appeared, so the broken replica's errors were never read —
-// this gate was producing the partial failure it exists to surface. lokiFlushIngester
-// flushes every ingester individually for exactly this reason, and the verdict has to
-// honour that.
 func TestLokiProveWritesFailsWhenSomeIngestersCannotWrite(t *testing.T) {
 	now := time.Date(2026, 8, 3, 21, 43, 0, 0, time.UTC)
 	h := &proveHarness{
@@ -430,3 +574,55 @@ func TestLokiProveWritesPassOnlyWhenNoIngesterComplained(t *testing.T) {
 		t.Errorf("PROVEN must say the whole fleet was quiet, not just that something landed:\n%s", text)
 	}
 }
+func TestReconcilerAlertSemantics(t *testing.T) {
+	promtool, err := exec.LookPath("promtool")
+	if err != nil {
+		// CI always has promtool — check-prom-rules is a hard gate and shells out
+		// to it — so this skip only ever fires on a dev box without it.
+		t.Skip("promtool not on PATH; the check-prom-rules gate covers CI")
+	}
+
+	crd, err := os.ReadFile(reconcilerRuleCRD)
+	if err != nil {
+		t.Fatalf("read PrometheusRule: %v", err)
+	}
+	// Run against the SHIPPED rules, extracted the same way the gate does — a
+	// hand-copied duplicate would drift and prove nothing about production.
+	bare, err := extractBareGroups(crd)
+	if err != nil {
+		t.Fatalf("extract spec.groups: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rules.yml"), bare, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases, err := os.ReadFile("testdata/promrules/reconciler_alerts_test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testFile := filepath.Join(dir, "alerts_test.yml")
+	if err := os.WriteFile(testFile, cases, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(promtool, "test", "rules", testFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("promtool test rules failed: %v\n%s", err, out)
+	}
+	t.Logf("promtool:\n%s", out)
+}
+
+// Every credential alert must be NAMED so the job that reads credential alerts
+// actually evaluates it.
+//
+// The daily credential-single-pane job runs
+// `llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)'`, so the alert
+// name is not cosmetic — it is the filter. `LLZRootTokenParked` (the original
+// spelling) is about the highest-privilege credential in the platform and
+// matched NOTHING: the rule was live and would have fired through Alertmanager,
+// but the job whose entire purpose is reading credential alerts skipped it.
+//
+// Asserted against the workflow's own regex, read from the file, so the two
+// cannot drift apart — they are edited by different changes in different repos'
+// worth of context.

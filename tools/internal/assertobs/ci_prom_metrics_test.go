@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 import (
 	"errors"
@@ -25,9 +25,9 @@ func TestFilterPromMetricNamesBadJSON(t *testing.T) {
 // runCIPromMetrics must not fail when Prometheus is unreachable — it's a best-effort
 // keep_cluster diagnostic; a wrong --prom should report and exit 0, not abort.
 func TestPromMetricsUnreachableIsNonFatal(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("no cluster")
 	}
 	if err := runCIPromMetrics(".", "monitoring/bogus:9090"); err != nil {
@@ -37,9 +37,9 @@ func TestPromMetricsUnreachableIsNonFatal(t *testing.T) {
 
 // The happy path reads names from the port-forward session, filters, sorts.
 func TestPromMetricsHappyPath(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if path != "/api/v1/label/__name__/values" {
 				t.Errorf("unexpected path %q", path)

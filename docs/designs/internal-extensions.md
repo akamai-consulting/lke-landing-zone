@@ -175,7 +175,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `assert-observability` | 1,596 | 10 | ✔ | scrape 228, `ci_readiness` 225, alert-eval 213, log-ingestion 190, alert-delivery 193, grafana 164, `prom_query` 140, prom-rules 104, prom-metrics 70, `loki_query` 69 |
+| `assert-observability` | 1,596 | 10 | ✔ | **✅ Extracted — 12 files, ~2,700 lines.** See [What `assert-observability` found](#what-assert-observability-found--a-mutation-inside-readiness). scrape 228, `ci_readiness` 225, alert-eval 213, log-ingestion 190, alert-delivery 193, grafana 164, `prom_query` 140, prom-rules 104, prom-metrics 70, `loki_query` 69 |
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | **✅ Extracted.** network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77. See [What `assert-network` corrected](#what-assert-network-corrected--a-name-that-read-like-a-capability). |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime`. **✅ Extracted** — 1,044 lines, not 725. See [What `assert-reconciler` decided](#what-assert-reconciler-decided--the-pairing-question).|
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty-four, extracted
+## The first twenty-five, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -283,9 +283,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `env-topology` extracted | 30,687 | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
 | `assert-network` extracted | 29,853 | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
 | `wave-health` extracted | 29,450 | 174 | −403 — closure **3**, and the second state-level catalog correction |
-| `tofu-driver` extracted | **29,230** | 172 | −220 — three verbs the catalog gave one row and one grant |
+| `tofu-driver` extracted | 29,230 | 172 | −220 — three verbs the catalog gave one row and one grant |
+| `assert-observability` extracted | **27,156** | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
 
-**Net −17,952 (38.0%) across twenty-four extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −20,026 (42.4%) across twenty-five extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1300,7 +1301,7 @@ PeerAuthentication. An error-gated, stdout-only read discards exactly that — t
 
 **One coupling test moved to package `main`** rather than being split: the wave-health VAP's CEL and
 the Go guard's allowlist must not drift, and `waveHealthAllowedKinds` is still in
-`ci_wave_health_guard.go`. `main` is the side that can see both halves. When `wave-health` is
+`health.go`. `main` is the side that can see both halves. When `wave-health` is
 extracted the test moves with it and the assertion becomes cross-package.
 
 ### What `wave-health` closed — a coupling that now spans packages
@@ -1361,6 +1362,43 @@ about the same moment**, which is what states are for.
 `OutputRunFn` was exported rather than duplicated: the `db-report` and `rotate-dbadmin` verbs read
 Terraform outputs through it and their tests stub it, so exporting the var keeps one place where "how
 this repo asks Tofu for an output" is decided.
+
+### What `assert-observability` found — a mutation inside "readiness"
+
+Twenty-fifth, the **largest** extraction: twelve files, ~2,700 lines, eleven verbs, **−2,074**.
+
+```
+assert-observability  assertion:verified   "telemetry"          [cluster-read]
+                      assertion:verified   "prom-rules"         [read-repo]
+                      transition:converged "harbor-ca-retrofit" [cluster-read, cluster-write]
+```
+
+**The measurement had a surprise in it.** Adding `ci_readiness.go` to the file set **lowered** the
+closure from 20 to 14. The Loki readiness helpers looked like a separate concern and were the other
+half of this one — pulling them in removed more edges than it added. Every previous file-list
+correction went the other way (a file that did not belong, inflating the number); this is the first
+where the catalog's list was too *small*.
+
+**And buried in that file is a cluster write.** The Harbor CA retrofit runs
+`kubectl rollout restart deploy/...` — pods predating the obj-proxy CA ClusterPolicy do not carry the
+mutation, so something has to roll them. **That is a mutation inside a file called "readiness",
+reached from lanes whose names all begin `assert-`.** An operator running `llz ci wait-harbor` would
+not expect a Deployment restart, and the twelve files around it genuinely are read-only.
+
+Third time an extraction has found a mutation hiding inside an observation — `converge` patches Argo
+Applications, `assert-storage` mutates Volumes — and **the least visible of the three**. It is now a
+`transition` binding, at `converged` rather than `verified` because a transition cannot attach to an
+observation state (as `assert-network` discovered when it tried).
+
+**One thing the model still cannot say.** The Loki flush probe POSTs to an ingester's `/flush`
+endpoint. That mutates Loki's internal state — but it is not the cluster, not the cloud and not a
+credential, so no grant fits. Recorded in the declaration rather than forced into the nearest word;
+this is the kind of gap that needs a second instance before it means anything.
+
+**Fifteen more stranded tests**, from `ci_assert_tier2_test.go`, `ci_batch2_test.go`,
+`ci_harbor_ca_retrofit_test.go`, `ci_loki_flush_check_test.go` and `ci_prom_rule_semantics_test.go`.
+The classify-then-split-by-line-range pass is now mechanical: parse `^func Name(` boundaries, check
+each body for a symbol the target package defines, move by line range. It has not mis-split since.
 
 ## The cost of the interesting half
 

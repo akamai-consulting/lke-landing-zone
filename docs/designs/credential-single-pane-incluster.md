@@ -104,7 +104,7 @@ read-only path for this job.
 
 ## `alert-eval` (the CI gate) does not come along
 
-`alert-eval` and its `prom_query.go` helper are built on `kubectl get prometheusrules`
+`alert-eval` and its `promquery.go` helper are built on `kubectl get prometheusrules`
 plus a `kubectl port-forward` to Prometheus (the LKE-E apiserver `services/proxy`
 subresource is webhook-denied, so port-forward is the only out-of-cluster path). Neither
 `kubectl` exists on the distroless image; porting it would be a client-go + direct-HTTP

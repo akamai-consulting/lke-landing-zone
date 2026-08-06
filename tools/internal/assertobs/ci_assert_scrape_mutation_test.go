@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // Gap-closing tests for ci_assert_scrape.go surfaced by mutation testing. This
 // gate exists because converge/health/assert-loki all stay color.Green while metrics
@@ -17,9 +17,9 @@ import (
 // stubPrometheus points the shared port-forward seam at canned /api/v1 payloads.
 func stubPrometheus(t *testing.T, targets, rules string) {
 	t.Helper()
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(path string) ([]byte, error) {
 			if strings.HasPrefix(path, "/api/v1/targets") {
 				return []byte(targets), nil
@@ -67,10 +67,10 @@ func TestRunAssertScrapeAcceptsOneSidedExpectations(t *testing.T) {
 // ...but with NEITHER list there is nothing to assert, and passing would be
 // vacuous — the gate must refuse before it ever reaches the cluster.
 func TestRunAssertScrapeRefusesEmptyExpectations(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
 	reached := false
-	withPrometheus = func(string, func(func(string) ([]byte, error)) error) error {
+	WithPrometheus = func(string, func(func(string) ([]byte, error)) error) error {
 		reached = true
 		return nil
 	}

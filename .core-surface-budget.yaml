@@ -134,12 +134,15 @@ categories:
     #                       2nd state-level correction. Closure 3, all noise. -403.
     #   29,230 / 172 files  tofu-driver — three verbs the catalog gave ONE row and
     #                       one grant; two of the three mutate nothing. -220.
+    #   27,156 / 161 files  assert-observability, the LARGEST assert row and the
+    #                       second-biggest single move: -2,074. Adding ci_readiness
+    #                       to the file set LOWERED closure 20 -> 14.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 29230
+    budget: 27156
     exact: true
     include:
       - "tools/cmd/llz/*.go"

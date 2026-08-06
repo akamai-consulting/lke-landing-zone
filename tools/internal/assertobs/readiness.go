@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_readiness.go implements `llz ci assert-loki` and `llz ci wait-harbor` — the
 // native ports of assert-loki-bootstrapped.sh and wait-for-harbor.sh. The Loki
@@ -24,7 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
-func ciAssertLokiCmd() *cobra.Command {
+func AssertLokiCmd() *cobra.Command {
 	var nameMatch, region string
 	var settle, interval int
 	var noFlushProbe bool
@@ -63,7 +63,7 @@ func ciAssertLokiCmd() *cobra.Command {
 	return c
 }
 
-func ciWaitHarborCmd() *cobra.Command {
+func WaitHarborCmd() *cobra.Command {
 	var harborURL string
 	var registryOnly bool
 	c := &cobra.Command{
@@ -344,7 +344,7 @@ func lokiOldestIngesterStart(nameMatch string) (time.Time, error) {
 // Seams for the outcome half.
 var (
 	lokiPodStart = func(ns, pod string) (time.Time, error) {
-		out, err := kubectlOut("-n", ns, "get", "pod", pod, "-o", "jsonpath={.status.startTime}")
+		out, err := caps.KubectlOut("-n", ns, "get", "pod", pod, "-o", "jsonpath={.status.startTime}")
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -417,7 +417,7 @@ func lokiFlushFailures(nameMatch string) []string {
 // was missing — and exactly why it needs to be exercisable without a cluster.
 var (
 	lokiLogs = func(ns, pod string, since time.Duration) (string, error) {
-		return kubectlOut("-n", ns, "logs", pod, "--since="+since.String(), "--tail=200")
+		return caps.KubectlOut("-n", ns, "logs", pod, "--since="+since.String(), "--tail=200")
 	}
 	lokiPodsFn = lokiPods
 )
@@ -490,7 +490,7 @@ func runCIWaitHarbor(_ string, _ bool) error {
 	return nil
 }
 
-func ciHarborTrustObjProxyCACmd() *cobra.Command {
+func HarborTrustObjProxyCACmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "harbor-trust-obj-proxy-ca",
 		Short: "roll harbor-registry if its pods predate the obj-proxy CA policy (no-op when objProxy is off)",
@@ -535,7 +535,7 @@ func ciHarborTrustObjProxyCACmd() *cobra.Command {
 // convergence gate and `llz ci assert-obj-encryption`'s [pod] check are the hard
 // checks; this is the repair that stops them from having to fire.
 //
-// ORDERING IS LOAD-BEARING: see ciHarborTrustObjProxyCACmd. This reads the
+// ORDERING IS LOAD-BEARING: see HarborTrustObjProxyCACmd. This reads the
 // ClusterPolicy to decide whether the component is enabled, so it is only correct
 // once that policy has synced.
 func retrofitHarborObjProxyCA() {
@@ -544,7 +544,7 @@ func retrofitHarborObjProxyCA() {
 	if _, err := harborCARetrofitKubectl("get", "clusterpolicy", objProxyCAPolicy); err != nil {
 		return
 	}
-	findings := objenc.CheckRegistryPodsCarryCA(objencDeps())
+	findings := objenc.CheckRegistryPodsCarryCA(caps.ObjEncDeps())
 	if len(findings) == 0 {
 		fmt.Printf("harbor-registry pods already trust the obj-proxy CA (clusterpolicy/%s).\n", objProxyCAPolicy)
 		return
@@ -568,7 +568,7 @@ func retrofitHarborObjProxyCA() {
 	// Re-read rather than assume: the restart is only a fix if the new pods actually
 	// came back mutated. If Kyverno was down, they did not, and saying so here is the
 	// difference between a warning and a silent Harbor outage.
-	if findings := objenc.CheckRegistryPodsCarryCA(objencDeps()); len(findings) > 0 {
+	if findings := objenc.CheckRegistryPodsCarryCA(caps.ObjEncDeps()); len(findings) > 0 {
 		for _, f := range findings {
 			fmt.Fprintf(os.Stderr, "::warning::obj-proxy CA retrofit did not take: %s\n", f.Problem)
 		}
@@ -587,7 +587,12 @@ const objProxyCAPolicy = "harbor-obj-proxy-ca"
 // same reason, and for one more: deploymentRolledOut reaches kubectl directly, so
 // without it a test would poll the real harborWaitBudget against no cluster.
 var (
-	harborCARetrofitKubectl   = kubectlOut
+	// DELEGATES rather than captures. `= caps.KubectlOut` would snapshot the
+	// DEFAULT at package-init time, before Install runs — so every retrofit call
+	// would reach the zero-value seam no matter what main wired. A package-level
+	// var initialised from an installed capability is a capture bug waiting to
+	// happen; the one-line closure is what makes it read through.
+	harborCARetrofitKubectl   = func(args ...string) (string, error) { return caps.KubectlOut(args...) }
 	harborCARetrofitRolledOut = deploymentRolledOut
 )
 
@@ -602,7 +607,7 @@ var harborWaitBudget = 600 * time.Second
 // a noisy "error: timed out" on its deadline — so the registry gate can poll a real
 // budget without littering the log with per-attempt errors.
 func deploymentRolledOut(namespace, name string) bool {
-	out, err := kubectlOut("-n", namespace, "get", "deployment", name,
+	out, err := caps.KubectlOut("-n", namespace, "get", "deployment", name,
 		"-o", "jsonpath={.status.availableReplicas}/{.spec.replicas}")
 	if err != nil {
 		return false

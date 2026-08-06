@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_prom_metrics.go implements `llz ci prom-metrics` — a cluster diagnostic that
 // lists the metric NAMES the in-cluster Prometheus is scraping, filtered by a
@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciPromMetricsCmd() *cobra.Command {
+func PromMetricsCmd() *cobra.Command {
 	var match, prom string
 	cmd := &cobra.Command{
 		Use:   "prom-metrics",
@@ -45,7 +45,7 @@ func runCIPromMetrics(match, prom string) error {
 		return fmt.Errorf("invalid --match regex: %w", err)
 	}
 	var names []string
-	err = withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	err = WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		out, gerr := get("/api/v1/label/__name__/values")
 		if gerr != nil {
 			return gerr

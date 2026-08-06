@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_check_prom_rules.go implements `llz ci check-prom-rules` — the native port
 // of the former template-scripts/linting-and-validation/
@@ -215,7 +215,7 @@ func runCICheckPromRules(rulesDirs []string, files []string, w io.Writer) error 
 	return nil
 }
 
-func ciCheckPromRulesCmd() *cobra.Command {
+func CheckPromRulesCmd() *cobra.Command {
 	var rulesDirs []string
 	c := &cobra.Command{
 		Use:   "check-prom-rules [file ...]",

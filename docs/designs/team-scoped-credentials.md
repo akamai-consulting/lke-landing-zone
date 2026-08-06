@@ -22,7 +22,7 @@ Linode API or Terraform state
 [`credentials_lkeadmin.go:45`](../../tools/cmd/llz/credentials_lkeadmin.go)) and
 shared by every SRE and every CI job
 ([`lke-admin-rotation.md:13`](../runbooks/lke-admin-rotation.md),
-[`prom_query.go:8`](../../tools/cmd/llz/prom_query.go)). It is
+[`prom_query.go:8`](../../tools/internal/assertobs/promquery.go)). It is
 `system:masters`-equivalent, unattributable (everyone is the same identity),
 and can only be rotated by deleting and regenerating that single token — never
 scoped or individually revoked.
@@ -131,7 +131,7 @@ Phase 2 also inherits two LKE-E realities to design around: the control-plane
 [`cluster-access/action.yml`](../../instance-template/.github/actions/cluster-access/action.yml))
 and admission **webhook denials** on some subresources for even cluster-admin
 (`services/proxy` denied, `pods/portforward` allowed —
-[`prom_query.go:6`](../../tools/cmd/llz/prom_query.go)).
+[`prom_query.go:6`](../../tools/internal/assertobs/promquery.go)).
 
 ## Spec surface
 

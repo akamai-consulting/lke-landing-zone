@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_prom_rules.go implements `llz ci health-prom-rules` — the native port of
 // llz-scheduled-checks.yml's Prometheus rule-evaluation check (the last
@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciHealthPromRulesCmd() *cobra.Command {
+func HealthPromRulesCmd() *cobra.Command {
 	var prom string
 	c := &cobra.Command{
 		Use:   "health-prom-rules",
@@ -83,14 +83,14 @@ func ruleEvalErrors(body []byte) []string {
 func runCIHealthPromRules(prom string) error {
 	region := os.Getenv("REGION")
 
-	// Route through the shared withPrometheus seam, like alert-eval /
+	// Route through the shared WithPrometheus seam, like alert-eval /
 	// assert-scrape-targets / assert-reconciler / prom-metrics. That fixes the
 	// namespace (this used to look in llz-observability, which holds the LLZ CRs —
 	// apl-core's Prometheus lives in monitoring) and drops a hand-rolled transport
 	// that pinned local port 19090, never drained the port-forward's stdout, and
 	// had its own readiness poll.
 	var body []byte
-	if err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	if err := WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		raw, err := get("/api/v1/rules")
 		if err != nil {
 			return err
@@ -129,7 +129,7 @@ func runCIHealthPromRules(prom string) error {
 	summary := []string{"", fmt.Sprintf("### Prometheus Rule Evaluation — %s", region), ""}
 	if len(errored) == 0 {
 		fmt.Printf("All Prometheus rule groups evaluated without errors on %s.\n", region)
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
+		return caps.Summary("GITHUB_STEP_SUMMARY",
 			append(summary, "- All rule groups: no evaluation errors")...)
 	}
 	for _, line := range errored {
@@ -138,5 +138,5 @@ func runCIHealthPromRules(prom string) error {
 	summary = append(summary, "**Rules with evaluation errors:**", "```")
 	summary = append(summary, errored...)
 	summary = append(summary, "```")
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+	return caps.Summary("GITHUB_STEP_SUMMARY", summary...)
 }

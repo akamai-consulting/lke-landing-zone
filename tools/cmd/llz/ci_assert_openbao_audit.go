@@ -48,6 +48,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
@@ -136,7 +137,7 @@ type auditProbe struct {
 func (p auditProbe) OK() bool { return p.Entries > 0 && p.Records > 0 }
 
 // evalAuditStreams reduces query_range streams to a verdict. Pure.
-func evalAuditStreams(selector string, streams []lokiStream) auditProbe {
+func evalAuditStreams(selector string, streams []assertobs.LokiStream) auditProbe {
 	p := auditProbe{Selector: selector, Streams: len(streams)}
 	for _, s := range streams {
 		for _, e := range s.Entries {
@@ -161,12 +162,12 @@ func evalAuditStreams(selector string, streams []lokiStream) auditProbe {
 // arrived".
 func probeAuditStream(loki, tenant, selector string, limit int, lookback time.Duration, now time.Time) (auditProbe, error) {
 	var p auditProbe
-	err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
-		raw, gerr := get(lokiQueryRangePath(selector, now.Add(-lookback), now, limit))
+	err := assertobs.WithLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+		raw, gerr := get(assertobs.LokiQueryRangePath(selector, now.Add(-lookback), now, limit))
 		if gerr != nil {
 			return gerr
 		}
-		streams, perr := parseLokiStreams(raw)
+		streams, perr := assertobs.ParseLokiStreams(raw)
 		if perr != nil {
 			return perr
 		}

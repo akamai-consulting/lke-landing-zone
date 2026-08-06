@@ -28,6 +28,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/spf13/cobra"
 )
 
@@ -77,7 +78,7 @@ func portForwardKeycloak() (string, func(), error) {
 		return "", nil, fmt.Errorf("kubectl port-forward: %w", err)
 	}
 	stop := func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
-	localPort, err := readForwardPortTimeout(stdout, forwardEstablishTimeout)
+	localPort, err := assertobs.ReadForwardPortTimeout(stdout, assertobs.ForwardEstablishTimeout)
 	if err != nil {
 		stop()
 		return "", nil, err

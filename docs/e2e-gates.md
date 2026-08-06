@@ -183,7 +183,7 @@ of at e2e time.
 1. **Write the verb** as `tools/cmd/llz/ci_assert_<thing>.go`, registered in
    `ci.go`. Keep the judgement in a pure function over parsed input so it is
    testable without a cluster; keep the transport (kubectl, port-forward, API) in
-   a seam a test can replace. `ci_assert_scrape.go` and
+   a seam a test can replace. `scrape.go` and
    `ci_assert_openbao_audit.go` are the models.
 2. **Unit-test it** — the pure evaluator, the fail-closed arms (empty, malformed,
    unreachable), and the static half of the contract.

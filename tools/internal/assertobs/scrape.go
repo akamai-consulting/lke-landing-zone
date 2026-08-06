@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_assert_scrape.go implements `llz ci assert-scrape-targets` — the gating
 // counterpart to the report-only `alert-eval` / `prom-metrics` diagnostics. It
@@ -64,7 +64,7 @@ var defaultScrapeRuleGroups = []string{
 	"llz-reconciler",
 }
 
-func ciAssertScrapeTargetsCmd() *cobra.Command {
+func ScrapeTargetsCmd() *cobra.Command {
 	var prom, monitors, ruleGroups string
 	var settle, interval int
 	c := &cobra.Command{
@@ -211,7 +211,7 @@ func (p scrapeProbe) allWired() bool {
 // a scrapeProbe. A transport error is returned so the poll loop can retry.
 func probeScrapeState(prom string, monitors, ruleGroups []string) (scrapeProbe, error) {
 	var p scrapeProbe
-	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+	err := WithPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		targetsJSON, terr := get("/api/v1/targets?state=active")
 		if terr != nil {
 			return terr

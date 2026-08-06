@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,9 +37,9 @@ const sampleAuditLine = `{"time":"2026-07-30T12:00:00Z","type":"response","auth"
 func seamLoki(t *testing.T, reply func(apiPath string) ([]byte, error)) *[]string {
 	t.Helper()
 	var asked []string
-	orig := withLoki
-	t.Cleanup(func() { withLoki = orig })
-	withLoki = func(_, _ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := assertobs.WithLoki
+	t.Cleanup(func() { assertobs.WithLoki = orig })
+	assertobs.WithLoki = func(_, _ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(p string) ([]byte, error) {
 			asked = append(asked, p)
 			return reply(p)
@@ -50,7 +51,7 @@ func seamLoki(t *testing.T, reply func(apiPath string) ([]byte, error)) *[]strin
 func TestLokiQueryRangePath(t *testing.T) {
 	start := time.Unix(1700000000, 0)
 	end := start.Add(30 * time.Minute)
-	got := lokiQueryRangePath(`{app="openbao",component="audit"}`, start, end, 20)
+	got := assertobs.LokiQueryRangePath(`{app="openbao",component="audit"}`, start, end, 20)
 
 	base, rawQuery, ok := strings.Cut(got, "?")
 	if !ok || base != "/loki/api/v1/query_range" {
@@ -78,7 +79,7 @@ func TestLokiQueryRangePath(t *testing.T) {
 
 func TestParseLokiStreams(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	streams, err := parseLokiStreams(lokiPushReply(
+	streams, err := assertobs.ParseLokiStreams(lokiPushReply(
 		map[string]string{"app": "openbao", "component": "audit"},
 		[]string{sampleAuditLine, sampleAuditLine}, now))
 	if err != nil {
@@ -104,7 +105,7 @@ func TestParseLokiStreams(t *testing.T) {
 		"bad timestamp":   `{"data":{"resultType":"streams","result":[{"stream":{},"values":[["not-a-ts","x"]]}]}}`,
 		"values too thin": `{"data":{"resultType":"streams","result":[{"stream":{},"values":[["1700000000000000000"]]}]}}`,
 	} {
-		got, err := parseLokiStreams([]byte(raw))
+		got, err := assertobs.ParseLokiStreams([]byte(raw))
 		if name == "values too thin" {
 			// A short pair is skipped, not fatal — but it must not become an entry.
 			if err != nil {
@@ -122,18 +123,18 @@ func TestParseLokiStreams(t *testing.T) {
 
 func TestEvalAuditStreams(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	older := lokiStream{
+	older := assertobs.LokiStream{
 		Labels:  map[string]string{"pod": "platform-openbao-1"},
-		Entries: []lokiEntry{{At: now.Add(-time.Hour), Line: sampleAuditLine}},
+		Entries: []assertobs.LokiEntry{{At: now.Add(-time.Hour), Line: sampleAuditLine}},
 	}
-	newer := lokiStream{
+	newer := assertobs.LokiStream{
 		Labels: map[string]string{"pod": "platform-openbao-0"},
-		Entries: []lokiEntry{
+		Entries: []assertobs.LokiEntry{
 			{At: now, Line: sampleAuditLine},
 			{At: now.Add(-time.Minute), Line: "not an audit record at all"},
 		},
 	}
-	p := evalAuditStreams(defaultAuditSelector, []lokiStream{older, newer})
+	p := evalAuditStreams(defaultAuditSelector, []assertobs.LokiStream{older, newer})
 	if p.Streams != 2 || p.Entries != 3 || p.Records != 2 {
 		t.Fatalf("miscounted: %+v", p)
 	}
@@ -153,8 +154,8 @@ func TestEvalAuditStreams(t *testing.T) {
 		t.Error("an empty probe must never be OK")
 	}
 	// Entries that are not audit records must not carry the verdict on their own.
-	only := evalAuditStreams(defaultAuditSelector, []lokiStream{{
-		Entries: []lokiEntry{{At: now, Line: "some other workload's log line"}},
+	only := evalAuditStreams(defaultAuditSelector, []assertobs.LokiStream{{
+		Entries: []assertobs.LokiEntry{{At: now, Line: "some other workload's log line"}},
 	}})
 	if only.OK() {
 		t.Error("entries that are not audit records must not pass the gate")

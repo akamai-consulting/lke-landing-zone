@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 // ci_alert_eval_mutation_test.go pins the "did we notice the problem" logic that
 // mutation testing found unguarded: the two verdict lines in printAlertEval (which

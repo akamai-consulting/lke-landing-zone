@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
@@ -133,7 +134,7 @@ func portForwardOpenbao() (string, func(), error) {
 	}
 	stop := func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
 
-	localPort, err := readForwardPortTimeout(stdout, forwardEstablishTimeout)
+	localPort, err := assertobs.ReadForwardPortTimeout(stdout, assertobs.ForwardEstablishTimeout)
 	if err != nil {
 		stop()
 		return "", nil, err

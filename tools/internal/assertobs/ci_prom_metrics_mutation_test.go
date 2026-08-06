@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 import (
 	"errors"
@@ -11,9 +11,9 @@ import (
 // session could be inverted — short-circuiting before the names were collected,
 // or reporting the reachable Prometheus as unreachable — and still "pass".
 func TestPromMetricsPrintsTheMatchingNames(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(string) ([]byte, error) {
 			return []byte(`{"status":"success","data":["loki_b","up","loki_a","vault_x"]}`), nil
 		})
@@ -31,9 +31,9 @@ func TestPromMetricsPrintsTheMatchingNames(t *testing.T) {
 // A failing query must surface as the unreachable-Prometheus notice (exit 0 with a
 // where-it-looked hint), not as a silent empty result set.
 func TestPromMetricsQueryErrorIsReported(t *testing.T) {
-	orig := withPrometheus
-	t.Cleanup(func() { withPrometheus = orig })
-	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+	orig := WithPrometheus
+	t.Cleanup(func() { WithPrometheus = orig })
+	WithPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
 		return fn(func(string) ([]byte, error) { return nil, errors.New("connection refused") })
 	}
 	var err error

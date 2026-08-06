@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
@@ -71,7 +72,7 @@ func ciCmd() *cobra.Command {
 		ciKeycloakConfigureCmd(),
 		ciTeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
+	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())
@@ -133,7 +134,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciMutateCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
-		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
+		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
 	// Apply-time failure diagnostics (llz-terraform.yml). (The former
 	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
@@ -251,15 +252,15 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(assertnetwork.WaveHealthVAPCmd())
 	// Cluster diagnostic: list in-cluster Prometheus metric names matching a regex
 	// (metric-name discovery for writing error-rate/saturation alerts).
-	c.AddCommand(ciPromMetricsCmd())
+	c.AddCommand(assertobs.PromMetricsCmd())
 	// Cluster diagnostic: evaluate deployed PrometheusRule alert exprs against the
 	// live Prometheus (catch never-fire / false-positive rules promtool can't).
-	c.AddCommand(ciAlertEvalCmd())
+	c.AddCommand(assertobs.AlertEvalCmd())
 	// E2E gate: assert every landing-zone ServiceMonitor has an `up` scrape target
 	// and every PrometheusRule group is loaded — the observability-pipeline wiring
 	// converge/health/assert-loki all stay color.Green on when a label/port/selector
 	// regression silently un-scrapes/un-loads it.
-	c.AddCommand(ciAssertScrapeTargetsCmd())
+	c.AddCommand(assertobs.ScrapeTargetsCmd())
 	// E2E gate: assert the reconciler is FUNCTIONALLY healthy (llz_reconcile_up=1 +
 	// llz_reconcile_leader=1) — the silently-broken-loop class (pod Running yet
 	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
@@ -277,16 +278,16 @@ func ciCmd() *cobra.Command {
 	// the rest of them.
 	//
 	// log path (the cluster-wide collector, NOT the OpenBao promtail sidecar).
-	c.AddCommand(ciAssertLogIngestionCmd())
+	c.AddCommand(assertobs.LogIngestionCmd())
 	// secret path: ESO is still RE-READING OpenBao, not just holding a Secret it
 	// materialized once and can no longer refresh.
 	c.AddCommand(ciAssertESORoundTripCmd())
 	// alert path: a firing alert has somewhere to go. Prometheus treats "firing
 	// with no receivers" as normal, so this is invisible everywhere else.
-	c.AddCommand(ciAssertAlertDeliveryCmd())
+	c.AddCommand(assertobs.AlertDeliveryCmd())
 	// dashboard path: the sidecar is a label selector, so a dropped label leaves a
 	// valid ConfigMap holding a dashboard nobody can see.
-	c.AddCommand(ciAssertGrafanaDashboardsCmd())
+	c.AddCommand(assertobs.GrafanaDashboardsCmd())
 	// ── Tier-4 enforcement negatives ─────────────────────────────────────────
 	// The runtime counterpart to the static policy manifests, in the same spirit as
 	// assert-wave-health-vap: server-dry-run something each policy MUST act on and
@@ -357,7 +358,7 @@ func ciCmd() *cobra.Command {
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.
-	c.AddCommand(ciCheckPromRulesCmd())
+	c.AddCommand(assertobs.CheckPromRulesCmd())
 	// Render/coverage lint gates ported from template-scripts (the Makefile's
 	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
 	// coverage floor in `make coverage`).

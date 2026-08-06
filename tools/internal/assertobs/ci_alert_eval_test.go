@@ -1,4 +1,4 @@
-package main
+package assertobs
 
 import (
 	"errors"
@@ -13,9 +13,9 @@ import (
 // eval paths are exercisable without a cluster.
 func withPrometheusStub(t *testing.T, fn func(string, func(func(string) ([]byte, error)) error) error) {
 	t.Helper()
-	orig := withPrometheus
-	withPrometheus = fn
-	t.Cleanup(func() { withPrometheus = orig })
+	orig := WithPrometheus
+	WithPrometheus = fn
+	t.Cleanup(func() { WithPrometheus = orig })
 }
 
 func TestParseAlertRulesSkipsRecordingAndNonMatching(t *testing.T) {
@@ -131,9 +131,9 @@ func TestPrintAlertEvalNoSummaryWhenTitleEmpty(t *testing.T) {
 }
 
 func TestAlertEvalUnreachableNonFatal(t *testing.T) {
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return nil, errors.New("no cluster") }
+	orig := caps.Exec
+	t.Cleanup(func() { caps.Exec = orig })
+	caps.Exec = func(_ string, _ ...string) ([]byte, error) { return nil, errors.New("no cluster") }
 	if err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", "", false); err != nil {
 		t.Errorf("unreachable cluster must be non-fatal, got %v", err)
 	}

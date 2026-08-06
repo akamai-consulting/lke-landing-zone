@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
@@ -55,6 +56,7 @@ import (
 // Listed in import order, NOT declaration order — All sorts by name, so the order
 // here carries no meaning and nobody has to maintain one.
 var declarations = []func() extension.Extension{
+	assertobs.Extension,
 	assertnetwork.Extension,
 	assertplatform.Extension,
 	assertreconciler.Extension,
