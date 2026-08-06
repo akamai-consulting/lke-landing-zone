@@ -1,4 +1,4 @@
-package main
+package phasetiming
 
 // ci_image_pulls.go implements `llz ci collect-image-pulls` — the Tier-1
 // instrumentation that answers "is a bring-up phase pull-bound or not?" (the
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // pullDurationRx pulls the "in <dur>" out of kubelet's Pulled message. Matches
@@ -37,23 +37,8 @@ type imagePull struct {
 	DurationS float64 `json:"duration_s"`
 }
 
-func ciCollectImagePullsCmd() *cobra.Command {
-	var out string
-	c := &cobra.Command{
-		Use:   "collect-image-pulls",
-		Short: "report per-image kubelet pull durations (step summary + JSON) — is a phase pull-bound?",
-		Long: "Gathers the cluster's `Pulled` Events, parses each image's pull duration, and\n" +
-			"writes a per-image + total table to $GITHUB_STEP_SUMMARY plus (with --out) a\n" +
-			"JSON artifact. Read-only, best-effort — a kubectl/parse failure is a note.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCollectImagePulls(out) },
-	}
-	c.Flags().StringVar(&out, "out", "", "write the JSON pull report here (for artifact upload)")
-	return c
-}
-
-func runCollectImagePulls(out string) error {
-	raw, err := execOutput("kubectl", "get", "events", "-A",
+func RunCollectImagePulls(out string) error {
+	raw, err := kubectlprobe.Exec("kubectl", "get", "events", "-A",
 		"--field-selector", "reason=Pulled", "-o", "json")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::collect-image-pulls: kubectl get events failed (ignored): %v\n", err)

@@ -48,6 +48,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -92,6 +93,7 @@ var declarations = []func() extension.Extension{
 	chartpublish.Extension,
 	gameday.Extension,
 	manifestguard.Extension,
+	phasetiming.Extension,
 	plaintext.Extension,
 	promote.Extension,
 	reconcilelanes.Extension,

@@ -1,4 +1,4 @@
-package main
+package phasetiming
 
 import (
 	"os"
@@ -16,8 +16,8 @@ func TestPhaseMarkAppendAndReport(t *testing.T) {
 		label string
 		ts    int64
 	}{{"apply-cluster", 1_000}, {"apl-core-install", 900_000}, {"converge", 1_123_000}} {
-		if err := appendPhaseMark(log, m.label, m.ts); err != nil {
-			t.Fatalf("appendPhaseMark: %v", err)
+		if err := AppendPhaseMark(log, m.label, m.ts); err != nil {
+			t.Fatalf("AppendPhaseMark: %v", err)
 		}
 	}
 
@@ -40,8 +40,8 @@ func TestPhaseMarkAppendAndReport(t *testing.T) {
 	summary := filepath.Join(dir, "summary.md")
 	t.Setenv("GITHUB_STEP_SUMMARY", summary)
 	out := filepath.Join(dir, "timeline.json")
-	if err := runPhaseReport(log, out, "phase timeline"); err != nil {
-		t.Fatalf("runPhaseReport: %v", err)
+	if err := RunPhaseReport(log, out, "phase timeline"); err != nil {
+		t.Fatalf("RunPhaseReport: %v", err)
 	}
 	jb, _ := os.ReadFile(out)
 	if !strings.Contains(string(jb), `"phase": "apl-core-install"`) {
@@ -65,7 +65,7 @@ func TestComputePhaseIntervalsSortsAndSingleMark(t *testing.T) {
 }
 
 func TestPhaseReportMissingLogIsNoOp(t *testing.T) {
-	if err := runPhaseReport(filepath.Join(t.TempDir(), "absent.jsonl"), "", "t"); err != nil {
+	if err := RunPhaseReport(filepath.Join(t.TempDir(), "absent.jsonl"), "", "t"); err != nil {
 		t.Errorf("missing log must be a no-op, got %v", err)
 	}
 }
@@ -83,13 +83,13 @@ func TestRunCollectTiming(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "phases.jsonl")
 	t.Setenv("LLZ_PHASE_LOG", log)
-	_ = appendPhaseMark(log, "apl-core-install", 1000)
-	_ = appendPhaseMark(log, "converge", 900_000)
+	_ = AppendPhaseMark(log, "apl-core-install", 1000)
+	_ = AppendPhaseMark(log, "converge", 900_000)
 	out := filepath.Join(dir, "timing")
 
 	// image-pulls + apl-operator off → only the phase-timeline is written; no
 	// kubectl needed, so no cluster access required.
-	if err := runCollectTiming(out, "bootstrap timeline", false, false); err != nil {
+	if err := RunCollectTiming(out, "bootstrap timeline", false, false); err != nil {
 		t.Fatalf("collect-timing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(out, "phase-timeline.json")); err != nil {
@@ -99,7 +99,7 @@ func TestRunCollectTiming(t *testing.T) {
 		t.Error("image-pulls.json must not be written when --image-pulls is off")
 	}
 
-	if err := runCollectTiming("", "t", false, false); err == nil {
+	if err := RunCollectTiming("", "t", false, false); err == nil {
 		t.Error("empty --dir must error")
 	}
 }

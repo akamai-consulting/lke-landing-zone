@@ -257,7 +257,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | ext? | notes |
 |---|---:|---:|:-:|---|
-| `phase-timing` | 316 | 2 | ✔ | phase-mark/report 201, image-pulls 115 |
+| `phase-timing` | 316 | 2 | ✔ | phase-mark/report 201, image-pulls 115. **✅ Extracted — and it settles the fifth-kind question by failing to answer it.** See [What `phase-timing` disproved](#what-phase-timing-disproved--diagnostic-is-not-a-kind). |
 | `dev-mutation-testing` | 265 | 1 | ✔ | `ci_mutate` — gremlins wrapper |
 | `verify-lab` | 239 | 2 | ✔ | `verify` 170, `sshcheck` 69 |
 | `doctor-probes` | 230 | 3 | ✔ | doctor-linode 93, doctor-crossorg 104, credentials-probe 33 |
@@ -316,9 +316,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `chart-publish` extracted | 23,898 | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
 | `guard-manifests` extracted | 23,653 | 150 | −245 — a declaration test found a lane that was not a gate |
 | `assert-objstore` extracted | 23,387 | 149 | −266 — six for six, and the first mutation that was never hidden |
-| `wedge-gameday` extracted | **23,205** | 148 | −182 — the first binding forced in BOTH its kind and its state |
+| `wedge-gameday` extracted | 23,205 | 148 | −182 — the first binding forced in BOTH its kind and its state |
+| `phase-timing` extracted | **22,964** | 146 | −241 — the second diagnostic, and the two disagree about shape |
 
-**Net −23,977 (50.8%) across thirty-four extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −24,218 (51.3%) across thirty-five extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1914,6 +1915,50 @@ it is.
 **Opt-in, unlike almost everything else in this catalog.** Deliberate fault injection against a
 healthy cluster is a thing an operator chooses on a cluster they are willing to break, not a thing an
 instance inherits. `TestStaysOptIn` keeps that the default direction.
+
+### What `phase-timing` disproved — "diagnostic" is not a kind
+
+Thirty-fifth, and the extraction whose most useful product is a **negative result**.
+
+```
+phase-timing  assertion:operating[cluster-read]   ← a placement, not a fit
+```
+
+`argocd-diagnostics` was case one for a missing **fifth binding kind**: it reads a failing platform,
+prints it for a human, always exits 0, and no kind fits. It shipped declared `assertion:converged`
+with an `Incomplete` note, on the rule that a new word needs a declaration to be *impossible* **and**
+two independent shipping cases. That note named `phase-timing` and `doctor-probes` as the likely cases
+two and three, and posed the shape question a fifth kind would have to answer:
+
+> does a diagnostic attach to a **state** at all, or to the **failure** of one?
+
+**The two cases disagree.**
+
+| case | attaches to |
+|---|---|
+| `argocd-diagnostics` | the **failure** of `converged` — you run it *after* convergence did not happen |
+| `phase-timing` | **no state.** It records the boundaries *between* them; its subject is the **run**, not the platform |
+
+Those are not one kind. A `Diagnostic` binding wide enough to hold both would mean *"produces
+operator-facing output and never fails"* — which describes a property of the **output**, not a
+position in the lifecycle. Position in the lifecycle is the entire content of a binding. Merging them
+would put a word in the vocabulary that says nothing about where the thing attaches, which is the one
+question the model exists to answer.
+
+**So still nothing is invented — and now for a better reason than "not enough cases."** Two cases
+arrived, they met the bar for **count**, and they failed the bar for **shape**. That is the first time
+this campaign has refused a vocabulary change on shape rather than on evidence, and it is what the
+two-part bar was written for.
+
+`doctor-probes` is the remaining candidate and is worth extracting for this alone: if it attaches to a
+**state** (it probes whether credentials resolve, which is `configured`), the family splits three ways
+and "diagnostic" was never a kind — it was a description of a tone of voice.
+
+**A boundary `deliver-docs` drew is load-bearing for the first time.** The phase log is a *write*, and
+deliberately needs no grant: it goes to `$LLZ_PHASE_LOG` under `$RUNNER_TEMP`, and `write-repo` was
+defined as the instance repo's **tracked** files — a temp dir needs no grant, the same way reading
+`/tmp` needs no `read-repo`. That definition was written from four cases that all wrote the repo;
+this is the first extraction on the other side of the line, and it holds.
 
 ## The cost of the interesting half
 

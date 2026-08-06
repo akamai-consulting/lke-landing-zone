@@ -1,4 +1,4 @@
-package main
+package phasetiming
 
 import (
 	"os"
@@ -33,10 +33,10 @@ func TestComputePhaseIntervalsKeepsEqualTimestampsInAppendOrder(t *testing.T) {
 func TestPhaseReportQuietWhenTheStepSummaryWriteSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "phases.jsonl")
-	if err := appendPhaseMark(log, "apply-cluster", 1_000); err != nil {
+	if err := AppendPhaseMark(log, "apply-cluster", 1_000); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendPhaseMark(log, "converge", 61_000); err != nil {
+	if err := AppendPhaseMark(log, "converge", 61_000); err != nil {
 		t.Fatal(err)
 	}
 	summary := filepath.Join(dir, "summary.md")
@@ -44,10 +44,10 @@ func TestPhaseReportQuietWhenTheStepSummaryWriteSucceeds(t *testing.T) {
 
 	var err error
 	errOut := captureStderr(t, func() {
-		_ = captureStdout(t, func() { err = runPhaseReport(log, "", "phase timeline") })
+		_ = captureStdout(t, func() { err = RunPhaseReport(log, "", "phase timeline") })
 	})
 	if err != nil {
-		t.Fatalf("runPhaseReport: %v", err)
+		t.Fatalf("RunPhaseReport: %v", err)
 	}
 	if strings.Contains(errOut, "step-summary write failed") {
 		t.Errorf("the write succeeded, yet: %s", errOut)
@@ -62,17 +62,17 @@ func TestRunCollectTimingQuietWhenMkdirSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "phases.jsonl")
 	t.Setenv("LLZ_PHASE_LOG", log)
-	if err := appendPhaseMark(log, "apl-core-install", 1_000); err != nil {
+	if err := AppendPhaseMark(log, "apl-core-install", 1_000); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendPhaseMark(log, "converge", 900_000); err != nil {
+	if err := AppendPhaseMark(log, "converge", 900_000); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "timing")
 
 	var err error
 	errOut := captureStderr(t, func() {
-		_ = captureStdout(t, func() { err = runCollectTiming(out, "bootstrap timeline", false, false) })
+		_ = captureStdout(t, func() { err = RunCollectTiming(out, "bootstrap timeline", false, false) })
 	})
 	if err != nil {
 		t.Fatalf("collect-timing: %v", err)

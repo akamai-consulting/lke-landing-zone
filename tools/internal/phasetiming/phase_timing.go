@@ -1,4 +1,4 @@
-package main
+package phasetiming
 
 // ci_phase_timing.go implements `llz ci phase-mark` / `phase-report` — the
 // always-on phase-timeline instrumentation (docs/designs/e2e-instrumentation.md).
@@ -23,16 +23,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
-// nowMilli is the wall clock in unix-millis, seamed for deterministic tests.
-var nowMilli = func() int64 { return time.Now().UnixMilli() }
+// NowMilli is the wall clock in unix-millis, seamed for deterministic tests.
+var NowMilli = func() int64 { return time.Now().UnixMilli() }
 
-// phaseLogPath resolves the shared per-job marks log: $LLZ_PHASE_LOG, else a
+// PhaseLogPath resolves the shared per-job marks log: $LLZ_PHASE_LOG, else a
 // stable temp path so a bare invocation still works (it just won't survive across
 // steps without the env pointing at $RUNNER_TEMP).
-func phaseLogPath(override string) string {
+func PhaseLogPath(override string) string {
 	if override != "" {
 		return override
 	}
@@ -54,24 +54,7 @@ type phaseInterval struct {
 	DurationS float64 `json:"duration_s"`
 }
 
-func ciPhaseMarkCmd() *cobra.Command {
-	var logPath string
-	c := &cobra.Command{
-		Use:   "phase-mark <label>",
-		Short: "record a phase-boundary timestamp into the shared per-job timeline log",
-		Long: "Appends {label, ts_ms} to $LLZ_PHASE_LOG (the shared per-job marks log). The\n" +
-			"e2e workflow drops one at each phase boundary; `llz ci phase-report` turns the\n" +
-			"marks into a duration timeline. Cheap and side-effect-free beyond the append.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return appendPhaseMark(phaseLogPath(logPath), args[0], nowMilli())
-		},
-	}
-	c.Flags().StringVar(&logPath, "log", "", "marks log path (default $LLZ_PHASE_LOG or a temp file)")
-	return c
-}
-
-func appendPhaseMark(path, label string, tsMs int64) error {
+func AppendPhaseMark(path, label string, tsMs int64) error {
 	b, err := json.Marshal(phaseMark{Label: label, TsMs: tsMs})
 	if err != nil {
 		return err
@@ -88,27 +71,7 @@ func appendPhaseMark(path, label string, tsMs int64) error {
 	return nil
 }
 
-func ciPhaseReportCmd() *cobra.Command {
-	var logPath, out, title string
-	c := &cobra.Command{
-		Use:   "phase-report",
-		Short: "turn the phase-mark timeline into a $GITHUB_STEP_SUMMARY table + JSON artifact",
-		Long: "Reads the shared marks log, computes each consecutive interval's duration,\n" +
-			"writes a table to $GITHUB_STEP_SUMMARY, and (with --out) a JSON timeline for\n" +
-			"upload as an artifact so runs are diffable. Best-effort: a missing/empty log\n" +
-			"is a no-op note, never an error (an early-failed job may have few marks).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runPhaseReport(phaseLogPath(logPath), out, title)
-		},
-	}
-	c.Flags().StringVar(&logPath, "log", "", "marks log path (default $LLZ_PHASE_LOG or a temp file)")
-	c.Flags().StringVar(&out, "out", "", "write the JSON timeline here (for artifact upload)")
-	c.Flags().StringVar(&title, "title", "phase timeline", "heading for the step-summary table")
-	return c
-}
-
-func runPhaseReport(logPath, out, title string) error {
+func RunPhaseReport(logPath, out, title string) error {
 	marks, err := readPhaseMarks(logPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::phase-report: %v — skipping (no timeline)\n", err)
@@ -193,29 +156,8 @@ func renderPhaseTable(title string, intervals []phaseInterval) string {
 // counts): mkdir the output dir, optionally gather kubelet image-pull durations
 // and the apl-operator helmfile logs, then write the phase-timeline report. All
 // best-effort — a collection failure is a note, never a non-zero exit.
-func ciCollectTimingCmd() *cobra.Command {
-	var dir, title string
-	var imagePulls, aplOperator bool
-	c := &cobra.Command{
-		Use:   "collect-timing",
-		Short: "gather this run's timing artifacts (phase timeline + optional image pulls / apl-operator logs) into --dir",
-		Long: "One call for the end-of-job timing bundle so the workflow stays a single\n" +
-			"line: makes --dir, optionally collects kubelet image-pull durations\n" +
-			"(--image-pulls, needs cluster access) and the apl-operator logs\n" +
-			"(--apl-operator), then writes the phase-report timeline. Best-effort.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCollectTiming(dir, title, imagePulls, aplOperator)
-		},
-	}
-	c.Flags().StringVar(&dir, "dir", "", "output directory for the timing artifacts (required)")
-	c.Flags().StringVar(&title, "title", "phase timeline", "heading for the step-summary table")
-	c.Flags().BoolVar(&imagePulls, "image-pulls", false, "also collect kubelet image-pull durations (needs cluster access)")
-	c.Flags().BoolVar(&aplOperator, "apl-operator", false, "also dump the apl-operator helmfile logs")
-	return c
-}
 
-func runCollectTiming(dir, title string, imagePulls, aplOperator bool) error {
+func RunCollectTiming(dir, title string, imagePulls, aplOperator bool) error {
 	if dir == "" {
 		return fmt.Errorf("collect-timing: --dir is required")
 	}
@@ -223,7 +165,7 @@ func runCollectTiming(dir, title string, imagePulls, aplOperator bool) error {
 		fmt.Fprintf(os.Stderr, "::warning::collect-timing: mkdir %s failed (ignored): %v\n", dir, err)
 	}
 	if imagePulls {
-		_ = runCollectImagePulls(filepath.Join(dir, "image-pulls.json"))
+		_ = RunCollectImagePulls(filepath.Join(dir, "image-pulls.json"))
 	}
 	if aplOperator {
 		logs := execCombined("kubectl", "-n", "apl-operator", "logs",
@@ -232,7 +174,7 @@ func runCollectTiming(dir, title string, imagePulls, aplOperator bool) error {
 			fmt.Fprintf(os.Stderr, "::warning::collect-timing: apl-operator log write failed (ignored): %v\n", err)
 		}
 	}
-	return runPhaseReport(phaseLogPath(""), filepath.Join(dir, "phase-timeline.json"), title)
+	return RunPhaseReport(PhaseLogPath(""), filepath.Join(dir, "phase-timeline.json"), title)
 }
 
 // fmtDuration renders seconds as a compact human string (e.g. "3m43s", "46s").
@@ -242,4 +184,48 @@ func fmtDuration(sec float64) string {
 		return fmt.Sprintf("%ds", s)
 	}
 	return fmt.Sprintf("%dm%02ds", s/60, s%60)
+}
+
+// ── localised helpers: copies, not seams ────────────────────────────────────
+//
+// NEITHER OF THESE BECAME A Deps FIELD, and both were checked against the
+// three-clause rule (can the package already do this with a grant it holds? is it
+// a pure function? is it already injectable elsewhere?).
+//
+// appendGHAFile is a file append to a path the ENVIRONMENT names. It is not a
+// capability another package owns — internal/envtopology reached the same
+// conclusion and keeps its own copy as the real default, precisely because a
+// no-op version turns every test that asserts on the summary into a tautology.
+//
+// execCombined is a kubectl shell-out, and internal/kubectlprobe already exports
+// Exec with the signature it needs; clause three answered it, as it did for
+// argocd-diagnostics and assert-objstore. Best-effort by design: a diagnostic that
+// fails because its log fetch failed would bury the timing it was run to collect.
+
+// appendGHAFile appends lines to the GitHub Actions command file named by envVar
+// (GITHUB_OUTPUT / GITHUB_ENV / GITHUB_STEP_SUMMARY). Outside Actions the variable
+// is unset and the write is skipped, keeping the commands runnable from a
+// workstation.
+func appendGHAFile(envVar string, lines ...string) error {
+	path := os.Getenv(envVar)
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open $%s: %w", envVar, err)
+	}
+	for _, l := range lines {
+		if _, err := fmt.Fprintln(f, l); err != nil {
+			f.Close()
+			return fmt.Errorf("write $%s: %w", envVar, err)
+		}
+	}
+	return f.Close()
+}
+
+// execCombined runs a command and returns its combined output, ignoring failure.
+func execCombined(name string, args ...string) string {
+	out, _ := kubectlprobe.Exec(name, args...)
+	return string(out)
 }

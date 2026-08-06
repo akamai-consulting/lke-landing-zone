@@ -96,7 +96,8 @@ COVERAGE_MINS := \
 	internal/chartpublish=58 \
 	internal/manifestguard=86 \
 	internal/assertobjstore=29 \
-	internal/gameday=28
+	internal/gameday=28 \
+	internal/phasetiming=74
 
 help:
 	@echo "lke-landing-zone — template repository targets"
