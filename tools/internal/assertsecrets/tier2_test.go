@@ -1,22 +1,14 @@
-package main
+package assertsecrets
 
-// Tests for the Tier-2 delivery gates: assert-log-ingestion, assert-eso-roundtrip,
-// assert-alert-delivery and assert-grafana-dashboards. Each gate's judgement is a
-// pure function over parsed input, so the whole verdict is exercised here without
-// a cluster; the transport seams are replaced per test.
+// Tests moved here by the classify-then-split-by-line-range pass. ci_assert_tier2
+// gives up its third batch: it has now fed internal/assertobs and this package,
+// keeping only the handful that are genuinely package main's.
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
-	"sigs.k8s.io/yaml"
 )
-
-// ── assert-log-ingestion ─────────────────────────────────────────────────────
 
 func TestStoreReady(t *testing.T) {
 	ready := []byte(`{"status":{"conditions":[{"type":"Ready","status":"True","message":"valid"}]}}`)
@@ -97,16 +89,6 @@ func TestFilterByNamespace(t *testing.T) {
 }
 
 // seamESO points the ESO gate's three cluster reads at canned data.
-func seamESO(t *testing.T, store, es []byte, secrets map[string]bool, storeErr, esErr error) {
-	oS, oE, oSec := readClusterSecretStore, readExternalSecrets, readSecretsWithData
-	t.Cleanup(func() { readClusterSecretStore, readExternalSecrets, readSecretsWithData = oS, oE, oSec })
-	readClusterSecretStore = func(string) ([]byte, error) { return store, storeErr }
-	readExternalSecrets = func([]string) ([]byte, error) { return es, esErr }
-	readSecretsWithData = func() (map[string]bool, error) { return secrets, nil }
-}
-
-// A not-Ready store short-circuits: every ExternalSecret beneath it is serving a
-// stale value, so reporting them individually would bury the actual cause.
 func TestRunAssertESORoundTripFailsOnNotReadyStore(t *testing.T) {
 	seamESO(t, []byte(`{"status":{"conditions":[{"type":"Ready","status":"False","message":"permission denied"}]}}`),
 		[]byte(`{"items":[]}`), map[string]bool{}, nil, nil)
@@ -126,60 +108,13 @@ func TestRunAssertESORoundTripFailsOnEmptyInventory(t *testing.T) {
 }
 
 // ── assert-alert-delivery ────────────────────────────────────────────────────
-
-func TestDefaultGrafanaDashboardsMatchTheManifests(t *testing.T) {
-	dir := filepath.Join("..", "..", "..", "platform-apl", "components", "observability")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Skipf("observability manifests not reachable from the test cwd: %v", err)
-	}
-
-	shipped := map[string]bool{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), "dashboard.yaml") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatalf("reading %s: %v", e.Name(), err)
-		}
-		var cm struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name      string            `json:"name"`
-				Namespace string            `json:"namespace"`
-				Labels    map[string]string `json:"labels"`
-			} `json:"metadata"`
-		}
-		if err := yaml.Unmarshal(raw, &cm); err != nil || cm.Kind != "ConfigMap" {
-			continue
-		}
-		shipped[cm.Metadata.Namespace+"/"+cm.Metadata.Name] = true
-
-		// While we are here: the manifest itself must carry both sidecar labels.
-		// Catching this at PR time beats catching it in an e2e cycle.
-		for k, want := range assertobs.GrafanaSidecarLabels {
-			if cm.Metadata.Labels[k] != want {
-				t.Errorf("%s: manifest is missing sidecar label %s=%q (found %q) — "+
-					"it would render on one stack and vanish on the other",
-					e.Name(), k, want, cm.Metadata.Labels[k])
-			}
-		}
-	}
-	if len(shipped) == 0 {
-		t.Fatal("found no dashboard ConfigMaps — this guard would pass vacuously")
-	}
-
-	for _, d := range assertobs.DefaultGrafanaDashboards {
-		if !shipped[d] {
-			t.Errorf("assertobs.DefaultGrafanaDashboards lists %q, which platform-apl does not ship — "+
-				"the gate would fail on every cluster", d)
-		}
-	}
-	for d := range shipped {
-		if !containsString(assertobs.DefaultGrafanaDashboards, d) {
-			t.Errorf("platform-apl ships dashboard %q that assertobs.DefaultGrafanaDashboards does not gate — "+
-				"add it, or it can regress unnoticed", d)
-		}
-	}
+func seamESO(t *testing.T, store, es []byte, secrets map[string]bool, storeErr, esErr error) {
+	oS, oE, oSec := readClusterSecretStore, readExternalSecrets, readSecretsWithData
+	t.Cleanup(func() { readClusterSecretStore, readExternalSecrets, readSecretsWithData = oS, oE, oSec })
+	readClusterSecretStore = func(string) ([]byte, error) { return store, storeErr }
+	readExternalSecrets = func([]string) ([]byte, error) { return es, esErr }
+	readSecretsWithData = func() (map[string]bool, error) { return secrets, nil }
 }
+
+// A not-Ready store short-circuits: every ExternalSecret beneath it is serving a
+// stale value, so reporting them individually would bury the actual cause.

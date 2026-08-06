@@ -176,7 +176,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
 | `assert-observability` | 1,596 | 10 | ✔ | **✅ Extracted — 12 files, ~2,700 lines.** See [What `assert-observability` found](#what-assert-observability-found--a-mutation-inside-readiness). scrape 228, `ci_readiness` 225, alert-eval 213, log-ingestion 190, alert-delivery 193, grafana 164, `prom_query` 140, prom-rules 104, prom-metrics 70, `loki_query` 69 |
-| `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
+| `assert-secrets` | 995 | 4 | ✔ | **✅ Extracted.** See [What `assert-secrets` confirmed](#what-assert-secrets-confirmed--four-for-four). rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | **✅ Extracted.** network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77. See [What `assert-network` corrected](#what-assert-network-corrected--a-name-that-read-like-a-capability). |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime`. **✅ Extracted** — 1,044 lines, not 725. See [What `assert-reconciler` decided](#what-assert-reconciler-decided--the-pairing-question).|
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty-five, extracted
+## The first twenty-six, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -284,9 +284,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-network` extracted | 29,853 | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
 | `wave-health` extracted | 29,450 | 174 | −403 — closure **3**, and the second state-level catalog correction |
 | `tofu-driver` extracted | 29,230 | 172 | −220 — three verbs the catalog gave one row and one grant |
-| `assert-observability` extracted | **27,156** | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
+| `assert-observability` extracted | 27,156 | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
+| `assert-secrets` extracted | **26,174** | 158 | −982 — grepped for hidden writes FIRST, and found one |
 
-**Net −20,026 (42.4%) across twenty-five extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −21,008 (44.5%) across twenty-six extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1399,6 +1400,42 @@ this is the kind of gap that needs a second instance before it means anything.
 `ci_harbor_ca_retrofit_test.go`, `ci_loki_flush_check_test.go` and `ci_prom_rule_semantics_test.go`.
 The classify-then-split-by-line-range pass is now mechanical: parse `^func Name(` boundaries, check
 each body for a symbol the target package defines, move by line range. It has not mis-split since.
+
+### What `assert-secrets` confirmed — four for four
+
+Twenty-sixth, and the first extraction where **I went looking for the hidden mutation before
+declaring** rather than discovering it partway through.
+
+```
+assert-secrets  assertion:operating  "rotation-health" [cluster-read, secret-read]
+                assertion:verified   "eso-roundtrip"   [cluster-read, secret-read]
+                assertion:verified   "openbao-audit"   [cluster-read]
+                transition:converged "broad-pat-drill" [cluster-read, cluster-write]
+```
+
+The previous extraction found a `kubectl rollout restart` buried in a file called *"readiness"*, so
+the first action here was to grep for writes rather than trust the `assert-` prefix. **It found one
+immediately**: the broad-PAT rotation drill `kubectl apply`s a Job and deletes it afterward.
+
+That write is *unavoidable* — you cannot assert a rotation rotates without running one — but it is
+still a cluster write reached from a lane named `assert-`, and a reader scanning for mutations would
+not look there.
+
+**Four for four.** Every extraction that has looked for a hidden mutation has found one:
+
+| extension | the mutation | where it hid |
+|---|---|---|
+| `converge` | patches Argo Applications | a health check |
+| `assert-storage` | mutates Linode Volumes | the catalog's own flagged anomaly |
+| `assert-observability` | `kubectl rollout restart` | a file called "readiness" |
+| `assert-secrets` | applies and deletes a Job | a lane called `assert-` |
+
+**The `assert-` prefix is a statement of intent, not of capability** — which is precisely the gap a
+grant line closes. Grepping for writes before declaring is now settled practice rather than a lesson
+being learned; it took four instances to earn that.
+
+`secret-read` is used by its fifth extension here, and still holds: these lanes read credential
+material to judge it, and none of them places any.
 
 ## The cost of the interesting half
 

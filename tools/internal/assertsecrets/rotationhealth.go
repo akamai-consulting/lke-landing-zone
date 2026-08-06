@@ -1,4 +1,4 @@
-package main
+package assertsecrets
 
 // ci_assert_rotation_health.go implements `llz ci assert-rotation-health` — the
 // gate on the credential-rotation lifecycle.
@@ -95,7 +95,7 @@ var alertableCredClasses = map[string]bool{
 	reconcilelanes.CredClassOnDemand:  true,
 }
 
-func ciAssertRotationHealthCmd() *cobra.Command {
+func RotationHealthCmd() *cobra.Command {
 	var prom, namespace string
 	var settle, interval int
 	var strict, requireInventory bool

@@ -1,4 +1,4 @@
-package main
+package assertsecrets
 
 // ci_assert_eso_roundtrip.go implements `llz ci assert-eso-roundtrip` — the gate
 // that ExternalSecrets are still actively re-reading from OpenBao, not merely
@@ -48,7 +48,7 @@ import (
 // through (platform-apl/manifest-secret-store).
 const esoStoreName = "openbao"
 
-func ciAssertESORoundTripCmd() *cobra.Command {
+func ESORoundTripCmd() *cobra.Command {
 	var store, namespaces string
 	var maxRefreshAge, settle, interval int
 	c := &cobra.Command{
@@ -211,7 +211,7 @@ func failedES(vs []esVerdict) []string {
 
 var (
 	readClusterSecretStore = func(name string) ([]byte, error) {
-		return execOutput("kubectl", "get", "clustersecretstore", name, "-o", "json")
+		return caps.Exec("kubectl", "get", "clustersecretstore", name, "-o", "json")
 	}
 	readExternalSecrets = func(namespaces []string) ([]byte, error) {
 		args := []string{"get", "externalsecrets", "-o", "json"}
@@ -223,10 +223,10 @@ var (
 			// querying all and filtering, which keeps one round trip.
 			args = append(args, "--all-namespaces")
 		}
-		return execOutput("kubectl", args...)
+		return caps.Exec("kubectl", args...)
 	}
 	readSecretsWithData = func() (map[string]bool, error) {
-		out, err := execOutput("kubectl", "get", "secrets", "--all-namespaces", "-o", "json")
+		out, err := caps.Exec("kubectl", "get", "secrets", "--all-namespaces", "-o", "json")
 		if err != nil {
 			return nil, err
 		}

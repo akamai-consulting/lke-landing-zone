@@ -137,12 +137,15 @@ categories:
     #   27,156 / 161 files  assert-observability, the LARGEST assert row and the
     #                       second-biggest single move: -2,074. Adding ci_readiness
     #                       to the file set LOWERED closure 20 -> 14.
+    #   26,174 / 158 files  assert-secrets. -982. Grepped for hidden writes BEFORE
+    #                       declaring and found one: the broad-PAT drill applies a
+    #                       Job. Four extractions, four hidden mutations.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 27156
+    budget: 26174
     exact: true
     include:
       - "tools/cmd/llz/*.go"

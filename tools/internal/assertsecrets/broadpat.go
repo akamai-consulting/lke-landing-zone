@@ -1,4 +1,4 @@
-package main
+package assertsecrets
 
 // ci_assert_broad_pat_rotation.go implements `llz ci assert-broad-pat-rotation
 // --region <env>` — the e2e gate that actually EXERCISES the in-cluster broad-PAT
@@ -47,7 +47,7 @@ var (
 	broadPATRotationPollInterval = 10 * time.Second
 )
 
-func ciAssertBroadPATRotationCmd() *cobra.Command {
+func BroadPATRotationCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "assert-broad-pat-rotation",
@@ -74,7 +74,7 @@ func runAssertBroadPATRotation(region string) error {
 	if err != nil {
 		return fmt.Errorf("assert-broad-pat-rotation: load spec: %w", err)
 	}
-	if !broadPATSeedEnabled(lz, region) {
+	if !caps.BroadPATSeedEnabled(lz, region) {
 		fmt.Printf("broadPatRotator not enabled for %s — skipping rotation exercise.\n", region)
 		return nil
 	}
@@ -89,7 +89,7 @@ func runAssertBroadPATRotation(region string) error {
 	// patch 403s (observed live). Overriding the threshold in the Job itself needs
 	// no credential at all: the rotator runs under its own k8s-auth role, which
 	// legitimately writes secret/linode/broad-pat.
-	cronJSON, err := execOutput("kubectl", "-n", broadPATRotatorNS, "get",
+	cronJSON, err := caps.Exec("kubectl", "-n", broadPATRotatorNS, "get",
 		"cronjob", broadPATRotatorCronJob, "-o", "json")
 	if err != nil {
 		return fmt.Errorf("read cronjob/%s: %w", broadPATRotatorCronJob, err)
@@ -100,7 +100,7 @@ func runAssertBroadPATRotation(region string) error {
 	}
 
 	// Fresh Job; drop a prior exercise Job first so re-runs are clean.
-	execCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
+	caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
 	if out, err := kubectlApplyStdin(jobJSON); err != nil {
 		return fmt.Errorf("create rotation Job (ROTATE_AFTER_DAYS=0): %w\n%s", err, out)
 	}
@@ -222,17 +222,17 @@ var kubectlApplyStdin = func(manifest []byte) (string, error) {
 // whatever the container managed to print before it died.
 func broadPATJobLogs() string {
 	sel := "job-name=" + broadPATRotatorE2EJob
-	names := execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
+	names := caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
 	var b strings.Builder
 	for _, p := range strings.Fields(names) {
-		b.WriteString(execCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--tail=-1"))
+		b.WriteString(caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--tail=-1"))
 		b.WriteString("\n")
 	}
 	if strings.TrimSpace(b.String()) == "" {
 		// No pod (or no logs yet) — fall back to the job selector form so a
 		// completed-and-still-present pod's logs are not lost.
-		return execCombined("kubectl", "-n", broadPATRotatorNS, "logs", "job/"+broadPATRotatorE2EJob, "--tail=-1")
+		return caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "logs", "job/"+broadPATRotatorE2EJob, "--tail=-1")
 	}
 	return b.String()
 }
@@ -245,28 +245,28 @@ func broadPATJobLogs() string {
 func dumpBroadPATRotatorDiag() {
 	sel := "job-name=" + broadPATRotatorE2EJob
 	fmt.Println("── broad-pat-rotator diagnostics (why the Job did not succeed) ──")
-	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel, "-o", "wide"))
-	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "describe", "job", broadPATRotatorE2EJob))
-	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "describe", "pods", "-l", sel))
-	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "get", "events", "--sort-by=.lastTimestamp"))
-	names := execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
+	fmt.Println(caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel, "-o", "wide"))
+	fmt.Println(caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "describe", "job", broadPATRotatorE2EJob))
+	fmt.Println(caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "describe", "pods", "-l", sel))
+	fmt.Println(caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "get", "events", "--sort-by=.lastTimestamp"))
+	names := caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
 	for _, p := range strings.Fields(names) {
 		fmt.Printf("── logs %s (previous) ──\n%s\n", p,
-			execCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--previous", "--tail=-1"))
+			caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--previous", "--tail=-1"))
 	}
 }
 
 // waitBroadPATJob polls the exercise Job until it reports success or failure (or
 // the poll budget runs out).
 func waitBroadPATJob() (succeeded, failed bool) {
-	return waitJobTerminal(broadPATRotatorNS, broadPATRotatorE2EJob,
+	return caps.WaitJobTerminal(broadPATRotatorNS, broadPATRotatorE2EJob,
 		broadPATRotationPollTimeout, broadPATRotationPollInterval)
 }
 
-// parseJobStatus reads the `{.status.succeeded}/{.status.failed}` jsonpath output
+// ParseJobStatus reads the `{.status.succeeded}/{.status.failed}` jsonpath output
 // (each side empty/0 until set) into two booleans. Succeeded wins if both are set.
-func parseJobStatus(s string) (succeeded, failed bool) {
+func ParseJobStatus(s string) (succeeded, failed bool) {
 	succStr, failStr, _ := strings.Cut(strings.TrimSpace(s), "/")
 	return isPositiveCount(succStr), isPositiveCount(failStr)
 }

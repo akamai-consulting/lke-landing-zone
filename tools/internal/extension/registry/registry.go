@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
@@ -57,6 +58,7 @@ import (
 // here carries no meaning and nobody has to maintain one.
 var declarations = []func() extension.Extension{
 	assertobs.Extension,
+	assertsecrets.Extension,
 	assertnetwork.Extension,
 	assertplatform.Extension,
 	assertreconciler.Extension,

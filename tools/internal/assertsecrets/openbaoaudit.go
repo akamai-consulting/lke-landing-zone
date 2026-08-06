@@ -1,4 +1,4 @@
-package main
+package assertsecrets
 
 // ci_assert_openbao_audit.go implements `llz ci assert-openbao-audit` — the e2e
 // gate that proves OpenBao's audit log is actually ARRIVING in Loki, by reading
@@ -80,7 +80,7 @@ const defaultAuditSelector = `{app="openbao",component="audit"}`
 // redaction pattern) and is present on every audit record.
 var auditRecordRe = regexp.MustCompile(`"type"\s*:\s*"(request|response)"`)
 
-func ciAssertOpenbaoAuditCmd() *cobra.Command {
+func OpenbaoAuditCmd() *cobra.Command {
 	var loki, tenant, selector string
 	var lookback, settle, interval, limit int
 	c := &cobra.Command{

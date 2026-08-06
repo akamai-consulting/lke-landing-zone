@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+	"gopkg.in/yaml.v3"
 )
 
 func TestHarborCARetrofitRollsPodsThatPredateThePolicy(t *testing.T) {
@@ -626,3 +627,59 @@ func TestReconcilerAlertSemantics(t *testing.T) {
 // Asserted against the workflow's own regex, read from the file, so the two
 // cannot drift apart — they are edited by different changes in different repos'
 // worth of context.
+func TestDefaultGrafanaDashboardsMatchTheManifests(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "platform-apl", "components", "observability")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Skipf("observability manifests not reachable from the test cwd: %v", err)
+	}
+
+	shipped := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), "dashboard.yaml") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("reading %s: %v", e.Name(), err)
+		}
+		var cm struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name      string            `json:"name"`
+				Namespace string            `json:"namespace"`
+				Labels    map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal(raw, &cm); err != nil || cm.Kind != "ConfigMap" {
+			continue
+		}
+		shipped[cm.Metadata.Namespace+"/"+cm.Metadata.Name] = true
+
+		// While we are here: the manifest itself must carry both sidecar labels.
+		// Catching this at PR time beats catching it in an e2e cycle.
+		for k, want := range GrafanaSidecarLabels {
+			if cm.Metadata.Labels[k] != want {
+				t.Errorf("%s: manifest is missing sidecar label %s=%q (found %q) — "+
+					"it would render on one stack and vanish on the other",
+					e.Name(), k, want, cm.Metadata.Labels[k])
+			}
+		}
+	}
+	if len(shipped) == 0 {
+		t.Fatal("found no dashboard ConfigMaps — this guard would pass vacuously")
+	}
+
+	for _, d := range DefaultGrafanaDashboards {
+		if !shipped[d] {
+			t.Errorf("DefaultGrafanaDashboards lists %q, which platform-apl does not ship — "+
+				"the gate would fail on every cluster", d)
+		}
+	}
+	for d := range shipped {
+		if !containsString(DefaultGrafanaDashboards, d) {
+			t.Errorf("platform-apl ships dashboard %q that DefaultGrafanaDashboards does not gate — "+
+				"add it, or it can regress unnoticed", d)
+		}
+	}
+}

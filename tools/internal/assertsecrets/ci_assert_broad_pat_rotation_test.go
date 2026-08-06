@@ -1,4 +1,4 @@
-package main
+package assertsecrets
 
 import (
 	"encoding/json"
@@ -125,9 +125,9 @@ func TestParseJobStatus(t *testing.T) {
 		{"1/1", true, true},      // both (caller prefers succeeded)
 	}
 	for _, tc := range tests {
-		succ, fl := parseJobStatus(tc.in)
+		succ, fl := ParseJobStatus(tc.in)
 		if succ != tc.wantSucc || fl != tc.wantFl {
-			t.Errorf("parseJobStatus(%q) = (%v,%v), want (%v,%v)", tc.in, succ, fl, tc.wantSucc, tc.wantFl)
+			t.Errorf("ParseJobStatus(%q) = (%v,%v), want (%v,%v)", tc.in, succ, fl, tc.wantSucc, tc.wantFl)
 		}
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -183,7 +184,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciSeedSSECKeyCmd())
 	c.AddCommand(ciAssertObjEncryptionCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
-	c.AddCommand(ciAssertBroadPATRotationCmd())
+	c.AddCommand(assertsecrets.BroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed
 	// drops a trivial manifest under kubernetes-custom/namespaces/<ns>/, and this
 	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
@@ -281,7 +282,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(assertobs.LogIngestionCmd())
 	// secret path: ESO is still RE-READING OpenBao, not just holding a Secret it
 	// materialized once and can no longer refresh.
-	c.AddCommand(ciAssertESORoundTripCmd())
+	c.AddCommand(assertsecrets.ESORoundTripCmd())
 	// alert path: a firing alert has somewhere to go. Prometheus treats "firing
 	// with no receivers" as normal, so this is invisible everywhere else.
 	c.AddCommand(assertobs.AlertDeliveryCmd())
@@ -313,7 +314,7 @@ func ciCmd() *cobra.Command {
 	// assert-harbor-roundtrip USES a minted robot rather than trusting it was
 	// created — the truncation regression left every credential valid and every
 	// push and pull 401ing on a malformed host.
-	c.AddCommand(ciAssertRotationHealthCmd(), ciAssertHarborRoundTripCmd())
+	c.AddCommand(assertsecrets.RotationHealthCmd(), ciAssertHarborRoundTripCmd())
 	// ── Delivery/health gates found in the post-review functional pass ───────
 	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
 	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks
@@ -337,7 +338,7 @@ func ciCmd() *cobra.Command {
 	// with a NetworkPolicy egress allow pointed at the same empty namespace, so
 	// both sides agreed with each other and neither agreed with the cluster. Only
 	// the round trip can tell a correct URL from a plausible one.
-	c.AddCommand(ciAssertOpenbaoAuditCmd())
+	c.AddCommand(assertsecrets.OpenbaoAuditCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).

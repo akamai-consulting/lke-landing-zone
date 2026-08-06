@@ -26,6 +26,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
@@ -124,7 +125,7 @@ func waitJobTerminal(namespace, name string, budget, interval time.Duration) (su
 	for {
 		out, _ := execOutput("kubectl", "-n", namespace, "get", "job", name,
 			"-o", "jsonpath={.status.succeeded}/{.status.failed}")
-		if succ, fail := parseJobStatus(string(out)); succ || fail {
+		if succ, fail := assertsecrets.ParseJobStatus(string(out)); succ || fail {
 			return succ, fail
 		}
 		if !time.Now().Before(deadline) {

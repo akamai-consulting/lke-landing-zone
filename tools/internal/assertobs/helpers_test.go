@@ -114,3 +114,15 @@ var errRetrofitNotFound = errors.New("Error from server (NotFound)")
 // design — a relative path in a test is a dependency on where the test file sits,
 // and moving the file silently re-points it. Checked rather than assumed.
 const reconcilerRuleCRD = "../../../platform-apl/components/llzReconciler/llz-reconciler/prometheusrule.yaml"
+
+// containsString: the definition travelled out of package main with a file this
+// extraction moved, leaving both sides using it. Defined here rather than hunted
+// for — it is three lines and slices.Contains-shaped.
+func containsString(hay []string, want string) bool {
+	for _, h := range hay {
+		if h == want {
+			return true
+		}
+	}
+	return false
+}
