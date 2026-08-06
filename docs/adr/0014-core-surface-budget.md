@@ -128,7 +128,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **22,566** with `kyverno-policies`.
 > and **22,383** with `managed-fresh` (which grew `template-sustain` rather than adding an extension).
 > and **22,153** with `dev-mutation-testing`.
-> Thirty-eight extensions, net −25,029 (53.0%) — now BELOW the
+> and **21,841** with `release-publish`.
+> Thirty-nine extensions, net −25,341 (53.7%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

@@ -55,6 +55,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
@@ -102,6 +103,7 @@ var declarations = []func() extension.Extension{
 	phasetiming.Extension,
 	plaintext.Extension,
 	promote.Extension,
+	releasepublish.Extension,
 	reconcilelanes.Extension,
 	sustain.Extension,
 	teardown.Extension,

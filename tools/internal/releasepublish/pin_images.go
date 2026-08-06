@@ -1,4 +1,4 @@
-package main
+package releasepublish
 
 // ci_pin_images.go implements `llz ci pin-instance-images` — the release-e2e
 // instantiate job's image-pin logic, moved out of inline workflow bash into
@@ -23,8 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 // pinImage maps an instance repo variable to the ci image whose tag it pins.
@@ -84,66 +82,28 @@ var (
 	}
 )
 
-func ciPinInstanceImagesCmd() *cobra.Command {
-	var instance, owner, templateRepo, sha, ref string
-	var interval, timeout int
-	var buildIfMissing, triggerOnly bool
-	c := &cobra.Command{
-		Use:   "pin-instance-images",
-		Short: "pin the e2e instance's TF_IMAGE/KUBE_IMAGE to this commit's ci images",
-		Long: "Points the instance repo's TF_IMAGE / KUBE_IMAGE variables at the ci-tofu\n" +
-			"/ ci-kubernetes images for --sha, so the baked llz binary can't drift from the\n" +
-			"rendered workflow. If this commit triggered a Build Container Images run, waits\n" +
-			"for its sha- image to publish and pins the exact sha; otherwise pins :latest\n" +
-			"(the binary is unchanged). Reads GH_TOKEN_TEMPLATE (this repo's runs + GHCR\n" +
-			"reads) and GH_TOKEN_INSTANCE (instance variable writes) from the environment.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runPinInstanceImages(pinOpts{
-				instance: instance, owner: strings.ToLower(owner), templateRepo: templateRepo,
-				sha: sha, ref: ref, actor: os.Getenv("GITHUB_ACTOR"),
-				templateToken: os.Getenv("GH_TOKEN_TEMPLATE"), instanceToken: os.Getenv("GH_TOKEN_INSTANCE"),
-				interval:       time.Duration(interval) * time.Second,
-				retries:        timeout / max1(interval),
-				buildIfMissing: buildIfMissing,
-				triggerOnly:    triggerOnly,
-			})
-		},
-	}
-	c.Flags().StringVar(&instance, "instance", "", "instance repo owner/name (TF_IMAGE/KUBE_IMAGE are set here)")
-	c.Flags().StringVar(&owner, "owner", "", "GHCR namespace owner (this repo's org)")
-	c.Flags().StringVar(&templateRepo, "template-repo", "", "this (template) repo owner/name — queried for the build run")
-	c.Flags().StringVar(&sha, "sha", "", "the commit whose images to pin")
-	c.Flags().StringVar(&ref, "ref", "", "branch/tag to (re)trigger Build Container Images on with --build-if-missing (its HEAD must be --sha)")
-	c.Flags().BoolVar(&buildIfMissing, "build-if-missing", false, "if this commit's sha images are missing (a failed/incomplete build, OR a branch where build-images never auto-ran), trigger Build Container Images on --ref, wait, and pin the sha — instead of pinning a stale :latest or failing")
-	c.Flags().BoolVar(&triggerOnly, "trigger-only", false, "with --build-if-missing: trigger a missing build and return WITHOUT waiting or pinning, so the publish wait overlaps the caller's other work; a later full invocation finds the build in flight and pins")
-	c.Flags().IntVar(&interval, "interval", 20, "seconds between manifest polls while waiting for a sha image")
-	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for a just-built sha image to publish")
-	return c
-}
-
-func max1(n int) int {
+func Max1(n int) int {
 	if n < 1 {
 		return 1
 	}
 	return n
 }
 
-type pinOpts struct {
-	instance, owner, templateRepo, sha, ref, actor string
-	templateToken, instanceToken                   string
-	interval                                       time.Duration
-	retries                                        int
-	buildIfMissing                                 bool
-	triggerOnly                                    bool
+type PinImagesOpts struct {
+	Instance, Owner, TemplateRepo, SHA, Ref, Actor string
+	TemplateToken, InstanceToken                   string
+	Interval                                       time.Duration
+	Retries                                        int
+	BuildIfMissing                                 bool
+	TriggerOnly                                    bool
 }
 
-func runPinInstanceImages(o pinOpts) error {
+func RunPinInstanceImages(o PinImagesOpts) error {
 	required := []struct{ name, val string }{
-		{"--instance", o.instance}, {"--owner", o.owner}, {"--template-repo", o.templateRepo},
-		{"--sha", o.sha}, {"GH_TOKEN_TEMPLATE", o.templateToken}, {"GH_TOKEN_INSTANCE", o.instanceToken},
+		{"--instance", o.Instance}, {"--owner", o.Owner}, {"--template-repo", o.TemplateRepo},
+		{"--sha", o.SHA}, {"GH_TOKEN_TEMPLATE", o.TemplateToken}, {"GH_TOKEN_INSTANCE", o.InstanceToken},
 	}
-	if o.triggerOnly {
+	if o.TriggerOnly {
 		// trigger-only never touches the instance's variables, so the instance
 		// credential is not needed (the later full invocation validates it).
 		required = required[:len(required)-1]
@@ -153,16 +113,16 @@ func runPinInstanceImages(o pinOpts) error {
 			return fmt.Errorf("pin-instance-images: %s is required", v.name)
 		}
 	}
-	if err := pinDockerLogin(o.templateToken, o.actor); err != nil {
+	if err := pinDockerLogin(o.TemplateToken, o.Actor); err != nil {
 		return fmt.Errorf("docker login ghcr.io failed: %w", err)
 	}
 
 	// --build-if-missing intends to (re)build THIS commit's image, so it needs a ref.
-	if o.buildIfMissing && o.ref == "" {
+	if o.BuildIfMissing && o.Ref == "" {
 		return fmt.Errorf("pin-instance-images: --ref is required with --build-if-missing (the branch/tag to build)")
 	}
 
-	built, err := commitBuiltImages(o.templateToken, o.templateRepo, o.sha)
+	built, err := commitBuiltImages(o.TemplateToken, o.TemplateRepo, o.SHA)
 	if err != nil {
 		return err
 	}
@@ -175,14 +135,14 @@ func runPinInstanceImages(o pinOpts) error {
 	// trigger a build unless one is already in flight — covering both a failed/
 	// mid-flight build on main AND a fresh branch build. One build covers every
 	// pinImages entry.
-	wantSha := built || o.buildIfMissing
-	if o.buildIfMissing && anyShaImageMissing(o.owner, o.sha) {
-		if pinBuildInProgress(o.templateToken, o.templateRepo, o.sha) {
-			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.sha)
+	wantSha := built || o.BuildIfMissing
+	if o.BuildIfMissing && anyShaImageMissing(o.Owner, o.SHA) {
+		if pinBuildInProgress(o.TemplateToken, o.TemplateRepo, o.SHA) {
+			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.SHA)
 		} else {
-			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.sha, o.ref)
-			if err := pinTriggerBuild(o.templateToken, o.templateRepo, o.ref, o.sha); err != nil {
-				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.ref, err)
+			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.SHA, o.Ref)
+			if err := pinTriggerBuild(o.TemplateToken, o.TemplateRepo, o.Ref, o.SHA); err != nil {
+				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.Ref, err)
 			}
 		}
 	}
@@ -190,26 +150,26 @@ func runPinInstanceImages(o pinOpts) error {
 	// caller's other work (scaffold/render/push in release-e2e's instantiate)
 	// overlaps the publish instead of serializing behind it. The later full
 	// invocation finds the run in progress and does the wait + pin.
-	if o.triggerOnly {
+	if o.TriggerOnly {
 		fmt.Println("trigger-only: not waiting or pinning — a later full pin-instance-images run completes the pin.")
 		return nil
 	}
 
 	for _, im := range pinImages {
-		base := fmt.Sprintf("ghcr.io/%s/%s", o.owner, im.Name)
-		ref := imageRef(base, o.sha, wantSha)
+		base := fmt.Sprintf("ghcr.io/%s/%s", o.Owner, im.Name)
+		ref := imageRef(base, o.SHA, wantSha)
 		if wantSha {
 			fmt.Printf("Waiting for %s to publish…\n", ref)
-			if !waitForManifest(ref, o.retries, o.interval) {
-				return fmt.Errorf("%s not published in time — did Build Container Images succeed for %.8s?", ref, o.sha)
+			if !waitForManifest(ref, o.Retries, o.Interval) {
+				return fmt.Errorf("%s not published in time — did Build Container Images succeed for %.8s?", ref, o.SHA)
 			}
 		} else if !pinManifestExists(ref) {
 			return fmt.Errorf("%s not found in GHCR", ref)
 		}
-		if _, err := pinGHRetry(o.instanceToken, "variable", "set", im.Var, "--repo", o.instance, "--body", ref); err != nil {
-			return fmt.Errorf("could not set %s on %s — GH_TOKEN_INSTANCE needs 'Variables: read and write': %w", im.Var, o.instance, err)
+		if _, err := pinGHRetry(o.InstanceToken, "variable", "set", im.Var, "--repo", o.Instance, "--body", ref); err != nil {
+			return fmt.Errorf("could not set %s on %s — GH_TOKEN_INSTANCE needs 'Variables: read and write': %w", im.Var, o.Instance, err)
 		}
-		fmt.Printf("Pinned %s %s=%s\n", o.instance, im.Var, ref)
+		fmt.Printf("Pinned %s %s=%s\n", o.Instance, im.Var, ref)
 	}
 	return nil
 }

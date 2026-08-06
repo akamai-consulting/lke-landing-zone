@@ -1,4 +1,4 @@
-package main
+package releasepublish
 
 import (
 	"errors"
@@ -27,7 +27,7 @@ func withPCSleepCounter(t *testing.T) *int {
 func TestRetryPCExhaustsExactlyTheBudget(t *testing.T) {
 	sleeps := withPCSleepCounter(t)
 	attempts := 0
-	err := retryPC(publishChartsOpts{retries: 3, interval: time.Second}, "helm push llz-x", func() error {
+	err := retryPC(PublishChartsOpts{Retries: 3, Interval: time.Second}, "helm push llz-x", func() error {
 		attempts++
 		// Succeeds only far past the budget: a correct retryPC never gets here,
 		// and a runaway one terminates (and fails) instead of hanging the suite.
@@ -61,8 +61,8 @@ func TestRunPublishChartsSelectedFilter(t *testing.T) {
 	regAll := &fakeRegistry{published: map[string]bool{}, signed: map[string]bool{}}
 	stubPublishSeams(t, regAll, inspect)
 	captureStdout(t, func() {
-		if err := runPublishCharts(publishChartsOpts{chartsDir: rootAll, selected: "all", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 2}); err != nil {
-			t.Fatalf("runPublishCharts(all): %v", err)
+		if err := RunPublishCharts(PublishChartsOpts{ChartsDir: rootAll, Selected: "all", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 2}); err != nil {
+			t.Fatalf("RunPublishCharts(all): %v", err)
 		}
 	})
 	if len(regAll.pushes) != 2 {
@@ -74,8 +74,8 @@ func TestRunPublishChartsSelectedFilter(t *testing.T) {
 	regOne := &fakeRegistry{published: map[string]bool{}, signed: map[string]bool{}}
 	stubPublishSeams(t, regOne, inspect)
 	captureStdout(t, func() {
-		if err := runPublishCharts(publishChartsOpts{chartsDir: rootOne, selected: "llz-cluster-foundation", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 2}); err != nil {
-			t.Fatalf("runPublishCharts(selected): %v", err)
+		if err := RunPublishCharts(PublishChartsOpts{ChartsDir: rootOne, Selected: "llz-cluster-foundation", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 2}); err != nil {
+			t.Fatalf("RunPublishCharts(selected): %v", err)
 		}
 	})
 	if len(regOne.signs) != 1 || !strings.Contains(regOne.signs[0], "llz-cluster-foundation") {
@@ -104,8 +104,8 @@ func TestRunPublishChartsReportsCounts(t *testing.T) {
 	stubPublishSeams(t, reg, inspect)
 
 	out := captureStdout(t, func() {
-		if err := runPublishCharts(publishChartsOpts{chartsDir: root, selected: "all", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 2}); err != nil {
-			t.Fatalf("runPublishCharts: %v", err)
+		if err := RunPublishCharts(PublishChartsOpts{ChartsDir: root, Selected: "all", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 2}); err != nil {
+			t.Fatalf("RunPublishCharts: %v", err)
 		}
 	})
 	const want = "Published 1 chart(s); re-signed 1 already-published unsigned chart(s)"

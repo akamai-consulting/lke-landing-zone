@@ -1,4 +1,4 @@
-package main
+package releasepublish
 
 // ci_publish_charts.go implements `llz ci publish-charts` — packages every
 // first-party Helm chart under a directory and pushes + keyless-cosign-signs it to
@@ -24,8 +24,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 )
@@ -68,45 +66,14 @@ var (
 	pcSleep = func(d time.Duration) { time.Sleep(d) }
 )
 
-type publishChartsOpts struct {
-	chartsDir, selected       string
-	registry, owner, repoPath string
-	destDir                   string
-	retries                   int
-	interval                  time.Duration
+type PublishChartsOpts struct {
+	ChartsDir, Selected       string
+	Registry, Owner, RepoPath string
+	DestDir                   string
+	Retries                   int
+	Interval                  time.Duration
 }
 
-func ciPublishChartsCmd() *cobra.Command {
-	var o publishChartsOpts
-	var interval int
-	c := &cobra.Command{
-		Use:   "publish-charts",
-		Short: "package, push, and keyless-sign first-party charts to an OCI registry (immutable + re-sign)",
-		Long: "Packages every chart under --dir and pushes + cosign-signs it to\n" +
-			"oci://<registry>/<owner>/<repo-path>/<chart>. Immutable: a version already\n" +
-			"published AND signed is skipped; a version pushed but UNSIGNED (an earlier\n" +
-			"run whose sign failed) is re-signed in place. Transient helm/cosign failures\n" +
-			"retry. Replaces the publish-charts workflow's inline bash with tested Go.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			o.interval = time.Duration(interval) * time.Second
-			return runPublishCharts(o)
-		},
-	}
-	c.Flags().StringVar(&o.chartsDir, "dir", "kubernetes-charts", "directory holding the chart subdirectories")
-	c.Flags().StringVar(&o.selected, "selected", "all", "chart name to publish, or \"all\"")
-	c.Flags().StringVar(&o.registry, "registry", "ghcr.io", "OCI registry host")
-	c.Flags().StringVar(&o.owner, "owner", "", "registry namespace owner (lowercased org)")
-	c.Flags().StringVar(&o.repoPath, "repo-path", "charts", "repository path prefix under the owner")
-	c.Flags().StringVar(&o.destDir, "dest", "/tmp/charts", "directory for packaged .tgz files")
-	c.Flags().IntVar(&o.retries, "retries", 5, "attempts for each flaky helm push / cosign step")
-	c.Flags().IntVar(&interval, "interval", 10, "seconds between retries")
-	return c
-}
-
-// runCapture runs a command and, on failure, folds its combined output into the
-// error — so a cosign/helm "exit status 1" is actually debuggable in CI logs
-// (exec.Command(...).Run() otherwise discards stderr).
 func runCapture(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
@@ -146,37 +113,37 @@ func chartDirs(root string) ([]string, error) {
 	return dirs, nil
 }
 
-// retryPC runs fn up to o.retries times, sleeping o.interval between attempts.
-func retryPC(o publishChartsOpts, what string, fn func() error) error {
+// retryPC runs fn up to o.Retries times, sleeping o.Interval between attempts.
+func retryPC(o PublishChartsOpts, what string, fn func() error) error {
 	var err error
-	for n := 1; n <= max1(o.retries); n++ {
+	for n := 1; n <= Max1(o.Retries); n++ {
 		if err = fn(); err == nil {
 			return nil
 		}
-		if n < max1(o.retries) {
-			fmt.Fprintf(os.Stderr, "::warning::%s failed (attempt %d/%d): %v — retrying in %s\n", what, n, o.retries, err, o.interval)
-			pcSleep(o.interval)
+		if n < Max1(o.Retries) {
+			fmt.Fprintf(os.Stderr, "::warning::%s failed (attempt %d/%d): %v — retrying in %s\n", what, n, o.Retries, err, o.Interval)
+			pcSleep(o.Interval)
 		}
 	}
-	return fmt.Errorf("%s failed after %d attempts: %w", what, max1(o.retries), err)
+	return fmt.Errorf("%s failed after %d attempts: %w", what, Max1(o.Retries), err)
 }
 
-func runPublishCharts(o publishChartsOpts) error {
-	if o.owner == "" {
+func RunPublishCharts(o PublishChartsOpts) error {
+	if o.Owner == "" {
 		return fmt.Errorf("publish-charts: --owner is required")
 	}
-	ociDest := "oci://" + o.registry + "/" + o.owner + "/" + o.repoPath // helm push (needs oci://)
-	regDest := o.registry + "/" + o.owner + "/" + o.repoPath            // cosign (bare ref)
+	ociDest := "oci://" + o.Registry + "/" + o.Owner + "/" + o.RepoPath // helm push (needs oci://)
+	regDest := o.Registry + "/" + o.Owner + "/" + o.RepoPath            // cosign (bare ref)
 
-	if o.destDir != "" {
-		if err := os.MkdirAll(o.destDir, 0o755); err != nil {
-			return fmt.Errorf("creating package dir %s: %w", o.destDir, err)
+	if o.DestDir != "" {
+		if err := os.MkdirAll(o.DestDir, 0o755); err != nil {
+			return fmt.Errorf("creating package dir %s: %w", o.DestDir, err)
 		}
 	}
 
-	dirs, err := chartDirs(o.chartsDir)
+	dirs, err := chartDirs(o.ChartsDir)
 	if err != nil {
-		return fmt.Errorf("listing charts under %s: %w", o.chartsDir, err)
+		return fmt.Errorf("listing charts under %s: %w", o.ChartsDir, err)
 	}
 
 	pushed, resigned := 0, 0
@@ -185,7 +152,7 @@ func runPublishCharts(o publishChartsOpts) error {
 		if err != nil {
 			return err
 		}
-		if o.selected != "all" && o.selected != name {
+		if o.Selected != "all" && o.Selected != name {
 			continue
 		}
 		ociRef := ociDest + "/" + name
@@ -208,10 +175,10 @@ func runPublishCharts(o publishChartsOpts) error {
 		}
 
 		fmt.Printf("Packaging %s %s\n", name, version)
-		if err := pcPackage(dir, o.destDir); err != nil {
+		if err := pcPackage(dir, o.DestDir); err != nil {
 			return fmt.Errorf("package %s %s: %w", name, version, err)
 		}
-		tgz := filepath.Join(o.destDir, name+"-"+version+".tgz")
+		tgz := filepath.Join(o.DestDir, name+"-"+version+".tgz")
 
 		fmt.Printf("Pushing %s %s → %s\n", name, version, ociDest)
 		var pushOut string

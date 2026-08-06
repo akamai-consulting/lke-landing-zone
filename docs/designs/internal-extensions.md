@@ -235,7 +235,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, ~~deliver-docs 154~~. Template-repo-side, not instance-side — **except `deliver-docs`, which is neither**; it was extracted as its own extension and is the catalog's sixth correction. See [What `deliver-docs` cost](#what-deliver-docs-cost--a-word). |
+| `release-publish` | 1,150 | 5 | ✘ | ✘ | ~~chart-publish-check 366~~, `gh_gitdata_native` 239, ~~pin-images 204~~, publish-charts 187, ~~deliver-docs 154~~. **Three of five files are NOT template-repo-side.** `deliver-docs` (6th correction), `chart-publish` (7th), `pin-instance-images` (10th) all run in a rendered instance. **✅ Extracted** — see [What `release-publish` could not declare](#what-release-publish-could-not-declare--a-row-that-is-not-an-extension). |
 | `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first ten, extracted](#the-first-ten-extracted). |
 | `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first ten, extracted](#the-first-ten-extracted). |
 | `promote-pipeline` | 307 | 2 | ✔ | ✘ | **✅ Extracted — binds `promoted`, the last unclaimed state.** See [What `promote-pipeline` closed](#what-promote-pipeline-closed--the-last-state-and-the-third-write-repo-case). `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
@@ -321,9 +321,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `doctor-probes` extracted | 22,726 | 143 | −238 — case three of three; the diagnostic family splits a third way |
 | `kyverno-policies` extracted | 22,566 | 142 | −160 — the first catalog note that was right first time |
 | `managed-fresh` → `template-sustain` | 22,383 | 141 | −183 — the ninth catalog correction, and the second about membership |
-| `dev-mutation-testing` extracted | **22,153** | 140 | −230 — the first extension that is not about the platform |
+| `dev-mutation-testing` extracted | 22,153 | 140 | −230 — the first extension that is not about the platform |
+| `release-publish` extracted | **21,841** | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
 
-**Net −25,029 (53.0%) across thirty-eight extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −25,341 (53.7%) across thirty-nine extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2121,6 +2122,46 @@ extraction ago the policy manifests **could not** follow their code, because `//
 the embedding package's directory and another package embeds them. Here nothing embeds the baseline
 and `testdata/` is package-local by Go convention, so it moved without argument. Two data directories,
 two opposite answers, one question to ask first: **does anything embed it?**
+
+### What `release-publish` could not declare — a row that is not an extension
+
+Thirty-ninth, **tenth catalog correction, and the third file pulled out of this one row.**
+
+```
+release-publish  transition:configured "pin-images" [read-repo, cloud-mutate]
+```
+
+The row is annotated *"Template-repo-side, not instance-side"* and lists five files. **Three of them
+are not:**
+
+| file | correction |
+|---|---|
+| `deliver-docs` | 6th — runs inside a rendered instance at copier time |
+| `chart-publish` | 7th — scans a rendered instance's apl-values pins |
+| `pin-instance-images` | 10th — sets the **instance** repo's `TF_IMAGE`/`KUBE_IMAGE`; `e2e-instantiate.yml` runs it with `--instance` |
+
+The row's own note is wrong about the majority of its contents, and the cause is the one this campaign
+has now seen three times: **a row grouped by *when* things run rather than by *what* they touch.**
+Everything here happens around a release, so everything here was filed as release machinery.
+
+**And the note is right about `publish-charts`, which is the interesting part.** It packages and
+keyless-cosign-signs the first-party Helm charts to an OCI registry, and runs in exactly one place:
+the template repo's own `publish-charts.yml`. It never runs in an instance. **It has no instance
+lifecycle state, because it is not part of an instance's life** — it produces the artifacts every
+instance later consumes.
+
+**So it gets no binding, and `Incomplete` says why.** That is a new shape for that field.
+`reconcile-actions` and `template-sustain` use it to mark code that **has not moved**;
+`guard-manifests` uses it for a lane that **could not** move. This marks **moved code that is in the
+catalog and is not an extension** — worth recording, because the catalog's 57 rows have been treated
+throughout as a list of extensions-in-waiting, and at least one of them is not one. On this evidence
+`publish-charts` is template machinery, the same class as `.template-manifest`.
+
+**`cloud-mutate` at `configured` gets its third shipping case**, and the argument holds unchanged from
+`chart-publish`: `configured` means *"its inputs resolve"*, GitHub is configured before Linode is
+provisioned, and resolving an input can require **creating** it. An instance pointed at an image tag
+that was never built has an input that does not resolve until something builds it. Nothing is forced
+about the kind here — pinning an image *is* an act, not an observation wearing a write grant.
 
 ## The cost of the interesting half
 

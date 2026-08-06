@@ -1,4 +1,4 @@
-package main
+package releasepublish
 
 import (
 	"os"
@@ -92,9 +92,9 @@ func TestRunPublishCharts(t *testing.T) {
 	}
 	stubPublishSeams(t, reg, inspect)
 
-	o := publishChartsOpts{chartsDir: root, selected: "all", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 3}
-	if err := runPublishCharts(o); err != nil {
-		t.Fatalf("runPublishCharts: %v", err)
+	o := PublishChartsOpts{ChartsDir: root, Selected: "all", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 3}
+	if err := RunPublishCharts(o); err != nil {
+		t.Fatalf("RunPublishCharts: %v", err)
 	}
 	// cf skipped (no push, no new sign); ob re-signed by tag; ca pushed + signed by digest.
 	if len(reg.pushes) != 1 {
@@ -121,9 +121,9 @@ func TestRunPublishCharts_Selected(t *testing.T) {
 	reg := &fakeRegistry{published: map[string]bool{}, signed: map[string]bool{}}
 	stubPublishSeams(t, reg, inspect)
 
-	o := publishChartsOpts{chartsDir: root, selected: "llz-openbao-platform", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 2}
-	if err := runPublishCharts(o); err != nil {
-		t.Fatalf("runPublishCharts: %v", err)
+	o := PublishChartsOpts{ChartsDir: root, Selected: "llz-openbao-platform", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 2}
+	if err := RunPublishCharts(o); err != nil {
+		t.Fatalf("RunPublishCharts: %v", err)
 	}
 	if len(reg.pushes) != 1 {
 		t.Errorf("--selected should push only the one chart, got %v", reg.pushes)
@@ -143,8 +143,8 @@ func TestRunPublishCharts_PushRetries(t *testing.T) {
 		return "Digest: sha256:deadbeef", nil
 	}
 	pcSign = func(string) error { return nil }
-	if err := runPublishCharts(publishChartsOpts{chartsDir: root, selected: "all", registry: "ghcr.io", owner: "acme", repoPath: "charts", retries: 5}); err != nil {
-		t.Fatalf("push should recover after retries: %v", err)
+	if err := RunPublishCharts(PublishChartsOpts{ChartsDir: root, Selected: "all", Registry: "ghcr.io", Owner: "acme", RepoPath: "charts", Retries: 5}); err != nil {
+		t.Fatalf("push should recover after Retries: %v", err)
 	}
 	if n != 3 {
 		t.Errorf("expected 3 push attempts, got %d", n)

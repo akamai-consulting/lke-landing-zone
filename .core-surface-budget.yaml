@@ -182,12 +182,65 @@ categories:
     #                       moved and env-topology's third binding is now
     #                       expressible. 7th catalog correction, and the SECOND
     #                       file pulled out of the `release-publish` row.
+    #   23,653 / 150 files  guard-manifests, three lanes of four. -245. The
+    #                       declaration's own test found the split: the first cut
+    #                       called all three a gate, and TestPackageStaysFilesOnly
+    #                       failed on `apl_schema.go reaches os/exec` — that lane
+    #                       shells out to helm to resolve the chart it validates
+    #                       against, so it is an assertion holding cloud-read.
+    #                       8th catalog correction. dropped-apiversions stayed
+    #                       (entangled with checks.go both ways), marked Incomplete.
+    #   23,387 / 149 files  assert-objstore. -266. SIX FOR SIX on assert- lanes
+    #                       that mutate — and the first where the write is NOT
+    #                       hidden: its own header says it PUTs, GETs and deletes.
+    #                       The write IS the check, because Linode's obj
+    #                       generations are disjoint namespaces and the API's
+    #                       bucket listing was the misleading view.
+    #   23,205 / 148 files  wedge-gameday. -182. Cleanest boundary since
+    #                       posture-plaintext: closure 2, one inbound edge, NO
+    #                       Deps. SIXTH forced `transition:converged`, and the
+    #                       first where BOTH halves are forced — a gameday belongs
+    #                       at `operating` and Transition cannot reach it.
+    #   22,964 / 146 files  phase-timing. -241, and a NEGATIVE RESULT worth more
+    #                       than the lines: the SECOND diagnostic, so the two-case
+    #                       bar for a fifth binding kind is met — and the two cases
+    #                       DISAGREE about shape. Not one kind, so nothing invented.
+    #   22,726 / 143 files  doctor-probes. -238. CASE THREE OF THREE closes the
+    #                       fifth-kind question in the negative: the three
+    #                       "diagnostics" attach to the FAILURE of a state, NO
+    #                       state, and TWO states. "Diagnostic" is a tone of voice,
+    #                       and the model already has a field for that (Short).
+    #   22,566 / 142 files  kyverno-policies. -160. FIRST CATALOG NOTE THAT WAS
+    #                       RIGHT FIRST TIME, after eight corrections. Also the
+    #                       first UNFORCED transition:converged after six forced
+    #                       ones — it genuinely acts. //go:embed PINS DATA to its
+    #                       package dir, so the manifests could not follow.
+    #   22,383 / 141 files  managed-fresh, into template-sustain's existing gate.
+    #                       -183, and the NINTH catalog correction: the
+    #                       `apl-upgrade` row groups two unrelated things, by WHEN
+    #                       they run rather than what they touch. A coverage floor
+    #                       went DOWN 84 -> 55 — the documented exception, because
+    #                       the tests assert what the CLASS TABLE locks.
+    #   22,153 / 140 files  dev-mutation-testing. -230, and the FIRST extension
+    #                       that is not about the platform at all — its subject is
+    #                       the repository's own tests. 97 lines of RunE moved with
+    #                       it: a flag set that keeps its verb in a cobra callback
+    #                       has been relabelled, not extracted. testdata/ moved
+    #                       WITH the package, unlike kyverno's embedded manifests.
+    #   21,841 / 138 files  release-publish. -312, TENTH catalog correction, and
+    #                       the THIRD file out of this one row. Its note says
+    #                       "template-repo-side, not instance-side" and three of
+    #                       its five files are not. Also the FIRST row where moved
+    #                       code got NO BINDING: publish-charts runs only in the
+    #                       template repo's own workflow, so it has no instance
+    #                       lifecycle state — a catalog row that is not an
+    #                       extension.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 22153
+    budget: 21841
     exact: true
     include:
       - "tools/cmd/llz/*.go"

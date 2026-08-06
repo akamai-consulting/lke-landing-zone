@@ -376,3 +376,17 @@ func runOpenbaoExec(g globalOpts, args []string) error {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
+
+// contains is a COPY. It was defined in ci_pin_images.go, which moved to
+// tools/internal/releasepublish; package main still uses it here. A three-line
+// slice predicate travels by copy rather than becoming an exported symbol whose
+// only job is to be reachable from both sides — the same call made for warn,
+// firstNonEmpty, orAll and report.
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

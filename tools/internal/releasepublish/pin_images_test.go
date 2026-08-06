@@ -1,4 +1,4 @@
-package main
+package releasepublish
 
 import (
 	"errors"
@@ -87,18 +87,18 @@ func stubPinSeams(t *testing.T, builds int, manifest func(string) bool) *[]strin
 	return &setVars
 }
 
-func baseOpts() pinOpts {
-	return pinOpts{
-		instance: "akamai-consulting/lke-landing-zone-example", owner: "akamai-consulting",
-		templateRepo: "akamai-consulting/lke-landing-zone", sha: "deadbeef", actor: "bot",
-		templateToken: "tt", instanceToken: "it", interval: 0, retries: 3,
+func baseOpts() PinImagesOpts {
+	return PinImagesOpts{
+		Instance: "akamai-consulting/lke-landing-zone-example", Owner: "akamai-consulting",
+		TemplateRepo: "akamai-consulting/lke-landing-zone", SHA: "deadbeef", Actor: "bot",
+		TemplateToken: "tt", InstanceToken: "it", Interval: 0, Retries: 3,
 	}
 }
 
 func TestRunPinInstanceImages(t *testing.T) {
 	// Commit built images → both vars pinned to the sha tag (after the image publishes).
 	setVars := stubPinSeams(t, 1, func(string) bool { return true })
-	if err := runPinInstanceImages(baseOpts()); err != nil {
+	if err := RunPinInstanceImages(baseOpts()); err != nil {
 		t.Fatalf("built flow: %v", err)
 	}
 	joined := strings.Join(*setVars, "\n")
@@ -113,7 +113,7 @@ func TestRunPinInstanceImages(t *testing.T) {
 
 	// No build for this commit → pin :latest.
 	setVars = stubPinSeams(t, 0, func(string) bool { return true })
-	if err := runPinInstanceImages(baseOpts()); err != nil {
+	if err := RunPinInstanceImages(baseOpts()); err != nil {
 		t.Fatalf("latest flow: %v", err)
 	}
 	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-tofu:latest") {
@@ -122,7 +122,7 @@ func TestRunPinInstanceImages(t *testing.T) {
 
 	// Built but the sha image never publishes within the budget → error, no var set.
 	setVars = stubPinSeams(t, 1, func(string) bool { return false })
-	if err := runPinInstanceImages(baseOpts()); err == nil {
+	if err := RunPinInstanceImages(baseOpts()); err == nil {
 		t.Error("expected error when sha image never publishes")
 	} else if len(*setVars) != 0 {
 		t.Errorf("should not set a variable on publish timeout, got %v", *setVars)
@@ -130,8 +130,8 @@ func TestRunPinInstanceImages(t *testing.T) {
 
 	// Missing required input → clear error.
 	o := baseOpts()
-	o.instanceToken = ""
-	if err := runPinInstanceImages(o); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
+	o.InstanceToken = ""
+	if err := RunPinInstanceImages(o); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
 		t.Errorf("missing token: err=%v, want a GH_TOKEN_INSTANCE required error", err)
 	}
 }
@@ -152,9 +152,9 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	pinBuildInProgress = func(string, string, string) bool { return false }
 
 	o := baseOpts()
-	o.buildIfMissing = true
-	o.ref = "main"
-	if err := runPinInstanceImages(o); err != nil {
+	o.BuildIfMissing = true
+	o.Ref = "main"
+	if err := RunPinInstanceImages(o); err != nil {
 		t.Fatalf("build-if-missing flow: %v", err)
 	}
 	if triggeredRef != "main" {
@@ -173,9 +173,9 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	pinTriggerBuild = func(string, string, string, string) error { triggered = true; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return true }
 	o2 := baseOpts()
-	o2.buildIfMissing = true
-	o2.ref = "main"
-	if err := runPinInstanceImages(o2); err != nil {
+	o2.BuildIfMissing = true
+	o2.Ref = "main"
+	if err := RunPinInstanceImages(o2); err != nil {
 		t.Fatalf("in-progress flow: %v", err)
 	}
 	if triggered {
@@ -185,9 +185,9 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	// --build-if-missing without --ref → clear error.
 	stubPinSeams(t, 1, func(string) bool { return false })
 	o3 := baseOpts()
-	o3.buildIfMissing = true
-	if err := runPinInstanceImages(o3); err == nil || !strings.Contains(err.Error(), "--ref is required") {
-		t.Errorf("missing --ref: err=%v, want a --ref required error", err)
+	o3.BuildIfMissing = true
+	if err := RunPinInstanceImages(o3); err == nil || !strings.Contains(err.Error(), "--ref is required") {
+		t.Errorf("missing --Ref: err=%v, want a --ref required error", err)
 	}
 
 	// Branch case: NO build ran for this commit (build-images doesn't auto-run off
@@ -203,9 +203,9 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	pinTriggerBuild = func(_, _, ref, _ string) error { branchRef = ref; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }
 	o4 := baseOpts()
-	o4.buildIfMissing = true
-	o4.ref = "feat/x"
-	if err := runPinInstanceImages(o4); err != nil {
+	o4.BuildIfMissing = true
+	o4.Ref = "feat/x"
+	if err := RunPinInstanceImages(o4); err != nil {
 		t.Fatalf("branch build-if-missing flow: %v", err)
 	}
 	if branchRef != "feat/x" {
@@ -228,11 +228,11 @@ func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
 	pinBuildInProgress = func(string, string, string) bool { return false }
 
 	o := baseOpts()
-	o.buildIfMissing = true
-	o.ref = "main"
-	o.triggerOnly = true
-	o.instanceToken = "" // not needed: trigger-only never writes instance variables
-	if err := runPinInstanceImages(o); err != nil {
+	o.BuildIfMissing = true
+	o.Ref = "main"
+	o.TriggerOnly = true
+	o.InstanceToken = "" // not needed: trigger-only never writes instance variables
+	if err := RunPinInstanceImages(o); err != nil {
 		t.Fatalf("trigger-only flow: %v", err)
 	}
 	if !triggered {
@@ -244,8 +244,8 @@ func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
 
 	// A full (non-trigger-only) run still requires the instance token.
 	o2 := baseOpts()
-	o2.instanceToken = ""
-	if err := runPinInstanceImages(o2); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
+	o2.InstanceToken = ""
+	if err := RunPinInstanceImages(o2); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
 		t.Errorf("full run without GH_TOKEN_INSTANCE: err=%v, want required error", err)
 	}
 }
