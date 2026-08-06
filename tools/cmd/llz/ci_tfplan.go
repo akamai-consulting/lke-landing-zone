@@ -9,6 +9,8 @@ import (
 
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // tfPlanFlakeSettle is how long tf-plan waits before its one retry when the plan
@@ -24,7 +26,7 @@ var tfPlanFlakeSettle = 30 * time.Second
 // tfPlanRunFn runs `terraform plan -no-color <flags...>` with stdout+stderr
 // combined into w. Package-level var so tests can stub the terraform exec.
 var tfPlanRunFn = func(w io.Writer, tfFlags []string) error {
-	cmd := tfCommand(append([]string{"plan", "-no-color"}, tfFlags...)...)
+	cmd := tfbin.Command(append([]string{"plan", "-no-color"}, tfFlags...)...)
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()

@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // checks.go ports the instance-local checks that used to live in the template's
@@ -556,7 +558,7 @@ func stepDroppedAPIVersions(_ globalOpts) error {
 }
 
 func stepTFValidate(g globalOpts) error {
-	terraform := tool(tfBin(), "LLZ_TERRAFORM")
+	terraform := tool(tfbin.Bin(), "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
 		return nil
 	}

@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 import (
 	"path/filepath"
@@ -15,7 +15,7 @@ func TestFetchKubeconfigDistinguishesBadBase64FromMissing(t *testing.T) {
 	withFakeKubeconfig(t, fake)
 	out := filepath.Join(t.TempDir(), "kubeconfig")
 
-	err := runCIFetchKubeconfig(fetchKubeconfigOpts{ref: clusterRef{clusterID: "5"}, output: out})
+	err := RunFetch(FetchOpts{Ref: ClusterRef{ClusterID: "5"}, Output: out})
 	if err == nil {
 		t.Fatal("undecodable kubeconfig must error")
 	}

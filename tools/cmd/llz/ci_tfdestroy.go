@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // ci_tfdestroy.go — `llz ci tf-destroy`, the assimilation of the inline
@@ -20,7 +22,7 @@ import (
 // tfDestroyRunFn runs `terraform <args...>` with output combined into w.
 // Package var so tests stub the terraform exec.
 var tfDestroyRunFn = func(w io.Writer, args ...string) error {
-	cmd := tfCommand(args...)
+	cmd := tfbin.Command(args...)
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()

@@ -138,7 +138,7 @@ Realistic settled core: **~2,900**.
 |---|---:|---:|:-:|:-:|---|
 | `import-brownfield` | 3,133 | 8 | ✘ | ✔ | The single biggest movable block, and the only large one that is genuinely optional. Externalisable — its four non-trivial core calls become `llz render` / `llz new` argv. **Two bindings, not one:** import *writes an instance repo* (`transition:scaffolded[read-repo, cloud-read, own-paths]`) and *adopts cloud substrate* (`transition:provisioned[cloud-mutate]`). An earlier draft declared it as one transition to `provisioned` holding `own-paths`, which the validator rejects — own-paths is only meaningful where files are written.  **✅ Extracted** — the first opt-in, and `ext? ✔` was WRONG; see [The first ten, extracted](#the-first-ten-extracted).|
 | `cluster-bootstrap` | 964 | 2 | ✔ | ✘ | `ci_bootstrap_cluster` 771 + manifests 193. ADR 0011's payload. |
-| `cluster-access` | 952 | 4 | ✔ | ✘ | `runner_acl` 458, `runner_acl_configmap` 201, `fetchkubeconfig_state` 192, `fetchkubeconfig` 101. |
+| `cluster-access` | 952 | 4 | ✔ | ✘ | `runner_acl` 458, `runner_acl_configmap` 201, `fetchkubeconfig_state` 192, `fetchkubeconfig` 101. **✅ Extracted** — and the header above is now wrong for it: this state's grants are not `cloud-mutate` alone. See [What `cluster-access` found](#what-cluster-access-found--the-credential-the-table-forgot).|
 | `cloud-firewall` | 394 | 2 | ✔ | ✘ | `ci_discover_firewall` 215, `ci_firewall` 179. |
 | `tofu-driver` | 235 | 3 | ✔ | ✘ | `ci_tfoutput` 98, `ci_tfplan` 81, `ci_tfdestroy` 56. Thin — the real driver is `internal/terraform`. |
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first ten, extracted
+## The first eleven, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -269,9 +269,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `template-sustain` extracted | 43,817 | 221 | −354, partial by construction — and the model grew a word for that |
 | `import-brownfield` extracted | 40,827 | 214 | **−2,990**, the largest single move — and the first opt-in |
 | `obj-encryption` extracted | 38,821 | 206 | −2,006, and the first binding at `seeded` |
-| `guard-charts` extracted | **38,364** | 202 | −457, and `guardwalk` — the traversal ten guards share |
+| `guard-charts` extracted | 38,364 | 202 | −457, and `guardwalk` — the traversal ten guards share |
+| `cluster-access` extracted | **37,483** | 199 | −881, and the second `grantStates` widening — see below |
 
-**Net −8,818 (18.7%) across ten extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −9,699 (20.6%) across eleven extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -627,6 +628,64 @@ needed it. Every remaining `guard-*` and `assert-*` extraction now starts with t
 `SortFindings` came with it, and is worth not losing: output stability is a **correctness** property
 for a guard, not a nicety. Findings that reorder between runs produce a diff on every CI run, and a
 gate whose output always differs is a gate people stop reading.
+
+### What `cluster-access` found — the credential the table forgot
+
+Eleventh, and the second extraction to change the model rather than fit into it.
+
+```
+cluster-access  transition:provisioned [cloud-mutate, cluster-write, secret-custody]
+```
+
+**`Validate()` rejected it.** `grantStates` listed `secret-custody` as legal at `seeded` and
+`operating` only:
+
+```
+secret-custody may only be asked for at seeded, operating — a binding elsewhere that needs it
+is either mislabelled or is widening what the state is understood to do
+```
+
+The declaration was not wrong. `RunFetch` writes a **cluster-admin kubeconfig** to disk, and
+[team-scoped-credentials.md](team-scoped-credentials.md) calls it the one human-facing credential per
+cluster. That is custody in the strictest sense the model has.
+
+**What the row had encoded.** `secret-custody` had only ever been shown credentials the platform
+*mints* (seeding) or *replaces* (rotation) — both of which happen to a cluster that already works. So
+the row quietly meant *"custody begins once there is a platform to hold it"*. The bootstrap
+credential breaks that: the **cloud** issues it at provisioning time, and holding it is the
+precondition for seeding rather than a consequence of it. A table that cannot express the first
+credential in the system's life is describing the middle of the story only.
+
+`provisioned` was added, with the argument in `validate.go` and the pin updated in
+`grantstates_internal_test.go`.
+
+**Both widenings were found the same way, at opposite ends.** `cloud-mutate` gained `operating` (the
+fourth extension) at the *end* of the lifecycle — reconciler lanes that keep running. This one gained
+a state at the *start*. Neither was predicted by reading the catalog; both surfaced only when code
+that already ships had to describe itself. That is the argument for extracting the **expensive**
+capabilities before trusting the ceiling, not after — and it is now made twice.
+
+**The state header above this extension's catalog row is wrong.** `## → provisioned — grants:
+cloud-mutate` was written from the catalog's own reading, and `cluster-access` holds three grants
+there. Left in place with a pointer rather than silently corrected: the catalog is evidence of what
+was believed before the extractions, and quietly editing it would destroy the record of the model
+being wrong.
+
+**And a second trap: extraction renames files, and the secrets guard reads filenames.** The natural
+names for this package's files were `kubeconfig.go` and `kubeconfig_state.go`. The pre-commit secrets
+guard blocks `(^|/)kubeconfig` — a path segment *starting* with it — so `fetchkubeconfig.go` passed
+for years and the tidier name did not. The guard was **right and the rename was wrong**: a file whose
+path segment begins `kubeconfig` is exactly the leak vector it exists to catch, and `.go` is not
+evidence to the contrary. They are `fetch.go` / `fetch_state.go` instead, which also matches
+`acl.go` / `acl_configmap.go`. Narrowing a security guard as a side effect of a refactor would have
+been the cheaper fix and the wrong one.
+
+**The trap, for the next extraction that shells out.** `internal/clusteraccess` re-executes the
+binary (`<self> render <env> --tfvars-only`). Under `go test`, `os.Executable()` is the *test binary*
+— so the moved code re-ran its own suite, which shelled out again, and `go test ./...` did not fail,
+it **hung**. `package main` had a `TestMain` guard for exactly this; the extraction moved the code
+that shells out and left the guard behind, because a guard wired into one package's `TestMain` is
+invisible to the file being moved. Cost: a wall-clock timeout to discover rather than a red test.
 
 ## The cost of the interesting half
 

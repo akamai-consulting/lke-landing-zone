@@ -45,3 +45,22 @@ func chdirTemp(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 }
+
+// errString is a string-valued error, duplicated back into package main after the
+// cluster-access extraction took the copy in acl_configmap_test.go with it.
+// Several unrelated tests here still build errors this way, and a test fixture
+// cannot cross a package boundary.
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+// renderReexecChild — duplicated back into package main after the cluster-access
+// extraction took the copy in fetchkubeconfig_state_deadline_test.go with it.
+//
+// package main's TestMain needs it for the same reason clusteraccess's does: under
+// `go test`, os.Executable() is THIS binary, so renderRootsFn's `<self> render
+// <env> --tfvars-only` shell-out re-runs the whole suite recursively and the run
+// HANGS rather than failing. Two TestMains, two guards.
+func renderReexecChild() bool {
+	return len(os.Args) >= 2 && os.Args[1] == "render"
+}

@@ -26,6 +26,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -45,6 +46,7 @@ var declarations = []func() extension.Extension{
 	brownfield.Extension,
 	budget.Extension,
 	chartguard.Extension,
+	clusteraccess.Extension,
 	docsguard.Extension,
 	objenc.Extension,
 	reconcilelanes.Extension,

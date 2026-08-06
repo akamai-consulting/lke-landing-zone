@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // ci_tfoutput.go — `llz ci tf-output <name>`, the assimilation of the scattered
@@ -24,7 +26,7 @@ import (
 // Package var so tests stub the terraform exec. stderr is discarded — a
 // zero-output state prints a warning there that must not reach the value.
 var tfOutputRunFn = func() (string, error) {
-	cmd := tfCommand("output", "-json")
+	cmd := tfbin.Command("output", "-json")
 	out, err := cmd.Output() // stdout only; stderr (the warning) dropped
 	return string(out), err
 }

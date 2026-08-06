@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 import (
 	"context"
@@ -36,12 +36,12 @@ func TestFetchKubeconfigWritesDecodedFile(t *testing.T) {
 	withFakeKubeconfig(t, fake)
 
 	out := filepath.Join(t.TempDir(), "nested", "kubeconfig")
-	if err := runCIFetchKubeconfig(fetchKubeconfigOpts{ref: clusterRef{clusterID: "5"}, output: out}); err != nil {
+	if err := RunFetch(FetchOpts{Ref: ClusterRef{ClusterID: "5"}, Output: out}); err != nil {
 		t.Fatalf("fetch-kubeconfig = %v", err)
 	}
 	got, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatalf("reading output: %v", err)
+		t.Fatalf("reading Output: %v", err)
 	}
 	if string(got) != raw {
 		t.Errorf("kubeconfig = %q, want decoded %q", got, raw)
@@ -55,7 +55,7 @@ func TestFetchKubeconfigMissingErrorsWithoutAllow(t *testing.T) {
 	fake := &fakeKubeconfigClient{kubeconfig: ""} // not-ready cluster
 	withFakeKubeconfig(t, fake)
 	out := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := runCIFetchKubeconfig(fetchKubeconfigOpts{ref: clusterRef{clusterID: "5"}, output: out}); err == nil {
+	if err := RunFetch(FetchOpts{Ref: ClusterRef{ClusterID: "5"}, Output: out}); err == nil {
 		t.Error("empty kubeconfig without --allow-missing should error")
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -70,7 +70,7 @@ func TestFetchKubeconfigAllowMissingSetsOutput(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", ghaOut)
 
 	out := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := runCIFetchKubeconfig(fetchKubeconfigOpts{ref: clusterRef{clusterID: "5"}, output: out, allowMissing: true}); err != nil {
+	if err := RunFetch(FetchOpts{Ref: ClusterRef{ClusterID: "5"}, Output: out, AllowMissing: true}); err != nil {
 		t.Fatalf("allow-missing fetch = %v", err)
 	}
 	b, _ := os.ReadFile(ghaOut)
@@ -81,7 +81,7 @@ func TestFetchKubeconfigAllowMissingSetsOutput(t *testing.T) {
 
 func TestFetchKubeconfigRequiresOutput(t *testing.T) {
 	withFakeKubeconfig(t, &fakeKubeconfigClient{})
-	if err := runCIFetchKubeconfig(fetchKubeconfigOpts{ref: clusterRef{clusterID: "5"}}); err == nil {
+	if err := RunFetch(FetchOpts{Ref: ClusterRef{ClusterID: "5"}}); err == nil {
 		t.Error("missing --output should error")
 	}
 }

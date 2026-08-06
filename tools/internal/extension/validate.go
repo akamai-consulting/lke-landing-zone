@@ -69,7 +69,21 @@ var bindableStates = map[BindingKind][]State{
 // TRANSCRIBED, not a derived fact — it is the most likely thing here to need a row
 // added, and adding one should be an argued change rather than a quiet widening.
 var grantStates = map[Grant][]State{
-	SecretCustody: {Seeded, Operating},
+	// SECOND WIDENING. `provisioned` was added for `cluster-access`, which fetches
+	// the cluster-admin kubeconfig. The row had only ever been shown credentials the
+	// platform MINTS (seeding) or REPLACES (rotation), both of which happen to a
+	// cluster that already works — so it encoded "custody begins once there is a
+	// platform to hold it". The bootstrap credential breaks that: the cloud issues
+	// it at provisioning time, and holding it is the PRECONDITION for seeding, not a
+	// consequence of it. A table that cannot express the first credential in the
+	// system's life is describing the middle of the story only.
+	//
+	// Note this widening is not symmetric with the first one. cloud-mutate gained
+	// `operating` at the END of the lifecycle (reconciler lanes, which keep running);
+	// this gains one at the START. Both were found the same way — by an extraction
+	// of code that already shipped — which is the argument for extracting the
+	// expensive capabilities before trusting the ceiling, not after.
+	SecretCustody: {Provisioned, Seeded, Operating},
 	CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
 	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
 }

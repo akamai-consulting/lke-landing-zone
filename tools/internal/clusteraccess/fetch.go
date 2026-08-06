@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 // fetchkubeconfig.go implements `llz ci fetch-kubeconfig` — fetch an LKE cluster's
 // admin kubeconfig straight from the Linode API and write it to a file.
@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 // kubeconfigClient is the slice of the Linode client fetch-kubeconfig needs,
@@ -30,41 +30,14 @@ type kubeconfigClient interface {
 
 var newKubeconfigClient = func(token string) kubeconfigClient { return linode.NewClient(token, 30*time.Second) }
 
-type fetchKubeconfigOpts struct {
-	ref          clusterRef
-	output       string
-	allowMissing bool
+type FetchOpts struct {
+	Ref          ClusterRef
+	Output       string
+	AllowMissing bool
 }
 
-func ciFetchKubeconfigCmd() *cobra.Command {
-	var o fetchKubeconfigOpts
-	c := &cobra.Command{
-		Use:   "fetch-kubeconfig",
-		Short: "write an LKE cluster's kubeconfig (from the Linode API) to a file",
-		Long: "Fetch the cluster's admin kubeconfig directly from the Linode API and write\n" +
-			"it to --output (mode 0600). The API-sourced alternative to reading\n" +
-			"kubeconfig_raw out of Terraform state — no terraform init / S3 backend / git\n" +
-			"auth, and no empty-output failure class. The cluster is resolved from\n" +
-			"--cluster-id, else --cluster-label (+ --linode-region), else cluster_label /\n" +
-			"region in <tfvars-dir>/<region>.tfvars. Reads LINODE_API_TOKEN (or\n" +
-			"LINODE_TOKEN). With --allow-missing, an absent/not-ready kubeconfig sets\n" +
-			"available=false on GITHUB_OUTPUT instead of failing.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIFetchKubeconfig(o) },
-	}
-	f := c.Flags()
-	f.StringVar(&o.output, "output", "", "absolute path to write the kubeconfig to (required)")
-	f.StringVar(&o.ref.region, "region", "", "deployment/env key (finds <region>.tfvars)")
-	f.StringVar(&o.ref.clusterID, "cluster-id", "", "explicit LKE cluster numeric ID (skips label resolution)")
-	f.StringVar(&o.ref.clusterLabel, "cluster-label", "", "LKE cluster label to resolve by")
-	f.StringVar(&o.ref.linodeRegion, "linode-region", "", "Linode datacenter region (e.g. us-ord) to disambiguate")
-	f.StringVar(&o.ref.tfvarsDir, "tfvars-dir", "terraform-iac-bootstrap/cluster", "dir holding <region>.tfvars")
-	f.BoolVar(&o.allowMissing, "allow-missing", false, "set available=false instead of failing when the kubeconfig is absent")
-	return c
-}
-
-func runCIFetchKubeconfig(o fetchKubeconfigOpts) error {
-	if o.output == "" {
+func RunFetch(o FetchOpts) error {
+	if o.Output == "" {
 		return fmt.Errorf("--output is required")
 	}
 	token := firstNonEmpty(os.Getenv("LINODE_API_TOKEN"), os.Getenv("LINODE_TOKEN"))
@@ -74,7 +47,7 @@ func runCIFetchKubeconfig(o fetchKubeconfigOpts) error {
 	client := newKubeconfigClient(token)
 	ctx := context.Background()
 
-	cid, err := resolveClusterID(ctx, client, o.ref)
+	cid, err := resolveClusterID(ctx, client, o.Ref)
 	if err != nil {
 		return err
 	}
@@ -87,7 +60,7 @@ func runCIFetchKubeconfig(o fetchKubeconfigOpts) error {
 	}
 	decoded, derr := base64.StdEncoding.DecodeString(encoded)
 	if encoded == "" || derr != nil || len(decoded) == 0 {
-		if o.allowMissing {
+		if o.AllowMissing {
 			fmt.Fprintf(os.Stderr, "::warning::fetch-kubeconfig: cluster %d has no kubeconfig yet (allow-missing) — available=false.\n", cid)
 			setGHAOutput("available", "false")
 			return nil
@@ -98,15 +71,15 @@ func runCIFetchKubeconfig(o fetchKubeconfigOpts) error {
 		return fmt.Errorf("cluster %d returned an empty kubeconfig (cluster not provisioned yet, or imported without a refresh)", cid)
 	}
 
-	if dir := filepath.Dir(o.output); dir != "" && dir != "." {
+	if dir := filepath.Dir(o.Output); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
 	}
-	if err := os.WriteFile(o.output, decoded, 0o600); err != nil {
-		return fmt.Errorf("writing kubeconfig to %s: %w", o.output, err)
+	if err := os.WriteFile(o.Output, decoded, 0o600); err != nil {
+		return fmt.Errorf("writing kubeconfig to %s: %w", o.Output, err)
 	}
-	fmt.Printf("fetch-kubeconfig: wrote cluster %d kubeconfig to %s (%d bytes).\n", cid, o.output, len(decoded))
+	fmt.Printf("fetch-kubeconfig: wrote cluster %d kubeconfig to %s (%d bytes).\n", cid, o.Output, len(decoded))
 	setGHAOutput("available", "true")
 	return nil
 }
@@ -124,4 +97,25 @@ func setGHAOutput(key, value string) {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s=%s\n", key, value)
+}
+
+// firstNonEmpty and firstLine are local copies of package main's glue — a few
+// lines each, with nothing to drift.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 140 {
+		s = s[:140] + "…"
+	}
+	return strings.TrimSpace(s)
 }

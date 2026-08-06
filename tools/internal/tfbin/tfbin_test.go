@@ -1,4 +1,4 @@
-package main
+package tfbin
 
 import (
 	"os"
@@ -61,17 +61,17 @@ func TestResolveTFBinHonoursOverride(t *testing.T) {
 	}
 }
 
-// tfBin must NOT cache: tests stub a fake binary on PATH, and a cached answer
+// Bin must NOT cache: tests stub a fake binary on PATH, and a cached answer
 // would leak whichever binary the first test in the package happened to resolve.
 func TestTFBinIsNotCached(t *testing.T) {
 	t.Setenv(tfBinEnv, "")
 	withStubPATH(t, "terraform")
-	if got := tfBin(); got != "terraform" {
+	if got := Bin(); got != "terraform" {
 		t.Fatalf("first resolution = %q, want terraform", got)
 	}
 	withStubPATH(t, "tofu", "terraform")
-	if got := tfBin(); got != "tofu" {
-		t.Errorf("after PATH changed, tfBin = %q — a cached answer would have kept terraform", got)
+	if got := Bin(); got != "tofu" {
+		t.Errorf("after PATH changed, Bin = %q — a cached answer would have kept terraform", got)
 	}
 }
 
@@ -79,9 +79,9 @@ func TestTFCommandUsesResolvedBinary(t *testing.T) {
 	prev := resolveTFBin
 	t.Cleanup(func() { resolveTFBin = prev })
 	resolveTFBin = func() string { return "tofu" }
-	cmd := tfCommand("output", "-json")
+	cmd := Command("output", "-json")
 	if filepath.Base(cmd.Path) != "tofu" && cmd.Args[0] != "tofu" {
-		t.Errorf("tfCommand built %v, want it to exec tofu", cmd.Args)
+		t.Errorf("Command built %v, want it to exec tofu", cmd.Args)
 	}
 	if len(cmd.Args) != 3 || cmd.Args[1] != "output" || cmd.Args[2] != "-json" {
 		t.Errorf("args = %v, want [tofu output -json]", cmd.Args)

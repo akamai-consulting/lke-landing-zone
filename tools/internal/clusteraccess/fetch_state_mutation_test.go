@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 // Gap-closing tests for fetchkubeconfig_state.go: the init retry's backoff and
 // the "why did kubeconfig_raw read empty?" diagnostics. The diagnostics are the
@@ -37,9 +37,9 @@ func TestTFInitBackoffWaitsAndGrows(t *testing.T) {
 
 // tfDiagStub answers the three read-only terraform calls the diagnostics make,
 // keyed on the joined args. A nil entry makes that call fail.
-func tfDiagStub(t *testing.T, replies map[string]string) {
+func tfDiagStub(t *testing.T, replies map[string]string) Deps {
 	t.Helper()
-	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+	return withExec(t, func(_ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		if reply, ok := replies[joined]; ok {
 			return []byte(reply), nil
@@ -54,14 +54,14 @@ func tfDiagStub(t *testing.T, replies map[string]string) {
 // the root even declares kubeconfig_raw, and the state resources say whether
 // init landed on the state cluster-bootstrap wrote.
 func TestFetchKubeconfigStateDiagnosticsReportsWhatItRead(t *testing.T) {
-	tfDiagStub(t, map[string]string{
+	d := tfDiagStub(t, map[string]string{
 		"version":        "OpenTofu v1.12.5\non darwin_arm64\n+ provider registry.opentofu.org/linode/linode v3.0.0",
 		"output -json":   `{"kubeconfig_raw":"","cluster_id":"123"}`,
 		"state list":     "module.cluster.linode_lke_cluster.this\nrandom_password.loki",
 		"unused-command": "",
 	})
 	out := captureStdout(t, func() {
-		fetchKubeconfigStateDiagnostics("primary", "cluster/primary/terraform.tfstate", "llz-state",
+		fetchKubeconfigStateDiagnostics(d, "primary", "cluster/primary/terraform.tfstate", "llz-state",
 			"Warning: Output \"kubeconfig_raw\" not found")
 	})
 
@@ -101,9 +101,9 @@ func TestFetchKubeconfigStateDiagnosticsReportsWhatItRead(t *testing.T) {
 // The mirror image: when every probe fails (or reads nothing) the diagnostics
 // must SAY so rather than print an empty section that reads as "nothing wrong".
 func TestFetchKubeconfigStateDiagnosticsFallsBackWhenNothingCanBeRead(t *testing.T) {
-	tfDiagStub(t, nil) // every terraform call fails
+	d := tfDiagStub(t, nil) // every terraform call fails
 	out := captureStdout(t, func() {
-		fetchKubeconfigStateDiagnostics("primary", "cluster/primary/terraform.tfstate", "llz-state", "  \n\t ")
+		fetchKubeconfigStateDiagnostics(d, "primary", "cluster/primary/terraform.tfstate", "llz-state", "  \n\t ")
 	})
 	for _, want := range []string{
 		"(no stderr captured)",
@@ -118,9 +118,9 @@ func TestFetchKubeconfigStateDiagnosticsFallsBackWhenNothingCanBeRead(t *testing
 
 // Unparseable `output -json` must land on the fallback, not on a half-read map.
 func TestFetchKubeconfigStateDiagnosticsUnparseableOutputJSON(t *testing.T) {
-	tfDiagStub(t, map[string]string{"output -json": "not json at all"})
+	d := tfDiagStub(t, map[string]string{"output -json": "not json at all"})
 	out := captureStdout(t, func() {
-		fetchKubeconfigStateDiagnostics("primary", "k", "b", "boom")
+		fetchKubeconfigStateDiagnostics(d, "primary", "k", "b", "boom")
 	})
 	if !strings.Contains(out, "(could not enumerate output keys)") {
 		t.Errorf("unparseable output JSON should report as un-enumerable:\n%s", out)

@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 // Termination coverage for fetch-kubeconfig-state's loops.
 //
@@ -147,15 +147,15 @@ func TestInstanceRootFrom_AnswersAreUsable(t *testing.T) {
 // tfInitWithRetry is the other bounded loop: it must stop at tfInitAttempts and
 // hand back the LAST error, sleeping between tries only.
 func TestTfInitWithRetry_GivesUpAfterTheAttemptBudget(t *testing.T) {
-	prevStream, prevSleep := tfInitStream, tfInitSleep
-	t.Cleanup(func() { tfInitStream, tfInitSleep = prevStream, prevSleep })
+	prevStream, prevSleep := TfInitStream, tfInitSleep
+	t.Cleanup(func() { TfInitStream, tfInitSleep = prevStream, prevSleep })
 
 	var calls int
 	var slept []time.Duration
 	tfInitSleep = func(d time.Duration) { slept = append(slept, d) }
-	tfInitStream = func(...string) error { calls++; return errors.New("blip") }
+	TfInitStream = func(...string) error { calls++; return errors.New("blip") }
 
-	if err := tfInitWithRetry("-backend-config=bucket=b"); err == nil {
+	if err := tfInitWithRetry(testDeps(t), "-backend-config=bucket=b"); err == nil {
 		t.Fatal("init failing every attempt must return an error")
 	}
 	if calls != tfInitAttempts {
@@ -172,14 +172,14 @@ func TestTfInitWithRetry_GivesUpAfterTheAttemptBudget(t *testing.T) {
 
 	// A blip that clears is not a failure: init is idempotent, so one retry wins.
 	calls = 0
-	tfInitStream = func(...string) error {
+	TfInitStream = func(...string) error {
 		calls++
 		if calls == 1 {
 			return errors.New("blip")
 		}
 		return nil
 	}
-	if err := tfInitWithRetry(); err != nil || calls != 2 {
+	if err := tfInitWithRetry(testDeps(t)); err != nil || calls != 2 {
 		t.Errorf("blip-then-ok: err=%v after %d attempts, want nil after 2", err, calls)
 	}
 }

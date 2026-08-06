@@ -26,6 +26,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 func ciCmd() *cobra.Command {
@@ -735,7 +737,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := tfCommandContext(ctx, "import", "-var-file="+varFile, addr, id)
+	cmd := tfbin.CommandContext(ctx, "import", "-var-file="+varFile, addr, id)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	runErr := cmd.Run()
 	// A context-deadline kill returns from Run() as an opaque "signal: killed"
@@ -760,7 +762,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 // or "" if the resource is not in state: `state show` of an absent address
 // exits non-zero, so the error path covers the not-in-state case.
 func tfStateID(addr string) string {
-	out, err := tfCommand("state", "show", addr).Output()
+	out, err := tfbin.Command("state", "show", addr).Output()
 	if err != nil {
 		return ""
 	}
@@ -783,7 +785,7 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 
 	// First attempt — the happy path. -no-color is load-bearing: the heal
 	// parsers anchor on the plain "  with <addr>," diagnostic lines.
-	applyLog, code, err := runTeed(tfBin(), "apply", "-no-color", "-auto-approve", plan)
+	applyLog, code, err := runTeed(tfbin.Bin(), "apply", "-no-color", "-auto-approve", plan)
 	if err != nil {
 		return fmt.Errorf("could not run terraform apply: %w", err)
 	}
@@ -888,7 +890,7 @@ func healFirewallCollision(g globalOpts, applyLog, varFile string, applyExit int
 
 // runTF runs a terraform subcommand with inherited stdio.
 func runTF(args ...string) error {
-	cmd := tfCommand(args...)
+	cmd := tfbin.Command(args...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return cmd.Run()
 }

@@ -18,7 +18,7 @@ Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`
 There is exactly **one** human-facing credential per LKE-Enterprise cluster: the
 Linode-issued **cluster-admin** kubeconfig (`lke-admin-token`), fetched via the
 Linode API or Terraform state
-([`fetchkubeconfig.go:9`](../../tools/cmd/llz/fetchkubeconfig.go),
+([`fetch.go:9`](../../tools/internal/clusteraccess/fetch.go),
 [`credentials_lkeadmin.go:45`](../../tools/cmd/llz/credentials_lkeadmin.go)) and
 shared by every SRE and every CI job
 ([`lke-admin-rotation.md:13`](../runbooks/lke-admin-rotation.md),

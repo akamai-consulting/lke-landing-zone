@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 import (
 	"encoding/json"
@@ -178,12 +178,13 @@ func TestDeregisterNullsLeaseKey(t *testing.T) {
 
 // open with --runner-configmap leases the IP after the ACL PUT.
 func TestRunnerACLOpenLeasesWhenConfigMapEnabled(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
 	withFakeACL(t, fake)
 	k := &fakeACLKubectl{getJSON: `{"data":{}}`}
 	withFakeKubectl(t, k, time.Date(2026, 6, 12, 17, 0, 0, 0, time.UTC))
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true, configMap: true}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true, ConfigMap: true}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
 	if data := k.lastPatchData(t); data["ip-1.2.3.4"] == nil {
@@ -194,16 +195,17 @@ func TestRunnerACLOpenLeasesWhenConfigMapEnabled(t *testing.T) {
 // revoke with --runner-configmap releases the lease even when open made no ACL
 // change (Modified=false), and does so before any error path.
 func TestRunnerACLRevokeReleasesLease(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}}}
 	withFakeACL(t, fake)
 	k := &fakeACLKubectl{getJSON: `{"data":{}}`}
 	withFakeKubectl(t, k, time.Date(2026, 6, 12, 17, 0, 0, 0, time.UTC))
 
 	// open (no ACL change — already present) records state + leases.
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", configMap: true}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", ConfigMap: true}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
-	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e", configMap: true}); err != nil {
+	if err := RunACL(d, "revoke", ACLOpts{Region: "e2e", ConfigMap: true}); err != nil {
 		t.Fatalf("revoke = %v", err)
 	}
 	if data := k.lastPatchData(t); data["ip-1.2.3.4"] != nil {

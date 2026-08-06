@@ -85,12 +85,16 @@ categories:
     #                       plus internal/harborauth and internal/s3sig.
     #   38,364 / 202 files  guard-charts, the fourth gate — plus internal/guardwalk,
     #                       the manifest traversal TEN guards share. -457.
+    #   37,483 / 199 files  cluster-access, the first extension whose binding is a
+    #                       TRANSITION at `provisioned` — and the second to widen
+    #                       grantStates (secret-custody, for the cloud-issued
+    #                       bootstrap kubeconfig). Plus internal/tfbin. -881.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 38364
+    budget: 37483
     exact: true
     include:
       - "tools/cmd/llz/*.go"

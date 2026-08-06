@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 import (
 	"context"
@@ -79,10 +79,11 @@ func withFakeACL(t *testing.T, fake *fakeACLClient) {
 }
 
 func TestRunnerACLOpenAddsIPAndRecordsState(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
 	withFakeACL(t, fake)
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
 	if len(fake.puts) != 1 || !fake.puts[0].ContainsIP("1.2.3.4") {
@@ -98,10 +99,11 @@ func TestRunnerACLOpenAddsIPAndRecordsState(t *testing.T) {
 }
 
 func TestRunnerACLOpenNoChangeWhenPresent(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}}}
 	withFakeACL(t, fake)
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4"}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4"}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
 	if len(fake.puts) != 0 {
@@ -114,10 +116,11 @@ func TestRunnerACLOpenNoChangeWhenPresent(t *testing.T) {
 }
 
 func TestRunnerACLOpenNoChangeWhenACLDisabled(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: false}}
 	withFakeACL(t, fake)
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4"}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4"}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
 	if len(fake.puts) != 0 {
@@ -126,6 +129,7 @@ func TestRunnerACLOpenNoChangeWhenACLDisabled(t *testing.T) {
 }
 
 func TestRunnerACLRevokeRemovesIPAndClearsState(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32", "9.9.9.0/24"}}}
 	withFakeACL(t, fake)
 
@@ -133,7 +137,7 @@ func TestRunnerACLRevokeRemovesIPAndClearsState(t *testing.T) {
 	if err := writeRunnerACLState("e2e", runnerACLState{ClusterID: "5", IP: "1.2.3.4", Modified: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e"}); err != nil {
+	if err := RunACL(d, "revoke", ACLOpts{Region: "e2e"}); err != nil {
 		t.Fatalf("revoke = %v", err)
 	}
 	if len(fake.puts) != 1 || fake.puts[0].ContainsIP("1.2.3.4") {
@@ -147,6 +151,7 @@ func TestRunnerACLRevokeRemovesIPAndClearsState(t *testing.T) {
 // A racing writer clobbers our open PUT once; verify-after-write must detect
 // the dropped IP, re-read the racer's current list, and retry until it sticks.
 func TestRunnerACLOpenRetriesWhenClobbered(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{
 		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}},
 		clobberN:   1,
@@ -154,7 +159,7 @@ func TestRunnerACLOpenRetriesWhenClobbered(t *testing.T) {
 	}
 	withFakeACL(t, fake)
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true}); err != nil {
 		t.Fatalf("open = %v", err)
 	}
 	if len(fake.puts) != 2 {
@@ -175,6 +180,7 @@ func TestRunnerACLOpenRetriesWhenClobbered(t *testing.T) {
 // job surfaces that this runner never got apiserver access) after the bounded
 // retries, not loop forever.
 func TestRunnerACLOpenFailsAfterMaxAttempts(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{
 		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}},
 		clobberN:   1000, // always clobbered
@@ -182,7 +188,7 @@ func TestRunnerACLOpenFailsAfterMaxAttempts(t *testing.T) {
 	}
 	withFakeACL(t, fake)
 
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true}); err == nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true}); err == nil {
 		t.Fatal("expected open to fail after exhausting retries, got nil")
 	}
 	if len(fake.puts) != aclMaxAttempts {
@@ -193,6 +199,7 @@ func TestRunnerACLOpenFailsAfterMaxAttempts(t *testing.T) {
 // A racing writer re-adds our IP after our revoke PUT; verify-after-write must
 // detect it's still present and retry until the removal sticks.
 func TestRunnerACLRevokeRetriesWhenReadded(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{
 		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32", "9.9.9.0/24"}},
 		clobberN:   1,
@@ -202,7 +209,7 @@ func TestRunnerACLRevokeRetriesWhenReadded(t *testing.T) {
 	if err := writeRunnerACLState("e2e", runnerACLState{ClusterID: "5", IP: "1.2.3.4", Modified: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e"}); err != nil {
+	if err := RunACL(d, "revoke", ACLOpts{Region: "e2e"}); err != nil {
 		t.Fatalf("revoke = %v", err)
 	}
 	if len(fake.puts) != 2 {
@@ -219,6 +226,7 @@ func TestRunnerACLRevokeRetriesWhenReadded(t *testing.T) {
 // Revoke runs under `if: always()`: a writer that keeps re-adding our IP must
 // NOT make revoke return a hard error (that would fail an otherwise-color.Green job).
 func TestRunnerACLRevokeTolerantWhenAlwaysReadded(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{
 		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}},
 		clobberN:   1000, // racer re-adds every time
@@ -228,7 +236,7 @@ func TestRunnerACLRevokeTolerantWhenAlwaysReadded(t *testing.T) {
 	if err := writeRunnerACLState("e2e", runnerACLState{ClusterID: "5", IP: "1.2.3.4", Modified: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e"}); err != nil {
+	if err := RunACL(d, "revoke", ACLOpts{Region: "e2e"}); err != nil {
 		t.Fatalf("revoke must stay tolerant (nil) even when it can't win, got %v", err)
 	}
 	if len(fake.puts) != aclMaxAttempts {
@@ -237,9 +245,10 @@ func TestRunnerACLRevokeTolerantWhenAlwaysReadded(t *testing.T) {
 }
 
 func TestRunnerACLRevokeNoStateIsNoOp(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{}
 	withFakeACL(t, fake)
-	if err := runRunnerACL("revoke", runnerACLOpts{region: "absent"}); err != nil {
+	if err := RunACL(d, "revoke", ACLOpts{Region: "absent"}); err != nil {
 		t.Fatalf("revoke(no state) = %v", err)
 	}
 	if len(fake.puts) != 0 {
@@ -248,23 +257,25 @@ func TestRunnerACLRevokeNoStateIsNoOp(t *testing.T) {
 }
 
 func TestRunnerACLEmptyTokenNoOps(t *testing.T) {
+	d := testDeps(t)
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("LINODE_API_TOKEN", "")
 	// newACLClient must not even be called; leave the default in place.
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4"}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4"}); err != nil {
 		t.Errorf("empty-token open should no-op nil, got %v", err)
 	}
 }
 
 func TestRunnerACLOpenUnresolvableTolerated(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{} // no clusters → resolution fails
 	withFakeACL(t, fake)
 	// fail-on-missing=false → no-op (e.g. a destroy job with no cluster).
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterLabel: "gone", failOnMissing: false}); err != nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterLabel: "gone", FailOnMissing: false}); err != nil {
 		t.Errorf("unresolvable open with fail-on-missing=false should no-op, got %v", err)
 	}
 	// fail-on-missing=true → error.
-	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterLabel: "gone", failOnMissing: true}); err == nil {
+	if err := RunACL(d, "open", ACLOpts{Region: "e2e", ClusterLabel: "gone", FailOnMissing: true}); err == nil {
 		t.Error("unresolvable open with fail-on-missing=true should error")
 	}
 }
@@ -279,7 +290,7 @@ func TestResolveClusterIDFromTFVars(t *testing.T) {
 		{"id": json.Number("7"), "label": "lke-e2e", "region": "us-ord"},
 		{"id": json.Number("8"), "label": "lke-e2e", "region": "us-sea"},
 	}}
-	id, err := resolveClusterID(context.Background(), fake, clusterRef{region: "e2e", tfvarsDir: dir})
+	id, err := resolveClusterID(context.Background(), fake, ClusterRef{Region: "e2e", TfvarsDir: dir})
 	if err != nil {
 		t.Fatalf("resolveClusterID = %v", err)
 	}
@@ -299,7 +310,7 @@ func TestResolveClusterIDRetriesTransientListFailure(t *testing.T) {
 	}
 	withFakeACL(t, fake) // zeroes aclRetryDelay so the retries are instant
 	id, err := resolveClusterID(context.Background(), fake,
-		clusterRef{clusterLabel: "lke-e2e", linodeRegion: "us-ord"})
+		ClusterRef{ClusterLabel: "lke-e2e", LinodeRegion: "us-ord"})
 	if err != nil {
 		t.Fatalf("resolveClusterID should retry transient list failures: %v", err)
 	}
@@ -393,6 +404,7 @@ func TestWaitACLEnforced(t *testing.T) {
 // mutation they were checking for. Verified against a live cluster before the
 // fix — the ACL revision-id changed.
 func TestRunnerACLDryRunMakesNoWrites(t *testing.T) {
+	d := testDeps(t)
 	for _, mode := range []string{"open", "revoke"} {
 		t.Run(mode, func(t *testing.T) {
 			fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
@@ -402,8 +414,8 @@ func TestRunnerACLDryRunMakesNoWrites(t *testing.T) {
 			if mode == "revoke" {
 				fake.acl.IPv4 = append(fake.acl.IPv4, "1.2.3.4")
 			}
-			o := runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true, dryRun: true}
-			if err := runRunnerACL(mode, o); err != nil {
+			o := ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true, DryRun: true}
+			if err := RunACL(d, mode, o); err != nil {
 				t.Fatalf("%s --dry-run = %v", mode, err)
 			}
 			if len(fake.puts) != 0 {
@@ -422,10 +434,11 @@ func TestRunnerACLDryRunMakesNoWrites(t *testing.T) {
 // The dry-run branch must still do the real RESOLUTION work — a dry run that
 // silently skips cluster lookup would hide the failure it exists to surface.
 func TestRunnerACLDryRunStillResolvesAndReads(t *testing.T) {
+	d := testDeps(t)
 	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
 	withFakeACL(t, fake)
-	o := runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true, dryRun: true}
-	if err := runRunnerACL("open", o); err != nil {
+	o := ACLOpts{Region: "e2e", ClusterID: "5", Ip: "1.2.3.4", FailOnMissing: true, DryRun: true}
+	if err := RunACL(d, "open", o); err != nil {
 		t.Fatalf("open --dry-run = %v", err)
 	}
 	if fake.gets == 0 {

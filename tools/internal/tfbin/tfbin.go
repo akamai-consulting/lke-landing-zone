@@ -1,4 +1,15 @@
-package main
+// Package tfbin resolves WHICH terraform-shaped binary to run, from a fixed
+// allowlist, and builds commands against it.
+//
+// It exists because the OpenTofu migration left two call sites behind — `tf-import`
+// and `tf-apply` reached for exec.Command with a hardcoded name and only surfaced
+// when a real apply ran in CI. Everything that shells out to terraform/tofu goes
+// through here so there is one place the name is decided.
+//
+// EIGHT CALLERS across package main and now two extensions; it became a package
+// when `cluster-access` needed it, on the same rule as guardwalk — a helper called
+// by that many things is a library, not one file's private detail.
+package tfbin
 
 // tfbin.go — the one place that decides which Terraform-family binary llz shells
 // out to. The Go half of template-scripts/lib-common.sh's detect_tf, and it
@@ -43,7 +54,7 @@ var resolveTFBin = func() string {
 	return "tofu"
 }
 
-// tfBin returns the Terraform-family binary to exec.
+// Bin returns the Terraform-family binary to exec.
 //
 // Deliberately NOT cached. Caching was the first instinct — "a plan and its
 // apply must not straddle two binaries" — but nothing mutates PATH inside a
@@ -51,19 +62,19 @@ var resolveTFBin = func() string {
 // defeating every test that stubs a fake binary on PATH: whichever test ran
 // first would pin the answer for the whole package. A LookPath per call is
 // cheap, and being observable in a test is worth more here.
-func tfBin() string { return resolveTFBin() }
+func Bin() string { return resolveTFBin() }
 
-// tfCommand builds an exec.Cmd for the resolved binary. Every llz shell-out to
+// Command builds an exec.Cmd for the resolved binary. Every llz shell-out to
 // Terraform/OpenTofu goes through here.
-func tfCommand(args ...string) *exec.Cmd {
-	return exec.Command(tfBin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
+func Command(args ...string) *exec.Cmd {
+	return exec.Command(Bin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
 }
 
-// tfCommandContext is tfCommand with a deadline, for the call sites that bound a
+// CommandContext is Command with a deadline, for the call sites that bound a
 // hung state-refresh. It exists so a caller needing a context does not reach for
 // exec.CommandContext directly and reintroduce a hardcoded binary name — which
 // is exactly how `tf-import` and `tf-apply` were left behind by the OpenTofu
 // migration and only surfaced when a real apply ran in CI.
-func tfCommandContext(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, tfBin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
+func CommandContext(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, Bin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
 }

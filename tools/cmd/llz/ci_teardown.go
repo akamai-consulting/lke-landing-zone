@@ -25,6 +25,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 func teardownDeps() teardown.Deps {
@@ -40,7 +42,7 @@ func teardownDeps() teardown.Deps {
 			return runCombined(cmd)
 		},
 		Summary: appendGHAFile,
-		TFBin:   tfBin,
+		TFBin:   tfbin.Bin,
 		Confirm: func() bool { return gopts.yes },
 	}
 }

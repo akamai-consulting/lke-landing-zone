@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 // runner_acl_configmap.go is the persistence half of `llz ci runner-acl`: it
 // records this runner's egress IP as a time-boxed lease in the

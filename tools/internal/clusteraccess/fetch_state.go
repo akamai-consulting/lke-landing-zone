@@ -1,4 +1,4 @@
-package main
+package clusteraccess
 
 // fetchkubeconfig_state.go implements `llz ci fetch-kubeconfig-state` — the
 // native port of the fetch-kubeconfig composite action's inline terraform
@@ -22,38 +22,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
-func ciFetchKubeconfigStateCmd() *cobra.Command {
-	var region, output string
-	var allowMissing bool
-	c := &cobra.Command{
-		Use:   "fetch-kubeconfig-state",
-		Short: "init the cluster TF backend and write the kubeconfig_raw output to a file",
-		Long: "Native port of the fetch-kubeconfig composite action's inline body. Runs\n" +
-			"`terraform init` against the cluster/<region> state key (bucket from\n" +
-			"$TF_STATE_BUCKET; init output is NOT swallowed — a failed init is the top\n" +
-			"suspect when `terraform output` reads empty against a state that has the\n" +
-			"value), then writes `terraform output -raw kubeconfig_raw` to --output\n" +
-			"(mode 0600). An empty output dumps grouped diagnostics (output keys, state\n" +
-			"resources) and either fails or, with --allow-missing, sets available=false\n" +
-			"on GITHUB_OUTPUT. Run from the cluster terraform working directory.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIFetchKubeconfigState(region, output, allowMissing)
-		},
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment/env key, e.g. primary (required)")
-	c.Flags().StringVar(&output, "output", "", "absolute path to write the kubeconfig to (required)")
-	c.Flags().BoolVar(&allowMissing, "allow-missing", false, "set available=false instead of failing when kubeconfig_raw is absent")
-	return c
-}
-
-// tfInitStream runs `terraform init` with streamed output. A package var so
+// TfInitStream runs `terraform init` with streamed output. A package var so
 // tests can record the backend config without a real backend.
-var tfInitStream = func(args ...string) error {
-	cmd := tfCommand(append([]string{"init"}, args...)...)
+var TfInitStream = func(args ...string) error {
+	cmd := tfbin.Command(append([]string{"init"}, args...)...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -71,10 +46,10 @@ var (
 // state backend — all transient-prone on a hosted runner — and is idempotent,
 // so a single blip must not fail a long (~30-min) provisioning run on the first
 // attempt.
-func tfInitWithRetry(args ...string) error {
+func tfInitWithRetry(d Deps, args ...string) error {
 	var err error
 	for attempt := 1; attempt <= tfInitAttempts; attempt++ {
-		if err = tfInitStream(args...); err == nil {
+		if err = TfInitStream(args...); err == nil {
 			return nil
 		}
 		if attempt < tfInitAttempts {
@@ -128,7 +103,7 @@ func instanceRootFrom(dir string) (string, error) {
 	}
 }
 
-func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
+func RunFetchFromState(d Deps, region, output string, allowMissing bool) error {
 	if region == "" || output == "" {
 		return fmt.Errorf("--region and --output are required")
 	}
@@ -143,7 +118,7 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 		return fmt.Errorf("rendering the cluster TF root before init: %w", err)
 	}
 
-	if err := tfInitWithRetry(
+	if err := tfInitWithRetry(d,
 		"-backend-config=bucket="+bucket,
 		"-backend-config=key="+stateKey,
 		"-backend-config=region=us-east-1"); err != nil {
@@ -158,7 +133,7 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 
 	// Capture stderr (don't discard it) so an empty result is explainable.
 	var stdout, stderr bytes.Buffer
-	cmd := tfCommand("output", "-raw", "kubeconfig_raw")
+	cmd := tfbin.Command("output", "-raw", "kubeconfig_raw")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	_ = cmd.Run()
 
@@ -170,7 +145,7 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	// writing garbage. `allow-missing` (the on-failure diagnostics path) then
 	// reports available=false with a clear reason instead of poisoning the probe.
 	if reason := kubeconfigRawProblem(stdout.Bytes()); reason != "" {
-		fetchKubeconfigStateDiagnostics(region, stateKey, bucket, stderr.String())
+		fetchKubeconfigStateDiagnostics(d, region, stateKey, bucket, stderr.String())
 		if allowMissing {
 			fmt.Fprintf(os.Stderr, "::warning::kubeconfig_raw for %s %s (allow-missing=true) — see diagnostics above.\n", region, reason)
 			setGHAOutput("available", "false")
@@ -211,11 +186,11 @@ func kubeconfigRawProblem(b []byte) string {
 
 // fetchKubeconfigStateDiagnostics dumps why kubeconfig_raw read empty —
 // best-effort, grouped for the run log.
-func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr string) {
+func fetchKubeconfigStateDiagnostics(d Deps, region, stateKey, bucket, outputStderr string) {
 	fmt.Printf("::group::fetch-kubeconfig diagnostics — kubeconfig_raw empty for %s\n", region)
 	fmt.Printf("state key : %s\n", stateKey)
 	fmt.Printf("bucket    : %s\n", bucket)
-	if out, err := execOutput(tfBin(), "version"); err == nil {
+	if out, err := d.Exec(tfbin.Bin(), "version"); err == nil {
 		lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 3)
 		for _, l := range lines[:min(2, len(lines))] {
 			fmt.Println(l)
@@ -229,7 +204,7 @@ func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr stri
 	}
 	fmt.Println("--- root output keys (json) ---")
 	keysListed := false
-	if out, err := execOutput(tfBin(), "output", "-json"); err == nil {
+	if out, err := d.Exec(tfbin.Bin(), "output", "-json"); err == nil {
 		var outputs map[string]json.RawMessage
 		if json.Unmarshal(out, &outputs) == nil {
 			for k := range outputs {
@@ -243,7 +218,7 @@ func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr stri
 	}
 	fmt.Println("--- state resources (lke / kubeconfig) ---")
 	matched := false
-	if out, err := execOutput(tfBin(), "state", "list"); err == nil {
+	if out, err := d.Exec(tfbin.Bin(), "state", "list"); err == nil {
 		for _, l := range strings.Split(string(out), "\n") {
 			lower := strings.ToLower(l)
 			if strings.Contains(lower, "lke") || strings.Contains(lower, "kubeconfig") {

@@ -10,19 +10,28 @@ package extension
 
 import "testing"
 
-// grantStates is judgement transcribed, and the fourth extension changed a row in
-// it. Pin the whole table: a widening should be an argued edit to this test and
-// its comment, not a quiet one that nothing notices.
+// grantStates is judgement transcribed, and TWO extensions have now changed a row
+// in it. Pin the whole table: a widening should be an argued edit to this test and
+// its comment, not a quiet one that nothing notices. Both widenings arrived the
+// same way — an extraction of code that already shipped and could not be described
+// — so treat a failure here as evidence about the table, not about the caller.
 //
-// The specific regression this guards is the one that produced the change. Adding
-// `operating` to cloud-mutate was correct — two shipping reconciler lanes mutate
-// Linode Volumes continuously — but the four states it was added to are NOT
-// therefore negotiable: `scaffolded` and `configured` have no cloud to mutate, and
-// a cloud-mutating binding at `verified` is an assertion that changes what it
-// measures.
+// The regressions this guards, in the order they were found:
+//
+//   - cloud-mutate gained `operating` (fourth extension). Correct: two shipping
+//     reconciler lanes mutate Linode Volumes continuously. But the four states it
+//     was added to are NOT therefore negotiable — `scaffolded` and `configured`
+//     have no cloud to mutate, and a cloud-mutating binding at `verified` is an
+//     assertion that changes what it measures.
+//   - secret-custody gained `provisioned` (eleventh, `cluster-access`). Correct:
+//     the cluster-admin kubeconfig is issued by the cloud at provisioning time and
+//     holding it is what MAKES seeding possible. The states it was NOT given still
+//     matter — custody at `scaffolded` or `configured` would mean a credential
+//     exists before anything has been built to issue one, which is the shape of a
+//     hardcoded secret rather than a fetched one.
 func TestGrantStatesTableIsPinned(t *testing.T) {
 	want := map[Grant][]State{
-		SecretCustody: {Seeded, Operating},
+		SecretCustody: {Provisioned, Seeded, Operating},
 		CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
 		ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
 	}

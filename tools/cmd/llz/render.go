@@ -33,6 +33,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // tfrootTokens resolves the two copier tokens the generated TF roots carry:
@@ -684,16 +686,16 @@ func renderTfvars(base string, assigns []clusterspec.Assign) string {
 // returns content unchanged — render and render --check both call it, so they
 // stay consistent regardless.
 //
-// Resolution goes through tfBin() rather than the open-coded tofu-then-terraform
+// Resolution goes through tfbin.Bin() rather than the open-coded tofu-then-terraform
 // probe this used to carry: it already had the right PREFERENCE, but as a second
 // copy of the policy it could drift from the one every other call site uses (and
 // it ignored $TF).
 func fmtHCL(content string) string {
-	bin := tfBin()
+	bin := tfbin.Bin()
 	if _, err := execLookPath(bin); err != nil {
 		return content
 	}
-	cmd := exec.Command(bin, "fmt", "-") // #nosec G204 -- bin resolved by tfBin()
+	cmd := exec.Command(bin, "fmt", "-") // #nosec G204 -- bin resolved by tfbin.Bin()
 	cmd.Stdin = strings.NewReader(content)
 	out, err := cmd.Output()
 	if err != nil {

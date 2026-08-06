@@ -32,26 +32,6 @@ func TestWriteEnvFile(t *testing.T) {
 	}
 }
 
-func TestRemoveRunnerACLState(t *testing.T) {
-	t.Setenv("RUNNER_TEMP", t.TempDir())
-
-	// Absent file is not an error.
-	if err := removeRunnerACLState("ord"); err != nil {
-		t.Errorf("remove absent = %v, want nil", err)
-	}
-	// Present file is removed.
-	path := runnerACLStatePath("ord")
-	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := removeRunnerACLState("ord"); err != nil {
-		t.Errorf("remove present = %v", err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("state file still present after remove")
-	}
-}
-
 func TestEditYAMLFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "spec.yaml")

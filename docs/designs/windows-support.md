@@ -138,7 +138,7 @@ Grounded in the code as it stands. "Build" = stops a Windows binary from existin
   "windows"` → `rundll32 url.dll,FileProtocolHandler` (or `cmd /c start`).
   One-liner.
 - **Hardcoded `/tmp`.** (Also resolved with the Harbor port-forward removal — `harbor-pf.{log,pid}` no longer exists. Retained as an example of the class.)
-  replace with `os.TempDir()` (the pattern `runner_acl.go:309-311` already uses).
+  replace with `os.TempDir()` (the pattern `internal/clusteraccess/acl.go` already uses).
   CI-path only, but trivially correct to fix.
 - **Mostly already portable.** Path handling uses `filepath` throughout, password
   entry uses `golang.org/x/term` (cross-platform), `RUNNER_TEMP`/`os.TempDir()`
