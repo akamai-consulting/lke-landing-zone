@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 // credentials_probe.go holds the credential-probing primitives shared by the
 // token-inventory writer (ci_token_inventory.go) and token validation
@@ -19,10 +19,10 @@ import (
 	"time"
 )
 
-// ghPATProbe performs one authenticated request and returns the HTTP status
+// GHPATProbe performs one authenticated request and returns the HTTP status
 // (0 == unreachable) and the raw token-expiration header. Package var so callers
 // are exercisable without network access.
-var ghPATProbe = func(api, token string) (code int, expHeader string, err error) {
+var GHPATProbe = func(api, token string) (code int, expHeader string, err error) {
 	url := strings.TrimRight(api, "/") + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -42,7 +42,7 @@ var ghPATProbe = func(api, token string) (code int, expHeader string, err error)
 
 // patTarget is one service PAT to self-check: its display name, the API base to
 // probe, and the token value (empty when the secret isn't set).
-type patTarget struct {
+type PATTarget struct {
 	name  string
 	api   string
 	token string
@@ -51,7 +51,7 @@ type patTarget struct {
 // credLister is the read-only slice of the Linode client the token inventory
 // needs. Injecting it lets the PAT expiry policy logic run against canned
 // responses.
-type credLister interface {
+type CredLister interface {
 	ListProfileTokens(ctx context.Context) ([]map[string]any, error)
 	ListObjectStorageKeys(ctx context.Context) ([]map[string]any, error)
 }

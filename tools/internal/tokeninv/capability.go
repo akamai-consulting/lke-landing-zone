@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 // token_capability.go — AUTHORIZATION probing, the layer above the VALIDITY
 // probe in token_validate.go. Validity answers "does this credential
@@ -10,7 +10,7 @@ package main
 //	       public key: HTTP 403: Resource not accessible by personal access token
 //
 // A fine-grained PAT missing "Secrets: write" still authenticates cleanly against
-// the API root that ghPATProbe hits, so it sails through validate-tokens with
+// the API root that GHPATProbe hits, so it sails through validate-tokens with
 // months of life left and then 403s six minutes later — AFTER the cluster, apl-
 // core, Kyverno and the Argo bridge are already up. That failure lands past the
 // `foundation-ready` phase mark, leaving a half-configured deployment with no
@@ -37,10 +37,10 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// ghCapabilityProbe GETs one API path with the credential and returns the HTTP
+// GHCapabilityProbe GETs one API path with the credential and returns the HTTP
 // status (0 == unreachable). Package var so callers are exercisable without
-// network access, matching the ghPATProbe / linodeProbe seams.
-var ghCapabilityProbe = func(api, token, path string) (int, error) {
+// network access, matching the GHPATProbe / LinodeProbe seams.
+var GHCapabilityProbe = func(api, token, path string) (int, error) {
 	url := strings.TrimRight(api, "/") + path
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -58,7 +58,7 @@ var ghCapabilityProbe = func(api, token, path string) (int, error) {
 	return resp.StatusCode, nil
 }
 
-// gitRefsProbe performs the git smart-HTTP ref-discovery handshake — the FIRST
+// GitRefsProbe performs the git smart-HTTP ref-discovery handshake — the FIRST
 // request any `git clone`/`git fetch`/`ls-remote` makes, and the one Argo CD's
 // repo-server makes when it computes an Application's target state. It is a
 // plain GET, read-only, and transfers no objects.
@@ -77,7 +77,7 @@ var ghCapabilityProbe = func(api, token, path string) (int, error) {
 //
 // Username is the `x-access-token` convention authedGitURL already uses: GitHub
 // ignores it for a PAT, but the Basic header must carry something.
-var gitRefsProbe = func(server, token, path string) (int, error) {
+var GitRefsProbe = func(server, token, path string) (int, error) {
 	url := strings.TrimRight(server, "/") + path
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -240,9 +240,9 @@ func probeCapability(c capabilityCheck, token string) capabilityResult {
 	var err error
 	switch c.transport {
 	case capGit:
-		code, err = gitRefsProbe(envOr("GITHUB_SERVER_URL", "https://github.com"), token, path)
+		code, err = GitRefsProbe(envOr("GITHUB_SERVER_URL", "https://github.com"), token, path)
 	default:
-		code, err = ghCapabilityProbe(envOr("GITHUB_API", "https://api.github.com"), token, path)
+		code, err = GHCapabilityProbe(envOr("GITHUB_API", "https://api.github.com"), token, path)
 	}
 	if err != nil {
 		code = 0

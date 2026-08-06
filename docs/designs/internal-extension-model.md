@@ -7,17 +7,31 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 `reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
 `template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
 `obj-encryption` (`tools/internal/objenc`), `guard-charts`
-(`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`) and `health-sla`
-(`tools/internal/healthsla`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`), `health-sla`
+(`tools/internal/healthsla`) and `token-inventory` (`tools/internal/tokeninv`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all twelve still run because `ci.go` and the reconciler register them, and the declarations are inert.
-All four kinds, six states including `seeded` — the group the old ceiling banned by omission — ALL SEVEN grants, both values of `Always`, multi-binding extensions,
+all thirteen still run because `ci.go` and the reconciler register them, and the declarations are inert.
+All four kinds, seven states including `configured` (the last unclaimed one) and `seeded` — the group the old ceiling banned by omission — ALL EIGHT grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
 rather than incidental. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
 the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that design is not
 contradicted here, only re-sequenced, and is tracked in issue #399.
+
+**The VOCABULARY was wrong once, and it took three extractions in a row to prove it.**
+`secret-custody` was a single word documented as *"read or write credential material"*. `cluster-access`
+WRITES a kubeconfig (custody); `health-sla` READS `updated_time` with the root token (declared custody
+under protest); `token-inventory` READS every pipeline credential and mutates nothing — and that one
+was **inexpressible**, because a gate permits `read-repo` alone and an assertion permits read grants
+only, which `secret-custody` was not. The grant was split into `secret-read` (reading credential
+material or its metadata; read-only) and `secret-custody` (placing it; mutating). **This is the model's
+only vocabulary ADDITION**, as against two `grantStates` widenings, and the distinction it draws is the
+one a reviewer actually wants: *"this could leak a secret"* versus *"this decides what the secret is"*.
+
+Note what did NOT happen: no `grantStates` row was widened. The ceiling was not too tight, the
+vocabulary was too coarse — and widening the row would have let every credential-reading check in the
+repo claim a mutating grant.
 
 **The ceiling has been wrong twice, at opposite ends of the lifecycle, and both times an
 extraction of shipping code found it.** The second: `secret-custody` was legal at `seeded` and
@@ -213,7 +227,7 @@ count from ~57 toward ~49.
 
 ### Grants
 
-`read-repo` · `cloud-read` · `cluster-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
+`read-repo` · `cloud-read` · `cluster-read` · `secret-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
 `own-paths`
 
 The vocabulary is closed. [The catalog](internal-extensions.md) records how it distributes across all
@@ -238,7 +252,7 @@ The ceiling is now the relationship between the two. `Validate()` enforces:
 | a `transition:seeded` binding **must** declare `secret-custody` | that transition is *defined* by placing credential material; claiming the state without the grant hides custody from the reviewer reading the grant line |
 | `own-paths` only on a `transition` to `scaffolded` or `upgraded` | it is exactly `.template-manifest`'s `owned` class — "copier must not render these bytes, something else does" — and a fence only matters when the thing it fences off runs. Copier runs at exactly two moments: `llz new` and `copier update`. Writing a file at some other state is not grounds for the grant; being outside copier's render is (see the catalog's Decision 1) |
 | every binding must declare **at least one** grant | the grant is the handle the action receives — a read-only kubeconfig, a path-fenced OpenBao token — so a binding asking for nothing is handed nothing and cannot run |
-| `secret-custody` only at `provisioned`, `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `cluster-write` at the same five | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
+| `secret-custody` (PLACING credential material — reading it is `secret-read`, which is unrestricted) only at `provisioned`, `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `cluster-write` at the same five | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
 
 Plus the structural rules: kebab-case unique names, at least one binding, closed vocabularies, no
 duplicate bindings or grants.

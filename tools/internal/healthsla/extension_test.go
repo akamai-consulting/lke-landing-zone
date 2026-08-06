@@ -42,15 +42,19 @@ func TestHealthSLASplitsOnCapabilityNotCount(t *testing.T) {
 		}
 		return false
 	}
-	if !has("rotation-sla", extension.SecretCustody) {
-		t.Error("rotation-sla dropped secret-custody — the Loki OBJ-key check still reads " +
+	if !has("rotation-sla", extension.SecretRead) {
+		t.Error("rotation-sla dropped secret-read — the Loki OBJ-key check still reads " +
 			"OPENBAO_ROOT_TOKEN and execs bao with it, so dropping the grant makes the " +
 			"DECLARATION the thing that is wrong")
 	}
-	if has("component-readiness", extension.SecretCustody) {
-		t.Error("component-readiness gained secret-custody — it holds no credential. This is " +
-			"exactly the over-granting that splitting on capability was meant to prevent; if " +
-			"the readiness checks now need a credential, that is a change worth arguing for")
+	if has("rotation-sla", extension.SecretCustody) {
+		t.Error("secret-custody claims this lane PLACES credential material; it reads " +
+			"updated_time. That is the conflation the secret-read split removed")
+	}
+	if has("component-readiness", extension.SecretRead) || has("component-readiness", extension.SecretCustody) {
+		t.Error("component-readiness touched a credential grant — it holds no credential. This " +
+			"is exactly the over-granting that splitting on capability was meant to prevent; if " +
+			"the readiness checks now need one, that is a change worth arguing for")
 	}
 	for _, name := range []string{"rotation-sla", "component-readiness"} {
 		if !has(name, extension.ClusterRead) {

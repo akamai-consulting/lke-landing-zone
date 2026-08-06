@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 import (
 	"strings"
@@ -46,10 +46,10 @@ func TestClassifyCapabilityStatus(t *testing.T) {
 // skips rather than fails. The probe can't be built without them, and that is
 // never the token's fault.
 func TestProbeCapability_SkipsWithoutContext(t *testing.T) {
-	orig := ghCapabilityProbe
-	t.Cleanup(func() { ghCapabilityProbe = orig })
+	orig := GHCapabilityProbe
+	t.Cleanup(func() { GHCapabilityProbe = orig })
 	called := false
-	ghCapabilityProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
+	GHCapabilityProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
 
 	t.Setenv("GH_REPO", "")
 	t.Setenv("REGION", "")
@@ -66,10 +66,10 @@ func TestProbeCapability_SkipsWithoutContext(t *testing.T) {
 // exact path `gh secret set --env infra-<region>` fetches. If this drifts, the
 // check stops being the read-only twin of the real call and starts guessing.
 func TestProbeCapability_ProbesTheRealEndpoint(t *testing.T) {
-	orig := ghCapabilityProbe
-	t.Cleanup(func() { ghCapabilityProbe = orig })
+	orig := GHCapabilityProbe
+	t.Cleanup(func() { GHCapabilityProbe = orig })
 	var gotPath string
-	ghCapabilityProbe = func(_, _, path string) (int, error) { gotPath = path; return 403, nil }
+	GHCapabilityProbe = func(_, _, path string) (int, error) { gotPath = path; return 403, nil }
 
 	t.Setenv("GH_REPO", "acme/platform")
 	t.Setenv("REGION", "prod")
@@ -87,9 +87,9 @@ func TestProbeCapability_ProbesTheRealEndpoint(t *testing.T) {
 // TestCheckCapability_OnlyRegisteredTokens confirms credentials with no scope
 // requirement report nothing (rather than a bogus verdict).
 func TestCheckCapability_OnlyRegisteredTokens(t *testing.T) {
-	orig := ghCapabilityProbe
-	t.Cleanup(func() { ghCapabilityProbe = orig })
-	ghCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
+	orig := GHCapabilityProbe
+	t.Cleanup(func() { GHCapabilityProbe = orig })
+	GHCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
 	t.Setenv("GH_REPO", "acme/platform")
 	t.Setenv("REGION", "prod")
 
@@ -122,23 +122,6 @@ func TestSealKeyHintNamesEnvironmentsPermission(t *testing.T) {
 	}
 }
 
-// TestSecretsWritePATURLRequestsEnvironments pins the wizard's pre-filled PAT
-// link to the permission that actually governs environment secrets. Every
-// credential in catalog() is destined for an infra-<env> ENVIRONMENT secret, so
-// a link that pre-fills `secrets=write` mints a token that cannot do the job.
-func TestSecretsWritePATURLRequestsEnvironments(t *testing.T) {
-	u := ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", "acme")
-	if !strings.Contains(u, "environments=write") {
-		t.Errorf("pre-fill must request environments=write; got %q", u)
-	}
-	if strings.Contains(u, "secrets=write") {
-		t.Errorf("pre-fill must NOT request secrets=write (repo-level only, not environment secrets); got %q", u)
-	}
-	if !strings.Contains(u, "actions=write") {
-		t.Errorf("pre-fill should keep actions=write (workflow dispatch); got %q", u)
-	}
-}
-
 // capCheckFor looks a check up by credential name. Tests must not index
 // capabilityChecks positionally — the order is presentation, not contract, and a
 // new entry would silently repoint an existing assertion at the wrong probe.
@@ -160,15 +143,15 @@ func capCheckFor(t *testing.T, name string) capabilityCheck {
 // api.github.com and github.com authorize independently, and the scar case is a
 // token that passes the former and is refused by the latter.
 func TestValuesRepoProbeIsGitRefDiscovery(t *testing.T) {
-	origGit, origREST := gitRefsProbe, ghCapabilityProbe
-	t.Cleanup(func() { gitRefsProbe, ghCapabilityProbe = origGit, origREST })
+	origGit, origREST := GitRefsProbe, GHCapabilityProbe
+	t.Cleanup(func() { GitRefsProbe, GHCapabilityProbe = origGit, origREST })
 
 	var gotServer, gotPath string
-	gitRefsProbe = func(server, _, path string) (int, error) {
+	GitRefsProbe = func(server, _, path string) (int, error) {
 		gotServer, gotPath = server, path
 		return 200, nil
 	}
-	ghCapabilityProbe = func(_, _, _ string) (int, error) {
+	GHCapabilityProbe = func(_, _, _ string) (int, error) {
 		t.Error("values-repo check must not use the REST transport")
 		return 200, nil
 	}
@@ -195,9 +178,9 @@ func TestValuesRepoProbeIsGitRefDiscovery(t *testing.T) {
 // minutes later, by which point the cluster, apl-core and the Argo bridge are up
 // and a human unwinds the mess by hand.
 func TestValuesRepoProbeDeniesOnUnauthorized(t *testing.T) {
-	orig := gitRefsProbe
-	t.Cleanup(func() { gitRefsProbe = orig })
-	gitRefsProbe = func(_, _, _ string) (int, error) { return 401, nil }
+	orig := GitRefsProbe
+	t.Cleanup(func() { GitRefsProbe = orig })
+	GitRefsProbe = func(_, _, _ string) (int, error) { return 401, nil }
 
 	t.Setenv("GH_REPO", "acme/platform")
 	cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
@@ -214,10 +197,10 @@ func TestValuesRepoProbeDeniesOnUnauthorized(t *testing.T) {
 // TestValuesRepoProbeSkipsWithoutRepo — no GH_REPO, no probe. Missing context is
 // never the token's fault and must not fail a run.
 func TestValuesRepoProbeSkipsWithoutRepo(t *testing.T) {
-	orig := gitRefsProbe
-	t.Cleanup(func() { gitRefsProbe = orig })
+	orig := GitRefsProbe
+	t.Cleanup(func() { GitRefsProbe = orig })
 	called := false
-	gitRefsProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
+	GitRefsProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
 
 	t.Setenv("GH_REPO", "")
 	if cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok"); cr.status != capSkipped {

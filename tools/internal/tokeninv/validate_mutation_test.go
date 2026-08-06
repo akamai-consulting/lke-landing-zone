@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 import (
 	"strings"
@@ -27,11 +27,11 @@ func clearValidatableTokens(t *testing.T) {
 // silently-empty environment (a mis-scoped GH Environment handing the job no
 // secrets at all) passes as a clean preflight.
 func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
-	origLinode, origGHCR, origGH := linodeProbe, ghcrTokenProbe, ghPATProbe
-	t.Cleanup(func() { linodeProbe, ghcrTokenProbe, ghPATProbe = origLinode, origGHCR, origGH })
-	linodeProbe = func(string) (int, error) { return 200, nil }
-	ghcrTokenProbe = func(_, _ string) (int, error) { return 403, nil } // GHCR is optional
-	ghPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
+	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
+	LinodeProbe = func(string) (int, error) { return 200, nil }
+	GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil } // GHCR is optional
+	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	clearValidatableTokens(t)
 	t.Setenv("LINODE_API_TOKEN", "live")   // required, valid
@@ -39,7 +39,7 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 	t.Setenv("LINODE_DNS_TOKEN", "live-2") // optional, valid
 
 	var err error
-	out := captureStdout(t, func() { err = runCIValidateTokens(true) })
+	out := captureStdout(t, func() { err = RunValidate(true) })
 	if err != nil {
 		t.Fatalf("only an OPTIONAL credential is invalid, so this must exit 0: %v", err)
 	}
@@ -56,20 +56,20 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 // must be probed and counted. Losing this branch means an expired state key is
 // discovered by `tofu init` instead of by the preflight.
 func TestValidateTokensProbesTheStateKeyPairWhenBothAreSet(t *testing.T) {
-	origLinode, origGHCR, origGH := linodeProbe, ghcrTokenProbe, ghPATProbe
-	t.Cleanup(func() { linodeProbe, ghcrTokenProbe, ghPATProbe = origLinode, origGHCR, origGH })
-	linodeProbe = func(string) (int, error) { return 200, nil }
-	ghcrTokenProbe = func(_, _ string) (int, error) { return 200, nil }
-	ghPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
+	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
+	LinodeProbe = func(string) (int, error) { return 200, nil }
+	GHCRTokenProbe = func(_, _ string) (int, error) { return 200, nil }
+	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
-	// Endpoint/bucket deliberately left unset: probeS3Pair reports "can't sign a
+	// Endpoint/bucket deliberately left unset: ProbeS3Pair reports "can't sign a
 	// probe" without touching the network, which is enough to observe the branch.
 	clearValidatableTokens(t)
 	t.Setenv("TF_STATE_ACCESS_KEY", "AK")
 	t.Setenv("TF_STATE_SECRET_KEY", "SK")
 
 	var err error
-	out := captureStdout(t, func() { err = runCIValidateTokens(true) })
+	out := captureStdout(t, func() { err = RunValidate(true) })
 	if err != nil {
 		t.Fatalf("an unprobeable (but present) key pair must not block: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestValidateTokensProbesTheStateKeyPairWhenBothAreSet(t *testing.T) {
 	for _, half := range []string{"TF_STATE_ACCESS_KEY", "TF_STATE_SECRET_KEY"} {
 		clearValidatableTokens(t)
 		t.Setenv(half, "only-one")
-		out := captureStdout(t, func() { err = runCIValidateTokens(true) })
+		out := captureStdout(t, func() { err = RunValidate(true) })
 		if err != nil {
 			t.Fatalf("%s alone must not block: %v", half, err)
 		}

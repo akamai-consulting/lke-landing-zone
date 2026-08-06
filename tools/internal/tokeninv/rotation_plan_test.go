@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 )
 
 func TestRouteRotationSchedules(t *testing.T) {
-	monthly, err := routeRotation(rotationInputs{
+	monthly, err := routeRotation(RotationInputs{
 		Event: "schedule", Cron: cronMonthlyRotate, Deployments: `["primary","secondary"]`,
 	})
 	if err != nil {
@@ -25,7 +25,7 @@ func TestRouteRotationSchedules(t *testing.T) {
 		t.Errorf("monthly regions = %q, want the discovered deployments", monthly.Regions)
 	}
 
-	daily, err := routeRotation(rotationInputs{Event: "schedule", Cron: cronDailyRevoke})
+	daily, err := routeRotation(RotationInputs{Event: "schedule", Cron: cronDailyRevoke})
 	if err != nil {
 		t.Fatalf("daily: %v", err)
 	}
@@ -39,13 +39,13 @@ func TestRouteRotationSchedules(t *testing.T) {
 		t.Errorf("daily regions = %q, want []", daily.Regions)
 	}
 
-	if _, err := routeRotation(rotationInputs{Event: "schedule", Cron: "0 0 * * *"}); err == nil {
+	if _, err := routeRotation(RotationInputs{Event: "schedule", Cron: "0 0 * * *"}); err == nil {
 		t.Error("unknown cron must be refused")
 	}
 }
 
 func TestRouteRotationDispatchScopes(t *testing.T) {
-	base := rotationInputs{Event: "workflow_dispatch", Reason: "incident 42",
+	base := RotationInputs{Event: "workflow_dispatch", Reason: "incident 42",
 		Region: "primary", Deployments: `["primary"]`}
 
 	// Every scope refuses a wrong confirm phrase.
@@ -116,7 +116,7 @@ func TestRouteRotationDispatchScopes(t *testing.T) {
 
 	// Nor does any schedule. db-admin is dispatch-only by construction.
 	for _, cron := range []string{cronMonthlyRotate, cronDailyRevoke} {
-		sched := rotationInputs{Event: "schedule", Cron: cron, Deployments: `["primary"]`}
+		sched := RotationInputs{Event: "schedule", Cron: cron, Deployments: `["primary"]`}
 		if sp, err := routeRotation(sched); err != nil || sp.RunDBAdmin {
 			t.Errorf("cron %s must not schedule db-admin: plan=%+v err=%v", cron, sp, err)
 		}
@@ -141,7 +141,7 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", out)
 	t.Setenv("GITHUB_STEP_SUMMARY", sum)
 
-	err := runCIRotationPlan(rotationInputs{
+	err := RunRotationPlan(testDeps(), RotationInputs{
 		Event: "workflow_dispatch", Scope: "lke-admin", Region: "primary",
 		Confirm: "rotate:primary", Reason: "incident", Actor: "octocat",
 	})
@@ -172,7 +172,7 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 	// A schedule run writes outputs but no dispatch summary.
 	os.Remove(out)
 	os.Remove(sum)
-	if err := runCIRotationPlan(rotationInputs{Event: "schedule", Cron: cronDailyRevoke}); err != nil {
+	if err := RunRotationPlan(testDeps(), RotationInputs{Event: "schedule", Cron: cronDailyRevoke}); err != nil {
 		t.Fatalf("schedule plan: %v", err)
 	}
 	if _, err := os.Stat(sum); !os.IsNotExist(err) {
@@ -180,7 +180,7 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 	}
 
 	// Routing refusals surface as errors (the step must fail).
-	if err := runCIRotationPlan(rotationInputs{Event: "workflow_dispatch", Reason: ""}); err == nil {
+	if err := RunRotationPlan(testDeps(), RotationInputs{Event: "workflow_dispatch", Reason: ""}); err == nil {
 		t.Error("blank reason must fail the step")
 	}
 }
@@ -190,7 +190,7 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 // db-admin — must NOT be reachable from `all` or any schedule. A cron that
 // re-keys state unattended is the failure this pins against.
 func TestRouteStatePassphrase(t *testing.T) {
-	base := rotationInputs{
+	base := RotationInputs{
 		Event: "workflow_dispatch", Scope: "state-passphrase", Reason: "quarterly",
 		Deployments: `["primary","secondary"]`,
 	}
@@ -219,7 +219,7 @@ func TestRouteStatePassphrase(t *testing.T) {
 	}
 
 	// Never reachable except by its own scope.
-	for _, other := range []rotationInputs{
+	for _, other := range []RotationInputs{
 		{Event: "workflow_dispatch", Scope: "all", Reason: "r", Confirm: "rotate:all"},
 		{Event: "schedule", Cron: cronMonthlyRotate},
 		{Event: "schedule", Cron: cronDailyRevoke},

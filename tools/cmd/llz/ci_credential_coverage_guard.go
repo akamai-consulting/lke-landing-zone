@@ -50,6 +50,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
 
 // credExemptKind names WHY a secret needs no write-time or expiry entry of its
@@ -188,17 +189,17 @@ type credCoverage struct {
 // Derived from the two target lists — never a copy of them.
 func credMeasuredByName() map[string]credCoverage {
 	out := map[string]credCoverage{}
-	for _, t := range ghPATTargets {
+	for _, t := range tokeninv.GHPATTargets {
 		d := "expiry probed via the token-expiration header"
-		if t.optional {
+		if t.Optional {
 			d += " (optional — skipped when unset)"
 		}
-		out[t.name] = credCoverage{how: "expiry", detail: d}
+		out[t.Name] = credCoverage{how: "expiry", detail: d}
 	}
-	for _, t := range ghSecretTargets {
-		out[t.name] = credCoverage{
+	for _, t := range tokeninv.GHSecretTargets {
+		out[t.Name] = credCoverage{
 			how:    "write-time",
-			detail: fmt.Sprintf("GitHub secret write time, class %s, expect %s", t.class, t.expect),
+			detail: fmt.Sprintf("GitHub secret write time, class %s, expect %s", t.Class, t.Expect),
 		}
 	}
 	return out

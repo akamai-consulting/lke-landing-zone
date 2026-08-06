@@ -128,7 +128,7 @@ Realistic settled core: **~2,900**.
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `token-inventory` | 1,473 | 6 | ✔ | ✘ | `tokens` 437, `ci_token_inventory` 330, `token_validate` 211, `ci_rotation_plan` 216, `token_capability` 167, `ci_validate_tokens` 112. **Wants splitting** — it contributes predicates at three states (`configured`, `seeded`, `operating`). Best single candidate for fine-graining. |
+| `token-inventory` | 1,473 | 6 | ✔ | ✘ | `tokens` 437, `ci_token_inventory` 330, `token_validate` 211, `ci_rotation_plan` 216, `token_capability` 167, `ci_validate_tokens` 112. **Wants splitting** — it contributes predicates at three states (`configured`, `seeded`, `operating`). Best single candidate for fine-graining. **✅ Extracted — five files, not six.** `tokens.go` is the credential PROVISIONING wizard and alone TRIPLED the closure. See [What `token-inventory` broke](#what-token-inventory-broke--one-word-doing-two-jobs).|
 | `env-topology` | 740 | 4 | ✔ | ✘ | `topology` 245, `env_set` 219, `branchpolicy` 165, `envlist` 111. |
 | `config-readiness` | 733 | 3 | ✔ | ✘ | `readiness` 255, `state` 242, `ci_preflight` 236. **This is the `configured` predicate** — the cleanest existing example of predicate code that's mis-filed as a command. |
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twelve, extracted
+## The first thirteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -271,9 +271,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `obj-encryption` extracted | 38,821 | 206 | −2,006, and the first binding at `seeded` |
 | `guard-charts` extracted | 38,364 | 202 | −457, and `guardwalk` — the traversal ten guards share |
 | `cluster-access` extracted | 37,483 | 199 | −881, and the second `grantStates` widening — see below |
-| `health-sla` extracted | **37,131** | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
+| `health-sla` extracted | 37,131 | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
+| `token-inventory` extracted | **36,107** | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
 
-**Net −10,051 (21.3%) across twelve extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −11,075 (23.5%) across thirteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -749,6 +750,73 @@ tests had already stubbed their seams, silently wiping them — four tests faile
 retry stalls that looked like a cluster timeout. Fixed by making installation idempotent
 (`ensureDeps`) rather than by documenting the required order: ordering dependence between fixtures is
 its own bug class, and a comment does not remove it.
+
+### What `token-inventory` broke — one word doing two jobs
+
+Thirteenth, the **first binding at `configured`** — the last unclaimed state in the vocabulary — and
+the first extraction to add a **word** to the model rather than a row to a table.
+
+```
+token-inventory  assertion:configured "validate-tokens"  [read-repo, secret-read]
+                 gate:configured      "rotation-plan"    [read-repo]
+                 invariant:operating  "expiry-inventory" [cloud-read, secret-read]
+```
+
+**Measure before trusting the catalog — again, and expensively.** The row named six files and 1,473
+lines. `tokens.go` (437 of them) is `llz tokens`, the credential **provisioning** wizard that creates
+OBJ buckets and gathers PATs, and it alone took the measured closure from **13 to 42** by dragging in
+the wizard, the state model and the command tree. It is a `transition` to `configured` holding
+`cloud-mutate`; these are the checks that *read what it wrote*. The catalog's "wants splitting across
+three states" was right about the split and wrong about which files were in it.
+
+**The refusal was not the one predicted.** The expectation was a third `grantStates` widening —
+`secret-custody` at `configured`, mirroring the eleventh extension's widening to `provisioned`. It
+never got that far:
+
+```
+gate:configured/validate-tokens[read-repo, secret-custody]: a gate permits only "read-repo",
+not "secret-custody" — it runs in the fast pre-commit path over files alone
+```
+
+`validate-tokens` probes GitHub, Linode and S3 over the network. It **blocks the pipeline**, which is
+what gates do, but a gate in this model is defined by *cost and reach* — fast, local, files only.
+Those are two different properties and the single word `gate` was carrying both. The honest kind is
+`assertion`, which may bind at any state.
+
+**And an assertion could not hold it either.** `secret-custody` was not a read grant, so it was
+refused there too — which left `llz ci validate-tokens` **inexpressible**. Not mis-described, not
+over-granted: there was no legal declaration for a check that reads credentials and mutates nothing.
+
+**The word was doing two jobs, and said so.** Its own definition read
+`SecretCustody Grant = "secret-custody" // read or write credential material`. Three extractions
+pushed on that ambiguity in a row:
+
+| extension | what it does with credentials | |
+|---|---|---|
+| `cluster-access` | **writes** a cluster-admin kubeconfig to disk | custody |
+| `health-sla` | **reads** `updated_time` using the OpenBao root token | declared custody *under protest* |
+| `token-inventory` | **reads** every pipeline credential and probes it | impossible |
+
+So the grant was split: **`secret-read`** for reading credential material or its metadata (read-only,
+an assertion may hold it) and **`secret-custody`** for placing it (mutating, still bound by
+`grantStates`). `health-sla`'s rotation lane was corrected to `secret-read` in the same commit — the
+comment there had already recorded that it over-reported, and this is the word it was missing.
+
+**No `grantStates` row was widened, and that is the better outcome.** The ceiling was not too tight;
+the vocabulary was too coarse. Widening the row would have "fixed" this by letting every
+credential-reading check in the repo claim a mutating grant — which is how a ceiling stops meaning
+anything.
+
+**The open gap from §13 is now closed.** `health-sla` recorded that the model could not distinguish
+*"handed root, reads metadata"* from *"handed root, reads material"*, and noted two instances with a
+third making it actionable. This was the third, and it did not merely under-report — it made a
+declaration impossible, which is the difference between a wart and a defect.
+
+**Tests that never travelled, twice more.** `TestCapitalizeFirst` and `TestSecretsWritePATURLRequests-
+Environments` both moved with the wrong file — the first from `coverage_tier1_test.go` (a file named
+for a *coverage tier*), the second because it rode along with `token_capability_test.go` while its
+subject, the wizard's pre-filled PAT link, stayed in package `main`. Third and fourth instances of the
+same lesson: **a test's filename says where someone put it, not what it is about.**
 
 ## The cost of the interesting half
 

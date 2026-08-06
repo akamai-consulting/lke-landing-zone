@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 // ci_rotation_plan.go implements `llz ci rotation-plan` — the native port of
 // llz-secret-rotation.yml's 'Route scope + validate emergency confirmation'
@@ -26,8 +26,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/spf13/cobra"
 )
 
 // The two schedules llz-secret-rotation.yml subscribes to.
@@ -36,8 +34,8 @@ const (
 	cronDailyRevoke   = "30 3 * * *" // PAT + TF-state revoke-old reapers
 )
 
-// rotationInputs is the routing decision's full input surface, read from env.
-type rotationInputs struct {
+// RotationInputs is the routing decision's full input surface, read from env.
+type RotationInputs struct {
 	Event, Cron                      string
 	Scope, Region                    string
 	Confirm, Reason, Actor           string
@@ -69,24 +67,9 @@ type rotationPlan struct {
 	Note                 string // human routing note (log + summary)
 }
 
-func ciRotationPlanCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "rotation-plan",
-		Short: "route a rotation run: schedule/scope → job-gating step outputs",
-		Long: "Native port of llz-secret-rotation.yml's 'Route scope + validate emergency\n" +
-			"confirmation' step. Maps the trigger (schedule cron, or a dispatch scope +\n" +
-			"typed confirmation + reason) onto the run-*/apply step outputs the rotation\n" +
-			"jobs gate on, and writes the dispatch audit summary. Fails on a confirm\n" +
-			"mismatch, a blank reason, or an unknown scope/cron — nothing downstream\n" +
-			"runs unless this routing passed. Env: EVENT, CRON, SCOPE, REGION, CONFIRM,\n" +
-			"REASON, *_APPLY, ACTOR, DEPLOYMENTS.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIRotationPlan(rotationInputsFromEnv()) },
-	}
-}
-
-func rotationInputsFromEnv() rotationInputs {
-	return rotationInputs{
+// InputsFromEnv reads the dispatch contract out of the environment.
+func InputsFromEnv() RotationInputs {
+	return RotationInputs{
 		Event:                os.Getenv("EVENT"),
 		Cron:                 os.Getenv("CRON"),
 		Scope:                os.Getenv("SCOPE"),
@@ -107,7 +90,7 @@ func rotationInputsFromEnv() rotationInputs {
 // routeRotation is the pure decision table. Returned errors are routing
 // refusals (confirm mismatch / blank reason / unknown scope or cron) — the
 // caller turns them into ::error:: annotations.
-func routeRotation(in rotationInputs) (rotationPlan, error) {
+func routeRotation(in RotationInputs) (rotationPlan, error) {
 	var p rotationPlan
 	p.Regions = "[]"
 
@@ -257,7 +240,9 @@ func (p rotationPlan) outputLines() []string {
 	}
 }
 
-func runCIRotationPlan(in rotationInputs) error {
+// RunRotationPlan maps the dispatch inputs onto the job-gating outputs the
+// rotation jobs key on. A routing refusal is an error: nothing downstream runs.
+func RunRotationPlan(d Deps, in RotationInputs) error {
 	plan, err := routeRotation(in)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::%s\n", capitalizeFirst(err.Error()))
@@ -266,13 +251,13 @@ func runCIRotationPlan(in rotationInputs) error {
 	if plan.Note != "" {
 		fmt.Println(plan.Note)
 	}
-	if err := appendGHAFile("GITHUB_OUTPUT", plan.outputLines()...); err != nil {
+	if err := d.Summary("GITHUB_OUTPUT", plan.outputLines()...); err != nil {
 		return err
 	}
 	if in.Event == "schedule" {
 		return nil
 	}
-	return appendGHAFile("GITHUB_STEP_SUMMARY",
+	return d.Summary("GITHUB_STEP_SUMMARY",
 		"## Emergency rotation requested",
 		"",
 		fmt.Sprintf("- Scope: `%s`", in.Scope),

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
 
 // fakeGetter satisfies nodeGetter (GetJSON) with a canned object + status.
@@ -289,12 +290,12 @@ func TestPresenceMatchesExpectation(t *testing.T) {
 		present bool
 		want    bool
 	}{
-		{credExpectPresent, true, true},
-		{credExpectPresent, false, false},
-		{credExpectAbsent, false, true},  // the healthy root-token state
-		{credExpectAbsent, true, false},  // parked after a break-glass
-		{credExpectOptional, true, true}, // the Harbor pair, either way
-		{credExpectOptional, false, true},
+		{tokeninv.CredExpectPresent, true, true},
+		{tokeninv.CredExpectPresent, false, false},
+		{tokeninv.CredExpectAbsent, false, true},  // the healthy root-token state
+		{tokeninv.CredExpectAbsent, true, false},  // parked after a break-glass
+		{tokeninv.CredExpectOptional, true, true}, // the Harbor pair, either way
+		{tokeninv.CredExpectOptional, false, true},
 		{"", true, true}, // an older writer sent no expect: treat as present
 		{"", false, false},
 	} {

@@ -68,6 +68,7 @@ COVERAGE_MINS := \
 	internal/shquote=100 \
 	internal/sustain=84 \
 	internal/teardown=80 \
+	internal/tokeninv=70 \
 	internal/terraform=95 \
 	internal/volumes=85
 

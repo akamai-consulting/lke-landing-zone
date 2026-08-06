@@ -16,6 +16,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
@@ -42,7 +43,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 	if raw == "" {
 		return nil // present but empty — treat as not-yet-primed
 	}
-	var inv tokenInventory
+	var inv tokeninv.Inventory
 	if err := json.Unmarshal([]byte(raw), &inv); err != nil {
 		return fmt.Errorf("parse llz-token-inventory: %w", err)
 	}
@@ -60,7 +61,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 				labels, float64(t.Expiry))
 		}
 		auditOK := 1.0
-		if t.State == tokenStateBreach {
+		if t.State == tokeninv.TokenStateBreach {
 			auditOK = 0
 		}
 		reg.SetGauge("llz_token_audit_ok",
@@ -87,11 +88,11 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 	// field; publish nothing rather than guess, so an instance mid-upgrade does
 	// not page for a probe that may be working fine.
 	switch inv.SecretProbe {
-	case secretProbeOK:
+	case tokeninv.SecretProbeOK:
 		reg.SetGauge("llz_credential_secret_probe_ok",
 			"1 if the GitHub secrets-metadata probe (credential write-time ages) could run, 0 if it could not authenticate",
 			nil, 1)
-	case secretProbeUnavailable:
+	case tokeninv.SecretProbeUnavailable:
 		reg.SetGauge("llz_credential_secret_probe_ok",
 			"1 if the GitHub secrets-metadata probe (credential write-time ages) could run, 0 if it could not authenticate",
 			nil, 0)
@@ -127,7 +128,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		// LLZCredentialRootTokenParked — and both need the label to say which way.
 		expect := sec.Expect
 		if expect == "" {
-			expect = credExpectPresent // inventory written by an older llz
+			expect = tokeninv.CredExpectPresent // inventory written by an older llz
 		}
 		// Publish presence ONLY when the writer actually learned it. `ok` and
 		// `absent` are both answers; `unknown` means the API refused (a 403 on the
@@ -137,17 +138,17 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		// exists to remove: LLZCredentialUnconfigured reads 0 as "seed this
 		// credential", so a token-permission problem would page as a missing
 		// credential and send the operator to the wrong runbook. Silence here is
-		// not a blind spot — secretProbeVerdict flips the funnel gauge to 0 for
+		// not a blind spot — tokeninv.SecretProbeVerdict flips the funnel gauge to 0 for
 		// exactly this case, so LLZCredentialSecretProbeUnavailable fires instead
 		// and names the real fault.
 		//
-		// An inventory from a writer predating tokenStateAbsent reports absent
+		// An inventory from a writer predating tokeninv.TokenStateAbsent reports absent
 		// credentials as `unknown` and so publishes nothing for them. That is the
 		// pre-existing behaviour, and degrading to it during an upgrade is the
 		// safe direction — no series rather than a false one.
 		switch sec.State {
-		case tokenStateOK, tokenStateAbsent:
-			present := sec.State == tokenStateOK
+		case tokeninv.TokenStateOK, tokeninv.TokenStateAbsent:
+			present := sec.State == tokeninv.TokenStateOK
 			// LABELS ARE `cred` ONLY, and that is a correctness requirement rather
 			// than tidiness. tools/internal/metrics upserts keyed by the RENDERED
 			// LABEL SET and has no delete: SetGauge with a different label value
@@ -228,9 +229,9 @@ func configMapData(obj map[string]any, key string) string {
 // run, and neither presence nor absence is a finding there.
 func presenceMatchesExpectation(expect string, present bool) bool {
 	switch expect {
-	case credExpectAbsent:
+	case tokeninv.CredExpectAbsent:
 		return !present
-	case credExpectOptional:
+	case tokeninv.CredExpectOptional:
 		return true
 	default: // credExpectPresent, and an empty value from an older writer
 		return present

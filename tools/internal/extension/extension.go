@@ -142,17 +142,44 @@ const (
 	ClusterRead   Grant = "cluster-read"   // read cluster state
 	ClusterWrite  Grant = "cluster-write"  // mutate cluster state
 	CloudMutate   Grant = "cloud-mutate"   // create/destroy cloud resources
-	SecretCustody Grant = "secret-custody" // read or write credential material
+	SecretRead    Grant = "secret-read"    // read credential material or its metadata
+	SecretCustody Grant = "secret-custody" // place or store credential material
 	OwnPaths      Grant = "own-paths"      // own instance files against `copier update`
 )
 
+// SPLITTING secret-custody WAS THE THIRTEENTH EXTENSION'S FINDING, and the first
+// that could not be fixed by adding a table row.
+//
+// This constant used to be one word documented as "read OR WRITE credential
+// material" — the ambiguity was written down and then relied on. Three extractions
+// pushed on it in a row:
+//
+//   - cluster-access WRITES a cluster-admin kubeconfig to disk. Custody.
+//   - health-sla READS `updated_time` off a KV entry using the OpenBao root
+//     token. Declared custody, and the declaration said so under protest.
+//   - token-inventory READS every pipeline credential and probes it. Mutates
+//     nothing.
+//
+// The third one broke it outright. `validate-tokens` blocks the pipeline before
+// anything provisions, so it is a gate or an assertion; a gate permits read-repo
+// alone, and an assertion permits READ GRANTS ONLY — and secret-custody was not
+// one, because it was half a write grant. The check was therefore INEXPRESSIBLE:
+// not mis-described, not over-granted, simply impossible to declare honestly.
+//
+// So: reading a credential is now secret-read (read-only, an assertion may hold
+// it), and PLACING one is secret-custody (mutating, still bound by grantStates).
+// The distinction is the one the reviewer actually cares about — "this could leak
+// a secret" versus "this decides what the secret IS" — and it was always the one
+// the single word could not draw.
+
 // Grants returns the closed vocabulary, ordered least to most dangerous.
 func Grants() []Grant {
-	return []Grant{ReadRepo, CloudRead, ClusterRead, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
+	return []Grant{ReadRepo, CloudRead, ClusterRead, SecretRead, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
 }
 
-// readOnly are the grants that observe without changing anything.
-var readOnly = map[Grant]bool{ReadRepo: true, CloudRead: true, ClusterRead: true}
+// readOnly are the grants that observe without changing anything. secret-read is
+// here and secret-custody is not: that is the whole content of the split.
+var readOnly = map[Grant]bool{ReadRepo: true, CloudRead: true, ClusterRead: true, SecretRead: true}
 
 func validGrant(g Grant) bool {
 	for _, k := range Grants() {

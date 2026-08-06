@@ -93,12 +93,16 @@ categories:
     #                       Only -352: internal/kubectlprobe (the 9th shared
     #                       package, 10 callers) left, but four cobra commands came
     #                       BACK as flag sets. A paydown is net of what returns.
+    #   36,107 / 192 files  token-inventory, the FIRST binding at `configured` —
+    #                       and the first extraction to add a WORD to the model
+    #                       rather than a table row (secret-read, split out of
+    #                       secret-custody). -1,024.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 37131
+    budget: 36107
     exact: true
     include:
       - "tools/cmd/llz/*.go"

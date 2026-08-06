@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 // equal elements as ordered and the sort swaps them, silently reordering the
 // inventory (and with it any diff a reviewer takes against the previous run).
 func TestBuildTokenInventoryTiedEntriesKeepInputOrder(t *testing.T) {
-	orig := ghPATProbe
-	t.Cleanup(func() { ghPATProbe = orig })
-	ghPATProbe = func(_, token string) (int, string, error) {
+	orig := GHPATProbe
+	t.Cleanup(func() { GHPATProbe = orig })
+	GHPATProbe = func(_, token string) (int, string, error) {
 		if token == "first" {
 			return 200, "2026-09-01 00:00:00 UTC", nil
 		}
@@ -21,7 +21,7 @@ func TestBuildTokenInventoryTiedEntriesKeepInputOrder(t *testing.T) {
 	}
 
 	inv := buildTokenInventory(context.Background(), tokenInvDeps{
-		ghTargets: []patTarget{
+		ghTargets: []PATTarget{
 			{"dup", "https://api.github.com", "first"},
 			{"dup", "https://ghe.example.com/api/v3", "second"},
 		},

@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 // ci_token_inventory.go implements `llz ci token-inventory` — the WRITER half of
 // the credential single-pane-of-glass. External CI tokens (GitHub service PATs,
@@ -13,7 +13,7 @@ package main
 // and a coarse state — never a token value. It is emitted to stdout as a ConfigMap
 // (JSON, which kubectl apply accepts); the scheduled-checks job pipes it to
 // `kubectl apply`. The measurement (network) is separated from the rendering (pure)
-// so both are unit-tested via the injected ghPATProbe var + credLister interface.
+// so both are unit-tested via the injected GHPATProbe var + credLister interface.
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
@@ -36,11 +35,11 @@ import (
 // tokenState is the coarse verdict the reconciler turns into llz_token_audit_ok:
 // breach → 0 (pages: no-expiry / expired / over-policy / invalid), everything else → 1.
 const (
-	tokenStateOK      = "ok"      // expiry set and within policy
-	tokenStateWarn    = "warn"    // within the warn window (drives lead-time alerts)
-	tokenStateBreach  = "breach"  // no-expiry / expired / over-policy / invalid — audit failure
-	tokenStateUnknown = "unknown" // not set / unreachable / unparseable — can't verify, don't page
-	// tokenStateAbsent — secretEntry only. The API ANSWERED and said 404: this
+	TokenStateOK      = "ok"      // expiry set and within policy
+	TokenStateWarn    = "warn"    // within the warn window (drives lead-time alerts)
+	TokenStateBreach  = "breach"  // no-expiry / expired / over-policy / invalid — audit failure
+	TokenStateUnknown = "unknown" // not set / unreachable / unparseable — can't verify, don't page
+	// TokenStateAbsent — SecretEntry only. The API ANSWERED and said 404: this
 	// credential is genuinely not configured. Distinct from `unknown`, which here
 	// means the API would not answer (403/5xx) and we therefore know nothing.
 	//
@@ -53,24 +52,24 @@ const (
 	// infra-<region> ENVIRONMENT secrets, whose metadata needs different token
 	// permissions from the repo-scoped ones, and the probe had never once read an
 	// environment-scoped secret in production — it never ran at all.
-	tokenStateAbsent = "absent"
+	TokenStateAbsent = "absent"
 )
 
-// tokenEntry is one credential's inventory record. Expiry is unix seconds, 0 when
+// TokenEntry is one credential's inventory record. Expiry is unix seconds, 0 when
 // unknown or the token never expires (the latter is also state=breach).
-type tokenEntry struct {
+type TokenEntry struct {
 	Provider string `json:"provider"` // github | linode
 	Name     string `json:"name"`
 	Expiry   int64  `json:"expiry"`
 	State    string `json:"state"`
 }
 
-// secretEntry is one GitHub Actions secret's WRITE time — the age signal for
+// SecretEntry is one GitHub Actions secret's WRITE time — the age signal for
 // credentials that have no expiry to read and cannot live in OpenBao (the
 // state-backend key pair, the state-encryption passphrase). Metadata only:
 // GitHub Actions secrets are write-only over the API, so there is no value to
 // carry even if we wanted to. UpdatedAt is RFC3339; empty means "not configured".
-type secretEntry struct {
+type SecretEntry struct {
 	Name      string `json:"name"`
 	Scope     string `json:"scope"` // repo | infra-<deployment>
 	UpdatedAt string `json:"updated_at,omitempty"`
@@ -86,7 +85,7 @@ type secretEntry struct {
 const (
 	// credExpectPresent — the instance cannot function without it, so a 404 is a
 	// finding. Everything except the root token.
-	credExpectPresent = "present"
+	CredExpectPresent = "present"
 	// credExpectOptional — legitimately absent on some healthy deployments, so
 	// neither presence nor absence is a finding. Measured when present (the age is
 	// real and worth seeing); silent when not.
@@ -98,22 +97,22 @@ const (
 	// them — by design, not by omission. Classing them `present` (as the first
 	// draft of this did) would fire LLZCredentialUnconfigured and FAIL the daily
 	// credential job on a perfectly healthy standby.
-	credExpectOptional = "optional"
+	CredExpectOptional = "optional"
 	// credExpectAbsent — OPENBAO_ROOT_TOKEN. Bootstrap mints a root token, uses
 	// it, and REVOKES it (ci_bao_breakglass.go: "a root token is ephemeral by
 	// design"); what survives is the 3-of-5 recovery quorum. So a root token
 	// sitting in an Actions secret in steady state is a live full-admin
 	// credential nobody revoked after a break-glass — the presence IS the
 	// finding, and the remedy is `bao-breakglass --action revoke`.
-	credExpectAbsent = "absent"
+	CredExpectAbsent = "absent"
 )
 
-// tokenInventory is the ConfigMap payload the reconciler reads (data["inventory.json"]).
-type tokenInventory struct {
+// Inventory is the ConfigMap payload the reconciler reads (data["inventory.json"]).
+type Inventory struct {
 	Updated int64         `json:"updated"` // unix time the inventory was written (heartbeat)
 	Region  string        `json:"region,omitempty"`
-	Tokens  []tokenEntry  `json:"tokens"`
-	Secrets []secretEntry `json:"secrets,omitempty"`
+	Tokens  []TokenEntry  `json:"tokens"`
+	Secrets []SecretEntry `json:"secrets,omitempty"`
 	// SecretProbe reports whether the GitHub secrets-metadata probe could run at
 	// all: `ok` | `unavailable`. Empty from an inventory written before this
 	// field existed, which the reconciler treats as "cannot tell" rather than as
@@ -131,10 +130,10 @@ type tokenInventory struct {
 	SecretProbe string `json:"secret_probe,omitempty"`
 }
 
-// Verdicts for tokenInventory.SecretProbe.
+// Verdicts for Inventory.SecretProbe.
 const (
-	secretProbeOK          = "ok"
-	secretProbeUnavailable = "unavailable"
+	SecretProbeOK          = "ok"
+	SecretProbeUnavailable = "unavailable"
 )
 
 // ghSecretTargets are the credentials measured by WRITE TIME rather than expiry.
@@ -149,19 +148,29 @@ const (
 // rest were left behind not because a different mechanism was needed but because
 // the target list was a literal nobody revisited — and that is the whole reason
 // `llz ci credential-coverage-guard` now exists.
-var ghSecretTargets = []struct {
-	name   string
-	class  string
-	expect string
-}{
+// SecretTarget is one GitHub Actions secret in the coverage catalogue: its name,
+// its rotation class, and whether the instance may legitimately lack it.
+//
+// A NAMED type rather than the anonymous struct this was, because the catalogue
+// is consumed outside this package — credential-coverage-guard and
+// assert-rotation-health both walk it. That is the point of it: the list of
+// credentials the platform expects belongs in ONE place, and the guard that
+// checks nothing was forgotten reads the same list the inventory measures.
+type SecretTarget struct {
+	Name   string
+	Class  string
+	Expect string
+}
+
+var GHSecretTargets = []SecretTarget{
 	// ── the state backend (ADR 0009) ──────────────────────────────────────────
 	// Operator-dispatchable via secret-rotation.yml scope=tf-state-key.
-	{"TF_STATE_ACCESS_KEY", reconcilelanes.CredClassOnDemand, credExpectPresent},
-	{"TF_STATE_SECRET_KEY", reconcilelanes.CredClassOnDemand, credExpectPresent},
+	{"TF_STATE_ACCESS_KEY", reconcilelanes.CredClassOnDemand, CredExpectPresent},
+	{"TF_STATE_SECRET_KEY", reconcilelanes.CredClassOnDemand, CredExpectPresent},
 	// Was `static` — correctly, while re-encrypting every state file had no
 	// automation. scope=state-passphrase is that automation, so the age is now
 	// ACTIONABLE and belongs on the 90d SLA rather than the yearly nudge.
-	{"TF_STATE_ENCRYPTION_PASSPHRASE", reconcilelanes.CredClassOnDemand, credExpectPresent},
+	{"TF_STATE_ENCRYPTION_PASSPHRASE", reconcilelanes.CredClassOnDemand, CredExpectPresent},
 
 	// ── OpenBao's own escrow ─────────────────────────────────────────────────
 	//
@@ -193,18 +202,18 @@ var ghSecretTargets = []struct {
 	// compromise reads every other credential in the platform. `static`: rotating
 	// it means a seal rewrap of the whole store, which nothing here implements —
 	// so the yearly nudge is the honest signal, not a 90d SLA nobody can meet.
-	{"OPENBAO_SEAL_KEY", reconcilelanes.CredClassStatic, credExpectPresent},
+	{"OPENBAO_SEAL_KEY", reconcilelanes.CredClassStatic, CredExpectPresent},
 	// The 3-of-5 recovery quorum that authorizes `operator generate-root`. Losing
 	// these means break-glass is impossible — which is exactly why an ABSENT one
 	// has to be visible (see llz_credential_configured): the failure surfaces on
 	// the day you need it and not before.
-	{"OPENBAO_RECOVERY_KEY_1", reconcilelanes.CredClassStatic, credExpectPresent},
-	{"OPENBAO_RECOVERY_KEY_2", reconcilelanes.CredClassStatic, credExpectPresent},
-	{"OPENBAO_RECOVERY_KEY_3", reconcilelanes.CredClassStatic, credExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_1", reconcilelanes.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_2", reconcilelanes.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_3", reconcilelanes.CredClassStatic, CredExpectPresent},
 	// Expected ABSENT — see credExpectAbsent. `on-demand` because there IS a
 	// rotation path (`bao-breakglass --action rotate`); the age matters only in
 	// the state this credential is not supposed to be in.
-	{"OPENBAO_ROOT_TOKEN", reconcilelanes.CredClassOnDemand, credExpectAbsent},
+	{"OPENBAO_ROOT_TOKEN", reconcilelanes.CredClassOnDemand, CredExpectAbsent},
 
 	// ── Harbor robots: the standby channel ───────────────────────────────────
 	//
@@ -217,8 +226,8 @@ var ghSecretTargets = []struct {
 	// channel holding a dead credential, and the OpenBao age would look fine.
 	// OPTIONAL, not present — see credExpectOptional. On a standby peer these are
 	// published by the ACTIVE peer's provisioner and are absent until it has run.
-	{"HARBOR_PASSWORD", reconcilelanes.CredClassStatic, credExpectOptional},
-	{"HARBOR_PULL_PASSWORD", reconcilelanes.CredClassStatic, credExpectOptional},
+	{"HARBOR_PASSWORD", reconcilelanes.CredClassStatic, CredExpectOptional},
+	{"HARBOR_PULL_PASSWORD", reconcilelanes.CredClassStatic, CredExpectOptional},
 }
 
 // The class is the SAME vocabulary the OpenBao age sampler uses
@@ -244,95 +253,73 @@ var ghSecretTargets = []struct {
 // permanent `unknown` rows on the dashboard, and an inventory that always shows
 // unknowns is one nobody reads. Optional targets are therefore skipped when
 // unset, and measured identically when present.
-var ghPATTargets = []struct {
-	name     string // the env var, and the `token` label on the metric
-	optional bool
-}{
+// PATTargetSpec is one service PAT in the catalogue.
+type PATTargetSpec struct {
+	Name     string // the env var, and the `token` label on the metric
+	Optional bool
+}
+
+var GHPATTargets = []PATTargetSpec{
 	// Always expected: the two service PATs bootstrap and apl-core run on.
-	{name: "OPENBAO_SECRETS_WRITE_TOKEN"},
-	{name: "APL_VALUES_REPO_TOKEN"},
+	{Name: "OPENBAO_SECRETS_WRITE_TOKEN"},
+	{Name: "APL_VALUES_REPO_TOKEN"},
 	// Template-repo admin only — the e2e harness dispatch PAT. Absent on every
 	// adopter instance.
-	{name: "E2E_DISPATCH_TOKEN", optional: true},
+	{Name: "E2E_DISPATCH_TOKEN", Optional: true},
 	// Only a PRIVATE fork/image needs a GHCR read credential; the first-party
 	// charts are public, so a stock instance leaves it empty by design.
-	{name: "GHCR_READ_TOKEN", optional: true},
+	{Name: "GHCR_READ_TOKEN", Optional: true},
 }
 
 // ghTargetsFromEnv resolves ghPATTargets against the process environment,
 // dropping optional targets whose secret is not set.
-func ghTargetsFromEnv(api string) []patTarget {
-	out := make([]patTarget, 0, len(ghPATTargets))
-	for _, t := range ghPATTargets {
-		v := os.Getenv(t.name)
-		if v == "" && t.optional {
+func ghTargetsFromEnv(api string) []PATTarget {
+	out := make([]PATTarget, 0, len(GHPATTargets))
+	for _, t := range GHPATTargets {
+		v := os.Getenv(t.Name)
+		if v == "" && t.Optional {
 			continue
 		}
-		out = append(out, patTarget{name: t.name, api: api, token: v})
+		out = append(out, PATTarget{name: t.Name, api: api, token: v})
 	}
 	return out
 }
 
-func ciTokenInventoryCmd() *cobra.Command {
-	var namespace, name string
-	var maxDays, warnDays int
-	c := &cobra.Command{
-		Use:   "token-inventory",
-		Short: "measure CI-token expiry and emit the ConfigMap the reconciler re-exposes as metrics",
-		Long: "Writer half of the credential single-pane-of-glass. Measures the expiry of the\n" +
-			"external CI tokens this job holds — the GitHub service PATs in ghPATTargets\n" +
-			"(OPENBAO_SECRETS_WRITE_TOKEN, APL_VALUES_REPO_TOKEN, and E2E_DISPATCH_TOKEN /\n" +
-			"GHCR_READ_TOKEN when set) via the token-expiration header, and every Linode PAT\n" +
-			"via the Linode API — and emits a ConfigMap (metadata only, never a token value) to\n" +
-			"stdout. Pipe it to `kubectl apply -f -`; the in-cluster llz-reconciler re-exposes it\n" +
-			"as llz_token_expiry_timestamp_seconds so Prometheus alerts before expiry.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			// The canonical PAT reader, but an absent token is NOT fatal here:
-			// buildTokenInventory skips the Linode section on "" and still
-			// reports the GitHub PATs.
-			linodeToken, _ := ciToken()
-			// Secret-age probe: metadata only, and only when a GitHub token +
-			// repo are available. GitHub Actions secrets are write-only over the
-			// API, so this cannot read a value even in principle.
-			if w, err := newSecretAgeWriter(); err != nil {
-				fmt.Fprintf(os.Stderr, "::warning::token-inventory: secret-age probe unavailable (%v) — token entries still written.\n", err)
-			} else {
-				secretAgeProbe = w.SecretUpdatedAt
-			}
-			inv := buildTokenInventory(cmd.Context(), tokenInvDeps{
-				ghTargets:   ghTargetsFromEnv(envOr("GITHUB_API", "https://api.github.com")),
-				linodeToken: linodeToken,
-				secretEnv:   secretScopeForRegion(os.Getenv("REGION")),
-				secretProbe: secretAgeProbe,
-				newLinode:   func(t string) credLister { return linode.NewClient(t, 30*time.Second) },
-				region:      os.Getenv("REGION"),
-				now:         time.Now(),
-				maxDays:     maxDays,
-				warnDays:    warnDays,
-			})
-			out, err := renderInventoryConfigMap(inv, namespace, name)
-			if err != nil {
-				return err
-			}
-			fmt.Println(out)
-			return nil
-		},
+// RunInventory measures token expiry and returns the ConfigMap the reconciler
+// re-exposes as metrics. Metadata only — never a token value.
+func RunInventory(ctx context.Context, d Deps, namespace, name string, maxDays, warnDays int) (string, error) {
+	// The canonical PAT reader, but an absent token is NOT fatal here:
+	// buildTokenInventory skips the Linode section on "" and still reports the
+	// GitHub PATs.
+	linodeToken, _ := d.CloudToken()
+	// Secret-age probe: metadata only, and only when a GitHub token + repo are
+	// available. GitHub Actions secrets are write-only over the API, so this
+	// cannot read a value even in principle.
+	if w, err := newSecretAgeWriter(); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::token-inventory: secret-age probe unavailable (%v) — token entries still written.\n", err)
+	} else {
+		secretAgeProbe = w.SecretUpdatedAt
 	}
-	f := c.Flags()
-	f.StringVar(&namespace, "namespace", "llz-reconciler", "namespace of the inventory ConfigMap the reconciler reads")
-	f.StringVar(&name, "name", "llz-token-inventory", "name of the inventory ConfigMap")
-	f.IntVar(&maxDays, "max-days", 90, "flag a token whose lifetime exceeds this many days as a breach")
-	f.IntVar(&warnDays, "warn-days", 14, "mark a token expiring within this many days as warn")
-	return c
+	inv := buildTokenInventory(ctx, tokenInvDeps{
+		ghTargets:   ghTargetsFromEnv(envOr("GITHUB_API", "https://api.github.com")),
+		linodeToken: linodeToken,
+		secretEnv:   secretScopeForRegion(os.Getenv("REGION")),
+		secretProbe: secretAgeProbe,
+		newLinode:   func(t string) CredLister { return linode.NewClient(t, 30*time.Second) },
+		region:      os.Getenv("REGION"),
+		now:         time.Now(),
+		maxDays:     maxDays,
+		warnDays:    warnDays,
+	})
+	return renderInventoryConfigMap(inv, namespace, name)
 }
 
 // tokenInvDeps are the injected inputs so buildTokenInventory is unit-testable
 // without GitHub/Linode network access.
 type tokenInvDeps struct {
-	ghTargets   []patTarget
+	ghTargets   []PATTarget
 	linodeToken string
-	newLinode   func(token string) credLister
+	newLinode   func(token string) CredLister
 	region      string
 	secretEnv   string
 	secretProbe func(env, name string) (string, bool, error)
@@ -344,13 +331,13 @@ type tokenInvDeps struct {
 // buildTokenInventory measures every configured token's expiry and assembles the
 // inventory. Best-effort: a provider that errors contributes its measurable entries
 // and is otherwise skipped (the inventory-stale alert covers a wholesale funnel break).
-func buildTokenInventory(ctx context.Context, d tokenInvDeps) tokenInventory {
-	inv := tokenInventory{Updated: d.now.Unix(), Region: d.region}
+func buildTokenInventory(ctx context.Context, d tokenInvDeps) Inventory {
+	inv := Inventory{Updated: d.now.Unix(), Region: d.region}
 	inv.Tokens = append(inv.Tokens, gatherGitHubTokens(d.ghTargets, d.now, d.maxDays, d.warnDays)...)
 	// Write-time ages for the credentials with no expiry to read (ADR 0009).
 	// The verdict is recorded whether or not the probe could run — see SecretProbe.
 	inv.Secrets = gatherSecretAges(d.secretEnv, d.secretProbe)
-	inv.SecretProbe = secretProbeVerdict(d.secretProbe != nil, inv.Secrets)
+	inv.SecretProbe = SecretProbeVerdict(d.secretProbe != nil, inv.Secrets)
 	if d.linodeToken != "" {
 		if entries, err := gatherLinodeTokens(ctx, d.newLinode(d.linodeToken), d.now, int64(d.maxDays), int64(d.warnDays)); err == nil {
 			inv.Tokens = append(inv.Tokens, entries...)
@@ -369,14 +356,14 @@ func buildTokenInventory(ctx context.Context, d tokenInvDeps) tokenInventory {
 
 // gatherGitHubTokens probes each configured GitHub PAT for its expiry header and
 // maps the classification to an inventory entry. A masked token value never leaves.
-func gatherGitHubTokens(targets []patTarget, now time.Time, maxDays, warnDays int) []tokenEntry {
-	var out []tokenEntry
+func gatherGitHubTokens(targets []PATTarget, now time.Time, maxDays, warnDays int) []TokenEntry {
+	var out []TokenEntry
 	for _, tgt := range targets {
 		present := tgt.token != ""
 		code, expHeader := 0, ""
 		if present {
 			fmt.Fprintf(os.Stderr, "::add-mask::%s\n", tgt.token)
-			if c, h, err := ghPATProbe(tgt.api, tgt.token); err == nil {
+			if c, h, err := GHPATProbe(tgt.api, tgt.token); err == nil {
 				code, expHeader = c, h
 			}
 		}
@@ -385,7 +372,7 @@ func gatherGitHubTokens(targets []patTarget, now time.Time, maxDays, warnDays in
 		if t, ok := health.ParseExpiryTime(expHeader); ok {
 			expiry = t.Unix()
 		}
-		out = append(out, tokenEntry{Provider: "github", Name: tgt.name, Expiry: expiry, State: patStateToInventory(state)})
+		out = append(out, TokenEntry{Provider: "github", Name: tgt.name, Expiry: expiry, State: patStateToInventory(state)})
 	}
 	return out
 }
@@ -415,40 +402,40 @@ var secretAgeProbe func(env, name string) (string, bool, error)
 // there skips a 404 as "not seeded yet", so a never-written credential is
 // indistinguishable from a healthy one. Here the API distinguishes them, so a
 // missing state-backend credential is visible instead of silent.
-func gatherSecretAges(env string, probe func(env, name string) (string, bool, error)) []secretEntry {
+func gatherSecretAges(env string, probe func(env, name string) (string, bool, error)) []SecretEntry {
 	if probe == nil {
 		return nil
 	}
-	out := make([]secretEntry, 0, len(ghSecretTargets))
-	for _, t := range ghSecretTargets {
+	out := make([]SecretEntry, 0, len(GHSecretTargets))
+	for _, t := range GHSecretTargets {
 		// Default `absent`, not `unknown`: the loop below only reaches its end
 		// having ASKED. An error downgrades it — never the other way round.
-		e := secretEntry{Name: t.name, Class: t.class, Expect: t.expect, State: tokenStateAbsent}
+		e := SecretEntry{Name: t.Name, Class: t.Class, Expect: t.Expect, State: TokenStateAbsent}
 		unreadable := false
 		for _, scope := range []string{env, ""} {
 			if scope == "" && env == "" {
 				continue // already tried the repo scope
 			}
-			ts, ok, err := probe(scope, t.name)
+			ts, ok, err := probe(scope, t.Name)
 			if err != nil {
 				// A 404 is NOT an error here — SecretUpdatedAt returns (‥, false,
 				// nil) for it. So reaching this branch means the API refused to
 				// answer: a 403 on the environment scope, a 5xx, a transport
 				// failure. We learn nothing about the credential, and saying
 				// "absent" would be a claim we cannot support.
-				fmt.Fprintf(os.Stderr, "::warning::token-inventory: %s (%s): %v\n", t.name, scopeLabel(scope), err)
+				fmt.Fprintf(os.Stderr, "::warning::token-inventory: %s (%s): %v\n", t.Name, scopeLabel(scope), err)
 				unreadable = true
 				continue
 			}
 			if ok {
-				e.Scope, e.UpdatedAt, e.State = scopeLabel(scope), ts, tokenStateOK
+				e.Scope, e.UpdatedAt, e.State = scopeLabel(scope), ts, TokenStateOK
 				break
 			}
 		}
 		// Found in one scope, refused in the other, is still found: only downgrade
 		// when nothing answered affirmatively anywhere.
-		if e.State != tokenStateOK && unreadable {
-			e.State = tokenStateUnknown
+		if e.State != TokenStateOK && unreadable {
+			e.State = TokenStateUnknown
 		}
 		if e.Scope == "" {
 			e.Scope = scopeLabel(env)
@@ -458,7 +445,7 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 	return out
 }
 
-// secretProbeVerdict decides whether the write-time lane can be trusted this
+// SecretProbeVerdict decides whether the write-time lane can be trusted this
 // run. `ok` requires BOTH that the client was built and that every credential
 // got an answer.
 //
@@ -468,16 +455,16 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 // unmeasured while everything else looks healthy. Reporting `ok` there would
 // vouch for a lane that is partly dark, which is the failure this field exists
 // to make impossible.
-func secretProbeVerdict(clientBuilt bool, secrets []secretEntry) string {
+func SecretProbeVerdict(clientBuilt bool, secrets []SecretEntry) string {
 	if !clientBuilt {
-		return secretProbeUnavailable
+		return SecretProbeUnavailable
 	}
 	for _, s := range secrets {
-		if s.State == tokenStateUnknown {
-			return secretProbeUnavailable
+		if s.State == TokenStateUnknown {
+			return SecretProbeUnavailable
 		}
 	}
-	return secretProbeOK
+	return SecretProbeOK
 }
 
 // secretScopeForRegion maps a deployment to the GitHub environment its
@@ -500,25 +487,25 @@ func scopeLabel(env string) string {
 func patStateToInventory(s health.PATCheckState) string {
 	switch s {
 	case health.PATOK:
-		return tokenStateOK
+		return TokenStateOK
 	case health.PATWarn:
-		return tokenStateWarn
+		return TokenStateWarn
 	case health.PATInvalid, health.PATNoExpiry, health.PATExpired, health.PATOverPolicy:
-		return tokenStateBreach
+		return TokenStateBreach
 	default: // PATNotSet, PATUnreachable, PATUnparseable
-		return tokenStateUnknown
+		return TokenStateUnknown
 	}
 }
 
 // gatherLinodeTokens lists every account PAT and classifies its expiry the same way
 // cred-audit does (no-expiry / expired / over-policy → breach; near-expiry → warn).
-func gatherLinodeTokens(ctx context.Context, client credLister, now time.Time, maxDays, warnDays int64) ([]tokenEntry, error) {
+func gatherLinodeTokens(ctx context.Context, client CredLister, now time.Time, maxDays, warnDays int64) ([]TokenEntry, error) {
 	tokens, err := client.ListProfileTokens(ctx)
 	if err != nil {
 		return nil, err
 	}
 	nowU := now.Unix()
-	var out []tokenEntry
+	var out []TokenEntry
 	for _, t := range tokens {
 		name := linode.MapString(t, "label")
 		if id := tokenID(t["id"]); id != "" {
@@ -526,22 +513,22 @@ func gatherLinodeTokens(ctx context.Context, client credLister, now time.Time, m
 		}
 		expiry, hasExpiry := linode.ParseTS(linode.MapString(t, "expiry"))
 		created, hasCreated := linode.ParseTS(linode.MapString(t, "created"))
-		state := tokenStateOK
+		state := TokenStateOK
 		switch {
 		case !hasExpiry:
-			state = tokenStateBreach // never-expiring PAT
+			state = TokenStateBreach // never-expiring PAT
 		case expiry <= nowU:
-			state = tokenStateBreach // already expired
+			state = TokenStateBreach // already expired
 		case hasCreated && expiry-created > maxDays*linode.DaySecs:
-			state = tokenStateBreach // lifetime exceeds policy
+			state = TokenStateBreach // lifetime exceeds policy
 		case expiry-nowU <= warnDays*linode.DaySecs:
-			state = tokenStateWarn
+			state = TokenStateWarn
 		}
 		var exp int64
 		if hasExpiry {
 			exp = expiry
 		}
-		out = append(out, tokenEntry{Provider: "linode", Name: name, Expiry: exp, State: state})
+		out = append(out, TokenEntry{Provider: "linode", Name: name, Expiry: exp, State: state})
 	}
 	return out, nil
 }
@@ -563,7 +550,7 @@ func tokenID(v any) string {
 // renderInventoryConfigMap marshals the inventory into a ConfigMap (as JSON, which
 // kubectl apply accepts). data["inventory.json"] carries the payload; SSA-friendly
 // labels let apl-core's tooling recognize it. Pure — unit-tested.
-func renderInventoryConfigMap(inv tokenInventory, namespace, name string) (string, error) {
+func renderInventoryConfigMap(inv Inventory, namespace, name string) (string, error) {
 	payload, err := json.Marshal(inv)
 	if err != nil {
 		return "", err

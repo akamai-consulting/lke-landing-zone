@@ -22,7 +22,7 @@ runs **daily, per region** (matrix). Per run it:
    kubeconfig out of Terraform state (S3 backend) and opens the LKE-Enterprise
    control-plane ACL for the hosted runner's dynamic egress IP (`llz ci runner-acl open`).
 2. **Writes the inventory** — `llz ci token-inventory | kubectl apply -f -`
-   ([`ci_token_inventory.go`](../../tools/cmd/llz/ci_token_inventory.go)) measures the
+   ([`inventory.go`](../../tools/internal/tokeninv/inventory.go)) measures the
    expiry of every CI token it holds — two GitHub service PATs
    (`OPENBAO_SECRETS_WRITE_TOKEN`, `APL_VALUES_REPO_TOKEN`) via the token-expiration
    header, plus Linode account PATs via `GET /v4/profile/tokens` — and applies the
@@ -134,7 +134,7 @@ without Alertmanager receivers wired. Keep them.
 
 ## Touch-points for when this proceeds
 
-- `tools/cmd/llz/ci_token_inventory.go` (+ `_test.go`) — add `--apply` (create-or-update via
+- `tools/internal/tokeninv/inventory.go` (+ `_test.go`) — add `--apply` (create-or-update via
   `kube.Client`).
 - `platform-apl/components/tokenInventory/` — new component (namespace, SA, cross-ns RBAC
   into `llz-reconciler`, `ExternalSecret`s, default-deny + egress NetworkPolicy, CronJob),

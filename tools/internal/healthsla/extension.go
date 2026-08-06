@@ -21,7 +21,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 //
 // TWO NAMED INVARIANTS, because their capabilities differ:
 //
-//	invariant:operating "rotation-sla"        [cluster-read, secret-custody]
+//	invariant:operating "rotation-sla"        [cluster-read, secret-read]
 //	invariant:operating "component-readiness" [cluster-read]
 //
 // WHY SPLIT. `guard-charts` established that a split must be justified by
@@ -38,15 +38,13 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 // failure means the platform DRIFTED rather than that a step failed. `operating`
 // is the only state an invariant may attach to, which is the right answer here.
 //
-// WHY secret-custody FOR A CHECK THAT ONLY READS A TIMESTAMP. This is the honest
-// reading and it is worth stating, because the narrower one is tempting: the code
-// calls `kv metadata get` and uses only `updated_time`, never the secret material.
-// But the model judges what a binding IS HANDED, not what it promises to do with
-// it — the grant is "the handle the action receives", and this action receives the
-// OpenBao ROOT token, which opens every secret in the store. A reviewer reading
-// `[cluster-read]` on this lane would not learn that. See the catalog for the gap
-// this exposes: the vocabulary cannot yet distinguish "handed root, reads
-// metadata" from "handed root, reads material".
+// WHY secret-read AND NOT secret-custody. This lane is handed the OpenBao ROOT
+// token and calls `kv metadata get` with it, using only `updated_time`. When this
+// was first declared the vocabulary had one word — secret-custody, documented as
+// "read or write credential material" — so the declaration took it and said in a
+// comment that it over-reported. The NEXT extension (token-inventory) could not
+// make that trade: a read-only credential check was inexpressible, which forced
+// the split. `secret-read` is what this lane always meant.
 //
 // No ceiling change. secret-custody became legal at `operating` before this
 // existed, and `cluster-read` is unrestricted.
@@ -60,7 +58,7 @@ func Extension() extension.Extension {
 				Kind:   extension.Invariant,
 				Name:   "rotation-sla",
 				State:  extension.Operating,
-				Grants: []extension.Grant{extension.ClusterRead, extension.SecretCustody},
+				Grants: []extension.Grant{extension.ClusterRead, extension.SecretRead},
 			},
 			{
 				Kind:   extension.Invariant,

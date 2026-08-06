@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 // ci_validate_tokens.go — `llz ci validate-tokens`: the CI counterpart of the
 // local `llz doctor` validity probe. It reads each pipeline credential from the
@@ -27,13 +27,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // validatableTokens is the ordered set of pipeline credentials this verb probes
-// from the environment. Only auth-bearing tokens with a probe (kindFor != none)
+// from the environment. Only auth-bearing tokens with a probe (KindFor != none)
 // belong here; each is checked only when its env var is set.
 var validatableTokens = []string{
 	"LINODE_API_TOKEN",
@@ -54,38 +52,12 @@ var optionalTokens = map[string]bool{
 	"LINODE_DNS_TOKEN": true,
 }
 
-func ciValidateTokensCmd() *cobra.Command {
-	var failOnInvalid bool
-	c := &cobra.Command{
-		Use:   "validate-tokens",
-		Short: "probe each pipeline credential in the environment and fail fast on an invalid/expired one",
-		Long: "Actively validates the pipeline credentials present in the environment —\n" +
-			"Linode PATs (GET /v4/profile), GitHub PATs (token-expiration probe), and the\n" +
-			"GHCR read token (GHCR token endpoint) — so a set-but-expired/revoked/mistyped\n" +
-			"credential fails HERE with a clear 'rotate it' rather than 401/403-ing deep in\n" +
-			"a later provision. Credentials with a required SCOPE are additionally probed\n" +
-			"for authorization against the read-only twin of the call they later make, so\n" +
-			"an under-scoped-but-valid PAT is caught here too. Absent credentials are\n" +
-			"skipped (a ::notice::, not a failure) and an unreachable endpoint is a warning\n" +
-			"(not the token's fault). Exit 0 when nothing is invalid, 1 when a probed\n" +
-			"credential is INVALID or DENIED its required scope (unless\n" +
-			"--fail-on-invalid=false). The local counterpart is `llz doctor`.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			return runCIValidateTokens(failOnInvalid)
-		},
-	}
-	c.Flags().BoolVar(&failOnInvalid, "fail-on-invalid", true,
-		"exit 1 if any probed credential is invalid; =false reports only")
-	return c
-}
-
 // runCIValidateTokens returns nil when nothing blocking is invalid and an error
 // otherwise (cobra exits 1 on it). The ::error:: annotation stays a direct
 // write: GitHub parses an annotation only at the start of a line, and a returned
 // error reaches stderr behind main.go's "llz: " prefix.
-func runCIValidateTokens(failOnInvalid bool) error {
+// RunValidate probes every pipeline credential for validity AND capability.
+func RunValidate(failOnInvalid bool) error {
 	now := time.Now()
 	ghcrUser := os.Getenv("GHCR_USERNAME")
 
@@ -99,10 +71,10 @@ func runCIValidateTokens(failOnInvalid bool) error {
 		}
 		// Keep the secret value out of any downstream log capture.
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", val)
-		tv := probeToken(name, val, ghcrUser, now)
+		tv := ProbeToken(name, val, ghcrUser, now)
 		probed++
 		suffix := ""
-		if tv.status == vInvalid {
+		if tv.Status == VInvalid {
 			if optionalTokens[name] {
 				optionalInvalid++
 				suffix = color.Dim("  (optional — warning only)")
@@ -111,12 +83,12 @@ func runCIValidateTokens(failOnInvalid bool) error {
 				blockingInvalid++
 			}
 		}
-		fmt.Printf("  %-30s %s%s\n", name, validityCell(tv), suffix)
+		fmt.Printf("  %-30s %s%s\n", name, ValidityCell(tv), suffix)
 
 		// Authorization, reported as an indented child of the validity line. Asked
 		// only of a credential that authenticated: a dead token has nothing to
 		// authorize, and a second verdict would just bury the real cause.
-		if tv.status == vInvalid {
+		if tv.Status == VInvalid {
 			continue
 		}
 		if cr, ok := checkCapability(name, val); ok {
@@ -136,12 +108,12 @@ func runCIValidateTokens(failOnInvalid bool) error {
 	if ak, sk := os.Getenv("TF_STATE_ACCESS_KEY"), os.Getenv("TF_STATE_SECRET_KEY"); ak != "" && sk != "" {
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", ak)
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", sk)
-		tv := probeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
+		tv := ProbeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
 		probed++
-		if tv.status == vInvalid {
+		if tv.Status == VInvalid {
 			blockingInvalid++
 		}
-		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", validityCell(tv))
+		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", ValidityCell(tv))
 	}
 
 	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid, %d scope-denied.\n",

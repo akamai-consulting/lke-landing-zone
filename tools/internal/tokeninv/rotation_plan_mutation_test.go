@@ -1,4 +1,4 @@
-package main
+package tokeninv
 
 import (
 	"path/filepath"
@@ -15,7 +15,7 @@ func TestRunCIRotationPlanPrintsTheRoutingNote(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = runCIRotationPlan(rotationInputs{
+		err = RunRotationPlan(testDeps(), RotationInputs{
 			Event: "schedule", Cron: cronMonthlyRotate, Deployments: `["primary"]`,
 		})
 	})

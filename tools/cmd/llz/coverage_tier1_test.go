@@ -81,14 +81,6 @@ func TestSetScalarChild(t *testing.T) {
 	}
 }
 
-func TestCapitalizeFirst(t *testing.T) {
-	for in, want := range map[string]string{"": "", "hello": "Hello", "A": "A", "123": "123"} {
-		if got := capitalizeFirst(in); got != want {
-			t.Errorf("capitalizeFirst(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestFilepathRel(t *testing.T) {
 	if got := filepathRel("/a/b/cluster", "/a/b/prod.tfvars"); got != "prod.tfvars" {
 		t.Errorf("filepathRel = %q, want prod.tfvars", got)

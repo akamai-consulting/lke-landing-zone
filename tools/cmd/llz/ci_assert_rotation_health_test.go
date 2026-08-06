@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
 
 func TestExpectedRotationCredsComesFromCredPaths(t *testing.T) {
@@ -263,12 +264,12 @@ func TestEveryCredPathClassIsKnown(t *testing.T) {
 // and the one credential expected ABSENT is absent.
 func presenceSteadyState() map[string]float64 {
 	m := map[string]float64{}
-	for _, t := range ghSecretTargets {
+	for _, t := range tokeninv.GHSecretTargets {
 		v := 1.0
-		if t.expect == credExpectAbsent {
+		if t.Expect == tokeninv.CredExpectAbsent {
 			v = 0
 		}
-		m[credLabelForSecret(t.name)] = v
+		m[credLabelForSecret(t.Name)] = v
 	}
 	return m
 }
@@ -393,10 +394,10 @@ func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
 func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
 	m := presenceSteadyState()
 	var optional []string
-	for _, tgt := range ghSecretTargets {
-		if tgt.expect == credExpectOptional {
-			optional = append(optional, credLabelForSecret(tgt.name))
-			delete(m, credLabelForSecret(tgt.name)) // absent AND publishing nothing
+	for _, tgt := range tokeninv.GHSecretTargets {
+		if tgt.Expect == tokeninv.CredExpectOptional {
+			optional = append(optional, credLabelForSecret(tgt.Name))
+			delete(m, credLabelForSecret(tgt.Name)) // absent AND publishing nothing
 		}
 	}
 	if len(optional) == 0 {
@@ -460,12 +461,12 @@ func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
 				  {"metric":{"namespace":"llz-reconciler"},"value":[1,"1"]}]}}`), nil
 			}
 			var rows []string
-			for _, tgt := range ghSecretTargets {
+			for _, tgt := range tokeninv.GHSecretTargets {
 				v := "1"
-				if tgt.expect == credExpectAbsent {
+				if tgt.Expect == tokeninv.CredExpectAbsent {
 					v = "0"
 				}
-				rows = append(rows, `{"metric":{"cred":"`+credLabelForSecret(tgt.name)+`"},"value":[1,"`+v+`"]}`)
+				rows = append(rows, `{"metric":{"cred":"`+credLabelForSecret(tgt.Name)+`"},"value":[1,"`+v+`"]}`)
 			}
 			return []byte(`{"status":"success","data":{"resultType":"vector","result":[` +
 				strings.Join(rows, ",") + `]}}`), nil

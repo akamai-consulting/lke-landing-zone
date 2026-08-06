@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 )
 
 // requirement is one var/secret an e2e instance needs.
@@ -217,7 +218,7 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 // The `validity` map (name → probe verdict, from probeTokenValidities) drives the
 // VALID column; pass nil to omit active probing (the column then reads "unprobed"
 // for every credential).
-func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState, validity map[string]tokenValidity) []string {
+func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState, validity map[string]tokeninv.TokenValidity) []string {
 	var missing []string
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
 	for _, r := range reqs {
@@ -258,10 +259,10 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 	// of the columnar table so it stays aligned.
 	for _, r := range reqs {
 		tv, ok := validity[r.Name]
-		if !ok || (tv.status != vInvalid && tv.status != vWarn && tv.status != vUnreachable) {
+		if !ok || (tv.Status != tokeninv.VInvalid && tv.Status != tokeninv.VWarn && tv.Status != tokeninv.VUnreachable) {
 			continue
 		}
-		fmt.Printf("  %s %s: %s\n", validGlyph(tv.status), r.Name, tv.detail)
+		fmt.Printf("  %s %s: %s\n", validGlyph(tv.Status), r.Name, tv.Detail)
 	}
 	return missing
 }
@@ -269,22 +270,22 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 // validCell renders a requirement's VALID column: a short colored verdict. Long
 // detail goes in the per-problem notes printed after the table. Every credential
 // (kind != none) gets a verdict — never a bare "n/a".
-func validCell(r requirement, onGitHub bool, validity map[string]tokenValidity) (string, func(string) string) {
-	if kindFor(r.Name) == kindNone {
+func validCell(r requirement, onGitHub bool, validity map[string]tokeninv.TokenValidity) (string, func(string) string) {
+	if tokeninv.KindFor(r.Name) == tokeninv.KindNone {
 		return "", color.Dim // not a credential — blank column
 	}
 	tv, ok := validity[r.Name]
 	if !ok {
 		return "· unprobed", color.Dim
 	}
-	switch tv.status {
-	case vValid:
+	switch tv.Status {
+	case tokeninv.VValid:
 		return "✓ valid", color.Green
-	case vWarn:
+	case tokeninv.VWarn:
 		return "⚠ warn", color.Yellow
-	case vInvalid:
+	case tokeninv.VInvalid:
 		return "✗ INVALID", color.Red
-	case vUnreachable:
+	case tokeninv.VUnreachable:
 		return "⚠ unreachable", color.Yellow
 	default: // vSkipped — not probed because the value isn't available locally
 		if onGitHub {
@@ -294,11 +295,11 @@ func validCell(r requirement, onGitHub bool, validity map[string]tokenValidity) 
 	}
 }
 
-func validGlyph(s validityStatus) string {
+func validGlyph(s tokeninv.ValidityStatus) string {
 	switch s {
-	case vInvalid:
+	case tokeninv.VInvalid:
 		return color.Red("✗")
-	case vWarn:
+	case tokeninv.VWarn:
 		return color.Yellow("⚠")
 	default:
 		return color.Yellow("⚠")

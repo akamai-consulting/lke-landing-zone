@@ -134,7 +134,12 @@ func TestAssertionIsReadOnly(t *testing.T) {
 		e := ok()
 		e.Bindings = []extension.Binding{bind(extension.Assertion, extension.Verified, g)}
 		errs := e.Validate()
-		wantOK := g == extension.ReadRepo || g == extension.CloudRead || g == extension.ClusterRead
+		// secret-read joined this set when it was split out of secret-custody.
+		// Reading a credential observes; it is the PLACING half that mutates, and
+		// that half kept the old name. An assertion that could not read a
+		// credential could not describe `llz ci validate-tokens` at all.
+		wantOK := g == extension.ReadRepo || g == extension.CloudRead ||
+			g == extension.ClusterRead || g == extension.SecretRead
 		if got := len(errs) == 0; got != wantOK {
 			t.Errorf("assertion with grant %q: valid=%v, want %v (%s)", g, got, wantOK, errText(errs))
 		}
@@ -415,8 +420,18 @@ func TestExtensionGrantsAreTheDerivedUnion(t *testing.T) {
 }
 
 func TestVocabulariesAreStableAndClosed(t *testing.T) {
-	if got := len(extension.Grants()); got != 7 {
-		t.Errorf("the catalog measured 7 grants, got %d — if a grant was added deliberately, update this and the catalog together", got)
+	// EIGHT, not the catalog's seven. `secret-read` was split out of
+	// `secret-custody` by the thirteenth extension: the single word was documented
+	// as "read or write credential material", and a check that only READS
+	// credentials (token-inventory's validate-tokens) was therefore inexpressible —
+	// an assertion permits read grants only, and half a write grant is not one.
+	//
+	// This is the only vocabulary ADDITION so far, as opposed to the two
+	// grantStates widenings. Treat a failure here as a claim that the model needed
+	// a new word, which is a much larger claim than needing a new row, and should
+	// arrive with the extraction that could not be declared without it.
+	if got := len(extension.Grants()); got != 8 {
+		t.Errorf("want 8 grants, got %d — if a grant was added deliberately, update this and the catalog together", got)
 	}
 	if got := len(extension.States()); got != 10 {
 		t.Errorf("want 10 states, got %d", got)
