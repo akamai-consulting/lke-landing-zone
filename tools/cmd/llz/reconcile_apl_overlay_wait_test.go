@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // fakeObjCredStore serves readObjPlatformCreds. seeded flips the KV read from
@@ -38,15 +40,15 @@ func (f fakeObjCredStore) Get(_ context.Context, path, key string) (string, bool
 func withObjCredSeams(t *testing.T, storeErr error) *atomic.Bool {
 	t.Helper()
 	seeded := &atomic.Bool{}
-	gc, ol, oj := openbaoGetClientFn, openbaoLoginFn, openbaoJWTFn
+	gc, ol, oj := openbaoGetClientFn, reconcilelanes.OpenBaoLoginFn, reconcilelanes.OpenBaoJWTFn
 	openbaoGetClientFn = func(string, string) (interface {
 		Get(ctx context.Context, path, key string) (string, bool, error)
 	}, error) {
 		return fakeObjCredStore{seeded: seeded, err: storeErr}, nil
 	}
-	openbaoLoginFn = func(context.Context, string, string) (string, error) { return "tok", nil }
-	openbaoJWTFn = func() (string, error) { return "jwt", nil }
-	t.Cleanup(func() { openbaoGetClientFn, openbaoLoginFn, openbaoJWTFn = gc, ol, oj })
+	reconcilelanes.OpenBaoLoginFn = func(context.Context, string, string) (string, error) { return "tok", nil }
+	reconcilelanes.OpenBaoJWTFn = func() (string, error) { return "jwt", nil }
+	t.Cleanup(func() { openbaoGetClientFn, reconcilelanes.OpenBaoLoginFn, reconcilelanes.OpenBaoJWTFn = gc, ol, oj })
 	return seeded
 }
 

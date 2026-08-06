@@ -19,6 +19,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/overlay"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // objPlatformPath is the consolidated platform object-storage credential (one key
@@ -45,7 +47,7 @@ type aplOverlayConfig struct {
 //
 // Pod-network traffic, so it uses the shared mTLS transport. Returns the
 // transport error rather than a client that fails every call — the same shape
-// reconcile_openbao.go's openbaoClientFn uses, so a missing client certificate
+// reconcile_openbao.go's reconcilelanes.OpenBaoClientFn uses, so a missing client certificate
 // surfaces once at construction instead of once per Get.
 var openbaoGetClientFn = func(addr, token string) (interface {
 	Get(ctx context.Context, path, key string) (string, bool, error)
@@ -70,7 +72,7 @@ func aplOverlayConfigFromEnv() (aplOverlayConfig, error) {
 		env:          os.Getenv("REGION"),
 		sourceBranch: envOr("APL_VALUES_SOURCE_BRANCH", "main"),
 		targetBranch: os.Getenv("APL_VALUES_BRANCH"),
-		openbaoAddr:  envOr("OPENBAO_ADDR", defaultOpenBaoAddr),
+		openbaoAddr:  envOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr),
 	}
 	// GH_REPO/REGION are render-time static — their absence is a genuine misconfig.
 	// The token is ESO-synced and handled as a no-op below, not here.
@@ -137,11 +139,11 @@ func (r ghOverlayRepo) OverlayCommit(ctx context.Context, branch string, files m
 // secret_access_key is NOT read here — it never transits the git overlay; ESO
 // delivers it into the obj-secrets Secret from the same OpenBao path.
 func readObjPlatformCreds(ctx context.Context, addr string) (accessKeyID string, ok bool, err error) {
-	jwt, err := openbaoJWTFn()
+	jwt, err := reconcilelanes.OpenBaoJWTFn()
 	if err != nil {
 		return "", false, err
 	}
-	tok, err := openbaoLoginFn(ctx, addr, jwt)
+	tok, err := reconcilelanes.OpenBaoLoginFn(ctx, addr, jwt)
 	if err != nil {
 		return "", false, err
 	}

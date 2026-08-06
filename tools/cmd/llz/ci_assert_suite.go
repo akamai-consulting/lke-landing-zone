@@ -152,7 +152,7 @@ func assertSuiteLanes(region string) []suiteLane {
 		{
 			Name: "credentials", Gating: true,
 			Steps: [][]string{{"assert-rotation-health"}, {"assert-harbor-roundtrip"}},
-			Why: "The credential lifecycle. assert-rotation-health gates every credential credPaths declares: a declared credential publishing NO age series is invisible on the " +
+			Why: "The credential lifecycle. assert-rotation-health gates every credential reconcilelanes.CredPaths declares: a declared credential publishing NO age series is invisible on the " +
 				"single pane AND unalertable, because a rule over an absent series never evaluates. assert-harbor-roundtrip then USES a minted robot — the auth handshake for pull AND " +
 				"push — rather than trusting it was created; the host-truncation regression left every credential valid and every push and pull 401ing. Neither forces a rotation: " +
 				"broad-pat already exercises one full cycle safely, and forcing lke-admin/obj-key/db-admin/state-passphrase mid-run would break the cluster being measured. " +

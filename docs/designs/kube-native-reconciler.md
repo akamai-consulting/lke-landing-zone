@@ -49,7 +49,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   reconciler with a `watch` closure runs level-based on each watch event (via
   `Client.Watch`), plus a resync floor, re-establishing the stream on close. The
   first watch reconciler — **argo-resync-nudger**
-  ([`reconcile_argo_nudge.go`](../../tools/cmd/llz/reconcile_argo_nudge.go)) —
+  ([`reconcile_argo_nudge.go`](../../tools/internal/reconcilelanes/argo_nudge.go)) —
   watches Argo CD Applications and re-triggers the terminally-failed ones (pure
   Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
   stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
@@ -91,7 +91,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   `LLZOpenBaoNotAvailable`. This is what lets **Phase 3** demote the CIDR-fragile
   `openbao-health` (ESO) + `certmanager-health` external checks to belt-and-suspenders.
 - **OpenBao-auth gauges (this branch).** An **opt-in, read-only** reconciler
-  (`--reconcile-openbao-gauges`, [`reconcile_openbao.go`](../../tools/cmd/llz/reconcile_openbao.go))
+  (`--reconcile-openbao-gauges`, [`reconcile_openbao.go`](../../tools/internal/reconcilelanes/openbao.go))
   that adds the two signals needing OpenBao access: `llz_openbao_sealed` /
   `llz_openbao_initialized` (the precise `/v1/sys/seal-status`, unauthenticated)
   and `llz_credential_age_days{cred}` (the rotation age of the in-cluster object-
@@ -111,7 +111,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   events), the policy is **starved** and never re-demotes, leaving two default
   StorageClasses that hard-fail `llz ci converge`. The CronJob is the durable
   backstop. This reconciler
-  ([`reconcile_sc_demote.go`](../../tools/cmd/llz/reconcile_sc_demote.go)) preserves
+  ([`reconcile_sc_demote.go`](../../tools/internal/reconcilelanes/sc_demote.go)) preserves
   that guarantee: it **watches** StorageClasses (fast demote) **and** carries a
   resync floor, so a slipped-through re-promotion is re-demoted on the next resync
   tick even with no events — exactly the starvation case the CronJob's `*/2`

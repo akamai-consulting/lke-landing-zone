@@ -119,7 +119,7 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 		// Throttled to 20s (a failed fetch returns fast, so a fresh refresh each cycle
 		// is safe, but don't hammer): the previous fetch already failed by the time the
 		// ComparisonError is visible, so we're kicking a new attempt, not interrupting one.
-		if transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
+		if health.IsTransientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
 			d.kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, firstLine(cerr))
 			lastRefresh = d.now()
@@ -178,36 +178,6 @@ func argoComparisonError(d aplGateDeps, namespace, parent string) string {
 		return ""
 	}
 	return strings.TrimSpace(out)
-}
-
-// transientFetchError reports whether msg is a transient git-fetch failure — the
-// intermittent flakes an anonymous clone of the template repo throws (the kustomize
-// remote-base fetch), which a hard refresh reliably recovers. A real manifest error
-// (bad kind, invalid yaml, missing field) matches none of these and is left to fail
-// the gate, so recovery never masks a genuine break.
-//
-// An AUTH refusal is excluded up front, because two of the patterns below —
-// "failed to list refs" and "could not read" — match it, and it is the one
-// git-fetch failure a hard refresh provably cannot recover: the remote answered,
-// the answer was "no", and refreshing asks the identical question again. Before
-// this guard, a values-repo credential Argo could not use was re-nudged every
-// poll for the full convergence budget.
-func transientFetchError(msg string) bool {
-	if msg == "" || health.IsGitAuthError(msg) {
-		return false
-	}
-	m := strings.ToLower(msg)
-	for _, p := range []string{
-		"failed to list refs", "repository not found", "could not read",
-		"timed out", "timeout", "connection refused", "connection reset",
-		"tls handshake", "i/o timeout", "dial tcp", "temporary failure",
-		"unexpected eof", "remote error", "rpc error",
-	} {
-		if strings.Contains(m, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // firstLine truncates a multi-line/long condition message to a single readable line

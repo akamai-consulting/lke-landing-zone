@@ -30,6 +30,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 func reconcileCmd() *cobra.Command {
@@ -133,7 +135,7 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.tokensInterval, "token-inventory-interval", 60, "seconds between token-inventory ConfigMap samples")
 	f.BoolVar(&o.reconcileSCDemote, "reconcile-sc-demote", false, "enable the StorageClass default-demote watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.scDemoteResync, "sc-demote-resync", 120, "resync-floor seconds for the sc-demote reconciler (defeats the admission-policy starvation case)")
-	f.StringVar(&o.scDemoteName, "sc-demote-name", defaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
+	f.StringVar(&o.scDemoteName, "sc-demote-name", reconcilelanes.DefaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
 	f.BoolVar(&o.reconcileESRecovery, "reconcile-es-store-recovery", false, "enable the ES store-recovery watch reconciler: force-sync ExternalSecrets/PushSecrets when the openbao ClusterSecretStore goes Ready (default off)")
 	f.IntVar(&o.esRecoveryResync, "es-store-recovery-resync", 300, "resync-floor seconds for the es-store-recovery reconciler (the store watch drives immediacy)")
 	f.BoolVar(&o.reconcileAplOverlay, "reconcile-apl-overlay", false, "enable the apl-overlay git-sync reconciler (obj storage + app toggles → apl-<env>, ff-retry; needs GH_REPO, APL_VALUES_REPO_TOKEN, REGION, OpenBao)")
@@ -487,9 +489,9 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		recs = append(recs, reconciler{
 			name:     "argo-nudge",
 			interval: o.argoNudgeResync, // resync floor; the watch drives immediacy
-			run:      gate(func(ctx context.Context) error { return reconcileArgoNudge(ctx, client) }),
+			run:      gate(func(ctx context.Context) error { return reconcilelanes.ArgoNudge(ctx, client) }),
 			watch: func(ctx context.Context, onEvent func()) error {
-				return client.Watch(ctx, argoAppsPath, "", func(kube.WatchEvent) error {
+				return client.Watch(ctx, reconcilelanes.ArgoAppsPath, "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
@@ -559,14 +561,14 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileSCDemote {
 		name := o.scDemoteName
 		if name == "" {
-			name = defaultDemoteSC
+			name = reconcilelanes.DefaultDemoteSC
 		}
 		recs = append(recs, reconciler{
 			name:     "sc-demote",
 			interval: o.scDemoteResync, // resync floor — defeats the admission-policy starvation
-			run:      gate(func(ctx context.Context) error { return reconcileSCDemote(ctx, client, name) }),
+			run:      gate(func(ctx context.Context) error { return reconcilelanes.SCDemote(ctx, client, name) }),
 			watch: func(ctx context.Context, onEvent func()) error {
-				return client.Watch(ctx, scStorageClassesPath, "", func(kube.WatchEvent) error {
+				return client.Watch(ctx, reconcilelanes.SCStorageClassesPath, "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
@@ -583,15 +585,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		})
 	}
 	if o.reconcileESRecovery {
-		state := &esStoreRecovery{}
+		state := &reconcilelanes.ESStoreRecovery{}
 		recs = append(recs, reconciler{
 			name:     "es-store-recovery",
 			interval: o.esRecoveryResync, // resync floor; the store watch drives immediacy
 			// Driving (patches ES/PushSecret annotations) → leader-gated. State is
 			// per-process; the leader gate means only the driving replica advances it.
-			run: gate(func(ctx context.Context) error { return state.reconcile(ctx, client, reg) }),
+			run: gate(func(ctx context.Context) error { return state.Reconcile(ctx, client, reg) }),
 			watch: func(ctx context.Context, onEvent func()) error {
-				return client.Watch(ctx, esStoresWatchPath, "", func(kube.WatchEvent) error {
+				return client.Watch(ctx, reconcilelanes.ESStoresWatchPath, "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
@@ -610,7 +612,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		recs = append(recs, reconciler{
 			name:     "openbao-gauges",
 			interval: o.openbaoInterval,
-			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) }),
+			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return reconcilelanes.SampleOpenBao(ctx, reg, time.Now()) }),
 		})
 	}
 	if o.reconcileTokens {

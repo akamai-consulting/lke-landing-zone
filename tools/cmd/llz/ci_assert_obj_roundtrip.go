@@ -85,7 +85,7 @@ var objConsumers = []objConsumer{
 		Name: "loki",
 		// The Secret apl-core's Loki release actually mounts. NOT
 		// `loki-object-store` — that is the OPENBAO PATH name
-		// (secret/loki/object-store, credPaths) and the two were conflated. The
+		// (secret/loki/object-store, reconcilelanes.CredPaths) and the two were conflated. The
 		// k8s ExternalSecret that once carried that name was deleted by 52465691
 		// when object storage went apl-core-native, so the old ref names an object
 		// that has not existed since.

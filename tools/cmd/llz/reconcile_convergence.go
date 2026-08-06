@@ -18,6 +18,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // sampleConvergence lists Argo CD Applications, classifies each via the shared
@@ -100,7 +102,7 @@ type convergenceSampleResult struct {
 // a check that examined nothing must not report the same green as one that
 // examined everything.
 func convergenceSample(ctx context.Context, client nodeGetter) (convergenceSampleResult, error) {
-	obj, status, err := client.GetJSON(ctx, argoAppsPath)
+	obj, status, err := client.GetJSON(ctx, reconcilelanes.ArgoAppsPath)
 	if err != nil {
 		return convergenceSampleResult{}, err
 	}

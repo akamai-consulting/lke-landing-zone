@@ -30,7 +30,7 @@ package main
 //      every run after the first exits 0, and the credential-age gauge reads the
 //      OpenBao stamp the premature write had just refreshed. Reversed, a
 //      PERSISTENT OpenBao failure leaves the stamp old, so
-//      LLZCredentialRotationOverdue (broad-pat is credClassAutomated) becomes
+//      LLZCredentialRotationOverdue (broad-pat is reconcilelanes.CredClassAutomated) becomes
 //      reachable. One new mode, stated for honesty: a persistent PUBLISH failure
 //      now mints a PAT per weekly run without reaching revoke — self-limiting at
 //      ~13 against the 100-PAT cap given the 90-day expiry. Reversed, a failed OpenBao write leaves the stamp OLD, so

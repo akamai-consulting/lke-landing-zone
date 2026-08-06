@@ -10,6 +10,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // convApp builds an Application object with the sync/health fields the classifier
@@ -34,7 +36,7 @@ func convApp(name, sync, health string, automated bool) map[string]any {
 func convergenceServer(t *testing.T, apps []map[string]any, statusOverride int) *kube.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != argoAppsPath {
+		if r.URL.Path != reconcilelanes.ArgoAppsPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -138,7 +140,7 @@ func TestSampleConvergenceCRDAbsentIsInProgress(t *testing.T) {
 func convergenceRawServer(t *testing.T, body string) *kube.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != argoAppsPath {
+		if r.URL.Path != reconcilelanes.ArgoAppsPath {
 			http.NotFound(w, r)
 			return
 		}

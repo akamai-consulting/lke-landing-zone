@@ -1,14 +1,14 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first four
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first five
 extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
-`posture-at-rest` (`tools/internal/atrest`) and `assert-storage` (`tools/internal/volumes`) declare
-themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+`posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
+`reconcile-actions` (`tools/internal/reconcilelanes`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all four still run because `ci.go` registers their cobra commands, and the declarations are inert.
-Three kinds, three states, four grants, multi-binding extensions, named bindings and the
-`grantStates` table are exercised; `transition`, `own-paths` and `secret-custody` are not — and [the
+all five still run because `ci.go` and the reconciler register them, and the declarations are inert.
+Three kinds, three states, six grants, multi-binding extensions, named bindings and the
+`grantStates` table are exercised; `transition` and `own-paths` are not — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
 rather than incidental. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
@@ -22,6 +22,11 @@ recorded beside it and the whole table pinned by a test. Refusing it was not the
 a ceiling that makes a continuously-running cloud mutator inexpressible does not prevent it, it only
 stops it being written down, which is `→ seeded` banned-by-omission recurring inside the half of the
 ceiling built to fix banning-by-omission.
+
+**A second thing the model cannot say, found by the fifth extension:** that an extension is
+PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
+lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
+what is missing. Recorded, not fixed; it becomes actionable at the second partial extension.
 
 **One known gap, found by the second extension:** there is no `write-repo` grant, so a binding that
 writes files in the repository cannot say so. `own-paths` is a copier fence, not a write permit. Two

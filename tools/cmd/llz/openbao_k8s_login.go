@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // Default mount paths for the client identity every in-cluster workload projects
@@ -116,7 +118,7 @@ func buildInClusterBaoHTTPClient() (*http.Client, error) {
 // other — the cert says "you may speak to me", the token says "and this is what
 // you may read".
 func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, error) {
-	addr := envOr("OPENBAO_ADDR", defaultOpenBaoAddr)
+	addr := envOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr)
 	mount := envOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
 	role := envOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
 	saFile := envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")

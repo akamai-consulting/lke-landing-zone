@@ -53,6 +53,7 @@ COVERAGE_MINS := \
 	internal/openbao=88 \
 	internal/pathglob=93 \
 	internal/preflight=95 \
+	internal/reconcilelanes=78 \
 	internal/shquote=100 \
 	internal/terraform=95 \
 	internal/volumes=85

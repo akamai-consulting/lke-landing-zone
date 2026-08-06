@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
 
 // assertArgoAppDeps builds seam deps: kubectl answers from the script (keyed
@@ -191,7 +193,7 @@ func TestTransientFetchError(t *testing.T) {
 		"dial tcp: i/o timeout",
 		"rpc error: code = Unknown",
 	} {
-		if !transientFetchError(m) {
+		if !health.IsTransientFetchError(m) {
 			t.Errorf("should be transient: %q", m)
 		}
 	}
@@ -199,7 +201,7 @@ func TestTransientFetchError(t *testing.T) {
 		"", "is missing required field kind", "invalid yaml at line 3",
 		"kind ExternalSecret not registered",
 	} {
-		if transientFetchError(m) {
+		if health.IsTransientFetchError(m) {
 			t.Errorf("should NOT be transient: %q", m)
 		}
 	}

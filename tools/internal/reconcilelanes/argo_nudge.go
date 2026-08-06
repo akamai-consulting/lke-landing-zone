@@ -15,15 +15,17 @@
 // only re-fetches on its slow periodic refresh). Idempotent: the hard refresh + sync
 // move the app out of the stuck state, so the next pass no-ops it. A NON-transient
 // ComparisonError (a real manifest error) matches no pattern and is left to surface.
-package main
+package reconcilelanes
 
 import (
 	"context"
 	"fmt"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
 
-// argoAppsPath is the Applications collection (Argo CD installs them in argocd).
-const argoAppsPath = "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications"
+// ArgoAppsPath is the Applications collection (Argo CD installs them in argocd).
+const ArgoAppsPath = "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications"
 
 // argoClient is the slice of the kube client the nudger needs.
 type argoClient interface {
@@ -31,11 +33,11 @@ type argoClient interface {
 	MergePatch(ctx context.Context, path string, patch any) error
 }
 
-// reconcileArgoNudge lists Applications and re-triggers each terminally-failed
+// ArgoNudge lists Applications and re-triggers each terminally-failed
 // one. A patch failure on one app does not abort the pass — the rest are still
 // nudged; the first error is returned so the manager records the pass as failed.
-func reconcileArgoNudge(ctx context.Context, client argoClient) error {
-	obj, status, err := client.GetJSON(ctx, argoAppsPath)
+func ArgoNudge(ctx context.Context, client argoClient) error {
+	obj, status, err := client.GetJSON(ctx, ArgoAppsPath)
 	if err != nil {
 		return err
 	}
@@ -56,7 +58,7 @@ func reconcileArgoNudge(ctx context.Context, client argoClient) error {
 		if !nudge {
 			continue
 		}
-		if err := client.MergePatch(ctx, argoAppsPath+"/"+name, argoNudgePatch()); err != nil {
+		if err := client.MergePatch(ctx, ArgoAppsPath+"/"+name, argoNudgePatch()); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("nudge %s: %w", name, err)
 			}
@@ -101,7 +103,7 @@ func transientComparisonErrorApp(item any) (string, bool) {
 	for _, c := range conds {
 		cm, _ := c.(map[string]any)
 		if t, _ := cm["type"].(string); t == "ComparisonError" {
-			if msg, _ := cm["message"].(string); transientFetchError(msg) {
+			if msg, _ := cm["message"].(string); health.IsTransientFetchError(msg) {
 				return name, true
 			}
 		}

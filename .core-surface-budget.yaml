@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 45,229 logic lines across 232 non-test files, 122 of them ci_*.go.
+    # 44,826 logic lines across 228 non-test files, 122 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -70,12 +70,15 @@ categories:
     #   45,229 / 232 files  assert-storage, the first extension that touches a
     #                       cluster and a cloud — and the first whose extraction
     #                       needed seams injected rather than none at all. -534.
+    #   44,826 / 228 files  reconcile-actions, four of the reconciler's eight
+    #                       lanes. The four that stayed are the finding; see the
+    #                       declaration. -403.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 45229
+    budget: 44826
     exact: true
     include:
       - "tools/cmd/llz/*.go"

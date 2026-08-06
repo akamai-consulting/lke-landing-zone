@@ -3,7 +3,7 @@ package main
 // ci_assert_rotation_health.go implements `llz ci assert-rotation-health` — the
 // gate on the credential-rotation lifecycle.
 //
-// THE COUPLING IT GUARDS. credPaths (reconcile_openbao.go) DECLARES every
+// THE COUPLING IT GUARDS. reconcilelanes.CredPaths (reconcile_openbao.go) DECLARES every
 // credential whose rotation age is tracked, with the class that says whether
 // anything will ever lower that age. The openbao-gauges lane SAMPLES those paths
 // and publishes llz_credential_age_days{cred,class}. LLZCredentialRotationOverdue
@@ -14,13 +14,13 @@ package main
 //
 // That is not hypothetical. The `static` class exists because those paths
 // "published NO series at all and were invisible on the single pane rather than
-// visibly old" (credClassStatic's own comment). A silently-missing series is the
+// visibly old" (reconcilelanes.CredClassStatic's own comment). A silently-missing series is the
 // native failure of this subsystem, and nothing gated it.
 //
 // WHAT IT ASSERTS. Two lanes, because the credential single pane has two feeds
 // and they fail in different ways.
 //
-// AGE LANE — for every credential in credPaths whose class is ALERTABLE
+// AGE LANE — for every credential in reconcilelanes.CredPaths whose class is ALERTABLE
 // (automated / on-demand — the classes something is expected to rotate):
 //
 //   1. a llz_credential_age_days series exists for it, and
@@ -28,7 +28,7 @@ package main
 //
 // PRESENCE LANE — for the GitHub-held credentials in ghSecretTargets, where the
 // failure is not "old" but "not there". That whole feed was ungated: the age lane
-// reads credPaths, so it had nothing to say about a write-time probe that never
+// reads reconcilelanes.CredPaths, so it had nothing to say about a write-time probe that never
 // authenticated (which is what was happening in production), a credential that
 // was never configured, or a root token left set after a break-glass. See
 // evalPresenceHealth.
@@ -69,6 +69,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // Rotation SLAs, in days. These MUST match the LLZCredentialRotationOverdue /
@@ -86,8 +88,8 @@ const (
 // the only ones whose age can fairly gate. Kept in step with the alert's
 // class=~"automated|on-demand" matcher.
 var alertableCredClasses = map[string]bool{
-	credClassAutomated: true,
-	credClassOnDemand:  true,
+	reconcilelanes.CredClassAutomated: true,
+	reconcilelanes.CredClassOnDemand:  true,
 }
 
 func ciAssertRotationHealthCmd() *cobra.Command {
@@ -97,10 +99,10 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "assert-rotation-health",
 		Short: "fail unless every rotatable credential is being observed and is within its rotation SLA",
-		Long: "Gates the credential-rotation lifecycle. For every credential credPaths declares\n" +
+		Long: "Gates the credential-rotation lifecycle. For every credential reconcilelanes.CredPaths declares\n" +
 			"with an ALERTABLE class (automated / on-demand), asserts a\n" +
 			"llz_credential_age_days series exists AND its age is within the class SLA.\n\n" +
-			"The missing series is the point. credPaths declares the credential, the\n" +
+			"The missing series is the point. reconcilelanes.CredPaths declares the credential, the\n" +
 			"openbao-gauges lane samples it, and LLZCredentialRotationOverdue alerts on the\n" +
 			"result — so a credential that is declared but publishes nothing disappears from\n" +
 			"the single pane AND can never fire an alert, because a rule over an absent\n" +
@@ -159,15 +161,15 @@ type credVerdict struct {
 const presenceLane = "presence"
 
 // expectedRotationCreds returns the credentials this gate demands a series for,
-// derived from the SAME credPaths table the sampler walks.
+// derived from the SAME reconcilelanes.CredPaths table the sampler walks.
 //
 // Derived from the declaration, not from the metrics: asking Prometheus which
 // credentials exist and then checking those exist is a tautology, and it would
 // pass green on precisely the missing-series bug this gate is for.
 func expectedRotationCreds() []expectedCred {
-	out := make([]expectedCred, 0, len(credPaths))
-	for _, cp := range credPaths {
-		out = append(out, expectedCred{cp.cred, cp.class, cp.optional})
+	out := make([]expectedCred, 0, len(reconcilelanes.CredPaths))
+	for _, cp := range reconcilelanes.CredPaths {
+		out = append(out, expectedCred{cp.Cred, cp.Class, cp.Optional})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cred < out[j].Cred })
 	return out
@@ -211,7 +213,7 @@ func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict
 		case !ok && e.Optional:
 			v.FailWhy = ""
 		case !ok && alertableCredClasses[e.Class]:
-			v.FailWhy = "no llz_credential_age_days series — this credential is DECLARED in credPaths but the " +
+			v.FailWhy = "no llz_credential_age_days series — this credential is DECLARED in reconcilelanes.CredPaths but the " +
 				"openbao-gauges lane is publishing nothing for it. It is invisible on the single pane, and " +
 				"LLZCredentialRotationOverdue can never fire for it: a rule over an absent series never evaluates. " +
 				"Usual cause is a missing secret/metadata read in policyReconcilerRead (a 403 fails the whole " +
@@ -233,9 +235,9 @@ func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict
 // description branches on exactly this distinction and so should the gate.
 func rotationRemedy(class string) string {
 	switch class {
-	case credClassAutomated:
+	case reconcilelanes.CredClassAutomated:
 		return "A breach here means the ROTATOR is broken, not that nobody ran it — check the rotator's CronJob/lane"
-	case credClassOnDemand:
+	case reconcilelanes.CredClassOnDemand:
 		return "A breach here means nobody has TRIGGERED it — dispatch secret-rotation.yml for this credential"
 	default:
 		return "Nothing automated lowers this age; it is re-seeded by hand"
@@ -347,7 +349,7 @@ func runCIAssertRotationHealth(prom, namespace string, strict, require bool, set
 
 // ── the presence lane ────────────────────────────────────────────────────────
 //
-// Everything above gates AGE, over the credentials credPaths declares in OpenBao.
+// Everything above gates AGE, over the credentials reconcilelanes.CredPaths declares in OpenBao.
 // It has nothing to say about the OTHER feed — the GitHub write-time lane — and
 // the failure mode there is not "old", it is "not there".
 //

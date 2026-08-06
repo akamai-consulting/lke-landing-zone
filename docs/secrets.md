@@ -382,7 +382,7 @@ to fire on.
 #### Credential-age coverage and the rotation class
 
 The `--reconcile-openbao-gauges` lane reads KV-v2 `updated_time` for every path in
-`credPaths` ([`reconcile_openbao.go`](../tools/cmd/llz/reconcile_openbao.go)) and
+`credPaths` ([`reconcile_openbao.go`](../tools/internal/reconcilelanes/openbao.go)) and
 publishes `llz_credential_age_days{cred, class}`. The `class` label is what makes
 the coverage honest — it separates "a rotator is late" from "nothing rotates this":
 

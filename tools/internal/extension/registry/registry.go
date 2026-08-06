@@ -26,11 +26,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 )
 
 // declarations is the built-in set. One line per extension; the catalog
-// (docs/designs/internal-extensions.md) sizes the other 55.
+// (docs/designs/internal-extensions.md) sizes the other 54.
 //
 // Listed in import order, NOT declaration order — All sorts by name, so the order
 // here carries no meaning and nobody has to maintain one.
@@ -38,6 +39,7 @@ var declarations = []func() extension.Extension{
 	atrest.Extension,
 	budget.Extension,
 	docsguard.Extension,
+	reconcilelanes.Extension,
 	volumes.Extension,
 }
 

@@ -16,7 +16,7 @@
 // so a slipped-through Flux re-promotion is re-demoted on the next resync tick
 // even when no admission/watch event ever fires — exactly the starvation case the
 // CronJob's */2 cadence covers. It DRIVES (patches the SC), so it is leader-gated.
-package main
+package reconcilelanes
 
 import (
 	"context"
@@ -24,17 +24,17 @@ import (
 )
 
 const (
-	scStorageClassesPath = "/apis/storage.k8s.io/v1/storageclasses"
-	scDefaultAnnotation  = "storageclass.kubernetes.io/is-default-class"
-	defaultDemoteSC      = "linode-block-storage-retain"
+	SCStorageClassesPath = "/apis/storage.k8s.io/v1/storageclasses"
+	SCDefaultAnnotation  = "storageclass.kubernetes.io/is-default-class"
+	DefaultDemoteSC      = "linode-block-storage-retain"
 )
 
-// reconcileSCDemote demotes the named StorageClass to non-default if it is
+// SCDemote demotes the named StorageClass to non-default if it is
 // currently marked the cluster default. Idempotent: a no-op when the SC is absent
 // (single-class cluster) or already non-default. A patch failure surfaces (the
 // manager records the pass failed).
-func reconcileSCDemote(ctx context.Context, client reconcileClient, name string) error {
-	obj, status, err := client.GetJSON(ctx, scStorageClassesPath+"/"+name)
+func SCDemote(ctx context.Context, client Client, name string) error {
+	obj, status, err := client.GetJSON(ctx, SCStorageClassesPath+"/"+name)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func reconcileSCDemote(ctx context.Context, client reconcileClient, name string)
 	if !scIsDefault(obj) {
 		return nil // already non-default — nothing to do
 	}
-	return client.MergePatch(ctx, scStorageClassesPath+"/"+name, scDemotePatch())
+	return client.MergePatch(ctx, SCStorageClassesPath+"/"+name, scDemotePatch())
 }
 
 // scIsDefault reports whether a StorageClass object carries
@@ -55,7 +55,7 @@ func reconcileSCDemote(ctx context.Context, client reconcileClient, name string)
 func scIsDefault(sc map[string]any) bool {
 	meta, _ := sc["metadata"].(map[string]any)
 	ann, _ := meta["annotations"].(map[string]any)
-	v, _ := ann[scDefaultAnnotation].(string)
+	v, _ := ann[SCDefaultAnnotation].(string)
 	return v == "true"
 }
 
@@ -64,7 +64,7 @@ func scIsDefault(sc map[string]any) bool {
 func scDemotePatch() map[string]any {
 	return map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{scDefaultAnnotation: "false"},
+			"annotations": map[string]any{SCDefaultAnnotation: "false"},
 		},
 	}
 }

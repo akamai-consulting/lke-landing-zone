@@ -1,4 +1,4 @@
-package main
+package reconcilelanes
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 func TestSCIsDefault(t *testing.T) {
 	def := func(v string) map[string]any {
-		return map[string]any{"metadata": map[string]any{"annotations": map[string]any{scDefaultAnnotation: v}}}
+		return map[string]any{"metadata": map[string]any{"annotations": map[string]any{SCDefaultAnnotation: v}}}
 	}
 	if !scIsDefault(def("true")) {
 		t.Error(`is-default-class "true" should be default`)
@@ -37,7 +37,7 @@ func scServer(t *testing.T, name string, getStatus int, isDefault bool) (*kube.C
 	t.Helper()
 	var mu sync.Mutex
 	var patched []string
-	path := scStorageClassesPath + "/" + name
+	path := SCStorageClassesPath + "/" + name
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != path {
 			http.NotFound(w, r)
@@ -51,7 +51,7 @@ func scServer(t *testing.T, name string, getStatus int, isDefault bool) (*kube.C
 			}
 			ann := map[string]any{}
 			if isDefault {
-				ann[scDefaultAnnotation] = "true"
+				ann[SCDefaultAnnotation] = "true"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": name, "annotations": ann}})
 		case http.MethodPatch:
@@ -67,9 +67,9 @@ func scServer(t *testing.T, name string, getStatus int, isDefault bool) (*kube.C
 }
 
 func TestReconcileSCDemoteWhenDefault(t *testing.T) {
-	client, patched := scServer(t, defaultDemoteSC, 200, true)
-	if err := reconcileSCDemote(context.Background(), client, defaultDemoteSC); err != nil {
-		t.Fatalf("reconcileSCDemote: %v", err)
+	client, patched := scServer(t, DefaultDemoteSC, 200, true)
+	if err := SCDemote(context.Background(), client, DefaultDemoteSC); err != nil {
+		t.Fatalf("SCDemote: %v", err)
 	}
 	if len(*patched) != 1 || !strings.Contains((*patched)[0], `"storageclass.kubernetes.io/is-default-class":"false"`) {
 		t.Fatalf("expected one demote patch, got %v", *patched)
@@ -77,9 +77,9 @@ func TestReconcileSCDemoteWhenDefault(t *testing.T) {
 }
 
 func TestReconcileSCDemoteAlreadyNonDefaultIsNoOp(t *testing.T) {
-	client, patched := scServer(t, defaultDemoteSC, 200, false)
-	if err := reconcileSCDemote(context.Background(), client, defaultDemoteSC); err != nil {
-		t.Fatalf("reconcileSCDemote: %v", err)
+	client, patched := scServer(t, DefaultDemoteSC, 200, false)
+	if err := SCDemote(context.Background(), client, DefaultDemoteSC); err != nil {
+		t.Fatalf("SCDemote: %v", err)
 	}
 	if len(*patched) != 0 {
 		t.Fatalf("non-default SC should not be patched, got %v", *patched)
@@ -87,8 +87,8 @@ func TestReconcileSCDemoteAlreadyNonDefaultIsNoOp(t *testing.T) {
 }
 
 func TestReconcileSCDemoteAbsentIsNoOp(t *testing.T) {
-	client, patched := scServer(t, defaultDemoteSC, 404, false)
-	if err := reconcileSCDemote(context.Background(), client, defaultDemoteSC); err != nil {
+	client, patched := scServer(t, DefaultDemoteSC, 404, false)
+	if err := SCDemote(context.Background(), client, DefaultDemoteSC); err != nil {
 		t.Fatalf("404 should be a no-op, got %v", err)
 	}
 	if len(*patched) != 0 {
@@ -97,8 +97,8 @@ func TestReconcileSCDemoteAbsentIsNoOp(t *testing.T) {
 }
 
 func TestReconcileSCDemoteServerErrorSurfaces(t *testing.T) {
-	client, _ := scServer(t, defaultDemoteSC, 500, false)
-	if err := reconcileSCDemote(context.Background(), client, defaultDemoteSC); err == nil {
+	client, _ := scServer(t, DefaultDemoteSC, 500, false)
+	if err := SCDemote(context.Background(), client, DefaultDemoteSC); err == nil {
 		t.Error("500 should surface an error")
 	}
 }

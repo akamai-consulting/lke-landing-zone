@@ -1,4 +1,4 @@
-package main
+package reconcilelanes
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
 
 func TestFailedAppName(t *testing.T) {
@@ -51,16 +53,16 @@ func argoTestServer(t *testing.T, apps []map[string]any) (*kube.Client, *[]strin
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == argoAppsPath:
+		case r.Method == http.MethodGet && r.URL.Path == ArgoAppsPath:
 			items := make([]any, len(apps))
 			for i, a := range apps {
 				items[i] = a
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
-		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, argoAppsPath+"/"):
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, ArgoAppsPath+"/"):
 			body, _ := io.ReadAll(r.Body)
 			mu.Lock()
-			patched = append(patched, strings.TrimPrefix(r.URL.Path, argoAppsPath+"/"))
+			patched = append(patched, strings.TrimPrefix(r.URL.Path, ArgoAppsPath+"/"))
 			bodies = append(bodies, string(body))
 			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
@@ -88,8 +90,8 @@ func TestReconcileArgoNudgePatchesOnlyFailed(t *testing.T) {
 		app("wedged-2", "Failed"),
 		app("fresh", ""), // no operationState
 	})
-	if err := reconcileArgoNudge(context.Background(), client); err != nil {
-		t.Fatalf("reconcileArgoNudge: %v", err)
+	if err := ArgoNudge(context.Background(), client); err != nil {
+		t.Fatalf("ArgoNudge: %v", err)
 	}
 	got := append([]string(nil), *patched...)
 	if len(got) != 2 || !contains(got, "wedged-1") || !contains(got, "wedged-2") {
@@ -107,8 +109,8 @@ func TestReconcileArgoNudgeNoFailedIsNoOp(t *testing.T) {
 		app("healthy", "Succeeded"),
 		app("syncing", "Running"),
 	})
-	if err := reconcileArgoNudge(context.Background(), client); err != nil {
-		t.Fatalf("reconcileArgoNudge: %v", err)
+	if err := ArgoNudge(context.Background(), client); err != nil {
+		t.Fatalf("ArgoNudge: %v", err)
 	}
 	if len(*patched) != 0 {
 		t.Fatalf("expected no patches, got %v", *patched)
@@ -121,7 +123,7 @@ func TestReconcileArgoNudgeListErrorSurfaces(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	client := kube.NewClient(srv.URL, "tok", srv.Client())
-	if err := reconcileArgoNudge(context.Background(), client); err == nil {
+	if err := ArgoNudge(context.Background(), client); err == nil {
 		t.Fatal("expected error when listing Applications fails")
 	}
 }
@@ -163,7 +165,7 @@ func TestGitAuthErrorIsNotNudged(t *testing.T) {
 		"failed to list refs: authentication required: Unauthorized",
 		"could not read Username for 'https://github.com': terminal prompts disabled",
 	} {
-		if transientFetchError(msg) {
+		if health.IsTransientFetchError(msg) {
 			t.Errorf("auth refusal must not be nudged as transient: %q", msg)
 		}
 	}
@@ -172,8 +174,17 @@ func TestGitAuthErrorIsNotNudged(t *testing.T) {
 		"failed to list refs: dial tcp 140.82.113.4:443: i/o timeout",
 		"failed to list refs: repository not found",
 	} {
-		if !transientFetchError(msg) {
+		if !health.IsTransientFetchError(msg) {
 			t.Errorf("genuine transient must still nudge: %q", msg)
 		}
 	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

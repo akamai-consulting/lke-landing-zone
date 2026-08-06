@@ -36,6 +36,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 //go:embed manifests/block-storage-class.yaml
@@ -645,7 +647,7 @@ func parseStorageClass(raw []byte) (stockStorageClass, error) {
 		VolumeBindingMode:    doc.VolumeBindingMode,
 		AllowVolumeExpansion: doc.AllowVolumeExpansion,
 		Parameters:           doc.Parameters,
-		IsDefault:            doc.Metadata.Annotations[scDefaultAnnotation] == "true",
+		IsDefault:            doc.Metadata.Annotations[reconcilelanes.SCDefaultAnnotation] == "true",
 	}, nil
 }
 

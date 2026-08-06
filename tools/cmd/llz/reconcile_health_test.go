@@ -10,6 +10,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // route is one path → (status, body) the health server replies with.
@@ -216,7 +218,7 @@ func TestReadyConditionAgreesWithFindReady(t *testing.T) {
 				t.Errorf("reason = %q, want %q", r, tt.wantReason)
 			}
 			// Both readers must now answer identically for the same object.
-			if got := objReadyStatus(tt.obj); got != s {
+			if got := reconcilelanes.ObjReadyStatus(tt.obj); got != s {
 				t.Errorf("objReadyStatus = %q but readyCondition = %q — the two readers must agree", got, s)
 			}
 		})

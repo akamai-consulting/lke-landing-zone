@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
 
 // sealKeySecretName is the Secret the chart's `seal "static"` stanza mounts; its
@@ -73,7 +75,7 @@ func waitForOpenbaoNamespace(d aplGateDeps, ns string, within time.Duration) err
 		// Kick a stuck app-of-apps to re-fetch (throttled 20s); a failed fetch
 		// returns fast, so a fresh refresh each cycle re-attempts rather than
 		// interrupts. The namespace is created downstream once the re-fetch succeeds.
-		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
+		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
 			d.kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, firstLine(cerr))
 			lastRefresh = d.now()

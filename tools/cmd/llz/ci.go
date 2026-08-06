@@ -288,7 +288,7 @@ func ciCmd() *cobra.Command {
 	// fail the step. One tested list now drives both, and it ships with the binary
 	// rather than with each instance's vendored workflow.
 	// ── Tier-3 credential-lifecycle gates ────────────────────────────────────
-	// assert-rotation-health gates the age of every credential credPaths declares:
+	// assert-rotation-health gates the age of every credential reconcilelanes.CredPaths declares:
 	// a declared credential publishing NO series is invisible on the single pane
 	// AND unalertable, because a rule over an absent series never evaluates.
 	// assert-harbor-roundtrip USES a minted robot rather than trusting it was

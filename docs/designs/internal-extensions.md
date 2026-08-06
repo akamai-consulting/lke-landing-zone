@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first four, extracted](#the-first-four-extracted). |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first five, extracted](#the-first-five-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -179,7 +179,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
-| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first four, extracted](#the-first-four-extracted). |
+| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first five, extracted](#the-first-five-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74 |
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
@@ -201,11 +201,11 @@ The binding the current design has no room for; without it these 4,283 lines sta
 |---|---:|---:|:-:|:-:|---|
 | `reconciler-runtime` | 1,094 | 5 | ✔ | ✘ | `reconcile` 541, leader 199, manager 146, health 125, convergence 83. The loop + leader election. **Should also become its own binary.** |
 | `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208 |
-| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. |
+| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first five, extracted](#the-first-five-extracted). |
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
-| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first four, extracted](#the-first-four-extracted). |
+| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first five, extracted](#the-first-five-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first four, extracted](#the-first-four-extracted). |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first five, extracted](#the-first-five-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first four, extracted
+## The first five, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -263,9 +263,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `llz extension list` | 46,797 | 235 | +81, spent deliberately |
 | `guard-docs` extracted | 46,106 | 235 | −691, the largest single move so far |
 | `posture-at-rest` extracted | 45,763 | 234 | −343, and the first binding that is not a gate |
-| `assert-storage` extracted | **45,229** | 232 | −534, and the first that touches a cluster and a cloud |
+| `assert-storage` extracted | 45,229 | 232 | −534, and the first that touches a cluster and a cloud |
+| `reconcile-actions` extracted | **44,826** | 228 | −403, four of eight lanes — the other four are the finding |
 
-**Net −1,953 (4.1%) across four extensions.** Read that as a floor on the effort rather than a
+**Net −2,356 (5.0%) across five extensions.** Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
 
@@ -402,6 +403,57 @@ kubectl themselves, so a test could only have run them against a real cluster. T
 parameter is what made them reachable, and the package went 64.8% → 85.3%. Delivering capabilities
 rather than letting code acquire them is a testability property before it is a security one.
 
+### What `reconcile-actions` proved, and the gap it opened
+
+The catalog calls this *"seven separate invariants whose needs differ — the clearest case for
+one-invariant-per-extension"*, and it is the first claim the model gets unambiguously **right**.
+
+```
+reconcile-actions  invariant:operating/sc-demote[cluster-read, cluster-write]
+                   invariant:operating/argo-nudge[cluster-read, cluster-write]
+                   invariant:operating/es-store-recovery[cluster-read, cluster-write]
+                   invariant:operating/openbao-gauges[cluster-read, secret-custody]
+```
+
+**The over-granting argument, as one number.** Collapse those into a single binding and it must hold
+the union — `cluster-write` **and** `secret-custody`. The read-only OpenBao sampler would gain
+permission to patch StorageClasses and Argo Applications; the three cluster lanes would gain an
+OpenBao token. Neither needs the other's capability, and the sampler is the one that most obviously
+must not have it. A test asserts no binding holds both.
+
+`openbao-gauges` is also the registry's first **`secret-custody`** binding, and it needed no ceiling
+change — `grantStates` already permitted it at `operating`. That makes it the control case for
+`assert-storage`'s `cloud-mutate` row: the table is not simply permissive everywhere, and the earlier
+correction was a genuine defect rather than the ceiling being too tight in general.
+
+**Four of the eight lanes did not move, in three different ways:**
+
+| lane | why it stayed |
+|---|---|
+| `tokens` | 15 references into `ci_token_inventory.go` — a *separate* catalog entry of 1,473 lines. The lane is 236 lines and its dependency is six times that. |
+| `apl-overlay`, `apl-overlay-wait` | Share this package's OpenBao client seam. One credential cluster with `openbao-gauges`; splitting it to move half would mean duplicating the seam. |
+| `linode-token-wait` | **It is not a lane.** It is a watch *wrapper* that kicks another lane when the Linode token first appears, and never acts itself. The catalog counts it among the seven invariants; it belongs to the runtime. A miscount found only by trying to declare it. |
+
+**And the gap: the model cannot say an extension is PARTIAL.** `reconcile-actions` declares four
+bindings and reads as complete. Nothing distinguishes *"has four invariants"* from *"has eight, four
+of which are still in core"*. Every extraction from here passes through this state, and an extension
+that silently under-declares its own surface is the same failure shape as banning by omission — the
+reader cannot tell what is missing.
+
+Recorded, not fixed. The remedy is probably a declaration-level `incomplete` marker naming what is
+outstanding, and inventing one from a single case is exactly what the [`write-repo`
+deferral](#what-guard-docs-added-by-disagreeing) was right to avoid. It becomes actionable at the
+second partial extension.
+
+**A fourth shared rule, and a boundary tax.** `transientFetchError` — the transient-vs-permanent
+classification for Argo comparison errors — was private to `ci_assert_argo_app.go` and called by the
+nudge lane; it moved to `internal/health`, beside `IsGitAuthError` which it already called. Two
+callers disagreeing about whether a timeout is permanent is a lane that never settles. Separately,
+two *coupling* tests now span the new boundary and needed symbols exported purely so they could still
+reach both halves (`ObjReadyStatus` vs the runtime's `readyCondition`; `CredPaths` vs
+`policyReconcilerRead`). That is a real cost of extraction and worth budgeting for: a test that
+cannot reach both things it couples is not a test.
+
 ## The cost of the interesting half
 
 Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
@@ -420,12 +472,21 @@ list:
 | `template-sustain` | `transition` · **`own-paths`** | 26 | ✘ |
 | `teardown` | `transition` + `assertion` · `destroyed` | 30 | ✘ |
 | `obj-encryption` | `transition:seeded` · **`secret-custody`** | 43 | ✘ |
-| `reconcile-actions` | `invariant` ×7 · seven grant sets | 62 | ✘ |
+| `reconcile-actions` | **`invariant` ×4 · two grant sets · `secret-custody`** | 62 → **28 → 4 lanes moved** | ◐ |
 
-`assert-storage` is the calibration point: **16 raw references collapsed to 4 injected seams**, because
-most of the 16 were one-line wrappers around the same four capabilities. Treat the raw counts above
-as an upper bound on difficulty, not an estimate of it — but note that the four seams were *the same
-four* the next candidates need, so the collapse does not repeat for free.
+**The raw counts were too pessimistic, and I can now say by how much.** `assert-storage`: 16 raw
+references collapsed to 4 injected seams, because most were one-line wrappers around the same four
+capabilities. `reconcile-actions`: the census said 62, but that number counted identifiers inside
+**comments** — the word "reconciler" appears constantly in prose. Re-measured with comments and
+string literals stripped, the eight lanes reference 28 symbols, and four of the lanes turned out to
+need almost nothing because a lane is a *free function taking a client interface*, not a method on
+the runtime type.
+
+So: treat the raw counts as an upper bound, and re-measure properly before concluding a candidate is
+out of reach. The corrected method is comments-stripped closure over non-test sources. What did NOT
+change is the shape of the finding — the lanes that stayed are still the ones with the expensive
+dependencies, and the four seams `assert-storage` needed are still the same four the next candidates
+need.
 
 **The catalog's line counts are file counts, not closures**, and the gap between the two is where the
 remaining work is. The cheap extractions are all gates because a gate reaches nothing; every
@@ -514,7 +575,7 @@ grants and the distribution is observed instead of assigned.
 > tidy version.
 
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first four, extracted](#the-first-four-extracted).
+   **Done** — [The first five, extracted](#the-first-five-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

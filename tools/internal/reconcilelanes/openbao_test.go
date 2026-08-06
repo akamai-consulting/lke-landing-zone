@@ -1,4 +1,4 @@
-package main
+package reconcilelanes
 
 import (
 	"context"
@@ -40,11 +40,11 @@ func (f *fakeProbe) MetadataList(_ context.Context, _ string) ([]string, bool, e
 
 func withOpenbaoSeams(t *testing.T, p openbaoProbe, loginErr, jwtErr error) {
 	t.Helper()
-	oc, ol, oj := openbaoClientFn, openbaoLoginFn, openbaoJWTFn
-	openbaoClientFn = func(string, string) (openbaoProbe, error) { return p, nil }
-	openbaoLoginFn = func(context.Context, string, string) (string, error) { return "tok", loginErr }
-	openbaoJWTFn = func() (string, error) { return "jwt", jwtErr }
-	t.Cleanup(func() { openbaoClientFn, openbaoLoginFn, openbaoJWTFn = oc, ol, oj })
+	oc, ol, oj := OpenBaoClientFn, OpenBaoLoginFn, OpenBaoJWTFn
+	OpenBaoClientFn = func(string, string) (openbaoProbe, error) { return p, nil }
+	OpenBaoLoginFn = func(context.Context, string, string) (string, error) { return "tok", loginErr }
+	OpenBaoJWTFn = func() (string, error) { return "jwt", jwtErr }
+	t.Cleanup(func() { OpenBaoClientFn, OpenBaoLoginFn, OpenBaoJWTFn = oc, ol, oj })
 }
 
 func obMetrics(t *testing.T, reg *metrics.Registry) string {
@@ -87,8 +87,8 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	}
 	withOpenbaoSeams(t, p, nil, nil)
 	reg := metrics.NewRegistry()
-	if err := sampleOpenBao(context.Background(), reg, now); err != nil {
-		t.Fatalf("sampleOpenBao: %v", err)
+	if err := SampleOpenBao(context.Background(), reg, now); err != nil {
+		t.Fatalf("SampleOpenBao: %v", err)
 	}
 	out := obMetrics(t, reg)
 	for _, want := range []string{
@@ -112,50 +112,8 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	}
 }
 
-// Every credPaths entry must have a matching metadata-read grant in
-// policyReconcilerRead. A missing grant is a 403, and sampleOpenBao treats any
-// non-404 failure as fatal — so one ungranted path silently takes down the seal
-// gauge and every OTHER credential's age with it, which is the opposite of what
-// widening the coverage was for.
-func TestCredPathsAreGrantedInReconcilerPolicy(t *testing.T) {
-	for _, cp := range credPaths {
-		meta := strings.Replace(cp.path, "secret/", "secret/metadata/", 1)
-		if !strings.Contains(policyReconcilerRead, `path "`+meta+`"`) {
-			t.Errorf("credPaths has %s but policyReconcilerRead grants no read on %q — the sampler will 403 and fail the whole lane", cp.path, meta)
-		}
-		switch cp.class {
-		case credClassAutomated, credClassGenerateOnce, credClassTracksSource, credClassStatic, credClassOnDemand:
-		default:
-			t.Errorf("credPaths entry %s has unknown class %q; the alert rules match on the known set", cp.cred, cp.class)
-		}
-	}
-}
-
-// The db-admin paths are discovered at sample time, so the pin test above cannot
-// see them — their grants are a LIST on the collection plus a metadata-read
-// prefix, and BOTH are needed: without the list the sampler 403s on discovery,
-// without the read it 403s on the first cluster it finds. Either one fails the
-// whole lane, not just the db series.
-func TestDBAdminGrantsInReconcilerPolicy(t *testing.T) {
-	for _, want := range []string{
-		`path "secret/metadata/infra/db-admin/" { capabilities = ["list"] }`,
-		`path "secret/metadata/infra/db-admin/*" { capabilities = ["read"] }`,
-	} {
-		if !strings.Contains(policyReconcilerRead, want) {
-			t.Errorf("policyReconcilerRead is missing the db-admin grant %q", want)
-		}
-	}
-	// The reconciler must never be able to read a database admin password — only
-	// its metadata. A data grant here would be a real privilege escalation.
-	// Matched on the `path "` prefix, not the bare string: the policy's own HCL
-	// comment names secret/data/infra/db-admin/* to say it is NOT granted.
-	if strings.Contains(policyReconcilerRead, `path "secret/data/infra/db-admin`) {
-		t.Error("policyReconcilerRead grants DATA on infra/db-admin; the age sampler needs metadata only")
-	}
-}
-
 // A deployment with databases gets one series per cluster, discovered from the
-// KV collection rather than declared in credPaths — so a cluster added later is
+// KV collection rather than declared in CredPaths — so a cluster added later is
 // covered with no code change.
 func TestSampleOpenBaoDBAdminDiscovered(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -169,8 +127,8 @@ func TestSampleOpenBaoDBAdminDiscovered(t *testing.T) {
 	}
 	withOpenbaoSeams(t, p, nil, nil)
 	reg := metrics.NewRegistry()
-	if err := sampleOpenBao(context.Background(), reg, now); err != nil {
-		t.Fatalf("sampleOpenBao: %v", err)
+	if err := SampleOpenBao(context.Background(), reg, now); err != nil {
+		t.Fatalf("SampleOpenBao: %v", err)
 	}
 	out := obMetrics(t, reg)
 	for _, want := range []string{
@@ -190,18 +148,18 @@ func TestSampleOpenBaoNoDatabasesIsNotAnError(t *testing.T) {
 	p := &fakeProbe{seal: openbao.SealInfo{Initialized: true}, updated: map[string]time.Time{}}
 	withOpenbaoSeams(t, p, nil, nil)
 	reg := metrics.NewRegistry()
-	if err := sampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
-		t.Fatalf("sampleOpenBao with no db-admin collection: %v", err)
+	if err := SampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
+		t.Fatalf("SampleOpenBao with no db-admin collection: %v", err)
 	}
 	if out := obMetrics(t, reg); strings.Contains(out, "db-admin") {
 		t.Errorf("published a db-admin series with nothing listed:\n%s", out)
 	}
 }
 
-// Discovery must not mutate the package-level credPaths: two passes in a row on
+// Discovery must not mutate the package-level CredPaths: two passes in a row on
 // the same process would otherwise accumulate (or overwrite) entries.
 func TestSampleOpenBaoDiscoveryDoesNotMutateCredPaths(t *testing.T) {
-	before := len(credPaths)
+	before := len(CredPaths)
 	p := &fakeProbe{
 		seal:    openbao.SealInfo{Initialized: true},
 		listed:  []string{"shared"},
@@ -209,12 +167,12 @@ func TestSampleOpenBaoDiscoveryDoesNotMutateCredPaths(t *testing.T) {
 	}
 	withOpenbaoSeams(t, p, nil, nil)
 	for i := 0; i < 2; i++ {
-		if err := sampleOpenBao(context.Background(), metrics.NewRegistry(), time.Unix(2, 0)); err != nil {
+		if err := SampleOpenBao(context.Background(), metrics.NewRegistry(), time.Unix(2, 0)); err != nil {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}
-	if len(credPaths) != before {
-		t.Errorf("credPaths grew from %d to %d across sample passes", before, len(credPaths))
+	if len(CredPaths) != before {
+		t.Errorf("CredPaths grew from %d to %d across sample passes", before, len(CredPaths))
 	}
 }
 
@@ -222,8 +180,8 @@ func TestSampleOpenBaoSealed(t *testing.T) {
 	p := &fakeProbe{seal: openbao.SealInfo{Sealed: true, Initialized: true}}
 	withOpenbaoSeams(t, p, nil, nil)
 	reg := metrics.NewRegistry()
-	if err := sampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
-		t.Fatalf("sampleOpenBao: %v", err)
+	if err := SampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
+		t.Fatalf("SampleOpenBao: %v", err)
 	}
 	if !strings.Contains(obMetrics(t, reg), "llz_openbao_sealed 1") {
 		t.Error("want sealed 1")
@@ -235,8 +193,8 @@ func TestSampleOpenBaoCredNotSeededSkipped(t *testing.T) {
 	p := &fakeProbe{seal: openbao.SealInfo{Initialized: true}, updated: map[string]time.Time{}}
 	withOpenbaoSeams(t, p, nil, nil)
 	reg := metrics.NewRegistry()
-	if err := sampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
-		t.Fatalf("sampleOpenBao: %v", err)
+	if err := SampleOpenBao(context.Background(), reg, time.Unix(1, 0)); err != nil {
+		t.Fatalf("SampleOpenBao: %v", err)
 	}
 	if strings.Contains(obMetrics(t, reg), "llz_credential_age_days") {
 		t.Error("no age gauge should be set when a path is not seeded")
@@ -258,7 +216,7 @@ func TestSampleOpenBaoErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			withOpenbaoSeams(t, c.p, c.login, c.jwt)
-			if err := sampleOpenBao(context.Background(), metrics.NewRegistry(), now); err == nil {
+			if err := SampleOpenBao(context.Background(), metrics.NewRegistry(), now); err == nil {
 				t.Errorf("%s should surface an error", c.name)
 			}
 		})

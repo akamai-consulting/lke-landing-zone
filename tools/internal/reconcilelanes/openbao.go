@@ -8,7 +8,7 @@
 // metadata (updated_time) via the reconciler's k8s-auth role — no access to the
 // secret data itself. Retires the daily openbao-health seal check and the
 // loki-objkey rotation-SLA check.
-package main
+package reconcilelanes
 
 import (
 	"context"
@@ -19,10 +19,14 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+
+	"net/http"
+
+	"fmt"
 )
 
 const (
-	defaultOpenBaoAddr    = "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+	DefaultOpenBaoAddr    = "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
 	openbaoAuthMount      = "kubernetes"
 	openbaoReconcilerRole = "reconciler"
 )
@@ -34,20 +38,20 @@ const (
 // and can never be cleared by anything except a human doing a manual re-seed —
 // i.e. permanent noise that trains operators to ignore the rule.
 const (
-	// credClassAutomated — a rotator resets this path on a cadence
+	// CredClassAutomated — a rotator resets this path on a cadence
 	// (linodeCredRotator, ~80d threshold). Eligible for the 90d SLA alert.
-	credClassAutomated = "automated"
-	// credClassGenerateOnce — created in-cluster by an ESO PushSecret with a
+	CredClassAutomated = "automated"
+	// CredClassGenerateOnce — created in-cluster by an ESO PushSecret with a
 	// Password generator and `updatePolicy: IfNotExists`, so it is written once
 	// and never again. Its age is REAL (and worth seeing on the dashboard), but
 	// no automation will ever lower it. Visible, not alertable.
-	credClassGenerateOnce = "generate-once"
-	// credClassTracksSource — mirrored from a source of truth outside OpenBao
+	CredClassGenerateOnce = "generate-once"
+	// CredClassTracksSource — mirrored from a source of truth outside OpenBao
 	// (harbor/admin follows Harbor's Helm-generated Secret via a `Replace`
 	// PushSecret). Age tracks the SOURCE's rotation, not OpenBao's, so an
 	// overdue reading is a statement about Harbor, not about the vault.
-	credClassTracksSource = "tracks-source"
-	// credClassOnDemand — a real rotation path exists, but an OPERATOR triggers
+	CredClassTracksSource = "tracks-source"
+	// CredClassOnDemand — a real rotation path exists, but an OPERATOR triggers
 	// it rather than a schedule: the Managed Postgres admin credential, rotated
 	// by `llz ci rotate-db-admin` (secret-rotation.yml scope=db-admin). Linode
 	// resets that password in place with no overlap window, so every consumer
@@ -63,8 +67,8 @@ const (
 	// It is not `automated` either: there, a 90d breach means the ROTATOR is
 	// broken; here it means nobody has run it. Different remedy, so a different
 	// label — the alert description branches on it.
-	credClassOnDemand = "on-demand"
-	// credClassStatic — seeded once by bootstrap (or by an operator) and never
+	CredClassOnDemand = "on-demand"
+	// CredClassStatic — seeded once by bootstrap (or by an operator) and never
 	// touched again by any automation: the Harbor robots, the two GitHub-PAT
 	// copies, the Slack webhook. This is the `static` row docs/secrets.md's
 	// rotation legend has always had and the metric taxonomy did not — so these
@@ -72,15 +76,15 @@ const (
 	// rather than visibly old. Re-seeding by hand is the only thing that lowers
 	// the age, so like the two classes above they get the yearly info nudge,
 	// never the 90d SLA.
-	credClassStatic = "static"
+	CredClassStatic = "static"
 )
 
-// credPaths maps each OpenBao KV path whose rotation age we track to its metric
+// CredPaths maps each OpenBao KV path whose rotation age we track to its metric
 // `cred` label and its rotation class (above) — every platform credential that
 // would otherwise age silently, which is exactly the blind spot the credential
 // single pane exists to close. The one deliberate omission is the per-cluster
 // Managed Postgres admin path, whose name is not known until a cluster is
-// declared; it is enumerated at sample time instead (see dbAdminRoot).
+// declared; it is enumerated at sample time instead (see DBAdminRoot).
 //
 // Every path here MUST also be granted a `secret/metadata/<path>` read in
 // policyReconcilerRead (ci_openbao_configure.go). A missing grant is a 403, and
@@ -96,64 +100,64 @@ const (
 // credPath is one tracked KV path. Named rather than anonymous because the
 // sampler copies and extends this slice, and every one of those literals had to
 // repeat the shape verbatim.
-type credPath struct {
-	path, cred, class string
-	optional          bool
+type CredPath struct {
+	Path, Cred, Class string
+	Optional          bool
 }
 
-var credPaths = []credPath{
-	{"secret/loki/object-store", "loki-object-store", credClassAutomated, false},
-	{"secret/harbor/registry-s3", "harbor-registry-s3", credClassAutomated, false},
-	{"secret/obj/platform", "obj-platform", credClassAutomated, false},
+var CredPaths = []CredPath{
+	{"secret/loki/object-store", "loki-object-store", CredClassAutomated, false},
+	{"secret/harbor/registry-s3", "harbor-registry-s3", CredClassAutomated, false},
+	{"secret/obj/platform", "obj-platform", CredClassAutomated, false},
 	// The narrow in-cluster PAT. Re-minted monthly per region by
 	// secret-rotation.yml → `rotate-incluster-pat`, so it is genuinely
 	// `automated` and belongs on the 90d SLA: a stalled rotation workflow is
 	// exactly the failure this alert can ask a human to fix. It was the one
 	// credential with real rotation and no watchdog over it.
-	{"secret/linode/api-token", "linode-incluster-pat", credClassAutomated, false},
+	{"secret/linode/api-token", "linode-incluster-pat", CredClassAutomated, false},
 	// The BROAD account read_write PAT — the highest-privilege Linode credential
 	// the platform holds. The broadPatRotator CronJob re-mints it weekly against
 	// ROTATE_AFTER_DAYS, so it is `automated` and belongs on the 90d SLA for the
 	// same reason the narrow PAT does. Its EXPIRY already rode in free via the
 	// token-inventory's Linode enumeration; what was missing is rotation age —
 	// so a wedged rotator stayed invisible until the token actually lapsed.
-	{"secret/linode/broad-pat", "linode-broad-pat", credClassAutomated, false},
-	{"secret/grafana/admin", "grafana-admin", credClassGenerateOnce, false},
-	{"secret/otel/ingress", "otel-ingress", credClassGenerateOnce, false},
-	{"secret/harbor/admin", "harbor-admin", credClassTracksSource, false},
+	{"secret/linode/broad-pat", "linode-broad-pat", CredClassAutomated, false},
+	{"secret/grafana/admin", "grafana-admin", CredClassGenerateOnce, false},
+	{"secret/otel/ingress", "otel-ingress", CredClassGenerateOnce, false},
+	{"secret/harbor/admin", "harbor-admin", CredClassTracksSource, false},
 	// Bootstrap seeds, re-seeded only by hand. `secret/alerts/webhooks` is
 	// operator-seeded and only when spec.alerting.receivers includes slack; an
 	// instance without it 404s and is skipped, same as any unseeded path.
-	{"secret/harbor/robot", "harbor-robot", credClassStatic, false},
-	{"secret/harbor/pull-robot", "harbor-pull-robot", credClassStatic, false},
-	{"secret/cert-automation/github-token", "cert-automation-github-token", credClassStatic, false},
-	{"secret/infra/github-dispatch-token", "infra-github-dispatch-token", credClassStatic, false},
+	{"secret/harbor/robot", "harbor-robot", CredClassStatic, false},
+	{"secret/harbor/pull-robot", "harbor-pull-robot", CredClassStatic, false},
+	{"secret/cert-automation/github-token", "cert-automation-github-token", CredClassStatic, false},
+	{"secret/infra/github-dispatch-token", "infra-github-dispatch-token", CredClassStatic, false},
 	// The third copy of a GitHub PAT held in OpenBao, and the same drift signal as
 	// the two above: token-inventory measures the GitHub-side expiry of
 	// APL_VALUES_REPO_TOKEN, but nothing re-seeds THIS copy when an operator
 	// rotates that PAT, and a stale copy is what actually breaks apl-core's
 	// otomi.git and the argocd repo Secrets.
-	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", credClassStatic, false},
-	{"secret/alerts/webhooks", "alerts-webhooks", credClassStatic, false},
+	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", CredClassStatic, false},
+	{"secret/alerts/webhooks", "alerts-webhooks", CredClassStatic, false},
 	// OPT-IN least-privilege firewall token (docs/consume-lke-landing-zone-internal.md).
 	// Most instances never seed it — the sampler 404s and publishes nothing, same
 	// as any unseeded path. Where it IS seeded it is operator-managed on a
 	// documented ≤90d policy, so `on-demand` (actionable, 90d SLA) rather than
 	// `static` (yearly nudge) is what matches the posture the docs promise.
-	{"secret/linode/cloud-firewall", "linode-cloud-firewall", credClassOnDemand, true},
+	{"secret/linode/cloud-firewall", "linode-cloud-firewall", CredClassOnDemand, true},
 }
 
-// dbAdminRoot is the KV collection holding one Managed Postgres admin credential
+// DBAdminRoot is the KV collection holding one Managed Postgres admin credential
 // per declared database cluster (`llz ci seed-db-admin` writes
 // secret/infra/db-admin/<name>). The names come from each deployment's
-// `databases` tfvar, so unlike every entry in credPaths they cannot be a literal
+// `databases` tfvar, so unlike every entry in CredPaths they cannot be a literal
 // here — the sampler LISTs the collection and tracks whatever it finds. That
 // keeps a cluster added later covered with no code change, and a deployment with
 // no databases simply lists nothing.
 //
 // Classified `on-demand`, not `static`: `llz ci rotate-db-admin` rotates these,
 // so their age is something a human can act on.
-const dbAdminRoot = "secret/infra/db-admin"
+const DBAdminRoot = "secret/infra/db-admin"
 
 // openbaoProbe is the slice of the OpenBao client the sampler needs.
 type openbaoProbe interface {
@@ -169,22 +173,35 @@ type openbaoProbe interface {
 // in-cluster OpenBao caller. It previously hardcoded HTTPClientInsecure, which
 // meant mounting a CA into the reconciler could not have made its traffic
 // verified — the manifest and the code disagreed silently.
+// BaoHTTPClient builds the mTLS-aware transport every OpenBao call in this package
+// goes through. It is a package var rather than a parameter because it is also the
+// seam package main's tests already stub, and because `reconcile_apl_overlay.go` —
+// which did NOT move, see the extension declaration — reaches OpenBao through the
+// same three Fn vars below. Assigned once at wiring time by package main.
+var BaoHTTPClient = func() (*http.Client, error) {
+	return nil, fmt.Errorf("reconcilelanes: BaoHTTPClient was never wired — package main assigns it at startup")
+}
+
 var (
-	openbaoClientFn = func(addr, token string) (openbaoProbe, error) {
-		hc, err := inClusterBaoHTTPClient()
+	// OpenBaoClientFn, OpenBaoLoginFn and OpenBaoJWTFn are exported because the
+	// apl-overlay lane still lives in package main and shares this credential path.
+	// That sharing is the reason the two are one grant cluster and would move
+	// together; it is recorded in the declaration rather than worked around.
+	OpenBaoClientFn = func(addr, token string) (openbaoProbe, error) {
+		hc, err := BaoHTTPClient()
 		if err != nil {
 			return nil, err
 		}
 		return openbao.NewWithClient(addr, token, "", hc), nil
 	}
-	openbaoLoginFn = func(ctx context.Context, addr, jwt string) (string, error) {
-		hc, err := inClusterBaoHTTPClient()
+	OpenBaoLoginFn = func(ctx context.Context, addr, jwt string) (string, error) {
+		hc, err := BaoHTTPClient()
 		if err != nil {
 			return "", err
 		}
 		return openbao.KubernetesLogin(ctx, hc, addr, openbaoAuthMount, openbaoReconcilerRole, jwt)
 	}
-	openbaoJWTFn = readServiceAccountToken
+	OpenBaoJWTFn = readServiceAccountToken
 )
 
 func readServiceAccountToken() (string, error) {
@@ -199,17 +216,17 @@ func readServiceAccountToken() (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// sampleOpenBao publishes the seal + credential-age gauges. Seal is
+// SampleOpenBao publishes the seal + credential-age gauges. Seal is
 // unauthenticated; the credential ages need a metadata-read token via k8s-auth.
 // Any API/login failure returns an error (the manager records up=0); a 404 on a
 // credential path (not seeded yet) is skipped, not an error.
-func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) error {
+func SampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) error {
 	addr := os.Getenv("OPENBAO_ADDR")
 	if addr == "" {
-		addr = defaultOpenBaoAddr
+		addr = DefaultOpenBaoAddr
 	}
 
-	sealClient, err := openbaoClientFn(addr, "")
+	sealClient, err := OpenBaoClientFn(addr, "")
 	if err != nil {
 		return err
 	}
@@ -217,40 +234,40 @@ func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) er
 	if err != nil {
 		return err
 	}
-	reg.SetGauge("llz_openbao_sealed", "1 if OpenBao is sealed", nil, boolGauge(si.Sealed))
-	reg.SetGauge("llz_openbao_initialized", "1 if OpenBao is initialized", nil, boolGauge(si.Initialized))
+	reg.SetGauge("llz_openbao_sealed", "1 if OpenBao is sealed", nil, BoolGauge(si.Sealed))
+	reg.SetGauge("llz_openbao_initialized", "1 if OpenBao is initialized", nil, BoolGauge(si.Initialized))
 
-	jwt, err := openbaoJWTFn()
+	jwt, err := OpenBaoJWTFn()
 	if err != nil {
 		return err
 	}
-	tok, err := openbaoLoginFn(ctx, addr, jwt)
+	tok, err := OpenBaoLoginFn(ctx, addr, jwt)
 	if err != nil {
 		return err
 	}
-	c, err := openbaoClientFn(addr, tok)
+	c, err := OpenBaoClientFn(addr, tok)
 	if err != nil {
 		return err
 	}
-	// Copied, not aliased: appending to a slice that shares credPaths' backing
+	// Copied, not aliased: appending to a slice that shares CredPaths' backing
 	// array would let one sample pass scribble the next one's entries.
-	paths := append([]credPath(nil), credPaths...)
+	paths := append([]CredPath(nil), CredPaths...)
 	// Managed Postgres admin credentials, discovered rather than declared. A
 	// deployment with no databases lists nothing (ok=false on the 404 KV v2
 	// returns for an empty collection) and contributes no series.
-	names, ok, err := c.MetadataList(ctx, dbAdminRoot)
+	names, ok, err := c.MetadataList(ctx, DBAdminRoot)
 	if err != nil {
 		return err
 	}
 	if ok {
 		for _, n := range names {
-			paths = append(paths, credPath{
-				path: dbAdminRoot + "/" + n, cred: "db-admin-" + n, class: credClassOnDemand})
+			paths = append(paths, CredPath{
+				Path: DBAdminRoot + "/" + n, Cred: "db-admin-" + n, Class: CredClassOnDemand})
 		}
 	}
 
 	for _, cp := range paths {
-		t, ok, err := c.MetadataUpdatedTime(ctx, cp.path)
+		t, ok, err := c.MetadataUpdatedTime(ctx, cp.Path)
 		if err != nil {
 			return err
 		}
@@ -258,13 +275,13 @@ func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) er
 			continue // not seeded yet
 		}
 		reg.SetGauge("llz_credential_age_days",
-			"days since the credential was last rotated in OpenBao (class: automated|on-demand|generate-once|tracks-source|static)",
-			map[string]string{"cred": cp.cred, "class": cp.class}, float64(health.DaysSince(t, now)))
+			"days since the credential was last rotated in OpenBao (Class: automated|on-demand|generate-once|tracks-source|static)",
+			map[string]string{"cred": cp.Cred, "class": cp.Class}, float64(health.DaysSince(t, now)))
 	}
 	return nil
 }
 
-func boolGauge(b bool) float64 {
+func BoolGauge(b bool) float64 {
 	if b {
 		return 1
 	}

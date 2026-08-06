@@ -1,4 +1,4 @@
-package main
+package reconcilelanes
 
 // The ES store-recovery watch reconciler (secrets-before-apps Phase 2 — see
 // docs/designs/secrets-before-apps.md). ESO's ExternalSecret controller does
@@ -32,19 +32,19 @@ import (
 const (
 	// esStorePath is the watched ClusterSecretStore (the read store every
 	// platform ExternalSecret binds; openbao-push recovers with the same bump).
-	esStorePath = "/apis/external-secrets.io/v1/clustersecretstores/" + defaultSecretStore
-	// esStoresWatchPath is the collection watch scoped to the read store by
+	esStorePath = "/apis/external-secrets.io/v1/clustersecretstores/" + DefaultSecretStore
+	// ESStoresWatchPath is the collection watch scoped to the read store by
 	// field selector (RBAC list/watch cannot be resourceNames-scoped).
-	esStoresWatchPath = "/apis/external-secrets.io/v1/clustersecretstores?fieldSelector=metadata.name%3D" + defaultSecretStore
+	ESStoresWatchPath = "/apis/external-secrets.io/v1/clustersecretstores?fieldSelector=metadata.name%3D" + DefaultSecretStore
 	// esListPath / pushListPath are the cluster-wide collections the bump
 	// fans out over (PushSecret is still v1alpha1 upstream).
 	esListPath   = "/apis/external-secrets.io/v1/externalsecrets"
 	pushListPath = "/apis/external-secrets.io/v1alpha1/pushsecrets"
 )
 
-// esStoreRecovery carries the lane's poll-to-poll memory: the store's last
+// ESStoreRecovery carries the lane's poll-to-poll memory: the store's last
 // observed readiness ("" until first observed, else "true"/"false").
-type esStoreRecovery struct {
+type ESStoreRecovery struct {
 	lastReady string
 }
 
@@ -52,7 +52,7 @@ type esStoreRecovery struct {
 // llz_es_store_ready gauge, and bumps every ExternalSecret/PushSecret when the
 // store transitions to Ready (or is Ready on the first pass with a bound
 // ExternalSecret still not-Ready — the restart-amnesty case).
-func (s *esStoreRecovery) reconcile(ctx context.Context, client reconcileClient, reg *metrics.Registry) error {
+func (s *ESStoreRecovery) Reconcile(ctx context.Context, client Client, reg *metrics.Registry) error {
 	obj, status, err := client.GetJSON(ctx, esStorePath)
 	if err != nil {
 		return err
@@ -66,7 +66,7 @@ func (s *esStoreRecovery) reconcile(ctx context.Context, client reconcileClient,
 	if status < 200 || status >= 300 || obj == nil {
 		return fmt.Errorf("GET %s: status %d", esStorePath, status)
 	}
-	ready := objReadyStatus(obj) == "True"
+	ready := ObjReadyStatus(obj) == "True"
 	v := 0.0
 	if ready {
 		v = 1
@@ -99,9 +99,15 @@ func (s *esStoreRecovery) reconcile(ctx context.Context, client reconcileClient,
 	return err
 }
 
-// objReadyStatus extracts a resource's Ready condition status via the shared
+// ObjReadyStatus is EXPORTED for one reason: package main's
+// TestReadyConditionAgreesWithFindReady asserts that this reader and the runtime's
+// readyCondition never disagree about a Ready condition, and the extraction put the
+// two on opposite sides of a package boundary. A coupling test that cannot reach
+// one of the two things it couples is not a test.
+//
+// ObjReadyStatus extracts a resource's Ready condition status via the shared
 // health predicate ("" when absent).
-func objReadyStatus(obj map[string]any) string {
+func ObjReadyStatus(obj map[string]any) string {
 	statusObj, _ := obj["status"].(map[string]any)
 	rawConds, _ := statusObj["conditions"].([]any)
 	conds := make([]health.Condition, 0, len(rawConds))
@@ -120,7 +126,7 @@ func objReadyStatus(obj map[string]any) string {
 
 // anyExternalSecretNotReady reports whether any ExternalSecret in the cluster
 // is not (yet) Ready — the restart-amnesty probe.
-func anyExternalSecretNotReady(ctx context.Context, client reconcileClient) (bool, error) {
+func anyExternalSecretNotReady(ctx context.Context, client Client) (bool, error) {
 	obj, status, err := client.GetJSON(ctx, esListPath)
 	if err != nil {
 		return false, err
@@ -134,7 +140,7 @@ func anyExternalSecretNotReady(ctx context.Context, client reconcileClient) (boo
 		if !ok {
 			continue
 		}
-		if objReadyStatus(m) != "True" {
+		if ObjReadyStatus(m) != "True" {
 			return true, nil
 		}
 	}
@@ -146,7 +152,7 @@ func anyExternalSecretNotReady(ctx context.Context, client reconcileClient) (boo
 // immediate ESO reconcile). One object's patch failure does not stop the
 // fan-out; the first error is returned so the manager records the pass failed
 // and the resync floor retries.
-func forceSyncESKinds(ctx context.Context, client reconcileClient) (int, error) {
+func forceSyncESKinds(ctx context.Context, client Client) (int, error) {
 	patch := map[string]any{"metadata": map[string]any{
 		"annotations": map[string]any{"force-sync": fmt.Sprintf("%d", nowUnix())},
 	}}

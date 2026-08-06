@@ -35,6 +35,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // dbProbeDatabase is the database every Managed Postgres exposes, used purely as
@@ -46,7 +48,7 @@ func ciAssertDatabaseCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "assert-database",
 		Short: "fail unless every declared Managed Postgres accepts its seeded admin credential",
-		Long: "Connects to each Managed Postgres declared under " + dbAdminRoot + " and completes\n" +
+		Long: "Connects to each Managed Postgres declared under " + reconcilelanes.DBAdminRoot + " and completes\n" +
 			"the TLS + authentication handshake with the seeded admin credential. No query is\n" +
 			"issued — reaching ReadyForQuery is the whole answer.\n\n" +
 			"db-declared and db-summary report what the spec asks for; seed-db-admin writes\n" +
@@ -166,13 +168,13 @@ func closeDBBao() {
 	dbBao.client, dbBao.cleanup, dbBao.err, dbBao.opened = nil, nil, nil, false
 }
 
-// listDBClusters returns the cluster names declared under dbAdminRoot.
+// listDBClusters returns the cluster names declared under reconcilelanes.DBAdminRoot.
 var listDBClusters = func(ctx context.Context) ([]string, error) {
 	bao, err := dbBaoClient()
 	if err != nil {
 		return nil, err
 	}
-	names, ok, err := bao.MetadataList(ctx, dbAdminRoot)
+	names, ok, err := bao.MetadataList(ctx, reconcilelanes.DBAdminRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +192,7 @@ var readDBCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error
 		return dbAdminCreds{}, err
 	}
 	get := func(key string) string {
-		v, _, _ := bao.Get(ctx, dbAdminRoot+"/"+cluster, key)
+		v, _, _ := bao.Get(ctx, reconcilelanes.DBAdminRoot+"/"+cluster, key)
 		return v
 	}
 	return dbAdminCreds{
@@ -205,7 +207,7 @@ func probeDBClusters(ctx context.Context, clusters []string, timeout time.Durati
 		creds, err := readDBCreds(ctx, name)
 		if err != nil {
 			out = append(out, dbVerdict{Cluster: name,
-				FailWhy: fmt.Sprintf("could not read its admin credential from %s/%s: %v", dbAdminRoot, name, err)})
+				FailWhy: fmt.Sprintf("could not read its admin credential from %s/%s: %v", reconcilelanes.DBAdminRoot, name, err)})
 			continue
 		}
 		if missing := creds.missingFields(); len(missing) > 0 {
@@ -237,11 +239,11 @@ func runCIAssertDatabase(timeout, settle, interval time.Duration) error {
 
 	clusters, err := listDBClusters(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::could not list declared databases under %s (%v)\n", dbAdminRoot, err)
-		return fmt.Errorf("could not list declared databases under %s: %w", dbAdminRoot, err)
+		fmt.Fprintf(os.Stderr, "::error::could not list declared databases under %s (%v)\n", reconcilelanes.DBAdminRoot, err)
+		return fmt.Errorf("could not list declared databases under %s: %w", reconcilelanes.DBAdminRoot, err)
 	}
 	if len(clusters) == 0 {
-		fmt.Printf("SKIP: no Managed Postgres declared under %s on this deployment.\n", dbAdminRoot)
+		fmt.Printf("SKIP: no Managed Postgres declared under %s on this deployment.\n", reconcilelanes.DBAdminRoot)
 		return nil
 	}
 	fmt.Printf("declared clusters: %s\n", strings.Join(clusters, ", "))

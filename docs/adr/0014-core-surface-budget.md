@@ -99,7 +99,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
 >
 > **And again: 46,106** with `guard-docs`, **45,763** with `posture-at-rest`, and
-> **45,229** with `assert-storage`. Four extensions, net −1,953 (4.1%) — a floor on
+> **45,229** with `assert-storage` and **44,826** with
+> `reconcile-actions`. Five extensions, net −2,356 (5.0%) — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)
 > measures what the rest costs and finds size and difficulty close to uncorrelated.

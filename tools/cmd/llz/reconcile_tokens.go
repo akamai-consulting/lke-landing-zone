@@ -16,6 +16,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // sampleTokenInventory reads the llz-token-inventory ConfigMap from the reconciler's
@@ -165,10 +167,10 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 			// published. A reclassification now flips a value on a series that
 			// already exists; it can never mint a second one.
 			configured = append(configured, metrics.GaugeSample{
-				Labels: map[string]string{"cred": cred}, Value: boolGauge(present)})
+				Labels: map[string]string{"cred": cred}, Value: reconcilelanes.BoolGauge(present)})
 			presenceOK = append(presenceOK, metrics.GaugeSample{
 				Labels: map[string]string{"cred": cred},
-				Value:  boolGauge(presenceMatchesExpectation(expect, present))})
+				Value:  reconcilelanes.BoolGauge(presenceMatchesExpectation(expect, present))})
 		}
 
 		if sec.UpdatedAt == "" {
