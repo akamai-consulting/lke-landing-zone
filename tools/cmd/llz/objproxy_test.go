@@ -473,7 +473,7 @@ func TestObjProxyMarksOutboundRequests(t *testing.T) {
 // A virtual-host-style request (bucket.<endpoint>/<key>) puts the object key
 // somewhere injectSSEC does not look: a single-segment key reads as a bucket-level
 // operation and gets NO SSE-C headers, so the object is written in PLAINTEXT while
-// every signal stays green. Nothing routes such requests here today — the CoreDNS
+// every signal stays color.Green. Nothing routes such requests here today — the CoreDNS
 // rewrite is an exact match — but broadening that rewrite is a natural-looking
 // change that would arm this silently. It must fail closed instead.
 func TestObjProxyRefusesVirtualHostStyleAddressing(t *testing.T) {

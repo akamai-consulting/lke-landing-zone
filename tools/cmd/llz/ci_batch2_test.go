@@ -40,7 +40,7 @@ func TestHealthPromRulesFailsClosedWhenUnreachable(t *testing.T) {
 	})
 	err := runCIHealthPromRules("monitoring/prometheus-operated:9090")
 	if err == nil {
-		t.Fatal("an unreachable Prometheus must FAIL — a check that cannot ask has established nothing, and exit 0 reads as a green rule set")
+		t.Fatal("an unreachable Prometheus must FAIL — a check that cannot ask has established nothing, and exit 0 reads as a color.Green rule set")
 	}
 	if !strings.Contains(err.Error(), "could not query") {
 		t.Errorf("error should say what it could not do: %v", err)

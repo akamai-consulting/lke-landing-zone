@@ -17,6 +17,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // envSpecFile returns the path to environments/<env>.yaml, erroring if it (or the
@@ -70,9 +72,9 @@ func envSetCmd() *cobra.Command {
 				return err
 			}
 			for _, a := range assigns {
-				fmt.Printf("  %s spec.%s = %s\n", green("set"), a[0], a[1])
+				fmt.Printf("  %s spec.%s = %s\n", color.Green("set"), a[0], a[1])
 			}
-			fmt.Printf("\n%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
+			fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
 			return runRender(gopts, env, false, false, false)
 		},
 	}
@@ -103,7 +105,7 @@ func envEditCmd() *cobra.Command {
 					return fmt.Errorf("%s won't parse after your edit: %s\n  fix it, then `llz render %s`", envFile, cleanFieldErr(derr), env)
 				}
 			}
-			fmt.Printf("%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
+			fmt.Printf("%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
 			return runRender(gopts, env, false, false, false)
 		},
 	}
@@ -152,9 +154,9 @@ func specSetCmd() *cobra.Command {
 				return err
 			}
 			for _, a := range assigns {
-				fmt.Printf("  %s spec.%s = %s\n", green("set"), a[0], a[1])
+				fmt.Printf("  %s spec.%s = %s\n", color.Green("set"), a[0], a[1])
 			}
-			fmt.Println("\n" + bold("Reconciling (`llz render`):"))
+			fmt.Println("\n" + color.Bold("Reconciling (`llz render`):"))
 			return runRender(gopts, "", false, false, false)
 		},
 	}
@@ -199,9 +201,9 @@ func networkAddCmd() *cobra.Command {
 			}, func(b []byte) error { _, e := clusterspec.Decode(b); return e }); err != nil {
 				return err
 			}
-			fmt.Printf("  %s shared VPC %q (region %s) → spec.networks\n", green("added"), name, region)
-			fmt.Printf("  %s  %s\n", dim("attach an env:"), cyan(fmt.Sprintf("llz env set <env> cluster.network.vpc=%s cluster.network.subnetCIDR=10.0.0.0/14", name)))
-			fmt.Println("\n" + bold("Reconciling (`llz render`):"))
+			fmt.Printf("  %s shared VPC %q (region %s) → spec.networks\n", color.Green("added"), name, region)
+			fmt.Printf("  %s  %s\n", color.Dim("attach an env:"), color.Cyan(fmt.Sprintf("llz env set <env> cluster.network.vpc=%s cluster.network.subnetCIDR=10.0.0.0/14", name)))
+			fmt.Println("\n" + color.Bold("Reconciling (`llz render`):"))
 			return runRender(gopts, "", false, false, false)
 		},
 	}
@@ -225,7 +227,7 @@ func networkListCmd() *cobra.Command {
 				return err
 			}
 			if len(lz.Spec.Networks) == 0 {
-				fmt.Println(dim("no shared VPCs declared (every env uses a dedicated VPC) — add one with `llz network add`"))
+				fmt.Println(color.Dim("no shared VPCs declared (every env uses a dedicated VPC) — add one with `llz network add`"))
 				return nil
 			}
 			names := make([]string, 0, len(lz.Spec.Networks))

@@ -119,10 +119,10 @@ func TestMeshEgressRenderedDirMatchesMakefile(t *testing.T) {
 }
 
 // A missing rendered tree is a hard error, never a quiet pass. Without this the
-// guard reports the same green whether or not it saw the chart policies.
+// guard reports the same color.Green whether or not it saw the chart policies.
 func TestMeshEgressRequiresRenderedTree(t *testing.T) {
 	if err := requireRenderedCharts(t.TempDir()); err == nil {
-		t.Fatal("a missing rendered tree must fail, not pass green")
+		t.Fatal("a missing rendered tree must fail, not pass color.Green")
 	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, renderedChartsDir), 0o755); err != nil {

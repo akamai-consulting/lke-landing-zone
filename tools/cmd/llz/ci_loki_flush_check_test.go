@@ -9,7 +9,7 @@ import (
 // #397 in one test: Ready pods and an S3-shaped config, and not one byte written.
 // Before this check, BOTH of assert-loki's conditions passed in exactly that state —
 // 238 flush failures on a single ingester, a chunks bucket whose newest object
-// predated the cluster by ten days, and a green lane throughout. Checks 1 and 2 are
+// predated the cluster by ten days, and a color.Green lane throughout. Checks 1 and 2 are
 // properties of the cluster's INTENT; this is the only one that asks about outcome.
 func TestLokiFlushFailuresCatchesTheWriteOutage(t *testing.T) {
 	orig, prev := lokiLogs, lokiPodsFn
@@ -36,7 +36,7 @@ func TestLokiFlushFailuresCatchesTheWriteOutage(t *testing.T) {
 }
 
 // Readers are not writers. Scanning queriers and gateways costs log volume and adds
-// no signal, and a stray "failed to flush" in an unrelated component must not red
+// no signal, and a stray "failed to flush" in an unrelated component must not color.Red
 // the lane.
 func TestLokiFlushFailuresOnlyScansWriters(t *testing.T) {
 	orig, prev := lokiLogs, lokiPodsFn
@@ -83,7 +83,7 @@ func TestLokiFlushFailuresQuietWhenWritesSucceed(t *testing.T) {
 }
 
 // A pod whose logs cannot be read (just restarted, terminating) is not evidence of
-// anything. Treating a read error as a failure would red the lane during exactly the
+// anything. Treating a read error as a failure would color.Red the lane during exactly the
 // window the retrofit-and-restart path creates.
 func TestLokiFlushFailuresIgnoresUnreadableLogs(t *testing.T) {
 	orig, prev := lokiLogs, lokiPodsFn
@@ -215,8 +215,8 @@ func TestLokiProveWritesFailsWhenTheFlushLandsNothing(t *testing.T) {
 }
 
 // A flush cannot invent data. An ingester holding no chunk writes nothing and logs
-// no error, and failing on that would red a healthy Loki for having nothing to say —
-// the same class of false red as the [object] check that started this thread.
+// no error, and failing on that would color.Red a healthy Loki for having nothing to say —
+// the same class of false color.Red as the [object] check that started this thread.
 func TestLokiProveWritesIsInconclusiveWhenThereWasNothingToFlush(t *testing.T) {
 	now := time.Date(2026, 8, 3, 19, 50, 0, 0, time.UTC)
 	h := &proveHarness{start: now.Add(-9 * time.Minute), now: now} // no object, no error
@@ -270,7 +270,7 @@ func TestLokiProveWritesReportsUnprovenWhenFlushingIsDisabled(t *testing.T) {
 }
 
 // A gate that could not reach the ingesters has not found an outage. Reporting one
-// would red the lane on an RBAC or networking problem in the CHECK.
+// would color.Red the lane on an RBAC or networking problem in the CHECK.
 func TestLokiProveWritesSkipsWhenNoIngesterCanBeReached(t *testing.T) {
 	now := time.Date(2026, 8, 3, 19, 50, 0, 0, time.UTC)
 	h := &proveHarness{start: now.Add(-9 * time.Minute), now: now, flushErr: errRetrofitNotFound}

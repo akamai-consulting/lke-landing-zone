@@ -101,7 +101,7 @@ var hclRunOfSpaces = regexp.MustCompile(`(\S) {2,}`)
 // renderTargets pipes HCL through `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with
 // the binary present the `=` signs AND trailing comments are column-aligned,
 // without it they are not. A golden captured where tofu is installed therefore
-// fails where it is not — which is how this first landed: green locally, red on
+// fails where it is not — which is how this first landed: color.Green locally, color.Red on
 // the plain-ubuntu CI runner, twice (once on `=` padding, then on comment
 // padding). Alignment is not part of the spec->artifact mapping this file exists
 // to pin, so it is normalised away rather than made a precondition for the test.
@@ -134,7 +134,7 @@ func serializeRender(targets map[string]string, instRoot string) string {
 			// `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with the binary present
 			// the `=` signs are column-aligned, without it they are not. A golden
 			// captured on a machine that has tofu therefore fails on one that does
-			// not — which is exactly how this first landed, green locally and red
+			// not — which is exactly how this first landed, color.Green locally and color.Red
 			// on the plain-ubuntu CI runner. Alignment is not part of the
 			// spec->artifact mapping this file exists to pin, so it is normalised
 			// away rather than made a precondition for running the test.

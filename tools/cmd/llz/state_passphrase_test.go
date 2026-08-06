@@ -326,7 +326,7 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 
 func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 	// The gap this closes: the secret every Terraform root needs was absent from
-	// the table, so `llz doctor` reported a green instance whose first build could
+	// the table, so `llz doctor` reported a color.Green instance whose first build could
 	// not init.
 	var found bool
 	for _, r := range e2eRequirements(false) {

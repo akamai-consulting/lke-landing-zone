@@ -193,7 +193,7 @@ const renderedChartsDir = "rendered"
 // requireRenderedCharts fails when the rendered tree is absent.
 //
 // This is requireCorpus's argument applied one level up: a guard whose corpus is
-// half-missing prints the same green as one that scanned everything. Since the
+// half-missing prints the same color.Green as one that scanned everything. Since the
 // chart-shipped policies are ONLY visible after rendering, running without a
 // rendered tree would silently return to the exact blind spot this change closes —
 // and it would do so quietly, on a machine where someone forgot a make target.

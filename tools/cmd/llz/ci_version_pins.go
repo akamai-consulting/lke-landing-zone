@@ -34,6 +34,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 const versionAuthorityFile = "dockerfiles/Dockerfile"
@@ -166,7 +168,7 @@ func runVersionPins(root string, verbose bool, out, errOut io.Writer) error {
 		fmt.Fprintf(errOut, "::error file=%s,line=%d::%s is %s but %s declares %s\n",
 			s.file, s.line, s.what, s.got, versionAuthorityFile, s.want)
 	}
-	fmt.Fprintf(errOut, "\n%s %d version pin(s) disagree with %s:\n", red("✗"), len(bad), versionAuthorityFile)
+	fmt.Fprintf(errOut, "\n%s %d version pin(s) disagree with %s:\n", color.Red("✗"), len(bad), versionAuthorityFile)
 	for _, s := range bad {
 		fmt.Fprintf(errOut, "    %s:%d  %s = %s (want %s)\n", s.file, s.line, s.what, s.got, s.want)
 	}

@@ -1,4 +1,4 @@
-package main
+package sustain
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // template_removals.go closes a copier gap: `copier update` never deletes a file
@@ -53,7 +55,7 @@ func readTemplateRemovals(path string) ([]removalRule, error) {
 	return rules, nil
 }
 
-// applyTemplateRemovals removes the paths the current template version declares
+// ApplyTemplateRemovals removes the paths the current template version declares
 // obsolete in .template-removals — run by `llz upgrade` after `copier update`.
 // Two modes:
 //   - untrack: `git rm --cached` — drop from the index, KEEP on disk (gitignored,
@@ -64,13 +66,13 @@ func readTemplateRemovals(path string) ([]removalRule, error) {
 // Matches git-tracked files with filepath.Match (so `*` never spans '/'); delete
 // wins when a path matches both modes. Idempotent — a no-op once nothing matches,
 // so re-running `llz upgrade` is safe. Honors --dry-run (prints the plan only).
-func applyTemplateRemovals(g globalOpts) error {
+func ApplyTemplateRemovals(d Deps) error {
 	rules, err := readTemplateRemovals(templateRemovalsFile)
 	if err != nil || len(rules) == 0 {
 		return err
 	}
 	mode := map[string]string{} // tracked path → resolved mode (delete beats untrack)
-	for _, f := range strings.Split(gitOut("ls-files"), "\n") {
+	for _, f := range strings.Split(gitOut(d, "ls-files"), "\n") {
 		if f = strings.TrimSpace(f); f == "" {
 			continue
 		}
@@ -93,7 +95,7 @@ func applyTemplateRemovals(g globalOpts) error {
 	sort.Strings(untrack)
 	sort.Strings(del)
 
-	if g.dryRun {
+	if !d.Confirm() {
 		if len(untrack) > 0 {
 			fmt.Fprintf(os.Stderr, "→ (dry-run) would untrack %d file(s): %s\n", len(untrack), strings.Join(untrack, ", "))
 		}
@@ -103,18 +105,18 @@ func applyTemplateRemovals(g globalOpts) error {
 		return nil
 	}
 	if len(untrack) > 0 {
-		if err := execArgv(append([]string{"git", "rm", "--cached", "-q", "--"}, untrack...), ""); err != nil {
+		if err := d.Run(append([]string{"git", "rm", "--cached", "-q", "--"}, untrack...), ""); err != nil {
 			return fmt.Errorf("untrack: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored file(s) — commit the removal:\n  %s\n",
-			dim("→"), len(untrack), strings.Join(untrack, "\n  "))
+			color.Dim("→"), len(untrack), strings.Join(untrack, "\n  "))
 	}
 	if len(del) > 0 {
-		if err := execArgv(append([]string{"git", "rm", "-q", "--"}, del...), ""); err != nil {
+		if err := d.Run(append([]string{"git", "rm", "-q", "--"}, del...), ""); err != nil {
 			return fmt.Errorf("delete: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "%s deleted %d obsolete file(s) — commit the removal:\n  %s\n",
-			dim("→"), len(del), strings.Join(del, "\n  "))
+			color.Dim("→"), len(del), strings.Join(del, "\n  "))
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ package main
 // they are permanently unreadable by its successor. Loki's index-gateway does not
 // skip an object it cannot decrypt; it fails the whole table and retries, which
 // degrades queries far enough to time out callers while every write-path check stays
-// green. See #397's follow-up.
+// color.Green. See #397's follow-up.
 //
 // WHY EMPTY AND NOT DELETE. Destroying the buckets also works, and it was the first
 // attempt. Linode does not release the bucket NAME promptly: a recreate six minutes

@@ -6,7 +6,7 @@ package main
 //
 // THE BUG. `llz ci converge`'s own long-pole report named this gate as the tail in
 // 8 of 8 sampled release-e2e runs (30849319500 .. 30966772849) — 404-532s from the
-// first poll, with every other check green by poll 2. Run 30966772849, where the
+// first poll, with every other check color.Green by poll 2. Run 30966772849, where the
 // overlay's own commit timestamp on apl-e2e splits the wait from the work:
 //
 //	01:59:16  `llz ci mint-bootstrap-objkeys` seeds secret/obj/platform. Every

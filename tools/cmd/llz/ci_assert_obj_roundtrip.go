@@ -279,7 +279,7 @@ var (
 )
 
 // readFirstObjConfig returns the first candidate that exists and carries data,
-// plus which one it was. The ref is reported so a green run records WHERE the
+// plus which one it was. The ref is reported so a color.Green run records WHERE the
 // endpoint came from — otherwise a chart rename silently shifts which object the
 // gate trusts.
 func readFirstObjConfig(refs []string) (cfg, from string, err error) {

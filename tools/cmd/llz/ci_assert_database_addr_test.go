@@ -10,7 +10,7 @@ package main
 //
 // The unit tests around this file all seam listDBClusters/readDBCreds wholesale,
 // so they exercised the verdict logic and never the connection — which is how
-// the defect reached a cluster with a green package. These tests call the
+// the defect reached a cluster with a color.Green package. These tests call the
 // DEFAULT implementations against a stub port-forward, so a revert to
 // openbaoClient fails here instead of 40 minutes into an e2e.
 

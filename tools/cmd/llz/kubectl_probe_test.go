@@ -124,7 +124,7 @@ func TestKItemsOKAndJSONPathOKReportUnreadable(t *testing.T) {
 
 // TestSectionsRefuseEmptyCorpus is the cluster-probe half of
 // TestWaveHealthGuardFailsOnEmptyCorpus: a section whose list call failed must
-// not iterate zero items and report the same green as a full pass.
+// not iterate zero items and report the same color.Green as a full pass.
 func TestSectionsRefuseEmptyCorpus(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) {
 		return nil, errors.New("Unable to connect to the server: connection refused")
@@ -133,7 +133,7 @@ func TestSectionsRefuseEmptyCorpus(t *testing.T) {
 	checkAPIServices(r)
 	checkWebhooks(r)
 	if len(r.Pending) == 0 {
-		t.Fatal("unreadable cluster: sections recorded nothing — an empty corpus passed as green")
+		t.Fatal("unreadable cluster: sections recorded nothing — an empty corpus passed as color.Green")
 	}
 	for _, p := range r.Pending {
 		if !strings.Contains(p, "could not list") {

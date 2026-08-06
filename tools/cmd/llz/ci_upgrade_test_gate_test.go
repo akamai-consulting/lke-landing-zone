@@ -114,7 +114,7 @@ func TestPreviousReleaseTag(t *testing.T) {
 
 	// THE case this argument exists for. Cutting a release tags the commit under
 	// test, and "upgrade v0.0.40 → v0.0.40" is a no-op that passes while testing
-	// nothing — a green gate meaning least on the run that matters most.
+	// nothing — a color.Green gate meaning least on the run that matters most.
 	t.Run("skips a tag on the commit under test", func(t *testing.T) {
 		got, ok := previousReleaseTag(
 			[]string{"v0.0.39", "v0.0.40"}, map[string]bool{"v0.0.40": true})

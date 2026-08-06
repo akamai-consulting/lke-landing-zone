@@ -197,7 +197,7 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 
 	// COVERAGE FLOORS — a TRIPWIRE for gross blinding, not a precise gate.
 	// Be clear about what they do and do not buy, because the temptation is to
-	// treat a green run as proof of coverage, which is the exact mistake this
+	// treat a color.Green run as proof of coverage, which is the exact mistake this
 	// guard keeps making.
 	//
 	// MEASURED by re-introducing each real regression and reading the counters:

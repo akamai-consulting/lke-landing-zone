@@ -23,6 +23,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 const (
@@ -109,7 +111,7 @@ func importScanCmd() *cobra.Command {
 
 func runImportScan(g globalOpts, o importScanOpts) error {
 	if g.dryRun {
-		fmt.Println(dim("→ (dry-run) read-only inventory scan via kubectl (current context); would write " + o.output))
+		fmt.Println(color.Dim("→ (dry-run) read-only inventory scan via kubectl (current context); would write " + o.output))
 		return nil
 	}
 
@@ -128,7 +130,7 @@ func runImportScan(g globalOpts, o importScanOpts) error {
 		get = func(args ...string) string {
 			out, err := kubectlCtx(o.kubeconfig, o.context, args...)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  %s  kubectl %s: %v\n", dim("WARN"), strings.Join(args, " "), err)
+				fmt.Fprintf(os.Stderr, "  %s  kubectl %s: %v\n", color.Dim("WARN"), strings.Join(args, " "), err)
 			}
 			return out
 		}
@@ -139,9 +141,9 @@ func runImportScan(g globalOpts, o importScanOpts) error {
 	if o.aplValues != "" {
 		b, err := os.ReadFile(o.aplValues)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  %s  read %s: %v\n", dim("WARN"), o.aplValues, err)
+			fmt.Fprintf(os.Stderr, "  %s  read %s: %v\n", color.Dim("WARN"), o.aplValues, err)
 		} else if sig, err := parseAplValues(string(b)); err != nil {
-			fmt.Fprintf(os.Stderr, "  %s  parse %s: %v\n", dim("WARN"), o.aplValues, err)
+			fmt.Fprintf(os.Stderr, "  %s  parse %s: %v\n", color.Dim("WARN"), o.aplValues, err)
 		} else {
 			repos = append(repos, repoInventory{Role: "apl", Path: o.aplValues, APL: &sig})
 		}
@@ -191,7 +193,7 @@ func runImportScan(g globalOpts, o importScanOpts) error {
 		token := firstNonEmpty(o.linodeToken, os.Getenv("LINODE_API_TOKEN"), os.Getenv("LINODE_TOKEN"))
 		lk, reason := enrichFromLinode(token, o.linodeClusterID, ctx)
 		if reason != "" {
-			fmt.Fprintf(os.Stderr, "  %s  %s\n", dim("WARN"), reason)
+			fmt.Fprintf(os.Stderr, "  %s  %s\n", color.Dim("WARN"), reason)
 		}
 		report.Linode = lk
 	}
@@ -222,7 +224,7 @@ func kubectlCtx(kubeconfig, context string, args ...string) (string, error) {
 }
 
 func printImportSummary(r importReport, output string) {
-	fmt.Printf("\n%s\n", bold("Import inventory ("+output+")"))
+	fmt.Printf("\n%s\n", color.Bold("Import inventory ("+output+")"))
 	fmt.Printf("  cluster   k8s=%s region=%s nodes=%d type=%s%s\n",
 		orDash(r.Cluster.KubernetesVersion), orDash(r.Cluster.Region), r.Cluster.NodeCount, orDash(r.Cluster.NodeType), poolsSuffix(r.Cluster.NodePools))
 	fmt.Printf("  platform  %s\n", orDash(strings.Join(r.Platform.Detected, ", ")))
@@ -256,13 +258,13 @@ func printImportSummary(r importReport, output string) {
 		fmt.Printf("  repo      %s [%s]  %s\n", repo.Path, orDash(repo.Role), repoInventoryLine(repo))
 	}
 	for _, w := range r.Warnings {
-		fmt.Printf("  %s  %s\n", red("WARN"), w)
+		fmt.Printf("  %s  %s\n", color.Red("WARN"), w)
 	}
 	dir, env := suggestedInstanceDir(r), suggestedEnv(r)
-	fmt.Printf("\n%s\n", bold("Next steps"))
+	fmt.Printf("\n%s\n", color.Bold("Next steps"))
 	fmt.Printf("  1. review %s\n", output)
 	fmt.Printf("  2. scaffold the LLZ instance from it (new + spec + render + checklist):\n")
-	fmt.Printf("     %s\n", cyan(fmt.Sprintf("llz import init --report %s --dir %s --env %s", output, dir, env)))
+	fmt.Printf("     %s\n", color.Cyan(fmt.Sprintf("llz import init --report %s --dir %s --env %s", output, dir, env)))
 }
 
 // suggestedInstanceDir proposes a scaffold directory for `llz import init`,

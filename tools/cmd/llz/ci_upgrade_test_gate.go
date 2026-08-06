@@ -47,6 +47,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -106,7 +108,7 @@ type upgradeTestOpts struct {
 //
 // Excluding the tag on HEAD is the whole point. Cutting a release puts a tag on
 // the commit this gate is checking, and "upgrade v0.0.40 → v0.0.40" is a no-op
-// that passes while testing nothing — the failure mode where a green gate means
+// that passes while testing nothing — the failure mode where a color.Green gate means
 // least, on the one run that matters most.
 func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) {
 	var candidates []string
@@ -301,7 +303,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		if from, ok = previousReleaseTag(strings.Split(tagsOut, "\n"), headTags); !ok {
 			// A shallow clone has no tags. Skipping is right — this gate cannot
 			// invent a prior release, and failing would make every shallow checkout
-			// red for a reason that is not about the change under test.
+			// color.Red for a reason that is not about the change under test.
 			fmt.Println("upgrade-test: SKIPPED — no vX.Y.Z tag to upgrade from (shallow clone? fetch tags, or pass --from)")
 			return nil
 		}
@@ -426,7 +428,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 
 func upgradeTestFailure(failures []string) error {
 	for _, f := range failures {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", red("✗"), f)
+		fmt.Fprintf(os.Stderr, "  %s %s\n", color.Red("✗"), f)
 	}
 	return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken", len(failures))
 }

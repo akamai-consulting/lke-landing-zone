@@ -8,7 +8,7 @@ package main
 // recorded the consequence — "a new required secret on every instance … adopters
 // must add it before their next Terraform run" — but that requirement never
 // reached `llz tokens`, `llz doctor`'s requirement table, or the quickstart. The
-// result was a guaranteed first-build failure for every new adopter: doctor green,
+// result was a guaranteed first-build failure for every new adopter: doctor color.Green,
 // `llz up` dispatches, and the first Terraform job dies at init. The template's own
 // e2e never caught it because the example instance repo had the secret hand-set
 // once, so every harness run since has inherited it.
@@ -32,6 +32,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // statePassphraseSecret is the GitHub secret name the Terraform roots read
@@ -178,16 +180,16 @@ func dropStatePassphraseIfLive(repo, env string, secrets map[string]string, mint
 	}
 	delete(secrets, statePassphraseSecret)
 	fmt.Fprintf(os.Stderr, "\n%s %s already exists on %s — NOT overwriting it.\n",
-		yellow("!"), statePassphraseSecret, repo)
+		color.Yellow("!"), statePassphraseSecret, repo)
 	fmt.Fprintln(os.Stderr, "  The repo's copy is the one your existing state is encrypted under; replacing")
 	fmt.Fprintln(os.Stderr, "  it would make every state file permanently unreadable. To rotate it properly,")
-	fmt.Fprintf(os.Stderr, "  use %s.\n", cyan("secret-rotation.yml (scope: state-passphrase)"))
+	fmt.Fprintf(os.Stderr, "  use %s.\n", color.Cyan("secret-rotation.yml (scope: state-passphrase)"))
 	if minted {
 		// Only reachable if the repo acquired one between plan and push. The
 		// operator has just been shown an escrow banner for a value that is now
 		// going nowhere; saying so is the difference between a confusing no-op and
 		// an escrowed string they believe is live.
-		fmt.Fprintf(os.Stderr, "  %s\n", bold("The passphrase printed above was NOT pushed — discard it."))
+		fmt.Fprintf(os.Stderr, "  %s\n", color.Bold("The passphrase printed above was NOT pushed — discard it."))
 	}
 	return nil
 }
@@ -251,8 +253,8 @@ func ensureStatePassphrase(g globalOpts, plan statePassphrasePlan, repo string, 
 		return nil
 	}
 	if g.dryRun || !g.yes {
-		fmt.Printf("\n%s %s — %s\n", bold("[state encryption]"), statePassphraseSecret,
-			dim("absent; would generate one and print it once for offline escrow"))
+		fmt.Printf("\n%s %s — %s\n", color.Bold("[state encryption]"), statePassphraseSecret,
+			color.Dim("absent; would generate one and print it once for offline escrow"))
 		return nil
 	}
 	pass, err := generateStatePassphrase()
@@ -273,10 +275,10 @@ func ensureStatePassphrase(g globalOpts, plan statePassphrasePlan, repo string, 
 // so here is the difference between an operator who copies it somewhere durable
 // and one who assumes the tooling kept it.
 func printStatePassphraseEscrow(repo, pass string) {
-	fmt.Fprintf(os.Stderr, "\n%s\n", bold("══ generated "+statePassphraseSecret+" — COPY IT OFFLINE NOW ══"))
-	fmt.Fprintf(os.Stderr, "  %s\n", cyan(pass))
+	fmt.Fprintf(os.Stderr, "\n%s\n", color.Bold("══ generated "+statePassphraseSecret+" — COPY IT OFFLINE NOW ══"))
+	fmt.Fprintf(os.Stderr, "  %s\n", color.Cyan(pass))
 	fmt.Fprintf(os.Stderr, "  %s\n", "The Terraform roots encrypt their state with this (ADR 0007). Lose it and every")
 	fmt.Fprintf(os.Stderr, "  %s\n", "state file is permanently unreadable — same blast radius as OPENBAO_SEAL_KEY.")
-	fmt.Fprintf(os.Stderr, "  %s\n", dim("Pushed as a repo-level secret on "+repo+" and cached in .llz/secrets.env (0600,"))
-	fmt.Fprintf(os.Stderr, "  %s\n", dim("gitignored). Neither is escrow — put it in your secret manager before moving on."))
+	fmt.Fprintf(os.Stderr, "  %s\n", color.Dim("Pushed as a repo-level secret on "+repo+" and cached in .llz/secrets.env (0600,"))
+	fmt.Fprintf(os.Stderr, "  %s\n", color.Dim("gitignored). Neither is escrow — put it in your secret manager before moving on."))
 }

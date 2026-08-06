@@ -3,7 +3,7 @@ package main
 // ci_assert_reconciler.go implements `llz ci assert-reconciler` — an e2e gate on
 // the reconciler's FUNCTIONAL health, not just its pod phase.
 //
-// converge/health see the reconciler Deployment as green the moment its pod is
+// converge/health see the reconciler Deployment as color.Green the moment its pod is
 // Running+Ready — but the reconcile loop can be up yet silently failing: after
 // the least-privilege RBAC tightening + CronJob retirement, a dropped permission
 // (or lost OpenBao/Linode access) leaves the pod healthy while its samples report
@@ -506,7 +506,7 @@ func runCIAssertReconciler(prom, namespace string, checkLanes bool, laneSet []st
 		fmt.Printf("FAIL: %s\n", last.leader.failWhy)
 	}
 
-	// Per-lane freshness. Reported in full either way: a green run should record
+	// Per-lane freshness. Reported in full either way: a color.Green run should record
 	// WHICH lanes it saw passing, so a lane that quietly stops being declared is
 	// visible in the log rather than merely absent from a failure list.
 	stale := last.staleLanes()

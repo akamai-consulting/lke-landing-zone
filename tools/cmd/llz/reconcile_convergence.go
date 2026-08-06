@@ -99,7 +99,7 @@ type convergenceSampleResult struct {
 // existing contract already maps to in-progress: the gate keeps polling instead of
 // passing, and no downstream caller needs a special case. This is requireCorpus
 // (guard_corpus.go) and sectionItems (ci_health.go) for the reconciler lane —
-// a check that examined nothing must not report the same green as one that
+// a check that examined nothing must not report the same color.Green as one that
 // examined everything.
 func convergenceSample(ctx context.Context, client nodeGetter) (convergenceSampleResult, error) {
 	obj, status, err := client.GetJSON(ctx, reconcilelanes.ArgoAppsPath)

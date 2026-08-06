@@ -62,7 +62,7 @@ func TestAssertAdopterPinDefaultsToLatestRelease(t *testing.T) {
 
 // THE REGRESSION. This is the gate reproducing the pre-fix behaviour: `llz tokens`
 // computes a floating version tag for a release-pinned instance. It has to FAIL —
-// this exact configuration shipped to a live adopter with e2e green throughout.
+// this exact configuration shipped to a live adopter with e2e color.Green throughout.
 func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })

@@ -12,6 +12,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // checks.go ports the instance-local checks that used to live in the template's
@@ -156,7 +158,7 @@ func goModuleDirs() []string {
 
 // stepGoFmt is the gofmt half of the format gate. stepFmtCheck covers HCL via
 // `tofu fmt`; nothing covered Go, so gofmt drift could only ever be caught by
-// CI's `make fmt-check` — which is exactly how it was caught, as a red Lint on an
+// CI's `make fmt-check` — which is exactly how it was caught, as a color.Red Lint on an
 // already-pushed commit. The pre-commit gate is the cheaper place to learn it.
 //
 // Deliberately NOT `make fmt-check`: this must run from any cwd inside the repo,
@@ -587,7 +589,7 @@ func stepCheckov(g globalOpts) error {
 // and that is a silent failure no amount of testing the step itself would catch.
 func lintSteps() []func(globalOpts) error {
 	return []func(globalOpts) error{
-		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard,
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, func(g globalOpts) error { return sustain.StepUpgradeChurnGuard(sustainDeps()) },
 		stepPinCoherence, stepRenderFresh,
 		stepFmtCheck, stepGoFmt, stepTFLint, stepActionsLint, stepGitleaks,
 	}

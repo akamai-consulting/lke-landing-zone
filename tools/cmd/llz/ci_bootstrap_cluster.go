@@ -342,7 +342,7 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	//
 	// Nothing downstream can proceed without the values branch, so a failure here is
 	// terminal — and saying so at the point of failure is worth far more than a
-	// green step and an unexplained collapse two phases later.
+	// color.Green step and an unexplained collapse two phases later.
 	// TERMINAL, including "apl-core hasn't published its coordinates yet". That state
 	// used to warn-and-skip on the theory that it is a normal early state on a fresh
 	// cluster and the extras would merely degrade. The first half is true and is now
@@ -351,7 +351,7 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// values branch, every gitops-* Application sits in ComparisonError, and converge
 	// hard-fails ~20 minutes later naming none of it.
 	//
-	// Failing here cannot turn a passing run red: a managed cluster that never
+	// Failing here cannot turn a passing run color.Red: a managed cluster that never
 	// publishes apl-git-config has no apl-core, so converge was going to fail
 	// regardless. It just fails earlier, and says why.
 	if err := configureManagedApl(o, d); err != nil {
@@ -490,7 +490,7 @@ func resolveKubeconfig(path string) (string, func(), error) {
 // `return buf.String(), cmd.Run() == nil` evaluates its operands left-to-right,
 // snapshotting the buffer EMPTY before the command ever executes. That exact
 // bug made every kubectl call return "" on the e2e bootstrap (the
-// "empty kubeconfig" red herring) — see TestRunCombined_OutputAfterRun.
+// "empty kubeconfig" color.Red herring) — see TestRunCombined_OutputAfterRun.
 func runCombined(cmd *exec.Cmd) (string, bool) {
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -862,7 +862,7 @@ var (
 // committed and the apl-<env> branch is never seeded — and then apl-operator has no
 // values branch, every gitops-* Application sits in ComparisonError, and converge
 // hard-fails ~20 minutes later naming none of it. That is the SAME shape as the
-// re-bootstrap bug (a green step, a late unexplained collapse) reached by a
+// re-bootstrap bug (a color.Green step, a late unexplained collapse) reached by a
 // different route, and the skip made it look intentional.
 //
 // Exhausting the budget is therefore TERMINAL. If apl-core never publishes its git

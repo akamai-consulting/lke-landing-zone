@@ -353,7 +353,7 @@ func TestCheckOpenBaoVisitsExactlyReplicaPods(t *testing.T) {
 
 // A leader-count verdict is recorded only when it is NOT OK. Inverting that
 // silences "no active leader" — the split-brain / leaderless check disappears
-// while a green line appears in its place.
+// while a color.Green line appears in its place.
 func TestCheckOpenBaoRecordsLeaderCountOnlyWhenNotOK(t *testing.T) {
 	// Every pod unsealed but standby => zero active leaders => hard fail.
 	baoPods(t, 3, map[int]string{})

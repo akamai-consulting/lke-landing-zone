@@ -9,7 +9,7 @@ package main
 // and nothing else: get the label wrong, or drop it in a refactor, and the
 // ConfigMap sits in the cluster forever, perfectly valid, containing a dashboard
 // nobody can see. Argo reports it Synced (the resource matches git). converge is
-// green. The dashboard is simply not in Grafana.
+// color.Green. The dashboard is simply not in Grafana.
 //
 // It has a second, sharper edge here. The landing zone must work on BOTH stacks:
 // self-installed apl-core watches `grafana_dashboard: "1"`, while managed App
@@ -55,7 +55,7 @@ var grafanaSidecarLabels = map[string]string{
 //
 // A KNOWN list, not "every ConfigMap carrying the label" — the label IS the thing
 // under test, so a label-filtered listing would return an empty expected set the
-// moment it regressed and the gate would pass green on exactly that bug. Same
+// moment it regressed and the gate would pass color.Green on exactly that bug. Same
 // reasoning as assert-scrape-targets' monitor list.
 // TestDefaultGrafanaDashboardsMatchTheManifests pins this list against the
 // ConfigMaps platform-apl actually ships, so a renamed or added dashboard fails
@@ -77,7 +77,7 @@ func ciAssertGrafanaDashboardsCmd() *cobra.Command {
 			"Platform).\n\n" +
 			"The sidecar is a label selector and nothing else. Drop or mistype the label and\n" +
 			"the ConfigMap sits in the cluster forever, valid and invisible — Argo reports it\n" +
-			"Synced because the resource matches git, converge is green, and the dashboard is\n" +
+			"Synced because the resource matches git, converge is color.Green, and the dashboard is\n" +
 			"simply not in Grafana. Carrying only ONE of the two labels is worse: it renders\n" +
 			"on the stack you tested and vanishes on the other.\n\n" +
 			"Scope: everything on this repo's side of the contract. It does NOT log into\n" +
@@ -131,7 +131,7 @@ func evalDashboardConfigMap(name string, raw []byte) dashboardVerdict {
 	}
 	if len(missing) > 0 {
 		v.FailWhy = fmt.Sprintf("not discoverable by the dashboard sidecar — missing/incorrect %s. "+
-			"The ConfigMap is present and valid, so Argo reports it Synced and converge stays green; "+
+			"The ConfigMap is present and valid, so Argo reports it Synced and converge stays color.Green; "+
 			"the dashboard is simply absent from Grafana. Both labels are required: one covers the "+
 			"self-installed stack, the other managed App Platform",
 			strings.Join(missing, "; "))

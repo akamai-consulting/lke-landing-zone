@@ -105,5 +105,13 @@ func Extension() extension.Extension {
 				},
 			},
 		},
+		Incomplete: []string{
+			"invariant:operating/tokens — 15 references into ci_token_inventory.go, which is " +
+				"the token-inventory extension's territory (a separate catalog entry of 1,473 lines)",
+			"invariant:operating/apl-overlay and /apl-overlay-wait — one credential cluster with " +
+				"openbao-gauges, sharing this package's OpenBao client seam",
+			"linode-token-wait is NOT missing: it is a watch wrapper belonging to the runtime, " +
+				"and the catalog counting it among the seven invariants is a miscount",
+		},
 	}
 }

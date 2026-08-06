@@ -14,6 +14,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 func aplAppCmd() *cobra.Command {
@@ -82,8 +84,8 @@ func runAppToggle(env, app string, enable bool) error {
 	if !enable {
 		done = "disabled"
 	}
-	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", green(done), app, env, path, value)
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
+	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", color.Green(done), app, env, path, value)
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
 	return runRender(gopts, env, false, false, false)
 }
 

@@ -1,8 +1,8 @@
-package main
+package sustain
 
 // drift.go is the template-drift check (formerly template-scripts/
 // check-template-drift.sh, now retired). It resolves this instance's provenance
-// (resolveTemplateVersion — copier's .copier-answers.yml, no committed stamp),
+// (ResolveTemplateVersion — copier's .copier-answers.yml, no committed stamp),
 // resolves the template repo's current branch head, and reports whether the
 // instance is behind. Report-only by default; --strict exits 1 on drift so a
 // scheduled job can gate. The Scheduled Checks template-drift job runs this via
@@ -12,13 +12,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-func runDrift(branch, repoURL string, strict bool) error {
+func RunDrift(d Deps, branch, repoURL string, strict bool) error {
 	if branch == "" {
 		branch = "main"
 	}
-	tv := resolveTemplateVersion()
+	tv := ResolveTemplateVersion(d)
 	if tv.TemplateRepo == "" || tv.TemplateSHA == "" {
 		return fmt.Errorf("cannot determine this instance's template provenance — run from an instance checkout (one with .copier-answers.yml, written by `llz new`)")
 	}
@@ -35,7 +37,7 @@ func runDrift(branch, repoURL string, strict bool) error {
 		}
 	}
 
-	latest := gitOut("ls-remote", repoURL, "refs/heads/"+branch)
+	latest := gitOut(d, "ls-remote", repoURL, "refs/heads/"+branch)
 	if i := strings.IndexAny(latest, " \t"); i > 0 {
 		latest = latest[:i]
 	}
@@ -55,23 +57,23 @@ func runDrift(branch, repoURL string, strict bool) error {
 	}
 
 	if tv.TemplateSHA == latest {
-		fmt.Printf("%s Up to date with %s@%s (%s).\n", green("✓"), tv.TemplateRepo, branch, short(latest))
+		fmt.Printf("%s Up to date with %s@%s (%s).\n", color.Green("✓"), tv.TemplateRepo, branch, short(latest))
 		emitDriftSummary(tv, branch, latest, "", "✅ up to date")
 		return nil
 	}
 
 	behind := ""
-	if commitReachable(tv.TemplateSHA) && commitReachable(latest) {
-		behind = gitOut("rev-list", "--count", tv.TemplateSHA+".."+latest)
+	if commitReachable(d, tv.TemplateSHA) && commitReachable(d, latest) {
+		behind = gitOut(d, "rev-list", "--count", tv.TemplateSHA+".."+latest)
 	}
 	msg := fmt.Sprintf("behind %s@%s", tv.TemplateRepo, branch)
 	if behind != "" {
 		msg = behind + " commit(s) " + msg
 	}
 	fmt.Printf("%s instance at %s, %s head at %s — %s.\n",
-		yellow("Template drift:"), short(tv.TemplateSHA), branch, short(latest), msg)
+		color.Yellow("Template drift:"), short(tv.TemplateSHA), branch, short(latest), msg)
 	if compareURL != "" {
-		fmt.Printf("%s %s\n", dim("Compare:"), cyan(compareURL))
+		fmt.Printf("%s %s\n", color.Dim("Compare:"), color.Cyan(compareURL))
 	}
 	if os.Getenv("GITHUB_ACTIONS") != "" {
 		fmt.Printf("::warning title=Template drift::Instance is %s. Sync upstream + re-stamp with `llz upgrade`.\n", msg)
@@ -100,12 +102,12 @@ func githubSlug(repo string) string {
 	}
 }
 
-func commitReachable(sha string) bool {
-	_, err := execOutput("git", "cat-file", "-e", sha+"^{commit}")
+func commitReachable(d Deps, sha string) bool {
+	_, err := d.Exec("git", "cat-file", "-e", sha+"^{commit}")
 	return err == nil
 }
 
-func emitDriftSummary(tv templateVersion, branch, latest, behind, status string) {
+func emitDriftSummary(tv TemplateVersion, branch, latest, behind, status string) {
 	f := os.Getenv("GITHUB_STEP_SUMMARY")
 	if f == "" {
 		return

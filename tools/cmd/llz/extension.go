@@ -76,6 +76,13 @@ func listExtensions(out io.Writer, exts []extension.Extension, verbose bool) err
 		if e.Always {
 			enabled = "always"
 		}
+		// A PARTIAL extension must not read as a complete one. The marker goes in
+		// the ENABLED column rather than a footnote because that column is what a
+		// skimmer reads, and "always" beside a four-binding extension that has
+		// eight is the misreading Incomplete exists to prevent.
+		if len(e.Incomplete) > 0 {
+			enabled += " ◐"
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			e.Name, enabled, bindingSummary(e), grantSummary(e), e.Short)
 		if verbose {
@@ -86,6 +93,9 @@ func listExtensions(out io.Writer, exts []extension.Extension, verbose bool) err
 			// scannable.
 			for _, b := range e.Bindings {
 				fmt.Fprintf(w, "\t\t%s\t\t\n", b)
+			}
+			for _, note := range e.Incomplete {
+				fmt.Fprintf(w, "\t\tNOT DECLARED: %s\t\t\n", note)
 			}
 		}
 	}

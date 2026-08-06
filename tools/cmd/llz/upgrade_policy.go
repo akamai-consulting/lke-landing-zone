@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 const copierAnswersPath = ".copier-answers.yml"
@@ -170,7 +172,7 @@ func applyUpgradeManifestPolicy(g globalOpts, ref string, before upgradeSnapshot
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s restored %d owned file(s); overwrote %d managed file(s) from %s\n",
-		dim("→"), len(before.files), count, ref)
+		color.Dim("→"), len(before.files), count, ref)
 	return nil
 }
 

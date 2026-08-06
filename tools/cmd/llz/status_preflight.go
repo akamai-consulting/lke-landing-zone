@@ -17,6 +17,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // clusterReachable probes the cluster kubectl currently points at with a short
@@ -63,12 +65,12 @@ func noClusterAccessErr(env, why string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no reachable cluster for the current kubectl context (%s).\n", why)
 	b.WriteString("  The build runs in GitHub Actions, so nothing has written a kubeconfig here yet. Fetch one:\n")
-	fmt.Fprintf(&b, "      %s\n", cyan("export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)"))
-	fmt.Fprintf(&b, "      %s\n", cyan(fmt.Sprintf("llz ci fetch-kubeconfig --region %s --output ~/.kube/%s.yaml", env, env)))
-	fmt.Fprintf(&b, "      %s\n", cyan(fmt.Sprintf("export KUBECONFIG=~/.kube/%s.yaml", env)))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan("export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)"))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan(fmt.Sprintf("llz ci fetch-kubeconfig --region %s --output ~/.kube/%s.yaml", env, env)))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan(fmt.Sprintf("export KUBECONFIG=~/.kube/%s.yaml", env)))
 	// fetch-kubeconfig resolves the cluster from <env>.tfvars, and those are
 	// gitignored build artifacts — absent in a fresh clone until a render.
-	fmt.Fprintf(&b, "  %s\n", dim(fmt.Sprintf("(fresh clone? `llz render %s` first — it resolves the cluster from the rendered %s.tfvars)", env, env)))
+	fmt.Fprintf(&b, "  %s\n", color.Dim(fmt.Sprintf("(fresh clone? `llz render %s` first — it resolves the cluster from the rendered %s.tfvars)", env, env)))
 	// The ACL is enabled unconditionally by the cluster module, and its address set
 	// is exactly cluster.apiServerAllowCIDRs. The quickstart's default answer for
 	// that field is EMPTY (correct for github.com-hosted runners, which open their
@@ -86,16 +88,16 @@ func noClusterAccessErr(env, why string) error {
 	// refused. --region on BOTH lines: it names the state file `revoke` reads back,
 	// and without it revoke looks under "default", finds nothing, and reports a
 	// no-op — leaving a home IP in the control-plane ACL indefinitely.
-	fmt.Fprintf(&b, "      %s\n", cyan("export LINODE_TOKEN=…   # runner-acl no-ops (exit 0) without it"))
-	fmt.Fprintf(&b, "      %s\n", cyan("llz ci runner-acl open --region "+env))
-	fmt.Fprintf(&b, "      %s\n", cyan("llz ci runner-acl revoke --region "+env)+dim("   # when you are done"))
-	fmt.Fprintf(&b, "  %s\n", dim("(add --runner-configmap if this cluster runs the cidrFirewall component, whose"))
-	fmt.Fprintf(&b, "  %s\n", dim("controller replaces the ACL on each reconcile; it is off by default.)"))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan("export LINODE_TOKEN=…   # runner-acl no-ops (exit 0) without it"))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan("llz ci runner-acl open --region "+env))
+	fmt.Fprintf(&b, "      %s\n", color.Cyan("llz ci runner-acl revoke --region "+env)+color.Dim("   # when you are done"))
+	fmt.Fprintf(&b, "  %s\n", color.Dim("(add --runner-configmap if this cluster runs the cidrFirewall component, whose"))
+	fmt.Fprintf(&b, "  %s\n", color.Dim("controller replaces the ACL on each reconcile; it is off by default.)"))
 	// NOT "edit the spec and re-apply": the cluster resource carries
 	// `ignore_changes = [control_plane[0].acl, pool]`, so the ACL is set at CREATE
 	// only and a re-apply against a live cluster is a no-op on it. Saying otherwise
 	// buys the operator a 20-minute apply that changes nothing and reports success.
-	fmt.Fprintf(&b, "  A spec edit (%s) does NOT change this cluster's ACL — Terraform holds it\n", cyan("llz env edit "+env))
+	fmt.Fprintf(&b, "  A spec edit (%s) does NOT change this cluster's ACL — Terraform holds it\n", color.Cyan("llz env edit "+env))
 	b.WriteString("  under ignore_changes, so it applies only to a cluster created later. Or run from an allowed host.")
 	return fmt.Errorf("%s", b.String())
 }

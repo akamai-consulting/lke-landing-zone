@@ -16,6 +16,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 func componentsCmd() *cobra.Command {
@@ -79,7 +81,7 @@ func envShowCmd() *cobra.Command {
 
 func printEnvShow(env string, e clusterspec.Environment) {
 	c := e.Cluster
-	fmt.Printf("%s\n\n", bold(fmt.Sprintf("Deployment %q — effective config (spec.defaults merged in):", env)))
+	fmt.Printf("%s\n\n", color.Bold(fmt.Sprintf("Deployment %q — effective config (spec.defaults merged in):", env)))
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	row := func(k, v string) {
@@ -117,7 +119,7 @@ func printEnvShow(env string, e clusterspec.Environment) {
 	}
 	_ = tw.Flush()
 
-	fmt.Printf("\n%s\n", bold("components:"))
+	fmt.Printf("\n%s\n", color.Bold("components:"))
 	ctw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, comp := range clusterspec.Components {
 		state := "off"

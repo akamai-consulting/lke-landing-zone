@@ -100,7 +100,7 @@ func runCIHealthPromRules(prom string) error {
 	}); err != nil {
 		// NOT a clean skip. This check's whole job is to notice rules that fail to
 		// evaluate; if it cannot ask, it has established nothing, and returning nil
-		// would report green. The scheduled job is continue-on-error, so a genuinely
+		// would report color.Green. The scheduled job is continue-on-error, so a genuinely
 		// unreachable cluster still won't block other work — it will just be visible.
 		return fmt.Errorf("health-prom-rules: could not query %s on %s: %w", prom, region, err)
 	}

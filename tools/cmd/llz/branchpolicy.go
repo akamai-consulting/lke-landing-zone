@@ -20,6 +20,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // errEnvProtectionUnsupported signals the infra-<env> environment was created (so
@@ -156,13 +158,13 @@ func warnEnvProtectionUnsupported(repo, env string) {
 		}
 	}
 	envName := "infra-" + env
-	fmt.Fprintf(os.Stderr, "\n%s could not restrict %s to deployments from `main`.\n", yellow("⚠ branch protection skipped"), envName)
-	fmt.Fprintln(os.Stderr, dim("  This repo's plan doesn't include environment protection rules (private repos need"))
-	fmt.Fprintln(os.Stderr, dim("  GitHub Pro/Team/Enterprise). Secrets were pushed, but until the env is locked a"))
-	fmt.Fprintln(os.Stderr, dim("  feature-branch workflow_dispatch could select "+envName+" and read them."))
+	fmt.Fprintf(os.Stderr, "\n%s could not restrict %s to deployments from `main`.\n", color.Yellow("⚠ branch protection skipped"), envName)
+	fmt.Fprintln(os.Stderr, color.Dim("  This repo's plan doesn't include environment protection rules (private repos need"))
+	fmt.Fprintln(os.Stderr, color.Dim("  GitHub Pro/Team/Enterprise). Secrets were pushed, but until the env is locked a"))
+	fmt.Fprintln(os.Stderr, color.Dim("  feature-branch workflow_dispatch could select "+envName+" and read them."))
 	fmt.Fprintln(os.Stderr, "  Lock it once the plan allows (UI: Settings → Environments → "+envName+" → Deployment branch policy), or:")
-	fmt.Fprintf(os.Stderr, "    %s\n", cyan("gh api -X PUT repos/"+repo+"/environments/"+envName+" -F deployment_branch_policy[custom_branch_policies]=true -F deployment_branch_policy[protected_branches]=false"))
-	fmt.Fprintf(os.Stderr, "    %s\n", cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/deployment-branch-policies -f name=main -f type=branch"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X PUT repos/"+repo+"/environments/"+envName+" -F deployment_branch_policy[custom_branch_policies]=true -F deployment_branch_policy[protected_branches]=false"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/deployment-branch-policies -f name=main -f type=branch"))
 }
 
 // policyKind classifies the deployment_branch_policy of an environment config.

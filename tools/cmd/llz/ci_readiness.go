@@ -200,7 +200,7 @@ func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string
 	// and the outcome is nothing. Loki was Running, Ready, Synced, Healthy, S3
 	// configured, and every PutObject returned 403 AccessDenied: 238 flush failures
 	// on one ingester and a chunks bucket whose newest object predated the cluster
-	// by ten days. This lane was green throughout, because nothing here had ever
+	// by ten days. This lane was color.Green throughout, because nothing here had ever
 	// asked whether a byte was written.
 	//
 	// TWO SIGNALS, because neither alone is enough. Flush ERRORS catch active
@@ -248,7 +248,7 @@ func applyLokiWriteVerdict(findings []lokiWriteMsg) (bool, []string) {
 //
 // THE CONSEQUENCE IS DELIBERATE: while #397 is open, every e2e run is RED here. That
 // is the point. The alternative — reporting the outage and passing anyway — buys a
-// green pipeline by making the pipeline mean less, and this repo has just spent three
+// color.Green pipeline by making the pipeline mean less, and this repo has just spent three
 // check designs learning where that leads. The first two versions of this check
 // PASSED on clusters that had persisted nothing at all, and each looked reasonable
 // while doing it.
@@ -486,9 +486,9 @@ func lokiConfigText(match string) string {
 // single 2m `kubectl rollout status`. harbor-registry only becomes schedulable
 // once its ExternalSecret syncs — a few minutes after the KV seed on a fresh
 // bootstrap — so that single 2m wait predictably timed out, and the caller's
-// `continue-on-error` then painted a green check over a scary
+// `continue-on-error` then painted a color.Green check over a scary
 // "error: timed out … exit code 1" that carried no signal (it "passed" whether
-// or not the registry came up). Now a healthy bootstrap goes green honestly, and
+// or not the registry came up). Now a healthy bootstrap goes color.Green honestly, and
 // a genuine stall is a visible ::warning:: — the convergence gate is the hard
 // check — never a masked error. That is what lets the caller drop
 // continue-on-error.

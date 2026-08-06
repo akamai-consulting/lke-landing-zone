@@ -6,7 +6,7 @@ package main
 // docs/environments-and-promotion.md: promotion_rank stays the single source of
 // truth, and `llz env add` (plus `llz env pipeline`) regenerates a STATIC
 // `needs:`-chained workflow so the runtime is 100% GitHub-native — `needs:` is
-// the on-green gate, the infra-<stage> Environment protection rules are the
+// the on-color.Green gate, the infra-<stage> Environment protection rules are the
 // approval/soak gate, and GitHub's "Re-run failed jobs" is the resume. There is
 // no self-dispatch loop to reinvent.
 //
@@ -128,7 +128,7 @@ func renderPromoteWorkflow(c promoCaller, stages []promoStage) string {
 #
 # Native code-promotion pipeline (docs/environments-and-promotion.md): a static
 # needs:-chain over the ranked deployments. Each stage calls the same reusable
-# llz-terraform.yml apply path terraform.yml uses; ` + "`needs:`" + ` is the on-green gate
+# llz-terraform.yml apply path terraform.yml uses; ` + "`needs:`" + ` is the on-color.Green gate
 # (a stage starts only once the prior stage applied AND converged) and the
 # infra-<stage> Environment protection rules are the approval/soak gate. Resume a
 # failed run with GitHub's built-in "Re-run failed jobs".
@@ -169,7 +169,7 @@ jobs:
 		b.WriteString(fmt.Sprintf("  %s:\n", s.name))
 		b.WriteString(fmt.Sprintf("    name: Promote → %s (rank %d)\n", s.name, s.rank))
 		if i > 0 {
-			// `needs:` the previous stage — the on-green gate.
+			// `needs:` the previous stage — the on-color.Green gate.
 			b.WriteString(fmt.Sprintf("    needs: %s\n", stages[i-1].name))
 		}
 		b.WriteString(fmt.Sprintf("    uses: %s\n", c.uses))

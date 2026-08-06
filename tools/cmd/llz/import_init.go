@@ -30,6 +30,8 @@ import (
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 	sigyaml "sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // importInitAplChartVersion is the apl-core version `llz import init` scaffolds:
@@ -107,7 +109,7 @@ func runImportInit(g globalOpts, o importInitOpts) error {
 		return err
 	}
 
-	fmt.Printf("\n%s\n", bold("Imported into "+o.dir))
+	fmt.Printf("\n%s\n", color.Bold("Imported into "+o.dir))
 	fmt.Printf("  spec authored for env %q from %s; review %s/%s for the manual steps.\n", o.env, o.report, o.dir, migrationTodoFile)
 	fmt.Printf("  apl-core pinned to %s; k8s_version left at the template default — set a valid +lke version.\n", importInitAplChartVersion)
 	return nil
@@ -148,7 +150,7 @@ func withinDir(dir string, fn func() error) error {
 // and re-renders.
 func applyComponentToggles(g globalOpts, env string, assigns []string) error {
 	if g.dryRun {
-		fmt.Printf("  %s would set: %s\n", dim("(dry-run)"), strings.Join(assigns, " "))
+		fmt.Printf("  %s would set: %s\n", color.Dim("(dry-run)"), strings.Join(assigns, " "))
 		return nil
 	}
 	envFile, err := envSpecFile(env)
@@ -170,7 +172,7 @@ func applyComponentToggles(g globalOpts, env string, assigns []string) error {
 		return err
 	}
 	for _, a := range assigns {
-		fmt.Printf("  %s spec.%s\n", green("set"), a)
+		fmt.Printf("  %s spec.%s\n", color.Green("set"), a)
 	}
 	return runRender(g, env, false, false, false)
 }

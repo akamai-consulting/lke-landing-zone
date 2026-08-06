@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // requirement is one var/secret an e2e instance needs.
@@ -17,7 +19,7 @@ type requirement struct {
 	Name     string
 	Secret   bool   // secret (value not readable) vs variable (value readable)
 	EnvScope bool   // infra-<env> environment vs repo-level
-	Required bool   // required for a green e2e vs optional
+	Required bool   // required for a color.Green e2e vs optional
 	Template bool   // lives on the template repo (admin/e2e-harness) vs the instance repo
 	How      string // one-line: how the wizard provides it
 }
@@ -217,7 +219,7 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 // for every credential).
 func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState, validity map[string]tokenValidity) []string {
 	var missing []string
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
 	for _, r := range reqs {
 		st := instance
 		if r.Template {
@@ -228,12 +230,12 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Secret {
 			_, inCache = secrets[r.Name]
 		}
-		statusPlain, statusColor := "✗ missing", red
+		statusPlain, statusColor := "✗ missing", color.Red
 		switch {
 		case onGitHub:
-			statusPlain, statusColor = "✓ set", green
+			statusPlain, statusColor = "✓ set", color.Green
 		case inCache:
-			statusPlain, statusColor = "⤴ cached → will push", yellow
+			statusPlain, statusColor = "⤴ cached → will push", color.Yellow
 		}
 		if r.Template {
 			statusPlain += " (template)"
@@ -269,48 +271,48 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 // (kind != none) gets a verdict — never a bare "n/a".
 func validCell(r requirement, onGitHub bool, validity map[string]tokenValidity) (string, func(string) string) {
 	if kindFor(r.Name) == kindNone {
-		return "", dim // not a credential — blank column
+		return "", color.Dim // not a credential — blank column
 	}
 	tv, ok := validity[r.Name]
 	if !ok {
-		return "· unprobed", dim
+		return "· unprobed", color.Dim
 	}
 	switch tv.status {
 	case vValid:
-		return "✓ valid", green
+		return "✓ valid", color.Green
 	case vWarn:
-		return "⚠ warn", yellow
+		return "⚠ warn", color.Yellow
 	case vInvalid:
-		return "✗ INVALID", red
+		return "✗ INVALID", color.Red
 	case vUnreachable:
-		return "⚠ unreachable", yellow
+		return "⚠ unreachable", color.Yellow
 	default: // vSkipped — not probed because the value isn't available locally
 		if onGitHub {
-			return "· not cached", dim // set on GitHub, value not in .llz cache
+			return "· not cached", color.Dim // set on GitHub, value not in .llz cache
 		}
-		return "· not set", dim
+		return "· not set", color.Dim
 	}
 }
 
 func validGlyph(s validityStatus) string {
 	switch s {
 	case vInvalid:
-		return red("✗")
+		return color.Red("✗")
 	case vWarn:
-		return yellow("⚠")
+		return color.Yellow("⚠")
 	default:
-		return yellow("⚠")
+		return color.Yellow("⚠")
 	}
 }
 
 // padColor right-pads a plain string to a display width (rune count — the status
 // glyphs render one cell wide) THEN colors it, so the zero-width ANSI escapes
 // don't throw off column alignment (the same trick record() uses).
-func padColor(plain string, color func(string) string, width int) string {
+func padColor(plain string, paint func(string) string, width int) string {
 	if n := width - utf8.RuneCountInString(plain); n > 0 {
 		plain += strings.Repeat(" ", n)
 	}
-	return color(plain)
+	return paint(plain)
 }
 
 // loadEnvFiles reads the gathered .llz/*.env (empty maps if absent).

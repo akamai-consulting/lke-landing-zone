@@ -108,7 +108,7 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 	//               unmarshals cleanly with zero groups → "All Prometheus rule
 	//               groups evaluated without errors". Zero rules loaded — the
 	//               exact ruleSelector regression monitoring-label-guard exists
-	//               for — read identically green.
+	//               for — read identically color.Green.
 	//
 	// The body is carried into the error (truncated) so callers keep Prometheus's
 	// own explanation instead of just a status number.

@@ -24,7 +24,7 @@ package main
 // The score is the one thing you cannot use to detect any of these. So this
 // command refuses to print a score until three independent checks pass:
 //
-//   CONTROL  the suite is green on unmutated source. A red suite makes every
+//   CONTROL  the suite is color.Green on unmutated source. A color.Red suite makes every
 //            mutant trivially "killed".
 //   CANARY   a mutant that CANNOT be killed must be reported LIVED. If the run
 //            says KILLED, the harness is not really running tests. See canary.
@@ -163,7 +163,7 @@ var canaries = map[string]canary{
 		Why: "make(map[string]string, len(dbAdminCarriedFields)+3) — a MAP size hint. " +
 			"Unlike a slice capacity it is not observable through cap() or any other API, " +
 			"and len(dbAdminCarriedFields)==4 so the mutant computes 1, which is positive " +
-			"and cannot panic. Verified by hand: applied, suite still green.",
+			"and cannot panic. Verified by hand: applied, suite still color.Green.",
 	},
 }
 
@@ -178,7 +178,7 @@ func (e *validationError) Error() string { return strings.Join(e.reasons, "; ") 
 func validateRun(r mutationRun, controlGreen bool, c *canary) error {
 	var bad []string
 	if !controlGreen {
-		bad = append(bad, "CONTROL failed: the suite is red on unmutated source, so every mutant is trivially killed")
+		bad = append(bad, "CONTROL failed: the suite is color.Red on unmutated source, so every mutant is trivially killed")
 	}
 	if len(r.Mutants) == 0 {
 		bad = append(bad, "no mutants were reported at all — gremlins found nothing to run")
@@ -288,7 +288,7 @@ func ciMutateCmd() *cobra.Command {
 		Use:   "mutate",
 		Short: "mutation-test a package, validating the harness before reporting a score",
 		Long: "Runs gremlins over a package and refuses to report a score until three checks\n" +
-			"pass: the suite is green on unmutated source (CONTROL), a provably-equivalent\n" +
+			"pass: the suite is color.Green on unmutated source (CONTROL), a provably-equivalent\n" +
 			"mutant comes back LIVED (CANARY), and no mutant timed out. Every gremlins\n" +
 			"failure mode found so far surfaced as a flattering 100%, never as an error, so\n" +
 			"the score is the one signal that cannot detect a broken run.\n\n" +
@@ -314,7 +314,7 @@ func ciMutateCmd() *cobra.Command {
 					"Stage the repo root around gremlins' workdir, or expect the canary to fail.\n", pkg)
 			}
 
-			// CONTROL first: a red suite makes every mutant trivially killed.
+			// CONTROL first: a color.Red suite makes every mutant trivially killed.
 			_, ctlErr := execOutput("go", "test", pkg, "-count=1")
 			controlGreen := ctlErr == nil
 

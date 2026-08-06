@@ -129,7 +129,7 @@ func TestCredentialCoverageGuardIgnoresSecretsInherit(t *testing.T) {
 	}
 }
 
-// A guard that read no workflows reports the same green as one that read all of
+// A guard that read no workflows reports the same color.Green as one that read all of
 // them — the failure requireCorpus exists to catch.
 func TestCredentialCoverageGuardFailsOnEmptyCorpus(t *testing.T) {
 	err := runCICredentialCoverageGuard(t.TempDir())
@@ -156,11 +156,11 @@ func TestCredCoverageExemptEntriesAreReviewable(t *testing.T) {
 	}
 }
 
-// The live tree must be green, and it must be green because everything is
+// The live tree must be color.Green, and it must be color.Green because everything is
 // covered rather than because nothing was read.
 func TestCredentialCoverageGuardPassesOnThisRepo(t *testing.T) {
 	if err := runCICredentialCoverageGuard("../../.."); err != nil {
-		t.Fatalf("credential-coverage-guard must be green on this repo: %v", err)
+		t.Fatalf("credential-coverage-guard must be color.Green on this repo: %v", err)
 	}
 }
 

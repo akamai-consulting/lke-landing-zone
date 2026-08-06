@@ -359,7 +359,7 @@ func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
 
 // Both walks in deliver-docs used to return nil on a WalkDir error, so an
 // unreadable subtree was skipped and the run still reported success — a stale
-// link surviving a delivery that claimed to have fixed it. Same false-green class
+// link surviving a delivery that claimed to have fixed it. Same false-color.Green class
 // as docs-guard's. Both must now fail closed.
 func TestDeliverDocs_WalkErrorFailsClosed(t *testing.T) {
 	if os.Geteuid() == 0 {

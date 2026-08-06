@@ -11,6 +11,10 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // validateEnvName returns an error if env is not a legal deployment name.
@@ -121,8 +125,8 @@ func requireCopier(g globalOpts, action string) error {
 	}
 	if g.dryRun {
 		fmt.Fprintf(os.Stderr, "%s `copier` is not on PATH — %s would fail here (dry-run: not executing it).\n",
-			yellow("!"), action)
-		fmt.Fprintf(os.Stderr, "  install it first: %s\n", cyan("pipx install copier"))
+			color.Yellow("!"), action)
+		fmt.Fprintf(os.Stderr, "  install it first: %s\n", color.Cyan("pipx install copier"))
 		return nil
 	}
 	//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded install-route block, not a sentence fragment
@@ -329,8 +333,8 @@ func checkNewTarget(dir string) error {
 			"  • add a deployment to it:     %s\n"+
 			"  • move it to a new release:   %s\n"+
 			"  • really want a separate instance? scaffold it into a new directory",
-			dir, cyan("cd "+dir+" && llz env add <env> --region <region> --obj-cluster <obj-cluster>"),
-			cyan("cd "+dir+" && llz self-update && llz upgrade"))
+			dir, color.Cyan("cd "+dir+" && llz env add <env> --region <region> --obj-cluster <obj-cluster>"),
+			color.Cyan("cd "+dir+" && llz self-update && llz upgrade"))
 	}
 	return fmt.Errorf("%s already exists and is not empty — copier would render the scaffold on top of it.\n"+
 		"  Pick an empty directory (or remove that one) and re-run", dir)
@@ -384,9 +388,9 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	// the rename errors — and this step is cosmetic until something is pushed, so
 	// failing `llz new` over it would be worse than the drift it prevents.
 	if err := ensureScaffoldBranch(g, dir); err != nil {
-		fmt.Fprintf(os.Stderr, "%s could not rename the scaffold branch to %s (%v).\n", yellow("!"), bootstrapBranch, err)
+		fmt.Fprintf(os.Stderr, "%s could not rename the scaffold branch to %s (%v).\n", color.Yellow("!"), bootstrapBranch, err)
 		fmt.Fprintf(os.Stderr, "  Do it before pushing — Argo CD tracks %s: %s\n",
-			bootstrapBranch, cyan("git -C "+dir+" branch -M "+bootstrapBranch))
+			bootstrapBranch, color.Cyan("git -C "+dir+" branch -M "+bootstrapBranch))
 	}
 
 	pushed := false
@@ -401,8 +405,8 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	return nil
 }
 
-// printNextSteps renders the post-scaffold guide: a bold header, dim context
-// notes, and the ordered command sequence with cyan commands + dim, column-
+// printNextSteps renders the post-scaffold guide: a color.Bold header, color.Dim context
+// notes, and the ordered command sequence with color.Cyan commands + color.Dim, column-
 // aligned `#` comments. Everything degrades to plain text off a TTY (color.go),
 // and the lines stay copy-paste-safe (commands run; notes are shell comments).
 //
@@ -439,11 +443,11 @@ func printNextSteps(dir string, pushed bool) {
 		if pad < 2 {
 			pad = 2
 		}
-		fmt.Printf("  %s%s%s\n", cyan(c), strings.Repeat(" ", pad), dim("# "+note))
+		fmt.Printf("  %s%s%s\n", color.Cyan(c), strings.Repeat(" ", pad), color.Dim("# "+note))
 	}
-	note := func(s string) { fmt.Println(dim("  # " + s)) }
+	note := func(s string) { fmt.Println(color.Dim("  # " + s)) }
 
-	fmt.Println("\n" + bold("Next steps"))
+	fmt.Println("\n" + color.Bold("Next steps"))
 	note("The declarative LandingZone spec is the source of truth — landingzone.yaml +")
 	note("environments/<env>.yaml. `llz env add` authors them; see the committed")
 	note("landingzone.yaml.example + docs/landing-zone-spec.md for the full model.")
@@ -691,7 +695,7 @@ func ensureScaffoldBranch(g globalOpts, dir string) error {
 	// directories llz did not just create — so never clobber, just say so.
 	if _, err := execOutput("git", "-C", dir, "show-ref", "--verify", "--quiet", "refs/heads/"+bootstrapBranch); err == nil {
 		fmt.Fprintf(os.Stderr, "%s scaffold is on %q but a %q branch already exists — leaving both alone.\n",
-			yellow("!"), branch, bootstrapBranch)
+			color.Yellow("!"), branch, bootstrapBranch)
 		fmt.Fprintf(os.Stderr, "  The platform-bootstrap Application tracks %s (apps_repo_revision), so push the scaffold there\n"+
 			"  yourself once you have reconciled the two branches.\n", bootstrapBranch)
 		return nil
@@ -705,7 +709,7 @@ func ensureScaffoldBranch(g globalOpts, dir string) error {
 		verb = "would rename"
 	}
 	fmt.Fprintf(os.Stderr, "%s scaffold is on %q; %s to %q — the platform-bootstrap Application tracks %s (apps_repo_revision)\n",
-		yellow("!"), branch, verb, bootstrapBranch, bootstrapBranch)
+		color.Yellow("!"), branch, verb, bootstrapBranch, bootstrapBranch)
 	return run(g, "git", "-C", dir, "branch", "-M", bootstrapBranch)
 }
 
@@ -722,7 +726,7 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 	if g.dryRun || !g.yes {
 		did = "would wire it as `origin` and push into it"
 	}
-	fmt.Fprintf(os.Stderr, "%s %s already exists on GitHub — %s.\n", yellow("!"), repo, did)
+	fmt.Fprintf(os.Stderr, "%s %s already exists on GitHub — %s.\n", color.Yellow("!"), repo, did)
 	sub := "add"
 	if _, err := execOutput("git", "-C", dir, "remote", "get-url", "origin"); err == nil {
 		sub = "set-url"
@@ -774,7 +778,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	policy, policyErr := loadTemplateManifest("")
 	var owned upgradeSnapshot
 	if policyErr != nil {
-		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", yellow("!"), policyErr)
+		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", color.Yellow("!"), policyErr)
 	} else {
 		if owned, err = snapshotUpgradeOwned(policy); err != nil {
 			return fmt.Errorf("snapshot owned files: %w", err)
@@ -794,7 +798,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// up to date from the copier update above. Honors --dry-run internally.
 	// Runs AFTER the manifest policy: a removed file is absent from the clean render,
 	// so the overwrite pass can't resurrect it, but the ordering makes that explicit.
-	if err := applyTemplateRemovals(g); err != nil {
+	if err := sustain.ApplyTemplateRemovals(sustainDeps()); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
 	}
 	if g.dryRun {
@@ -819,7 +823,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// in the normal case, but it does not close this one, and a flag that is right
 	// 99% of the time is not a substitute for verifying the 1%.
 	if regressions := answerRegressions(answersBefore, currentAnswerMap()); len(regressions) > 0 {
-		fmt.Fprintf(os.Stderr, "\n%s copier update rewrote %d answer(s) it does not own:\n", red("✗"), len(regressions))
+		fmt.Fprintf(os.Stderr, "\n%s copier update rewrote %d answer(s) it does not own:\n", color.Red("✗"), len(regressions))
 		for _, r := range regressions {
 			fmt.Fprintf(os.Stderr, "    %s\n", r)
 		}
@@ -833,7 +837,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// invalid YAML far downstream (the gsap-apl incident). Fail loudly here BEFORE
 	// the operator commits, instead of relying on `llz lint` to catch it later.
 	if bad := upgradeConflictFiles(); len(bad) > 0 {
-		fmt.Fprintf(os.Stderr, "\n%s copier update left merge-conflict markers in %d file(s):\n", red("✗"), len(bad))
+		fmt.Fprintf(os.Stderr, "\n%s copier update left merge-conflict markers in %d file(s):\n", color.Red("✗"), len(bad))
 		for _, f := range bad {
 			fmt.Fprintf(os.Stderr, "    %s\n", f)
 		}
@@ -881,7 +885,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	if commit {
 		return commitUpgrade(g, oldRef, newRef)
 	}
-	fmt.Fprintln(os.Stderr, dim("  (re-run with --commit to stage + commit this upgrade as one labeled commit)"))
+	fmt.Fprintln(os.Stderr, color.Dim("  (re-run with --commit to stage + commit this upgrade as one labeled commit)"))
 	return nil
 }
 
@@ -915,7 +919,7 @@ func currentTemplateRef() string {
 	if ref := pinnedTemplateRef(); ref != "" {
 		return ref
 	}
-	tv := resolveTemplateVersion()
+	tv := sustain.ResolveTemplateVersion(sustainDeps())
 	if tv.TemplateRef != "" {
 		return tv.TemplateRef
 	}
@@ -960,13 +964,13 @@ func printUpgradeSummary(oldRef, newRef string) {
 	if from == "" {
 		from = "(unknown)"
 	}
-	fmt.Printf("\n%s template %s → %s\n", bold("upgrade"), from, newRef)
+	fmt.Printf("\n%s template %s → %s\n", color.Bold("upgrade"), from, newRef)
 	if stat := gitOut("diff", "--stat"); stat != "" {
 		fmt.Println(stat)
 	} else if untracked := gitOut("ls-files", "--others", "--exclude-standard"); untracked != "" {
 		fmt.Printf("new files:\n%s\n", untracked)
 	} else {
-		fmt.Println(dim("  no file changes — already up to date."))
+		fmt.Println(color.Dim("  no file changes — already up to date."))
 	}
 }
 
@@ -994,16 +998,16 @@ var reportCIImageSkew = func(ref string) {
 		repo = a.InstanceRepo
 	}
 	fmt.Fprintf(os.Stderr, "\n%s the new pin moved the ci images this instance should run — %d variable(s) still name the old commit:\n",
-		yellow("!"), len(skew))
+		color.Yellow("!"), len(skew))
 	for _, s := range skew {
-		fmt.Fprintf(os.Stderr, "    %s\n      have %s\n      want %s\n", bold(s.Name), dim(s.Have), cyan(s.Want))
+		fmt.Fprintf(os.Stderr, "    %s\n      have %s\n      want %s\n", color.Bold(s.Name), color.Dim(s.Have), color.Cyan(s.Want))
 	}
 	fmt.Fprintf(os.Stderr, "  CI reads these as %s repo variables, which this command does not push. Re-pin with either:\n", repo)
-	fmt.Fprintf(os.Stderr, "    %s\n", cyan("llz tokens --env <env> --yes"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz tokens --env <env> --yes"))
 	for _, s := range skew {
-		fmt.Fprintf(os.Stderr, "    %s\n", cyan(fmt.Sprintf("gh variable set %s --repo %s --body %s", s.Name, repo, s.Want)))
+		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan(fmt.Sprintf("gh variable set %s --repo %s --body %s", s.Name, repo, s.Want)))
 	}
-	fmt.Fprintln(os.Stderr, dim("  Until then the first pipeline run fails `llz ci assert-image-fresh`."))
+	fmt.Fprintln(os.Stderr, color.Dim("  Until then the first pipeline run fails `llz ci assert-image-fresh`."))
 }
 
 // commitUpgrade stages the whole tree and records the upgrade as one labeled
@@ -1011,7 +1015,7 @@ var reportCIImageSkew = func(ref string) {
 // update produced no changes.
 func commitUpgrade(g globalOpts, oldRef, newRef string) error {
 	if strings.TrimSpace(gitOut("status", "--porcelain")) == "" {
-		fmt.Fprintln(os.Stderr, green("✓")+" already up to date — nothing to commit.")
+		fmt.Fprintln(os.Stderr, color.Green("✓")+" already up to date — nothing to commit.")
 		return nil
 	}
 	from := oldRef
@@ -1025,7 +1029,7 @@ func commitUpgrade(g globalOpts, oldRef, newRef string) error {
 	if err := run(g, "git", "commit", "-m", msg); err != nil {
 		return fmt.Errorf("git commit: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "%s committed template upgrade %s → %s\n", green("✓"), from, newRef)
+	fmt.Fprintf(os.Stderr, "%s committed template upgrade %s → %s\n", color.Green("✓"), from, newRef)
 	return nil
 }
 
@@ -1086,16 +1090,16 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 		}
 	}
 	if !skipTokens {
-		fmt.Println(bold("══ 1/3  llz tokens — provision credentials ══"))
+		fmt.Println(color.Bold("══ 1/3  llz tokens — provision credentials ══"))
 		if err := upTokens(g, admin, env); err != nil {
 			return fmt.Errorf("tokens: %w", err)
 		}
 	}
-	fmt.Println("\n" + bold("══ 2/3  llz doctor — readiness gate ══"))
+	fmt.Println("\n" + color.Bold("══ 2/3  llz doctor — readiness gate ══"))
 	if err := upDoctor(g, admin, env); err != nil {
 		return fmt.Errorf("doctor: %w (fix the above, then re-run `llz up %s`)", err, env)
 	}
-	fmt.Println("\n" + bold("══ 3/3  llz build — dispatch the apply ══"))
+	fmt.Println("\n" + color.Bold("══ 3/3  llz build — dispatch the apply ══"))
 	if err := upBuild(g, env); err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -1106,17 +1110,17 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 // printManualActions lists the post-build steps the bootstrap genuinely cannot do
 // on the operator's behalf — surfaced once here so they don't get lost.
 func printManualActions(env string) {
-	b := func(s string) string { return "  " + dim("•") + " " + s }
-	fmt.Println("\n" + bold("══ remaining manual actions (the tooling can't do these for you) ══"))
-	fmt.Println(b("Watch convergence:   " + cyan("llz status "+env+" --wait")))
+	b := func(s string) string { return "  " + color.Dim("•") + " " + s }
+	fmt.Println("\n" + color.Bold("══ remaining manual actions (the tooling can't do these for you) ══"))
+	fmt.Println(b("Watch convergence:   " + color.Cyan("llz status "+env+" --wait")))
 	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
-	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
+	fmt.Println(color.Dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
 	// Repeated here because stage 1's banner has scrolled past a full build by now,
 	// and this secret has the same "lose it and the data is gone" blast radius.
-	fmt.Println(dim("      – and TF_STATE_ENCRYPTION_PASSPHRASE, if `llz tokens` generated one above"))
-	fmt.Println(dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + dim("   (`llz status` flags it if left)"))
+	fmt.Println(color.Dim("      – and TF_STATE_ENCRYPTION_PASSPHRASE, if `llz tokens` generated one above"))
+	fmt.Println(color.Dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + color.Dim("   (`llz status` flags it if left)"))
 	fmt.Println(b("DNS-01 certs wire automatically once TF_VAR_linode_dns_token is set at apply"))
-	fmt.Println(dim("      (the letsencrypt ClusterIssuers sync via Argo; re-apply TF if the token came later)"))
+	fmt.Println(color.Dim("      (the letsencrypt ClusterIssuers sync via Argo; re-apply TF if the token came later)"))
 }
 
 func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
@@ -1170,10 +1174,27 @@ func warnIfRootTokenPresent(env string) {
 	}
 	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
-			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", yellow("⚠"), env)
-			fmt.Println(dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))
-			fmt.Printf("  Remove it: %s\n", cyan(fmt.Sprintf("gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s", env, repo)))
+			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", color.Yellow("⚠"), env)
+			fmt.Println(color.Dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))
+			fmt.Printf("  Remove it: %s\n", color.Cyan(fmt.Sprintf("gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s", env, repo)))
 			return
 		}
+	}
+}
+
+// sustainDeps is what internal/sustain is handed: provenance, two shell-outs, and
+// the --yes bit. No cluster, no cloud — sustain answers repo questions.
+func sustainDeps() sustain.Deps {
+	return sustain.Deps{
+		ReadAnswers: func(dir string) (*sustain.Answers, error) {
+			a, err := readAnswers(dir)
+			if err != nil || a == nil {
+				return nil, err
+			}
+			return &sustain.Answers{Commit: a.Commit, SrcPath: a.SrcPath, Version: a.Version}, nil
+		},
+		Exec:    execOutput,
+		Run:     execArgv,
+		Confirm: func() bool { return gopts.yes },
 	}
 }

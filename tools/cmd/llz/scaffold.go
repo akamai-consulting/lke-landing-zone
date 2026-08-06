@@ -25,6 +25,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // envAddOpts mirrors new-deployment.sh's flags, plus the ADOPTER-MUST-SET values
@@ -162,13 +164,13 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
 				"  Fix the spec (%s or %s) and run %s,\n"+
 				"  or discard it and start over: %s",
-				envFile, overlayDst, envFile, lzPath, cyan("llz render "+name), cyan("rm "+envFile))
+				envFile, overlayDst, envFile, lzPath, color.Cyan("llz render "+name), color.Cyan("rm "+envFile))
 		}
 		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
 	}
 
-	field := func(label, val string) { fmt.Printf("    %s%s\n", dim(label), val) }
-	fmt.Println(bold("llz env add") + dim(" — spec-first scaffold"))
+	field := func(label, val string) { fmt.Printf("    %s%s\n", color.Dim(label), val) }
+	fmt.Println(color.Bold("llz env add") + color.Dim(" — spec-first scaffold"))
 	field("env:            ", name)
 	// NO --cluster-domain warning here: cobra's MarkDeprecated (main.go) already
 	// emits one at parse time, before this banner. Printing a second warning mid-
@@ -179,15 +181,15 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	fmt.Println()
 
 	if dryRun {
-		fmt.Println(bold("Spec that would be authored, then `llz render`:"))
+		fmt.Println(color.Bold("Spec that would be authored, then `llz render`:"))
 		if _, err := os.Stat(lzPath); err != nil {
-			fmt.Printf("  %s  %s  %s\n", cyan("would-create"), lzPath, dim("(instance identity + shared defaults)"))
+			fmt.Printf("  %s  %s  %s\n", color.Cyan("would-create"), lzPath, color.Dim("(instance identity + shared defaults)"))
 		} else {
-			fmt.Printf("  %s        %s  %s\n", dim("exists"), lzPath, dim("(left as-is)"))
+			fmt.Printf("  %s        %s  %s\n", color.Dim("exists"), lzPath, color.Dim("(left as-is)"))
 		}
-		fmt.Printf("  %s  %s  %s\n", cyan("would-create"), envFile, dim("(ClusterDefinition from the flags)"))
-		fmt.Printf("  %s     %s  %s\n", cyan("would-run"), "llz render "+name, dim(fmt.Sprintf("(→ tfvars + the thin apl-values/%s overlay)", name)))
-		fmt.Println("\n" + yellow("DRY RUN") + dim(" — nothing written. Re-run without --dry-run to create the files."))
+		fmt.Printf("  %s  %s  %s\n", color.Cyan("would-create"), envFile, color.Dim("(ClusterDefinition from the flags)"))
+		fmt.Printf("  %s     %s  %s\n", color.Cyan("would-run"), "llz render "+name, color.Dim(fmt.Sprintf("(→ tfvars + the thin apl-values/%s overlay)", name)))
+		fmt.Println("\n" + color.Yellow("DRY RUN") + color.Dim(" — nothing written. Re-run without --dry-run to create the files."))
 		return nil
 	}
 
@@ -197,14 +199,14 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		return fmt.Errorf("write landingzone.yaml: %w", err)
 	}
 	if created {
-		fmt.Printf("  %s  %s  %s\n", green("created"), lzPath, dim("(instance identity + shared defaults)"))
+		fmt.Printf("  %s  %s  %s\n", color.Green("created"), lzPath, color.Dim("(instance identity + shared defaults)"))
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
 	if err := writeEnvDefinition(envFile, name, o, instanceName); err != nil {
 		return fmt.Errorf("write %s: %w", envFile, err)
 	}
-	fmt.Printf("  %s  %s\n", green("created"), envFile)
+	fmt.Printf("  %s  %s\n", color.Green("created"), envFile)
 
 	// ── 3. render → tfvars + the THIN apl-values/<env>/ overlay ──────────────
 	// Nothing to clone: the manifests live ONCE in platform-apl/manifest/ +
@@ -218,15 +220,15 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if o.haGroup != "" {
 		if missing := haGroupMissingRole(o.haGroup); missing != "" {
 			deferred = true
-			fmt.Printf("\n%s deployment %q authored; HA group %q still needs its %s peer.\n", cyan("○"), name, o.haGroup, missing)
+			fmt.Printf("\n%s deployment %q authored; HA group %q still needs its %s peer.\n", color.Cyan("○"), name, o.haGroup, missing)
 			fmt.Printf("  add it, then both render:  llz env add <peer> --ha-role %s --ha-group %s --region <r> --obj-cluster <o> --subnet-cidr <distinct/14>\n", missing, o.haGroup)
-			fmt.Printf("  %s\n", dim("HA peers need DISTINCT cluster.network.subnetCIDR (e.g. 10.0.0.0/14 + 10.4.0.0/14) — pass --subnet-cidr on each."))
+			fmt.Printf("  %s\n", color.Dim("HA peers need DISTINCT cluster.network.subnetCIDR (e.g. 10.0.0.0/14 + 10.4.0.0/14) — pass --subnet-cidr on each."))
 		} else {
 			renderEnv = "" // pair complete — render every env so both peers render
 		}
 	}
 	if !deferred {
-		fmt.Printf("\n%s %s\n", bold("Reconciling the spec"), dim("(`llz render "+orElse(renderEnv, "(all)")+"`):"))
+		fmt.Printf("\n%s %s\n", color.Bold("Reconciling the spec"), color.Dim("(`llz render "+orElse(renderEnv, "(all)")+"`):"))
 		if err := runRender(g, renderEnv, false, false, false); err != nil {
 			// The rejected field is not always in the env file — spec.teams (the
 			// copier openbao_team answer) lives in landingzone.yaml — so name both,
@@ -234,9 +236,9 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 			// the env file now exists, so `llz env add` refuses to overwrite it, and
 			// `llz doctor` refuses because the overlay was never created and tells
 			// you to run the `llz env add` that just refused.
-			fmt.Fprintf(os.Stderr, "\n%s the spec was authored but `llz render` rejected it. Fix the field named above —\n", yellow("!"))
-			fmt.Fprintf(os.Stderr, "  it is in %s or %s — then run %s.\n", envFile, lzPath, cyan("llz render "+name))
-			fmt.Fprintf(os.Stderr, "  Or start this deployment over: %s\n", cyan("rm "+envFile))
+			fmt.Fprintf(os.Stderr, "\n%s the spec was authored but `llz render` rejected it. Fix the field named above —\n", color.Yellow("!"))
+			fmt.Fprintf(os.Stderr, "  it is in %s or %s — then run %s.\n", envFile, lzPath, color.Cyan("llz render "+name))
+			fmt.Fprintf(os.Stderr, "  Or start this deployment over: %s\n", color.Cyan("rm "+envFile))
 			return err
 		}
 	}
@@ -250,7 +252,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 
 	if deferred {
 		fmt.Printf("\n%s commit the spec (%s + %s), add the peer above, then `llz render` reconciles both.\n",
-			dim("→"), lzPath, envFile)
+			color.Dim("→"), lzPath, envFile)
 		return nil
 	}
 	printEnvAddNextSteps(name, envFile, o)
@@ -268,11 +270,11 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	gen := existingPaths([]string{lzPath, envFile, filepath.Join(aplDir, name)})
 	if relPrefix == "" && commitFiles(gen, "llz env add "+name) {
 		fmt.Printf("\n%s committed the spec + overlay — %s to publish (CI renders tfvars + builds from the pushed tree).\n",
-			green("✓"), cyan("git push"))
+			color.Green("✓"), color.Cyan("git push"))
 	} else {
-		fmt.Printf("\n%s commit + push the spec and overlay (CI renders tfvars + builds from the pushed tree):\n", dim("→"))
-		fmt.Printf("    %s\n", cyan("git add "+strings.Join(gen, " ")))
-		fmt.Printf("    %s\n", cyan(`git commit -m "llz env add `+name+`" && git push`))
+		fmt.Printf("\n%s commit + push the spec and overlay (CI renders tfvars + builds from the pushed tree):\n", color.Dim("→"))
+		fmt.Printf("    %s\n", color.Cyan("git add "+strings.Join(gen, " ")))
+		fmt.Printf("    %s\n", color.Cyan(`git commit -m "llz env add `+name+`" && git push`))
 	}
 	return nil
 }
@@ -305,10 +307,10 @@ func commitFiles(paths []string, msg string) bool {
 }
 
 func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
-	fmt.Printf("\n%s %s\n", green("✓"), bold(fmt.Sprintf("Deployment %q scaffolded", name)))
-	fmt.Println(dim(fmt.Sprintf("  landingzone.yaml + %s are the source; `llz render` reconciled them into", envFile)))
-	fmt.Println(dim(fmt.Sprintf("  the tfvars + apl-values/%s overlay. To change the cluster, edit %s", name, envFile)))
-	fmt.Println(dim(fmt.Sprintf("  and re-run `llz render %s` (CI re-renders on every build).", name)))
+	fmt.Printf("\n%s %s\n", color.Green("✓"), color.Bold(fmt.Sprintf("Deployment %q scaffolded", name)))
+	fmt.Println(color.Dim(fmt.Sprintf("  landingzone.yaml + %s are the source; `llz render` reconciled them into", envFile)))
+	fmt.Println(color.Dim(fmt.Sprintf("  the tfvars + apl-values/%s overlay. To change the cluster, edit %s", name, envFile)))
+	fmt.Println(color.Dim(fmt.Sprintf("  and re-run `llz render %s` (CI re-renders on every build).", name)))
 	// The "what is left to fill" half is printPlaceholderChecklist's, and ONLY
 	// its: this used to print an unconditional "Still to fill … the
 	// REPLACE_PER_ENV / REPLACE_ME placeholders" block that the checklist then
@@ -322,7 +324,7 @@ func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
 // what (if anything) is left to fill, then what to run next.
 func printNextCommand(name string) {
 	fmt.Printf("\n%s %s catch unfilled values, then %s\n",
-		bold("Next:"), cyan("llz doctor --env "+name), cyan("llz tokens --env "+name+" --yes")+dim("."))
+		color.Bold("Next:"), color.Cyan("llz doctor --env "+name), color.Cyan("llz tokens --env "+name+" --yes")+color.Dim("."))
 }
 
 // printPlaceholderChecklist scans the freshly-scaffolded apl-values overlay for the
@@ -347,18 +349,18 @@ func printPlaceholderChecklist(aplDir, env string) {
 	}
 	if len(todo) == 0 {
 		fmt.Printf("\n%s no placeholders left to fill — run %s to confirm readiness.\n",
-			green("✓"), cyan("llz doctor --env "+env))
+			color.Green("✓"), color.Cyan("llz doctor --env "+env))
 		return
 	}
 	groups := groupFindings(todo)
-	fmt.Printf("\n%s %s\n", yellow(fmt.Sprintf("Placeholders still to fill (%d in %d file(s))", len(groups), countFiles(todo))),
-		dim("— then `llz doctor --env "+env+"`:"))
+	fmt.Printf("\n%s %s\n", color.Yellow(fmt.Sprintf("Placeholders still to fill (%d in %d file(s))", len(groups), countFiles(todo))),
+		color.Dim("— then `llz doctor --env "+env+"`:"))
 	for _, g := range groups {
-		where := cyan(g.first.loc())
+		where := color.Cyan(g.first.loc())
 		if g.files > 1 {
-			where = cyan(g.first.loc()) + dim(fmt.Sprintf(" (+%d more file(s))", g.files-1))
+			where = color.Cyan(g.first.loc()) + color.Dim(fmt.Sprintf(" (+%d more file(s))", g.files-1))
 		}
-		fmt.Printf("  %s %s  %s %s\n", dim("•"), where, g.first.token, dim("— "+g.first.hint))
+		fmt.Printf("  %s %s  %s %s\n", color.Dim("•"), where, g.first.token, color.Dim("— "+g.first.hint))
 	}
 }
 

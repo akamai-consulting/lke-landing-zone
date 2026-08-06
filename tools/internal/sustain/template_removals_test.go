@@ -1,4 +1,4 @@
-package main
+package sustain
 
 import (
 	"os"
@@ -61,7 +61,7 @@ delete   platform-apl/manifest/dns/old-webhook.yaml
 	gitInitRepo(t, dir, append(tracked, ".template-removals")...)
 	chdir(t, dir)
 
-	if err := applyTemplateRemovals(globalOpts{}); err != nil {
+	if err := ApplyTemplateRemovals(realGitDeps(t)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,7 +83,7 @@ delete   platform-apl/manifest/dns/old-webhook.yaml
 	}
 
 	// Idempotent: a second pass changes nothing.
-	if err := applyTemplateRemovals(globalOpts{}); err != nil {
+	if err := ApplyTemplateRemovals(realGitDeps(t)); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	if join(gitTracked(t, dir)) != join(want) {
@@ -97,7 +97,7 @@ func TestApplyTemplateRemovals_NoFileNoOp(t *testing.T) {
 	writeFile(t, filepath.Join(dir, p), "x\n")
 	gitInitRepo(t, dir, p)
 	chdir(t, dir)
-	if err := applyTemplateRemovals(globalOpts{}); err != nil {
+	if err := ApplyTemplateRemovals(realGitDeps(t)); err != nil {
 		t.Fatal(err)
 	}
 	if got := gitTracked(t, dir); len(got) != 1 || got[0] != p {

@@ -1,15 +1,15 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first six
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first seven
 extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
 `posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
-`reconcile-actions` (`tools/internal/reconcilelanes`) and `teardown` (`tools/internal/teardown`)
-declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+`reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
+`template-sustain` (`tools/internal/sustain`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all six still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all seven still run because `ci.go` and the reconciler register them, and the declarations are inert.
 All four kinds, four states, six grants, multi-binding extensions, named bindings and the
-`grantStates` table are exercised; `own-paths` and `alwaysEnabled: false` are not — and [the
+`grantStates` table are exercised; `own-paths` (which may be unreachable) and `alwaysEnabled: false` are not — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
 rather than incidental. The action
 ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
@@ -24,10 +24,9 @@ a ceiling that makes a continuously-running cloud mutator inexpressible does not
 stops it being written down, which is `→ seeded` banned-by-omission recurring inside the half of the
 ceiling built to fix banning-by-omission.
 
-**A second thing the model cannot say, found by the fifth extension:** that an extension is
-PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
+**FIXED by the seventh extension:** that an extension is PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
 lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
-what is missing. Recorded, not fixed; it becomes actionable at the second partial extension.
+what is missing. `template-sustain` was the second independent case, so `Extension.Incomplete` now exists and both partial declarations say what they are missing.
 
 **A third thing the model cannot say, found by the sixth extension:** the difference between
 GRANTED and CONFIRMED. `cloud-mutate` permits a binding to delete cloud resources; nothing expresses

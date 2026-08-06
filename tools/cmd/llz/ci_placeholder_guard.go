@@ -52,7 +52,7 @@ func ciPlaceholderGuardCmd() *cobra.Command {
 		Long: "Rejects unsubstituted `placeholder.example.com` hostnames in the rendered\n" +
 			"manifests. Anything Argo CD reconciles into a cluster must carry real addresses,\n" +
 			"never the template's example placeholders. Fails closed on an empty corpus: a\n" +
-			"guard that scanned nothing must not report the same green as one that scanned\n" +
+			"guard that scanned nothing must not report the same color.Green as one that scanned\n" +
 			"everything and found none.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {

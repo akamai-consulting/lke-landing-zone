@@ -500,7 +500,7 @@ func runCIPlaintextGuard(root string) error {
 		return err
 	}
 	// Same rationale as the sibling guards: a guard that walked nothing prints
-	// the same green as one that walked everything.
+	// the same color.Green as one that walked everything.
 	if err := guardkit.RequireCorpus("plaintext-guard", examined, dirs); err != nil {
 		return err
 	}

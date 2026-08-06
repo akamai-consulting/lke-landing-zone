@@ -9,7 +9,7 @@ package main
 //   2. Every landing-zone PrometheusRule group is LOADED into Prometheus (via
 //      /api/v1/rules).
 //
-// Why a dedicated gate. `converge`, `health`, and `assert-loki` all stay green
+// Why a dedicated gate. `converge`, `health`, and `assert-loki` all stay color.Green
 // even when metrics silently stop flowing — the exact failure mode of the
 // ServiceMonitor/PrometheusRule label regressions (a missing `prometheus: system`
 // label, a renamed Service port, a wrong namespaceSelector): the CRs exist, but
@@ -20,7 +20,7 @@ package main
 // The expected sets are the KNOWN landing-zone monitors/groups, NOT derived from
 // the cluster by the `prometheus: system` label. That is deliberate: if the label
 // regresses at the source, a label-filtered `kubectl get` would return an empty
-// expected set and the gate would pass green on the very bug it exists to catch.
+// expected set and the gate would pass color.Green on the very bug it exists to catch.
 // A monitor whose label is dropped produces no scrapePool in Prometheus, so the
 // "0 active targets → FAIL" arm catches it independent of how the CR is labelled.
 // Instances that ship a different surface override --monitors / --rule-groups.

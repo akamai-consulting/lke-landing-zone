@@ -9,7 +9,7 @@ package main
 // interval. When the refresh path breaks — the ClusterSecretStore's CA goes
 // stale, the k8s-auth role loses a policy, a KV path is renamed, OpenBao is
 // sealed — the ALREADY-MATERIALIZED Secret keeps sitting there with its old
-// value. Every pod that mounts it keeps working. converge is green, the Secret
+// value. Every pod that mounts it keeps working. converge is color.Green, the Secret
 // exists, and the store looks fine until something needs a value that changed.
 //
 // So the assertion is not "does the Secret exist" (it does, and will for as long
@@ -60,7 +60,7 @@ func ciAssertESORoundTripCmd() *cobra.Command {
 			"refreshes on an interval; when the READ path breaks — stale store CA, a lost\n" +
 			"k8s-auth policy, a renamed KV path, a sealed OpenBao — the already-written\n" +
 			"Secret keeps sitting there with its old value and every consumer keeps working.\n" +
-			"converge is green and the Secret exists. Only staleness of the refresh can\n" +
+			"converge is color.Green and the Secret exists. Only staleness of the refresh can\n" +
 			"distinguish that from a healthy pipeline.\n\n" +
 			"Fails closed, including on finding zero ExternalSecrets. Read-only. Exit 0 / 1.",
 		Args: cobra.NoArgs,
@@ -292,7 +292,7 @@ func runCIAssertESORoundTrip(store string, namespaces []string, maxRefreshAge, s
 		return lastErr
 	}
 	// Zero ExternalSecrets is a FAILURE. A platform whose ExternalSecrets have all
-	// vanished is not healthy, and passing here would be the vacuous green this
+	// vanished is not healthy, and passing here would be the vacuous color.Green this
 	// battery refuses.
 	if len(last) == 0 {
 		fmt.Fprintln(os.Stderr, "::error::no ExternalSecrets found — refusing to pass having examined nothing")

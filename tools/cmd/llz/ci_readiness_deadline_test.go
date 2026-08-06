@@ -12,7 +12,7 @@ import (
 // falling through to the parse. Existing coverage stubs kubectl to either succeed
 // with a parseable count or fail with no output — and an empty string does not
 // parse as rolled out either, so the guard could be deleted and everything stayed
-// green.
+// color.Green.
 //
 // The case that separates them is a read that FAILS and still prints something
 // parseable, which is exactly what kubectl does when it writes a partial answer

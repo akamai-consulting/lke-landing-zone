@@ -253,7 +253,7 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	esoC := openbao.NewWithClient(addr, esoTok, "", openbao.HTTPClientLoopback(30*time.Second))
 	// %v, not %w, on err: the !ok / wrong-value branches reach here with a NIL err
 	// (Get reports an absent secret as ok=false, err=nil), and %w would render that
-	// as "%!w(<nil>)" in the one place an operator reads this — a red e2e lane.
+	// as "%!w(<nil>)" in the one place an operator reads this — a color.Red e2e lane.
 	if v, ok, err := esoC.Get(ctx, inPath, "ok"); err != nil || !ok || v != "1" {
 		return fmt.Errorf("EXPECTED the eso role to READ %s (the team-written key) via the %s-reader policy, got value=%q ok=%v err=%v — bao-configure did not grant ESO read on the team subtree", inPath, team, v, ok, err)
 	}

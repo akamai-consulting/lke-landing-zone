@@ -115,7 +115,7 @@ func TestProbeReconcilerEffectsSkipsDisabledLanes(t *testing.T) {
 }
 
 // An enabled lane whose object cannot be read must FAIL. Degrading to a skip is
-// how "we could not tell" becomes a green check on a broken invariant.
+// how "we could not tell" becomes a color.Green check on a broken invariant.
 func TestProbeReconcilerEffectsFailsWhenEnabledObjectUnreadable(t *testing.T) {
 	seamEffectReaders(t, nil, nil, nil,
 		errors.New("connection refused"), errors.New("NotFound"), errors.New("NotFound"))

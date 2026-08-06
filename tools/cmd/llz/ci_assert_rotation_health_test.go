@@ -73,7 +73,7 @@ func TestEvalRotationHealth(t *testing.T) {
 		t.Errorf("an overdue on-demand credential must fail naming the remedy, got %q", f)
 	}
 	// Non-alertable classes are reported, never gated: nothing lowers their age,
-	// so gating would be a permanent red that trains people to ignore the gate.
+	// so gating would be a permanent color.Red that trains people to ignore the gate.
 	if by["grafana-admin"].FailWhy != "" {
 		t.Errorf("a generate-once credential past 365d must NOT gate by default: %s", by["grafana-admin"].FailWhy)
 	}

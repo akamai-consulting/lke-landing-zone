@@ -31,6 +31,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // ghAPIJSON runs `gh api <path>` and decodes the response into out. Package var
@@ -138,9 +140,9 @@ func warnUnpublishedEdits(specRoot, aplDir, env string) {
 		// evidence of an unpublished edit is not evidence of one.
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s uncommitted spec/overlay changes — the build reads the COMMITTED + pushed tree, so these are NOT in it:\n", yellow("!"))
+	fmt.Fprintf(os.Stderr, "%s uncommitted spec/overlay changes — the build reads the COMMITTED + pushed tree, so these are NOT in it:\n", color.Yellow("!"))
 	for _, line := range strings.Split(dirty, "\n") {
-		fmt.Fprintf(os.Stderr, "      %s\n", dim(strings.TrimSpace(line)))
+		fmt.Fprintf(os.Stderr, "      %s\n", color.Dim(strings.TrimSpace(line)))
 	}
 	// Stage exactly the paths that were scanned. `git add -A` is worktree-wide
 	// while this warning is scoped, so prescribing it would sweep in whatever else
@@ -153,7 +155,7 @@ func warnUnpublishedEdits(specRoot, aplDir, env string) {
 	// it. Same guard scaffold.go already applies before committing generated files.
 	if stage := existingPaths(paths); len(stage) > 0 {
 		fmt.Fprintf(os.Stderr, "  publish them first: %s\n",
-			cyan(fmt.Sprintf(`git add -- %s && git commit -m "llz: fill deployment values" && git push`,
+			color.Cyan(fmt.Sprintf(`git add -- %s && git commit -m "llz: fill deployment values" && git push`,
 				strings.Join(stage, " "))))
 	}
 }
@@ -189,7 +191,7 @@ func unknownDeploymentErr(tfDir, env string) error {
 	if repo, branch, ok := buildBranch(); ok {
 		if _, found, answered := ghFileSHA(repo, clusterspec.EnvironmentsDir+"/"+env+".yaml", branch); answered && found {
 			fmt.Fprintf(os.Stderr, "%s %q is not in your checkout but IS on %s's %s branch — the build uses the pushed tree, so this dispatch is fine (%s to see it locally).\n",
-				yellow("!"), env, repo, branch, cyan("git pull"))
+				color.Yellow("!"), env, repo, branch, color.Cyan("git pull"))
 			return nil
 		}
 	}
@@ -202,8 +204,8 @@ func unknownDeploymentErr(tfDir, env string) error {
 		"  • building an existing one?  check the name — `llz env list`\n"+
 		"  • someone else added it?     %s\n"+
 		"  • adding a new one?          %s",
-		env, have, cyan("git pull"),
-		cyan("llz env add "+env+" --region <region> --obj-cluster <obj-cluster>"))
+		env, have, color.Cyan("git pull"),
+		color.Cyan("llz env add "+env+" --region <region> --obj-cluster <obj-cluster>"))
 }
 
 // buildBranch resolves the repo + default branch a dispatch would run from.
@@ -244,13 +246,13 @@ func remoteDeploymentPresent(specRoot, env string) error {
 		// a transient and sends the operator looking in the wrong place.
 		if repoMissing(repo) {
 			fmt.Fprintf(os.Stderr, "%s instance repo %s does not exist, or your `gh` login cannot see it — the build dispatches to it either way.\n",
-				yellow("!"), repo)
+				color.Yellow("!"), repo)
 			fmt.Fprintf(os.Stderr, "  create + push it (%s), or fix the auth `llz doctor` reports.\n",
-				cyan("gh repo create "+repo+" --private --source . --remote origin --push"))
+				color.Cyan("gh repo create "+repo+" --private --source . --remote origin --push"))
 			return nil
 		}
 		fmt.Fprintf(os.Stderr, "%s could not resolve %s's default branch — dispatching without the spec check.\n",
-			yellow("!"), repo)
+			color.Yellow("!"), repo)
 		return nil
 	}
 	// The deployment's own file first: when a first-ever instance has pushed
@@ -269,7 +271,7 @@ func remoteDeploymentPresent(specRoot, env string) error {
 			// legitimate build on it would be worse than the failure this gate
 			// prevents. Say so and get out of the way.
 			fmt.Fprintf(os.Stderr, "%s could not check whether %s is on %s's %s branch — dispatching anyway.\n",
-				yellow("!"), rel, repo, branch)
+				color.Yellow("!"), rel, repo, branch)
 			return nil
 		}
 		if !found {
@@ -281,7 +283,7 @@ func remoteDeploymentPresent(specRoot, env string) error {
 		local := gitOut("hash-object", filepath.Join(specRoot, filepath.FromSlash(rel)))
 		if local != "" && remoteSHA != "" && local != remoteSHA {
 			fmt.Fprintf(os.Stderr, "%s %s on %s differs from your working copy — the build uses the PUSHED one (%s).\n",
-				yellow("!"), rel, branch, publishHint(branch))
+				color.Yellow("!"), rel, branch, publishHint(branch))
 		}
 	}
 	return nil
@@ -311,9 +313,9 @@ func notOnBuildBranchErr(rel, repo, branch, env string) error {
 func publishHint(defaultBranch string) string {
 	cur := gitOut("rev-parse", "--abbrev-ref", "HEAD")
 	if cur == "" || cur == "HEAD" || cur == defaultBranch {
-		return cyan("git push")
+		return color.Cyan("git push")
 	}
-	return cyan(fmt.Sprintf("git push -u origin %s", cur)) +
+	return color.Cyan(fmt.Sprintf("git push -u origin %s", cur)) +
 		fmt.Sprintf(" — then merge it into %s; the dispatch always runs from %s, not from %s",
 			defaultBranch, defaultBranch, cur)
 }
@@ -416,4 +418,15 @@ func mergeJSONPages(pages []json.RawMessage, out any) error {
 		}
 	}
 	return nil
+}
+
+// gitOut runs git and returns trimmed stdout, "" on failure. A local copy: the
+// sustain extraction took the original with stamp.go, and build_preflight is the
+// only other caller. Three lines around execOutput, nothing to drift.
+func gitOut(args ...string) string {
+	out, err := execOutput("git", args...)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

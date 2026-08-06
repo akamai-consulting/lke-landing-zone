@@ -1,7 +1,7 @@
 package main
 
 // ci_keycloak_configure_mutation_test.go — the guards in keycloak-configure that
-// must FAIL a half-wired realm rather than report green. Mutation testing found
+// must FAIL a half-wired realm rather than report color.Green. Mutation testing found
 // each of these inert-but-passing: a swallowed mapper error, a status set that
 // accepts what it should reject (and rejects what it should accept), the
 // created-client id read from the wrong place, and the poll/sleep budgets of the

@@ -217,7 +217,7 @@ func TestRunnerACLRevokeRetriesWhenReadded(t *testing.T) {
 }
 
 // Revoke runs under `if: always()`: a writer that keeps re-adding our IP must
-// NOT make revoke return a hard error (that would fail an otherwise-green job).
+// NOT make revoke return a hard error (that would fail an otherwise-color.Green job).
 func TestRunnerACLRevokeTolerantWhenAlwaysReadded(t *testing.T) {
 	fake := &fakeACLClient{
 		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}},

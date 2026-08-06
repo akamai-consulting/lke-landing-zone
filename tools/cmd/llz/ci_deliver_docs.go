@@ -153,7 +153,7 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		// FAIL CLOSED. Returning nil here skips part of the instance tree and
 		// still reports success, so a stale link survives a delivery that
-		// claimed to have fixed it — the same false-green class as docs-guard's.
+		// claimed to have fixed it — the same false-color.Green class as docs-guard's.
 		if err != nil {
 			return fmt.Errorf("walk %s: %w", p, err)
 		}

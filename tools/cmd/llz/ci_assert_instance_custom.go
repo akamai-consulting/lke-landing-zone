@@ -15,7 +15,7 @@ package main
 //
 // Why converge / assert-loki do NOT cover this: those gate the PLATFORM Applications.
 // An escape hatch that generated nothing (the directory generator matched no path) or
-// whose generated App never synced leaves every platform app green — the
+// whose generated App never synced leaves every platform app color.Green — the
 // instance-custom-<ns> App simply would not exist. Only an assertion that NAMES the
 // generated App catches that. Its ROOT-CAUSE surface differs too: the parent here is
 // the instance-custom ApplicationSet (whose health.lua reports ErrorOccurred on a

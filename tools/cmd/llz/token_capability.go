@@ -33,6 +33,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // ghCapabilityProbe GETs one API path with the credential and returns the HTTP
@@ -275,12 +277,12 @@ func capabilityHint(name string) string {
 func capabilityCell(cr capabilityResult) string {
 	switch cr.status {
 	case capOK:
-		return green("✓ " + cr.detail)
+		return color.Green("✓ " + cr.detail)
 	case capDenied:
-		return red("✗ DENIED — " + cr.detail)
+		return color.Red("✗ DENIED — " + cr.detail)
 	case capUnknown:
-		return yellow("⚠ " + cr.detail)
+		return color.Yellow("⚠ " + cr.detail)
 	default: // capSkipped
-		return dim("– " + orDefault(cr.detail, "not probed"))
+		return color.Dim("– " + orDefault(cr.detail, "not probed"))
 	}
 }

@@ -64,7 +64,7 @@ type suiteLane struct {
 	// SummaryTitle, when set, appends the lane's captured output to
 	// $GITHUB_STEP_SUMMARY under this heading.
 	SummaryTitle string
-	// Why documents what the lane proves and what stays green without it. Printed
+	// Why documents what the lane proves and what stays color.Green without it. Printed
 	// with the lane's group so a failure carries its own rationale.
 	Why string
 }
@@ -130,7 +130,7 @@ func assertSuiteLanes(region string) []suiteLane {
 				"and a plaintext write passes it perfectly. This proves the SSE-C gateway is in the path — the registry pods carry the CA, " +
 				"the DNS rewrite is in force, sampled objects answer 400 to a keyless HEAD, and a blob pushed BY HARBOR lands encrypted. " +
 				"That last one is the only check that proves the CA chain: Loki reaches the proxy with insecure_skip_verify, so every other " +
-				"check here is green with Harbor's trust completely broken. MUTATING (leaves one untagged probe blob, which Harbor GC reclaims). " +
+				"check here is color.Green with Harbor's trust completely broken. MUTATING (leaves one untagged probe blob, which Harbor GC reclaims). " +
 				"Endpoint and bucket names are derived from the spec, not passed in — a gate configured from env vars nothing exports fails on a " +
 				"missing flag rather than on encryption. SELF-SKIPS (loudly) with no --region or when spec.components.objProxy is off.",
 		},
@@ -179,13 +179,13 @@ func assertSuiteLanes(region string) []suiteLane {
 		{
 			Name: "instance-custom", Gating: true,
 			Steps: [][]string{{"assert-instance-custom"}},
-			Why:   "The operator escape hatch generated something. converge and assert-loki gate the PLATFORM apps and stay green when the hatch generated NOTHING — only an assertion that names it catches that.",
+			Why:   "The operator escape hatch generated something. converge and assert-loki gate the PLATFORM apps and stay color.Green when the hatch generated NOTHING — only an assertion that names it catches that.",
 		},
 		{
 			Name: "team-write", Gating: true,
 			Steps: [][]string{regionArg("team-login-smoke")},
 			Why: "The team-scoped OpenBao credential path, BOTH halves — spec.teams → Keycloak group/role → OpenBao role → <name>-writer, and the ESO SA → k8s-auth → <name>-reader. " +
-				"A red lane is either a Keycloak fault or a bao-configure policy fault; the log names which assertion tripped. No-op when no teams are declared.",
+				"A color.Red lane is either a Keycloak fault or a bao-configure policy fault; the log names which assertion tripped. No-op when no teams are declared.",
 		},
 		{
 			Name: "metric-surface", Gating: false,

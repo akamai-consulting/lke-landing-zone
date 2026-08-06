@@ -84,7 +84,7 @@ func ciAssertVolumeEncryptionCmd() *cobra.Command {
 			"Fails closed on every ambiguity, INCLUDING a cluster with no Linode-CSI PVs —\n" +
 			"a gate that passes having examined nothing is worse than no gate.\n" +
 			"\n" +
-			"A red run is not re-runnable: encryption is set inside CreateVolume and\n" +
+			"A color.Red run is not re-runnable: encryption is set inside CreateVolume and\n" +
 			"storageClassName is immutable once bound, so the fix is to re-roll the workload\n" +
 			"onto a class that encrypts (which destroys that volume's data).",
 		Args: cobra.NoArgs,

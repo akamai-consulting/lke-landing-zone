@@ -4,7 +4,7 @@ package main
 // --region <env>` — the e2e gate that actually EXERCISES the in-cluster broad-PAT
 // rotator end-to-end, instead of only asserting it deployed.
 //
-// converge sees the rotator's carved App green the moment its CronJob + the two
+// converge sees the rotator's carved App color.Green the moment its CronJob + the two
 // ESO Secrets exist — but the CronJob is weekly, so nothing proves the in-cluster
 // mint → verify → OpenBao write → GitHub env-secret publish → revoke path works
 // against real OpenBao k8s-auth, real Linode, and real GitHub until it runs. This

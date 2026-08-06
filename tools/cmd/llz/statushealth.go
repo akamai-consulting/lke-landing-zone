@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // requiredSupportApps must be Synced+Healthy for the support plane to be up.
@@ -120,18 +122,18 @@ func reportArgoHealth(g globalOpts, wait bool, timeout int) error {
 		reqUnhealthy, missing, otherUnhealthy := classifyArgoApps(apps, requiredSupportApps)
 
 		if len(reqUnhealthy) == 0 && len(missing) == 0 {
-			fmt.Printf("%s required support-plane Applications are Synced + Healthy\n", green("✓"))
-			printList(dim("  other Applications still not healthy:"), otherUnhealthy)
+			fmt.Printf("%s required support-plane Applications are Synced + Healthy\n", color.Green("✓"))
+			printList(color.Dim("  other Applications still not healthy:"), otherUnhealthy)
 			return nil
 		}
 		if !wait || time.Now().After(deadline) {
-			fmt.Printf("%s required support-plane Applications not Synced/Healthy:\n", red("✗"))
+			fmt.Printf("%s required support-plane Applications not Synced/Healthy:\n", color.Red("✗"))
 			printList("", reqUnhealthy)
-			printList(dim("  missing:"), missing)
-			printList(dim("  (other Applications not healthy:)"), otherUnhealthy)
+			printList(color.Dim("  missing:"), missing)
+			printList(color.Dim("  (other Applications not healthy:)"), otherUnhealthy)
 			return fmt.Errorf("%d required Application(s) unhealthy, %d missing", len(reqUnhealthy), len(missing))
 		}
-		fmt.Printf("%s\n", dim(fmt.Sprintf("  waiting for %d required Application(s) to converge…", len(reqUnhealthy)+len(missing))))
+		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("  waiting for %d required Application(s) to converge…", len(reqUnhealthy)+len(missing))))
 		time.Sleep(interval)
 	}
 }
@@ -144,6 +146,6 @@ func printList(header string, items []string) {
 		fmt.Println(header)
 	}
 	for _, it := range items {
-		fmt.Println("  " + dim("-") + " " + it)
+		fmt.Println("  " + color.Dim("-") + " " + it)
 	}
 }

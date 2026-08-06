@@ -195,6 +195,32 @@ type Extension struct {
 	// Bindings is where it attaches and, per binding, what it may touch. At least
 	// one.
 	Bindings []Binding
+
+	// Incomplete names what this extension does NOT yet declare, and is empty for
+	// an extension that declares its whole surface.
+	//
+	// IT EXISTS BECAUSE TWO EXTRACTIONS ARRIVED PARTIAL AND THE MODEL COULD NOT SAY
+	// SO. `reconcile-actions` declares four invariants while four more of its lanes
+	// are still in package main; `template-sustain` declares the half that does not
+	// touch `.template-manifest`, which ADR 0014 pins as permanently core. Both
+	// read as COMPLETE — nothing distinguished "has four bindings" from "has eight,
+	// four of which have not moved" — and an extension that silently under-declares
+	// its own surface is the same failure shape as PR #15's ban-by-omission: the
+	// reader cannot tell what is missing.
+	//
+	// Added on the SECOND case, not the first, which is the rule this model has
+	// been following for every vocabulary change (see grantStates' cloud-mutate
+	// row). One occurrence is an anecdote; two independent ones with different
+	// causes — a sibling extension's territory, and a core-by-construction file —
+	// is a shape.
+	//
+	// IT IS PROSE, NOT A SCHEMA, and deliberately: what is missing is a sentence
+	// about code that has not moved, and there is nothing yet to validate it
+	// against. Validate() only checks that the strings are non-empty, so the field
+	// cannot become a silent `[]string{""}`. When the loader exists and can compare
+	// a declaration against what is registered, this is where the discrepancy gets
+	// reported.
+	Incomplete []string
 }
 
 // Grants is the union of every binding's grants — "what does this extension

@@ -42,7 +42,7 @@
 categories:
   cmd-llz-package-main:
     kind: go-logic
-    # 44,171 logic lines across 226 non-test files, 120 of them ci_*.go.
+    # 43,817 logic lines across 221 non-test files, 120 of them ci_*.go.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
@@ -74,12 +74,15 @@ categories:
     #                       lanes. The four that stayed are the finding; see the
     #                       declaration. -403.
     #   44,171 / 226 files  teardown, the first TRANSITION binding. -655.
+    #   43,817 / 221 files  template-sustain (partial — the own-paths half cannot
+    #                       leave core) plus internal/color, which every extracted
+    #                       extension needs. -354.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 44171
+    budget: 43817
     exact: true
     include:
       - "tools/cmd/llz/*.go"

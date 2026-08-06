@@ -116,7 +116,7 @@ func TestRunCIWaitHarbor(t *testing.T) {
 	// A registry that never rolls out is a SOFT gate: it warns and returns nil,
 	// because the convergence gate is the hard check. Previously this was a single
 	// 2m `rollout status` that hard-failed, which the caller then had to mask with
-	// continue-on-error — painting a green check over a scary "timed out" that
+	// continue-on-error — painting a color.Green check over a scary "timed out" that
 	// carried no signal either way. Budget 0 so waitPoll evaluates once instead of
 	// polling the real budget.
 	harborWaitBudget = 0

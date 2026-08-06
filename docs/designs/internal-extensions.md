@@ -55,7 +55,7 @@ addition to any row:
 
 | file | lines | assigned to |
 |---|---:|---|
-| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first five, extracted](#the-first-five-extracted). |
+| `ci_docs_guard` 692, `ci_gen_toc` 90 | 782 | **`guard-docs` — new.** `always`, the seventh gate. **✅ Extracted.** Marked `ext?` ✔ here and that was WRONG — see [The first seven, extracted](#the-first-seven-extracted). |
 | `objproxy` 347, `objproxy_resign` 317, `objproxy_inject` 87 | 751 | **`obj-proxy` — new.** A long-running in-cluster process, not a verb: like `reconciler-runtime`, it should also become its own binary. |
 | `ci_assert_obj_encryption` 500, `ci_obj_encryption_harbor` 254, `s3_ssec_probe` 151 | 905 | `assert-objstore` (560 → 1,465) |
 | `template_commit` 213, `ci_upgrade_test_gate` 305 | 518 | `template-sustain` (630 → 1,148) |
@@ -179,7 +179,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
 | `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
-| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first five, extracted](#the-first-five-extracted). |
+| `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first seven, extracted](#the-first-seven-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74 |
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
@@ -201,11 +201,11 @@ The binding the current design has no room for; without it these 4,283 lines sta
 |---|---:|---:|:-:|:-:|---|
 | `reconciler-runtime` | 1,094 | 5 | ✔ | ✘ | `reconcile` 541, leader 199, manager 146, health 125, convergence 83. The loop + leader election. **Should also become its own binary.** |
 | `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208 |
-| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first five, extracted](#the-first-five-extracted). |
+| `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first seven, extracted](#the-first-seven-extracted). |
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
-| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first five, extracted](#the-first-five-extracted). |
+| `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first seven, extracted](#the-first-seven-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
@@ -213,8 +213,8 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
-| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first six, extracted](#the-first-six-extracted). |
-| `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. |
+| `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first seven, extracted](#the-first-seven-extracted). |
+| `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first seven, extracted](#the-first-seven-extracted). |
 | `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
 
 ## Gate — attach at `→ scaffolded` / `→ configured`, grants: `read-repo`
@@ -223,7 +223,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 | extension | lines | files | always | notes |
 |---|---:|---:|:-:|---|
-| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first five, extracted](#the-first-five-extracted). |
+| `guard-budgets` | 646 | 3 | ✔ | untestable-loc 447, coverage 166, core-surface 33. **Start here** — the gate exports itself. **✅ Extracted** — see [The first seven, extracted](#the-first-seven-extracted). |
 | `guard-charts` | 546 | 4 | ✔ | chart-lock 148, chart-pin 143, chart-version 130, cosign-subject 125 |
 | `guard-monitoring` | 452 | 3 | ✔ | wave-dependency 222, prom-rules 154, monitoring-label 76 |
 | `guard-manifests` | 351 | 4 | ✔ | argocd-rendered-apps 123, apl-schema 111, placeholder 77, dropped-apiversions 40 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first five, extracted
+## The first seven, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -264,9 +264,11 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `guard-docs` extracted | 46,106 | 235 | −691, the largest single move so far |
 | `posture-at-rest` extracted | 45,763 | 234 | −343, and the first binding that is not a gate |
 | `assert-storage` extracted | 45,229 | 232 | −534, and the first that touches a cluster and a cloud |
-| `reconcile-actions` extracted | **44,826** | 228 | −403, four of eight lanes — the other four are the finding |
+| `reconcile-actions` extracted | 44,826 | 228 | −403, four of eight lanes — the other four are the finding |
+| `teardown` extracted | 44,171 | 226 | −655, and the first binding that MOVES the platform |
+| `template-sustain` extracted | **43,817** | 221 | −354, partial by construction — and the model grew a word for that |
 
-**Net −2,356 (5.0%) across five extensions.** Read that as a floor on the effort rather than a
+**Net −3,365 (7.1%) across seven extensions.** Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
 
@@ -454,6 +456,72 @@ reach both halves (`ObjReadyStatus` vs the runtime's `readyCondition`; `CredPath
 `policyReconcilerRead`). That is a real cost of extraction and worth budgeting for: a test that
 cannot reach both things it couples is not a test.
 
+### What `teardown` proved — the first `transition`
+
+Six extensions in, the first binding that **moves** the platform. The previous five all observe
+(`gate`, `assertion`) or hold (`invariant`).
+
+```
+teardown  transition:destroyed [cloud-mutate, cluster-write]   the destroy itself
+          assertion:destroyed  [cloud-read]                    assert-no-orphans
+```
+
+**It validated with no ceiling change.** `cloud-mutate` was already legal at `destroyed` — the one
+state in `grantStates` that exists for exactly this. It also declares **the model's own motivating
+example**: `validate.go` justifies letting assertions target any state by naming `assert-no-orphans`,
+*"the assertion that `destroyed` actually holds, and the one a missed Volume bills for."* That
+argument had never been tested against code. It holds.
+
+**The read-only ceiling earns itself here.** `assert-no-orphans` is the destroy job's *final* gate.
+An assertion able to delete could clean up whatever it found and then report zero — and this is where
+that shortcut is most tempting, since the reaper is one call away.
+
+**A third thing the model cannot say: `Confirm`.** Every seam the previous five needed delivers a
+*capability*. `teardown.Deps.Confirm` delivers an **authorisation** — `--yes`, the answer to "may I",
+not the means to act. `cloud-mutate` says this binding MAY delete cloud resources; nothing says a
+human agreed to **this** deletion. Unlike the other two gaps this is probably not a missing grant but
+a missing axis, and it belongs to the action ABI.
+
+**A fifth shared rule, and the sharpest.** The orphan census — what counts as a leaked Volume,
+NodeBalancer or VPC — had **three** consumers: preflight reports it, `assert-no-orphans` gates on it,
+`llz reap` cleans by it. Its comment said so outright and nothing but proximity kept them in step. An
+under-counting census makes preflight optimistic but makes the destroy gate **pass on a leak** — a bug
+already paid for once, when it counted only `pvc-`-prefixed Volumes and every relabelled Volume was
+invisible to it.
+
+**And a cost of the `Deps` pattern**, found by the first extraction big enough to feel it: `Deps{}`
+compiles and then dereferences a nil func the moment a path needs a seam the caller forgot. Still the
+right trade, but a future action ABI should hand extensions **zero values that work** — `Confirm`
+defaulting to nil would mean a destroy verb panicking instead of refusing.
+
+### What `template-sustain` proved — the prediction held, and the model adapted
+
+The one the closure census said might not be separable, picked *because* of that. The prediction held
+exactly: **what asks about provenance moved; what acts on the manifest did not.**
+
+```
+template-sustain  assertion:upgraded [read-repo]   drift — how far behind is this instance
+                  gate:scaffolded    [read-repo]   the upgrade-churn guard
+                  NOT DECLARED: transition:upgraded[own-paths] …
+```
+
+**`own-paths` may be the one grant no extension can ever hold.** It belongs to the copier
+restore/overwrite pass, which reads `.template-manifest`'s class table — and ADR 0014's corollary says
+there is exactly **one** ownership authority. The extension that would hold `own-paths` is welded to
+the file that *defines* it. That is a question the corollary opens and does not answer.
+
+**The model grew `Incomplete`.** `reconcile-actions` arrived partial first; this is the second, with a
+different cause — a sibling's territory versus a core-by-construction file. Two independent
+occurrences is the bar every vocabulary change here has used, so `Extension.Incomplete` now exists,
+both declarations say what they are missing, and `llz extension list` marks them `always ◐` in the
+column a skimmer actually reads. It is prose rather than a schema: `Validate()` only refuses a blank
+entry, because a marker that says "partial" without saying how is worse than no marker.
+
+**A sixth shared thing, and the most mundane: colour.** `internal/color` — seven one-line wrappers and
+the `NO_COLOR`/TTY rule. It became a package on the *seventh* extraction rather than the first
+because colour is what a verb does at the very end, so everything that prints needs it, and six
+copies of `paint()` would be six chances to disagree about when to stay quiet.
+
 ## The cost of the interesting half
 
 Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
@@ -469,8 +537,8 @@ list:
 | `guard-docs` | `gate` · `read-repo` | 2 | ✅ |
 | `posture-at-rest` | **`invariant`** · `read-repo` | 2 | ✅ |
 | `assert-storage` | **`assertion`** + `invariant` ×2 · **`cloud-mutate`** · named | 16 → 4 seams | ✅ |
-| `template-sustain` | `transition` · **`own-paths`** | 26 | ✘ |
-| `teardown` | `transition` + `assertion` · `destroyed` | 30 | ✘ |
+| `template-sustain` | `assertion` + `gate` · `upgraded` | 26 → **4 seams** | ◐ 4 of 7 files |
+| `teardown` | **`transition`** + `assertion` · `destroyed` · `cloud-mutate` | 30 → **7 seams** | ✅ |
 | `obj-encryption` | `transition:seeded` · **`secret-custody`** | 43 | ✘ |
 | `reconcile-actions` | **`invariant` ×4 · two grant sets · `secret-custody`** | 62 → **28 → 4 lanes moved** | ◐ |
 
@@ -526,15 +594,16 @@ multi-binding extensions and named bindings, up to four on one extension; six of
 states (`scaffolded`, `verified`, `operating`, `destroyed`); and `grantStates` in both directions —
 one row wrong and corrected, three right and serving as controls.
 
-**Still unexercised:** `own-paths`, `alwaysEnabled: false` (every extension so far ships `always`),
+**Still unexercised:** `own-paths` — and it may be **unreachable**, since the pass that would hold it
+cannot leave the file that defines it — plus `alwaysEnabled: false` (every extension so far ships `always`),
 and the states between `scaffolded` and `verified`.
 
 **And three things the model cannot express**, all found by declaring rather than by design:
 
 1. a binding that **writes repository files** — no `write-repo`, and `own-paths` is a copier fence
    explicitly *not* a write permit (`llz ci gen-toc`, `promote-pipeline`);
-2. an extension that is **partial** — `reconcile-actions` declares four bindings and reads as
-   complete while four more of its lanes are still core;
+2. ~~an extension that is **partial**~~ — **FIXED.** Two independent cases (`reconcile-actions`,
+   `template-sustain`) met the bar, and `Extension.Incomplete` landed with them;
 3. the difference between **granted and confirmed** — `cloud-mutate` permits a deletion; nothing says
    a human authorised *this* one (`teardown.Deps.Confirm`).
 
@@ -587,7 +656,7 @@ grants and the distribution is observed instead of assigned.
 > tidy version.
 
 1. ~~**`guard-budgets`** (907) — self-hosting proof, zero grants beyond `read-repo`, already unit-tested.~~
-   **Done** — [The first five, extracted](#the-first-five-extracted).
+   **Done** — [The first seven, extracted](#the-first-seven-extracted).
 2. **`converge`** (1,599) — the acid test, run early rather than deferred. Forces the Go action ABI
    and the action/predicate split in `ci_health.go` on day one, which is where the design either
    holds or doesn't.

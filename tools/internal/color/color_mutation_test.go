@@ -1,4 +1,4 @@
-package main
+package color
 
 import (
 	"os"
@@ -27,8 +27,8 @@ func TestColorOnHonoursTheEnvOptOuts(t *testing.T) {
 			t.Fatalf("colorOn = %v, want %v (NO_COLOR=%q TERM=%q CLICOLOR_FORCE=%q)",
 				got, want == "on", os.Getenv("NO_COLOR"), os.Getenv("TERM"), os.Getenv("CLICOLOR_FORCE"))
 		}
-		if painted := red("x") != "x"; painted != (want == "on") {
-			t.Fatalf("red() painted=%v, want %v", painted, want == "on")
+		if painted := Red("x") != "x"; painted != (want == "on") {
+			t.Fatalf("Red() painted=%v, want %v", painted, want == "on")
 		}
 		return
 	}

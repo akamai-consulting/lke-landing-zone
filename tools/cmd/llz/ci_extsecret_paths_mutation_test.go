@@ -7,7 +7,7 @@ package main
 // match per input, so capping the scan at the first match (-1 → 1) changed
 // nothing anyone asserted: a real seeding source that writes two OpenBao paths
 // (or one path with two fields) would have been read as writing only the first,
-// and the guard would still report green while the second went unvalidated.
+// and the guard would still report color.Green while the second went unvalidated.
 //
 // Each test below therefore feeds a fixture with TWO OR MORE matches per input
 // and asserts that ALL of them are extracted.

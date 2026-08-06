@@ -58,3 +58,25 @@ func TestGrantStatesTableIsPinned(t *testing.T) {
 		}
 	}
 }
+
+// Incomplete is prose, and the only thing worth validating about prose is that it
+// is not blank. A `[]string{""}` would mark an extension partial while saying
+// nothing about how — worse than not marking it, because the marker implies a
+// reader can find out more.
+func TestIncompleteRejectsBlankEntries(t *testing.T) {
+	base := Extension{
+		Name: "probe", Short: "x",
+		Bindings: []Binding{{Kind: Gate, State: Scaffolded, Grants: []Grant{ReadRepo}}},
+	}
+	if errs := base.Validate(); len(errs) != 0 {
+		t.Fatalf("fixture should validate: %v", errs)
+	}
+	base.Incomplete = []string{"the seeder half has not moved"}
+	if errs := base.Validate(); len(errs) != 0 {
+		t.Errorf("a real note must validate: %v", errs)
+	}
+	base.Incomplete = []string{"  "}
+	if errs := base.Validate(); len(errs) == 0 {
+		t.Error("a blank note must be refused — it marks the extension partial without saying how")
+	}
+}

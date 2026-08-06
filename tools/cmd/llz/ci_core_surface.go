@@ -32,7 +32,7 @@ func ciCoreSurfaceCmd() *cobra.Command {
 			"that gate pushes logic INTO the CLI and names no ceiling, so package main\n" +
 			"accretes. Satisfy this one by extracting to tools/internal/<pkg> (ADR 0013),\n" +
 			"moving the capability out to an extension (issue #10), or deleting dead\n" +
-			"code — and then ratchet the budget DOWN. Never raise it to go green.",
+			"code — and then ratchet the budget DOWN. Never raise it to go color.Green.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return budget.Run("core-surface", root, configPath, verbose, budget.CoreSurfaceRemedy)

@@ -61,9 +61,9 @@ func TestNoHardcodedTerraformExec(t *testing.T) {
 			}
 		}
 	}
-	// A guard that scanned nothing reports the same green as one that scanned
+	// A guard that scanned nothing reports the same color.Green as one that scanned
 	// everything — the contract this repo's other guards share.
 	if scanned == 0 {
-		t.Fatal("scanned 0 Go files — the guard's corpus is empty, so its green means nothing")
+		t.Fatal("scanned 0 Go files — the guard's corpus is empty, so its color.Green means nothing")
 	}
 }

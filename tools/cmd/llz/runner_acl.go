@@ -378,7 +378,7 @@ func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) err
 	// removes our IP, PUTs, then confirms our IP is actually gone — a racer that
 	// PUT a stale list could otherwise re-introduce it. Revoke stays TOLERANT:
 	// it never returns a hard error (it runs under `if: always()`, so a non-nil
-	// return would fail an otherwise-green job); on exhausted retries it warns
+	// return would fail an otherwise-color.Green job); on exhausted retries it warns
 	// and leaves the state file so a later revoke can retry.
 	for attempt := 1; attempt <= aclMaxAttempts; attempt++ {
 		acl, err := client.GetControlPlaneACL(ctx, cid)

@@ -7,7 +7,7 @@ package main
 // `x-amz-trailer: x-amz-checksum-crc32`). Linode Object Storage is Ceph RGW and
 // rejects that framing with 403 AccessDenied. Loki 3.7.2 uses that SDK, so it cannot
 // write a single chunk — measured on three clusters, with every other health signal
-// green throughout.
+// color.Green throughout.
 //
 // WHY THE FIX LANDS HERE AND NOT IN LOKI. Loki is apl-core's workload on a managed
 // App Platform. Its legacy S3 client exposes no checksum knob (the `send_content_md5`

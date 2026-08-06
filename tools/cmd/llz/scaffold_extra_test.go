@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 func TestValidateOBJCluster(t *testing.T) {
@@ -50,12 +52,12 @@ func TestResolveTemplateVersionFallsBackToGit(t *testing.T) {
 		}
 	})
 
-	tv := resolveTemplateVersion()
+	tv := sustain.ResolveTemplateVersion(sustainDeps())
 	if tv.Schema != 1 || tv.Generator != "llz" {
 		t.Errorf("resolved meta wrong: %+v", tv)
 	}
-	if tv.TemplateRepo != defaultTemplateRepo {
-		t.Errorf("TemplateRepo = %q, want default %q", tv.TemplateRepo, defaultTemplateRepo)
+	if tv.TemplateRepo != sustain.DefaultTemplateRepo {
+		t.Errorf("TemplateRepo = %q, want default %q", tv.TemplateRepo, sustain.DefaultTemplateRepo)
 	}
 	if tv.TemplateSHA != "deadbeefcafe1234" || tv.TemplateRef != "v1.2.3" {
 		t.Errorf("git fallback not used: %+v", tv)
@@ -73,9 +75,9 @@ func TestResolveTemplateVersionFromAnswers(t *testing.T) {
 	})
 	mustWrite(t, ".copier-answers.yml", "_commit: 1234567890abcdef\n_src_path: gh:akamai-consulting/lke-landing-zone\nllz_version: v9.9.9\n")
 
-	tv := resolveTemplateVersion()
-	if tv.TemplateRepo != defaultTemplateRepo {
-		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, defaultTemplateRepo)
+	tv := sustain.ResolveTemplateVersion(sustainDeps())
+	if tv.TemplateRepo != sustain.DefaultTemplateRepo {
+		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, sustain.DefaultTemplateRepo)
 	}
 	if tv.TemplateSHA != "1234567890abcdef" || tv.TemplateRef != "v9.9.9" {
 		t.Errorf("answers not honored: %+v", tv)
@@ -89,7 +91,7 @@ func TestResolveTemplateVersionFallsBackToLegacyStamp(t *testing.T) {
 	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) { return []byte(""), nil })
 	mustWrite(t, ".template-version", `{"schema":1,"template_repo":"myorg/lke-landing-zone","template_ref":"v0.0.27","template_sha":"abc1234567"}`)
 
-	tv := resolveTemplateVersion()
+	tv := sustain.ResolveTemplateVersion(sustainDeps())
 	if tv.TemplateRepo != "myorg/lke-landing-zone" || tv.TemplateRef != "v0.0.27" || tv.TemplateSHA != "abc1234567" {
 		t.Errorf("legacy stamp not honored: %+v", tv)
 	}

@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // lkeVersionLister is the slice of the Linode client this needs — a seam so the
@@ -53,11 +55,11 @@ var doctorLinodeClient = func() lkeVersionLister {
 // reportLinodeAccount prints doctor's "Linode account" section for the k8s
 // versions the spec pins. Returns nothing: this section never fails the gate.
 func reportLinodeAccount(want []string) {
-	fmt.Println("\n" + bold("Linode account (advisory — never blocks the build):"))
+	fmt.Println("\n" + color.Bold("Linode account (advisory — never blocks the build):"))
 
 	c := doctorLinodeClient()
 	if c == nil {
-		fmt.Printf("  %s  LKE-Enterprise check skipped — set LINODE_TOKEN to verify the account offers your k8sVersion\n", dim("–"))
+		fmt.Printf("  %s  LKE-Enterprise check skipped — set LINODE_TOKEN to verify the account offers your k8sVersion\n", color.Dim("–"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -69,22 +71,22 @@ func reportLinodeAccount(want []string) {
 		// Includes 401/403 — which is the interesting case, because it is what a
 		// token without the scope, or an account without the entitlement, looks
 		// like. Still advisory: it is also what a network blip looks like.
-		fmt.Printf("  %s  could not list LKE-Enterprise versions — check the PAT's scope and that the account is LKE-Enterprise entitled\n", yellow("!"))
-		fmt.Printf("      %s\n", dim(firstLine(err.Error())))
+		fmt.Printf("  %s  could not list LKE-Enterprise versions — check the PAT's scope and that the account is LKE-Enterprise entitled\n", color.Yellow("!"))
+		fmt.Printf("      %s\n", color.Dim(firstLine(err.Error())))
 		return
 	case len(got) == 0:
-		fmt.Printf("  %s  the account reports NO LKE-Enterprise versions — an apply would have nothing to create\n", yellow("!"))
+		fmt.Printf("  %s  the account reports NO LKE-Enterprise versions — an apply would have nothing to create\n", color.Yellow("!"))
 		return
 	}
 
-	fmt.Printf("  %s  LKE-Enterprise reachable — %d version(s) offered\n", green("✓"), len(got))
+	fmt.Printf("  %s  LKE-Enterprise reachable — %d version(s) offered\n", color.Green("✓"), len(got))
 	for _, w := range want {
 		if lkeVersionOffered(w, got) {
-			fmt.Printf("  %s  k8sVersion %s is offered\n", green("✓"), w)
+			fmt.Printf("  %s  k8sVersion %s is offered\n", color.Green("✓"), w)
 			continue
 		}
-		fmt.Printf("  %s  k8sVersion %s is NOT in the account's list — a retired or mistyped pin fails (or HANGS) at apply\n", yellow("!"), w)
-		fmt.Printf("      %s\n", dim("offered: "+strings.Join(got, ", ")))
+		fmt.Printf("  %s  k8sVersion %s is NOT in the account's list — a retired or mistyped pin fails (or HANGS) at apply\n", color.Yellow("!"), w)
+		fmt.Printf("      %s\n", color.Dim("offered: "+strings.Join(got, ", ")))
 	}
 }
 

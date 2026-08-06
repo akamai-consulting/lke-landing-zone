@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // writeMiniInstance lays down the smallest tree buildPreflight recognizes: a
@@ -241,7 +243,7 @@ func TestPublishHintNamesTheBranchYouAreOn(t *testing.T) {
 	t.Cleanup(func() { execOutput = orig })
 
 	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("main\n"), nil }
-	if got := publishHint("main"); got != cyan("git push") {
+	if got := publishHint("main"); got != color.Cyan("git push") {
 		t.Errorf("on the default branch the hint is a plain push, got %q", got)
 	}
 
@@ -256,7 +258,7 @@ func TestPublishHintNamesTheBranchYouAreOn(t *testing.T) {
 	// Detached HEAD / no git: fall back to the plain form rather than inventing a
 	// branch name.
 	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("HEAD\n"), nil }
-	if got := publishHint("main"); got != cyan("git push") {
+	if got := publishHint("main"); got != color.Cyan("git push") {
 		t.Errorf("detached HEAD should fall back to a plain push, got %q", got)
 	}
 }

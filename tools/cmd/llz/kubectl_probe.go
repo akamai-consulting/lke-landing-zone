@@ -3,7 +3,7 @@ package main
 // kubectl_probe.go — the cluster-probe siblings of guard_corpus.go.
 //
 // The manifest guards already have doctrine for this bug: requireCorpus exists
-// because "a guard that had nothing to check reports the same green as one that
+// because "a guard that had nothing to check reports the same color.Green as one that
 // checked everything". None of that reached the cluster probes, which are the
 // converge gate's source of truth.
 //
@@ -89,7 +89,7 @@ func kubectlProbe(args ...string) ([]byte, probeVerdict) {
 // absenceMarkers are the kubectl stderr texts that mean "asked and answered: it
 // is not there". Everything outside this set is treated as no answer, which is
 // the safe default — a misfiled transient costs a retry, a misfiled absence
-// costs a false green.
+// costs a false color.Green.
 var absenceMarkers = []string{
 	"notfound",                              // Error from server (NotFound)
 	"not found",                             // ...: pods "x" not found
@@ -155,7 +155,7 @@ func kItems(args ...string) []json.RawMessage {
 
 // kItemsOK is kItems with "the cluster answered" reported separately. A section
 // whose corpus comes back empty records nothing and passes — exactly the empty-
-// corpus green requireCorpus refuses for the file guards — so any caller that
+// corpus color.Green requireCorpus refuses for the file guards — so any caller that
 // would silently skip work must use this and say "inconclusive" instead. See
 // scanInventory and sectionItems.
 func kItemsOK(args ...string) ([]json.RawMessage, bool) {

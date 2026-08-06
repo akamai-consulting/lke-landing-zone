@@ -249,7 +249,7 @@ func TestRunCIAssertOpenbaoAuditRetriesWithinSettle(t *testing.T) {
 }
 
 func TestRunCIAssertOpenbaoAuditRefusesVacuousArguments(t *testing.T) {
-	// Both would otherwise be a green gate that asserted nothing.
+	// Both would otherwise be a color.Green gate that asserted nothing.
 	seamLoki(t, func(string) ([]byte, error) {
 		t.Error("Loki must not be queried at all")
 		return nil, nil

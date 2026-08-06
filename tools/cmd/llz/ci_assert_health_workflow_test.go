@@ -143,7 +143,7 @@ func TestHealthTransientOnly(t *testing.T) {
 // TestHealthWorkflowExpected pins the anchoring fix: whether an absent
 // WorkflowTemplate is a failure is decided by the SPEC, never by the cluster.
 // Anchoring it to the cluster is what let a component the e2e explicitly enables
-// fail to deploy and still report green.
+// fail to deploy and still report color.Green.
 func TestHealthWorkflowExpected(t *testing.T) {
 	// A spec with clusterHealthWorkflow enabled for "e2e" and absent (default
 	// disabled) for "lab" — the two cases that must diverge.

@@ -650,7 +650,7 @@ func TestSeedTargetsAreReservedNamespaces(t *testing.T) {
 			}
 		}
 	}
-	// A regex that silently matches nothing would make this test vacuously green.
+	// A regex that silently matches nothing would make this test vacuously color.Green.
 	if seen == 0 {
 		t.Error("matched no `const … = \"secret/<ns>/…\"` declarations; the pattern has drifted from the code and this guard is inert")
 	}

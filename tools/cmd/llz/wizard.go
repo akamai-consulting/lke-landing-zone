@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // secretSpec is one credential the token wizard requests. Dest records where the
@@ -410,7 +412,7 @@ func pushSecrets(g globalOpts, env string) error {
 // all the blockers. envExplicit distinguishes a user-supplied --env from the
 // default, so a bare `llz doctor` doesn't error on a scaffold that was never added.
 func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts string) error {
-	fmt.Println(bold("Tooling:"))
+	fmt.Println(color.Bold("Tooling:"))
 	// terraform OR tofu satisfies the Terraform requirement.
 	reportEither("terraform", "tofu")
 	// git is first because it is the one every other step assumes: copier clones
@@ -421,7 +423,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		report(t, lookable(t))
 	}
 
-	fmt.Println("\n" + bold("GitHub auth:"))
+	fmt.Println("\n" + color.Bold("GitHub auth:"))
 	if _, err := execLookPath("gh"); err != nil {
 		report("gh auth status", false)
 	} else {
@@ -439,7 +441,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// Cross-org reuse guardrail (#200): a thin-caller workflow whose reusable
 	// `uses:` org differs from this instance's org while passing `secrets: inherit`
 	// runs with EMPTY secrets — a silent setup-time trap. Fail loudly here.
-	fmt.Println("\n" + bold("Workflow reuse:"))
+	fmt.Println("\n" + color.Bold("Workflow reuse:"))
 	if err := checkCrossOrgReuse(); err != nil {
 		errs = append(errs, err)
 	}
@@ -447,7 +449,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// Escape-hatch layout. `llz render` gates on this too, but doctor is the readiness
 	// gate an operator runs FIRST — surfacing it here means they meet a reserved-name
 	// mistake before a terraform op trips over it. See custom_layout.go.
-	fmt.Println("\n" + bold("Custom resources:"))
+	fmt.Println("\n" + color.Bold("Custom resources:"))
 	tfDir, _, _ := instanceLayout()
 	customDir := filepath.Join(filepath.Dir(tfDir), clusterspec.CustomRoot)
 	if err := checkCustomLayout(customDir); err != nil {
@@ -465,7 +467,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// active/standby roles meaningless. doctor is the right place for the
 	// whole-set rule: it reports, so a half-added pair (the expected state between
 	// the two `llz env add` calls) is surfaced without failing anything.
-	fmt.Println("\n" + bold("HA topology:"))
+	fmt.Println("\n" + color.Bold("HA topology:"))
 	if deps, terr := readTopology(tfDir); terr != nil {
 		report("read cluster topology", false)
 		errs = append(errs, terr)
@@ -538,9 +540,9 @@ func ghHost() string {
 }
 
 func report(name string, ok bool) {
-	mark := red("✗")
+	mark := color.Red("✗")
 	if ok {
-		mark = green("✓")
+		mark = color.Green("✓")
 	}
 	fmt.Printf("  %s  %s\n", mark, name)
 }

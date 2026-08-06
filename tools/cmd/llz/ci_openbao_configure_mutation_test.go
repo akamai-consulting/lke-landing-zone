@@ -178,7 +178,7 @@ func TestRunCIBaoConfigureInvalidTeamsAreDropped(t *testing.T) {
 
 // A missing audit device is reported by deferring the failure into GITHUB_ENV for
 // the job's final gate. If that write fails the run must FAIL: swallowing it
-// leaves an OpenBao serving platform credentials with no audit log and a green
+// leaves an OpenBao serving platform credentials with no audit log and a color.Green
 // bootstrap.
 func TestRunCIBaoConfigureUnwritableGHAEnvIsFatal(t *testing.T) {
 	t.Chdir(t.TempDir())

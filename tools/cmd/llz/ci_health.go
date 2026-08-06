@@ -18,6 +18,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // healthNamespaces are the namespaces this repo touches — iterated for the
@@ -119,7 +121,7 @@ func ciConvergeCmd() *cobra.Command {
 // per-section memoization was removed — it forced a full confirm-on-DONE pass
 // [~a whole extra health scan] on every converge to guard against masking a
 // regression, and once the harbor-kick / store-recovery work made converge hit
-// green on the FIRST poll, that confirm was pure cost with no multi-poll benefit
+// color.Green on the FIRST poll, that confirm was pure cost with no multi-poll benefit
 // to recoup it. Each poll now just runs the full health scan; the elapsed-aware
 // convergeSleep keeps the pacing cheap.)
 type convergeState struct {
@@ -361,8 +363,8 @@ func healthExitCodeState(st *convergeState) healthResult {
 	// sections to look at yet.
 	if !inv.crds["applications.argoproj.io"] ||
 		!kExists("-n", "argocd", "get", "application", "platform-bootstrap") {
-		fmt.Println(bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
-		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", cyan("PENDING"))
+		fmt.Println(color.Bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
+		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", color.Cyan("PENDING"))
 		return healthResult{code: 2}
 	}
 
@@ -435,9 +437,9 @@ func healthExitCodeState(st *convergeState) healthResult {
 	code := health.PhaseAwareExitCode(r.ExitCode(), demotePhase1)
 	switch {
 	case demotePhase1 && code != r.ExitCode():
-		fmt.Println(bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
+		fmt.Println(color.Bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
 	case phase1 && r.GitAuthFailure:
-		fmt.Println(bold("== phase1, but NOT downgrading: Argo CD is being refused by the git remote — polling cannot fix a rejected credential =="))
+		fmt.Println(color.Bold("== phase1, but NOT downgrading: Argo CD is being refused by the git remote — polling cannot fix a rejected credential =="))
 		fmt.Fprintln(os.Stderr, "::error::Argo CD cannot authenticate to the source repo. This is terminal — check the values-repo credential (APL_VALUES_REPO_TOKEN → otomi.git.password → the argocd repo Secret) rather than re-running.")
 	}
 	return healthResult{
@@ -455,43 +457,43 @@ func healthExitCodeState(st *convergeState) healthResult {
 func printHealthSummary(r *health.Report) {
 	fmt.Println()
 	for _, c := range r.Drift {
-		fmt.Println("  " + yellow("drift:   ") + " " + c)
+		fmt.Println("  " + color.Yellow("drift:   ") + " " + c)
 	}
 	for _, c := range r.Deferred {
-		fmt.Println("  " + cyan("deferred:") + " " + c)
+		fmt.Println("  " + color.Cyan("deferred:") + " " + c)
 	}
 	for _, c := range r.Pending {
-		fmt.Println("  " + cyan("pending: ") + " " + c)
+		fmt.Println("  " + color.Cyan("pending: ") + " " + c)
 	}
 	for _, c := range r.Instance {
-		fmt.Println("  " + magenta("instance:") + " " + c)
+		fmt.Println("  " + color.Magenta("instance:") + " " + c)
 	}
 	for _, c := range r.Failed {
-		fmt.Println("  " + red("FAILED:  ") + " " + c)
+		fmt.Println("  " + color.Red("FAILED:  ") + " " + c)
 	}
 	// One dead tunnel fails every apiserver→pod check at once. Name it as the single
 	// cause it is — otherwise the reader sees N unrelated component failures sitting
-	// directly under a green "konnectivity-agent (3/3)" line and debugs the symptoms.
+	// directly under a color.Green "konnectivity-agent (3/3)" line and debugs the symptoms.
 	if r.TunnelDown {
-		fmt.Println(yellow("  konnectivity tunnel (apiserver → pod) unavailable — the checks above that " +
+		fmt.Println(color.Yellow("  konnectivity tunnel (apiserver → pod) unavailable — the checks above that " +
 			"depend on it are inconclusive, not failed. konnectivity-agent reporting Ready does not " +
 			"prove the tunnel: its readiness probe does not exercise the dial-out."))
 	}
 	switch r.Verdict() {
 	case health.HardFailed:
-		fmt.Printf("%s\n", red(fmt.Sprintf("%d check(s) hard-failed.", len(r.Failed))))
+		fmt.Printf("%s\n", color.Red(fmt.Sprintf("%d check(s) hard-failed.", len(r.Failed))))
 	case health.InProgress:
-		fmt.Println(yellow("Cluster is still converging — re-run after a backoff."))
+		fmt.Println(color.Yellow("Cluster is still converging — re-run after a backoff."))
 	default:
 		switch {
 		case len(r.Deferred) > 0 && len(r.Instance) > 0:
-			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Platform converged — %d operator-deferred + %d instance-owned item(s) remain (neither gates the platform).", len(r.Deferred), len(r.Instance)))
+			fmt.Printf("%s %s\n", color.Green("✓"), fmt.Sprintf("Platform converged — %d operator-deferred + %d instance-owned item(s) remain (neither gates the platform).", len(r.Deferred), len(r.Instance)))
 		case len(r.Instance) > 0:
-			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Platform converged — %d instance-owned item(s) remain (operator-owned escape hatch; does not gate the platform).", len(r.Instance)))
+			fmt.Printf("%s %s\n", color.Green("✓"), fmt.Sprintf("Platform converged — %d instance-owned item(s) remain (operator-owned escape hatch; does not gate the platform).", len(r.Instance)))
 		case len(r.Deferred) > 0:
-			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.", len(r.Deferred)))
+			fmt.Printf("%s %s\n", color.Green("✓"), fmt.Sprintf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.", len(r.Deferred)))
 		default:
-			fmt.Printf("%s Cluster converged.\n", green("✓"))
+			fmt.Printf("%s Cluster converged.\n", color.Green("✓"))
 		}
 	}
 }
@@ -539,7 +541,7 @@ func openBaoClusterSecretStoreReady() bool {
 
 // sectionItems fetches a section's corpus and, when the cluster did not answer,
 // records an inconclusive finding instead of letting the section iterate an
-// empty list and report green. This is requireCorpus for cluster probes: a
+// empty list and report color.Green. This is requireCorpus for cluster probes: a
 // section that had nothing to check otherwise prints the same clean run as one
 // that checked everything. CatPending (not CatFail) because converge's poll loop
 // should re-ask — an unreadable cluster is not converged, but it is also not
@@ -582,7 +584,7 @@ type clusterInventory struct {
 //
 // So an errored namespace list is not data: ok=false, and the caller returns
 // exit 3 (apiserver transient) so converge retries against its budget rather
-// than banking a false green. The CRD list needs no such handling — a failed one
+// than banking a false color.Green. The CRD list needs no such handling — a failed one
 // empties inv.crds, which trips the phase-0 gate into exit 2 and short-circuits
 // before any CRD-driven section runs.
 // scanCRDs takes the first of the two list calls. A failed one empties inv.crds,
@@ -624,15 +626,15 @@ func scanInventory() (*clusterInventory, bool) {
 // converge. An unknown category falls through to a blank, uncolored label.
 var catStyles = map[health.Category]struct {
 	label string
-	color func(string) string
+	paint func(string) string
 }{
-	health.CatOK:       {"OK", green},
-	health.CatWarn:     {"WARN", yellow},
-	health.CatFail:     {"FAIL", red},
-	health.CatPending:  {"PENDING", cyan},
-	health.CatDeferred: {"DEFERRED", cyan},
-	health.CatDrift:    {"DRIFT", yellow},
-	health.CatInstance: {"INSTANCE", magenta},
+	health.CatOK:       {"OK", color.Green},
+	health.CatWarn:     {"WARN", color.Yellow},
+	health.CatFail:     {"FAIL", color.Red},
+	health.CatPending:  {"PENDING", color.Cyan},
+	health.CatDeferred: {"DEFERRED", color.Cyan},
+	health.CatDrift:    {"DRIFT", color.Yellow},
+	health.CatInstance: {"INSTANCE", color.Magenta},
 }
 
 // record prints a labeled line for a finding and routes it into the report
@@ -652,14 +654,14 @@ func record(r *health.Report, cat health.Category, msg string) {
 	// Pad to the fixed column on the PLAIN label, then color — the ANSI escapes are
 	// zero-width, so the columns stay aligned (color.go).
 	label := fmt.Sprintf("%-8s", style.label)
-	if style.color != nil {
-		label = style.color(label)
+	if style.paint != nil {
+		label = style.paint(label)
 	}
 	fmt.Printf("  %s %s\n", label, msg)
 	r.Add(cat, msg)
 }
 
-func hdr(s string) { fmt.Printf("\n%s\n", bold("== "+s+" ==")) }
+func hdr(s string) { fmt.Printf("\n%s\n", color.Bold("== "+s+" ==")) }
 
 // metaName / nsName extract common metadata for inline-typed items.
 type meta struct {

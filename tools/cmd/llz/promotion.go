@@ -14,7 +14,7 @@ package main
 // line, not a tie — so `nextStage` is unambiguous.
 //
 //   • `llz env list --ordered`  — the ranked deployments in promotion order, the
-//                                 sequence a promote-on-green workflow walks.
+//                                 sequence a promote-on-color.Green workflow walks.
 //   • `llz env next <name>`     — the deployment promoted into after <name>; errors
 //                                 on the last stage (nothing left to promote to).
 //
@@ -146,8 +146,8 @@ func envNextCmd() *cobra.Command {
 		Use:   "next <deployment>",
 		Short: "print the deployment promoted into after <deployment> (the next promotion_rank); errors on the last stage",
 		Long: "Reads each deployment's promotion_rank (cluster tfvars) and prints the\n" +
-			"next stage in the pipeline — what a promote-on-green CI job builds after\n" +
-			"<deployment> goes green. Errors if <deployment> is unranked (not in a\n" +
+			"next stage in the pipeline — what a promote-on-color.Green CI job builds after\n" +
+			"<deployment> goes color.Green. Errors if <deployment> is unranked (not in a\n" +
 			"pipeline) or is the final stage. Pair with `llz env list --ordered`.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {

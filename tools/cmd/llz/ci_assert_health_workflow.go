@@ -176,7 +176,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 	// to the cluster made the gate unfalsifiable: the e2e explicitly enables
 	// clusterHealthWorkflow, so a WorkflowTemplate that never synced — a render
 	// regression, a Kyverno denial on the CR, a wedged Argo app — read as
-	// "component disabled" and passed green, proving nothing. Nothing else asserts
+	// "component disabled" and passed color.Green, proving nothing. Nothing else asserts
 	// the template SHOULD exist. Same anchoring assert-broad-pat-rotation uses.
 	if !kExists("-n", namespace, "get", "workflowtemplate", template) {
 		expected, why := healthWorkflowExpected(region)

@@ -193,7 +193,7 @@ metadata:
 // An empty corpus must FAIL, not pass. The guard used to call walkManifests and
 // throw the examined count away, so with its trees absent or moved it walked zero
 // files, classified zero negative-wave kinds, and printed the same "every
-// negative-wave kind is health-safe" green as a full clean run — the PR #142 wedge
+// negative-wave kind is health-safe" color.Green as a full clean run — the PR #142 wedge
 // class unpoliced by a guard that reported success. Its three siblings all gated on
 // requireCorpus; this one did not.
 func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
@@ -218,7 +218,7 @@ func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
 
 	err = runCIWaveHealthGuard(root)
 	if err == nil {
-		t.Fatal("wave-health-guard passed with an EMPTY corpus — a guard that examined nothing must not report the same green as one that examined everything")
+		t.Fatal("wave-health-guard passed with an EMPTY corpus — a guard that examined nothing must not report the same color.Green as one that examined everything")
 	}
 	if !strings.Contains(err.Error(), "examined 0 manifest files") {
 		t.Fatalf("want the requireCorpus failure, got: %v", err)

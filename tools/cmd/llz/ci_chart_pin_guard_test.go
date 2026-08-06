@@ -170,7 +170,7 @@ func TestExtractChartPinsFindsVersionAboveChart(t *testing.T) {
 
 // TestChartPinScanRootsCoverPlatformApl guards the coverage gap directly:
 // platform-apl holds 3 of the repo's 5 first-party pins, and its absence from
-// the scan roots let them drift unwatched while the guard reported green.
+// the scan roots let them drift unwatched while the guard reported color.Green.
 func TestChartPinScanRootsCoverPlatformApl(t *testing.T) {
 	for _, want := range []string{"platform-apl", "kubernetes-charts"} {
 		found := false

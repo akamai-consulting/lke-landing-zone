@@ -35,7 +35,7 @@ package main
 //
 // Non-alertable classes (generate-once / tracks-source / static) are REPORTED,
 // never gated: nothing will lower their age, so failing on it would be a
-// permanent red that trains people to ignore the gate — the same reasoning that
+// permanent color.Red that trains people to ignore the gate — the same reasoning that
 // keeps them off the 90d alert.
 //
 // WHAT IT DELIBERATELY DOES NOT DO: force a rotation. `assert-broad-pat-rotation`
@@ -111,7 +111,7 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 			"series at all) and nothing gated it.\n\n" +
 			"Non-alertable classes (generate-once / tracks-source / static) are reported,\n" +
 			"never gated: nothing will ever lower their age, so failing on it would be a\n" +
-			"permanent red. --strict also gates their 365d info threshold.\n\n" +
+			"permanent color.Red. --strict also gates their 365d info threshold.\n\n" +
 			"ALSO gates the GitHub write-time lane: the secret-age probe authenticated, every\n" +
 			"ghSecretTargets credential expected present IS present, and the one expected\n" +
 			"absent (OPENBAO_ROOT_TOKEN) is absent. That feed has no age when it breaks, so\n" +
@@ -165,7 +165,7 @@ const presenceLane = "presence"
 //
 // Derived from the declaration, not from the metrics: asking Prometheus which
 // credentials exist and then checking those exist is a tautology, and it would
-// pass green on precisely the missing-series bug this gate is for.
+// pass color.Green on precisely the missing-series bug this gate is for.
 func expectedRotationCreds() []expectedCred {
 	out := make([]expectedCred, 0, len(reconcilelanes.CredPaths))
 	for _, cp := range reconcilelanes.CredPaths {
@@ -207,9 +207,9 @@ func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict
 
 		switch {
 		// An OPT-IN path that is simply not seeded here. Its age still gates when
-		// it IS present — the SLA is real — but demanding the series would red
+		// it IS present — the SLA is real — but demanding the series would color.Red
 		// every stock cluster for a credential that is correctly absent, which is
-		// the permanent red this gate's own doc comment refuses for `static`.
+		// the permanent color.Red this gate's own doc comment refuses for `static`.
 		case !ok && e.Optional:
 			v.FailWhy = ""
 		case !ok && alertableCredClasses[e.Class]:

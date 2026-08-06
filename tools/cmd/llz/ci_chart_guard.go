@@ -10,7 +10,7 @@ package main
 // published; clusters keep pulling the stale artifact by their pinned
 // targetRevision. That is how the firewall-controller runner-acl RBAC grant
 // reached chart source but never any cluster, leaving the control-plane ACL
-// un-reconciled. This guard turns that class of mistake into a red PR.
+// un-reconciled. This guard turns that class of mistake into a color.Red PR.
 //
 // The decision logic (which dirs changed, and whether each bumped its version)
 // is pure and unit-tested; git is reached only through the execOutput seam.
@@ -57,7 +57,7 @@ func runChartVersionGuard(base, root string) error {
 	// WORKING TREE — so with only the committed diff a local pre-commit run
 	// compares the old chart set against new on-disk files and prints "No chart
 	// directories changed" for a chart the very next commit fails on. That false
-	// green is the whole reason the other two sources are here.
+	// color.Green is the whole reason the other two sources are here.
 	committed, err := gitOutput(root, "diff", "--name-only", base+"...HEAD", "--", chartsRoot)
 	if err != nil {
 		return fmt.Errorf("git diff against base %s: %w", base, err)

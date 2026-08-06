@@ -31,6 +31,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // tfrootTokens resolves the two copier tokens the generated TF roots carry:
@@ -120,15 +122,15 @@ func renderCmd() *cobra.Command {
 }
 
 // renderedPath / wouldRenderPath print one file-mutation line with a consistent
-// colored verb — green for done, cyan for a dry-run plan — so the render/scaffold
+// colored verb — color.Green for done, color.Cyan for a dry-run plan — so the render/scaffold
 // output reads as a scannable action log. Both degrade to plain text off a TTY
 // (color.go).
 func renderedPath(prefix, path string) {
-	fmt.Printf("  %s  %s%s\n", green("rendered"), prefix, path)
+	fmt.Printf("  %s  %s%s\n", color.Green("rendered"), prefix, path)
 }
 
 func wouldRenderPath(prefix, path string) {
-	fmt.Printf("  %s  %s%s\n", cyan("would-render"), prefix, path)
+	fmt.Printf("  %s  %s%s\n", color.Cyan("would-render"), prefix, path)
 }
 
 func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
@@ -198,7 +200,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("%s LandingZone spec valid (%d environment(s)); committed manifests in sync\n", green("✓"), len(lz.Spec.Environments))
+		fmt.Printf("%s LandingZone spec valid (%d environment(s)); committed manifests in sync\n", color.Green("✓"), len(lz.Spec.Environments))
 		return nil
 	}
 
@@ -336,7 +338,7 @@ func untrackRenderedTfvars(relPrefix string) {
 		return // best-effort: no git, not a repo, etc.
 	}
 	fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored tfvars (rendered from the spec) — commit the removal:\n  %s\n",
-		dim("→"), len(tracked), strings.Join(tracked, "\n  "))
+		color.Dim("→"), len(tracked), strings.Join(tracked, "\n  "))
 }
 
 // committedTargets returns every committed apl-values/<env>/ file a deployment
@@ -754,16 +756,16 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		switch {
 		case err != nil:
 			changed++
-			fmt.Printf("%s %s\n", green("+ new    "), p)
+			fmt.Printf("%s %s\n", color.Green("+ new    "), p)
 			fmt.Println(indent(lineDiff("", want[p]), "    "))
 		case string(cur) != want[p]:
 			changed++
-			fmt.Printf("%s %s\n", yellow("~ changed"), p)
+			fmt.Printf("%s %s\n", color.Yellow("~ changed"), p)
 			fmt.Println(indent(lineDiff(string(cur), want[p]), "    "))
 		}
 	}
 	if changed == 0 {
-		fmt.Printf("%s render is a no-op — all %d target file(s) already match the spec\n", green("✓"), len(want))
+		fmt.Printf("%s render is a no-op — all %d target file(s) already match the spec\n", color.Green("✓"), len(want))
 		return nil
 	}
 	fmt.Printf("\n%d file(s) would change. Run `llz render` to apply.\n", changed)
@@ -854,18 +856,18 @@ func lineDiff(oldS, newS string) string {
 			continue
 		}
 		if gap {
-			fmt.Fprintf(&b, "  %s\n", dim("…"))
+			fmt.Fprintf(&b, "  %s\n", color.Dim("…"))
 			gap = false
 		}
 		if emitted >= capLines {
-			fmt.Fprintf(&b, "  %s\n", dim("… (more — run `llz render`, then `git diff`)"))
+			fmt.Fprintf(&b, "  %s\n", color.Dim("… (more — run `llz render`, then `git diff`)"))
 			break
 		}
 		switch d.sign {
 		case '-':
-			fmt.Fprintf(&b, "%s %s\n", red("-"), d.text)
+			fmt.Fprintf(&b, "%s %s\n", color.Red("-"), d.text)
 		case '+':
-			fmt.Fprintf(&b, "%s %s\n", green("+"), d.text)
+			fmt.Fprintf(&b, "%s %s\n", color.Green("+"), d.text)
 		default:
 			fmt.Fprintf(&b, "  %s\n", d.text)
 		}

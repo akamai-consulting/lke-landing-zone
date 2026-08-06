@@ -153,6 +153,13 @@ func (e Extension) Validate() []error {
 		seenBinding[at] = true
 	}
 
+	for i, note := range e.Incomplete {
+		if strings.TrimSpace(note) == "" {
+			errs = append(errs, fmt.Errorf("%s: Incomplete[%d] is blank — the field records WHAT is "+
+				"not declared yet; an empty entry says an extension is partial without saying how", e.Name, i))
+		}
+	}
+
 	for _, b := range e.Bindings {
 		// A grant is the HANDLE, not a label on one: a cluster-read binding is
 		// handed a read-only kubeconfig, a secret-custody binding an OpenBao token

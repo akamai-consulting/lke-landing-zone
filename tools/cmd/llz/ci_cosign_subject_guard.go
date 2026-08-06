@@ -14,7 +14,7 @@ package main
 // starts REJECTING the very images we just built and signed.
 //
 // That failure is loud in the wrong place and quiet in the right one. Nothing in
-// template-repo CI notices — the rename is green here — and the breakage lands
+// template-repo CI notices — the rename is color.Green here — and the breakage lands
 // later, in clusters, as pods that never get admitted. Four workloads run the
 // gated image: the llz-reconciler Deployment (every watch lane), the
 // broad-pat-rotator and harbor-robot-provisioner CronJobs, and the
@@ -23,7 +23,7 @@ package main
 // credential rotation stops, and the cluster looks fine until something needs
 // the thing that quietly stopped running.
 //
-// The guard is the cheap half of that trade: a rename becomes a red PR in the
+// The guard is the cheap half of that trade: a rename becomes a color.Red PR in the
 // repo doing the renaming, with the policy file named, instead of a silent
 // admission failure in every instance downstream.
 //
@@ -127,7 +127,7 @@ func runCosignSubjectGuard(root string) error {
 	// An empty result is NOT a pass. This guard exists because a path pin can go
 	// stale silently; a guard that finds no pins at all has the same blind spot
 	// one directory up — the policy itself could have been renamed or moved out
-	// of the scanned tree, and "zero pins, all valid" would report green.
+	// of the scanned tree, and "zero pins, all valid" would report color.Green.
 	if len(refs) == 0 {
 		return fmt.Errorf("cosign-subject-guard: found no keyless workflow `subject:` pins under %s, "+
 			"but the repo signs its first-party image keyless and gates it at admission. "+

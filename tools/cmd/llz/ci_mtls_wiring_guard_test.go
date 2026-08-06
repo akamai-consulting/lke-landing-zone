@@ -54,7 +54,7 @@ func TestMTLSWiringAcceptsAWiredPod(t *testing.T) {
 
 // TestMTLSWiringCatchesMissingClientCert is the regression test for the defect
 // that motivated this guard: removing the client-certificate mount left the pod
-// unable to reach OpenBao while every other gate in the repo reported green.
+// unable to reach OpenBao while every other gate in the repo reported color.Green.
 func TestMTLSWiringCatchesMissingClientCert(t *testing.T) {
 	y := strings.Replace(wiredDeployment, "            - {name: id, mountPath: /etc/openbao-client-tls}\n", "", 1)
 	certs := certsFor("llz-reconciler/openbao-ca-bundle", "llz-reconciler/llz-reconciler-client-tls")

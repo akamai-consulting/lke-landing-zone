@@ -150,7 +150,7 @@ func convergenceRawServer(t *testing.T, body string) *kube.Client {
 	return kube.NewClient(srv.URL, "tok", srv.Client())
 }
 
-// An unread corpus must not report the same green as a healthy one. Each case
+// An unread corpus must not report the same color.Green as a healthy one. Each case
 // here used to render as llz_convergence_state=0 — "all Argo Applications
 // converged" — on the strength of having classified nothing at all.
 func TestSampleConvergenceEmptyCorpusIsNotConverged(t *testing.T) {

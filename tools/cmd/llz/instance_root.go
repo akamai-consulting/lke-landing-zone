@@ -24,6 +24,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // instanceRootMarkers identify an instance checkout. Any ONE is enough:
@@ -109,14 +111,14 @@ func requireInstanceRoot(op string) error {
 	case len(cands) > 0:
 		b.WriteString("  • your instance is right here — cd into it first:\n")
 		for _, c := range cands {
-			fmt.Fprintf(&b, "      %s\n", cyan("cd "+c))
+			fmt.Fprintf(&b, "      %s\n", color.Cyan("cd "+c))
 		}
 	case enclosingInstanceRoot() != "":
 		fmt.Fprintf(&b, "  • you are inside an instance, below its root — go up to it:\n      %s\n",
-			cyan("cd "+enclosingInstanceRoot()))
+			color.Cyan("cd "+enclosingInstanceRoot()))
 	default:
-		fmt.Fprintf(&b, "  • already scaffolded one? cd into it:      %s\n", cyan("cd <instance-dir>"))
-		fmt.Fprintf(&b, "  • not yet? scaffold + publish it first:    %s\n", cyan("llz new <instance-dir> --push --yes"))
+		fmt.Fprintf(&b, "  • already scaffolded one? cd into it:      %s\n", color.Cyan("cd <instance-dir>"))
+		fmt.Fprintf(&b, "  • not yet? scaffold + publish it first:    %s\n", color.Cyan("llz new <instance-dir> --push --yes"))
 	}
 	return errors.New(strings.TrimRight(b.String(), "\n"))
 }

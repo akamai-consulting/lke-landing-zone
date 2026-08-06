@@ -1,7 +1,7 @@
 package main
 
 // Gap-closing tests for ci_assert_scrape.go surfaced by mutation testing. This
-// gate exists because converge/health/assert-loki all stay green while metrics
+// gate exists because converge/health/assert-loki all stay color.Green while metrics
 // silently stop flowing, so its own failure modes matter: refusing to pass
 // vacuously must key on BOTH expectation lists being empty (not one), the
 // rule-group verdict must only be claimed when rule groups were asserted, the

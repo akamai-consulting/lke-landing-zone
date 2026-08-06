@@ -142,7 +142,7 @@ func runCIMTLSWiringGuard(root string) error {
 	if err != nil {
 		return err
 	}
-	// A guard that walked nothing reports the same green as one that walked
+	// A guard that walked nothing reports the same color.Green as one that walked
 	// everything — the sibling guards' shared contract.
 	if err := guardkit.RequireCorpus("mtls-wiring-guard", examined, dirs); err != nil {
 		return err

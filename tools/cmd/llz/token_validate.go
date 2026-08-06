@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 type validityStatus int
@@ -263,15 +265,15 @@ func localValue(r requirement, secrets, vars map[string]string) (string, bool) {
 func validityCell(tv tokenValidity) string {
 	switch tv.status {
 	case vValid:
-		return green("✓ " + orDefault(tv.detail, "valid"))
+		return color.Green("✓ " + orDefault(tv.detail, "valid"))
 	case vWarn:
-		return yellow("⚠ " + tv.detail)
+		return color.Yellow("⚠ " + tv.detail)
 	case vInvalid:
-		return red("✗ INVALID — " + tv.detail)
+		return color.Red("✗ INVALID — " + tv.detail)
 	case vUnreachable:
-		return yellow("⚠ " + tv.detail)
+		return color.Yellow("⚠ " + tv.detail)
 	default: // vSkipped
-		return dim("– " + orDefault(tv.detail, "not probed"))
+		return color.Dim("– " + orDefault(tv.detail, "not probed"))
 	}
 }
 

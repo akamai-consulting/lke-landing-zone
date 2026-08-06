@@ -11,7 +11,7 @@ package main
 //
 // And checkObjectsAreEncrypted samples the LOKI bucket, which proves the proxy
 // encrypts — but Loki reaches the proxy without any CA work at all (its config
-// carries insecure_skip_verify: true). So a green Loki check says nothing about
+// carries insecure_skip_verify: true). So a color.Green Loki check says nothing about
 // whether Harbor can complete the handshake.
 //
 // The only thing that proves it is Harbor's own registry successfully writing to

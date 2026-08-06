@@ -5,7 +5,7 @@ package main
 // `if err != nil { return err }` is a no-op. That leaves the error handling
 // itself unasserted — and an inverted guard here does not fail the bootstrap, it
 // makes it EXIT 0 having applied half (or none) of the Argo bridge, which is the
-// convergence contract's worst outcome: green while inert.
+// convergence contract's worst outcome: color.Green while inert.
 
 import (
 	"encoding/base64"
@@ -38,7 +38,7 @@ func managedArgoUpKubectl(extra func(line string) (string, bool)) func(args ...s
 // contract when it was written. Upstream deliberately made it fatal: on a managed
 // cluster that never publishes apl-git-config there is no apl-core, so every
 // gitops-* Application would sit in ComparisonError and converge would hard-fail
-// ~20 minutes later naming none of it. Failing here cannot turn a passing run red;
+// ~20 minutes later naming none of it. Failing here cannot turn a passing run color.Red;
 // it fails earlier and names the cause. The assertion is inverted to match, and
 // the error text is asserted so a silent abort is still a failure.
 func TestBootstrapClusterAbortsWhenManagedAplConfigFails(t *testing.T) {
@@ -189,7 +189,7 @@ func aplGitStubKubectl(branch string, override func(line string) (string, bool, 
 // Repointing apl-core is the LAST and load-bearing step: the migration Job has
 // already force-pushed the complete tree to the github branch, and if the Secret
 // patch is rejected apl-core keeps reconciling gitea. Reporting that as success
-// leaves the operator with a green bootstrap and an unchanged cluster.
+// leaves the operator with a color.Green bootstrap and an unchanged cluster.
 func TestConfigureManagedAplFailsWhenTheGitConfigPatchIsRejected(t *testing.T) {
 	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", instanceRepoToken: "tok"}
 	d := bootstrapDeps{

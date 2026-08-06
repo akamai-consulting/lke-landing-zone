@@ -42,6 +42,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 func ciAssertAdopterPinCmd() *cobra.Command {
@@ -62,7 +64,7 @@ func ciAssertAdopterPinCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release tag to check (default: the template repo's latest release)")
-	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+defaultTemplateRepo+")")
+	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+sustain.DefaultTemplateRepo+")")
 	return c
 }
 

@@ -174,7 +174,7 @@ func runChartPublishCheck(o chartPublishOpts) error {
 	}
 	// With the scan trees corrected, finding nothing means the pins moved again —
 	// not that everything is published. Refuse to report success having checked
-	// none; that vacuous green is what hid this bug on every run.
+	// none; that vacuous color.Green is what hid this bug on every run.
 	if len(pins) == 0 {
 		return fmt.Errorf("chart-publish-check: found no first-party chart pins under %s (searched %s) — refusing to report every chart published having checked none",
 			o.root, strings.Join(publishPinTrees, ", "))

@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 func TestContainsString(t *testing.T) {
@@ -67,23 +69,6 @@ func TestFirstNonEmpty(t *testing.T) {
 	}
 }
 
-func TestGithubSlug(t *testing.T) {
-	cases := map[string]string{
-		"git@github.com:owner/repo.git":     "owner/repo",
-		"https://github.com/owner/repo.git": "owner/repo",
-		"https://github.com/owner/repo":     "owner/repo",
-		"owner/repo.git":                    "owner/repo",
-		"https://gitlab.com/owner/repo":     "", // other host
-		"git@gitlab.com:owner/repo.git":     "", // other host
-		"justaword":                         "",
-	}
-	for in, want := range cases {
-		if got := githubSlug(in); got != want {
-			t.Errorf("githubSlug(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestGhFineGrainedDispatchURL(t *testing.T) {
 	u, err := url.Parse(ghFineGrainedDispatchURL("llz-e2e-dispatch", "my-org"))
 	if err != nil {
@@ -134,8 +119,8 @@ func TestNormalizeTemplateRepo(t *testing.T) {
 		"https://github.com/owner/repo.git": "owner/repo",
 	}
 	for in, want := range cases {
-		if got := normalizeTemplateRepo(in); got != want {
-			t.Errorf("normalizeTemplateRepo(%q) = %q, want %q", in, got, want)
+		if got := sustain.NormalizeTemplateRepo(in); got != want {
+			t.Errorf("sustain.NormalizeTemplateRepo(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

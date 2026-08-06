@@ -168,7 +168,7 @@ func ciCmd() *cobra.Command {
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed
 	// drops a trivial manifest under kubernetes-custom/namespaces/<ns>/, and this
 	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
-	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps green).
+	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps color.Green).
 	c.AddCommand(ciAssertInstanceCustomCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
@@ -239,7 +239,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciAlertEvalCmd())
 	// E2E gate: assert every landing-zone ServiceMonitor has an `up` scrape target
 	// and every PrometheusRule group is loaded — the observability-pipeline wiring
-	// converge/health/assert-loki all stay green on when a label/port/selector
+	// converge/health/assert-loki all stay color.Green on when a label/port/selector
 	// regression silently un-scrapes/un-loads it.
 	c.AddCommand(ciAssertScrapeTargetsCmd())
 	// E2E gate: assert the reconciler is FUNCTIONALLY healthy (llz_reconcile_up=1 +
@@ -254,7 +254,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciAssertReconcilerEffectsCmd())
 	// ── Tier-2 delivery gates: does the data actually ARRIVE? ────────────────
 	// Each covers a pipeline whose failure mode is silence — the producer stays
-	// Running, the sink stays Ready, converge stays green, and the thing simply
+	// Running, the sink stays Ready, converge stays color.Green, and the thing simply
 	// never gets there. assert-openbao-audit proved one such round trip; these are
 	// the rest of them.
 	//
@@ -387,7 +387,7 @@ func ciCmd() *cobra.Command {
 	// Release gate for the shape e2e structurally cannot produce: an instance pinned
 	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
-	// first-run to a live adopter with e2e green throughout.
+	// first-run to a live adopter with e2e color.Green throughout.
 	c.AddCommand(ciAssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
@@ -934,7 +934,7 @@ func ciReapVolumesCmd() *cobra.Command {
 			"--require-empty (needs --volume-ids) re-lists after the sweep and, if any\n" +
 			"tracked Volume is still present, retries up to --attempts (sleeping\n" +
 			"--retry-delay s between tries) and finally EXITS NON-ZERO when orphans\n" +
-			"remain — so a destroy doesn't go green leaving Volumes that block the next\n" +
+			"remain — so a destroy doesn't go color.Green leaving Volumes that block the next\n" +
 			"apply's preflight. Without it the sweep is single-pass and best-effort.\n" +
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
@@ -969,7 +969,7 @@ func ciReapNodeBalancersCmd() *cobra.Command {
 			"--require-empty (needs --cluster-id) re-lists after the sweep and, if any\n" +
 			"NodeBalancer still carries the cluster's CCM tag, retries up to --attempts\n" +
 			"(sleeping --retry-delay s between tries) and finally EXITS NON-ZERO when\n" +
-			"orphans remain — so a destroy doesn't go green leaving a NodeBalancer that\n" +
+			"orphans remain — so a destroy doesn't go color.Green leaving a NodeBalancer that\n" +
 			"blocks the next apply's preflight.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {

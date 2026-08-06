@@ -1,4 +1,4 @@
-package main
+package sustain
 
 import (
 	"os"
@@ -29,7 +29,7 @@ func TestUpgradeChurnGuardPasses(t *testing.T) {
 	churnFixture(t,
 		"jobs:\n  call:\n    uses: ./.github/workflows/llz-terraform.yml\n    with:\n      instance_repo: <@ instance_repo @>\n",
 		"See [the guide](../adopter-guide.md) and [secrets](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md).\n")
-	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
+	if err := StepUpgradeChurnGuard(realGitDeps(t)); err != nil {
 		t.Fatalf("clean delivered surface must pass: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestUpgradeChurnGuardCatchesEachShape(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			churnFixture(t, tc.scaffold, tc.runbook)
-			err := stepUpgradeChurnGuard(globalOpts{})
+			err := StepUpgradeChurnGuard(realGitDeps(t))
 			if err == nil {
 				t.Fatal("expected the guard to fail")
 			}
@@ -79,7 +79,7 @@ func TestUpgradeChurnGuardAllowsProseVersions(t *testing.T) {
 	churnFixture(t,
 		"jobs: {}\n",
 		"Fixed in v0.0.29; see the v0.0.31 release notes. Upgrade with `llz upgrade --ref v0.0.32`.\n")
-	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
+	if err := StepUpgradeChurnGuard(realGitDeps(t)); err != nil {
 		t.Fatalf("prose version references must be allowed: %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestUpgradeChurnGuardSkipsOutsideBothCheckouts(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "README.md"), "an instance pinned at v0.0.32\n")
 	t.Chdir(dir)
-	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
+	if err := StepUpgradeChurnGuard(realGitDeps(t)); err != nil {
 		t.Fatalf("must skip outside a template-repo or instance checkout: %v", err)
 	}
 }
@@ -116,7 +116,7 @@ func instanceChurnFixture(t *testing.T, quickstart string) {
 func TestUpgradeChurnGuardCatchesStaleDeliveryInInstance(t *testing.T) {
 	instanceChurnFixture(t,
 		"[secrets](https://github.com/akamai-consulting/lke-landing-zone/blob/v0.0.32/docs/secrets.md)\n")
-	err := stepUpgradeChurnGuard(globalOpts{})
+	err := StepUpgradeChurnGuard(realGitDeps(t))
 	if err == nil {
 		t.Fatal("expected the guard to fail on a stale delivered permalink")
 	}
@@ -130,7 +130,7 @@ func TestUpgradeChurnGuardCatchesStaleDeliveryInInstance(t *testing.T) {
 func TestUpgradeChurnGuardAllowsThePinnedPointerInInstance(t *testing.T) {
 	instanceChurnFixture(t,
 		"[secrets](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md)\n")
-	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
+	if err := StepUpgradeChurnGuard(realGitDeps(t)); err != nil {
 		t.Fatalf("a correctly delivered instance must pass: %v", err)
 	}
 }

@@ -151,7 +151,7 @@ func TestValidate(t *testing.T) {
 			control: true, can: nil, want: "TIMED OUT",
 		},
 		{
-			name:    "red control invalidates everything",
+			name:    "color.Red control invalidates everything",
 			run:     ok,
 			control: false, can: liveCanary(), want: "CONTROL failed",
 		},
@@ -314,7 +314,7 @@ func TestMutateCmdReportsAScoreWhenTheRunValidates(t *testing.T) {
 		t.Errorf("a baselined survivor must not be reported as new:\n%s", out)
 	}
 	// CONTROL must actually run, and before gremlins — a score computed without
-	// it is the "red suite kills every mutant" failure.
+	// it is the "color.Red suite kills every mutant" failure.
 	if len(*calls) < 2 || !strings.HasPrefix((*calls)[0], "go test") {
 		t.Errorf("CONTROL `go test` must run first, calls were: %v", *calls)
 	}
@@ -331,7 +331,7 @@ func TestMutateCmdRefusesToScoreAnUntrustworthyRun(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "red control",
+			name:       "color.Red control",
 			controlErr: errors.New("suite failed"),
 			out:        mutateHealthyOut,
 			want:       "CONTROL failed",

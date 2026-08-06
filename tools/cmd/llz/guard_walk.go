@@ -81,7 +81,7 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 // On error it returns the paths found SO FAR alongside it, never a bare nil. A
 // caller that drops the error must not also be handed an empty slice: the guards
 // read "no files" as the clean skip-or-succeed case, so returning nil on an
-// unreadable subtree would turn a partial scan into a silent green — the walk
+// unreadable subtree would turn a partial scan into a silent color.Green — the walk
 // aborting is exactly when the corpus looks emptiest.
 func collectManifestPaths(dirs []string) ([]string, error) {
 	var paths []string

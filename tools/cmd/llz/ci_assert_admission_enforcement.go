@@ -19,7 +19,7 @@ package main
 // registered, whether the policy compiled, or whether `validationFailureAction`
 // is still Enforce — and a policy that exists but does not enforce looks
 // identical in git, in Argo, and in converge. Both of these are one edit
-// (Enforce → Audit) away from being decorative, and nothing would go red.
+// (Enforce → Audit) away from being decorative, and nothing would go color.Red.
 //
 // The method is a server-side dry run: submit a resource the policy must act on
 // and require the policy's OWN response. Dry-run runs the full admission chain —

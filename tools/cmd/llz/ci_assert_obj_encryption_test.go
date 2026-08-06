@@ -103,7 +103,7 @@ func TestAssertObjEncryptionPassesAFullyMutatedPod(t *testing.T) {
 	}
 }
 
-// A gate that examined nothing must not report green — the same rule the sibling
+// A gate that examined nothing must not report color.Green — the same rule the sibling
 // guards' requireCorpus enforces.
 func TestAssertObjEncryptionFailsWhenNoRegistryPodsExist(t *testing.T) {
 	withObjEncKubectl(t, `{"items":[{"metadata":{"name":"other"},"spec":{"containers":[],"volumes":[]}}]}`, nil)
@@ -195,7 +195,7 @@ func TestCheckObjectsEncryptedPassesWhenTheWholeSampleIsEncrypted(t *testing.T) 
 	}
 }
 
-// THE regression this rewrite exists for. A single-object sample reported green on
+// THE regression this rewrite exists for. A single-object sample reported color.Green on
 // a bucket that is 1-in-N plaintext; the whole sample must be probed.
 func TestCheckObjectsEncryptedCatchesOnePlaintextAmongMany(t *testing.T) {
 	keys := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "rotten"}
@@ -404,7 +404,7 @@ func TestObjEncryptionLaneIsRegisteredAndGating(t *testing.T) {
 	// It must carry NOTHING else. Endpoint and bucket names are derived from the
 	// spec; the earlier revision passed them from three env vars that no workflow
 	// exported, so the lane would have failed on a missing flag rather than on
-	// encryption — a gate misconfigured into always-red teaches people to ignore it.
+	// encryption — a gate misconfigured into always-color.Red teaches people to ignore it.
 	for _, invented := range []string{"OBJ_ENDPOINT_HOST", "LOKI_CHUNKS_BUCKET", "HARBOR_REGISTRY_BUCKET"} {
 		if strings.Contains(flat, invented) {
 			t.Errorf("lane still reads %s, which nothing sets: %q", invented, flat)
@@ -569,7 +569,7 @@ func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *tes
 }
 
 // A bucket whose every object predates the cutover proves nothing either way, and a
-// check that examined no relevant object must not report green. This is the state a
+// check that examined no relevant object must not report color.Green. This is the state a
 // consumer that CANNOT WRITE produces — the real condition it surfaced on the e2e
 // cluster, where Loki was failing every PutObject and the bucket held only a
 // previous cluster's data.

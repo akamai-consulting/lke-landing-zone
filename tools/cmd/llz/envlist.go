@@ -84,7 +84,7 @@ func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
 	var names []string
 	switch {
 	case ordered:
-		// Promotion order, not alphabetical: the sequence a promote-on-green
+		// Promotion order, not alphabetical: the sequence a promote-on-color.Green
 		// workflow walks (dev → staging → prod). Only ranked deployments appear.
 		stages, err := readPromotion(tfDir)
 		if err != nil {
@@ -138,7 +138,7 @@ func envListCmd() *cobra.Command {
 			"OpenBao HA members (ha_role != standalone); --role filters by exact role.\n" +
 			"--ordered emits only the deployments that declare a promotion_rank, in\n" +
 			"ascending promotion order (dev → staging → prod) — the sequence a\n" +
-			"promote-on-green pipeline walks (see `llz env next`).\n" +
+			"promote-on-color.Green pipeline walks (see `llz env next`).\n" +
 			"Layout-aware (instance root or a template-repo checkout).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runEnvList(jsonOut, haOnly, ordered, role) },

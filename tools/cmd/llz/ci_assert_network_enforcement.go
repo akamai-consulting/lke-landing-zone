@@ -49,7 +49,7 @@ package main
 //	        harbor-peerauthentication.yaml warns about having already caught twice.
 //
 // IT CLEANS UP AFTER ITSELF, including on failure: the scratch namespace is
-// deleted in a defer. A gate that leaks a namespace on every red run makes the
+// deleted in a defer. A gate that leaks a namespace on every color.Red run makes the
 // next run's cluster dirtier, and this one runs on a cluster that is about to be
 // asserted against by ten other lanes.
 

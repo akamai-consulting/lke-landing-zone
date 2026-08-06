@@ -183,7 +183,7 @@ func TestChartScalarStripsQuotes(t *testing.T) {
 	}
 }
 
-// TestRunChartVersionGuardSeesWorkingTree locks the false-green this guard used
+// TestRunChartVersionGuardSeesWorkingTree locks the false-color.Green this guard used
 // to give before a commit. Detection used to be `git diff base...HEAD` alone —
 // committed changes only — while the NEW version is read from the working tree.
 // So an edited-but-uncommitted chart produced an empty changed set and the guard

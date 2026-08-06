@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 func TestPinnedImageTag(t *testing.T) {
@@ -210,14 +212,14 @@ func TestInstanceTemplateRepo(t *testing.T) {
 		writeInstanceDir(t, map[string]string{
 			".copier-answers.yml": "_src_path: /home/me/template\n_commit: v0.0.39\n",
 		})
-		if got := instanceTemplateRepo(); got != defaultTemplateRepo {
-			t.Errorf("instanceTemplateRepo = %q, want %q", got, defaultTemplateRepo)
+		if got := instanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
+			t.Errorf("instanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
 		}
 	})
 	t.Run("falls back outside an instance", func(t *testing.T) {
 		writeInstanceDir(t, nil)
-		if got := instanceTemplateRepo(); got != defaultTemplateRepo {
-			t.Errorf("instanceTemplateRepo = %q, want %q", got, defaultTemplateRepo)
+		if got := instanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
+			t.Errorf("instanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
 		}
 	})
 }

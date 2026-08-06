@@ -166,7 +166,7 @@ const s3SamplePageCap = 10
 // backwards by fetching exactly ONE key. That is adequate for a bucket that should
 // be uniformly encrypted from its first write, and badly misleading for a bucket
 // mid-migration: with a thousand plaintext objects among ten thousand, a
-// single-object sample reports green nine times out of ten.
+// single-object sample reports color.Green nine times out of ten.
 //
 // So the caller samples a set and fails on ANY plaintext in it. A clean sample is
 // evidence, not proof; a dirty one is proof. That asymmetry is stated in the

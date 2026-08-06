@@ -36,7 +36,7 @@ package main
 // WHAT IT DOES NOT DO. It cannot see a credential that never appears in a
 // workflow — one seeded by hand straight into OpenBao, say. That residue belongs
 // to reconcilelanes.CredPaths and its own gate (`assert-rotation-health`), and is stated here so
-// nobody reads a green run as "every credential is covered".
+// nobody reads a color.Green run as "every credential is covered".
 
 import (
 	"fmt"
@@ -217,7 +217,7 @@ func runCICredentialCoverageGuard(root string) error {
 		return err
 	}
 	// Same rationale as the sibling guards: a guard that read no workflows prints
-	// the same green as one that read all of them.
+	// the same color.Green as one that read all of them.
 	if err := guardkit.RequireCorpus("credential-coverage-guard", examined, []string{dir}); err != nil {
 		return err
 	}

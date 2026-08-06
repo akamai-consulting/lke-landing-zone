@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // CI image tags published by build-images.yml; TF_IMAGE/KUBE_IMAGE derive from
@@ -57,7 +59,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		return err
 	}
 
-	fmt.Printf("%s %s\n", bold("llz tokens"), dim(fmt.Sprintf("— %s (env infra-%s)%s", instanceRepo, deployEnv, adminBanner(admin))))
+	fmt.Printf("%s %s\n", color.Bold("llz tokens"), color.Dim(fmt.Sprintf("— %s (env infra-%s)%s", instanceRepo, deployEnv, adminBanner(admin))))
 
 	if err := os.MkdirAll(".llz", 0o700); err != nil {
 		return err
@@ -73,7 +75,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		tmplSt = fetchLiveState(templateRepo(), "")
 	}
 	if n := prepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
-		fmt.Printf("%s\n", dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
+		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
 	// PRESENCE isn't CORRECTNESS either, for the two variables llz derives rather
 	// than gathers. `llz upgrade` moves the template pin, and TF_IMAGE/KUBE_IMAGE
@@ -90,7 +92,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	})
 	for _, s := range repin {
 		fmt.Printf("%s %s names an older template commit — re-pinning: %s → %s\n",
-			yellow("!"), s.Name, dim(s.Have), cyan(s.Want))
+			color.Yellow("!"), s.Name, color.Dim(s.Have), color.Cyan(s.Want))
 		vars[s.Name] = s.Want
 	}
 	// Presence isn't validity: actively probe every gathered/cached credential so
@@ -100,20 +102,20 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	validity, invalidN := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
 	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if invalidN > 0 {
-		fmt.Println(dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
+		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
 	if len(missing) == 0 && len(repin) == 0 {
 		_ = writeEnvFile(".llz/vars.env", vars)
-		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", green("✓"))
+		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", color.Green("✓"))
 		return nil
 	}
 	if g.dryRun {
-		fmt.Printf("\n%s\n", dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above%s.",
+		fmt.Printf("\n%s\n", color.Dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above%s.",
 			len(missing), repinPlanNote(repin))))
 		return nil
 	}
 	if !g.yes {
-		fmt.Println("\n" + dim("(no --yes: will gather + write .llz/*.env + print the push plan, but create/write nothing)"))
+		fmt.Println("\n" + color.Dim("(no --yes: will gather + write .llz/*.env + print the push plan, but create/write nothing)"))
 	}
 
 	// Decide the state-encryption passphrase's fate BEFORE the interactive section
@@ -135,9 +137,9 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	needKeys := !have("TF_STATE_ACCESS_KEY", true) || !have("TF_STATE_SECRET_KEY", true)
 	clusterID := clusterFromEndpoint(vars["TF_STATE_ENDPOINT"])
 	if needKeys || !have("LINODE_API_TOKEN", true) {
-		fmt.Printf("\n%s API token — full Read/Write (provisioning; also creates the state bucket)\n", bold("[Linode]"))
+		fmt.Printf("\n%s API token — full Read/Write (provisioning; also creates the state bucket)\n", color.Bold("[Linode]"))
 		openURL(g, linodeTokensURL)
-		fmt.Printf("      %s %s\n", dim("create at:"), cyan(linodeTokensURL))
+		fmt.Printf("      %s %s\n", color.Dim("create at:"), color.Cyan(linodeTokensURL))
 		token := prompt(in, "Linode PAT")
 		if token == "" {
 			return fmt.Errorf("a Linode PAT is required")
@@ -159,7 +161,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 			vars["TF_STATE_ENDPOINT"] = "https://" + clusterID + ".linodeobjects.com"
 			bucketName := firstNonEmpty(bucket, vars["TF_STATE_BUCKET"], repoSlug(instanceRepo)+"-tfstate")
 			vars["TF_STATE_BUCKET"] = bucketName
-			fmt.Printf("%s state bucket %q in %s\n", bold("[Linode]"), bucketName, clusterID)
+			fmt.Printf("%s state bucket %q in %s\n", color.Bold("[Linode]"), bucketName, clusterID)
 			if g.yes {
 				if _, err := client.CreateObjectStorageBucket(ctx, clusterID, bucketName); err != nil {
 					return fmt.Errorf("create bucket: %w", err)
@@ -174,13 +176,13 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 					return fmt.Errorf("create-key response missing access_key/secret_key")
 				}
 				secrets["TF_STATE_ACCESS_KEY"], secrets["TF_STATE_SECRET_KEY"] = ak, sk
-				fmt.Printf("      %s bucket + scoped read_write key created\n", green("✓"))
+				fmt.Printf("      %s bucket + scoped read_write key created\n", color.Green("✓"))
 			} else {
-				fmt.Println(dim("      (--yes to create the bucket + scoped key)"))
+				fmt.Println(color.Dim("      (--yes to create the bucket + scoped key)"))
 			}
 		}
 	} else {
-		fmt.Println("\n" + bold("[Linode]") + dim(" token + state bucket/key already set — skipping"))
+		fmt.Println("\n" + color.Bold("[Linode]") + color.Dim(" token + state bucket/key already set — skipping"))
 	}
 
 	// ── GitHub PATs ──────────────────────────────────────────────────────────
@@ -189,14 +191,14 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// vs fine-grained) so the operator can pick whichever their org policy allows.
 	gatherGH := func(name, note, primaryLabel, primaryURL, altLabel, altURL string) {
 		if have(name, true) {
-			fmt.Printf("%s %s\n", bold("[GitHub]"), dim(name+" already set — skipping"))
+			fmt.Printf("%s %s\n", color.Bold("[GitHub]"), color.Dim(name+" already set — skipping"))
 			return
 		}
 		openURL(g, primaryURL)
-		fmt.Printf("\n%s %s — %s\n", bold("[GitHub]"), name, note)
-		fmt.Printf("      %s:\n        %s\n", primaryLabel, cyan(primaryURL))
+		fmt.Printf("\n%s %s — %s\n", color.Bold("[GitHub]"), name, note)
+		fmt.Printf("      %s:\n        %s\n", primaryLabel, color.Cyan(primaryURL))
 		if altURL != "" {
-			fmt.Printf("      %s:\n        %s\n", dim(altLabel), cyan(altURL))
+			fmt.Printf("      %s:\n        %s\n", color.Dim(altLabel), color.Cyan(altURL))
 		}
 		if v := prompt(in, name); v != "" {
 			secrets[name] = v
@@ -256,7 +258,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		if have(s.name, true) {
 			continue
 		}
-		fmt.Printf("\n%s %s — %s\n", bold("[optional]"), s.name, dim(s.desc))
+		fmt.Printf("\n%s %s — %s\n", color.Bold("[optional]"), s.name, color.Dim(s.desc))
 		if v := prompt(in, s.name+" (Enter to skip)"); v != "" {
 			secrets[s.name] = v
 		}
@@ -269,8 +271,8 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// the clean default). Gathered as a pair: the read:packages secret + its owner
 	// variable; the username is only meaningful alongside the token.
 	if !have("GHCR_READ_TOKEN", true) {
-		fmt.Printf("\n%s GHCR_READ_TOKEN — %s\n", bold("[optional]"),
-			dim("GitHub read:packages PAT — ONLY for a private fork or private image; Enter to skip (public charts pull anonymously)"))
+		fmt.Printf("\n%s GHCR_READ_TOKEN — %s\n", color.Bold("[optional]"),
+			color.Dim("GitHub read:packages PAT — ONLY for a private fork or private image; Enter to skip (public charts pull anonymously)"))
 		if v := prompt(in, "GHCR_READ_TOKEN (Enter to skip)"); v != "" {
 			secrets["GHCR_READ_TOKEN"] = v
 			if !have("GHCR_USERNAME", false) {
@@ -305,7 +307,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		return err
 	}
 	nSecrets, nVars := len(secrets), len(vars)
-	fmt.Printf("\n%s wrote %d secret(s) + %d variable(s) to .llz/\n", green("✓"), nSecrets, nVars)
+	fmt.Printf("\n%s wrote %d secret(s) + %d variable(s) to .llz/\n", color.Green("✓"), nSecrets, nVars)
 
 	// Admin e2e harness (template-repo vars + E2E_DISPATCH_TOKEN) runs BEFORE the
 	// instance-repo push: a push / branch-policy failure on the instance repo
@@ -319,7 +321,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		return err
 	}
 	if !g.yes {
-		fmt.Println("\n" + dim("(no --yes: nothing was created or pushed — re-run with --yes to execute)"))
+		fmt.Println("\n" + color.Dim("(no --yes: nothing was created or pushed — re-run with --yes to execute)"))
 	}
 	return nil
 }
@@ -334,14 +336,14 @@ func printTokensNextSteps(env string) {
 		if pad < 2 {
 			pad = 2
 		}
-		fmt.Printf("  %s%s%s\n", cyan(c), strings.Repeat(" ", pad), dim("# "+note))
+		fmt.Printf("  %s%s%s\n", color.Cyan(c), strings.Repeat(" ", pad), color.Dim("# "+note))
 	}
-	fmt.Println("\n" + bold("Next steps"))
+	fmt.Println("\n" + color.Bold("Next steps"))
 	cmd("llz doctor --env "+env, "confirm every required value is set")
 	cmd("llz build "+env+" --yes", "dispatch the apply  (or `llz up "+env+" --yes` chains doctor → build)")
 	cmd("llz status "+env, "watch OpenBao / ArgoCD / ESO converge")
-	fmt.Println(dim("  after the first build: escrow OpenBao unseal keys 4 & 5 + the root token offline,"))
-	fmt.Println(dim("  and delete OPENBAO_ROOT_TOKEN from infra-" + env + " (DNS-01 certs wire automatically via TF_VAR_linode_dns_token)."))
+	fmt.Println(color.Dim("  after the first build: escrow OpenBao unseal keys 4 & 5 + the root token offline,"))
+	fmt.Println(color.Dim("  and delete OPENBAO_ROOT_TOKEN from infra-" + env + " (DNS-01 certs wire automatically via TF_VAR_linode_dns_token)."))
 }
 
 // cmdDoctorE2E reports e2e readiness of the env files + live repo (the wizard's
@@ -364,21 +366,21 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if admin {
 		tmplSt = fetchLiveState(templateRepo(), "")
 	}
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
 	// Actively probe validity, not just presence — a set-but-dead token is the
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
 	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
 	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if len(missing) > 0 {
-		fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
+		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
 	}
 	if invalid > 0 {
 		return fmt.Errorf("%d probeable credential(s) are invalid — rotate them (see the validity report above)", invalid)
 	}
 	if len(missing) == 0 {
-		fmt.Println("\n" + green("✓") + " ready — every required value is set and every probeable token is valid.")
+		fmt.Println("\n" + color.Green("✓") + " ready — every required value is set and every probeable token is valid.")
 	}
 	return nil
 }
@@ -465,7 +467,7 @@ func requireInstanceRepo(instanceRepo string) error {
 // remediateMissingRepo prints the exact fix for an absent instance repo so the
 // failure is actionable instead of an all-missing readiness table.
 func remediateMissingRepo(repo string) {
-	fmt.Fprintf(os.Stderr, "\n%s instance repo %q is not reachable on GitHub.\n", red("✗"), repo)
+	fmt.Fprintf(os.Stderr, "\n%s instance repo %q is not reachable on GitHub.\n", color.Red("✗"), repo)
 	fmt.Fprintln(os.Stderr, "  `llz tokens` and `llz doctor` read/write the live repo, so it must exist and be pushed first.")
 	// GitHub 404s a private repo you cannot see exactly as it 404s one that does
 	// not exist, so "create it" is the wrong first move for an operator who is
@@ -562,14 +564,14 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 	if err != nil {
 		return "", fmt.Errorf("list OBJ clusters: %w", err)
 	}
-	fmt.Println("\n  " + bold("Object Storage clusters:"))
+	fmt.Println("\n  " + color.Bold("Object Storage clusters:"))
 	for _, c := range clusters {
 		id, _ := c["id"].(string)
 		region, _ := c["region"].(string)
 		status, _ := c["status"].(string)
-		fmt.Printf("    %s region=%-12s %s\n", cyan(fmt.Sprintf("%-14s", id)), region, status)
+		fmt.Printf("    %s region=%-12s %s\n", color.Cyan(fmt.Sprintf("%-14s", id)), region, status)
 	}
-	fmt.Println(dim("  (tip: pick the legacy \"-1\" cluster for your region — the Terraform provider rejects newer ones)"))
+	fmt.Println(color.Dim("  (tip: pick the legacy \"-1\" cluster for your region — the Terraform provider rejects newer ones)"))
 	id := prompt(in, "OBJ cluster id")
 	if id == "" {
 		return "", fmt.Errorf("a cluster id is required")
@@ -581,7 +583,7 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 // instanceRepo. Skips variables whose value already matches the repo. Gated by
 // --yes; secret values pipe via stdin.
 func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string, st liveState) error {
-	fmt.Printf("\n%s %s\n", bold("Configure"), repo)
+	fmt.Printf("\n%s %s\n", color.Bold("Configure"), repo)
 	type item struct {
 		argv []string
 		val  string
@@ -649,7 +651,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 // (skipping anything already set).
 func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st liveState) error {
 	tr := templateRepo()
-	fmt.Printf("\n%s e2e harness on %s\n", bold("[admin]"), tr)
+	fmt.Printf("\n%s e2e harness on %s\n", color.Bold("[admin]"), tr)
 	want := map[string]string{
 		"E2E_INSTANCE_REPO": instanceRepo,
 		"E2E_LINODE_REGION": regionFromCluster(clusterID),
@@ -685,7 +687,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 			fmt.Fprintln(os.Stderr, "→ "+shellQuote(dispArgv))
 		}
 	} else {
-		fmt.Println(dim("    • E2E_DISPATCH_TOKEN already set — skipping"))
+		fmt.Println(color.Dim("    • E2E_DISPATCH_TOKEN already set — skipping"))
 	}
 
 	if g.dryRun || !g.yes {

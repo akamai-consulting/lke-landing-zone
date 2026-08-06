@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 const migrationPlanFile = "MIGRATION-PLAN.md"
@@ -63,7 +65,7 @@ func runImportPlan(o importPlanOpts) error {
 	if err := os.WriteFile(o.output, []byte(plan), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", o.output, err)
 	}
-	fmt.Printf("%s wrote %s — review, fill the ${...} target values, then run the steps.\n", green("✓"), o.output)
+	fmt.Printf("%s wrote %s — review, fill the ${...} target values, then run the steps.\n", color.Green("✓"), o.output)
 	return nil
 }
 

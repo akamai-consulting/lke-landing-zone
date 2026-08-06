@@ -146,7 +146,7 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 			lokiWriteMsg{fmt.Sprintf("FAIL: %d ingester(s) flushed, nothing reached %s within %s, and they logged "+
 				"write errors doing it — Loki is not persisting logs", flushed, bucket, lokiProveBudget), true},
 			lokiWriteMsg{"  " + errs[0], false},
-			lokiWriteMsg{"  Every other signal in this lane can be green in this state — that is what #397 is. " +
+			lokiWriteMsg{"  Every other signal in this lane can be color.Green in this state — that is what #397 is. " +
 				"A 403 AccessDenied here is usually NOT the credential but Linode's Ceph rejecting the AWS SDK's " +
 				"default aws-chunked trailer-checksum framing", false})
 	case landed:
@@ -156,7 +156,7 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 	}
 	// Nothing landed and nothing complained. A flush cannot invent data, so on a
 	// quiet cluster this is normal: the ingesters had no buffered chunk to write.
-	// Failing here would red a healthy Loki for having nothing to say.
+	// Failing here would color.Red a healthy Loki for having nothing to say.
 	return append(out, lokiWriteMsg{fmt.Sprintf(
 		"INCONCLUSIVE: %d ingester(s) flushed without error and nothing new reached %s within %s — they had no "+
 			"buffered chunk to write, so this neither proves nor disproves the write path. On a cluster with log "+

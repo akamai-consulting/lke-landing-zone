@@ -32,6 +32,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // quotedTokens pulls the "…" entries out of an HCL list so each can be parsed on
@@ -106,14 +108,14 @@ func runEnvReadiness(env string) error {
 	specDriven := false // spec present AND this env defined in it
 	var specFindings []finding
 	if lz, present, perr := loadSpec(); present {
-		fmt.Println(bold("LandingZone spec:"))
+		fmt.Println(color.Bold("LandingZone spec:"))
 		if perr != nil {
-			fmt.Printf("  %s failed to load: %v\n", red("✗"), perr)
+			fmt.Printf("  %s failed to load: %v\n", color.Red("✗"), perr)
 			return perr
 		}
 		if errs := lz.Validate(); len(errs) > 0 {
 			for _, e := range errs {
-				fmt.Printf("  %s %v\n", red("✗"), e)
+				fmt.Printf("  %s %v\n", color.Red("✗"), e)
 			}
 			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
 		}
@@ -131,9 +133,9 @@ func runEnvReadiness(env string) error {
 				// `llz render` hint; surface it as the blocking failure.
 				return err
 			}
-			fmt.Printf("  %s valid; committed apl-values for %q in sync with the spec\n\n", green("✓"), env)
+			fmt.Printf("  %s valid; committed apl-values for %q in sync with the spec\n\n", color.Green("✓"), env)
 		} else {
-			fmt.Printf("  %s valid (%q is not in the spec — scanning its committed files directly)\n\n", green("✓"), env)
+			fmt.Printf("  %s valid (%q is not in the spec — scanning its committed files directly)\n\n", color.Green("✓"), env)
 		}
 	}
 
@@ -153,7 +155,7 @@ func runEnvReadiness(env string) error {
 		}
 	}
 
-	fmt.Printf("%s\n\n", bold(fmt.Sprintf("Deployment %q readiness (%s + %s):", env, tfDir, aplDir)))
+	fmt.Printf("%s\n\n", color.Bold(fmt.Sprintf("Deployment %q readiness (%s + %s):", env, tfDir, aplDir)))
 
 	findings := specFindings
 	missing := 0
@@ -169,7 +171,7 @@ func runEnvReadiness(env string) error {
 			// flag a genuinely missing tfvars — except for an OPT-IN root, which an
 			// instance may deliberately never apply (see optionalTFRoots).
 			if strings.HasSuffix(f, ".tfvars") && !specDriven && !optionalTFVars(f) {
-				fmt.Printf("  %s  %s %s\n", red("✗ missing"), f, dim("— run `llz env add "+env+"`"))
+				fmt.Printf("  %s  %s %s\n", color.Red("✗ missing"), f, color.Dim("— run `llz env add "+env+"`"))
 				missing++
 			}
 			continue
@@ -179,7 +181,7 @@ func runEnvReadiness(env string) error {
 
 	blocking := 0
 	if len(findings) == 0 && missing == 0 {
-		fmt.Println("  " + green("✓") + " no residual scaffold placeholders in the tfvars or overlay")
+		fmt.Println("  " + color.Green("✓") + " no residual scaffold placeholders in the tfvars or overlay")
 	}
 	// DNS/cert overlay placeholders are DEFERRABLE, not blocking: they configure
 	// cert-manager DNS-01 issuance (the Argo-synced letsencrypt ClusterIssuers),
@@ -191,12 +193,12 @@ func runEnvReadiness(env string) error {
 			deferred = append(deferred, f)
 			continue
 		}
-		mark := yellow("⚠ warn ")
+		mark := color.Yellow("⚠ warn ")
 		if f.blocking {
-			mark = red("✗ TODO ")
+			mark = color.Red("✗ TODO ")
 			blocking++
 		}
-		fmt.Printf("  %s %s  %s %s\n", mark, f.loc(), f.token, dim("— "+f.hint))
+		fmt.Printf("  %s %s  %s %s\n", mark, f.loc(), f.token, color.Dim("— "+f.hint))
 	}
 
 	// obj_cluster must be shaped like a Linode OBJ cluster id — catch a malformed
@@ -205,7 +207,7 @@ func runEnvReadiness(env string) error {
 	if b, err := os.ReadFile(objTfv); err == nil {
 		if v := tfvarsValue(string(b), "obj_cluster"); v != "" {
 			if err := validateOBJCluster(v); err != nil {
-				fmt.Printf("  %s  %s %s\n", red("✗ TODO"), objTfv, dim("— "+err.Error()))
+				fmt.Printf("  %s  %s %s\n", color.Red("✗ TODO"), objTfv, color.Dim("— "+err.Error()))
 				blocking++
 			}
 		}
@@ -226,8 +228,8 @@ func runEnvReadiness(env string) error {
 			continue
 		}
 		if v := tfvarsValue(string(b), dc.key); v != "" && v != env {
-			fmt.Printf("  %s  %s  %s\n", red("✗ TODO"), p,
-				dim(fmt.Sprintf("%s = %q must equal the deployment name %q (mismatched discriminator → wrong TF state key / overlay)", dc.key, v, env)))
+			fmt.Printf("  %s  %s  %s\n", color.Red("✗ TODO"), p,
+				color.Dim(fmt.Sprintf("%s = %q must equal the deployment name %q (mismatched discriminator → wrong TF state key / overlay)", dc.key, v, env)))
 			blocking++
 		}
 	}
@@ -235,22 +237,22 @@ func runEnvReadiness(env string) error {
 	fmt.Println()
 	switch err := renderOverlay(overlay); {
 	case err == nil:
-		fmt.Printf("  %s kubectl kustomize %s/manifest renders\n", green("✓"), overlay)
+		fmt.Printf("  %s kubectl kustomize %s/manifest renders\n", color.Green("✓"), overlay)
 	case isMissingBinary(err):
-		fmt.Printf("  %s kubectl not found — skipped overlay render (install kubectl to enable)\n", dim("–"))
+		fmt.Printf("  %s kubectl not found — skipped overlay render (install kubectl to enable)\n", color.Dim("–"))
 	default:
-		fmt.Printf("  %s kubectl kustomize %s/manifest failed:\n%s\n", red("✗"), overlay, indent(err.Error(), "      "))
+		fmt.Printf("  %s kubectl kustomize %s/manifest failed:\n%s\n", color.Red("✗"), overlay, indent(err.Error(), "      "))
 		blocking++
 	}
 
 	// Deferred (non-blocking) cert/DNS placeholders, surfaced on their own so it's
 	// obvious the build can proceed now and DNS-01 is finished later.
 	if len(deferred) > 0 {
-		fmt.Println("\n" + bold("Deferred — cert/DNS issuance (non-blocking; set up after the build):"))
+		fmt.Println("\n" + color.Bold("Deferred — cert/DNS issuance (non-blocking; set up after the build):"))
 		for _, f := range deferred {
-			fmt.Printf("  %s %s  %s %s\n", cyan("○ later"), f.loc(), f.token, dim("— "+f.hint))
+			fmt.Printf("  %s %s  %s %s\n", color.Cyan("○ later"), f.loc(), f.token, color.Dim("— "+f.hint))
 		}
-		fmt.Println("  " + dim("↳ fine to leave for now — set the ACME email + TF_VAR_linode_dns_token; the Argo-synced letsencrypt ClusterIssuers issue certs once both exist (quickstart §4)."))
+		fmt.Println("  " + color.Dim("↳ fine to leave for now — set the ACME email + TF_VAR_linode_dns_token; the Argo-synced letsencrypt ClusterIssuers issue certs once both exist (quickstart §4)."))
 	}
 
 	fmt.Println()
@@ -263,10 +265,10 @@ func runEnvReadiness(env string) error {
 	}
 	if len(deferred) > 0 {
 		fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`) %s\n",
-			green("✓"), env, env, dim(fmt.Sprintf("— %d cert/DNS item(s) deferred (set ACME email + TF_VAR_linode_dns_token)", len(deferred))))
+			color.Green("✓"), env, env, color.Dim(fmt.Sprintf("— %d cert/DNS item(s) deferred (set ACME email + TF_VAR_linode_dns_token)", len(deferred))))
 		return nil
 	}
-	fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`).\n", green("✓"), env, env)
+	fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`).\n", color.Green("✓"), env, env)
 	return nil
 }
 

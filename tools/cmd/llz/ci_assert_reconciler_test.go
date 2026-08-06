@@ -442,7 +442,7 @@ func TestEvalLaneFreshnessFallsBackToDefaultInterval(t *testing.T) {
 	}
 }
 
-// End-to-end through the seam: one dead lane among healthy ones must red the
+// End-to-end through the seam: one dead lane among healthy ones must color.Red the
 // gate. llz_reconcile_up is a max() across lanes, so it stays pinned at 1 — this
 // is precisely what the aggregate gauges cannot see.
 func TestRunAssertReconcilerFailsOnDeadLane(t *testing.T) {

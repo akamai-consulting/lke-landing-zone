@@ -16,6 +16,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 type reapOpts struct {
@@ -37,34 +39,34 @@ func runReap(g globalOpts, o reapOpts) error {
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
-	fmt.Println(bold("################ llz reap — orphaned Linode resources ################"))
+	fmt.Println(color.Bold("################ llz reap — orphaned Linode resources ################"))
 	if !confirm {
-		fmt.Println(yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
+		fmt.Println(color.Yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
 	}
-	fmt.Printf("  %s%s\n", dim("region:        "), orAll(o.region))
-	fmt.Printf("  %s%s\n", dim("cluster label: "), orNone(o.clusterLabel))
-	fmt.Printf("  %s%s\n\n", dim("env (creds):   "), orNone(o.env))
+	fmt.Printf("  %s%s\n", color.Dim("region:        "), orAll(o.region))
+	fmt.Printf("  %s%s\n", color.Dim("cluster label: "), orNone(o.clusterLabel))
+	fmt.Printf("  %s%s\n\n", color.Dim("env (creds):   "), orNone(o.env))
 
 	deleted, failed := 0, 0
 	// del prints (dry-run) or deletes (confirm), tallying outcomes.
 	del := func(path, desc string) {
 		if !confirm {
-			fmt.Printf("  %s %s\n", cyan("would DELETE"), desc)
+			fmt.Printf("  %s %s\n", color.Cyan("would DELETE"), desc)
 			return
 		}
 		if err := client.DeleteResourcePath(ctx, path); err != nil {
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", red(fmt.Sprintf("DELETE %s FAILED", desc)), err)
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", color.Red(fmt.Sprintf("DELETE %s FAILED", desc)), err)
 			failed++
 			return
 		}
-		fmt.Printf("  %s %s\n", green("DELETE"), desc)
+		fmt.Printf("  %s %s\n", color.Green("DELETE"), desc)
 		deleted++
 	}
 
 	// ── 1. Orphan clusters by label (root) ───────────────────────────────────
 	clustersDeleted := false
 	if o.clusterLabel != "" {
-		fmt.Println(bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.clusterLabel)))
+		fmt.Println(color.Bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.clusterLabel)))
 		ids, err := client.ClustersWithLabel(ctx, o.clusterLabel)
 		if err != nil {
 			return fmt.Errorf("list clusters: %w", err)
@@ -74,40 +76,40 @@ func runReap(g globalOpts, o reapOpts) error {
 			clustersDeleted = true
 		}
 		if len(ids) == 0 {
-			fmt.Println(dim("  none matched"))
+			fmt.Println(color.Dim("  none matched"))
 		}
 		// Cluster delete is async; let it settle so the firewall safety guard
 		// (which refuses while a live cluster still carries the label) passes.
 		if confirm && clustersDeleted {
-			fmt.Println(dim("  (waiting 25s for cluster delete to settle)"))
+			fmt.Println(color.Dim("  (waiting 25s for cluster delete to settle)"))
 			time.Sleep(25 * time.Second)
 		}
 
 		// ── 2. Orphan node firewall ──────────────────────────────────────────
-		fmt.Println("\n" + bold("==== orphan node firewall ===="))
+		fmt.Println("\n" + color.Bold("==== orphan node firewall ===="))
 		if err := reapFirewalls(ctx, client, o, del); err != nil {
 			return err
 		}
 	} else {
-		fmt.Println(bold("==== orphan clusters + firewall ====") + dim(" — skipped (no --cluster-label)"))
+		fmt.Println(color.Bold("==== orphan clusters + firewall ====") + color.Dim(" — skipped (no --cluster-label)"))
 	}
 
 	// ── 3. NodeBalancers BEFORE VPCs (a parked NB blocks its VPC delete) ──────
-	fmt.Println("\n" + bold("==== orphan NodeBalancers (account-wide) ===="))
+	fmt.Println("\n" + color.Bold("==== orphan NodeBalancers (account-wide) ===="))
 	if err := reapNodeBalancers(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 4. VPCs (lke<id> cluster-gone, + <label>-vpc when --cluster-label) ────
-	fmt.Println("\n" + bold("==== orphan VPCs ===="))
+	fmt.Println("\n" + color.Bold("==== orphan VPCs ===="))
 	if err := reapVPCs(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 5. Volumes (needs a scope: --region or --volume-ids) ──────────────────
-	fmt.Println("\n" + bold("==== orphan Volumes ===="))
+	fmt.Println("\n" + color.Bold("==== orphan Volumes ===="))
 	if o.region == "" && o.volumeIDs == "" {
-		fmt.Println(dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
+		fmt.Println(color.Dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
 	} else if err := reapVolumes(ctx, client, o, del); err != nil {
 		return err
 	}
@@ -119,9 +121,9 @@ func runReap(g globalOpts, o reapOpts) error {
 	// leaked mint (failed run, failed drain) accretes toward the account's 100-key /
 	// 100-PAT caps until a fresh mint 400s. Needs an explicit --env (never a blind
 	// account-wide token/key delete).
-	fmt.Println("\n" + bold("==== orphan per-env Linode creds (obj-keys + in-cluster PAT) ===="))
+	fmt.Println("\n" + color.Bold("==== orphan per-env Linode creds (obj-keys + in-cluster PAT) ===="))
 	if o.env == "" {
-		fmt.Println(dim("  skipped — set --env <deployment> to reap its minted keys + PAT"))
+		fmt.Println(color.Dim("  skipped — set --env <deployment> to reap its minted keys + PAT"))
 	} else {
 		// The prefix namespaces the key labels this reaps. Read it from the spec —
 		// an exact-label match under the wrong prefix would delete ANOTHER
@@ -140,13 +142,13 @@ func runReap(g globalOpts, o reapOpts) error {
 
 	summary := fmt.Sprintf("summary: deleted=%d failed=%d", deleted, failed)
 	if failed > 0 {
-		summary = red(summary)
+		summary = color.Red(summary)
 	} else if deleted > 0 {
-		summary = green(summary)
+		summary = color.Green(summary)
 	}
 	fmt.Printf("\n%s\n", summary)
 	if !confirm {
-		fmt.Println(dim("(dry-run — nothing was deleted; re-run with --yes)"))
+		fmt.Println(color.Dim("(dry-run — nothing was deleted; re-run with --yes)"))
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d delete(s) failed", failed)
@@ -169,7 +171,7 @@ func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del f
 			return fmt.Errorf("firewall safety check: %w", err)
 		}
 		if len(live) > 0 {
-			fmt.Printf("  %s\n", yellow(fmt.Sprintf("a live cluster still carries label %q — refusing (delete the cluster first, or --force)", o.clusterLabel)))
+			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — refusing (delete the cluster first, or --force)", o.clusterLabel)))
 			return nil
 		}
 	}
@@ -188,7 +190,7 @@ func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del f
 		matched = true
 	}
 	if !matched {
-		fmt.Printf("%s\n", dim(fmt.Sprintf("  none matched (searched: %s)", strings.Join(candidates, ", "))))
+		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("  none matched (searched: %s)", strings.Join(candidates, ", "))))
 	}
 	return nil
 }
@@ -225,7 +227,7 @@ func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, d
 		matched = true
 	}
 	if !matched {
-		fmt.Println(dim("  none matched"))
+		fmt.Println(color.Dim("  none matched"))
 	}
 	return nil
 }
@@ -242,7 +244,7 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 			return err
 		}
 		if len(held) > 0 {
-			fmt.Printf("  %s\n", yellow(fmt.Sprintf("a live cluster still carries label %q — not targeting its %q VPC", o.clusterLabel, o.clusterLabel+"-vpc")))
+			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — not targeting its %q VPC", o.clusterLabel, o.clusterLabel+"-vpc")))
 		} else {
 			byoLabel = o.clusterLabel + "-vpc"
 		}
@@ -276,7 +278,7 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 		matched = true
 	}
 	if !matched {
-		fmt.Println(dim("  none matched"))
+		fmt.Println(color.Dim("  none matched"))
 	}
 	return nil
 }
@@ -309,9 +311,9 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 		// weeks. Say what was skipped and what would widen the net.
 		fmt.Printf("  none matched the filter (%d Volume(s) skipped)\n", skipped)
 		if o.env == "" {
-			fmt.Println(dim("  NOTE: LLZ's volume-labels reconciler renames bound volumes to"))
-			fmt.Println(dim("        <deployment>-<namespace>-<pvc>, which no longer start with \"pvc-\"."))
-			fmt.Println(dim("        Pass --env <deployment> (e.g. --env e2e) to include those."))
+			fmt.Println(color.Dim("  NOTE: LLZ's volume-labels reconciler renames bound volumes to"))
+			fmt.Println(color.Dim("        <deployment>-<namespace>-<pvc>, which no longer start with \"pvc-\"."))
+			fmt.Println(color.Dim("        Pass --env <deployment> (e.g. --env e2e) to include those."))
 		}
 	}
 	return nil

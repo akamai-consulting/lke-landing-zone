@@ -40,8 +40,8 @@ func TestCPMax1(t *testing.T) {
 }
 
 // TestCollectMissingPinsChecked pins the "checked" tally the success line reports.
-// The whole point of that number is that a green run states how many pins it
-// actually verified — a miscount reintroduces the vacuous green this command
+// The whole point of that number is that a color.Green run states how many pins it
+// actually verified — a miscount reintroduces the vacuous color.Green this command
 // exists to prevent.
 func TestCollectMissingPinsChecked(t *testing.T) {
 	pins := []publishPin{
@@ -101,7 +101,7 @@ func TestChartPublishCheckWaitLoopIsBounded(t *testing.T) {
 
 // A registry error raised DURING the wait must abort. Swallowing it leaves an
 // empty "still missing" list, which reads as "everything published" — the exact
-// vacuous green this command was written to kill.
+// vacuous color.Green this command was written to kill.
 func TestChartPublishCheckWaitPropagatesRegistryError(t *testing.T) {
 	root := cpWriteRepo(t, map[string]string{
 		"platform-apl/manifest/applications/cf.yaml": "spec:\n  source:\n    repoURL: ghcr.io/acme/charts\n" +

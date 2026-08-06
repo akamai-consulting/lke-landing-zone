@@ -32,6 +32,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // Endpoint bases, overridable so tests point the two network legs at an httptest
@@ -187,11 +191,11 @@ var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 // pre-copier or hand-assembled instance still resolves.
 func instanceTemplateRepo() string {
 	if a, _ := readAnswers("."); a != nil {
-		if r := normalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
+		if r := sustain.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
 			return r
 		}
 	}
-	return defaultTemplateRepo
+	return sustain.DefaultTemplateRepo
 }
 
 // pinnedImageTag returns the ci image tag that pins an instance to the SAME commit
@@ -320,7 +324,7 @@ func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 		"      pin %q. The first pipeline run will say so (`llz ci assert-image-fresh`) rather\n"+
 		"      than fail obscurely later. Upgrading to a release whose ci images were published\n"+
 		"      is the durable fix.\n",
-		yellow("!"), why, ciTofuTag, ciKubernetesTag, ref)
+		color.Yellow("!"), why, ciTofuTag, ciKubernetesTag, ref)
 }
 
 // ciImageSkew is one ci image variable whose recorded value no longer names the

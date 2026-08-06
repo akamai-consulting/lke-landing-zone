@@ -301,7 +301,7 @@ var readHarborRobotSecret = func(ns, name string) ([]byte, error) {
 // The distinction it buys is the whole reason this gate can be honest. An absent
 // llz-cert-automation namespace means the component was never deployed — managed
 // App Platform renders a MINIMAL app set and simply does not include it — and a
-// gate that failed on that would red every such cluster for a component it was
+// gate that failed on that would color.Red every such cluster for a component it was
 // never asked to run. An absent Secret INSIDE a present namespace is the real
 // finding: ESO is not materializing secret/harbor/robot.
 var namespaceExists = func(ns string) (bool, error) {

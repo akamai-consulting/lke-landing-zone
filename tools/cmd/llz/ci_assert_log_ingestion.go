@@ -13,13 +13,13 @@ package main
 // It fails the same silent way. A namespace dropped from the collector's
 // discovery config, a relabel rule that stops emitting the `namespace` label, a
 // NetworkPolicy that blocks the collector from a namespace: in every case the
-// pods stay Running, Loki stays Ready, assert-loki stays green, and the logs you
+// pods stay Running, Loki stays Ready, assert-loki stays color.Green, and the logs you
 // need during an incident are simply not there. You find out when you go looking,
 // which is the worst possible moment.
 //
 // The assertion is per-namespace and freshness-bounded: for each expected
 // namespace there must be at least one log line in the lookback window. Existence
-// alone would stay green for Loki's whole retention after collection stopped —
+// alone would stay color.Green for Loki's whole retention after collection stopped —
 // the same trap assert-openbao-audit avoids.
 //
 // FAIL-CLOSED: no stream, no entries, an unparseable response, or an unreachable
@@ -40,7 +40,7 @@ import (
 // defaultLogNamespaces are the landing-zone namespaces whose pod logs must be
 // reaching Loki. Deliberately a KNOWN list rather than "every namespace Loki
 // happens to have": if collection regresses at the source, a discovered list
-// would come back short and the gate would pass green on the very bug it exists
+// would come back short and the gate would pass color.Green on the very bug it exists
 // to catch — the same reasoning as assert-scrape-targets' monitor list.
 //
 // Only the two namespaces that exist on EVERY landing zone are defaults.
@@ -84,7 +84,7 @@ func ciAssertLogIngestionCmd() *cobra.Command {
 			"asserted.\n\n" +
 			"The failure is silent by construction: a namespace dropped from discovery, a\n" +
 			"relabel rule that stops emitting `namespace`, or a NetworkPolicy blocking the\n" +
-			"collector all leave pods Running, Loki Ready and assert-loki green while the\n" +
+			"collector all leave pods Running, Loki Ready and assert-loki color.Green while the\n" +
 			"logs are simply absent. Freshness-bounded, so collection that stopped an hour\n" +
 			"ago cannot pass on Loki's retained history. Read-only. Exit 0 / 1.",
 		Args: cobra.NoArgs,

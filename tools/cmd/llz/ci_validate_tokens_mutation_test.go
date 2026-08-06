@@ -22,7 +22,7 @@ func clearValidatableTokens(t *testing.T) {
 }
 
 // TestValidateTokensSummaryCountsAreHonest pins the tally line. The verb exits 0
-// whenever nothing BLOCKING is wrong, so on a green run this one line is the
+// whenever nothing BLOCKING is wrong, so on a color.Green run this one line is the
 // entire report — "probed 0 credential(s)" on a run that probed three is how a
 // silently-empty environment (a mis-scoped GH Environment handing the job no
 // secrets at all) passes as a clean preflight.

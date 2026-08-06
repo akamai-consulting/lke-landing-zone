@@ -14,7 +14,7 @@ package main
 // pinned `llz-cluster-foundation:0.1.0` 404s, the support-plane app never syncs,
 // the llz-openbao namespace is never created, and the OpenBao bootstrap workflow
 // times out on `namespaces "llz-openbao" not found` with no hint at the cause.
-// This guard turns that drift into a red PR instead of a dead cluster.
+// This guard turns that drift into a color.Red PR instead of a dead cluster.
 //
 // The extraction + comparison logic is pure and unit-tested; the filesystem is
 // reached only by the walk in RunE.

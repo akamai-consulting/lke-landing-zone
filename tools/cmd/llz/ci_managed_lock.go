@@ -36,6 +36,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // managedLockPath is the digest list, relative to the scaffold root. It is
@@ -119,7 +121,7 @@ func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
 	for _, rel := range drifted {
 		fmt.Fprintf(errOut, "::error file=%s::file was edited locally — the template owns it and `llz upgrade` will overwrite it\n", rel)
 	}
-	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) drifted from the template:\n", red("✗"), len(drifted)+len(missing))
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) drifted from the template:\n", color.Red("✗"), len(drifted)+len(missing))
 	for _, rel := range append(append([]string{}, missing...), drifted...) {
 		fmt.Fprintf(errOut, "    %s\n", rel)
 	}
@@ -199,7 +201,7 @@ func checkLockComplete(m templateManifest, want map[string]string, errOut io.Wri
 	for _, rel := range unlocked {
 		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, managedLockPath)
 	}
-	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", red("✗"), len(unlocked), managedLockPath)
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", color.Red("✗"), len(unlocked), managedLockPath)
 	for _, rel := range unlocked {
 		fmt.Fprintf(errOut, "    %s\n", rel)
 	}

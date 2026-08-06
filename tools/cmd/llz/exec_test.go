@@ -67,17 +67,6 @@ func TestKubectlOut(t *testing.T) {
 	}
 }
 
-func TestCommitReachable(t *testing.T) {
-	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, nil })
-	if !commitReachable("abc123") {
-		t.Error("commitReachable = false on success, want true")
-	}
-	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("unknown rev") })
-	if commitReachable("abc123") {
-		t.Error("commitReachable = true on error, want false")
-	}
-}
-
 func TestHaveToolAndLookable(t *testing.T) {
 	withLookPath(t, func(file string) (string, error) { return "/usr/bin/" + file, nil })
 	if !haveTool("tflint") {

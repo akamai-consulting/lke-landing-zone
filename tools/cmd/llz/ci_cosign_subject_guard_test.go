@@ -74,7 +74,7 @@ func TestExtractCosignSubjects(t *testing.T) {
 }
 
 // TestCosignSubjectGuardRefusesEmpty pins the half of this guard that is easy to
-// lose: a guard that finds no pins must not report the same green as one that
+// lose: a guard that finds no pins must not report the same color.Green as one that
 // found them all and checked them. If the policy is renamed or moved out of the
 // scanned tree, "0 pins, 0 missing" is exactly the silence this guard exists to
 // prevent one level down.

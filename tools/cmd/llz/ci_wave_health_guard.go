@@ -110,7 +110,7 @@ var waveHealthAllowedKinds = map[string]waveHealthKindRule{
 // would re-create wedge #3 — but these specific certs are issued by in-cluster
 // self-signed CA chains with no external dependency, by a cert-manager whose
 // webhook `llz ci wait-apl-pipeline` gates Available before the tree ever
-// syncs. They have converged promptly through every green bootstrap on record.
+// syncs. They have converged promptly through every color.Green bootstrap on record.
 // Keep this name-scoped: a NEW Certificate at a negative wave must be vetted
 // here, not waved through by kind.
 var waveHealthAllowedNames = map[string]waveHealthKindRule{
@@ -199,7 +199,7 @@ func runCIWaveHealthGuard(root string) error {
 	}
 	// This guard used to DISCARD the examined count: with its trees absent or
 	// moved it walked zero files, found zero negative-wave kinds, and printed the
-	// same green as a full clean run — the PR #142 wedge class silently unpoliced.
+	// same color.Green as a full clean run — the PR #142 wedge class silently unpoliced.
 	// Its three siblings gated on requireCorpus; this one did not.
 	if err := guardkit.RequireCorpus("wave-health-guard", examined, dirs); err != nil {
 		return err

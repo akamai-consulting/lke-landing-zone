@@ -94,7 +94,7 @@ func TestMajorMinorRejectsALeadingSeparator(t *testing.T) {
 
 // The whole point of the section is checking the versions THIS spec pins. A
 // guard that bails on a perfectly good spec leaves doctor checking nothing while
-// still printing a green "LKE-Enterprise reachable" — the silent no-op the
+// still printing a color.Green "LKE-Enterprise reachable" — the silent no-op the
 // advisory check was added to avoid.
 func TestSpecK8sVersionsReadsAPresentSpec(t *testing.T) {
 	// Split layout: landingzone.yaml carries the default pin (inherited by prod),

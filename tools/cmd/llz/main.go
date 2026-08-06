@@ -19,6 +19,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -41,7 +45,7 @@ var gopts globalOpts
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, red("llz:"), err)
+		fmt.Fprintln(os.Stderr, color.Red("llz:"), err)
 		os.Exit(1)
 	}
 }
@@ -96,7 +100,7 @@ func newRootCmd() *cobra.Command {
 	// Operator-defined commands from .llz/commands.yaml (added last so the
 	// built-in set wins any name collision). See docs/extending-llz.md.
 	if cmds, err := loadExtCommands("."); err != nil {
-		fmt.Fprintln(os.Stderr, red("llz:"), err)
+		fmt.Fprintln(os.Stderr, color.Red("llz:"), err)
 	} else {
 		addExtCommands(root, cmds)
 	}
@@ -315,7 +319,9 @@ func driftCmd() *cobra.Command {
 		Use:   "drift",
 		Short: "report how far behind the template this instance is",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runDrift(branch, repoURL, strict) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return sustain.RunDrift(sustainDeps(), branch, repoURL, strict)
+		},
 	}
 	c.Flags().StringVar(&branch, "branch", "main", "template branch to compare against")
 	c.Flags().StringVar(&repoURL, "repo-url", "", "override the fetch URL (default: derived from .copier-answers.yml)")

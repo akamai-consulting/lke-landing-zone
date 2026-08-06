@@ -134,19 +134,6 @@ func TestLiveStateValue(t *testing.T) {
 	}
 }
 
-func TestPaint(t *testing.T) {
-	defer func(o bool) { colorOn = o }(colorOn)
-
-	colorOn = false
-	if got := paint("32", "x"); got != "x" {
-		t.Errorf("paint with color off = %q, want x", got)
-	}
-	colorOn = true
-	if got := paint("32", "x"); got != "\033[32mx\033[0m" {
-		t.Errorf("paint with color on = %q", got)
-	}
-}
-
 func TestEsPropFilesSortKey(t *testing.T) {
 	if got := (esPropFiles{prop: "secret/x", hasProp: true}).sortKey(); got != "secret/x" {
 		t.Errorf("sortKey(hasProp) = %q, want secret/x", got)

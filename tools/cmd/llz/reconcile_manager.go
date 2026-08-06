@@ -17,7 +17,7 @@
 // lives in the Linode API / Harbor / OpenBao and emits no Kubernetes watch
 // events, so a timer is the right trigger — the same cadence the CronJobs ran).
 // They stay OFF by default: the CronJobs remain the owners until a reconciler
-// proves out per-env (the design's "keep the CronJob until one green e2e cycle"),
+// proves out per-env (the design's "keep the CronJob until one color.Green e2e cycle"),
 // so enabling one is an opt-in flag + the same env/secrets its CronJob had.
 package main
 

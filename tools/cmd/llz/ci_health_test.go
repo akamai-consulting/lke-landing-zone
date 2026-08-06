@@ -129,7 +129,7 @@ func mustInventory(t *testing.T) *clusterInventory {
 //
 // What this test pins is that contract: the same cluster must not report a
 // SOFTER verdict because a list call was dropped. It does not reproduce the
-// full exit-0 false-green — that needs a stub clean enough that the broken
+// full exit-0 false-color.Green — that needs a stub clean enough that the broken
 // Deployment is the only finding, and this harness has other sections failing
 // on its empty stubs. Without the fix here the verdict is 1 instead of 3; in a
 // clean cluster it is 0, which is the case that actually ships a broken cluster.

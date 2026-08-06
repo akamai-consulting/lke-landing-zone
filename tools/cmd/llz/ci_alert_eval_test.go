@@ -222,7 +222,7 @@ func TestAlertEvalStrictFailsClosed(t *testing.T) {
 // so a 503 or a `{"status":"error"}` envelope arrived as data: nerr stayed nil,
 // the strict guard never fired, `known` stayed empty, exprMetricsExist returned
 // true for every rule, the DEAD? count was structurally 0, and --strict passed
-// green having evaluated nothing.
+// color.Green having evaluated nothing.
 //
 // The transport path was closed; the body was not.
 func TestAlertEvalStrictFailsOnPrometheusErrorBody(t *testing.T) {

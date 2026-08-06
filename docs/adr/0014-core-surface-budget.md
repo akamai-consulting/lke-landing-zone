@@ -100,7 +100,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 >
 > **And again: 46,106** with `guard-docs`, **45,763** with `posture-at-rest`, and
 > **45,229** with `assert-storage`, **44,826** with
-> `reconcile-actions` and **44,171** with `teardown`. Six extensions, net −3,011 (6.4%) — a floor on
+> `reconcile-actions` **44,171** with `teardown` and **43,817** with `template-sustain`. Seven
+> extensions, net −3,365 (7.1%) — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)
 > measures what the rest costs and finds size and difficulty close to uncorrelated.

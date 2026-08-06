@@ -142,7 +142,7 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 		return err
 	}
 	// Component-gated, like seed-ssec-key. A deployment that does not run the proxy
-	// has no encrypted objects to find, and failing it would red every cluster for a
+	// has no encrypted objects to find, and failing it would color.Red every cluster for a
 	// component it was never asked to run.
 	//
 	// The skip is LOUD. A gate that quietly passes when disabled is a gate that can
@@ -203,7 +203,7 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 // checkHarborPath runs the push check when Harbor is on this cluster.
 //
 // An ABSENT harbor namespace is not a finding: managed App Platform renders a
-// minimal app set and simply may not include it, and failing there would red a
+// minimal app set and simply may not include it, and failing there would color.Red a
 // cluster for a component it never ran. An absent --harbor-bucket while the
 // namespace IS present is a finding, because that is the check being skipped on a
 // cluster that needs it — and it is the ONLY check that proves the CA chain.
@@ -473,7 +473,7 @@ func checkRegistryPodsCarryCA() []objEncryptionFinding {
 		return []objEncryptionFinding{{
 			check:   "pod",
 			problem: "could not decode the harbor pod list: " + jerr.Error(),
-			fix:     "a gate that cannot read the pods must not report green",
+			fix:     "a gate that cannot read the pods must not report color.Green",
 		}}
 	}
 
@@ -532,7 +532,7 @@ func checkRegistryPodsCarryCA() []objEncryptionFinding {
 		findings = append(findings, objEncryptionFinding{
 			check:   "pod",
 			problem: "no harbor-registry pods found",
-			fix:     "a gate that examined nothing must not report green — check the harbor namespace is deployed",
+			fix:     "a gate that examined nothing must not report color.Green — check the harbor namespace is deployed",
 		})
 	}
 	return findings
@@ -571,7 +571,7 @@ func checkEndpointResolvesToProxy(endpoint string) []objEncryptionFinding {
 // rather than the configuration.
 //
 // An EMPTY bucket is a failure, not a pass. "Nothing has been written yet" and
-// "everything written is encrypted" produce the same green from a checker that
+// "everything written is encrypted" produce the same color.Green from a checker that
 // shrugs at zero objects, and the first is the state every misconfigured cluster
 // passes through on its way to writing plaintext.
 //
@@ -676,7 +676,7 @@ func checkObjectsAreEncrypted(endpoint string, buckets []string, sample int) []o
 			problem: fmt.Sprintf("nothing has been written to %s since the gateway went live at %s "+
 				"(newest of %d sampled: %s), so this proves nothing about encryption",
 				strings.Join(buckets, " or "), cutover.Format(time.RFC3339), len(keys), keys[0].LastModified.Format(time.RFC3339)),
-			fix: "a check that examined no relevant object must not report green. The Harbor push above " +
+			fix: "a check that examined no relevant object must not report color.Green. The Harbor push above " +
 				"normally guarantees at least one post-cutover object, so if THAT skipped or failed this is " +
 				"downstream of it. Otherwise no consumer has written since the cutover — check their logs " +
 				"for S3 errors before suspecting the proxy",

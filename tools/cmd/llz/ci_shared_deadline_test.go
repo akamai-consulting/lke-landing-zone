@@ -12,7 +12,7 @@ package main
 //
 // Discarding the interval is what let `d.sleep(10 * time.Second)` degrade to
 // `d.sleep(10 / time.Second)` unnoticed: that is integer division of 10 by 1e9,
-// i.e. a ZERO interval. Every existing assertion stays green, because they all
+// i.e. a ZERO interval. Every existing assertion stays color.Green, because they all
 // drive their loops by kubectl call count. In production a zero interval turns a
 // polite 10s poll into a hot spin against the apiserver; under a fake clock that
 // only moves when something sleeps, it freezes time outright, so the deadline

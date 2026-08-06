@@ -93,7 +93,7 @@ func TestPlaintextGuardRealTree(t *testing.T) {
 }
 
 // TestPlaintextGuardFailsOnEmptyCorpus: a guard pointed at nothing must not
-// report the same green as one that checked everything. Mirrors the
+// report the same color.Green as one that checked everything. Mirrors the
 // requireCorpus contract the sibling guards share.
 func TestPlaintextGuardFailsOnEmptyCorpus(t *testing.T) {
 	err := runCIPlaintextGuard(t.TempDir())
@@ -144,7 +144,7 @@ func repoRootForGuardTest(t *testing.T) string {
 // Keycloak's JWKS URL (the signing keys OpenBao validates team logins with).
 //
 // A guard that misses the findings it was built for is worse than none: it
-// reports green and buys false confidence.
+// reports color.Green and buys false confidence.
 func TestScanPlaintextGoServiceURL(t *testing.T) {
 	cases := []struct{ name, body, wantKey string }{
 		{
@@ -305,7 +305,7 @@ func TestRelForKeyIsLayoutStable(t *testing.T) {
 // A PeerAuthentication port exemption is an accepted plaintext hop, and it is
 // spelled as mesh policy rather than as a URL or a scrape scheme. The guard was
 // blind to the whole class, so the two exemptions the harbor namespace ships
-// (CNPG on 8000, Prometheus on 8001) passed green while the registry claimed to
+// (CNPG on 8000, Prometheus on 8001) passed color.Green while the registry claimed to
 // enumerate every accepted residual.
 //
 // Each exemption must key on ITS OWN port, which comes from a quoted MAP KEY

@@ -1,4 +1,4 @@
-package main
+package sustain
 
 // upgrade_churn_guard.go is the regression gate for a class of bug that is
 // invisible in review: making the TEMPLATE re-render a version string into the
@@ -102,9 +102,9 @@ func churnGuardScope() (roots []string, instance bool) {
 	return nil, false
 }
 
-// stepUpgradeChurnGuard fails the lint gate when a banned pattern is present in the
+// StepUpgradeChurnGuard fails the lint gate when a banned pattern is present in the
 // delivered surface — about to ship it (template repo) or carrying it (instance).
-func stepUpgradeChurnGuard(_ globalOpts) error {
+func StepUpgradeChurnGuard(_ Deps) error {
 	roots, instance := churnGuardScope()
 	if roots == nil {
 		return nil // neither a template repo nor an instance — nothing to guard

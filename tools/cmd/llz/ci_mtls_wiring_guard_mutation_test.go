@@ -44,7 +44,7 @@ spec:
 // Every step between — the doc filter that decides which YAML documents are
 // workloads at all, and the two error checks around the walk — can drop a real
 // finding on the floor while the guard still prints its cheerful summary line,
-// which is precisely the silent-green this family of guards exists to prevent.
+// which is precisely the silent-color.Green this family of guards exists to prevent.
 func TestMTLSWiringGuardVerbFailsOnAFinding(t *testing.T) {
 	root := mtlsTree(t, map[string]string{
 		"llzReconciler/deployment.yaml": mtlsUnwiredDeployment,
@@ -90,7 +90,7 @@ spec: {secretName: llz-reconciler-client-tls}
 }
 
 // TestMTLSWiringGuardRefusesAnEmptyCorpus: a guard that walked nothing reports
-// the same green as one that walked everything. This is the sibling guards'
+// the same color.Green as one that walked everything. This is the sibling guards'
 // shared contract, and the only thing standing between a moved manifest tree and
 // a permanently inert gate.
 func TestMTLSWiringGuardRefusesAnEmptyCorpus(t *testing.T) {

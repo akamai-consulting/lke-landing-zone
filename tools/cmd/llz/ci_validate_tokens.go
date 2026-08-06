@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
 // validatableTokens is the ordered set of pipeline credentials this verb probes
@@ -87,12 +89,12 @@ func runCIValidateTokens(failOnInvalid bool) error {
 	now := time.Now()
 	ghcrUser := os.Getenv("GHCR_USERNAME")
 
-	fmt.Printf("%s\n", bold("Token validity — probing pipeline credentials in the environment"))
+	fmt.Printf("%s\n", color.Bold("Token validity — probing pipeline credentials in the environment"))
 	probed, blockingInvalid, optionalInvalid, blockingDenied := 0, 0, 0, 0
 	for _, name := range validatableTokens {
 		val := os.Getenv(name)
 		if val == "" {
-			fmt.Printf("  %-30s %s\n", name, dim("– not set — skipped"))
+			fmt.Printf("  %-30s %s\n", name, color.Dim("– not set — skipped"))
 			continue
 		}
 		// Keep the secret value out of any downstream log capture.
@@ -103,7 +105,7 @@ func runCIValidateTokens(failOnInvalid bool) error {
 		if tv.status == vInvalid {
 			if optionalTokens[name] {
 				optionalInvalid++
-				suffix = dim("  (optional — warning only)")
+				suffix = color.Dim("  (optional — warning only)")
 				fmt.Fprintf(os.Stderr, "::warning::%s is invalid but optional — it won't block the run; rotate or unset it.\n", name)
 			} else {
 				blockingInvalid++

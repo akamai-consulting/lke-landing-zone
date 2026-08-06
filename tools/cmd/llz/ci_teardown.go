@@ -105,7 +105,7 @@ func ciTeardownDeleteVPCCmd() *cobra.Command {
 			"Resolves the exact vpc_id terraform output first, then the\n" +
 			"\"<cluster_label>-vpc\" label. Still-undeletable after the retries is a\n" +
 			"warning by default; --require-deleted turns it into a NON-ZERO exit so a\n" +
-			"destroy doesn't go green leaving an orphan VPC that blocks the next apply's\n" +
+			"destroy doesn't go color.Green leaving an orphan VPC that blocks the next apply's\n" +
 			"preflight. Dry-run by default; --yes to delete. Reads LINODE_TOKEN (or\n" +
 			"LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
@@ -130,7 +130,7 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 		Short: "fail if orphaned Linode resources remain after a destroy (with retry)",
 		Long: "Final destroy-job gate. Counts orphaned Volumes / NodeBalancers / VPCs with\n" +
 			"the SAME account census `llz ci preflight` runs, and FAILS the job when the\n" +
-			"count EXCEEDS --threshold — so a destroy can't go green leaving orphans that\n" +
+			"count EXCEEDS --threshold — so a destroy can't go color.Green leaving orphans that\n" +
 			"stall the next apply's preflight. This backstops the scoped Volume/NB sweeps,\n" +
 			"which no-op when the cluster was already gone at capture time (a re-run of a\n" +
 			"partial destroy, or pre-existing orphans). Cluster-delete reaps NBs/VPCs\n" +
