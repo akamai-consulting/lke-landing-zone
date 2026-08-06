@@ -165,12 +165,21 @@ categories:
     #                       files REACH, not what reaches them, so the inbound
     #                       caller in cluster-bootstrap was invisible until the
     #                       build broke.
+    #   24,203 / 154 files  posture-plaintext. -604, and the CLEANEST BOUNDARY of
+    #                       the campaign: a real closure of ZERO. 984 lines plus
+    #                       719 of test moved with no injected capability, no
+    #                       stranded fixture and no symbol crossing either way.
+    #                       closure.py first said 5 — all five words inside error
+    #                       STRINGS, because it stripped backtick literals before
+    #                       double-quoted ones and a backtick inside a "..." ate
+    #                       an arbitrary span. Every closure measured before that
+    #                       fix is an UPPER BOUND.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 24807
+    budget: 24203
     exact: true
     include:
       - "tools/cmd/llz/*.go"

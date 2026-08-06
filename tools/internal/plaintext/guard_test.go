@@ -1,4 +1,4 @@
-package main
+package plaintext
 
 import (
 	"os"
@@ -87,7 +87,7 @@ func TestScanPlaintextIgnoresExternalHTTP(t *testing.T) {
 // of the guard — and equally when a registry entry outlives its hop.
 func TestPlaintextGuardRealTree(t *testing.T) {
 	root := repoRootForGuardTest(t)
-	if err := runCIPlaintextGuard(root); err != nil {
+	if err := Run(root); err != nil {
 		t.Errorf("plaintext-guard failed on the real tree: %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestPlaintextGuardRealTree(t *testing.T) {
 // report the same color.Green as one that checked everything. Mirrors the
 // requireCorpus contract the sibling guards share.
 func TestPlaintextGuardFailsOnEmptyCorpus(t *testing.T) {
-	err := runCIPlaintextGuard(t.TempDir())
+	err := Run(t.TempDir())
 	if err == nil {
 		t.Fatal("expected a failure on an empty corpus")
 	}

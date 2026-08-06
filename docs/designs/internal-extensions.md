@@ -225,7 +225,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `reconciler-runtime` | 1,094 | 5 | ✔ | ✘ | `reconcile` 541, leader 199, manager 146, health 125, convergence 83. The loop + leader election. **Should also become its own binary.** |
 | `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208. **✅ Extracted — and it is a GATE, not an invariant.** It reaches no cluster. See [What `posture-credential-coverage` corrected](#what-posture-credential-coverage-corrected--the-first-wrong-state).|
 | `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first ten, extracted](#the-first-ten-extracted). |
-| `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
+| `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. **✅ Extracted — 984 lines, and a real closure of ZERO.** See [What `posture-plaintext` cost](#what-posture-plaintext-cost--nothing-and-a-measurement-bug). |
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78. **✅ Extracted — but only two of the three files.** `incluster` is part of `converge`, not this; grouping by filename prefix grouped it wrong. See [What `health-sla` corrected](#what-health-sla-corrected--a-catalog-row-that-grouped-by-filename).|
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
 | `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first ten, extracted](#the-first-ten-extracted). |
@@ -311,9 +311,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-secrets` extracted | 26,174 | 158 | −982 — grepped for hidden writes FIRST, and found one |
 | `assert-identity` extracted | 25,274 | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
 | `deliver-docs` extracted | 25,020 | 156 | −254 — the smallest paydown, and the one that added a word |
-| `argocd-diagnostics` extracted | **24,807** | 155 | −213 — the first binding kind that is wrong on purpose |
+| `argocd-diagnostics` extracted | 24,807 | 155 | −213 — the first binding kind that is wrong on purpose |
+| `posture-plaintext` extracted | **24,203** | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
 
-**Net −22,375 (47.4%) across twenty-nine extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −22,979 (48.7%) across thirty extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1647,6 +1648,53 @@ two already recorded are files named for a coverage **metric** (`coverage_tier1/
 `uncovered_helpers`) and for the **command** that calls the code (`env_set_test.go`, which held zero
 tests for `env_set.go`). All three share a property: nothing in the name points at a subject, so
 nothing points at where the test belongs.
+
+### What `posture-plaintext` cost — nothing, and a measurement bug
+
+Thirtieth, and **the cleanest boundary of the campaign**: a real closure of **zero**. 984 lines of
+guard and 719 of test moved with no injected capability, no stranded fixture, and no symbol crossing
+the boundary in either direction. The catalog called it *"the best stress test of the vehicle"* on the
+strength of its size; it turned out to be the cheapest large thing in package `main`.
+
+```
+posture-plaintext  gate:scaffolded[read-repo]
+```
+
+**The measurement that said otherwise was wrong, and the bug matters for every number in this
+catalog.** `closure.py` first reported 5, and all five were ordinary words appearing inside
+operator-facing error strings. It stripped **backtick** literals before double-quoted ones — so a
+backtick inside a `"…"` string, which this file has many of (`"run `+"`kubectl get secret`"+`"`),
+paired with an unrelated backtick elsewhere in the file and swallowed everything between them, leaving
+quoted prose exposed to the identifier scan. Reversing the two strips took the number to 2, both
+noise.
+
+> **Every closure recorded in this catalog before that fix is an upper bound**, and the error scales
+> with how much operator-facing prose a candidate carries. The guards and the `assert-` lanes — the
+> two families that explain themselves at length in their error text — are exactly where it was
+> largest.
+
+**The extraction's scar: a guard that scans the tree it lives in.** This one walks the repo looking
+for plaintext hops, and its own source contains every literal it searches for, so it exempts itself —
+as linters do. The exemption named two **basenames**. Moving the files out of package `main`
+therefore re-enabled the guard against itself: it reported every example URL in its own registry as an
+unregistered hop, and *simultaneously* declared the real entries stale, because the registry keys are
+**file paths** and the path had changed. The fix is a directory-scoped exemption plus
+`TestGuardExemptsItselfByDirectory`, which fails with instructions if the package is ever moved
+again. A self-scanning guard has to survive being moved within the tree it scans, and a basename list
+is the one form of the rule that cannot.
+
+**The open question it raises is about data, not capability** — and the catalog predicted it. This is
+the *most instance-tunable* candidate, because `plaintextAllowed` is **policy rather than fact**: six
+hundred lines of an adopter's accepted residuals, which hops they tolerate, why, and who owns closing
+them. Today it is compiled into the binary. An instance that meshes its Prometheus cannot delete an
+entry without a source change; one that ships an extra plaintext hop cannot register it at all.
+
+Nothing is proposed here, deliberately. The declaration model says *where* an extension attaches and
+*what* it may touch; it has no vocabulary for "this extension carries per-instance configuration", and
+inventing one from a single case is what this campaign has now refused four times. It is recorded
+because the row is marked `ext? ✔` — a candidate for running as a pure-argv action later — and **an
+argv action cannot carry a compiled-in registry at all.** Whoever builds that half meets this question
+first.
 
 ## The cost of the interesting half
 

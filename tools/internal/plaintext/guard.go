@@ -1,6 +1,6 @@
-package main
+package plaintext
 
-// ci_plaintext_guard.go implements `llz ci plaintext-guard` — the static gate on
+// guard.go implements `llz ci plaintext-guard` — the static gate on
 // UNENCRYPTED in-cluster communication.
 //
 // The problem it solves is drift, not any single hop. An audit of in-cluster
@@ -47,8 +47,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
@@ -474,27 +472,7 @@ func shortInClusterURL(code string) (string, bool) {
 	return "", false
 }
 
-func ciPlaintextGuardCmd() *cobra.Command {
-	var root string
-	cmd := &cobra.Command{
-		Use:   "plaintext-guard",
-		Short: "fail when an unencrypted in-cluster hop is not registered as an accepted residual",
-		Long: "Static gate on cleartext in-cluster communication (docs/adr/0010-in-cluster-mtls.md).\n" +
-			"Scans platform-apl/ and kubernetes-charts/ for `scheme: http` scrapes,\n" +
-			"`insecureSkipVerify: true`, http:// URLs to in-cluster Services (fully\n" +
-			"qualified OR the short svc.namespace / svc forms), and Istio mesh policy that\n" +
-			"accepts cleartext (PeerAuthentication mode: PERMISSIVE, DestinationRule\n" +
-			"tls.mode: DISABLE), plus tools/ for InsecureSkipVerify. Every hit must be\n" +
-			"registered in plaintextAllowed with a reason and an owner; unregistered hits\n" +
-			"fail, and so do registry entries whose hop no longer exists.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIPlaintextGuard(root) },
-	}
-	cmd.Flags().StringVar(&root, "root", ".", "repo root (template or instance layout)")
-	return cmd
-}
-
-func runCIPlaintextGuard(root string) error {
+func Run(root string) error {
 	dirs := plaintextScanDirs(root)
 	findings, examined, err := collectPlaintextFindings(root, dirs)
 	if err != nil {
@@ -516,7 +494,7 @@ func runCIPlaintextGuard(root string) error {
 			continue
 		}
 		failed = true
-		fmt.Printf("::error file=%s,line=%d::unregistered plaintext hop (%s). Every unencrypted in-cluster hop must be an explicit, reviewed decision: either secure it, or register %q in plaintextAllowed (ci_plaintext_guard.go) with a reason naming WHAT crosses the wire and an owner who could close it. See docs/adr/0010-in-cluster-mtls.md.\n",
+		fmt.Printf("::error file=%s,line=%d::unregistered plaintext hop (%s). Every unencrypted in-cluster hop must be an explicit, reviewed decision: either secure it, or register %q in plaintextAllowed (tools/internal/plaintext/guard.go) with a reason naming WHAT crosses the wire and an owner who could close it. See docs/adr/0010-in-cluster-mtls.md.\n",
 			f.file, f.line, f.what, f.key)
 	}
 
@@ -548,6 +526,11 @@ func runCIPlaintextGuard(root string) error {
 // scanned less than it appeared to, which is the precise failure requireCorpus
 // exists to catch and would NOT have caught here (platform-apl alone keeps the
 // examined count above zero).
+// guardOwnDir is the path fragment identifying this package's own source. Kept as
+// a single constant so the self-exemption and the registry's own keys cannot drift
+// apart; TestGuardExemptsItself fails if a real file here stops matching it.
+const guardOwnDir = "tools/internal/plaintext/"
+
 func plaintextScanDirs(root string) []string {
 	dirs := guardwalk.PlatformTreeDirs(root)
 	dirs = append(dirs, guardkit.RepoPath(root, "kubernetes-charts"), guardkit.RepoPath(root, "tools"))
@@ -572,7 +555,17 @@ func collectPlaintextFindings(root string, dirs []string) ([]plaintextFinding, i
 			// The guard's own source contains the literals it searches for (its
 			// finding messages and the registry's example keys), so it would
 			// report itself. Linters exempt themselves for the same reason.
-			if filepath.Base(path) == "ci_plaintext_guard.go" || filepath.Base(path) == "ci_plaintext_guard_test.go" {
+			//
+			// EXEMPT BY DIRECTORY, NOT BY FILENAME, and that change is this
+			// extraction's scar. The exemption used to name two basenames —
+			// `ci_plaintext_guard.go` and its test — so moving those files out of
+			// package main silently re-enabled the guard against itself: it found
+			// every example URL in its own registry, reported them as unregistered
+			// hops, and simultaneously declared the real entries stale because the
+			// keys are FILE PATHS and the path had changed. A guard that scans the
+			// tree it lives in has to survive being moved within that tree, and a
+			// basename list is the one form of the rule that cannot.
+			if strings.Contains(filepath.ToSlash(path), guardOwnDir) {
 				return nil
 			}
 			ext := filepath.Ext(path)
