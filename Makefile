@@ -73,7 +73,7 @@ COVERAGE_MINS := \
 	internal/instancelayout=55 \
 	internal/envtopology=31 \
 	internal/yamledit=87 \
-	internal/kubectlprobe=66 \
+	internal/kubectlprobe=71 \
 	internal/tfbin=90 \
 	internal/preflight=95 \
 	internal/reconcilelanes=78 \
@@ -90,7 +90,8 @@ COVERAGE_MINS := \
 	internal/assertsecrets=63 \
 	internal/keycloak=49 \
 	internal/assertidentity=24 \
-	internal/deliverdocs=93
+	internal/deliverdocs=93 \
+	internal/argodiag=86
 
 help:
 	@echo "lke-landing-zone — template repository targets"

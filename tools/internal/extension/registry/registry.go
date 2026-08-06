@@ -22,6 +22,7 @@ package registry
 import (
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/argodiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
@@ -61,6 +62,7 @@ import (
 var declarations = []func() extension.Extension{
 	assertobs.Extension,
 	assertsecrets.Extension,
+	argodiag.Extension,
 	assertidentity.Extension,
 	deliverdocs.Extension,
 	assertnetwork.Extension,

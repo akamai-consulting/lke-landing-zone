@@ -188,7 +188,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 |---|---:|---:|:-:|:-:|---|
 | `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test. ✅ Extracted — the prediction held exactly; see [What `converge` settled](#what-converge-settled--the-acid-test-and-what-it-did-not-break).** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
 | `apl-upgrade` | 306 | 2 | ✔ | ✘ | `ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76. |
-| `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. |
+| `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. **✅ Extracted — and the first declaration that is knowingly wrong.** See [What `argocd-diagnostics` could not say](#what-argocd-diagnostics-could-not-say--the-first-missing-kind). |
 | `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. |
 
 ## `verified` — assertion contributors, grants: `cluster-read`
@@ -310,9 +310,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-observability` extracted | 27,156 | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
 | `assert-secrets` extracted | 26,174 | 158 | −982 — grepped for hidden writes FIRST, and found one |
 | `assert-identity` extracted | 25,274 | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
-| `deliver-docs` extracted | **25,020** | 156 | −254 — the smallest paydown, and the one that added a word |
+| `deliver-docs` extracted | 25,020 | 156 | −254 — the smallest paydown, and the one that added a word |
+| `argocd-diagnostics` extracted | **24,807** | 155 | −213 — the first binding kind that is wrong on purpose |
 
-**Net −22,162 (47.0%) across twenty-eight extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −22,375 (47.4%) across twenty-nine extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1587,6 +1588,65 @@ pins an agreement between *three* packages — docs-guard's two link resolvers a
 resolve a root-relative link identically, or the guard passes a link the rewriter then breaks. Only
 package `main` can see all three, so the test stayed there and `RewriteInstanceRootLinks` is
 exported. That is the whole justification for the export, and it is written at both ends.
+
+### What `argocd-diagnostics` could not say — the first missing kind
+
+Twenty-ninth, and **the first extraction that ended with a declaration I know to be wrong**. Every
+one before it found a true declaration once the right words were chosen — twice by inventing a word,
+four times by moving code to the side whose declaration was true. This one has no true kind available,
+and all four are wrong in different ways:
+
+| kind | why not |
+|---|---|
+| `gate` | runs before a state is attempted, **over files alone**; `Validate()` rejects a gate holding anything but `read-repo`, and this reads a cluster |
+| `transition` | *acts* to move the platform into a state; this changes nothing |
+| `invariant` | must hold **continuously** at `operating`; this runs once, on failure |
+| `assertion` | contributes evidence a state **holds** — declared, under protest |
+
+**Why `assertion` is wrong.** The command's own help says *"Always exits 0: diagnostics must never
+mask the failure that triggered them"*, and that is its purpose rather than an implementation detail.
+An assertion that cannot fail contributes a constant `true`. Worse, it runs **precisely when the
+state does not hold** — it is what you run after `converged` failed, to find out why. Declared as an
+assertion it is evidence for exactly the conclusion its existence contradicts.
+
+**Why it was declared anyway.** `Extension.Incomplete` exists for this: an extension that silently
+under-declares its own surface is the same failure shape as PR #15's ban-by-omission, where a reader
+cannot tell what is missing. The alternative was to invent a **fifth binding kind** on the first case
+that wanted one, and the campaign's own rule says otherwise — a new word needs a declaration to be
+*impossible* **and** two independent shipping cases. This is case one, and the note names it.
+
+**Cases two and three are already in this catalog**, which is why the gap is recorded rather than
+shrugged off: `doctor-probes` (230 lines, 3 files) and `phase-timing` (316 lines, 2 files) are the
+same shape — read something, print it for a human, never fail. When one is extracted, the kind can be
+argued from three instances instead of guessed from one, and the question it must answer is already
+sharp: **does a diagnostic attach to a state at all, or to the *failure* of one?** `write-repo` took
+four cases and three refusals, and the refusals are what made the eventual word well-shaped.
+
+**The first honest name in six.** Five consecutive `assert-`-prefixed lanes turned out to hide a
+cluster write, which is why grepping for writes before declaring became settled practice. This one
+really is read-only — and its name is `diagnose`, not `assert`. `TestPackageStaysReadOnly` keeps it
+that way rather than trusting the grep.
+
+**It needed no `Deps` at all**, the second extraction to manage that after `assert-registry`. The
+measured closure was three symbols, two of them noise; the one real seam was `execOutput`, and
+`internal/kubectlprobe` already exported `Exec` with the identical signature — a package this
+diagnostic *already imported* for `Reachable()` and `Items()`. Clause three of the `Deps` rule ("is it
+already injectable elsewhere?") answered it.
+
+**And a limit of the closure measurement, found the hard way.** `closure.py` reports what the moved
+files **reach**; it says nothing about what reaches **them**. `effectiveKubeconfig` had an inbound
+caller in `ci_bootstrap_cluster.go` that was invisible to the measurement and surfaced as a build
+break. It moved to `internal/kubectlprobe`, which already owns *"can kubectl reach the cluster"* —
+*"which file will kubectl read to try"* is the same question one step earlier. Worth knowing for the
+remaining candidates: **an extraction's real cost includes its inbound edges, and the number in this
+catalog counts only the outbound ones.**
+
+**A third filename pattern that strands tests.** `TestDiagnoseArgoCD` lived in `ci_batch2_test.go` —
+named for the batch it was written in, a fact about the day's work rather than about the code. The
+two already recorded are files named for a coverage **metric** (`coverage_tier1/2`, `branch_coverage`,
+`uncovered_helpers`) and for the **command** that calls the code (`env_set_test.go`, which held zero
+tests for `env_set.go`). All three share a property: nothing in the name points at a subject, so
+nothing points at where the test belongs.
 
 ## The cost of the interesting half
 

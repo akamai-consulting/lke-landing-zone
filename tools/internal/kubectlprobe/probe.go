@@ -50,7 +50,9 @@ package kubectlprobe
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -256,4 +258,40 @@ func JSONPathOK(args ...string) (string, bool) {
 func Reachable() bool {
 	_, err := Exec("kubectl", "version", "--request-timeout=10s")
 	return err == nil
+}
+
+// IT LIVES HERE BECAUSE TWO CALLERS NEEDED IT, and the extraction that moved the
+// first one found the second the hard way. `llz ci diagnose-argocd` and the
+// cluster bootstrap both ask "which kubeconfig will kubectl actually read"; the
+// closure measurement that sized the diagnostic's extraction reads only what the
+// moved files REACH, so an inbound caller in package main was invisible until the
+// build broke. This package already owns "can kubectl reach the cluster"; which
+// file it reads to try is the same question one step earlier.
+
+// EffectiveKubeconfig resolves the kubeconfig kubectl will actually read: the
+// $KUBECONFIG env var when it points at a non-empty file, else the default
+// ~/.kube/config. Returns "" only when NEITHER exists / is non-empty — the
+// genuine "no cluster, nothing to diagnose" signal.
+//
+// Gating solely on $KUBECONFIG (the previous behavior) silently skipped these
+// diagnostics on exactly the failures they exist for: the bootstrap-openbao job
+// — like most of our steps — writes ~/.kube/config and relies on kubectl's
+// default path, never exporting $KUBECONFIG. So the v0.0.19 (2026-07-05) e2e
+// convergence wedge tripped the assert-argo-app gate and then this step
+// no-op'd with "No kubeconfig available", losing the platform-bootstrap
+// Application state that would have explained the stall.
+func EffectiveKubeconfig() string {
+	candidates := []string{os.Getenv("KUBECONFIG")}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".kube", "config"))
+	}
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return p
+		}
+	}
+	return ""
 }

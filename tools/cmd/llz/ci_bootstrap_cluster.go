@@ -34,6 +34,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
@@ -479,7 +480,7 @@ func resolveKubeconfig(path string) (string, func(), error) {
 	//    $KUBECONFIG / ~/.kube/config THEMSELVES, exactly like wait-cluster-ready +
 	//    diagnose-argocd, which read the cluster fine. An empty return path signals
 	//    "do not touch the child env". Fail loudly only when nothing is resolvable.
-	if effectiveKubeconfig() == "" {
+	if kubectlprobe.EffectiveKubeconfig() == "" {
 		return "", noop, fmt.Errorf("no usable kubeconfig: pass --kubeconfig, set a non-empty $KUBECONFIG or ~/.kube/config, or set KUBECONFIG_RAW")
 	}
 	return "", noop, nil

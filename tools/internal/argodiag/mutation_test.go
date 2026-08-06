@@ -1,4 +1,4 @@
-package main
+package argodiag
 
 import (
 	"errors"
@@ -50,7 +50,7 @@ func TestDiagnoseArgoCDPrintsCapturedNodeSchedulingLines(t *testing.T) {
 	})
 
 	out := captureStdout(t, func() {
-		if err := runCIDiagnoseArgoCD("apl-operator", "argocd"); err != nil {
+		if err := Run("apl-operator", "argocd"); err != nil {
 			t.Fatalf("diagnostics must never fail: %v", err)
 		}
 	})

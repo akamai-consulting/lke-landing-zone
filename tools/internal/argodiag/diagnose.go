@@ -1,4 +1,4 @@
-package main
+package argodiag
 
 // ci_diagnose_argocd.go implements `llz ci diagnose-argocd` — the native port
 // of llz-terraform.yml's 'Diagnose ArgoCD install failure' step. Runs only on
@@ -21,69 +21,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/spf13/cobra"
 )
-
-func ciDiagnoseArgoCDCmd() *cobra.Command {
-	var ns, aplNS string
-	c := &cobra.Command{
-		Use:   "diagnose-argocd",
-		Short: "dump apl-operator + ArgoCD install-failure diagnostics (best-effort, never fails)",
-		Long: "Native port of the 'Diagnose ArgoCD install failure' step. Dumps node\n" +
-			"schedulability, then for the apl-operator and argocd namespaces: their\n" +
-			"resources, Jobs + their logs, per-pod describes, recent events, and the\n" +
-			"Helm release status/history — grouped with ::group:: for the run log.\n" +
-			"apl-operator is swept first because helm_release.apl timing out (operator\n" +
-			"Deployment never Available) is the most common fresh-cluster failure, and\n" +
-			"the argocd namespace is empty by design until the operator gets that far.\n" +
-			"Then sweeps every failing pod / Job across ALL namespaces and dumps its\n" +
-			"container logs — the crash reason the state-only captures miss.\n" +
-			"Skips cleanly when $KUBECONFIG is absent/empty (cluster may not exist) or\n" +
-			"when the apiserver is unreachable (e.g. the runner was never allowlisted on\n" +
-			"the control-plane firewall) — otherwise every probe would block on its own\n" +
-			"~30s dial timeout and the dozens of them would burn the whole job budget.\n" +
-			"Always exits 0: diagnostics must never mask the failure that triggered them.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDiagnoseArgoCD(aplNS, ns) },
-	}
-	c.Flags().StringVar(&ns, "namespace", "argocd", "namespace holding the ArgoCD install")
-	c.Flags().StringVar(&aplNS, "apl-namespace", "apl-operator", "namespace holding the apl-operator install")
-	return c
-}
-
-// effectiveKubeconfig resolves the kubeconfig kubectl will actually read: the
-// $KUBECONFIG env var when it points at a non-empty file, else the default
-// ~/.kube/config. Returns "" only when NEITHER exists / is non-empty — the
-// genuine "no cluster, nothing to diagnose" signal.
-//
-// Gating solely on $KUBECONFIG (the previous behavior) silently skipped these
-// diagnostics on exactly the failures they exist for: the bootstrap-openbao job
-// — like most of our steps — writes ~/.kube/config and relies on kubectl's
-// default path, never exporting $KUBECONFIG. So the v0.0.19 (2026-07-05) e2e
-// convergence wedge tripped the assert-argo-app gate and then this step
-// no-op'd with "No kubeconfig available", losing the platform-bootstrap
-// Application state that would have explained the stall.
-func effectiveKubeconfig() string {
-	candidates := []string{os.Getenv("KUBECONFIG")}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".kube", "config"))
-	}
-	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
-			return p
-		}
-	}
-	return ""
-}
 
 // diagStream runs a command with output streamed to stdout, best-effort. A
 // package var so tests can record the probe sequence without real binaries.
@@ -93,8 +36,8 @@ var diagStream = func(name string, args ...string) {
 	_ = cmd.Run()
 }
 
-func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
-	if effectiveKubeconfig() == "" {
+func Run(aplNS, argoNS string) error {
+	if kubectlprobe.EffectiveKubeconfig() == "" {
 		fmt.Fprintln(os.Stderr, "::warning::No kubeconfig available — cluster may not exist; nothing to diagnose")
 		return nil
 	}
@@ -114,7 +57,7 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 		diagStream("kubectl", "get", "nodes", "-o", "wide")
 		// The bash piped describe through grep for the scheduling-relevant
 		// sections; print them from the captured describe instead.
-		if out, err := execOutput("kubectl", "describe", "nodes"); err == nil {
+		if out, err := kubectlprobe.Exec("kubectl", "describe", "nodes"); err == nil {
 			for _, line := range strings.Split(string(out), "\n") {
 				switch {
 				case strings.HasPrefix(line, "Name:"), strings.HasPrefix(line, "Taints:"),
@@ -352,7 +295,7 @@ func diagnoseNamespace(ns, release string) {
 		}
 	})
 	diagGroup(ns+" — recent events (by time)", func() {
-		if out, err := execOutput("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp"); err == nil {
+		if out, err := kubectlprobe.Exec("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp"); err == nil {
 			fmt.Print(cigate.TailLines(string(out), 60))
 			fmt.Println()
 		}
@@ -366,7 +309,7 @@ func diagnoseNamespace(ns, release string) {
 // kubectlNames returns the non-empty lines of a `kubectl ... -o name` listing,
 // nil on any error (the diagnostics' best-effort contract).
 func kubectlNames(args ...string) []string {
-	out, err := execOutput("kubectl", args...)
+	out, err := kubectlprobe.Exec("kubectl", args...)
 	if err != nil {
 		return nil
 	}

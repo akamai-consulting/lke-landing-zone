@@ -22,9 +22,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 (`tools/internal/tofudriver`) `assert-observability`
 (`tools/internal/assertobs`) `assert-secrets`
 (`tools/internal/assertsecrets`) and `assert-identity` (`tools/internal/assertidentity`) and `deliver-docs`
-(`tools/internal/deliverdocs`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/deliverdocs`) and `argocd-diagnostics`
+(`tools/internal/argodiag`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all twenty-eight still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all twenty-nine still run because `ci.go` and the reconciler register them, and the declarations are inert.
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
@@ -67,6 +68,17 @@ ceiling built to fix banning-by-omission.
 **FIXED by the seventh extension:** that an extension is PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
 lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
 what is missing. `template-sustain` was the second independent case, so `Extension.Incomplete` now exists and both partial declarations say what they are missing.
+
+**A FOURTH thing the model cannot say, found by the twenty-ninth extension:** there is no binding
+kind for a **diagnostic**. `argocd-diagnostics` reads a failing platform and prints it for a human,
+always exits 0 by design ("diagnostics must never mask the failure that triggered them"), and runs
+precisely when `converged` did *not* hold. None of the four kinds fits: `gate` is files-only,
+`transition` acts, `invariant` holds continuously, and `assertion` contributes evidence a state
+**holds** — which is the opposite of what this contributes. It ships declared as an `assertion` with
+an `Incomplete` note saying so, because a fifth kind needs a declaration to be impossible **and** two
+independent cases; this is case one. `doctor-probes` and `phase-timing` are the same shape and are
+where the argument should be made. The question the kind has to answer is already sharp: **does a
+diagnostic attach to a state, or to the failure of one?**
 
 **A third thing the model cannot say, found by the sixth extension:** the difference between
 GRANTED and CONFIRMED. `cloud-mutate` permits a binding to delete cloud resources; nothing expresses

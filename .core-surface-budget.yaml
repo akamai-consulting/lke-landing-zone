@@ -155,12 +155,22 @@ categories:
     #                       PRUNES a directory mid-walk, so there was no seam to
     #                       split on and the declaration was impossible rather
     #                       than incomplete.
+    #   24,807 / 155 files  argocd-diagnostics. -213. The FIRST extension whose
+    #                       binding KIND is wrong on purpose: a diagnostic that
+    #                       always exits 0, declared `assertion` and marked
+    #                       Incomplete, because a fifth kind needs two cases and
+    #                       this is one. Needed NO Deps — kubectlprobe.Exec
+    #                       already had the only seam. EffectiveKubeconfig moved
+    #                       to internal/kubectlprobe: closure measures what moved
+    #                       files REACH, not what reaches them, so the inbound
+    #                       caller in cluster-bootstrap was invisible until the
+    #                       build broke.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 25020
+    budget: 24807
     exact: true
     include:
       - "tools/cmd/llz/*.go"
