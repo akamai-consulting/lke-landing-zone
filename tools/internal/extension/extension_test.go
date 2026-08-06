@@ -420,18 +420,27 @@ func TestExtensionGrantsAreTheDerivedUnion(t *testing.T) {
 }
 
 func TestVocabulariesAreStableAndClosed(t *testing.T) {
-	// EIGHT, not the catalog's seven. `secret-read` was split out of
-	// `secret-custody` by the thirteenth extension: the single word was documented
-	// as "read or write credential material", and a check that only READS
-	// credentials (token-inventory's validate-tokens) was therefore inexpressible —
-	// an assertion permits read grants only, and half a write grant is not one.
+	// NINE, not the catalog's seven, and the two extra words arrived by different
+	// routes — which is the distinction this test exists to keep visible.
 	//
-	// This is the only vocabulary ADDITION so far, as opposed to the two
-	// grantStates widenings. Treat a failure here as a claim that the model needed
-	// a new word, which is a much larger claim than needing a new row, and should
-	// arrive with the extraction that could not be declared without it.
-	if got := len(extension.Grants()); got != 8 {
-		t.Errorf("want 8 grants, got %d — if a grant was added deliberately, update this and the catalog together", got)
+	//   - `secret-read` was SPLIT OUT of `secret-custody` (thirteenth extension).
+	//     The single word was documented as "read or write credential material",
+	//     and a check that only READS credentials (token-inventory's
+	//     validate-tokens) was inexpressible: an assertion permits read grants
+	//     only, and half a write grant is not one.
+	//   - `write-repo` was ADDED (twenty-eighth, `deliver-docs`), after being
+	//     refused three times. gen-toc, guard-docs and promote-pipeline each write
+	//     the operator's repo and each resolved it with a file split — render in
+	//     the package, os.WriteFile in main. deliver-docs prunes a directory and
+	//     rewrites links mid-walk, so there is no seam to split on; the declaration
+	//     was impossible rather than incomplete.
+	//
+	// Treat a failure here as a claim that the model needed a new word, which is a
+	// much larger claim than needing a new grantStates row, and should arrive with
+	// the extraction that could not be declared without it. Two additions in
+	// twenty-eight extractions is the rate to judge the next one against.
+	if got := len(extension.Grants()); got != 9 {
+		t.Errorf("want 9 grants, got %d — if a grant was added deliberately, update this and the catalog together", got)
 	}
 	if got := len(extension.States()); got != 10 {
 		t.Errorf("want 10 states, got %d", got)

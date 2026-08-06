@@ -37,6 +37,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
@@ -61,6 +62,7 @@ var declarations = []func() extension.Extension{
 	assertobs.Extension,
 	assertsecrets.Extension,
 	assertidentity.Extension,
+	deliverdocs.Extension,
 	assertnetwork.Extension,
 	assertplatform.Extension,
 	assertreconciler.Extension,

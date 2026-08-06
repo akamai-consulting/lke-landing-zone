@@ -146,12 +146,21 @@ categories:
     #                       a shared package — Go will not let two packages define
     #                       methods on a type neither owns, so internal/keycloak
     #                       had to come out first.
+    #   25,020 / 156 files  deliver-docs. -254, the SMALLEST paydown yet, and the
+    #                       one that cost the most model. It added `write-repo` —
+    #                       the second word this vocabulary has gained, after
+    #                       three earlier extractions recorded the gap and refused
+    #                       to invent it. gen-toc, guard-docs and promote-pipeline
+    #                       could each keep the os.WriteFile in cmd/llz; this one
+    #                       PRUNES a directory mid-walk, so there was no seam to
+    #                       split on and the declaration was impossible rather
+    #                       than incomplete.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 25274
+    budget: 25020
     exact: true
     include:
       - "tools/cmd/llz/*.go"

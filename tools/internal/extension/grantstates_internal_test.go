@@ -29,11 +29,18 @@ import "testing"
 //     matter — custody at `scaffolded` or `configured` would mean a credential
 //     exists before anything has been built to issue one, which is the shape of a
 //     hardcoded secret rather than a fetched one.
+//   - write-repo was ADDED (twenty-eighth, `deliver-docs`) — the first new row
+//     rather than a widened one, and the first whose states sit entirely OUTSIDE
+//     the mutating middle. `scaffolded` and `upgraded` are the two moments copier
+//     runs, which is the only reason a repo write happens at all. It holds exactly
+//     the states one shipping extension proved and not the `promoted` that looks
+//     obvious; see the row's comment.
 func TestGrantStatesTableIsPinned(t *testing.T) {
 	want := map[Grant][]State{
 		SecretCustody: {Provisioned, Seeded, Operating},
 		CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
 		ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
+		WriteRepo:     {Scaffolded, Upgraded},
 	}
 	if len(grantStates) != len(want) {
 		t.Fatalf("grantStates has %d rows, want %d — only the MUTATING grants belong here; "+
@@ -57,14 +64,28 @@ func TestGrantStatesTableIsPinned(t *testing.T) {
 			}
 		}
 	}
-	// And the states that must NEVER carry a mutating grant, named rather than
-	// implied — these are the ones a widening would reach for first.
+	// And the states that must never carry a SUBSTRATE-mutating grant, named
+	// rather than implied — these are the ones a widening would reach for first.
+	//
+	// THE THREE GRANTS ARE LISTED EXPLICITLY, and after write-repo that is load-
+	// bearing rather than incidental. This loop used to read as "no mutating grant
+	// belongs at scaffolded/configured/verified", and write-repo is a mutating
+	// grant that is legal at `scaffolded`. The rule it was always expressing is
+	// narrower: you cannot mutate a SUBSTRATE that does not exist yet, and you
+	// cannot mutate anything at `verified` without changing what you are measuring.
+	// A repo exists before any substrate does, so it is not covered — and saying so
+	// out loud is cheaper than discovering it when the next grant is added.
 	for _, s := range []State{Scaffolded, Configured, Verified} {
 		for _, g := range []Grant{CloudMutate, ClusterWrite, SecretCustody} {
 			if containsState(grantStates[g], s) {
-				t.Errorf("%q became legal at %q — %q is where a mutating grant must not go", g, s, s)
+				t.Errorf("%q became legal at %q — %q is where a substrate-mutating grant must not go", g, s, s)
 			}
 		}
+	}
+	// write-repo is bound by the same `verified` rule, for the same reason: an
+	// assertion that rewrites the repo it is judging has changed its own evidence.
+	if containsState(grantStates[WriteRepo], Verified) {
+		t.Errorf("write-repo became legal at %q — a binding that rewrites the repo cannot also be evidence about it", Verified)
 	}
 }
 

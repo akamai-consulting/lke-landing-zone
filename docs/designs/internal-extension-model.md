@@ -21,10 +21,11 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 (`tools/internal/wavehealth`) `tofu-driver`
 (`tools/internal/tofudriver`) `assert-observability`
 (`tools/internal/assertobs`) `assert-secrets`
-(`tools/internal/assertsecrets`) and `assert-identity` (`tools/internal/assertidentity`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/assertsecrets`) and `assert-identity` (`tools/internal/assertidentity`) and `deliver-docs`
+(`tools/internal/deliverdocs`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all twenty-seven still run because `ci.go` and the reconciler register them, and the declarations are inert.
-**ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL EIGHT grants, both values of `Always`, multi-binding extensions,
+all twenty-eight still run because `ci.go` and the reconciler register them, and the declarations are inert.
+**ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
 rather than incidental. The action
@@ -73,11 +74,28 @@ whether a human authorised *this* deletion (`teardown.Deps.Confirm` — `--yes`)
 granted but unconfirmed must dry-run rather than proceed, so the two bits must not be one. Unlike the
 other two this is probably not a missing grant but a missing axis, and it belongs to the action ABI.
 
-**One known gap, found by the second extension:** there is no `write-repo` grant, so a binding that
-writes files in the repository cannot say so. `own-paths` is a copier fence, not a write permit. Two
-independent cases — `llz ci gen-toc` and the catalog's `promote-pipeline` — are recorded in [the
-catalog](internal-extensions.md#the-first-two-extracted). Deliberately not invented here: two cases
-say the vocabulary has a hole, not what shape it is.
+**The `write-repo` gap is CLOSED, by the twenty-eighth extension.** It was open from the second one,
+and refused three times: `llz ci gen-toc`, `guard-docs` and `promote-pipeline` each write the
+operator's repo, and each was resolved by a **file split** — the package renders bytes, package `main`
+calls `os.WriteFile` — on the stated grounds that two cases say the vocabulary has a hole and do not
+say what shape it is.
+
+`deliver-docs` is where that answer stops working. It does not render bytes for someone else to
+write: it **prunes a directory and rewrites links in place**, deciding per file, mid-walk, from that
+file's inode identity and whether the template owns its path. Hoisting the writes means buffering
+every rewritten file to hand back, or passing `main` a callback that writes — the write happening
+inside the package with extra indirection. The declaration was **impossible**, not incomplete, which
+is this model's stated bar for a new word.
+
+`write-repo` means the instance repo's **tracked** files; a temp dir needs no grant, the same way
+reading `/tmp` needs no `read-repo`. Its `grantStates` row is `{scaffolded, upgraded}` — the two
+moments copier runs — and deliberately **not** `promoted`, because `promote-pipeline` still keeps its
+write in `main` and a row no shipping code exercises is a guess. It is not `own-paths`: that is a
+**fence** ("copier must not render these bytes") and this is a **permit**; `deliver-docs` holds the
+permit and not the fence, since it prunes what copier just rendered and wants the re-render.
+
+Two vocabulary additions in twenty-eight extractions — `secret-read` (a **split**) and `write-repo`
+(an **addition**) — is the rate to judge the next one against.
 
 **Relates:** [ADR 0014](../adr/0014-core-surface-budget.md) (the budget this exists to relieve),
 [internal-extensions.md](internal-extensions.md) (the catalog this model is derived from),
@@ -87,6 +105,17 @@ issue #399 (the sequenced plan), PR #15 (closed, superseded).
 **This document owns the MODEL** — states, bindings, grants, and the rules between them. Its
 evidence is [the catalog](internal-extensions.md); the budget it serves is [ADR
 0014](../adr/0014-core-surface-budget.md). Cited, not restated.
+
+<!-- toc -->
+## Contents
+
+- [What changed, and why](#what-changed-and-why)
+- [The model](#the-model)
+- [Anatomy of an extension](#anatomy-of-an-extension)
+- [What is deliberately absent](#what-is-deliberately-absent)
+- [Ordering](#ordering)
+
+<!-- /toc -->
 
 ## What changed, and why
 

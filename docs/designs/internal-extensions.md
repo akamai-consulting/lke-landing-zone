@@ -32,6 +32,29 @@ mechanism one); `ext?` = could plausibly become *external* later (pure argv acti
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [Re-measured on rebase (2026-08-05)](#re-measured-on-rebase-2026-08-05)
+- [Core residue — 3,764, and shrinking](#core-residue--3764-and-shrinking)
+- [`→ scaffolded` — grants: `own-paths`](#-scaffolded--grants-own-paths)
+- [`→ configured` — grants: `read-repo`](#-configured--grants-read-repo)
+- [`→ provisioned` — grants: `cloud-mutate`](#-provisioned--grants-cloud-mutate)
+- [`→ seeded` — grants: `secret-custody` (+ `cloud-mutate` / `cluster-write`)](#-seeded--grants-secret-custody--cloud-mutate--cluster-write)
+- [`→ converged` — grants: `cluster-write`](#-converged--grants-cluster-write)
+- [`verified` — assertion contributors, grants: `cluster-read`](#verified--assertion-contributors-grants-cluster-read)
+- [`invariant: operating`](#invariant-operating)
+- [`→ promoted` / `→ upgraded` / `→ destroyed`](#-promoted---upgraded---destroyed)
+- [Gate — attach at `→ scaffolded` / `→ configured`, grants: `read-repo`](#gate--attach-at--scaffolded---configured-grants-read-repo)
+- [Dev-only — template-repo tooling, never ships to an instance](#dev-only--template-repo-tooling-never-ships-to-an-instance)
+- [The first twenty-six, extracted](#the-first-twenty-six-extracted)
+- [The cost of the interesting half](#the-cost-of-the-interesting-half)
+- [What the catalog says](#what-the-catalog-says)
+- [Suggested first five](#suggested-first-five)
+- [Decisions](#decisions)
+
+<!-- /toc -->
+
 ## Re-measured on rebase (2026-08-05)
 
 Two days of calendar, five weeks of `main`. The catalog measured 214 files / 41,709 lines; the gate
@@ -212,7 +235,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
+| `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, ~~deliver-docs 154~~. Template-repo-side, not instance-side — **except `deliver-docs`, which is neither**; it was extracted as its own extension and is the catalog's sixth correction. See [What `deliver-docs` cost](#what-deliver-docs-cost--a-word). |
 | `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first ten, extracted](#the-first-ten-extracted). |
 | `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first ten, extracted](#the-first-ten-extracted). |
 | `promote-pipeline` | 307 | 2 | ✔ | ✘ | **✅ Extracted — binds `promoted`, the last unclaimed state.** See [What `promote-pipeline` closed](#what-promote-pipeline-closed--the-last-state-and-the-third-write-repo-case). `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
@@ -286,9 +309,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `tofu-driver` extracted | 29,230 | 172 | −220 — three verbs the catalog gave one row and one grant |
 | `assert-observability` extracted | 27,156 | 161 | **−2,074** — the second-largest single move, and a mutation hiding in "readiness" |
 | `assert-secrets` extracted | 26,174 | 158 | −982 — grepped for hidden writes FIRST, and found one |
-| `assert-identity` extracted | **25,274** | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
+| `assert-identity` extracted | 25,274 | 157 | −900 — five for five, and the first extraction Go's own rules ordered |
+| `deliver-docs` extracted | **25,020** | 156 | −254 — the smallest paydown, and the one that added a word |
 
-**Net −21,908 (46.4%) across twenty-seven extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −22,162 (47.0%) across twenty-eight extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -320,7 +344,10 @@ fit. Three findings:
   was once mis-reported as removed. An argv tool would have to re-derive the tree from help text,
   which is the second-implementation-of-a-shared-rule bug this code already has scars from. "36 of 57
   need in-process Go" now has one worked example instead of an estimate.
-- **The model has no `write-repo`, and that is a real gap.** `llz ci gen-toc` writes Markdown back to
+- **The model has no `write-repo`, and that is a real gap.** ***CLOSED by the twenty-eighth
+  extension — `deliver-docs` added the grant. The reasoning below is the record of the three refusals
+  that preceded it, kept because the refusals are the argument for the shape it finally took.***
+  `llz ci gen-toc` writes Markdown back to
   disk, and nothing can express it. A `gate` may hold `read-repo` only — correctly. `own-paths` is
   the nearest-looking grant and is the wrong one: per [Decision 1](#1-generated-files-own-paths-is-a-fence-against-copier-not-a-claim-on-authorship)
   it means "copier must not render these bytes", a fence rather than a write permit, and the template
@@ -1491,6 +1518,76 @@ sibling *mention* the admin client but *drive* `portForwardKeycloakFn`, a port-f
 package's symbols while being about something else entirely — the only case in seven files where
 "which symbols does this test touch" gave the wrong answer.
 
+### What `deliver-docs` cost — a word
+
+Twenty-eighth, the **smallest paydown of the campaign** (−254), and the one that changed the model
+most. It is the case for measuring an extraction by what it teaches rather than by what it moves.
+
+```
+deliver-docs  transition:scaffolded/deliver [read-repo, write-repo]
+              transition:upgraded/redeliver [read-repo, write-repo]
+```
+
+**`write-repo` exists now, after three refusals.** The gap was found by the *second* extension and
+recorded four times since. `llz ci gen-toc`, `guard-docs` and `promote-pipeline` each write the
+operator's repo and each declared `read-repo`, because in all three the write could be lifted **out**
+of the extension: the package renders bytes, package `main` calls `os.WriteFile`. Every time, the
+catalog refused to invent a word on the stated grounds that *two cases say the vocabulary has a hole
+and do not say what shape it is*.
+
+This is where that answer stops working, and the difference is structural rather than one of degree.
+`deliver-docs` does not render bytes for someone else to write — it **prunes a directory** and
+rewrites links **in place**, deciding per file, mid-walk, from that file's inode identity and whether
+the template ships its path. Lifting the writes out means buffering every rewritten file to hand
+back, or passing `main` a callback that writes: the write happening inside the package with extra
+indirection and a worse boundary.
+
+The model's own rule is that a gap making a declaration **incomplete** is fixed by a file split, and
+one making it **impossible** justifies a new word. Three times it was the former. This is the latter,
+and it is the only clean test of that rule the campaign has produced — the three refusals are what
+make the fourth case evidence rather than impatience.
+
+**And the shape was knowable only because of them.** The question the earlier refusals left open was
+*which* writes count — the operator's repo, a build artifact, or a temp file. All four cases answer it
+identically: they write files an operator has checked in and will read a diff of. So `write-repo`
+means the instance repo's **tracked** files, and a temp dir needs no grant, the same way reading
+`/tmp` needs no `read-repo`.
+
+Its `grantStates` row is `{scaffolded, upgraded}` — the two moments copier runs — and **not**
+`promoted`, which looks obvious and is not earned: `promote-pipeline` keeps its `os.WriteFile` in
+`main` and so does not hold the grant, and a row no shipping code exercises is a guess in a table
+whose whole discipline is that it records what an extraction needed.
+
+It is also the first row whose states sit **outside** the mutating middle of the lifecycle. The other
+three start at `provisioned` — you cannot mutate a cluster or a cloud before one exists. Repo writes
+are the opposite shape: they happen before any substrate exists, and again when the template moves
+under it. That forced an edit to the pinning test, which had read as *"no mutating grant belongs at
+`scaffolded`"*; the rule it was really expressing is narrower — *no **substrate**-mutating grant does.*
+
+**Two bindings for one piece of code**, which no earlier extension has needed. `guard-charts` settled
+that two checks sharing a grant and a state are one binding; the corollary nobody had reached is that
+identical work at two **different** states is two bindings, because a binding is `(kind, state)` and
+there is nowhere else for the second moment to go. It genuinely runs at both: copier invokes it from
+`_tasks`, which fire on render (`llz new` → `scaffolded`) and on `copier update` (→ `upgraded`).
+
+**Sixth catalog correction, and the first about which extension a file belongs to.** `deliver-docs`
+was filed as one of `release-publish`'s five files, under the note *"template-repo-side, not
+instance-side"*. It is neither: it runs inside a **rendered instance**, at copier time, over that
+instance's own `docs/`. The four previous corrections were about file lists or states; this one is
+about membership.
+
+**It is not `own-paths`,** which is the grant it looks most like. `own-paths` is a **fence** —
+"copier must not render these bytes" — and `docs/` is classed `managed`, so copier rewrites it
+wholesale every update, which is exactly what this verb runs *after*. Claiming the fence would stop
+the thing it depends on. `own-paths` says nothing about who writes; `write-repo` says nothing about
+copier.
+
+**One symbol crossed the boundary, for one test.** `TestLinkResolution_AllThreeResolversAgreeOnRootRelative`
+pins an agreement between *three* packages — docs-guard's two link resolvers and this rewriter must
+resolve a root-relative link identically, or the guard passes a link the rewriter then breaks. Only
+package `main` can see all three, so the test stayed there and `RewriteInstanceRootLinks` is
+exported. That is the whole justification for the export, and it is written at both ends.
+
 ## The cost of the interesting half
 
 Three extensions in, the model is exercised by two kinds (`gate`, `invariant`), two states
@@ -1572,14 +1669,15 @@ in the lower half of this table.
 
 **And three things the model cannot express**, all found by declaring rather than by design:
 
-1. a binding that **writes repository files** — no `write-repo`, and `own-paths` is a copier fence
-   explicitly *not* a write permit (`llz ci gen-toc`, `promote-pipeline`);
+1. ~~a binding that **writes repository files**~~ — **FIXED.** Refused three times (`llz ci gen-toc`,
+   `guard-docs`, `promote-pipeline`), each resolved by a file split; `deliver-docs` prunes a
+   directory mid-walk and had no seam to split on, so `write-repo` landed with it;
 2. ~~an extension that is **partial**~~ — **FIXED.** Two independent cases (`reconcile-actions`,
    `template-sustain`) met the bar, and `Extension.Incomplete` landed with them;
 3. the difference between **granted and confirmed** — `cloud-mutate` permits a deletion; nothing says
    a human authorised *this* one (`teardown.Deps.Confirm`).
 
-None is invented here. (1) and (2) each wait for a second independent case; (3) is a question for the
+None was invented here. (1) and (2) have since landed, each on the case that made a declaration impossible rather than merely awkward; (3) is a question for the
 action ABI rather than a missing grant.
 
 ## What the catalog says

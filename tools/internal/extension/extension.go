@@ -140,12 +140,47 @@ const (
 	ReadRepo      Grant = "read-repo"      // read the instance repo's files
 	CloudRead     Grant = "cloud-read"     // read cloud APIs
 	ClusterRead   Grant = "cluster-read"   // read cluster state
+	WriteRepo     Grant = "write-repo"     // create, rewrite or delete the instance repo's files
 	ClusterWrite  Grant = "cluster-write"  // mutate cluster state
 	CloudMutate   Grant = "cloud-mutate"   // create/destroy cloud resources
 	SecretRead    Grant = "secret-read"    // read credential material or its metadata
 	SecretCustody Grant = "secret-custody" // place or store credential material
 	OwnPaths      Grant = "own-paths"      // own instance files against `copier update`
 )
+
+// ADDING write-repo WAS THE TWENTY-EIGHTH EXTENSION'S FINDING, and it is the
+// SECOND word this vocabulary has gained — the first since secret-custody was
+// split. It took four cases, and three refusals, to get here.
+//
+// THE THREE REFUSALS ARE THE POINT. `llz ci gen-toc`, `guard-docs` and
+// `promote-pipeline` each write the operator's repo and each declared `read-repo`,
+// because in all three the write could be lifted OUT of the extension and left in
+// package main: the package renders bytes, main calls os.WriteFile. Each time the
+// catalog recorded the gap and refused to invent a word, on the stated grounds
+// that two cases say the vocabulary has a hole and do not say what SHAPE it is.
+//
+// `deliver-docs` is the case where that answer stops working, and the difference
+// is structural rather than a matter of degree. It does not render bytes for
+// someone else to write — it PRUNES A DIRECTORY and rewrites links in place,
+// deciding per file, mid-walk, from the file's own inode identity and whether the
+// template owns its path. Lifting the writes out means either buffering every
+// rewritten file to hand back, or passing main a callback that writes — which is
+// the write happening inside the package with extra indirection and a worse
+// boundary. The declaration was not INCOMPLETE, which a file split fixes; it was
+// IMPOSSIBLE, which is this model's stated bar for a new word.
+//
+// AND THE SHAPE IS NOW KNOWN, which is what the earlier refusals were waiting for.
+// The question they left open was which writes count: the operator's repo, or a
+// build artifact, or a temp file. All four cases answer it the same way — they
+// write files an operator has checked in and will read a diff of. So write-repo
+// means the INSTANCE REPO'S TRACKED FILES, and a temp dir or a render output under
+// .instance-test needs no grant, the same way reading /tmp needs no read-repo.
+//
+// It is NOT own-paths, and the two are easy to confuse. own-paths is a FENCE —
+// "copier must not render these bytes" — and says nothing about who writes them.
+// write-repo is a PERMIT and says nothing about copier. deliver-docs holds the
+// permit and not the fence: it rewrites files copier itself rendered, and wants
+// them re-rendered on the next update.
 
 // SPLITTING secret-custody WAS THE THIRTEENTH EXTENSION'S FINDING, and the first
 // that could not be fixed by adding a table row.
@@ -174,7 +209,7 @@ const (
 
 // Grants returns the closed vocabulary, ordered least to most dangerous.
 func Grants() []Grant {
-	return []Grant{ReadRepo, CloudRead, ClusterRead, SecretRead, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
+	return []Grant{ReadRepo, CloudRead, ClusterRead, SecretRead, WriteRepo, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
 }
 
 // readOnly are the grants that observe without changing anything. secret-read is

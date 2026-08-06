@@ -1,4 +1,4 @@
-package main
+package deliverdocs
 
 // ci_deliver_docs.go — `llz ci deliver-docs`: shrink an instance's copied-in
 // docs/ to the day-to-day operator set (quickstart + runbooks + playbooks) and
@@ -34,8 +34,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 )
 
@@ -43,32 +41,7 @@ import (
 // guard that validates every link AS IT RESOLVES inside the pruned tree — a check
 // that is meaningless if it runs against a different set than this verb ships.
 
-func ciDeliverDocsCmd() *cobra.Command {
-	var dir, org, ref, root, templateRoot string
-	c := &cobra.Command{
-		Use:   "deliver-docs",
-		Short: "prune a copied-in docs/ to the operator set + write a version-pinned pointer to the rest",
-		Long: "Slims an instance's docs/ to quickstart.md + runbooks/ + playbooks/ and writes\n" +
-			"docs/README.md pointing at the full docs for the pinned template version in the\n" +
-			"(public) template repo. Run after copying the template's docs/ in; the same verb\n" +
-			"backs both the copier render step and release-e2e, so the keep-set can't drift.\n" +
-			"With --template-root, ALSO repoints links in the instance's root-level Markdown\n" +
-			"(README.md, AGENTS.md, …) that target template-only paths, which the docs/-scoped\n" +
-			"rewrite never sees.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runDeliverDocs(dir, org, ref, root, templateRoot)
-		},
-	}
-	c.Flags().StringVar(&dir, "docs", "docs", "the already-copied docs directory to prune in place")
-	c.Flags().StringVar(&org, "org", "", "template org for the reference URL (e.g. akamai-consulting)")
-	c.Flags().StringVar(&ref, "ref", "", "template ref/tag the instance is pinned to (for the version-matched URL)")
-	c.Flags().StringVar(&root, "root", ".", "the instance root, whose top-level Markdown is repointed (needs --template-root)")
-	c.Flags().StringVar(&templateRoot, "template-root", "", "path to the template checkout; enables the instance-root link repoint (copier passes _copier_conf.src_path)")
-	return c
-}
-
-func runDeliverDocs(dir, org, ref, root, templateRoot string) error {
+func Run(dir, org, ref, root, templateRoot string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read docs dir %s: %w", dir, err)
@@ -194,7 +167,7 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 		if fileDir == "." {
 			fileDir = ""
 		}
-		out, n := rewriteInstanceRootLinks(string(data), fileDir,
+		out, n := RewriteInstanceRootLinks(string(data), fileDir,
 			func(q string) bool { return pathExists(filepath.Join(root, q)) },
 			func(q string) (bool, bool) {
 				fi, e := os.Stat(filepath.Join(templateRoot, q))
@@ -217,11 +190,11 @@ func pathExists(p string) bool {
 	return err == nil
 }
 
-// rewriteInstanceRootLinks repoints relative links that inInstance reports absent
+// RewriteInstanceRootLinks repoints relative links that inInstance reports absent
 // and inTemplate reports present, to the template repo at referencedDocsBranch.
 // Directories get /tree/, files /blob/. Pure (both lookups are injected), so the
 // "absent from BOTH is left alone" rule is unit-tested without a fixture tree.
-func rewriteInstanceRootLinks(
+func RewriteInstanceRootLinks(
 	content, fileDir string,
 	inInstance func(string) bool,
 	inTemplate func(string) (exists bool, isDir bool),

@@ -86,6 +86,34 @@ var grantStates = map[Grant][]State{
 	SecretCustody: {Provisioned, Seeded, Operating},
 	CloudMutate:   {Provisioned, Seeded, Converged, Operating, Destroyed},
 	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
+
+	// FIRST ROW ADDED RATHER THAN WIDENED, because write-repo is the first grant
+	// added since this table was written (see the Grant block in extension.go for
+	// why it took four cases).
+	//
+	// The two states are the two moments `deliver-docs` runs, and it runs at both
+	// by construction: copier invokes it from `_tasks`, which fire on render
+	// (`llz new` → scaffolded) and on `copier update` (→ upgraded). Its own
+	// repointInstanceRootLinks comment is about the second — the walk is gated on
+	// template ownership precisely because on update it runs against a LIVE
+	// instance holding files that are none of the template's business.
+	//
+	// NOTHING ELSE IS LISTED, and the omissions are deliberate rather than
+	// pending. `promoted` looks obvious — promote-pipeline generates
+	// .github/workflows/promote.yml — but that extension does not hold this grant:
+	// its rendering is pure and its os.WriteFile stayed in package main, so adding
+	// the state would list a row no shipping code exercises. The rule this table
+	// has followed for both earlier widenings is that a state earns its place by an
+	// extraction that needed it, not by seeming plausible. When promote-pipeline's
+	// write moves in, `promoted` can be argued then, and there is a test that will
+	// notice: TestGrantStatesIsPinned.
+	//
+	// Note this is also the first row whose states are all OUTSIDE the mutating
+	// middle of the lifecycle. The other three rows start at `provisioned` — you
+	// cannot mutate a cluster or a cloud before one exists. Repo writes are the
+	// opposite shape: they happen when the REPO changes, which is before any
+	// substrate exists and again when the template moves under it.
+	WriteRepo: {Scaffolded, Upgraded},
 }
 
 // `Operating` was ADDED to CloudMutate by the fourth extension, and the row is
