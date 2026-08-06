@@ -50,6 +50,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -152,9 +153,9 @@ func runCIMintBootstrapPAT(region string) error {
 	// owns a live token — minting again would strand it until the next drain.
 	// Reading "" off a sealed pod strands it in exactly the way this guard is
 	// written to avoid, so an unreadable path stops the mint instead.
-	seeded, verdict := baoKVGetFieldOK("secret/linode/api-token", "token")
-	if verdict == baoReadUnknown {
-		return errBaoReadUnknown("secret/linode/api-token", "token", "mint a replacement PAT")
+	seeded, verdict := baoread.KVGetFieldOK("secret/linode/api-token", "token")
+	if verdict == baoread.Unknown {
+		return baoread.ErrReadUnknown("secret/linode/api-token", "token", "mint a replacement PAT")
 	}
 	if seeded != "" {
 		fmt.Println("secret/linode/api-token already seeded — skipping mint (rotation owns it).")

@@ -130,7 +130,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **22,153** with `dev-mutation-testing`.
 > and **21,841** with `release-publish`.
 > and **21,542** with `credential-state-passphrase`.
-> Forty extensions, net −25,640 (54.3%) — now BELOW the
+> and **21,457** with `internal/baoread` (a shared package, not an extension).
+> Forty extensions, net −25,725 (54.5%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

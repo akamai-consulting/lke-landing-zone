@@ -9,6 +9,6 @@ package main
 // HARBOR_URL is internal DNS the GitHub runner cannot resolve, and the
 // ensure-project/smoke logic now lives inside the provisioner loop.
 
-// baoKVGetField and its classifying sibling baoKVGetFieldOK now live in
+// baoKVGetField and its classifying sibling baoread.KVGetFieldOK now live in
 // bao_read.go — the "" this returned on a sealed pod was gating credential
 // overwrites.

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/spf13/cobra"
 )
 
@@ -41,24 +42,16 @@ var (
 	baoSleep     = time.Sleep
 )
 
-// transientExecMarkers are kube-apiserver/konnectivity transport failures that
-// mean the exec stream never reached the pod, so the in-pod `bao` command did
-// NOT run — making a retry safe even for non-idempotent ops like `operator
-// init`. A real bao error ("already initialized", a sealed-pod status exit)
-// carries none of these and is returned on the first try. The canonical case:
-// konnectivity reports "No agent available" for up to a few minutes after a
-// node/pod comes up — exactly when bao-init first execs — so one blip would
-// otherwise fail the entire bootstrap.
-var transientExecMarkers = []string{
-	"No agent available",           // konnectivity: no tunnel agent registered yet
-	"error dialing backend",        // apiserver could not dial the kubelet
-	"unable to upgrade connection", // SPDY/exec stream never established
-	"error sending request",        // request never delivered to the node
-	"TLS handshake timeout",        // apiserver↔kubelet handshake stalled
-}
+// The transient-exec marker list moved to internal/baoread.
+//
+// It describes kube/konnectivity transport failures, and the only thing that
+// REASONS about them is that package's read classifier — which has to tell "the
+// pod answered: no such path" from "nothing answered at all". The fact lives once,
+// next to the code that decides on it, and this file imports it. Same resolution
+// as docsguard.DeliveredDocs and manifestguard.BootstrapValuePlaceholders.
 
 func isTransientExecErr(stderr string) bool {
-	for _, m := range transientExecMarkers {
+	for _, m := range baoread.TransientMarkers {
 		if strings.Contains(stderr, m) {
 			return true
 		}
@@ -78,7 +71,7 @@ func isTransientExecErr(stderr string) bool {
 // OUT to the server and the node-pool firewall's outbound policy is ACCEPT, so
 // the firewall never gates this; the only safe lever is to wait the warmup out.
 // Retrying is safe even for `operator init` because a transient transport
-// failure means the in-pod command never ran (see transientExecMarkers).
+// failure means the in-pod command never ran (see baoread.TransientMarkers).
 //
 // A later run still spent 17 of 18 tries on platform-openbao-0
 // before konnectivity registered — one attempt of margin — so the budget was

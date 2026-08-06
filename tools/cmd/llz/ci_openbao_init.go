@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/spf13/cobra"
 )
 
@@ -226,7 +227,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 		case err == nil:
 			fmt.Println("Root token is valid — skipping regeneration.")
 			return nil
-		case tokenLookupRejected(stderr):
+		case baoread.TokenLookupRejected(stderr):
 			fmt.Println("Root token is invalid (revoked from prior run?) — regenerating via quorum.")
 		default:
 			fmt.Fprintf(os.Stderr, "::error::could not validate OPENBAO_ROOT_TOKEN on %s: the lookup did not "+

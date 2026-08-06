@@ -323,9 +323,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `managed-fresh` → `template-sustain` | 22,383 | 141 | −183 — the ninth catalog correction, and the second about membership |
 | `dev-mutation-testing` extracted | 22,153 | 140 | −230 — the first extension that is not about the platform |
 | `release-publish` extracted | 21,841 | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
-| `credential-state-passphrase` extracted | **21,542** | 136 | −299 — the first credential row, and a state the grant table refuses |
+| `credential-state-passphrase` extracted | 21,542 | 136 | −299 — the first credential row, and a state the grant table refuses |
+| `internal/baoread` extracted | **21,457** | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
 
-**Net −25,640 (54.3%) across forty extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −25,725 (54.5%) across forty extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2205,6 +2206,39 @@ earlier. That is the **third** binding pushed to its nearest legal state — aft
 (pushed by `bindableStates`) and `argocd-diagnostics` (pushed by having no honest kind) — and the
 first pushed by the **grant** table rather than the binding table. A test pins the refusal, so if
 `secret-custody` ever reaches `configured` this declaration is revisited deliberately.
+
+### What `internal/baoread` cost — 85 lines, and a wall that was two walls
+
+Not an extension. **Infrastructure**, extracted because five `credential-*` rows, `database-provisioner`
+and `openbao-lifecycle` all sit behind it.
+
+**−85 lines, and that is the point.** `bao_read.go` is 170 lines that seven files depend on, so
+extracting it buys almost no core surface — the paydown is that other things can now move. It is the
+`internal/keycloak` shape: a shared package pulled out not because it duplicates anything, but because
+everything downstream of it is stuck until it does.
+
+**Four dependencies, and only one was a capability.** The three-clause rule took the rest apart:
+
+| symbol | resolution |
+|---|---|
+| `baoExecFn` | a real capability → `Exec` seam, with **which pod** baked in by the installer (`rootOpenbaoPod` has six callers in main and is not this package's business) |
+| `parseBaoPodStatus` | four other callers in main — shared machinery → `PodStatusUnsealed` seam over it |
+| `transientExecMarkers` | **data**, and it moved *here* rather than being injected: the only thing that reasons about kube transport failures is this classifier. Same resolution as `docsguard.DeliveredDocs` |
+
+**`PodStatusUnsealed` defaults to `false`, deliberately.** This package's entire discipline is that a
+non-answer must never read as absence — erring toward unknown costs a failed run, erring toward absent
+costs a credential. An uninstalled liveness check that claimed "healthy" would invert exactly that.
+
+**It did not unblock as much as predicted, and that is worth recording.** After the extraction,
+`credential-objkey` still measures a closure of 18: the credential rows share a **second** framework —
+`credentials.go`'s rotator client and `ci_rotate_linode_creds.go`'s rotation table. One wall turned out
+to be two, and the prediction in the handoff note ("extract this and the credential rows unblock") was
+half right. The rotator framework is the real next move for that family.
+
+**Sixth stranded-test find, and a fourth filename pattern.** `bao_read_test.go` held five tests: two
+about the read classifier, three driving `runCIBaoSeed` and the objkey mint paths. The file was named
+for the **dependency the tests share**, not the code they test — the most plausible-looking of the four
+patterns so far, and wrong for the identical reason: nothing in the name points at a subject.
 
 ## The cost of the interesting half
 

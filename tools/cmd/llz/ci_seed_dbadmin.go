@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/spf13/cobra"
 )
@@ -156,9 +157,9 @@ func runCISeedDBAdmin(region string) error {
 		// An unreadable path is NOT an absent one — writing over a live credential
 		// we failed to read is indistinguishable from a successful rotation, so
 		// fail closed.
-		existingEndpoint, verdict := baoKVGetFieldOK(path, "endpoint")
-		if verdict == baoReadUnknown {
-			return errBaoReadUnknown(path, "endpoint", "seed the admin credential for database cluster "+name)
+		existingEndpoint, verdict := baoread.KVGetFieldOK(path, "endpoint")
+		if verdict == baoread.Unknown {
+			return baoread.ErrReadUnknown(path, "endpoint", "seed the admin credential for database cluster "+name)
 		}
 		switch {
 		case existingEndpoint == "":

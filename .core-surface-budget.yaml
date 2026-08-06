@@ -244,12 +244,20 @@ categories:
     #                       binding is PUSHED to `seeded`: the honest state is
     #                       `configured`, and grantStates rightly refuses
     #                       secret-custody there.
+    #   21,457 / 136 files  internal/baoread — INFRASTRUCTURE, not an extension.
+    #                       Only -85, and that is the point: the OpenBao read
+    #                       classifier is 170 lines that SEVEN files depend on, so
+    #                       extracting it buys almost no surface and unblocks a
+    #                       family. It did not unblock as much as predicted: the
+    #                       credential rows share a SECOND framework
+    #                       (credentials.go's rotator client + the rotation
+    #                       table), which is the actual next wall.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 21542
+    budget: 21457
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
@@ -28,14 +29,14 @@ import (
 var objencDeps = func() objenc.Deps {
 	return objenc.Deps{
 		KVGet: func(path, field string) (string, objenc.KVVerdict) {
-			v, verdict := baoKVGetFieldOK(path, field)
+			v, verdict := baoread.KVGetFieldOK(path, field)
 			// The three-valued answer is load-bearing: only a definite ABSENT may
 			// be read as "not seeded". An unknown treated as absent would mint a
 			// SECOND SSE-C key and every object under the first becomes unreadable.
 			switch verdict {
-			case baoReadFound:
+			case baoread.Found:
 				return v, objenc.KVFound
-			case baoReadAbsent:
+			case baoread.Absent:
 				return v, objenc.KVAbsent
 			default:
 				return v, objenc.KVUnknown

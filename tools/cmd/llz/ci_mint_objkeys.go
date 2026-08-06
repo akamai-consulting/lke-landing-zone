@@ -37,6 +37,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
@@ -105,9 +106,9 @@ func runCIMintBootstrapObjkeys(region string) error {
 		// An unreadable path is not an unseeded one: reading "" off a sealed pod
 		// mints a REAL object-storage key at Linode and overwrites the live one,
 		// breaking Loki/Harbor S3 auth until the next drain. Fail closed.
-		seeded, verdict := baoKVGetFieldOK(e.baoPath, e.presentField)
-		if verdict == baoReadUnknown {
-			return errBaoReadUnknown(e.baoPath, e.presentField, "mint a replacement key for "+e.name)
+		seeded, verdict := baoread.KVGetFieldOK(e.baoPath, e.presentField)
+		if verdict == baoread.Unknown {
+			return baoread.ErrReadUnknown(e.baoPath, e.presentField, "mint a replacement key for "+e.name)
 		}
 		if seeded != "" {
 			fmt.Printf("%s: %s already seeded — skipping mint.\n", e.name, e.baoPath)

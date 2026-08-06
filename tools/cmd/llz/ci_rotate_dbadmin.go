@@ -68,6 +68,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/spf13/cobra"
@@ -210,9 +211,9 @@ func rotateOneDBAdmin(ctx context.Context, api dbAdminAPI, t dbAdminTarget) erro
 	if err != nil {
 		return err
 	}
-	oldPassword, verdict := baoKVGetFieldOK(t.path, "password")
-	if verdict == baoReadUnknown {
-		return errBaoReadUnknown(t.path, "password", "rotate the admin credential for database cluster "+t.name)
+	oldPassword, verdict := baoread.KVGetFieldOK(t.path, "password")
+	if verdict == baoread.Unknown {
+		return baoread.ErrReadUnknown(t.path, "password", "rotate the admin credential for database cluster "+t.name)
 	}
 
 	if err := api.ResetPostgresCredentials(ctx, t.id); err != nil {
@@ -262,11 +263,11 @@ var dbAdminCarriedFields = []string{"endpoint", "port", "ca", "sslmode"}
 func readDBAdminCarriedFields(path, name string) (map[string]string, error) {
 	out := make(map[string]string, len(dbAdminCarriedFields)+3)
 	for _, f := range dbAdminCarriedFields {
-		v, verdict := baoKVGetFieldOK(path, f)
+		v, verdict := baoread.KVGetFieldOK(path, f)
 		switch verdict {
-		case baoReadUnknown:
-			return nil, errBaoReadUnknown(path, f, "rotate the admin credential for database cluster "+name)
-		case baoReadAbsent:
+		case baoread.Unknown:
+			return nil, baoread.ErrReadUnknown(path, f, "rotate the admin credential for database cluster "+name)
+		case baoread.Absent:
 			if f == "sslmode" {
 				// Seeded before sslmode was written, or hand-created. Re-assert the
 				// floor rather than refusing: omitting it lets a client negotiate
@@ -347,9 +348,9 @@ func dbAdminTargets(afterDays int, rotateNow bool) ([]dbAdminTarget, error) {
 	out := make([]dbAdminTarget, 0, len(names))
 	for _, name := range names {
 		t := dbAdminTarget{name: name, id: ids[name], path: dbAdminSeedRoot + name, ageDays: -1}
-		stamp, verdict := baoKVGetFieldOK(t.path, "rotated_at")
-		if verdict == baoReadUnknown {
-			return nil, errBaoReadUnknown(t.path, "rotated_at", "decide whether database cluster "+name+" is due for rotation")
+		stamp, verdict := baoread.KVGetFieldOK(t.path, "rotated_at")
+		if verdict == baoread.Unknown {
+			return nil, baoread.ErrReadUnknown(t.path, "rotated_at", "decide whether database cluster "+name+" is due for rotation")
 		}
 		if secs, err := strconv.ParseInt(strings.TrimSpace(stamp), 10, 64); err == nil && secs > 0 {
 			t.ageDays = int(now.Sub(time.Unix(secs, 0)).Hours() / 24)

@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/spf13/cobra"
 )
@@ -305,9 +306,9 @@ func runCIBaoSeed(o baoSeedOpts) error {
 	// unreadable path is now fatal: a failed run is recoverable, a clobbered
 	// credential is not.
 	if o.skipIfPresent != "" {
-		val, verdict := baoKVGetFieldOK(o.path, o.skipIfPresent)
-		if verdict == baoReadUnknown {
-			return errBaoReadUnknown(o.path, o.skipIfPresent, "seed it")
+		val, verdict := baoread.KVGetFieldOK(o.path, o.skipIfPresent)
+		if verdict == baoread.Unknown {
+			return baoread.ErrReadUnknown(o.path, o.skipIfPresent, "seed it")
 		}
 		if val != "" {
 			fmt.Printf("%s already exists — skipping.\n", o.path)
