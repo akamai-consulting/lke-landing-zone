@@ -1,4 +1,4 @@
-package main
+package assertplatform
 
 // ci_assert_apl_version.go implements `llz ci assert-apl-version` — a front-loaded
 // preflight that refuses to stand up a cluster whose PINNED apl-core chart version
@@ -29,11 +29,12 @@ package main
 import (
 	"fmt"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
-// minSupportedAplChartVersion is the oldest apl-core chart the landing zone still
-// supports. It used to be an ALIAS of defaultAplChartVersion, with a note saying
+// MinSupportedAplChartVersion is the oldest apl-core chart the landing zone still
+// supports. It used to be an ALIAS of clusterspec.BaselineAplChartVersion, with a note saying
 // to give it its own literal on the day the floor and the target legitimately
 // diverged. The v6.1.0 baseline bump is that day.
 //
@@ -47,16 +48,20 @@ import (
 //
 // Raise it only when a 6.0.0 cluster genuinely stops working, and say why here the
 // way the 5.x rationale below does.
-const minSupportedAplChartVersion = "6.0.0"
+// MinSupportedAplChartVersion is EXPORTED because one assertion needs both it and
+// the scaffold baseline: an instance `llz import` creates must be born on a chart
+// this gate would not refuse. That test now lives here, since this is the side
+// that owns the floor.
+const MinSupportedAplChartVersion = "6.0.0"
 
-func ciAssertAplVersionCmd() *cobra.Command {
+func AplVersionCmd() *cobra.Command {
 	var env string
 	c := &cobra.Command{
 		Use:   "assert-apl-version",
 		Short: "fail fast when the spec pins an apl-core chart version the landing zone no longer supports",
 		Long: "Resolves the apl-core chart version exactly as `llz ci bootstrap-cluster` does\n" +
 			"(spec.cluster.bootstrap.aplChartVersion for the deployment, else the baked\n" +
-			"default) and fails when it is older than " + minSupportedAplChartVersion + ".\n\n" +
+			"default) and fails when it is older than " + MinSupportedAplChartVersion + ".\n\n" +
 			"Run as a front-loaded preflight so an unsupported pin fails in seconds rather\n" +
 			"than wedging apl-operator (missing apl-sops-secrets) and leaving the cluster\n" +
 			"with no external-secrets operator — both ~2h into the bootstrap.",
@@ -72,7 +77,7 @@ func ciAssertAplVersionCmd() *cobra.Command {
 // error here — it simply means the default applies.
 func resolveAplChartVersion(env string) (string, error) {
 	pinned := ""
-	lz, present, err := loadSpec()
+	lz, present, err := deps.LoadSpec()
 	if err != nil {
 		return "", fmt.Errorf("load spec to resolve the apl-core chart version: %w", err)
 	}
@@ -81,7 +86,7 @@ func resolveAplChartVersion(env string) (string, error) {
 			pinned = e.Cluster.Bootstrap.AplChartVersion
 		}
 	}
-	return firstNonEmpty(pinned, defaultAplChartVersion), nil
+	return firstNonEmpty(pinned, clusterspec.BaselineAplChartVersion), nil
 }
 
 func assertAplVersion(env string) error {
@@ -92,20 +97,20 @@ func assertAplVersion(env string) error {
 	if err := aplVersionSupported(v, env); err != nil {
 		return err
 	}
-	fmt.Printf("apl-core chart version %s (deployment %q) is supported (>= %s).\n", v, env, minSupportedAplChartVersion)
+	fmt.Printf("apl-core chart version %s (deployment %q) is supported (>= %s).\n", v, env, MinSupportedAplChartVersion)
 	return nil
 }
 
 // aplVersionSupported is the pure predicate behind the preflight: nil when v is a
-// semver >= minSupportedAplChartVersion, else an error explaining exactly what
+// semver >= MinSupportedAplChartVersion, else an error explaining exactly what
 // breaks and how to fix it. Split out from assertAplVersion so it is testable
 // without a spec on disk.
 func aplVersionSupported(v, env string) error {
-	if _, _, _, ok := semver(v); !ok {
+	if _, _, _, ok := clusterspec.AplSemver(v); !ok {
 		return fmt.Errorf("apl-core chart version %q (deployment %q) is not a semver — set spec.cluster.bootstrap.aplChartVersion to a released apl-core chart (>= %s)",
-			v, env, minSupportedAplChartVersion)
+			v, env, MinSupportedAplChartVersion)
 	}
-	if semverLess(v, minSupportedAplChartVersion) {
+	if clusterspec.AplSemverLess(v, MinSupportedAplChartVersion) {
 		//lint:ignore ST1005 multi-line operator diagnostic: the trailing period ends a sentence of remediation prose that continues on the next line
 		return fmt.Errorf(`apl-core chart version %q (deployment %q) is NOT supported — this landing zone requires >= %s.
 
@@ -127,8 +132,8 @@ Fix one of:
 NOTE: `+"`llz import init`"+` scaffolds apl-core %s (this release's baseline), which is
 already above this floor — so a rejection here means an EXISTING pin was carried
 across an llz upgrade, not that the scaffolder produced it.`,
-			v, env, minSupportedAplChartVersion,
-			v, v, minSupportedAplChartVersion, env, v, defaultAplChartVersion)
+			v, env, MinSupportedAplChartVersion,
+			v, v, MinSupportedAplChartVersion, env, v, clusterspec.BaselineAplChartVersion)
 	}
 	return nil
 }

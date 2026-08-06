@@ -1,4 +1,4 @@
-package main
+package assertplatform
 
 // Gap-closing tests for ci_assert_argo_app.go surfaced by mutation testing. The
 // existing suite proves each POLICY (git-auth is terminal after the grace, a

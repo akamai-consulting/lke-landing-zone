@@ -1,4 +1,4 @@
-package main
+package assertplatform
 
 // ci_assert_instance_custom.go implements `llz ci assert-instance-custom` — the e2e
 // gate that proves the operator escape hatch actually WORKS end to end, not merely
@@ -36,7 +36,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciAssertInstanceCustomCmd() *cobra.Command {
+func InstanceCustomCmd() *cobra.Command {
 	var (
 		namespace string
 		appSet    string

@@ -1,4 +1,4 @@
-package main
+package assertplatform
 
 // ci_assert_health_workflow.go — `llz ci assert-health-workflow`: the e2e gate
 // that proves the day-2 clusterHealthWorkflow component actually RUNS, not just
@@ -32,7 +32,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ciAssertHealthWorkflowCmd() *cobra.Command {
+func HealthWorkflowCmd() *cobra.Command {
 	var region, namespace, template string
 	var timeout, interval int
 	c := &cobra.Command{
@@ -192,7 +192,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 
 	// Reap any prior e2e probe Workflows first: on a REUSED cluster a Failed one
 	// lingers and (even with converge now ignoring them) is just noise. Best-effort.
-	execCombined("kubectl", "-n", namespace, "delete", "workflow",
+	deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow",
 		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running", "--ignore-not-found")
 
 	for attempt := 1; ; attempt++ {
@@ -217,22 +217,22 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 			// A failed run whose own verdict is "0 hard-failed, N in-progress" is a
 			// cluster MID-SETTLE (e.g. the argocd-redis WRONGPASS flap right after an
 			// operator roll), not an unhealthy cluster — retry with a fresh Workflow.
-			logs := execCombined("kubectl", "-n", namespace, "logs",
+			logs := deps.ExecCombined("kubectl", "-n", namespace, "logs",
 				"-l", "workflows.argoproj.io/workflow="+name, "-c", "main", "--tail=-1")
 			if attempt < healthRetryAttempts && healthTransientOnly(logs) {
 				fmt.Printf("::warning::assert-health-workflow: %s/%s failed with 0 hard-failed (in-progress only — cluster still settling); retrying in %s…\n",
 					namespace, name, healthRetryPause)
-				execCombined("kubectl", "-n", namespace, "delete", "workflow", name, "--ignore-not-found")
+				deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow", name, "--ignore-not-found")
 				time.Sleep(healthRetryPause)
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s failed (not Succeeded).\n", namespace, name)
 			fmt.Fprintln(os.Stderr, logs)
-			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
+			fmt.Fprint(os.Stderr, deps.ExecCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
 			return fmt.Errorf("assert-health-workflow: Workflow %s/%s failed (not Succeeded)", namespace, name)
 		case healthTimeout:
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s.\n", namespace, name, timeout)
-			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
+			fmt.Fprint(os.Stderr, deps.ExecCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
 			return fmt.Errorf("assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s", namespace, name, timeout)
 		}
 	}
@@ -256,7 +256,7 @@ func waitHealthWorkflow(namespace, name string, timeout, interval time.Duration)
 		// get never has, so it always yielded nothing → phase stuck at "<none yet>"
 		// and the poll timed out even on a workflow that had already Succeeded.)
 		var phase string
-		if out, err := execOutput("kubectl", "-n", namespace, "get", "workflow", name, "-o", "json"); err == nil {
+		if out, err := deps.Exec("kubectl", "-n", namespace, "get", "workflow", name, "-o", "json"); err == nil {
 			phase = workflowPhase(out)
 		}
 		terminal, succeeded := classifyWorkflowPhase(phase)

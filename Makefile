@@ -42,6 +42,7 @@ COVERAGE_MINS := \
 	internal/budget=92 \
 	internal/chartguard=70 \
 	internal/cli=95 \
+	internal/assertplatform=51 \
 	internal/atrest=93 \
 	internal/clusterspec=95 \
 	internal/clusteraccess=74 \

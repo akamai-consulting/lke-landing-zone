@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -36,6 +37,7 @@ func ciCmd() *cobra.Command {
 	// rather than in main() because gopts is populated by flag parsing, and DryRun
 	// is one of the capabilities.
 	installConvergeDeps(gopts)
+	installAssertPlatformDeps()
 	c := &cobra.Command{
 		Use:   "ci",
 		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
@@ -49,7 +51,7 @@ func ciCmd() *cobra.Command {
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
-		ciAssertAplVersionCmd(),
+		assertplatform.AplVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
@@ -62,14 +64,14 @@ func ciCmd() *cobra.Command {
 		ciKeycloakConfigureCmd(),
 		ciTeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
+	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())
 	// Fail-fast gate ahead of wait-pods: a missing Argo Application means the
 	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
 	// operationState message instead of burning the 600s pod wait blind (PR #142).
-	c.AddCommand(ciAssertArgoAppCmd())
+	c.AddCommand(assertplatform.ArgoAppCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
@@ -178,7 +180,7 @@ func ciCmd() *cobra.Command {
 	// drops a trivial manifest under kubernetes-custom/namespaces/<ns>/, and this
 	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
 	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps color.Green).
-	c.AddCommand(ciAssertInstanceCustomCmd())
+	c.AddCommand(assertplatform.InstanceCustomCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())

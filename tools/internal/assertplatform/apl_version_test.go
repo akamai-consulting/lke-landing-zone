@@ -1,15 +1,17 @@
-package main
+package assertplatform
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // The guard must pass every supported pin and reject exactly the ones that wedge a
 // bootstrap — with an error that names the two v6-only assumptions, so an operator
 // reading CI output knows what breaks and how to fix it.
 func TestAplVersionSupported(t *testing.T) {
-	for _, v := range []string{minSupportedAplChartVersion, "6.0.1", "6.1.2", "7.0.0"} {
+	for _, v := range []string{MinSupportedAplChartVersion, "6.0.1", "6.1.2", "7.0.0"} {
 		if err := aplVersionSupported(v, "prod"); err != nil {
 			t.Errorf("%s should be supported, got: %v", v, err)
 		}
@@ -21,18 +23,18 @@ func TestAplVersionSupported(t *testing.T) {
 	for _, v := range []string{"5.0.0", "5.9.9", "0.1.0"} {
 		err := aplVersionSupported(v, "prod")
 		if err == nil {
-			t.Fatalf("%s must be rejected (older than %s)", v, minSupportedAplChartVersion)
+			t.Fatalf("%s must be rejected (older than %s)", v, MinSupportedAplChartVersion)
 		}
 		msg := err.Error()
-		for _, want := range []string{"apl-sops-secrets", "external-secrets", minSupportedAplChartVersion, v} {
+		for _, want := range []string{"apl-sops-secrets", "external-secrets", MinSupportedAplChartVersion, v} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("rejection of %s should mention %q; got:\n%s", v, want, msg)
 			}
 		}
 		// The import path pins 5.0.0, so the message must call that out — it is how an
 		// imported instance reaches this state by default.
-		if !strings.Contains(msg, defaultAplChartVersion) {
-			t.Errorf("rejection should name the import-init pin %s; got:\n%s", defaultAplChartVersion, msg)
+		if !strings.Contains(msg, clusterspec.BaselineAplChartVersion) {
+			t.Errorf("rejection should name the import-init pin %s; got:\n%s", clusterspec.BaselineAplChartVersion, msg)
 		}
 	}
 
@@ -46,7 +48,7 @@ func TestAplVersionSupported(t *testing.T) {
 // The default the template bakes must itself satisfy the guard — otherwise every
 // instance without an explicit pin would fail this preflight.
 func TestDefaultAplChartVersionIsSupported(t *testing.T) {
-	if err := aplVersionSupported(defaultAplChartVersion, "prod"); err != nil {
-		t.Fatalf("defaultAplChartVersion %s must satisfy the guard: %v", defaultAplChartVersion, err)
+	if err := aplVersionSupported(clusterspec.BaselineAplChartVersion, "prod"); err != nil {
+		t.Fatalf("clusterspec.BaselineAplChartVersion %s must satisfy the guard: %v", clusterspec.BaselineAplChartVersion, err)
 	}
 }

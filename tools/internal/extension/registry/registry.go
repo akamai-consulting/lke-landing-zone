@@ -22,6 +22,7 @@ package registry
 import (
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
@@ -45,6 +46,7 @@ import (
 // Listed in import order, NOT declaration order — All sorts by name, so the order
 // here carries no meaning and nobody has to maintain one.
 var declarations = []func() extension.Extension{
+	assertplatform.Extension,
 	atrest.Extension,
 	brownfield.Extension,
 	budget.Extension,

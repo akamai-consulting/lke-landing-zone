@@ -8,10 +8,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 `template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
 `obj-encryption` (`tools/internal/objenc`), `guard-charts`
 (`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`), `health-sla`
-(`tools/internal/healthsla`) `token-inventory` (`tools/internal/tokeninv`) and `converge`
-(`tools/internal/converge`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/healthsla`) `token-inventory` (`tools/internal/tokeninv`) `converge`
+(`tools/internal/converge`) and `assert-platform` (`tools/internal/assertplatform`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all fourteen still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all fifteen still run because `ci.go` and the reconciler register them, and the declarations are inert.
 All four kinds, seven states including `configured` (the last unclaimed one) and `seeded` — the group the old ceiling banned by omission — ALL EIGHT grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural

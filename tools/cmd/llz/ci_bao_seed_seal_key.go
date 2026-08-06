@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
@@ -77,14 +78,14 @@ func waitForOpenbaoNamespace(d cigate.Deps, ns string, within time.Duration) err
 		// Kick a stuck app-of-apps to re-fetch (throttled 20s); a failed fetch
 		// returns fast, so a fresh refresh each cycle re-attempts rather than
 		// interrupts. The namespace is created downstream once the re-fetch succeeds.
-		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
+		if cerr := assertplatform.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
 			d.Kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, cigate.FirstLine(cerr))
 			lastRefresh = d.Now()
 		}
 		if !d.Now().Before(deadline) {
 			extra := ""
-			if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
+			if cerr := assertplatform.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
 				extra = fmt.Sprintf(" (%s ComparisonError: %s)", openbaoNSParent, cigate.FirstLine(cerr))
 			}
 			return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced%s", ns, within, extra)

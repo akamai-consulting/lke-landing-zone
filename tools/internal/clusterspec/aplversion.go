@@ -25,7 +25,7 @@ import (
 // `apl-6.0.0` to `apl-v6.1.0`. `helm --version 6.1.0` still RESOLVES (helm treats
 // the flag as a semver constraint and v6.1.0 normalises to 6.1.0), but only with
 // an "unable to find exact version requested" warning, so we carry the exact
-// published string. Every comparison here goes through aplSemver, which strips
+// published string. Every comparison here goes through AplSemver, which strips
 // the prefix — a spec pinned to a bare "6.1.0" is still DriftNone.
 const BaselineAplChartVersion = "v6.1.0"
 
@@ -64,11 +64,11 @@ func AplChartDriftOf(pin string) AplChartDrift {
 	if pin == "" {
 		return AplChartDriftNone
 	}
-	pMaj, pMin, pPatch, ok := aplSemver(pin)
+	pMaj, pMin, pPatch, ok := AplSemver(pin)
 	if !ok {
 		return AplChartDriftUnparseable
 	}
-	bMaj, bMin, bPatch, ok := aplSemver(BaselineAplChartVersion)
+	bMaj, bMin, bPatch, ok := AplSemver(BaselineAplChartVersion)
 	if !ok {
 		// An unparseable baseline is a build-time bug in llz itself; don't
 		// convert it into a spec problem the operator cannot fix.
@@ -85,10 +85,18 @@ func AplChartDriftOf(pin string) AplChartDrift {
 	return AplChartDriftNone
 }
 
-// aplSemver parses a bare MAJOR.MINOR.PATCH chart version. A leading "v" and any
+// AplSemver parses a bare MAJOR.MINOR.PATCH chart version.
+//
+// EXPORTED for internal/assertplatform, whose apl-version lane compares a pinned
+// chart version against the minimum this llz supports. Note there is a SECOND
+// semver parser in package main (selfupdate.go) and they are deliberately NOT
+// merged: that one strips a leading "llz/" because it parses llz RELEASE TAGS,
+// and this one TrimSpaces and rejects negatives because it parses operator-typed
+// CHART versions out of a spec file. Same shape, different inputs — collapsing
+// them would make each wrong for the other's source. A leading "v" and any
 // pre-release/build suffix (6.1.0-rc.1) are tolerated and ignored — the gate
 // cares about the numeric triple, not the release channel.
-func aplSemver(s string) (maj, min, patch int, ok bool) {
+func AplSemver(s string) (maj, min, patch int, ok bool) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
 	if i := strings.IndexAny(s, "-+"); i >= 0 {
 		s = s[:i]
@@ -136,7 +144,7 @@ func aplChartVersionError(env, pin string) error {
 	if majorDriftAllowed() {
 		return nil
 	}
-	pMaj, _, _, _ := aplSemver(pin)
+	pMaj, _, _, _ := AplSemver(pin)
 	if drift == AplChartDriftMajorBehind {
 		return fmt.Errorf(
 			"environments.%s.cluster.bootstrap.aplChartVersion is %q but this llz release targets apl-core %s — "+
@@ -166,4 +174,22 @@ func (lz *LandingZone) AplChartVersionWarnings() []string {
 			name, pin, BaselineAplChartVersion))
 	}
 	return out
+}
+
+// AplSemverLess reports whether chart version a sorts before b. An unparseable
+// version sorts lowest, so an unset or malformed pin reads as "older than the
+// minimum" rather than silently passing a floor check.
+func AplSemverLess(a, b string) bool {
+	amaj, amin, apatch, aok := AplSemver(a)
+	bmaj, bmin, bpatch, bok := AplSemver(b)
+	if !aok || !bok {
+		return !aok && bok
+	}
+	if amaj != bmaj {
+		return amaj < bmaj
+	}
+	if amin != bmin {
+		return amin < bmin
+	}
+	return apatch < bpatch
 }

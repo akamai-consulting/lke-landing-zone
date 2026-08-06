@@ -181,7 +181,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime` |
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
-| `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74 |
+| `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
 | `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner` |
 | `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first fourteen, extracted
+## The first fifteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -273,9 +273,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `cluster-access` extracted | 37,483 | 199 | −881, and the second `grantStates` widening — see below |
 | `health-sla` extracted | 37,131 | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
 | `token-inventory` extracted | 36,107 | 192 | −1,024, the first `configured` binding — and the first new **word** in the model |
-| `converge` extracted | **34,359** | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
+| `converge` extracted | 34,359 | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
+| `assert-platform` extracted | **33,877** | 185 | −482 — the first PURELY-assertion extension |
 
-**Net −12,823 (27.2%) across fourteen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −13,305 (28.2%) across fifteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -889,6 +890,48 @@ unanswerable kubectl call three times with a 3s gap, and package `main` zeroed t
 half of the same `TestMain` and hung. **Any extraction that moves code touching `kubectlprobe` needs
 that line**, and the general shape is worth stating plainly: a guard wired into one package's
 `TestMain` is invisible to the files being moved.
+
+### What `assert-platform` showed — the first extension that only looks
+
+Fifteenth, and the first whose declaration holds **no mutating grant at all**: four lanes, one read
+grant each.
+
+```
+assert-platform  assertion:verified   "health-workflow" [cluster-read]
+                 assertion:verified   "argo-app"        [cluster-read]
+                 assertion:verified   "instance-custom" [cluster-read]
+                 assertion:configured "apl-version"     [read-repo]
+```
+
+Worth having one of these on the record now that every mutating shape is exercised. It validated with
+no ceiling change and no argument — which, fifteen extractions in, is the point of running it.
+
+**The catalog named five files; four belong.** `ci_assert_image_fresh.go` stayed in package `main`:
+its closure is the **template-pin machinery** (`assertPinCoherence`, `pinnedTemplateRef`,
+`resolveTemplateCommit`), and it asserts that an instance's pinned template ref and its images agree —
+a `template-sustain` question wearing an `assert-` filename. **Fourth time the catalog's file list has
+been wrong, and the fourth time for the same reason: it grouped by name.** The running score is
+`guard-docs`, `health-sla`, `token-inventory`, `assert-platform`.
+
+**One lane binds a different state, and that is the interesting part.** Three of these read a cluster.
+`assert-apl-version` does not — it reads the pinned apl-core chart version out of the **spec file** and
+compares it against the floor this llz supports, deliberately before anything is provisioned. It is
+the same shape `token-inventory`'s `validate-tokens` lane established: **a preflight is not a gate just
+because it blocks.** It reads more than files, so it is an assertion; it reads them before
+provisioning, so it binds `configured`.
+
+**A duplicate the extraction surfaced, and did NOT merge.** `internal/clusterspec` already had
+`aplSemver`, and package `main` has `semver` in `selfupdate.go`. They look identical and are not: one
+strips a leading `llz/` because it parses llz **release tags**, the other `TrimSpace`s and rejects
+negatives because it parses operator-typed **chart versions** out of a spec file. Same shape, different
+inputs — collapsing them would make each wrong for the other's source. `AplSemver`/`AplSemverLess` were
+exported from `clusterspec` instead, and the reason not to merge is recorded next to them.
+
+**A test that has now moved twice.** `TestImportScaffoldsASupportedChart` compares the chart version
+`llz import` scaffolds against the floor `assert-apl-version` enforces. Its own comment said it lived
+in package `main` because that was "the side that owns both halves" — which stopped being true the
+moment this extension was extracted. It moved, and the comment was corrected rather than left to rot.
+**A comment explaining why code lives somewhere is a claim that expires when the code moves.**
 
 ## The cost of the interesting half
 
