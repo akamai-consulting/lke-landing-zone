@@ -1189,6 +1189,7 @@ func warnIfRootTokenPresent(env string) {
 // the --yes bit. No cluster, no cloud — sustain answers repo questions.
 func sustainDeps() sustain.Deps {
 	return sustain.Deps{
+		LockableScaffoldFiles: lockableScaffoldFiles,
 		ReadAnswers: func(dir string) (*sustain.Answers, error) {
 			a, err := readAnswers(dir)
 			if err != nil || a == nil {

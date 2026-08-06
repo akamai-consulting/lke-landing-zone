@@ -37,6 +37,19 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 // alternative — teach the manifest to accept contributed paths — is a design
 // question ADR 0014's corollary opens and does not answer.
 //
+// NINTH CATALOG CORRECTION, AND THE SECOND ABOUT MEMBERSHIP. `managed-fresh`
+// arrived here from the `apl-upgrade` row, which the catalog lists as
+// "ci_managed_lock 230, ci_prepare_apl_upgrade 76". Those are two unrelated
+// things. `prepare-apl-upgrade` annotates the apl-operator Deployment before an
+// apl-core chart upgrade — genuinely apl-upgrade, and genuinely cluster-write.
+// `managed-fresh` recomputes .template-managed.lock digests over the scaffold: it
+// never touches a cluster, and its subject is the TEMPLATE, which is this
+// extension. The row grouped them because both run near an upgrade.
+//
+// `deliver-docs` and `chart-publish` came out of `release-publish` the same way,
+// for the same reason: a row grouped by WHEN things run rather than by what they
+// touch. That is now three files across two rows.
+//
 // AND THE SECOND CASE FOR `Incomplete`. `reconcile-actions` was the first
 // extension to arrive partial; this is the second, with a different cause. Two
 // independent occurrences is the bar this model has used for every vocabulary
@@ -57,8 +70,18 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.ReadRepo},
 			},
 			{
-				// The churn guard: refuse an upgrade whose diff is larger than the
-				// change it carries. Files in, findings out, before anything runs.
+				// TWO GUARDS, ONE BINDING, per the rule guard-charts settled: a split
+				// needs divergent CAPABILITY, not divergent subject matter.
+				//
+				//   - the churn guard: refuse an upgrade whose diff is larger than the
+				//     change it carries.
+				//   - managed-fresh: every digest-locked template file still matches
+				//     the digest the template shipped, so a hand-edited instance fails
+				//     CI instead of silently diverging.
+				//
+				// Both are files in, findings out, before anything runs — no network,
+				// no cluster, no credential. One question in two halves: is this
+				// instance still the thing the template rendered.
 				Kind:   extension.Gate,
 				State:  extension.Scaffolded,
 				Grants: []extension.Grant{extension.ReadRepo},

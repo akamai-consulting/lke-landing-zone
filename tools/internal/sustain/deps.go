@@ -33,6 +33,24 @@ type Deps struct {
 	// their work (`copier update` and friends).
 	Run func(argv []string, stdin string) error
 
+	// LockableScaffoldFiles resolves the scaffold root and every file under it
+	// whose .template-manifest class is digest-locked.
+	//
+	// THE NARROWEST SEAM THAT ANSWERS THE QUESTION, and it exists because the
+	// thing behind it CANNOT MOVE. ADR 0014 pins .template-manifest as the single
+	// ownership authority and this extension's own Incomplete note already records
+	// that the class table cannot be separated from the file defining it. The
+	// managed-lock guard needs three things from that model — the root, the file
+	// list, and which classes are digest-locked — and taking `templateManifest`
+	// itself would drag the whole ownership model across a boundary it is pinned
+	// on the other side of.
+	//
+	// So it takes the ANSWER instead of the model, the same call internal/promote
+	// made for InstanceRepo: one function, two return values, no type shared.
+	// Everything the guard does with them — reading bytes, spotting `<@` copier
+	// tokens, hashing — is its own.
+	LockableScaffoldFiles func(root string) (scaffoldRoot string, rels []string, err error)
+
 	// Confirm is `--yes`. The same authorisation-not-capability seam teardown
 	// found, and its second independent occurrence: `llz upgrade` rewrites files
 	// in the operator's repo, so being ABLE to and being ASKED to are different

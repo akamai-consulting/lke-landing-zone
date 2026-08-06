@@ -187,7 +187,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
 | `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test. ✅ Extracted — the prediction held exactly; see [What `converge` settled](#what-converge-settled--the-acid-test-and-what-it-did-not-break).** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
-| `apl-upgrade` | 306 | 2 | ✔ | ✘ | `ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76. |
+| `apl-upgrade` | 306 | 2 | ✔ | ✘ | ~~`ci_managed_lock` 230~~, `ci_prepare_apl_upgrade` 76. **Ninth catalog correction:** `managed-fresh` is not apl-upgrade's — it is a TEMPLATE drift guard and **✅ was extracted into `template-sustain`**. See [What `managed-fresh` corrected](#what-managed-fresh-corrected--a-row-grouped-by-when-not-what). |
 | `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. **✅ Extracted — and the first declaration that is knowingly wrong.** See [What `argocd-diagnostics` could not say](#what-argocd-diagnostics-could-not-say--the-first-missing-kind). |
 | `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. **✅ Extracted — the first row whose note needed no correction.** See [What `kyverno-policies` confirmed](#what-kyverno-policies-confirmed--a-note-that-was-right). |
 
@@ -319,9 +319,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `wedge-gameday` extracted | 23,205 | 148 | −182 — the first binding forced in BOTH its kind and its state |
 | `phase-timing` extracted | 22,964 | 146 | −241 — the second diagnostic, and the two disagree about shape |
 | `doctor-probes` extracted | 22,726 | 143 | −238 — case three of three; the diagnostic family splits a third way |
-| `kyverno-policies` extracted | **22,566** | 142 | −160 — the first catalog note that was right first time |
+| `kyverno-policies` extracted | 22,566 | 142 | −160 — the first catalog note that was right first time |
+| `managed-fresh` → `template-sustain` | **22,383** | 141 | −183 — the ninth catalog correction, and the second about membership |
 
-**Net −24,616 (52.2%) across thirty-seven extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −24,799 (52.6%) across thirty-seven extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2050,6 +2051,40 @@ copy — the same call made for `firstNonEmpty`, `orAll` and `report`.
 regex to lift the cobra constructor and swallowed the import block with it. That trap is already
 written down — *split on line ranges computed from parsed `^func` boundaries* — and I reached for the
 regex anyway. Restored from git and redone the recorded way, which worked first time.
+
+### What `managed-fresh` corrected — a row grouped by *when*, not *what*
+
+The catalog lists `apl-upgrade` as *"`ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76"*. **Those are
+two unrelated things**, and this is the ninth catalog correction — the second about **membership**.
+
+| file | what it actually does |
+|---|---|
+| `ci_prepare_apl_upgrade.go` | annotates the apl-operator Deployment before an apl-core chart upgrade — genuinely `apl-upgrade`, genuinely `cluster-write` |
+| `ci_managed_lock.go` | recomputes `.template-managed.lock` digests over the scaffold. **Never touches a cluster.** Its subject is the *template* |
+
+They were grouped because both run near an upgrade. `deliver-docs` and `chart-publish` came out of
+`release-publish` the same way, for the same reason — **a row grouped by when things run rather than
+by what they touch.** That is now three files across two rows.
+
+So `managed-fresh` went to `template-sustain`, which already owns the template's side of the story,
+and joined its **existing** `gate:scaffolded[read-repo]` binding rather than adding one — per
+`guard-charts`: a split needs divergent *capability*, not divergent subject matter. Both are files in,
+findings out, before anything runs. One question in two halves: *is this instance still the thing the
+template rendered.*
+
+**The seam takes the answer, not the model.** ADR 0014 pins `.template-manifest` as the single
+ownership authority, and `template-sustain`'s own `Incomplete` already records that the class table
+cannot be separated from the file defining it. The guard needs three things from that model — the
+root, the file list, and which classes are digest-locked — so `Deps.LockableScaffoldFiles` returns
+exactly that and no type is shared. The same call `internal/promote` made for `InstanceRepo`.
+
+**A coverage floor went DOWN, 84 → 55, and that is the documented exception rather than a ratchet
+failure.** The guard moved into `internal/sustain` while its tests stayed in package `main`: they
+assert *which files the class table locks* — that `merge`-classed caller stubs are not locked, that
+tokenful `managed` files become declared exclusions — and a fixture on the other side could only
+reimplement the classification it is meant to be checking. I tried exactly that first, and three tests
+failed against my own reimplementation, which is the right outcome. Same shape as `docsguard`'s six
+cobra tests; the Makefile's own guidance anticipates it.
 
 ## The cost of the interesting half
 

@@ -126,7 +126,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **22,964** with `phase-timing`.
 > and **22,726** with `doctor-probes`.
 > and **22,566** with `kyverno-policies`.
-> Thirty-seven extensions, net −24,616 (52.2%) — now BELOW the
+> and **22,383** with `managed-fresh` (which grew `template-sustain` rather than adding an extension).
+> Thirty-seven extensions, net −24,799 (52.6%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

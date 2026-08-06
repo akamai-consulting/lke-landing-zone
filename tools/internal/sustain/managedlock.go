@@ -1,4 +1,4 @@
-package main
+package sustain
 
 // ci_managed_lock.go implements `llz ci managed-fresh` — the drift guard
 // specified in docs/designs/cross-org-reuse-pattern.md ("a hand-edited instance
@@ -35,62 +35,35 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// managedLockPath is the digest list, relative to the scaffold root. It is
+// ManagedLockPath is the digest list, relative to the scaffold root. It is
 // itself `managed`, so `llz upgrade` refreshes it alongside the files it covers.
 // Named for the CLASS it locks, not a directory: it used to be
 // .template-workflows.lock, scoped to .github/, and the name outlived the scope.
-const managedLockPath = ".template-managed.lock"
+const ManagedLockPath = ".template-managed.lock"
 
-func ciManagedFreshCmd() *cobra.Command {
-	var write bool
-	var root string
-	c := &cobra.Command{
-		Use:   "managed-fresh",
-		Short: "fail when a template-owned scaffold file drifts from the template",
-		Long: "Verifies every token-free file in a digest-locked class of .template-manifest\n" +
-			"(today: `managed` — the vendored llz-*.yml bodies, composite actions and the\n" +
-			"template-owned configs) still matches the digest the template shipped in\n" +
-			managedLockPath + ". These files are template-owned: `llz upgrade` overwrites them\n" +
-			"from a clean render, so a local edit is silently lost on the next bump. Failing\n" +
-			"here turns that silent loss into a CI error.\n\n" +
-			"Runs offline — no copier, no template checkout, no network.\n\n" +
-			"--write regenerates the lock; it is for the TEMPLATE repo (CI asserts the lock\n" +
-			"is current), not for instances.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runManagedFresh(root, write, os.Stdout, os.Stderr)
-		},
-	}
-	c.Flags().BoolVar(&write, "write", false, "regenerate the lock from the scaffold (template repo only)")
-	c.Flags().StringVar(&root, "root", "", "scaffold root containing .template-manifest (default: auto-detect instance-template/ or .)")
-	return c
-}
-
-func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
-	m, err := loadTemplateManifest(root)
+func RunManagedFresh(d Deps, root string, write bool, out, errOut io.Writer) error {
+	scaffoldRoot, lockable, err := d.LockableScaffoldFiles(root)
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(m.root, managedLockPath)
-	if m.root == "." {
-		lockPath = managedLockPath
+	lockPath := filepath.Join(scaffoldRoot, ManagedLockPath)
+	if scaffoldRoot == "." {
+		lockPath = ManagedLockPath
 	}
 
 	if write {
-		return writeManagedLock(m, lockPath, out)
+		return writeManagedLock(scaffoldRoot, lockable, lockPath, out)
 	}
 
-	want, err := readManagedLock(lockPath)
+	want, err := ReadManagedLock(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Instances rendered before the lock existed simply have nothing to
 			// check — don't fail their lint gate; the next `llz upgrade` ships one.
-			fmt.Fprintf(errOut, "managed-fresh: no %s — skipping (upgrade to a template version that ships it)\n", managedLockPath)
+			fmt.Fprintf(errOut, "managed-fresh: no %s — skipping (upgrade to a template version that ships it)\n", ManagedLockPath)
 			return nil
 		}
 		return err
@@ -98,7 +71,7 @@ func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
 
 	var drifted, missing []string
 	for _, rel := range sortedKeys(want) {
-		sum, err := sha256File(filepath.Join(m.root, filepath.FromSlash(rel)))
+		sum, err := sha256File(filepath.Join(scaffoldRoot, filepath.FromSlash(rel)))
 		if err != nil {
 			missing = append(missing, rel)
 			continue
@@ -108,10 +81,10 @@ func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
 		}
 	}
 	if len(drifted) == 0 && len(missing) == 0 {
-		if err := checkLockComplete(m, want, errOut); err != nil {
+		if err := checkLockComplete(scaffoldRoot, lockable, want, errOut); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "managed-fresh: OK — %d template-owned file(s) match %s\n", len(want), managedLockPath)
+		fmt.Fprintf(out, "managed-fresh: OK — %d template-owned file(s) match %s\n", len(want), ManagedLockPath)
 		return nil
 	}
 
@@ -141,17 +114,13 @@ func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
 //
 // The lock file itself is excluded by construction: it is `managed`, so it would
 // otherwise try to record a digest of the bytes being written.
-func lockableFiles(m templateManifest, files []string) (sums map[string]string, tokenful []string, err error) {
+func lockableFiles(scaffoldRoot string, files []string) (sums map[string]string, tokenful []string, err error) {
 	sums = map[string]string{}
 	for _, rel := range files {
-		if rel == managedLockPath {
+		if rel == ManagedLockPath {
 			continue
 		}
-		c, ok := lookupTemplateClass(m.classify(rel))
-		if !ok || !c.digestLocked {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(m.root, filepath.FromSlash(rel)))
+		data, err := os.ReadFile(filepath.Join(scaffoldRoot, filepath.FromSlash(rel)))
 		if err != nil {
 			return nil, nil, fmt.Errorf("managed-fresh: read %s: %w", rel, err)
 		}
@@ -176,16 +145,12 @@ func lockableFiles(m templateManifest, files []string) (sums map[string]string, 
 // guard checkCopierFencing uses): an instance is rendered output, and holding it
 // to the template's completeness invariant would fail instances whose lock simply
 // predates a newly-classified file.
-func checkLockComplete(m templateManifest, want map[string]string, errOut io.Writer) error {
-	if !fileExists(filepath.Join(filepath.Dir(m.root), "copier.yml")) &&
-		!fileExists(filepath.Join(filepath.Dir(m.root), "copier.yaml")) {
+func checkLockComplete(scaffoldRoot string, lockable []string, want map[string]string, errOut io.Writer) error {
+	if !fileExists(filepath.Join(filepath.Dir(scaffoldRoot), "copier.yml")) &&
+		!fileExists(filepath.Join(filepath.Dir(scaffoldRoot), "copier.yaml")) {
 		return nil
 	}
-	files, err := scaffoldManifestFiles(m.root)
-	if err != nil {
-		return err
-	}
-	sums, _, err := lockableFiles(m, files)
+	sums, _, err := lockableFiles(scaffoldRoot, lockable)
 	if err != nil {
 		return err
 	}
@@ -199,15 +164,15 @@ func checkLockComplete(m templateManifest, want map[string]string, errOut io.Wri
 		return nil
 	}
 	for _, rel := range unlocked {
-		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, managedLockPath)
+		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, ManagedLockPath)
 	}
-	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", color.Red("✗"), len(unlocked), managedLockPath)
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", color.Red("✗"), len(unlocked), ManagedLockPath)
 	for _, rel := range unlocked {
 		fmt.Fprintf(errOut, "    %s\n", rel)
 	}
 	fmt.Fprintf(errOut, "\n`llz upgrade` overwrites these from a clean render, so an instance's local edit\n"+
 		"is silently lost — which is exactly what this lock exists to catch. Regenerate it:\n"+
-		"    llz ci managed-fresh --root %s --write\n", m.root)
+		"    llz ci managed-fresh --root %s --write\n", scaffoldRoot)
 	return fmt.Errorf("managed-fresh: %d template-owned file(s) missing from the lock", len(unlocked))
 }
 
@@ -215,21 +180,17 @@ func checkLockComplete(m templateManifest, want map[string]string, errOut io.Wri
 // token-free file in a digestLocked class. Tokenful ones cannot be locked at all
 // (their rendered bytes differ per instance) and are recorded in the header as
 // declared exclusions rather than dropped silently.
-func writeManagedLock(m templateManifest, lockPath string, out io.Writer) error {
-	files, err := scaffoldManifestFiles(m.root)
-	if err != nil {
-		return err
-	}
-	sums, tokenful, err := lockableFiles(m, files)
+func writeManagedLock(scaffoldRoot string, lockable []string, lockPath string, out io.Writer) error {
+	sums, tokenful, err := lockableFiles(scaffoldRoot, lockable)
 	if err != nil {
 		return err
 	}
 	if len(sums) == 0 {
-		return fmt.Errorf("managed-fresh: no digest-lockable files in %s — refusing to write an empty lock", m.root)
+		return fmt.Errorf("managed-fresh: no digest-lockable files in %s — refusing to write an empty lock", scaffoldRoot)
 	}
 
 	var b strings.Builder
-	b.WriteString("# " + managedLockPath + " — digests of the template-owned scaffold surface.\n")
+	b.WriteString("# " + ManagedLockPath + " — digests of the template-owned scaffold surface.\n")
 	b.WriteString("#\n")
 	b.WriteString("# GENERATED by `llz ci managed-fresh --write` — do not hand-edit.\n")
 	b.WriteString("# Covers every token-free file in a digest-locked class of .template-manifest\n")
@@ -261,7 +222,7 @@ func writeManagedLock(m templateManifest, lockPath string, out io.Writer) error 
 	return nil
 }
 
-func readManagedLock(path string) (map[string]string, error) {
+func ReadManagedLock(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -295,4 +256,23 @@ func sha256File(path string) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// ── localised pure helpers: copies, not seams ──────────────────────────────
+
+// sortedKeys returns a map's keys in sorted order, so output is stable.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fileExists reports whether path exists. Pure, localised — package main keeps
+// its copy for the manifest machinery ADR 0014 pins as core.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

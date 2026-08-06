@@ -36,6 +36,14 @@ RETRY := template-scripts/ci/with-retry.sh
 # from the number this target prints, but read a LOW one on a freshly extracted
 # package as "its tests are elsewhere" before reading it as "it is untested" — and
 # say which in the comment, as here.
+#
+# internal/sustain WENT DOWN, 84 -> 55, and that is the documented exception rather
+# than a ratchet failure. The managed-fresh guard moved INTO that package while its
+# tests stayed in package main: they assert which files the .template-manifest class
+# table locks, and ADR 0014 pins that table to main as the single ownership
+# authority, so a fixture on the other side could only reimplement the
+# classification it is meant to be checking. Same shape as docsguard above. The
+# tests did not go anywhere — `go test -coverprofile` credits them to cmd/llz.
 COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/brownfield=80 \
@@ -79,7 +87,7 @@ COVERAGE_MINS := \
 	internal/reconcilelanes=78 \
 	internal/s3sig=100 \
 	internal/shquote=100 \
-	internal/sustain=84 \
+	internal/sustain=55 \
 	internal/teardown=80 \
 	internal/tokeninv=70 \
 	internal/terraform=95 \
