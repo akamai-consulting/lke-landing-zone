@@ -49,6 +49,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
@@ -97,6 +98,7 @@ var declarations = []func() extension.Extension{
 	gameday.Extension,
 	kyverno.Extension,
 	manifestguard.Extension,
+	mutate.Extension,
 	phasetiming.Extension,
 	plaintext.Extension,
 	promote.Extension,

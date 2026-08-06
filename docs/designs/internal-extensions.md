@@ -258,7 +258,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 | extension | lines | files | ext? | notes |
 |---|---:|---:|:-:|---|
 | `phase-timing` | 316 | 2 | ✔ | phase-mark/report 201, image-pulls 115. **✅ Extracted — and it settles the fifth-kind question by failing to answer it.** See [What `phase-timing` disproved](#what-phase-timing-disproved--diagnostic-is-not-a-kind). |
-| `dev-mutation-testing` | 265 | 1 | ✔ | `ci_mutate` — gremlins wrapper |
+| `dev-mutation-testing` | 265 | 1 | ✔ | `ci_mutate` — gremlins wrapper. **✅ Extracted — the first extension whose subject is not the platform.** See [What `dev-mutation-testing` measures](#what-dev-mutation-testing-measures--not-the-platform). |
 | `verify-lab` | 239 | 2 | ✔ | `verify` 170, `sshcheck` 69 |
 | `doctor-probes` | 230 | 3 | ✔ | doctor-linode 93, doctor-crossorg 104, credentials-probe 33. **✅ Extracted — and it closes the fifth-kind question.** See [What `doctor-probes` closed](#what-doctor-probes-closed--diagnostic-was-a-tone-of-voice). |
 
@@ -320,9 +320,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `phase-timing` extracted | 22,964 | 146 | −241 — the second diagnostic, and the two disagree about shape |
 | `doctor-probes` extracted | 22,726 | 143 | −238 — case three of three; the diagnostic family splits a third way |
 | `kyverno-policies` extracted | 22,566 | 142 | −160 — the first catalog note that was right first time |
-| `managed-fresh` → `template-sustain` | **22,383** | 141 | −183 — the ninth catalog correction, and the second about membership |
+| `managed-fresh` → `template-sustain` | 22,383 | 141 | −183 — the ninth catalog correction, and the second about membership |
+| `dev-mutation-testing` extracted | **22,153** | 140 | −230 — the first extension that is not about the platform |
 
-**Net −24,799 (52.6%) across thirty-seven extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −25,029 (53.0%) across thirty-eight extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2085,6 +2086,41 @@ tokenful `managed` files become declared exclusions — and a fixture on the oth
 reimplement the classification it is meant to be checking. I tried exactly that first, and three tests
 failed against my own reimplementation, which is the right outcome. Same shape as `docsguard`'s six
 cobra tests; the Makefile's own guidance anticipates it.
+
+### What `dev-mutation-testing` measures — not the platform
+
+Thirty-eighth, and **the first extension whose subject is not the platform at all.** Everything
+before it attaches to something the platform does — rendering an instance, provisioning a cluster,
+converging it, asserting it holds. This one measures **the repository's own tests**.
+
+```
+dev-mutation-testing  gate:scaffolded[read-repo]
+```
+
+**A gate it earns on reach and fails on cost.** A gate is defined as *fast, local, files only,
+findings out*. Three of those are exactly right: no cluster, no cloud, no credential, and it exits
+non-zero on a **new** survivor. The fourth is not — a mutation run is the slowest thing in this
+catalog by an order of magnitude, minutes where every other gate is milliseconds.
+
+It is still a gate, and the reason is `Always: false`. "Fast" in that definition is doing the work of
+*cheap enough to run before you attempt the state*, and an opt-in developer tool is never in an
+instance's critical path. Recording the mismatch rather than widening the definition — the cost clause
+exists to keep gates out of the bootstrap path, and this is not in it.
+
+**`read-repo` covers running `go test` and `gremlins`,** which looks like it should need more. Both
+are local processes over local source; neither reaches a network. The grant vocabulary has no word for
+*"spawns a subprocess"* because spawning one is not a capability — what the subprocess **touches** is.
+
+**Ninety-seven lines of `RunE` moved with it.** The cobra closure held the control run, the gremlins
+invocation, harness validation and the survivor diff — the whole verb. A flag set that keeps its verb
+in a callback has not been extracted, it has been **relabelled**. `Run(Opts)` now holds it, and the
+test that used to build a cobra tree and call `Execute` drives the verb directly.
+
+**`testdata/` moved with the package, and the contrast with `kyverno-policies` is the point.** One
+extraction ago the policy manifests **could not** follow their code, because `//go:embed` pins data to
+the embedding package's directory and another package embeds them. Here nothing embeds the baseline
+and `testdata/` is package-local by Go convention, so it moved without argument. Two data directories,
+two opposite answers, one question to ask first: **does anything embed it?**
 
 ## The cost of the interesting half
 

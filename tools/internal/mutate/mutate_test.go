@@ -1,4 +1,4 @@
-package main
+package mutate
 
 import (
 	"errors"
@@ -282,14 +282,38 @@ const mutateHealthyOut = `Starting...
        LIVED ARITHMETIC_BASE at ci_rotate_dbadmin.go:262:58
 `
 
+// runMutateCmd drives Run directly rather than through a cobra tree.
+//
+// The command used to be the only entry point, so the test built it and called
+// Execute with argv. Lifting the ninety-seven-line RunE into Run(Opts) made the
+// flag parsing package main's business and left this test asserting on the verb
+// itself — which is what it was always about. The `--package` argv form is kept so
+// the cases read the same as the command an operator types.
 func runMutateCmd(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	c := ciMutateCmd()
+	var o Opts
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--package":
+			i++
+			if i < len(args) {
+				o.Pkg = args[i]
+			}
+		case "--baseline":
+			i++
+			if i < len(args) {
+				o.BaselinePath = args[i]
+			}
+		case "--out":
+			i++
+			if i < len(args) {
+				o.OutPath = args[i]
+			}
+		}
+	}
 	var buf strings.Builder
-	c.SetOut(&buf)
-	c.SetErr(&buf)
-	c.SetArgs(args)
-	err := c.Execute()
+	o.Out = &buf
+	err := Run(o)
 	return buf.String(), err
 }
 

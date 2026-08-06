@@ -107,7 +107,8 @@ COVERAGE_MINS := \
 	internal/gameday=28 \
 	internal/phasetiming=74 \
 	internal/doctor=87 \
-	internal/kyverno=87
+	internal/kyverno=87 \
+	internal/mutate=89
 
 help:
 	@echo "lke-landing-zone — template repository targets"
