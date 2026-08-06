@@ -1,4 +1,4 @@
-package main
+package statepassphrase
 
 // state_passphrase.go — provision TF_STATE_ENCRYPTION_PASSPHRASE, the one
 // required secret nothing used to create.
@@ -36,9 +36,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// statePassphraseSecret is the GitHub secret name the Terraform roots read
+// SecretName is the GitHub secret name the Terraform roots read
 // through the tf-encryption-env action.
-const statePassphraseSecret = "TF_STATE_ENCRYPTION_PASSPHRASE"
+const SecretName = "TF_STATE_ENCRYPTION_PASSPHRASE"
 
 // generateStatePassphrase returns a fresh passphrase.
 //
@@ -63,7 +63,7 @@ func generateStatePassphrase() (string, error) {
 // NOT read as absence. Distinct from liveState.has, which folds every failure
 // into "not configured" because its callers only ever re-prompt.
 var ghSecretPresent = func(apiPath string) (present, answered bool) {
-	_, err := execOutput("gh", "api", apiPath, "--silent")
+	_, err := caps.Exec("gh", "api", apiPath, "--silent")
 	if err == nil {
 		return true, true
 	}
@@ -91,7 +91,7 @@ var ghSecretPresent = func(apiPath string) (present, answered bool) {
 // An indefinite answer on EITHER scope means unknown: a 403 on one of them
 // cannot rule out a passphrase living there.
 func statePassphraseExists(repo, env string) (present, answered bool) {
-	paths := []string{"repos/" + repo + "/actions/secrets/" + statePassphraseSecret}
+	paths := []string{"repos/" + repo + "/actions/secrets/" + SecretName}
 	// EVERY infra-* environment, not just the one being provisioned. An instance
 	// whose FIRST deployment holds the passphrase on infra-primary would otherwise
 	// look empty while provisioning `dr`: both probes 404, llz mints a second
@@ -111,7 +111,7 @@ func statePassphraseExists(repo, env string) (present, answered bool) {
 	for _, e := range envs {
 		// 404s when the environment does not exist yet — the normal first-run
 		// state, and correctly read as "no env-scoped copy".
-		paths = append(paths, "repos/"+repo+"/environments/"+e+"/secrets/"+statePassphraseSecret)
+		paths = append(paths, "repos/"+repo+"/environments/"+e+"/secrets/"+SecretName)
 	}
 	for _, p := range paths {
 		found, ok := ghSecretPresent(p)
@@ -140,7 +140,7 @@ var instanceInfraEnvs = func(repo, env string) (envs []string, ok bool) {
 			Name string `json:"name"`
 		} `json:"environments"`
 	}
-	if err := ghAPIJSONPaged("repos/"+repo+"/environments", &listing); err != nil {
+	if err := caps.GHJSONPaged("repos/"+repo+"/environments", &listing); err != nil {
 		return nil, false
 	}
 	for _, e := range listing.Environments {
@@ -151,10 +151,10 @@ var instanceInfraEnvs = func(repo, env string) (envs []string, ok bool) {
 	return out, true
 }
 
-// dropStatePassphraseIfLive removes the passphrase from a push set when the
+// DropStatePassphraseIfLive removes the passphrase from a push set when the
 // instance already holds one, and is the LAST word before any `gh secret set`.
 //
-// Two entrances needed the same guard. planStatePassphrase decides early — before
+// Two entrances needed the same guard. PlanStatePassphrase decides early — before
 // the wizard prompts, so a refusal cannot discard freshly-pasted PATs — which
 // leaves a window: the repo can acquire a passphrase between that decision and
 // the push (a second operator provisioning a peer deployment on the same repo is
@@ -164,23 +164,23 @@ var instanceInfraEnvs = func(repo, env string) (envs []string, ok bool) {
 // and pushSecrets then pushed whatever was typed straight over the live value.
 //
 // Re-asking here costs one API call and converts both into a no-op.
-func dropStatePassphraseIfLive(repo, env string, secrets map[string]string, minted bool) error {
-	if _, ok := secrets[statePassphraseSecret]; !ok {
+func DropStatePassphraseIfLive(repo, env string, secrets map[string]string, minted bool) error {
+	if _, ok := secrets[SecretName]; !ok {
 		return nil
 	}
 	present, answered := statePassphraseExists(repo, env)
 	if !answered {
 		//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded remediation block, not a sentence fragment
 		return fmt.Errorf("could not confirm whether %s already exists on %s before pushing it.\n"+
-			"  Refusing to push: overwriting a live passphrase makes every existing Terraform\n"+
-			"  state file permanently unreadable. Fix the GitHub lookup and re-run.", statePassphraseSecret, repo)
+			"  Refusing to Push: overwriting a live passphrase makes every existing Terraform\n"+
+			"  state file permanently unreadable. Fix the GitHub lookup and re-run.", SecretName, repo)
 	}
 	if !present {
 		return nil
 	}
-	delete(secrets, statePassphraseSecret)
+	delete(secrets, SecretName)
 	fmt.Fprintf(os.Stderr, "\n%s %s already exists on %s — NOT overwriting it.\n",
-		color.Yellow("!"), statePassphraseSecret, repo)
+		color.Yellow("!"), SecretName, repo)
 	fmt.Fprintln(os.Stderr, "  The repo's copy is the one your existing state is encrypted under; replacing")
 	fmt.Fprintln(os.Stderr, "  it would make every state file permanently unreadable. To rotate it properly,")
 	fmt.Fprintf(os.Stderr, "  use %s.\n", color.Cyan("secret-rotation.yml (scope: state-passphrase)"))
@@ -194,14 +194,14 @@ func dropStatePassphraseIfLive(repo, env string, secrets map[string]string, mint
 	return nil
 }
 
-// statePassphrasePlan is what to do about the passphrase this run. Both fields
-// are decided BEFORE any prompting or cloud mutation; see planStatePassphrase.
-type statePassphrasePlan struct {
-	generate bool // mint a new one (nothing has one yet)
-	push     bool // include it in the `gh secret set` batch
+// StatePassphrasePlan is what to do about the passphrase this run. Both fields
+// are decided BEFORE any prompting or cloud mutation; see PlanStatePassphrase.
+type StatePassphrasePlan struct {
+	Generate bool // mint a new one (nothing has one yet)
+	Push     bool // include it in the `gh secret set` batch
 }
 
-// planStatePassphrase decides the passphrase's fate from the repo's state and the
+// PlanStatePassphrase decides the passphrase's fate from the repo's state and the
 // local cache. It runs EARLY — before the wizard prompts for a single PAT or
 // creates the state bucket — because its only failure mode is a hard refusal, and
 // refusing after the interactive section has already minted an OBJ key and read
@@ -223,37 +223,44 @@ type statePassphrasePlan struct {
 // (a previous run generated it and the push did not land). Never a cached value
 // over a live one — the repo's copy is authoritative, and re-pushing an identical
 // value buys nothing anyway.
-func planStatePassphrase(repo, env string, secrets map[string]string) (statePassphrasePlan, error) {
+func PlanStatePassphrase(repo, env string, secrets map[string]string) (StatePassphrasePlan, error) {
 	present, answered := statePassphraseExists(repo, env)
 	if !answered {
-		return statePassphrasePlan{}, fmt.Errorf("could not determine whether %s already exists on %s.\n"+
+		return StatePassphrasePlan{}, fmt.Errorf("could not determine whether %s already exists on %s.\n"+
 			"  Refusing to act: if the secret IS set, overwriting it makes every existing\n"+
 			"  Terraform state file permanently unreadable. Fix the GitHub lookup (`gh auth status\n"+
 			"  --hostname %s`, connectivity, and note that reading a secret's metadata needs repo\n"+
 			"  admin) and re-run — or, if you know the instance has never applied, set it yourself:\n"+
 			"      gh secret set %s --repo %s   # openssl rand -base64 32",
-			statePassphraseSecret, repo, ghHost(), statePassphraseSecret, repo)
+			SecretName, repo, ghHost(), SecretName, repo)
 	}
-	_, cached := secrets[statePassphraseSecret]
+	_, cached := secrets[SecretName]
 	switch {
 	case present:
-		return statePassphrasePlan{}, nil
+		return StatePassphrasePlan{}, nil
 	case cached:
-		return statePassphrasePlan{push: true}, nil
+		return StatePassphrasePlan{Push: true}, nil
 	default:
-		return statePassphrasePlan{generate: true, push: true}, nil
+		return StatePassphrasePlan{Generate: true, Push: true}, nil
 	}
 }
 
-// ensureStatePassphrase mints the passphrase the plan called for and shows it
+// EnsureStatePassphrase mints the passphrase the plan called for and shows it
 // once. Deliberately the LAST thing gathered, so a wizard the operator abandons
 // half-way has not created material they never saw the escrow banner for.
-func ensureStatePassphrase(g globalOpts, plan statePassphrasePlan, repo string, secrets map[string]string) error {
-	if !plan.generate {
+// EnsureStatePassphrase writes the state-encryption passphrase into every
+// deployment Environment that lacks one.
+//
+// dryRun AND yes ARE PLAIN BOOLEANS, not package main's globalOpts. They are
+// FLAGS, not capabilities — the three-clause rule's second question — and taking
+// the whole struct would have pulled main's flag model across the boundary so this
+// package could read two bits from it.
+func EnsureStatePassphrase(dryRun, yes bool, plan StatePassphrasePlan, repo string, secrets map[string]string) error {
+	if !plan.Generate {
 		return nil
 	}
-	if g.dryRun || !g.yes {
-		fmt.Printf("\n%s %s — %s\n", color.Bold("[state encryption]"), statePassphraseSecret,
+	if dryRun || !yes {
+		fmt.Printf("\n%s %s — %s\n", color.Bold("[state encryption]"), SecretName,
 			color.Dim("absent; would generate one and print it once for offline escrow"))
 		return nil
 	}
@@ -261,7 +268,7 @@ func ensureStatePassphrase(g globalOpts, plan statePassphrasePlan, repo string, 
 	if err != nil {
 		return err
 	}
-	secrets[statePassphraseSecret] = pass
+	secrets[SecretName] = pass
 	printStatePassphraseEscrow(repo, pass)
 	return nil
 }
@@ -275,7 +282,7 @@ func ensureStatePassphrase(g globalOpts, plan statePassphrasePlan, repo string, 
 // so here is the difference between an operator who copies it somewhere durable
 // and one who assumes the tooling kept it.
 func printStatePassphraseEscrow(repo, pass string) {
-	fmt.Fprintf(os.Stderr, "\n%s\n", color.Bold("══ generated "+statePassphraseSecret+" — COPY IT OFFLINE NOW ══"))
+	fmt.Fprintf(os.Stderr, "\n%s\n", color.Bold("══ generated "+SecretName+" — COPY IT OFFLINE NOW ══"))
 	fmt.Fprintf(os.Stderr, "  %s\n", color.Cyan(pass))
 	fmt.Fprintf(os.Stderr, "  %s\n", "The Terraform roots encrypt their state with this (ADR 0007). Lose it and every")
 	fmt.Fprintf(os.Stderr, "  %s\n", "state file is permanently unreadable — same blast radius as OPENBAO_SEAL_KEY.")

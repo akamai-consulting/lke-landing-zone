@@ -1,4 +1,4 @@
-package main
+package statepassphrase
 
 import (
 	"errors"
@@ -62,7 +62,7 @@ func TestGHSecretPresentOnlyTrustsADefiniteAnswer(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, c.err })
-			present, answered := ghSecretPresent("repos/o/r/actions/secrets/" + statePassphraseSecret)
+			present, answered := ghSecretPresent("repos/o/r/actions/secrets/" + SecretName)
 			if present != c.present || answered != c.answerd {
 				t.Errorf("got (present=%v, answered=%v), want (%v, %v)", present, answered, c.present, c.answerd)
 			}
@@ -148,7 +148,7 @@ func TestStatePassphraseExistsChecksBothScopes(t *testing.T) {
 
 // The reachable form of the clobber bug: the early-return in runTokens only fires
 // when NOTHING is missing, so an instance holding the passphrase on infra-primary
-// still reaches ensureStatePassphrase while provisioning a second deployment —
+// still reaches EnsureStatePassphrase while provisioning a second deployment —
 // which is exactly the HA flow the quickstart teaches.
 func TestEnsureStatePassphraseHonoursAnEnvScopedCopy(t *testing.T) {
 	withStubbedInfraEnvs(t)
@@ -158,14 +158,14 @@ func TestEnsureStatePassphraseHonoursAnEnvScopedCopy(t *testing.T) {
 		}
 		return nil, errors.New("gh: Not Found (HTTP 404)")
 	})
-	p, err := planStatePassphrase("o/r", "lab", map[string]string{})
+	p, err := PlanStatePassphrase("o/r", "lab", map[string]string{})
 	if err != nil {
 		t.Fatalf("an env-scoped passphrase is present, not absent: %v", err)
 	}
-	if p.generate {
+	if p.Generate {
 		t.Fatal("would mint a second passphrase alongside the env-scoped one")
 	}
-	if p.push {
+	if p.Push {
 		t.Fatal("would push a repo-level copy that shadows nothing and confuses rotation")
 	}
 }
@@ -180,7 +180,7 @@ func TestPlanStatePassphraseRefusesToGuessWhenGitHubCannotAnswer(t *testing.T) {
 		return nil, errors.New("gh: Bad credentials (HTTP 401)")
 	})
 
-	_, err := planStatePassphrase("o/r", "lab", map[string]string{})
+	_, err := PlanStatePassphrase("o/r", "lab", map[string]string{})
 
 	if err == nil {
 		t.Fatal("an unknown answer must stop the run, not mint a passphrase")
@@ -202,8 +202,8 @@ func TestPlanStatePassphrase(t *testing.T) {
 
 	t.Run("nothing anywhere: mint it and push it", func(t *testing.T) {
 		withExecOutput(t, absent)
-		p, err := planStatePassphrase("o/r", "lab", map[string]string{})
-		if err != nil || !p.generate || !p.push {
+		p, err := PlanStatePassphrase("o/r", "lab", map[string]string{})
+		if err != nil || !p.Generate || !p.Push {
 			t.Fatalf("got (%+v, %v), want generate+push", p, err)
 		}
 	})
@@ -212,8 +212,8 @@ func TestPlanStatePassphrase(t *testing.T) {
 	// there is nothing to clobber — publish the copy we hold.
 	t.Run("cached but repo has none: push, do not re-mint", func(t *testing.T) {
 		withExecOutput(t, absent)
-		p, err := planStatePassphrase("o/r", "lab", map[string]string{statePassphraseSecret: "cached"})
-		if err != nil || p.generate || !p.push {
+		p, err := PlanStatePassphrase("o/r", "lab", map[string]string{SecretName: "cached"})
+		if err != nil || p.Generate || !p.Push {
 			t.Fatalf("got (%+v, %v), want push without generate", p, err)
 		}
 	})
@@ -224,22 +224,22 @@ func TestPlanStatePassphrase(t *testing.T) {
 	// state file unreadable with no fallback.
 	t.Run("repo already has one: never push a cached value over it", func(t *testing.T) {
 		withExecOutput(t, presentAnywhere)
-		p, err := planStatePassphrase("o/r", "lab", map[string]string{statePassphraseSecret: "stale-local-copy"})
+		p, err := PlanStatePassphrase("o/r", "lab", map[string]string{SecretName: "stale-local-copy"})
 		if err != nil {
 			t.Fatalf("present is not an error: %v", err)
 		}
-		if p.generate {
+		if p.Generate {
 			t.Error("re-generated over an existing passphrase — this strands all state")
 		}
-		if p.push {
+		if p.Push {
 			t.Error("would push a possibly-stale cached value over the live one")
 		}
 	})
 
 	t.Run("repo has one and nothing cached: do nothing", func(t *testing.T) {
 		withExecOutput(t, presentAnywhere)
-		p, err := planStatePassphrase("o/r", "lab", map[string]string{})
-		if err != nil || p.generate || p.push {
+		p, err := PlanStatePassphrase("o/r", "lab", map[string]string{})
+		if err != nil || p.Generate || p.Push {
 			t.Fatalf("got (%+v, %v), want a no-op plan", p, err)
 		}
 	})
@@ -247,14 +247,14 @@ func TestPlanStatePassphrase(t *testing.T) {
 
 func TestEnsureStatePassphraseGeneratesWhenThePlanSaysSo(t *testing.T) {
 	secrets := map[string]string{}
-	plan := statePassphrasePlan{generate: true, push: true}
+	plan := StatePassphrasePlan{Generate: true, Push: true}
 
 	var err error
-	out := captureStderr(t, func() { err = ensureStatePassphrase(globalOpts{yes: true}, plan, "o/r", secrets) })
+	out := captureStderr(t, func() { err = EnsureStatePassphrase(false, true, plan, "o/r", secrets) })
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	got := secrets[statePassphraseSecret]
+	got := secrets[SecretName]
 	if got == "" {
 		t.Fatal("no passphrase was added to the push set")
 	}
@@ -275,10 +275,10 @@ func TestEnsureStatePassphraseGeneratesWhenThePlanSaysSo(t *testing.T) {
 
 func TestEnsureStatePassphraseMintsNothingWhenThePlanSaysNot(t *testing.T) {
 	secrets := map[string]string{}
-	if err := ensureStatePassphrase(globalOpts{yes: true}, statePassphrasePlan{}, "o/r", secrets); err != nil {
+	if err := EnsureStatePassphrase(false, true, StatePassphrasePlan{}, "o/r", secrets); err != nil {
 		t.Fatalf("a no-op plan must not fail: %v", err)
 	}
-	if _, minted := secrets[statePassphraseSecret]; minted {
+	if _, minted := secrets[SecretName]; minted {
 		t.Fatal("minted a passphrase the plan did not ask for")
 	}
 }
@@ -288,13 +288,15 @@ func TestEnsureStatePassphraseMintsNothingWithoutYes(t *testing.T) {
 	// minted here would be shown once and then discarded when the operator re-runs
 	// with --yes and got a DIFFERENT one — while the first may already have been
 	// escrowed as if it were real.
-	for _, g := range []globalOpts{{}, {dryRun: true}} {
+	// dryRun/yes are plain booleans now, not package main's globalOpts: the two
+	// cases are "no --yes" and "--dry-run".
+	for _, g := range []struct{ dryRun, yes bool }{{}, {dryRun: true}} {
 		secrets := map[string]string{}
-		plan := statePassphrasePlan{generate: true, push: true}
-		if err := ensureStatePassphrase(g, plan, "o/r", secrets); err != nil {
+		plan := StatePassphrasePlan{Generate: true, Push: true}
+		if err := EnsureStatePassphrase(g.dryRun, g.yes, plan, "o/r", secrets); err != nil {
 			t.Fatalf("planning must not fail: %v", err)
 		}
-		if _, minted := secrets[statePassphraseSecret]; minted {
+		if _, minted := secrets[SecretName]; minted {
 			t.Errorf("minted a passphrase with %+v — nothing may be created without --yes", g)
 		}
 	}
@@ -306,7 +308,7 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 	// of every deployment), and GitHub resolves a repo-level secret inside an
 	// infra-<env> job. An env-scoped copy would let a second deployment be
 	// provisioned with a different passphrase.
-	if configreadiness.SecretIsEnvScoped(statePassphraseSecret) {
+	if configreadiness.SecretIsEnvScoped(SecretName) {
 		t.Error("the state-encryption passphrase must be repo-level")
 	}
 	// Everything else is unchanged — this generalization must not move any
@@ -332,7 +334,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 	// not init.
 	var found bool
 	for _, r := range configreadiness.E2ERequirements(false) {
-		if r.Name != statePassphraseSecret {
+		if r.Name != SecretName {
 			continue
 		}
 		found = true
@@ -344,7 +346,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("%s missing from configreadiness.E2ERequirements — doctor cannot report it", statePassphraseSecret)
+		t.Fatalf("%s missing from configreadiness.E2ERequirements — doctor cannot report it", SecretName)
 	}
 }
 
@@ -357,14 +359,14 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 func TestDropStatePassphraseIfLiveRefusesToOverwriteALiveValue(t *testing.T) {
 	withStubbedInfraEnvs(t)
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte(""), nil }) // present
-	secrets := map[string]string{statePassphraseSecret: "freshly-pasted", "OTHER": "keep"}
+	secrets := map[string]string{SecretName: "freshly-pasted", "OTHER": "keep"}
 
 	var err error
-	out := captureStderr(t, func() { err = dropStatePassphraseIfLive("o/r", "lab", secrets, false) })
+	out := captureStderr(t, func() { err = DropStatePassphraseIfLive("o/r", "lab", secrets, false) })
 	if err != nil {
 		t.Fatalf("present is a no-op, not an error: %v", err)
 	}
-	if _, still := secrets[statePassphraseSecret]; still {
+	if _, still := secrets[SecretName]; still {
 		t.Fatal("left the passphrase in the push set — this overwrites live state encryption")
 	}
 	if secrets["OTHER"] != "keep" {
@@ -384,9 +386,9 @@ func TestDropStatePassphraseIfLiveRefusesToOverwriteALiveValue(t *testing.T) {
 func TestDropStatePassphraseIfLiveSaysWhenAMintedValueIsDiscarded(t *testing.T) {
 	withStubbedInfraEnvs(t)
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte(""), nil })
-	secrets := map[string]string{statePassphraseSecret: "just-minted"}
+	secrets := map[string]string{SecretName: "just-minted"}
 	out := captureStderr(t, func() {
-		if err := dropStatePassphraseIfLive("o/r", "lab", secrets, true); err != nil {
+		if err := DropStatePassphraseIfLive("o/r", "lab", secrets, true); err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
@@ -400,11 +402,11 @@ func TestDropStatePassphraseIfLiveKeepsItWhenTheRepoHasNone(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) {
 		return nil, errors.New("gh: Not Found (HTTP 404)")
 	})
-	secrets := map[string]string{statePassphraseSecret: "ours"}
-	if err := dropStatePassphraseIfLive("o/r", "lab", secrets, true); err != nil {
+	secrets := map[string]string{SecretName: "ours"}
+	if err := DropStatePassphraseIfLive("o/r", "lab", secrets, true); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if secrets[statePassphraseSecret] != "ours" {
+	if secrets[SecretName] != "ours" {
 		t.Fatal("dropped the passphrase the repo definitively lacks — nothing would ever be pushed")
 	}
 }
@@ -414,8 +416,8 @@ func TestDropStatePassphraseIfLiveRefusesOnAnUnansweredLookup(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) {
 		return nil, errors.New("gh: Bad credentials (HTTP 401)")
 	})
-	secrets := map[string]string{statePassphraseSecret: "ours"}
-	err := dropStatePassphraseIfLive("o/r", "lab", secrets, false)
+	secrets := map[string]string{SecretName: "ours"}
+	err := DropStatePassphraseIfLive("o/r", "lab", secrets, false)
 	if err == nil {
 		t.Fatal("must not push on an unanswered lookup — it could be overwriting a live value")
 	}
@@ -429,7 +431,7 @@ func TestDropStatePassphraseIfLiveIgnoresAnAbsentEntry(t *testing.T) {
 		t.Error("asked GitHub about a secret that is not in the push set")
 		return nil, nil
 	})
-	if err := dropStatePassphraseIfLive("o/r", "lab", map[string]string{"OTHER": "x"}, false); err != nil {
+	if err := DropStatePassphraseIfLive("o/r", "lab", map[string]string{"OTHER": "x"}, false); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 }

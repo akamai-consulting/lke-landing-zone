@@ -26,6 +26,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -124,7 +125,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// below: its only failure mode is a hard refusal, and refusing after the
 	// prompts would throw away three freshly-pasted PATs and orphan a
 	// bucket-scoped OBJ key this run created. See state_passphrase.go.
-	passPlan, err := planStatePassphrase(instanceRepo, deployEnv, secrets)
+	passPlan, err := statepassphrase.PlanStatePassphrase(instanceRepo, deployEnv, secrets)
 	if err != nil {
 		return err
 	}
@@ -288,7 +289,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// ── state-encryption passphrase ──────────────────────────────────────────
 	// Generated, not prompted: it is machine material with no issuer to visit, and
 	// every Terraform root refuses to run without it.
-	if err := ensureStatePassphrase(g, passPlan, instanceRepo, secrets); err != nil {
+	if err := statepassphrase.EnsureStatePassphrase(g.dryRun, g.yes, passPlan, instanceRepo, secrets); err != nil {
 		return err
 	}
 
@@ -305,7 +306,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// it is a no-op at best and, against a rotated repo, strands every state file.
 	// Re-asked here rather than trusting passPlan, because the plan was made before
 	// the interactive section and the repo can have acquired a passphrase since.
-	if err := dropStatePassphraseIfLive(instanceRepo, deployEnv, secrets, passPlan.generate); err != nil {
+	if err := statepassphrase.DropStatePassphraseIfLive(instanceRepo, deployEnv, secrets, passPlan.Generate); err != nil {
 		return err
 	}
 	nSecrets, nVars := len(secrets), len(vars)

@@ -235,12 +235,21 @@ categories:
     #                       template repo's own workflow, so it has no instance
     #                       lifecycle state — a catalog row that is not an
     #                       extension.
+    #   21,542 / 136 files  credential-state-passphrase. -299, and the FIRST
+    #                       credential row extractable at all: the other five read
+    #                       OpenBao through bao_read.go, whose verdict type has 7
+    #                       callers and whose exec seam has 9. This one is not
+    #                       blocked because the Tofu state passphrase never enters
+    #                       OpenBao — it must exist before any cluster does. Its
+    #                       binding is PUSHED to `seeded`: the honest state is
+    #                       `configured`, and grantStates rightly refuses
+    #                       secret-custody there.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 21841
+    budget: 21542
     exact: true
     include:
       - "tools/cmd/llz/*.go"

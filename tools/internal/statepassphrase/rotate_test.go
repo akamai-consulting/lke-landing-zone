@@ -1,4 +1,4 @@
-package main
+package statepassphrase
 
 import (
 	"errors"
@@ -42,7 +42,7 @@ func allRoots() map[string]bool {
 func TestRotateStatePassphraseRefusesWithoutAFallback(t *testing.T) {
 	t.Setenv("TF_ENCRYPTION", `state { method = method.aes_gcm.n }`)
 	t.Setenv("TF_ENCRYPTION_NEW_ONLY", `state { method = method.aes_gcm.n }`)
-	err := runRotateStatePassphrase(true, "terraform")
+	err := RunRotate(true, "terraform")
 	if err == nil || !strings.Contains(err.Error(), "no fallback") {
 		t.Fatalf("want a no-fallback refusal, got %v", err)
 	}
@@ -54,7 +54,7 @@ func TestRotateStatePassphraseRefusesWithoutAFallback(t *testing.T) {
 func TestRotateStatePassphraseRequiresTheNewPassphrase(t *testing.T) {
 	t.Setenv("TF_ENCRYPTION", `state { fallback { method = method.aes_gcm.o } }`)
 	t.Setenv("TF_STATE_ENCRYPTION_PASSPHRASE", "")
-	err := runRotateStatePassphrase(true, "terraform")
+	err := RunRotate(true, "terraform")
 	if err == nil || !strings.Contains(err.Error(), "TF_STATE_ENCRYPTION_PASSPHRASE") {
 		t.Fatalf("want a refusal naming the passphrase, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRotateStatePassphraseAllRootsVerify(t *testing.T) {
 		func(d string) error { rekeyed = append(rekeyed, d); return nil },
 		func(string) error { return nil },
 		allRoots())
-	if err := runRotateStatePassphrase(true, "terraform"); err != nil {
+	if err := RunRotate(true, "terraform"); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	if len(rekeyed) != len(statePassphraseRoots) {
@@ -131,7 +131,7 @@ func TestRotateStatePassphraseFailsWhenAnyRootDoesNot(t *testing.T) {
 			return nil
 		},
 		allRoots())
-	err := runRotateStatePassphrase(true, "terraform")
+	err := RunRotate(true, "terraform")
 	if err == nil {
 		t.Fatal("a root that fails verification MUST fail the command — the old passphrase is still load-bearing")
 	}
@@ -149,7 +149,7 @@ func TestRotateStatePassphraseRekeyedButUnverifiedIsAFailure(t *testing.T) {
 		func(string) error { return nil },
 		func(string) error { return errors.New("decryption failed for all attempted") },
 		allRoots())
-	if err := runRotateStatePassphrase(true, "terraform"); err == nil {
+	if err := RunRotate(true, "terraform"); err == nil {
 		t.Fatal("re-keyed-but-unverified must fail")
 	}
 }
@@ -164,7 +164,7 @@ func TestRotateStatePassphraseSkipsAbsentRoots(t *testing.T) {
 		func(d string) error { rekeyed = append(rekeyed, d); return nil },
 		func(string) error { return nil },
 		present)
-	if err := runRotateStatePassphrase(true, "terraform"); err != nil {
+	if err := RunRotate(true, "terraform"); err != nil {
 		t.Fatalf("absent root should not fail the rollover: %v", err)
 	}
 	for _, d := range rekeyed {
@@ -181,7 +181,7 @@ func TestRotateStatePassphraseDryRunTouchesNothing(t *testing.T) {
 		func(string) error { t.Error("dry run must not re-key"); return nil },
 		func(string) error { t.Error("dry run must not verify"); return nil },
 		allRoots())
-	if err := runRotateStatePassphrase(false, "terraform"); err != nil {
+	if err := RunRotate(false, "terraform"); err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
 }

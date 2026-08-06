@@ -179,7 +179,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 | `harbor-provisioner` | 551 | 4 | ✘ | ✘ | `ci_harbor_provisioner` 265, `ci_harbor` 191, kick 94. |
 | `credential-objkey` | 474 | 4 | ✘ | ✘ | `credentials_objkey` 196, `ci_temp_objkey` 106, `ci_mint_objkeys` 87, `objcluster_resolve` 85. |
 | `credential-linode` | 462 | 4 | ✔ | ✘ | `ci_rotate_linode_creds` 271, `credentials_lkeadmin` 99, `credentials` 74, `linode_token` 18. |
-| `credential-state-passphrase` | 199 | 1 | ✔ | ✘ | Tofu state encryption key rollover. |
+| `credential-state-passphrase` | 199 | 1 | ✔ | ✘ | Tofu state encryption key rollover. **✅ Extracted — the only `credential-*` row not blocked behind OpenBao.** See [What `credential-state-passphrase` could not say](#what-credential-state-passphrase-could-not-say--a-state-the-grant-table-refuses). |
 | `forge-env-seed` | 189 | 3 | ✔ | ✘ | `gh_secrets_native` 63, `ci_github_oidc` 63, `ci_clear_secrets` 63. Should route through `internal/forge`. |
 
 ## `→ converged` — grants: `cluster-write`
@@ -322,9 +322,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `kyverno-policies` extracted | 22,566 | 142 | −160 — the first catalog note that was right first time |
 | `managed-fresh` → `template-sustain` | 22,383 | 141 | −183 — the ninth catalog correction, and the second about membership |
 | `dev-mutation-testing` extracted | 22,153 | 140 | −230 — the first extension that is not about the platform |
-| `release-publish` extracted | **21,841** | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
+| `release-publish` extracted | 21,841 | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
+| `credential-state-passphrase` extracted | **21,542** | 136 | −299 — the first credential row, and a state the grant table refuses |
 
-**Net −25,341 (53.7%) across thirty-nine extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −25,640 (54.3%) across forty extensions** (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2162,6 +2163,48 @@ throughout as a list of extensions-in-waiting, and at least one of them is not o
 provisioned, and resolving an input can require **creating** it. An instance pointed at an image tag
 that was never built has an input that does not resolve until something builds it. Nothing is forced
 about the kind here — pinning an image *is* an act, not an observation wearing a write grant.
+
+### What `credential-state-passphrase` could not say — a state the grant table refuses
+
+Fortieth, and **the first `credential-*` row that could be extracted at all.**
+
+```
+credential-state-passphrase  transition:configured[…, secret-custody]   ← REFUSED
+                             transition:seeded[read-repo, cloud-mutate, secret-custody]
+```
+
+**Five of the six credential rows are blocked behind one wall.** They read OpenBao through package
+`main`'s `bao_read.go`, whose fail-closed verdict type has **seven** callers and whose exec seam has
+**nine**. Extracting any one of them means extracting that layer first — the `internal/keycloak` shape
+at a larger scale, and the real next move in this campaign.
+
+**This one is not blocked, and the reason is the finding.** The Tofu state-encryption passphrase
+**never enters OpenBao**. It lives in a GitHub Environment secret, because the thing that needs it —
+`tofu init` in a reusable workflow — runs before any cluster exists to hold a secret store. *A
+credential whose whole purpose is bootstrapping the substrate cannot be kept in the substrate.* So the
+credential family is not one family: five rows are OpenBao consumers, this one is a forge consumer.
+
+**The state is a forced move, and the grant table is right to force it.** The honest state is
+`configured` — the passphrase is an input that must resolve before the first `tofu init`, written to a
+GitHub Environment, which is configured before Linode is provisioned. That is exactly the argument
+`chart-publish` used to widen `cloud-mutate` to `configured`.
+
+But this binding also **places credential material**, so it needs `secret-custody`, whose row is
+`{provisioned, seeded, operating}`. `Validate()` refuses `configured`.
+
+**Nothing was widened, and this is the first refusal I have agreed with rather than worked around.**
+The row's comment states the rule plainly: custody at `scaffolded` or `configured` *"would mean a
+credential exists before anything has been built to issue one, which is the shape of a hardcoded
+secret rather than a fetched one."* This passphrase is **generated locally, with no issuer** — which
+is precisely the shape the row defends against, and a reviewer *should* look twice at it. Widening the
+row to accommodate the one credential that legitimately has no issuer would disarm the check for every
+credential that does.
+
+So `seeded`, the first state where custody is legal, with `Incomplete` recording that it actually runs
+earlier. That is the **third** binding pushed to its nearest legal state — after `wedge-gameday`
+(pushed by `bindableStates`) and `argocd-diagnostics` (pushed by having no honest kind) — and the
+first pushed by the **grant** table rather than the binding table. A test pins the refusal, so if
+`secret-custody` ever reaches `configured` this declaration is revisited deliberately.
 
 ## The cost of the interesting half
 

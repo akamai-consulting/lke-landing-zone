@@ -17,6 +17,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -198,7 +199,7 @@ func catalog() []secretSpec {
 			// generates it, but gather does not run that code. Prompted rather than
 			// generated here, because this catalog's whole contract is "you paste
 			// every value yourself".
-			Name:    statePassphraseSecret,
+			Name:    statepassphrase.SecretName,
 			Purpose: "OpenTofu state+plan encryption passphrase — REPO-LEVEL, one per instance. LEAVE BLANK if this instance already has one (`llz tokens` generates it); a NEW value here would make every existing state file unreadable. First time only: `openssl rand -base64 32`, and ESCROW IT",
 			Dest:    "repository secret",
 		},
@@ -362,7 +363,7 @@ func pushSecrets(g globalOpts, env string) error {
 	// re-running gather to add one missing token can paste a NEW passphrase over
 	// the live one and make every state file unreadable. Ask before pushing.
 	if repo, rerr := resolveInstanceRepo("", false); rerr == nil {
-		if err := dropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
+		if err := statepassphrase.DropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
 			return err
 		}
 	}
