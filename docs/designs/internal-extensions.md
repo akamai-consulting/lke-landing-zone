@@ -205,7 +205,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | **✅ Extracted.** See [What `assert-identity` forced](#what-assert-identity-forced--the-first-extraction-the-language-decided). team-login-smoke 469, certificates 158 |
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
-| `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, `s3_object` 131, `s3_probe` 122 |
+| `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, ~~`s3_object` 131, `s3_probe` 122~~ (both already in `internal/s3sig`/`internal/objenc`). **✅ Extracted.** See [What `assert-objstore` said out loud](#what-assert-objstore-said-out-loud--the-write-is-the-check). |
 | `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner`. **✅ Extracted** — closure **2**, the cleanest boundary of all seventeen. See [What `assert-registry` cost](#what-assert-registry-cost--nothing-and-that-is-the-finding).|
 | `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion |
 | `assert-database` | 194 | 1 | ✘ | pairs with `database-provisioner` |
@@ -314,9 +314,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `argocd-diagnostics` extracted | 24,807 | 155 | −213 — the first binding kind that is wrong on purpose |
 | `posture-plaintext` extracted | 24,203 | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
 | `chart-publish` extracted | 23,898 | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
-| `guard-manifests` extracted | **23,653** | 150 | −245 — a declaration test found a lane that was not a gate |
+| `guard-manifests` extracted | 23,653 | 150 | −245 — a declaration test found a lane that was not a gate |
+| `assert-objstore` extracted | **23,387** | 149 | −266 — six for six, and the first mutation that was never hidden |
 
-**Net −23,529 (49.9%) across thirty-two extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −23,795 (50.4%) across thirty-three extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1810,6 +1811,65 @@ set of `${...}` tokens bootstrap-cluster substitutes, and apl-schema validates t
 use only those. It now lives in the guard and `cmd/llz` imports it — the same resolution
 `deliver-docs` reached for `docsguard.DeliveredDocs`. A check that validates a set is meaningless if
 it runs against a different set than the producer ships.
+
+### What `assert-objstore` said out loud — the write is the check
+
+Thirty-third, and **six for six on `assert-` lanes that mutate** — except this one is not hiding it,
+which is what makes it worth its own section.
+
+```
+assert-objstore  transition:converged[cluster-read, secret-read, cloud-mutate]
+```
+
+Every previous case buried the write somewhere a reader would not look: a health check that patches
+Argo Applications, a file called *"readiness"* that runs `kubectl rollout restart`, a rotation drill
+that applies a Job, a *"smoke test"* that creates a Keycloak client and a user. This one announces it
+in step 3 of its own header — *"PUTs a small object, GETs it back and compares the bytes, then
+deletes it."*
+
+**And it cannot be otherwise.** Linode's object-storage generations are disjoint namespaces on
+different hosts, so `verify-object-storage` could list the account's buckets through the Linode API
+and confirm all four exist by label **while Loki and Harbor were both returning NoSuchBucket in
+production**. Two views that agree with themselves and not with each other. The only check that tells
+them apart speaks S3 at the endpoint the *consumer* uses, with the credential the *consumer* holds —
+which means writing. Hence `cloud-mutate`, and hence **no `cloud-read`**: this extension never asks
+the Linode API anything, because the Linode API's answer was the misleading one.
+
+**A pattern worth naming rather than repeating.** This is the *fifth* time the model has forced
+`transition:converged` onto something whose job is to check: `converge`, `assert-observability`,
+`assert-secrets`, `assert-identity`, and now this. Each lands there for the same two mechanical
+reasons — an assertion may hold read grants only, and `bindableStates` gives `Transition` no way to
+reach `verified`. The declaration is true, but true the way a forced move is true. What a reader wants
+is *"this is a check, and checking requires writing"*, and the vocabulary can say the second half only
+by dropping the first.
+
+That is the same family of gap as the missing **diagnostic** kind (`argocd-diagnostics`), approached
+from the opposite side: one is an observation that contributes no verdict; this is a verdict that
+cannot be reached by observing.
+
+**Nothing was invented.** Five instances is well past the two-case bar — but the bar is two cases
+*and a shape*, and the shape is not settled: these five differ in whether the mutation is
+**incidental** (`converge` patches to make progress) or **constitutive** (this one writes because
+writing *is* the question). A kind that merged them would hide exactly the distinction a reviewer
+needs. Recorded for whoever takes the fifth-kind question up, alongside the diagnostic case.
+
+**`decodeSecretField` had two owners and belonged to neither.** It was defined in this assertion and
+imported by `cmd/llz` purely to satisfy `internal/objenc`'s `SecretField` dependency — so extracting
+the assertion would have made one extension's private helper part of another's wiring. It is now
+`kube.SecretField`. Decoding a Secret's `data` field is not either extension's business.
+
+**A fifth stranded-test find, and the first whose answer was a *third* package.** The four
+`S3ObjectRoundTrip` tests lived in `ci_assert_obj_certs_db_test.go` and drive `objenc.S3ObjectRoundTrip`
+through a seam `internal/objenc` owns. They were never package `main`'s, and they were not the
+assertion's either — my first classification put them with the assertion, wrong for exactly the reason
+the original filename was wrong: **filed by the command that happened to exercise the code, not by the
+code they test.** They now live in `internal/objenc`.
+
+**And the fourth filename pattern.** `ci_assert_obj_certs_db_test.go` is named for *three unrelated
+subjects*, so whichever subject moves first strands the other two. With the three already recorded —
+named for a coverage **metric**, for the **command** that calls the code, and for the **batch** it was
+written in — all four share one property: nothing in the name points at a subject, so nothing points
+at where a test belongs.
 
 ## The cost of the interesting half
 

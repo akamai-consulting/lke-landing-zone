@@ -26,9 +26,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 (`tools/internal/argodiag`) and `posture-plaintext`
 (`tools/internal/plaintext`) and `chart-publish`
 (`tools/internal/chartpublish`) and `guard-manifests`
-(`tools/internal/manifestguard`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/manifestguard`) and `assert-objstore`
+(`tools/internal/assertobjstore`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all thirty-two still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all thirty-three still run because `ci.go` and the reconciler register them, and the declarations are inert.
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural

@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
@@ -42,7 +43,7 @@ var objencDeps = func() objenc.Deps {
 		},
 		KVPut:       func(path string, fields map[string]string) error { return baoKVPutFn(path, fields) },
 		KubectlOut:  kubectlOut,
-		SecretField: decodeSecretField,
+		SecretField: kube.SecretField,
 		MaskGHALines: func(vals ...string) {
 			for _, v := range vals {
 				maskGHALines(v)

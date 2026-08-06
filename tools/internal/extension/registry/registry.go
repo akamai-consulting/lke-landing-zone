@@ -25,6 +25,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/argodiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobjstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
@@ -67,6 +68,7 @@ var declarations = []func() extension.Extension{
 	assertsecrets.Extension,
 	argodiag.Extension,
 	assertidentity.Extension,
+	assertobjstore.Extension,
 	deliverdocs.Extension,
 	assertnetwork.Extension,
 	assertplatform.Extension,

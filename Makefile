@@ -63,7 +63,7 @@ COVERAGE_MINS := \
 	internal/metrics=95 \
 	internal/guardkit=100 \
 	internal/guardwalk=46 \
-	internal/objenc=50 \
+	internal/objenc=52 \
 	internal/openbao=88 \
 	internal/pathglob=93 \
 	internal/promwire=92 \
@@ -94,7 +94,8 @@ COVERAGE_MINS := \
 	internal/argodiag=86 \
 	internal/plaintext=91 \
 	internal/chartpublish=58 \
-	internal/manifestguard=86
+	internal/manifestguard=86 \
+	internal/assertobjstore=29
 
 help:
 	@echo "lke-landing-zone — template repository targets"

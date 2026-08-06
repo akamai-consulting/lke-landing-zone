@@ -1,4 +1,4 @@
-package main
+package assertobjstore
 
 // ci_assert_obj_roundtrip.go implements `llz ci assert-obj-roundtrip` — the gate
 // that Loki and Harbor can actually WRITE to their object storage.
@@ -48,9 +48,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
-	"github.com/spf13/cobra"
 )
 
 // objConsumer describes one writer of object storage and where its real
@@ -117,42 +117,6 @@ var objConsumers = []objConsumer{
 	},
 }
 
-func ciAssertObjRoundTripCmd() *cobra.Command {
-	var only, keyPrefix string
-	var settle, interval int
-	c := &cobra.Command{
-		Use:   "assert-obj-roundtrip",
-		Short: "fail unless Loki and Harbor can write to, and read back from, their object storage",
-		Long: "Writes a small object, reads it back and compares the bytes, then deletes it —\n" +
-			"once per consumer, using THAT consumer's own credential Secret and its own\n" +
-			"endpoint and bucket as read from its live config.\n\n" +
-			"verify-object-storage lists buckets through the LINODE API and confirms they\n" +
-			"exist by label. Every one of those checks passed while Loki and Harbor were both\n" +
-			"returning NoSuchBucket: Linode's object-storage generations are DISJOINT\n" +
-			"namespaces on different hosts, so an obj-cluster id stripped to its region puts\n" +
-			"the bucket on gen-1 while the consumers address gen-2. The bucket exists, the\n" +
-			"API is telling the truth, and the consumer 404s.\n\n" +
-			"Only a check that speaks S3 at the CONSUMER's endpoint with the CONSUMER's\n" +
-			"credential can tell those apart, and it must read back: a PUT can succeed\n" +
-			"against the wrong endpoint. If a consumer's endpoint cannot be read from its\n" +
-			"config this FAILS rather than deriving one — the derived endpoint is the view\n" +
-			"that was already wrong.\n\n" +
-			"Writes, because Loki writes chunks continuously and Harbor writes on every\n" +
-			"push; a read-only probe passes on a bucket that has gone read-only. Exit 0 / 1.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			return runCIAssertObjRoundTrip(cigate.SplitCSVList(only), keyPrefix,
-				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
-		},
-	}
-	c.Flags().StringVar(&only, "only", "", "comma-separated consumers to check (default: all)")
-	c.Flags().StringVar(&keyPrefix, "key-prefix", "llz-roundtrip-probe/", "object key prefix for the probe object")
-	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
-	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
-	return c
-}
-
 // objVerdict is one consumer's outcome.
 type objVerdict struct {
 	Consumer string
@@ -160,28 +124,6 @@ type objVerdict struct {
 	Bucket   string
 	Detail   string
 	FailWhy  string
-}
-
-// decodeSecretField pulls a base64 Secret value out of `kubectl get -o json`.
-func decodeSecretField(raw []byte, field string) (string, error) {
-	var s struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", fmt.Errorf("decoding the Secret: %w", err)
-	}
-	v, ok := s.Data[field]
-	if !ok {
-		return "", fmt.Errorf("the Secret has no %q key — ESO has not materialized this consumer's credential", field)
-	}
-	b, err := base64.StdEncoding.DecodeString(v)
-	if err != nil {
-		return "", fmt.Errorf("the Secret's %q is not valid base64: %w", field, err)
-	}
-	if strings.TrimSpace(string(b)) == "" {
-		return "", fmt.Errorf("the Secret's %q is empty", field)
-	}
-	return string(b), nil
 }
 
 // Endpoint and bucket, as the consumers spell them. Loki renders YAML
@@ -237,7 +179,7 @@ func parseObjConfig(cfg string) (endpoint, bucket string, err error) {
 var (
 	readObjSecret = func(ref string) ([]byte, error) {
 		ns, name, _ := strings.Cut(ref, "/")
-		return execOutput("kubectl", "-n", ns, "get", "secret", name, "-o", "json")
+		return kubectlprobe.Exec("kubectl", "-n", ns, "get", "secret", name, "-o", "json")
 	}
 	// readObjConfig returns the consumer's rendered config as text. Secrets and
 	// ConfigMaps both carry it depending on the chart, so the ref names the kind.
@@ -247,7 +189,7 @@ var (
 			return "", fmt.Errorf("config ref %q is not <kind>/<namespace>/<name>", ref)
 		}
 		kind, ns, name := parts[0], parts[1], parts[2]
-		out, err := execOutput("kubectl", "-n", ns, "get", kind, name, "-o", "json")
+		out, err := kubectlprobe.Exec("kubectl", "-n", ns, "get", kind, name, "-o", "json")
 		if err != nil {
 			return "", err
 		}
@@ -302,7 +244,7 @@ func readFirstObjConfig(refs []string) (cfg, from string, err error) {
 // listSecretsIn returns the Secret names in a namespace, for failure messages
 // only. Seamed with the other cluster reads.
 var listSecretsIn = func(ns string) ([]string, error) {
-	out, err := execOutput("kubectl", "-n", ns, "get", "secret",
+	out, err := kubectlprobe.Exec("kubectl", "-n", ns, "get", "secret",
 		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`)
 	if err != nil {
 		return nil, err
@@ -346,12 +288,12 @@ func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict
 			c.SecretRef, err, candidateSecretHint(c.SecretRef))
 		return v
 	}
-	access, err := decodeSecretField(secretRaw, c.AccessKeyField)
+	access, err := kube.SecretField(secretRaw, c.AccessKeyField)
 	if err != nil {
 		v.FailWhy = fmt.Sprintf("%s: %v", c.SecretRef, err)
 		return v
 	}
-	secret, err := decodeSecretField(secretRaw, c.SecretKeyField)
+	secret, err := kube.SecretField(secretRaw, c.SecretKeyField)
 	if err != nil {
 		v.FailWhy = fmt.Sprintf("%s: %v", c.SecretRef, err)
 		return v
@@ -389,7 +331,7 @@ func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict
 	return v
 }
 
-func runCIAssertObjRoundTrip(only []string, keyPrefix string, settle, interval time.Duration) error {
+func Run(only []string, keyPrefix string, settle, interval time.Duration) error {
 	fmt.Println("## Object-storage round-trip assertion (Loki + Harbor can WRITE)")
 
 	consumers := objConsumers
