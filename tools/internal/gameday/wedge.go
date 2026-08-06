@@ -1,4 +1,4 @@
-package main
+package gameday
 
 // ci_wedge_gameday.go implements `llz ci wedge-gameday` — the fault-injection
 // proof that the blast-radius decomposition (docs/designs/blast-radius-decomposition.md)
@@ -31,7 +31,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/spf13/cobra"
 )
 
 // appHealth is an Argo Application's (sync, health) status pair.
@@ -93,60 +92,23 @@ func carvedAppNames() []string {
 	return names
 }
 
-func ciWedgeGamedayCmd() *cobra.Command {
-	var (
-		externalSecret string
-		targetApp      string
-		namespace      string
-		timeout        int
-		interval       int
-	)
-	cmd := &cobra.Command{
-		Use:   "wedge-gameday",
-		Short: "prove blast-radius containment: break one ExternalSecret, assert only its own carved App degrades",
-		Long: "Fault-injection game-day for the blast-radius decomposition. Repoints one\n" +
-			"platform ExternalSecret's secretStoreRef at a non-existent store (forcing it\n" +
-			"not-Ready), then asserts the carved Application that owns it goes non-Healthy\n" +
-			"while platform-bootstrap and every sibling carved App stay Healthy — the\n" +
-			"concrete proof the #163 wedge is contained. Always restores the ExternalSecret.\n" +
-			"Uses kubectl with the ambient KUBECONFIG. Run on a warm cluster (the\n" +
-			"converge-only fast-path reuses one).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runWedgeGameday(cigate.NewDeps(), wedgeOpts{
-				esRef:     externalSecret,
-				targetApp: targetApp,
-				namespace: namespace,
-				timeout:   time.Duration(timeout) * time.Second,
-				interval:  time.Duration(interval) * time.Second,
-			})
-		},
-	}
-	cmd.Flags().StringVar(&externalSecret, "externalsecret", "monitoring/loki-object-store", "the ExternalSecret to break, as <namespace>/<name>")
-	cmd.Flags().StringVar(&targetApp, "target-app", "llz-observability", "the carved Application expected to go non-Healthy (owns --externalsecret)")
-	cmd.Flags().StringVar(&namespace, "namespace", "argocd", "namespace of the Argo Application resources")
-	cmd.Flags().IntVar(&timeout, "timeout", 300, "seconds to watch for the fault to surface")
-	cmd.Flags().IntVar(&interval, "interval", 5, "seconds between health snapshots")
-	return cmd
+type Opts struct {
+	ESRef, TargetApp, Namespace string
+	Timeout, Interval           time.Duration
 }
 
-type wedgeOpts struct {
-	esRef, targetApp, namespace string
-	timeout, interval           time.Duration
-}
-
-// runWedgeGameday orchestrates the live game-day: verify healthy start, inject the
+// Run orchestrates the live game-day: verify healthy start, inject the
 // fault, watch, restore, and evaluate containment.
-func runWedgeGameday(d cigate.Deps, o wedgeOpts) error {
-	esNS, esName, ok := splitNSName(o.esRef)
+func Run(d cigate.Deps, o Opts) error {
+	esNS, esName, ok := splitNSName(o.ESRef)
 	if !ok {
-		return fmt.Errorf("--externalsecret must be <namespace>/<name>, got %q", o.esRef)
+		return fmt.Errorf("--externalsecret must be <namespace>/<name>, got %q", o.ESRef)
 	}
-	guarded := append([]string{"platform-bootstrap"}, siblingsOf(o.targetApp)...)
+	guarded := append([]string{"platform-bootstrap"}, siblingsOf(o.TargetApp)...)
 
 	// 1. Refuse to run on an already-sick cluster: the target + every guarded App
 	//    must be Healthy first, or a "breach" we observe isn't ours.
-	start := snapshotApps(d, o.namespace, append([]string{o.targetApp}, guarded...))
+	start := snapshotApps(d, o.Namespace, append([]string{o.TargetApp}, guarded...))
 	for app, h := range start {
 		if !argoHealthy(h.health) {
 			fmt.Fprintf(os.Stderr, "::error::wedge-gameday: %s is %s/%s before fault injection — refusing to run on an unhealthy cluster.\n", app, h.sync, h.health)
@@ -165,33 +127,33 @@ func runWedgeGameday(d cigate.Deps, o wedgeOpts) error {
 	//     auto-sync of NEW git commits is unaffected. Restored in the defer (LIFO:
 	//     registered first so it runs LAST — after the ExternalSecret is put back, so
 	//     re-enabled self-heal sees an already-correct spec).
-	selfHealWasOn := setSelfHeal(d, o.namespace, o.targetApp, false)
+	selfHealWasOn := setSelfHeal(d, o.Namespace, o.TargetApp, false)
 	if selfHealWasOn {
-		defer setSelfHeal(d, o.namespace, o.targetApp, true)
+		defer setSelfHeal(d, o.Namespace, o.TargetApp, true)
 	}
 
 	// 2b. Capture the current secretStoreRef.name, then break it. Restore on EVERY
 	//     exit path (defer) — a game-day must never leave the cluster wedged.
 	origStore, ok := esStoreRef(d, esNS, esName)
 	if !ok {
-		return fmt.Errorf("read ExternalSecret %s: not found (adjust --externalsecret)", o.esRef)
+		return fmt.Errorf("read ExternalSecret %s: not found (adjust --externalsecret)", o.ESRef)
 	}
 	defer restoreES(d, esNS, esName, origStore)
 	const bogus = "llz-gameday-nonexistent-store"
 	if !patchESStore(d, esNS, esName, bogus) {
-		return fmt.Errorf("could not patch ExternalSecret %s to inject the fault", o.esRef)
+		return fmt.Errorf("could not patch ExternalSecret %s to inject the fault", o.ESRef)
 	}
-	fmt.Printf("wedge-gameday: broke %s (secretStoreRef %s → %s); watching %ds for containment…\n", o.esRef, origStore, bogus, int(o.timeout.Seconds()))
+	fmt.Printf("wedge-gameday: broke %s (secretStoreRef %s → %s); watching %ds for containment…\n", o.ESRef, origStore, bogus, int(o.Timeout.Seconds()))
 
 	// 3. Watch: snapshot the target + guarded Apps until the fault surfaces in the
 	//    target (contained success) or the deadline passes.
 	var snaps []gamedaySnapshot
-	deadline := d.Now().Add(o.timeout)
-	watch := append([]string{o.targetApp}, guarded...)
+	deadline := d.Now().Add(o.Timeout)
+	watch := append([]string{o.TargetApp}, guarded...)
 	for {
-		snap := snapshotApps(d, o.namespace, watch)
+		snap := snapshotApps(d, o.Namespace, watch)
 		snaps = append(snaps, snap)
-		v := evalWedge(o.targetApp, guarded, snaps)
+		v := evalWedge(o.TargetApp, guarded, snaps)
 		if !v.containmentHeld {
 			// A guarded App broke — stop early, this is a containment FAILURE.
 			break
@@ -202,24 +164,24 @@ func runWedgeGameday(d cigate.Deps, o wedgeOpts) error {
 		if !d.Now().Before(deadline) {
 			break
 		}
-		d.Sleep(o.interval)
+		d.Sleep(o.Interval)
 	}
 
 	// 4. Evaluate + report.
-	v := evalWedge(o.targetApp, guarded, snaps)
+	v := evalWedge(o.TargetApp, guarded, snaps)
 	switch {
 	case v.contained():
 		fmt.Printf("✓ wedge-gameday CONTAINED: %s went %s while platform-bootstrap + siblings (%s) stayed Healthy.\n",
-			o.targetApp, v.targetStatus, strings.Join(siblingsOf(o.targetApp), ", "))
+			o.TargetApp, v.targetStatus, strings.Join(siblingsOf(o.TargetApp), ", "))
 		return nil
 	case !v.containmentHeld:
 		fmt.Fprintf(os.Stderr, "::error::wedge-gameday NOT CONTAINED: breaking %s took down %s — the fault cascaded past %s's own App.\n",
-			o.esRef, strings.Join(v.breaches, ", "), o.targetApp)
+			o.ESRef, strings.Join(v.breaches, ", "), o.TargetApp)
 		return fmt.Errorf("containment breached: %s", strings.Join(v.breaches, ", "))
 	default:
 		fmt.Fprintf(os.Stderr, "::error::wedge-gameday INCONCLUSIVE: %s never went non-Healthy within %s — did the fault take? (check %s status)\n",
-			o.targetApp, o.timeout, o.esRef)
-		return fmt.Errorf("fault never surfaced in %s", o.targetApp)
+			o.TargetApp, o.Timeout, o.ESRef)
+		return fmt.Errorf("fault never surfaced in %s", o.TargetApp)
 	}
 }
 

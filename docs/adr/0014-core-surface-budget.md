@@ -122,7 +122,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **23,898** with `chart-publish`.
 > and **23,653** with `guard-manifests`.
 > and **23,387** with `assert-objstore`.
-> Thirty-three extensions, net −23,795 (50.4%) — now BELOW the
+> and **23,205** with `wedge-gameday`.
+> Thirty-four extensions, net −23,977 (50.8%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

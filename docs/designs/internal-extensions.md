@@ -207,7 +207,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-platform` | 602 | 5 | ✔ | health-workflow 210, argo-app 130, instance-custom 106, image-fresh 82, apl-version 74. **✅ Extracted — four of five files.** `image-fresh` is template-pin machinery and stayed. See [What `assert-platform` showed](#what-assert-platform-showed--the-first-extension-that-only-looks).|
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, ~~`s3_object` 131, `s3_probe` 122~~ (both already in `internal/s3sig`/`internal/objenc`). **✅ Extracted.** See [What `assert-objstore` said out loud](#what-assert-objstore-said-out-loud--the-write-is-the-check). |
 | `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner`. **✅ Extracted** — closure **2**, the cleanest boundary of all seventeen. See [What `assert-registry` cost](#what-assert-registry-cost--nothing-and-that-is-the-finding).|
-| `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion |
+| `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion. **✅ Extracted.** See [What `wedge-gameday` could not place](#what-wedge-gameday-could-not-place--a-state-not-just-a-kind). |
 | `assert-database` | 194 | 1 | ✘ | pairs with `database-provisioner` |
 
 **The pairing pattern is the strongest structural signal in the catalog.** `harbor-provisioner` ↔
@@ -315,9 +315,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `posture-plaintext` extracted | 24,203 | 154 | −604 — the cleanest boundary of the campaign, and a bug in the measurement |
 | `chart-publish` extracted | 23,898 | 153 | −305 — the third `grantStates` widening, ten extractions after it was first refused |
 | `guard-manifests` extracted | 23,653 | 150 | −245 — a declaration test found a lane that was not a gate |
-| `assert-objstore` extracted | **23,387** | 149 | −266 — six for six, and the first mutation that was never hidden |
+| `assert-objstore` extracted | 23,387 | 149 | −266 — six for six, and the first mutation that was never hidden |
+| `wedge-gameday` extracted | **23,205** | 148 | −182 — the first binding forced in BOTH its kind and its state |
 
-**Net −23,795 (50.4%) across thirty-three extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −23,977 (50.8%) across thirty-four extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1870,6 +1871,49 @@ subjects*, so whichever subject moves first strands the other two. With the thre
 named for a coverage **metric**, for the **command** that calls the code, and for the **batch** it was
 written in — all four share one property: nothing in the name points at a subject, so nothing points
 at where a test belongs.
+
+### What `wedge-gameday` could not place — a state, not just a kind
+
+Thirty-fourth, **the cleanest boundary since `posture-plaintext`**, and the extraction that sharpened
+the open fifth-kind question into something more specific than "there should be a fifth kind".
+
+```
+wedge-gameday  transition:converged[cluster-read, cluster-write]
+```
+
+The move itself cost nothing: closure **2** (both noise), one inbound edge (the cobra constructor),
+and **no `Deps` struct** — it already took `internal/cigate.Deps` as a parameter before the move. That
+package came out with `converge` and now has thirteen callers; a capability seam that is already
+shared is one the extraction does not have to invent.
+
+**Sixth forced `transition:converged` — and the first where *both* halves are forced.**
+
+The kind is forced the usual way: it patches an ExternalSecret to inject the fault, and an assertion
+may hold read grants only. (The restore path does not make it read-only — a mode that cleans up after
+itself still wrote.)
+
+**The state is the new part.** A gameday runs against a platform that is up and steady; the command
+says so itself by *refusing to start unless the cluster is already Healthy*. The natural state is
+`operating`. But `bindableStates` gives `Transition` no way to reach `operating`, on the sound general
+reasoning that `operating` is a condition that **holds** rather than a place you move the platform to.
+That reasoning is right about transitions and wrong about this one: the drill does not move the
+platform to `operating` — **it requires the platform to already be there.**
+
+So `converged` is the nearest legal state, the declaration is true (the platform *is* converged when
+this runs), and the precondition that matters is quietly lost. The five earlier cases — `converge`,
+`assert-observability`, `assert-secrets`, `assert-identity`, `assert-objstore` — all genuinely belong
+at `converged`. This is the first one *pushed* there.
+
+**Still nothing invented, and the waiting is now paying.** One extraction ago the gap read as "these
+checks have to call themselves transitions". It now reads more precisely: what these six want is a way
+to say **"this is a check, it must mutate to run, and it requires state X rather than establishing
+it"** — three claims, of which the vocabulary can express one. A fifth binding kind bolted on after
+`assert-objstore` would have answered the *kind* question and left the *state* question exactly where
+it is.
+
+**Opt-in, unlike almost everything else in this catalog.** Deliberate fault injection against a
+healthy cluster is a thing an operator chooses on a cluster they are willing to break, not a thing an
+instance inherits. `TestStaysOptIn` keeps that the default direction.
 
 ## The cost of the interesting half
 
