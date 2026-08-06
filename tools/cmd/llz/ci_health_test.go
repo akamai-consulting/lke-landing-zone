@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // withKubectl stubs the execOutput seam to answer kubectl invocations via a
@@ -40,16 +41,16 @@ func TestKItemsAndKExists(t *testing.T) {
 			return nil, errors.New("nope")
 		}
 	})
-	if n := len(kItems("get", "pods")); n != 1 {
+	if n := len(kubectlprobe.Items("get", "pods")); n != 1 {
 		t.Errorf("kItems = %d, want 1", n)
 	}
-	if len(kItems("get", "missing")) != 0 {
+	if len(kubectlprobe.Items("get", "missing")) != 0 {
 		t.Error("kItems on an errored call should be empty")
 	}
-	if !kExists("get", "crd", "present") {
+	if !kubectlprobe.Exists("get", "crd", "present") {
 		t.Error("kExists should be true on exit 0")
 	}
-	if kExists("get", "crd", "absent") {
+	if kubectlprobe.Exists("get", "crd", "absent") {
 		t.Error("kExists should be false on error")
 	}
 }
@@ -67,11 +68,11 @@ func TestKList(t *testing.T) {
 			`{"metadata":[]}`, // metadata is an object — this item must be dropped
 		), nil
 	})
-	got := kList[namespaceItem]("get", "ns")
+	got := kubectlprobe.List[namespaceItem]("get", "ns")
 	if len(got) != 1 || got[0].Metadata.Name != "good" {
 		t.Errorf("kList = %+v, want just the decodable item", got)
 	}
-	if len(kList[namespaceItem]("get", "missing")) != 0 {
+	if len(kubectlprobe.List[namespaceItem]("get", "missing")) != 0 {
 		t.Error("kList on an errored call should be empty")
 	}
 }
@@ -613,12 +614,12 @@ func TestCheckOpenBaoTunnelBlocked(t *testing.T) {
 }
 
 func TestExecErrText(t *testing.T) {
-	if got := execErrText(nil); got != "" {
+	if got := kubectlprobe.ErrText(nil); got != "" {
 		t.Errorf("execErrText(nil) = %q, want empty", got)
 	}
 	// No captured stderr (a stubbed exec, or a failure before the process ran) =>
 	// fall back to the error text rather than reporting nothing.
-	if got := execErrText(errors.New("boom")); got != "boom" {
+	if got := kubectlprobe.ErrText(errors.New("boom")); got != "boom" {
 		t.Errorf("execErrText = %q, want the error text", got)
 	}
 }

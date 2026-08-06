@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
@@ -200,9 +201,9 @@ func runConverge(budget, interval, retryDelay int) error {
 	// polling rather than resolving. So don't also pay every probe's internal
 	// 3×3s retry pauses on every poll. (Restored on return so one-shot
 	// `llz ci health` semantics — and tests — keep the retrying probes.)
-	prevProbeRetries := probeRetries
-	probeRetries = 1
-	defer func() { probeRetries = prevProbeRetries }()
+	prevProbeRetries := kubectlprobe.Retries
+	kubectlprobe.Retries = 1
+	defer func() { kubectlprobe.Retries = prevProbeRetries }()
 	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's
@@ -362,7 +363,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 	// the whole apl-core helmfile run, and it has nothing for the per-namespace
 	// sections to look at yet.
 	if !inv.crds["applications.argoproj.io"] ||
-		!kExists("-n", "argocd", "get", "application", "platform-bootstrap") {
+		!kubectlprobe.Exists("-n", "argocd", "get", "application", "platform-bootstrap") {
 		fmt.Println(color.Bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
 		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", color.Cyan("PENDING"))
 		return healthResult{code: 2}
@@ -508,19 +509,19 @@ func kubectlReachable() bool {
 func phase1OpenBaoBootstrapPending() bool {
 	// kExists retries an unanswerable probe (kubectl_probe.go), so a transient
 	// API/ACL blip no longer reads as a missing CA and mislabels the phase.
-	if kExists("-n", "cert-manager", "get", "secret", "platform-app-ca") {
+	if kubectlprobe.Exists("-n", "cert-manager", "get", "secret", "platform-app-ca") {
 		return false
 	}
 	return !openBaoClusterSecretStoreReadyWithRetry()
 }
 
 func openBaoClusterSecretStoreReadyWithRetry() bool {
-	for attempt := 0; attempt < probeRetries; attempt++ {
+	for attempt := 0; attempt < kubectlprobe.Retries; attempt++ {
 		if openBaoClusterSecretStoreReady() {
 			return true
 		}
-		if attempt < probeRetries-1 {
-			time.Sleep(probeDelay)
+		if attempt < kubectlprobe.Retries-1 {
+			time.Sleep(kubectlprobe.Delay)
 		}
 	}
 	return false
@@ -547,7 +548,7 @@ func openBaoClusterSecretStoreReady() bool {
 // should re-ask — an unreadable cluster is not converged, but it is also not
 // proof of a broken one; the budget decides.
 func sectionItems[T any](r *health.Report, kind string, args ...string) []T {
-	items, ok := kListOK[T](args...)
+	items, ok := kubectlprobe.ListOK[T](args...)
 	if !ok {
 		record(r, health.CatPending, "could not list "+kind+" — cluster read failed after retries; treating as inconclusive rather than 'none found'")
 		return nil
@@ -592,7 +593,7 @@ type clusterInventory struct {
 // the per-name CRD probes had, since that same CRD gated phase-0 by name before.
 func scanCRDs() *clusterInventory {
 	inv := &clusterInventory{crds: map[string]bool{}, nsExists: map[string]bool{}}
-	for _, crd := range kList[meta]("get", "crd") {
+	for _, crd := range kubectlprobe.List[meta]("get", "crd") {
 		inv.crds[crd.Metadata.Name] = true
 	}
 	return inv
@@ -602,11 +603,11 @@ func scanCRDs() *clusterInventory {
 // succeeded. Called after the phase-0 gate so a pre-bootstrap poll — which has
 // no namespaces worth listing — does not pay for it every interval.
 func (inv *clusterInventory) addNamespaces() bool {
-	raw, ok := kItemsOK("get", "ns")
+	raw, ok := kubectlprobe.ItemsOK("get", "ns")
 	if !ok {
 		return false
 	}
-	inv.namespaces = decodeItems[namespaceItem](raw)
+	inv.namespaces = kubectlprobe.DecodeItems[namespaceItem](raw)
 	for _, ns := range inv.namespaces {
 		inv.nsExists[ns.Metadata.Name] = true
 	}
@@ -743,7 +744,7 @@ func checkRequiredCRDs(r *health.Report, inv *clusterInventory) {
 		switch {
 		case inv.crds[crd]:
 			record(r, health.CatOK, "CRD "+crd+" installed")
-		case kExists("-n", "argocd", "get", "application", app):
+		case kubectlprobe.Exists("-n", "argocd", "get", "application", app):
 			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application "+app+" has not installed it")
 		default:
 			record(r, health.CatOK, "CRD "+crd+" not required ("+app+" Application not deployed)")
@@ -754,7 +755,7 @@ func checkRequiredCRDs(r *health.Report, inv *clusterInventory) {
 func checkStorageClasses(r *health.Report) {
 	hdr("StorageClasses")
 	for _, sc := range health.RequiredStorageClasses() {
-		if kExists("get", "storageclass", sc) {
+		if kubectlprobe.Exists("get", "storageclass", sc) {
 			record(r, health.CatOK, "StorageClass "+sc+" present")
 		} else {
 			record(r, health.CatFail, "StorageClass "+sc+" missing")
@@ -804,7 +805,7 @@ func checkStorageClasses(r *health.Report) {
 // filesystem Loki is intentional (no objectStorage.cluster) → nothing to await.
 // Skipped in phase1 (Loki/apl-secrets not installed yet).
 func checkLokiObjStorage(r *health.Report, phase1 bool) {
-	if phase1 || !kExists("get", "secret", "obj-secrets", "-n", "apl-secrets") {
+	if phase1 || !kubectlprobe.Exists("get", "secret", "obj-secrets", "-n", "apl-secrets") {
 		return
 	}
 	hdr("apl-overlay obj storage (Loki S3)")
@@ -819,7 +820,7 @@ func checkLokiObjStorage(r *health.Report, phase1 bool) {
 	}
 	// Not S3 yet — POLL (CatPending), and report which chain stage is outstanding.
 	stage := "reconciler push / apl-operator apply pending — loki-s3-linode-credentials not built yet"
-	if kExists("get", "secret", "loki-s3-linode-credentials", "-n", "monitoring") {
+	if kubectlprobe.Exists("get", "secret", "loki-s3-linode-credentials", "-n", "monitoring") {
 		stage = "creds built (loki-s3-linode-credentials present) — Loki re-rendering/restarting onto S3"
 	}
 	record(r, health.CatPending, "apl-overlay: Loki not yet S3-backed — "+stage+" (obj chain settling; check llz-reconciler llz_apl_overlay_synced)")
@@ -837,8 +838,8 @@ func checkFirewallBootstrap(r *health.Report) {
 	// This is the one branch where absence means "pass the whole section", so it
 	// is the one that must not accept an unanswerable probe as absence: a blip on
 	// both reads would skip every firewall check with an OK.
-	depExists, depAnswered := kExistsOK("-n", "kube-system", "get", "deployment", firewallDeploymentName)
-	cmExists, cmAnswered := kExistsOK("-n", "kube-system", "get", "configmap", firewallConfigMapName)
+	depExists, depAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "deployment", firewallDeploymentName)
+	cmExists, cmAnswered := kubectlprobe.ExistsOK("-n", "kube-system", "get", "configmap", firewallConfigMapName)
 	if !depAnswered || !cmAnswered {
 		record(r, health.CatPending, "could not read kube-system firewall-controller Deployment/ConfigMap — cannot tell 'component disabled' from 'unreadable cluster'")
 		return
@@ -859,10 +860,10 @@ func checkFirewallBootstrap(r *health.Report) {
 	// assertion on depExists, not cmExists, so a self-discovery-only cluster does
 	// not hard-fail on a Secret no workload reads.
 	if depExists {
-		exists := kExists("-n", "kube-system", "get", "secret", "linode")
+		exists := kubectlprobe.Exists("-n", "kube-system", "get", "secret", "linode")
 		token := ""
 		if exists {
-			token = kJSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
+			token = kubectlprobe.JSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
 		}
 		cat, msg := health.ClassifyFirewallToken(exists, token)
 		record(r, cat, msg)
@@ -873,13 +874,13 @@ func checkFirewallBootstrap(r *health.Report) {
 	// firewallConfigMapName (ci_firewall.go) is the single source of truth for the
 	// ConfigMap name the private chart renders (<fullname>-config =
 	// llz-linode-cidr-firewall-config) and `bootstrap-cloud-firewall` patches.
-	if !kExists("-n", "kube-system", "get", "configmap", firewallConfigMapName) {
+	if !kubectlprobe.Exists("-n", "kube-system", "get", "configmap", firewallConfigMapName) {
 		record(r, health.CatFail, "ConfigMap kube-system/"+firewallConfigMapName+" missing")
 		return
 	}
 	record(r, health.CatOK, "ConfigMap kube-system/"+firewallConfigMapName+" exists")
 	for _, key := range []string{"LINODE_FIREWALL_ID", "LKE_CLUSTER_ID", "FIREWALL_TEMPLATE_ID", "RECONCILE_INTERVAL_SECS", "VPC_CIDR"} {
-		val := kJSONPath("-n", "kube-system", "get", "configmap", firewallConfigMapName, "-o", "jsonpath={.data."+key+"}")
+		val := kubectlprobe.JSONPath("-n", "kube-system", "get", "configmap", firewallConfigMapName, "-o", "jsonpath={.data."+key+"}")
 		cat := health.ClassifyFirewallConfigKey(key, val)
 		if cat == health.CatOK {
 			record(r, health.CatOK, "  "+key+" = "+val)
@@ -940,7 +941,7 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 	hdr("openbao seal / HA")
 	// A CatWarn skip never affects the verdict, so an unreadable STS would retire
 	// the entire seal check silently — demand an actual answer before skipping.
-	specReplicas, answered := kJSONPathOK("-n", openbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")
+	specReplicas, answered := kubectlprobe.JSONPathOK("-n", openbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")
 	if !answered {
 		record(r, health.CatPending, "could not read openbao/platform-openbao StatefulSet — seal check inconclusive")
 		return
@@ -960,11 +961,11 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 	tunnelBlocked := false
 	for i := 0; i < replicas; i++ {
 		pod := fmt.Sprintf("platform-openbao-%d", i)
-		if !kExists("-n", openbaoNamespace, "get", "pod", pod) {
+		if !kubectlprobe.Exists("-n", openbaoNamespace, "get", "pod", pod) {
 			record(r, health.CatFail, "Pod openbao/"+pod+" missing")
 			continue
 		}
-		ready := kJSONPath("-n", openbaoNamespace, "get", "pod", pod, "-o", `jsonpath={.status.containerStatuses[?(@.name=="openbao")].ready}`)
+		ready := kubectlprobe.JSONPath("-n", openbaoNamespace, "get", "pod", pod, "-o", `jsonpath={.status.containerStatuses[?(@.name=="openbao")].ready}`)
 		if ready != "true" {
 			record(r, health.CatPending, "Pod openbao/"+pod+" (openbao container not Ready — can't query seal status)")
 			continue
@@ -983,7 +984,7 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 			// stderr into the message: it names the real cause, and lets record()
 			// classify a tunnel outage as Pending rather than a hard failure.
 			msg := "Pod openbao/" + pod + " (could not parse bao status JSON"
-			if detail := strings.TrimSpace(execErrText(execErr)); detail != "" {
+			if detail := strings.TrimSpace(kubectlprobe.ErrText(execErr)); detail != "" {
 				msg += " — " + detail
 			}
 			record(r, health.CatFail, msg+")")
@@ -996,7 +997,7 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 			active++
 		}
 		if cat == health.CatOK && !phase1 {
-			if kExists("-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--", "test", "-s", "/openbao/audit/audit.log") {
+			if kubectlprobe.Exists("-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--", "test", "-s", "/openbao/audit/audit.log") {
 				record(r, health.CatOK, "  audit device active on "+pod)
 			} else {
 				record(r, health.CatFail, "  audit device inactive on "+pod+" — /openbao/audit/audit.log missing or empty")
@@ -1040,7 +1041,7 @@ func checkWebhooks(r *health.Report) {
 				if ns == "" || svc == "" {
 					continue
 				}
-				exists := kExists("-n", ns, "get", "svc", svc)
+				exists := kubectlprobe.Exists("-n", ns, "get", "svc", svc)
 				ready := countReadyEndpoints(ns, svc)
 				cat, msg := health.ClassifyWebhookBackend(exists, ready)
 				record(r, cat, fmt.Sprintf("%s %s → %s/%s %s", kind, cfg.Metadata.Name, ns, svc, msg))
@@ -1057,7 +1058,7 @@ func checkAppProjects(r *health.Report, inv *clusterInventory) {
 	// platform-support is the only per-domain AppProject the support-plane
 	// Applications reference.
 	for _, ap := range []string{"platform-support"} {
-		if kExists("-n", "argocd", "get", "appproject", ap) {
+		if kubectlprobe.Exists("-n", "argocd", "get", "appproject", ap) {
 			record(r, health.CatOK, "AppProject argocd/"+ap+" present")
 		} else {
 			record(r, health.CatFail, "AppProject argocd/"+ap+" missing — child Applications will ComparisonError 'project not found'")
@@ -1246,12 +1247,12 @@ func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 	// policy its own way and LLZ applies none — a namespace with no LLZ NPs is then not a
 	// failure. Gate the hard-fail on cluster-foundation actually being deployed (self-
 	// install); namespaces that DO carry their own NPs still pass either way.
-	ownsNetpols := kExists("-n", "argocd", "get", "application", "cluster-foundation")
+	ownsNetpols := kubectlprobe.Exists("-n", "argocd", "get", "application", "cluster-foundation")
 	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
-		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kItems("-n", ns, "get", "networkpolicies")))
+		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kubectlprobe.Items("-n", ns, "get", "networkpolicies")))
 		if cat == health.CatFail && !ownsNetpols {
 			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
 			continue
@@ -1563,5 +1564,5 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 // countReadyEndpoints sums ready endpoints across a Service's EndpointSlices.
 func countReadyEndpoints(ns, svc string) int {
 	return health.CountReadyEndpoints(
-		kList[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
+		kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
 }

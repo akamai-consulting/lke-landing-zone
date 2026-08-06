@@ -26,6 +26,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +67,7 @@ func ciKickHarborProvisionerCmd() *cobra.Command {
 }
 
 func runKickHarborProvisioner(namespace, cronjob string, coreTimeout int) {
-	if !kExists("-n", namespace, "get", "cronjob", cronjob) {
+	if !kubectlprobe.Exists("-n", namespace, "get", "cronjob", cronjob) {
 		fmt.Printf("cronjob/%s not present in %s — nothing to kick (component disabled or standby).\n", cronjob, namespace)
 		return
 	}

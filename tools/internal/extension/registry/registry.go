@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
@@ -48,6 +49,7 @@ var declarations = []func() extension.Extension{
 	chartguard.Extension,
 	clusteraccess.Extension,
 	docsguard.Extension,
+	healthsla.Extension,
 	objenc.Extension,
 	reconcilelanes.Extension,
 	sustain.Extension,

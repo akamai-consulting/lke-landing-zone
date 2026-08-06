@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
 
@@ -178,7 +179,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 	// regression, a Kyverno denial on the CR, a wedged Argo app — read as
 	// "component disabled" and passed color.Green, proving nothing. Nothing else asserts
 	// the template SHOULD exist. Same anchoring assert-broad-pat-rotation uses.
-	if !kExists("-n", namespace, "get", "workflowtemplate", template) {
+	if !kubectlprobe.Exists("-n", namespace, "get", "workflowtemplate", template) {
 		expected, why := healthWorkflowExpected(region)
 		if expected {
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: WorkflowTemplate %s/%s is MISSING but %s. The component did not deploy — check the Argo app that owns it and whether admission denied the CR.\n",

@@ -1,4 +1,4 @@
-package main
+package healthsla
 
 // Gap-closing tests for ci_health_readiness.go surfaced by mutation testing.
 // These checks are warning-only, so their ONLY product is the report — which
@@ -18,6 +18,7 @@ import (
 func summaryBody(t *testing.T, fn func()) (summary, stdout string) {
 	t.Helper()
 	setSummary(t)
+	ensureDeps(t)
 	out := captureStdout(t, fn)
 	return readSummaryFile(t), out
 }
@@ -53,7 +54,7 @@ func TestHealthOpenbaoRendersHAModeColumns(t *testing.T) {
 	})
 
 	body, _ := summaryBody(t, func() {
-		if err := runHealthOpenbao(); err != nil {
+		if err := RunOpenbao(td); err != nil {
 			t.Errorf("err = %v, want nil (warn-only)", err)
 		}
 	})
@@ -83,7 +84,7 @@ func TestHealthOpenbaoAllReadableRaisesNoUnknownBanner(t *testing.T) {
 		return itemsJSON(), nil
 	})
 	body, out := summaryBody(t, func() {
-		if err := runHealthOpenbao(); err != nil {
+		if err := RunOpenbao(td); err != nil {
 			t.Errorf("err = %v, want nil", err)
 		}
 	})
@@ -112,7 +113,7 @@ func TestHealthOpenbaoClusterSecretStoreStateIsReportedVerbatim(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		body, _ := summaryBody(t, func() {
-			if err := runHealthOpenbao(); err != nil {
+			if err := RunOpenbao(td); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})
@@ -147,7 +148,7 @@ func TestHealthCertManagerCountsNotReadyCertificates(t *testing.T) {
 	}
 	stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(certs...), nil })
 	body, out := summaryBody(t, func() {
-		if err := runHealthCertManager(); err != nil {
+		if err := RunCertManager(td); err != nil {
 			t.Errorf("err = %v, want nil (warn-only)", err)
 		}
 	})

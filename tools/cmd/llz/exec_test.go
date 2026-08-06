@@ -3,15 +3,20 @@ package main
 import (
 	"errors"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // withExecOutput / withLookPath swap the package-level exec seam for the
 // duration of a test, restoring the real implementation afterward.
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
-	orig := execOutput
+	orig, origProbe := execOutput, kubectlprobe.Exec
 	execOutput = fn
-	t.Cleanup(func() { execOutput = orig })
+	// The probe package holds its own reference (wired in exec.go's init), so
+	// stubbing only execOutput leaves internal/kubectlprobe shelling out for real.
+	kubectlprobe.Exec = fn
+	t.Cleanup(func() { execOutput, kubectlprobe.Exec = orig, origProbe })
 }
 
 func withLookPath(t *testing.T, fn func(file string) (string, error)) {

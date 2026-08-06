@@ -1,4 +1,4 @@
-package main
+package healthsla
 
 // ci_health_readiness.go implements the warning-only cluster readiness
 // scheduled checks — `llz ci health-openbao` (Raft seal state across the 3 pods
@@ -14,29 +14,16 @@ import (
 	"os"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
-	"github.com/spf13/cobra"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // apl-core 6.x ships ESO as a core app in the `external-secrets` namespace; the
 // landing zone no longer runs its own controller. (The `openbao`
 // ClusterSecretStore probed below is cluster-scoped, so the -n is cosmetic, but
 // keep it pointed at the live ESO namespace.)
-const esoNamespace = "external-secrets"
+const ESONamespace = "external-secrets"
 
-func ciHealthOpenbaoCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "health-openbao",
-		Short: "report OpenBao seal state + ESO readiness to the step summary (warn-only)",
-		Long: "Native port of the openbao-health scheduled job. Probes each of the 3 OpenBao\n" +
-			"Raft pods' seal state (an unreachable pod counts as sealed) and the ESO\n" +
-			"ClusterSecretStore + every ExternalSecret's Ready condition, emitting warnings\n" +
-			"and a step summary. Warning-only — never fails the job.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runHealthOpenbao() },
-	}
-}
-
-func runHealthOpenbao() error {
+func RunOpenbao(d Deps) error {
 	reg := schedRegion()
 	summary := []string{
 		fmt.Sprintf("## OpenBao Health — %s — %s", reg, schedStamp()), "",
@@ -46,7 +33,7 @@ func runHealthOpenbao() error {
 
 	sealed, unknown := 0, 0
 	for _, pod := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		st, ok := baoStatus(pod)
+		st, ok := baoStatus(d, pod)
 		if !ok {
 			// Distinct from sealed: the exec never answered (after the transient
 			// retries), so this pod's seal state is simply not known.
@@ -82,7 +69,7 @@ func runHealthOpenbao() error {
 
 	// ── ESO ClusterSecretStore + ExternalSecrets ──
 	summary = append(summary, "", fmt.Sprintf("### ESO ClusterSecretStore — %s", reg), "")
-	css, cssAnswered := kJSONPathOK("-n", esoNamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+	css, cssAnswered := kubectlprobe.JSONPathOK("-n", ESONamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
 	switch {
 	case css == "True":
 		fmt.Printf("ClusterSecretStore openbao (%s): Ready\n", reg)
@@ -102,7 +89,7 @@ func runHealthOpenbao() error {
 	}
 
 	var unhealthy []string
-	esRaw, esAnswered := kItemsOK("get", "externalsecrets.external-secrets.io", "-A")
+	esRaw, esAnswered := kubectlprobe.ItemsOK("get", "externalsecrets.external-secrets.io", "-A")
 	for _, raw := range esRaw {
 		var it readyResourceItem
 		if json.Unmarshal(raw, &it) != nil {
@@ -131,22 +118,10 @@ func runHealthOpenbao() error {
 		summary = append(summary, "- All ExternalSecrets: Ready")
 	}
 
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+	return d.Summary("GITHUB_STEP_SUMMARY", summary...)
 }
 
-func ciHealthCertManagerCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "health-certmanager",
-		Short: "report every cert-manager Certificate's Ready state to the step summary (warn-only)",
-		Long: "Native port of the certmanager-health scheduled job. Checks every cert-manager\n" +
-			"Certificate across all namespaces for Ready=True (a stuck ACME renewal leaves\n" +
-			"one Ready=False indefinitely), emitting warnings + a step summary. Warning-only.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runHealthCertManager() },
-	}
-}
-
-func runHealthCertManager() error {
+func RunCertManager(d Deps) error {
 	reg := schedRegion()
 	summary := []string{
 		fmt.Sprintf("## cert-manager Certificate Health — %s — %s", reg, schedStamp()), "",
@@ -155,7 +130,7 @@ func runHealthCertManager() error {
 	}
 
 	notReady := 0
-	for _, raw := range kItems("get", "certificates.cert-manager.io", "-A") {
+	for _, raw := range kubectlprobe.Items("get", "certificates.cert-manager.io", "-A") {
 		var it readyResourceItem
 		if json.Unmarshal(raw, &it) != nil {
 			continue
@@ -180,7 +155,7 @@ func runHealthCertManager() error {
 		summary = append(summary, "> All Certificates Ready.")
 	}
 
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+	return d.Summary("GITHUB_STEP_SUMMARY", summary...)
 }
 
 // baoStatusOrSealed runs `bao status -format=json` in the pod and parses it,
@@ -212,8 +187,8 @@ func runHealthCertManager() error {
 // stub ignores args and returns canned JSON, which is why it never showed up.
 // Args are now bare, matching every other baoExecFn caller; the VAULT_* env is
 // baoExec's job alone.
-func baoStatus(pod string) (st health.BaoStatus, ok bool) {
-	stdout, _, err := baoExecFn(pod, "", "", "status", "-format=json")
+func baoStatus(d Deps, pod string) (st health.BaoStatus, ok bool) {
+	stdout, _, err := d.BaoExec(pod, "", "", "status", "-format=json")
 	if err != nil {
 		return health.BaoStatus{}, false
 	}

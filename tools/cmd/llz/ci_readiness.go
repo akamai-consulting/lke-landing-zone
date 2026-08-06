@@ -16,6 +16,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/spf13/cobra"
 
@@ -131,9 +132,9 @@ func runCIAssertLoki(nameMatch, region string, settle, interval time.Duration, a
 	}
 
 	// Best-effort Argo CD Application status (non-gating).
-	if kExists("get", "crd", "applications.argoproj.io") {
+	if kubectlprobe.Exists("get", "crd", "applications.argoproj.io") {
 		re := regexp.MustCompile(nameMatch)
-		for _, raw := range kItems("get", "applications.argoproj.io", "-A") {
+		for _, raw := range kubectlprobe.Items("get", "applications.argoproj.io", "-A") {
 			a, err := health.ParseArgoApp(raw)
 			if err != nil || !re.MatchString(a.Name) {
 				continue
@@ -424,10 +425,10 @@ var (
 // falling back to a name-regex match over all pods (so it doesn't depend on one
 // labelling convention).
 func lokiPods(match string) []lokiPod {
-	items := kItems("get", "pods", "-A", "-l", "app.kubernetes.io/name="+match)
+	items := kubectlprobe.Items("get", "pods", "-A", "-l", "app.kubernetes.io/name="+match)
 	filterByName := false
 	if len(items) == 0 {
-		items = kItems("get", "pods", "-A")
+		items = kubectlprobe.Items("get", "pods", "-A")
 		filterByName = true
 	}
 	re := regexp.MustCompile(match)
@@ -456,7 +457,7 @@ func lokiPods(match string) []lokiPod {
 func lokiConfigText(match string) string {
 	re := regexp.MustCompile(match)
 	var b strings.Builder
-	for _, raw := range kItems("get", "configmap", "-A") {
+	for _, raw := range kubectlprobe.Items("get", "configmap", "-A") {
 		var cm struct {
 			Metadata struct {
 				Name string `json:"name"`

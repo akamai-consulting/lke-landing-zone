@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
 
@@ -245,7 +246,7 @@ func diagnoseUnsyncedApplications(argoNS string) {
 		} `json:"status"`
 	}
 	var names []string
-	for _, raw := range kItems("-n", argoNS, "get", "applications") {
+	for _, raw := range kubectlprobe.Items("-n", argoNS, "get", "applications") {
 		var a app
 		if json.Unmarshal(raw, &a) != nil {
 			continue
@@ -277,7 +278,7 @@ func diagnoseUnsyncedApplications(argoNS string) {
 // exactly the pods that pinned it.
 func diagnoseFailingWorkloads() {
 	diagGroup("convergence — failing-workload logs (crashloop / not-starting pods + failed Jobs)", func() {
-		for _, raw := range kItems("get", "pods", "-A") {
+		for _, raw := range kubectlprobe.Items("get", "pods", "-A") {
 			var p struct {
 				Metadata struct {
 					Namespace string `json:"namespace"`
@@ -296,7 +297,7 @@ func diagnoseFailingWorkloads() {
 				diagStream("kubectl", "-n", p.Metadata.Namespace, "logs", p.Metadata.Name, "-c", c.Name, "--tail=40")
 			}
 		}
-		for _, raw := range kItems("get", "jobs", "-A") {
+		for _, raw := range kubectlprobe.Items("get", "jobs", "-A") {
 			var j struct {
 				Metadata struct {
 					Namespace string `json:"namespace"`

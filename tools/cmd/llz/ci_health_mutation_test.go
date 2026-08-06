@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // ── converge loop: budget arithmetic + poll numbering (runConverge) ───────────
@@ -134,9 +135,9 @@ func TestRealignArgocdRedisWarnsOnlyOnStatusFailure(t *testing.T) {
 // multiplier), and a pause after the FINAL attempt is pure dead time paid on
 // every poll of a cluster that is legitimately not ready yet.
 func TestOpenBaoClusterSecretStoreRetryBudgetAndPauseSpacing(t *testing.T) {
-	origRetries, origDelay := probeRetries, probeDelay
-	t.Cleanup(func() { probeRetries, probeDelay = origRetries, origDelay })
-	probeRetries, probeDelay = 3, 40*time.Millisecond
+	origRetries, origDelay := kubectlprobe.Retries, kubectlprobe.Delay
+	t.Cleanup(func() { kubectlprobe.Retries, kubectlprobe.Delay = origRetries, origDelay })
+	kubectlprobe.Retries, kubectlprobe.Delay = 3, 40*time.Millisecond
 
 	var at []time.Time
 	withKubectl(t, func(a string) ([]byte, error) {
@@ -152,16 +153,16 @@ func TestOpenBaoClusterSecretStoreRetryBudgetAndPauseSpacing(t *testing.T) {
 	}
 	done := time.Now()
 
-	if len(at) != probeRetries {
-		t.Fatalf("probe ran %d times, want probeRetries=%d", len(at), probeRetries)
+	if len(at) != kubectlprobe.Retries {
+		t.Fatalf("probe ran %d times, want probeRetries=%d", len(at), kubectlprobe.Retries)
 	}
 	for i := 1; i < len(at); i++ {
-		if gap := at[i].Sub(at[i-1]); gap < probeDelay*3/4 {
+		if gap := at[i].Sub(at[i-1]); gap < kubectlprobe.Delay*3/4 {
 			t.Errorf("attempts %d→%d were %v apart, want a ≥%v pause — retrying with no pause re-asks the same instant",
-				i-1, i, gap, probeDelay)
+				i-1, i, gap, kubectlprobe.Delay)
 		}
 	}
-	if tail := done.Sub(at[len(at)-1]); tail > probeDelay/2 {
+	if tail := done.Sub(at[len(at)-1]); tail > kubectlprobe.Delay/2 {
 		t.Errorf("slept %v after the FINAL attempt — the pause belongs between attempts, not before the return", tail)
 	}
 }

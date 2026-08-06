@@ -1,4 +1,4 @@
-package main
+package healthsla
 
 import (
 	"fmt"
@@ -7,21 +7,6 @@ import (
 	"testing"
 	"time"
 )
-
-// stubKubectl replaces the execOutput seam so a test can drive the kubectl /
-// bao orchestration from canned output. Non-kubectl calls fall through to the
-// real execOutput (none are expected in these tests).
-func stubKubectl(t *testing.T, fn func(args []string) ([]byte, error)) {
-	t.Helper()
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
-	execOutput = func(name string, args ...string) ([]byte, error) {
-		if name != "kubectl" {
-			return orig(name, args...)
-		}
-		return fn(args)
-	}
-}
 
 func argsContain(args []string, want string) bool {
 	for _, a := range args {
@@ -50,6 +35,7 @@ func setSummary(t *testing.T) {
 func TestRunHealthLKEAdminRotation(t *testing.T) {
 	t.Run("unreachable cluster skips", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		stubKubectl(t, func(args []string) ([]byte, error) {
 			if argsContain(args, "version") {
 				return nil, fmt.Errorf("connection refused")
@@ -57,7 +43,7 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthLKEAdminRotation(35, 90); err != nil {
+			if err := RunLKEAdminRotation(td, 35, 90); err != nil {
 				t.Errorf("err = %v, want nil (skip on unreachable)", err)
 			}
 		})
@@ -65,6 +51,7 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 
 	t.Run("past critical SLA fails the job", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		sec := fmt.Sprintf(`{"metadata":{"name":"lke-admin-token-abc","creationTimestamp":%q}}`, rfc(100))
 		stubKubectl(t, func(args []string) ([]byte, error) {
 			if argsContain(args, "version") {
@@ -76,7 +63,7 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthLKEAdminRotation(35, 90); err == nil {
+			if err := RunLKEAdminRotation(td, 35, 90); err == nil {
 				t.Error("err = nil, want non-nil past the critical SLA")
 			}
 		})
@@ -84,6 +71,7 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 
 	t.Run("fresh token is current", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		sec := fmt.Sprintf(`{"metadata":{"name":"lke-admin-token-abc","creationTimestamp":%q}}`, rfc(2))
 		stubKubectl(t, func(args []string) ([]byte, error) {
 			if argsContain(args, "version") {
@@ -95,7 +83,7 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthLKEAdminRotation(35, 90); err != nil {
+			if err := RunLKEAdminRotation(td, 35, 90); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})
@@ -105,9 +93,10 @@ func TestRunHealthLKEAdminRotation(t *testing.T) {
 func TestRunHealthLokiObjkeyRotation(t *testing.T) {
 	t.Run("no token is a non-fatal not-found", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		t.Setenv("OPENBAO_ROOT_TOKEN", "")
 		captureStdout(t, func() {
-			if err := runHealthLokiObjkeyRotation(105, 120); err != nil {
+			if err := RunLokiObjkeyRotation(td, 105, 120); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})
@@ -115,6 +104,7 @@ func TestRunHealthLokiObjkeyRotation(t *testing.T) {
 
 	t.Run("past critical SLA fails the job", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		t.Setenv("OPENBAO_ROOT_TOKEN", "roottok")
 		meta := fmt.Sprintf(`{"data":{"updated_time":%q}}`, rfc(130))
 		stubKubectl(t, func(args []string) ([]byte, error) {
@@ -124,7 +114,7 @@ func TestRunHealthLokiObjkeyRotation(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthLokiObjkeyRotation(105, 120); err == nil {
+			if err := RunLokiObjkeyRotation(td, 105, 120); err == nil {
 				t.Error("err = nil, want non-nil past the critical SLA")
 			}
 		})
@@ -132,6 +122,7 @@ func TestRunHealthLokiObjkeyRotation(t *testing.T) {
 
 	t.Run("fresh key is current", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		t.Setenv("OPENBAO_ROOT_TOKEN", "roottok")
 		meta := fmt.Sprintf(`{"data":{"updated_time":%q}}`, rfc(3))
 		stubKubectl(t, func(args []string) ([]byte, error) {
@@ -141,7 +132,7 @@ func TestRunHealthLokiObjkeyRotation(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthLokiObjkeyRotation(105, 120); err != nil {
+			if err := RunLokiObjkeyRotation(td, 105, 120); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})

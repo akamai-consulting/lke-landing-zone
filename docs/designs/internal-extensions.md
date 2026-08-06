@@ -203,7 +203,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `posture-credential-coverage` | 664 | 2 | ✔ | ✔ | `ci_extsecret_paths` 456, `ci_credential_coverage_guard` 208 |
 | `reconcile-actions` | 648 | 7 | ✔ | ✘ | es-store-recovery 141, openbao 135, tokens 116, apl-overlay 106, argo-nudge 81, sc-demote 39, linode-token-wait 30. **Seven separate invariants** — the clearest case for one-invariant-per-extension. **◐ Four of eight extracted** — and `linode-token-wait` is not a lane at all; see [The first ten, extracted](#the-first-ten-extracted). |
 | `posture-plaintext` | 626 | 1 | ✔ | ✔ | The largest single guard and the most instance-tunable (its protocol allow-list is policy, not fact). Best stress test of the vehicle. |
-| `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78 |
+| `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78. **✅ Extracted — but only two of the three files.** `incluster` is part of `converge`, not this; grouping by filename prefix grouped it wrong. See [What `health-sla` corrected](#what-health-sla-corrected--a-catalog-row-that-grouped-by-filename).|
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
 | `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first ten, extracted](#the-first-ten-extracted). |
 | `wave-health` | 178 | 1 | ✔ | ✔ | |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first eleven, extracted
+## The first twelve, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -270,9 +270,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `import-brownfield` extracted | 40,827 | 214 | **−2,990**, the largest single move — and the first opt-in |
 | `obj-encryption` extracted | 38,821 | 206 | −2,006, and the first binding at `seeded` |
 | `guard-charts` extracted | 38,364 | 202 | −457, and `guardwalk` — the traversal ten guards share |
-| `cluster-access` extracted | **37,483** | 199 | −881, and the second `grantStates` widening — see below |
+| `cluster-access` extracted | 37,483 | 199 | −881, and the second `grantStates` widening — see below |
+| `health-sla` extracted | **37,131** | 197 | −352 only — plus `kubectlprobe`, the probe **ten** callers share |
 
-**Net −9,699 (20.6%) across eleven extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −10,051 (21.3%) across twelve extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -686,6 +687,68 @@ binary (`<self> render <env> --tfvars-only`). Under `go test`, `os.Executable()`
 it **hung**. `package main` had a `TestMain` guard for exactly this; the extraction moved the code
 that shells out and left the guard behind, because a guard wired into one package's `TestMain` is
 invisible to the file being moved. Cost: a wall-clock timeout to discover rather than a red test.
+
+### What `health-sla` corrected — a catalog row that grouped by filename
+
+Twelfth, and the first whose finding is about **the catalog** rather than the model.
+
+```
+health-sla  invariant:operating "rotation-sla"        [cluster-read, secret-custody]
+            invariant:operating "component-readiness" [cluster-read]
+```
+
+**The row named three files; only two belong.** The catalog listed `ci_health_sla.go`,
+`ci_health_readiness.go` and `ci_health_incluster.go` as one extension. They share a filename prefix
+and nothing else: `health-incluster` computes the **convergence verdict** over `internal/kube` with
+the pod ServiceAccount, sharing the exit-code contract and the classifier with `ci_health.go`. It is
+part of `converge` and stayed behind for that extraction. **Grouping by name prefix is grouping by
+how someone once filed the code** — which is precisely the misfiling ADR 0014 says package `main` is
+full of. The catalog inherited the filing it was written to describe.
+
+**The split is the declaration's whole content.** `guard-charts` established that a split must be
+justified by *divergent capability* rather than by count; this is the case where divergence actually
+shows up. The Loki OBJ-key SLA reads `OPENBAO_ROOT_TOKEN` and execs `bao kv metadata get` with it;
+the readiness checks hold no credential at all. One binding would widen grants to the union and hand
+the readiness lane secret-custody it never uses.
+
+**A gap the vocabulary cannot yet express.** That check reads only `updated_time` — metadata, never
+the secret material. It is nonetheless declared `secret-custody`, because the model judges what a
+binding **is handed**, not what it promises to do with it, and this one is handed the token that
+opens every secret in the store. But `[cluster-read]` would under-report it and `[secret-custody]`
+over-reports it, and there is no third thing to say. **This is the same shape as the open
+granted-vs-confirmed gap:** the grant names a capability, and what is missing is an axis for how much
+of it is exercised. Two instances now; a third would make it actionable.
+
+**The ninth shared package, and the larger yield.** `internal/kubectlprobe` — the classified
+`kubectl get` that distinguishes *"the resource is absent"* from *"we never got an answer"* — had
+**ten** non-test callers in package `main`. That is the same threshold at which `guardwalk` was
+extracted, and the same argument. Every remaining cluster-facing extraction now starts with it done,
+`converge` most of all.
+
+**One seam, not two.** The probes hold their own `Exec`, so `exec.go` now wires it to package main's
+in `init()` and `withExecOutput` swaps **both**. Stubbing only one leaves the probes shelling out to
+a real cluster — which, as the previous extraction established, is a hang rather than a failure.
+
+### Three traps this one paid for
+
+**Comments are not code, again.** A symbol rename across the probe file rewrote the English word
+*"answered"* to *"Answered"* in six prose sentences, because `answered` was also a method name. The
+recorded rule is to strip comments and strings before renaming; the working version of that rule is
+the small parser now used for the ten call sites, which splits each line at its `//` and stashes
+string literals before substituting. It rewrote twelve files with zero comment or string damage.
+
+**Tests that never travelled.** `TestReadyCell` and `TestSchedRegion` lived in
+`coverage_tier1_test.go` — a file named for a *coverage tier*, so nothing about it suggested it held
+assertions about these checks. The recorded lesson is that tests travel with the **file** rather than
+the subject; this is that lesson from the other side, where a test fails to travel because it was
+never filed with its subject to begin with. `go vet` found them as undefined symbols. **Grep for the
+moved symbols, not only for the moved files.**
+
+**Fixture install order.** The new `Deps` baseline was installed by a helper that ran *after* the
+tests had already stubbed their seams, silently wiping them — four tests failed with 12-second
+retry stalls that looked like a cluster timeout. Fixed by making installation idempotent
+(`ensureDeps`) rather than by documenting the required order: ordering dependence between fixtures is
+its own bug class, and a comment does not remove it.
 
 ## The cost of the interesting half
 

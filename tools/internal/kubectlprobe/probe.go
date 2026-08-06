@@ -1,6 +1,15 @@
-package main
+package kubectlprobe
 
-// kubectl_probe.go — the cluster-probe siblings of guard_corpus.go.
+// Package kubectlprobe is the cluster-probe sibling of internal/guardwalk: the
+// classified `kubectl get` every cluster-facing extension needs, in one place.
+//
+// TEN non-test callers in package main reached for these helpers before the
+// extraction — the health family, the assert lanes, the readiness gates, env-set.
+// That count is the whole argument for the package: guardwalk was extracted at
+// ten and the same threshold applies here. Every remaining cluster-facing
+// extraction should now find this done.
+//
+// probe.go — the cluster-probe siblings of guard_corpus.go.
 //
 // The manifest guards already have doctrine for this bug: requireCorpus exists
 // because "a guard that had nothing to check reports the same color.Green as one that
@@ -10,9 +19,9 @@ package main
 // Every probe here used to collapse each of two very different outcomes into one
 // domain value:
 //
-//	kExists    — any non-zero kubectl exit ⇒ "absent"
-//	kItems     — any error ⇒ empty .items[] ⇒ the section is a silent no-op
-//	kJSONPath  — any error ⇒ "" ⇒ indistinguishable from an unset field
+//	Exists    — any non-zero kubectl exit ⇒ "absent"
+//	Items     — any error ⇒ empty .items[] ⇒ the section is a silent no-op
+//	JSONPath  — any error ⇒ "" ⇒ indistinguishable from an unset field
 //
 // "The resource is not there" and "we never got an answer" are not the same
 // claim, and only the first is evidence. An unreachable API server, an expired
@@ -22,12 +31,12 @@ package main
 //
 // So probes classify instead of collapsing:
 //
-//	probeFound   — the call succeeded
-//	probeAbsent  — kubectl said NotFound / No resources found / no such resource
+//	Found   — the call succeeded
+//	Absent  — kubectl said NotFound / No resources found / no such resource
 //	               type. A real answer: the thing is genuinely not there.
-//	probeUnknown — anything else. Not an answer at all.
+//	Unknown — anything else. Not an answer at all.
 //
-// probeUnknown is retried (a blip usually is one), and if it survives the
+// Unknown is retried (a blip usually is one), and if it survives the
 // retries the *OK siblings report it to the caller so a section can record
 // "inconclusive" instead of "none". Sections that hard-fail on absence were
 // always safe — a blip there costs a false FAIL, never a false pass — and can
@@ -46,41 +55,53 @@ import (
 	"time"
 )
 
-// probeVerdict is what a kubectl probe learned, if anything.
-type probeVerdict int
+// Exec is the shell-out seam, stdout-only, mirroring package main's execOutput —
+// which is what this was before the extraction. A package var rather than a Deps
+// field because every probe here is a FREE FUNCTION with ten callers, and two of
+// them are generic (List/ListOK); threading a receiver through generics buys
+// nothing when the only capability is "run kubectl and give me stdout".
+//
+// Hand it something that works: a nil Exec panics rather than returning an error,
+// and the probes below would report the panic as probeUnknown if it did not.
+var Exec = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+// Verdict is what a kubectl probe learned, if anything.
+type Verdict int
 
 const (
-	probeFound   probeVerdict = iota // the call succeeded
-	probeAbsent                      // kubectl answered: the resource is not there
-	probeUnknown                     // no answer — unreachable, unauthorized, timed out, throttled
+	Found   Verdict = iota // the call succeeded
+	Absent                 // kubectl Answered: the resource is not there
+	Unknown                // no answer — unreachable, unauthorized, timed out, throttled
 )
 
-// answered reports whether the probe learned anything at all.
-func (v probeVerdict) answered() bool { return v != probeUnknown }
+// Answered reports whether the probe learned anything at all.
+func (v Verdict) Answered() bool { return v != Unknown }
 
-// probeRetries / probeDelay bound the retry of a probeUnknown call. Package vars
+// Retries / Delay bound the retry of an Unknown call. Package vars
 // so converge can drop the retries (its poll loop is the retry — see runConverge)
 // and tests can zero the delay.
 var (
-	probeRetries = 3
-	probeDelay   = 3 * time.Second
+	Retries = 3
+	Delay   = 3 * time.Second
 )
 
-// kubectlProbe runs `kubectl <args>`, retrying while the failure is one that
+// Probe runs `kubectl <args>`, retrying while the failure is one that
 // carries no information. Genuine absence is returned on the first attempt —
 // re-asking a question kubectl already answered just burns the budget.
-func kubectlProbe(args ...string) ([]byte, probeVerdict) {
-	var verdict probeVerdict
-	for attempt := 0; attempt < probeRetries; attempt++ {
-		out, err := execOutput("kubectl", args...)
+func Probe(args ...string) ([]byte, Verdict) {
+	var verdict Verdict
+	for attempt := 0; attempt < Retries; attempt++ {
+		out, err := Exec("kubectl", args...)
 		if err == nil {
-			return out, probeFound
+			return out, Found
 		}
-		if verdict = classifyKubectlErr(err); verdict != probeUnknown {
+		if verdict = ClassifyErr(err); verdict != Unknown {
 			return nil, verdict
 		}
-		if attempt < probeRetries-1 {
-			time.Sleep(probeDelay)
+		if attempt < Retries-1 {
+			time.Sleep(Delay)
 		}
 	}
 	return nil, verdict
@@ -98,12 +119,12 @@ var absenceMarkers = []string{
 	"could not find the requested resource", // 404 for a kind that is not served
 }
 
-// execErrText is a failed shell-out's diagnostic text: the captured stderr, or
-// the error itself when there is none (a stubbed execOutput in tests, or a
-// failure before the process ran). execOutput returns stdout only, so without
+// ErrText is a failed shell-out's diagnostic text: the captured stderr, or
+// the error itself when there is none (a stubbed Exec in tests, or a
+// failure before the process ran). Exec returns stdout only, so without
 // this a kubectl failure's actual reason — the apiserver's "No agent available",
 // a NotFound — is discarded and the caller is left guessing from an empty stdout.
-func execErrText(err error) string {
+func ErrText(err error) string {
 	if err == nil {
 		return ""
 	}
@@ -114,54 +135,54 @@ func execErrText(err error) string {
 	return err.Error()
 }
 
-// classifyKubectlErr decides whether a failed kubectl call answered the question.
-func classifyKubectlErr(err error) probeVerdict {
-	low := strings.ToLower(execErrText(err))
+// ClassifyErr decides whether a failed kubectl call answered the question.
+func ClassifyErr(err error) Verdict {
+	low := strings.ToLower(ErrText(err))
 	for _, m := range absenceMarkers {
 		if strings.Contains(low, m) {
-			return probeAbsent
+			return Absent
 		}
 	}
-	return probeUnknown
+	return Unknown
 }
 
 // ── existence ────────────────────────────────────────────────────────────────
 
-// kExistsOK reports whether `kubectl <args>` found the resource, and whether the
+// ExistsOK reports whether `kubectl <args>` found the resource, and whether the
 // cluster answered at all. Callers whose "absent" branch SKIPS work (or advises
 // a destructive fix) must check the second value; callers that hard-fail on
-// absence can use kExists.
-func kExistsOK(args ...string) (exists, answered bool) {
-	_, verdict := kubectlProbe(args...)
-	return verdict == probeFound, verdict.answered()
+// absence can use Exists.
+func ExistsOK(args ...string) (exists, answered bool) {
+	_, verdict := Probe(args...)
+	return verdict == Found, verdict.Answered()
 }
 
-// kExists reports whether `kubectl <args>` exits 0. An unanswerable probe reads
+// Exists reports whether `kubectl <args>` exits 0. An unanswerable probe reads
 // as absent, which is only safe where absence hard-fails.
-func kExists(args ...string) bool {
-	exists, _ := kExistsOK(args...)
+func Exists(args ...string) bool {
+	exists, _ := ExistsOK(args...)
 	return exists
 }
 
 // ── lists ────────────────────────────────────────────────────────────────────
 
-// kItems runs `kubectl get <args> -o json` and returns its .items[] as raw
-// messages, or nil on any error. Routes through the execOutput seam so the
+// Items runs `kubectl get <args> -o json` and returns its .items[] as raw
+// messages, or nil on any error. Routes through the Exec seam so the
 // section orchestrators are unit-testable with stubbed kubectl JSON.
-func kItems(args ...string) []json.RawMessage {
-	items, _ := kItemsOK(args...)
+func Items(args ...string) []json.RawMessage {
+	items, _ := ItemsOK(args...)
 	return items
 }
 
-// kItemsOK is kItems with "the cluster answered" reported separately. A section
+// ItemsOK is Items with "the cluster answered" reported separately. A section
 // whose corpus comes back empty records nothing and passes — exactly the empty-
 // corpus color.Green requireCorpus refuses for the file guards — so any caller that
 // would silently skip work must use this and say "inconclusive" instead. See
 // scanInventory and sectionItems.
-func kItemsOK(args ...string) ([]json.RawMessage, bool) {
-	out, verdict := kubectlProbe(append(args, "-o", "json")...)
-	if verdict != probeFound {
-		return nil, verdict.answered()
+func ItemsOK(args ...string) ([]json.RawMessage, bool) {
+	out, verdict := Probe(append(args, "-o", "json")...)
+	if verdict != Found {
+		return nil, verdict.Answered()
 	}
 	var body struct {
 		Items []json.RawMessage `json:"items"`
@@ -174,22 +195,22 @@ func kItemsOK(args ...string) ([]json.RawMessage, bool) {
 	return body.Items, true
 }
 
-// kList runs `kubectl get <args> -o json` and decodes its .items[] into T,
-// silently dropping any item that does not decode. It is kItems for the common
+// List runs `kubectl get <args> -o json` and decodes its .items[] into T,
+// silently dropping any item that does not decode. It is Items for the common
 // case — every section wants typed items, not raw JSON — so the
 // unmarshal-and-continue loop lives here once instead of in each of them.
-func kList[T any](args ...string) []T { return decodeItems[T](kItems(args...)) }
+func List[T any](args ...string) []T { return DecodeItems[T](Items(args...)) }
 
-// kListOK is kList with kItemsOK's answered flag.
-func kListOK[T any](args ...string) ([]T, bool) {
-	raw, ok := kItemsOK(args...)
-	return decodeItems[T](raw), ok
+// ListOK is List with ItemsOK's answered flag.
+func ListOK[T any](args ...string) ([]T, bool) {
+	raw, ok := ItemsOK(args...)
+	return DecodeItems[T](raw), ok
 }
 
-// decodeItems decodes already-fetched .items[] into T, dropping what does not
-// decode. Split from kList so a caller that needed kItemsOK's success flag can
+// DecodeItems decodes already-fetched .items[] into T, dropping what does not
+// decode. Split from List so a caller that needed ItemsOK's success flag can
 // still get typed items without a second fetch.
-func decodeItems[T any](raws []json.RawMessage) []T {
+func DecodeItems[T any](raws []json.RawMessage) []T {
 	out := make([]T, 0, len(raws))
 	for _, raw := range raws {
 		var v T
@@ -203,20 +224,20 @@ func decodeItems[T any](raws []json.RawMessage) []T {
 
 // ── field reads ──────────────────────────────────────────────────────────────
 
-// kJSONPath runs a kubectl get with a -o jsonpath=... arg and returns trimmed
+// JSONPath runs a kubectl get with a -o jsonpath=... arg and returns trimmed
 // stdout, or "" when the read failed. "" is also what an unset field returns, so
-// a caller that branches on emptiness wants kJSONPathOK.
-func kJSONPath(args ...string) string {
-	val, _ := kJSONPathOK(args...)
+// a caller that branches on emptiness wants JSONPathOK.
+func JSONPath(args ...string) string {
+	val, _ := JSONPathOK(args...)
 	return val
 }
 
-// kJSONPathOK is kJSONPath with "the cluster answered" reported separately. A
+// JSONPathOK is JSONPath with "the cluster answered" reported separately. A
 // missing resource answers "" (true); an unreadable one answers ("", false).
-func kJSONPathOK(args ...string) (string, bool) {
-	out, verdict := kubectlProbe(args...)
-	if verdict != probeFound {
-		return "", verdict.answered()
+func JSONPathOK(args ...string) (string, bool) {
+	out, verdict := Probe(args...)
+	if verdict != Found {
+		return "", verdict.Answered()
 	}
 	return strings.TrimSpace(string(out)), true
 }

@@ -142,23 +142,3 @@ func TestEsPropFilesSortKey(t *testing.T) {
 		t.Errorf("sortKey(!hasProp) = %q, want empty", got)
 	}
 }
-
-func TestReadyCell(t *testing.T) {
-	if got := readyCell(""); got != "Unknown" {
-		t.Errorf("readyCell(\"\") = %q, want Unknown", got)
-	}
-	if got := readyCell("True"); got != "True" {
-		t.Errorf("readyCell(True) = %q, want True", got)
-	}
-}
-
-func TestSchedRegion(t *testing.T) {
-	t.Setenv("REGION", "")
-	if got := schedRegion(); got != "cluster" {
-		t.Errorf("schedRegion unset = %q, want cluster", got)
-	}
-	t.Setenv("REGION", "us-ord")
-	if got := schedRegion(); got != "us-ord" {
-		t.Errorf("schedRegion set = %q, want us-ord", got)
-	}
-}

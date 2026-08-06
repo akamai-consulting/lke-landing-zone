@@ -7,9 +7,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 `reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
 `template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
 `obj-encryption` (`tools/internal/objenc`), `guard-charts`
-(`tools/internal/chartguard`) and `cluster-access` (`tools/internal/clusteraccess`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`) and `health-sla`
+(`tools/internal/healthsla`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all eleven still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all twelve still run because `ci.go` and the reconciler register them, and the declarations are inert.
 All four kinds, six states including `seeded` — the group the old ceiling banned by omission — ALL SEVEN grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural

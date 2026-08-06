@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // sealKeySecretName is the Secret the chart's `seal "static"` stanza mounts; its
@@ -133,7 +134,7 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	}
 
 	// An existing Secret is the live unseal key — never overwrite it.
-	if kExists("-n", openbaoNS, "get", "secret", sealKeySecretName) {
+	if kubectlprobe.Exists("-n", openbaoNS, "get", "secret", sealKeySecretName) {
 		fmt.Printf("%s/%s already exists — leaving the static seal key untouched.\n", openbaoNS, sealKeySecretName)
 		return nil
 	}

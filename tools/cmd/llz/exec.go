@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // This file holds the single seam through which llz shells out to external
@@ -14,6 +16,18 @@ import (
 // without the real binaries. Genuinely interactive call sites (those that wire
 // os.Stdin/os.Stdout or pipe a secret over stdin) deliberately keep calling
 // os/exec directly — they are exercised by the e2e workflow, not unit tests.
+
+// init points internal/kubectlprobe at THIS seam, so there is one shell-out
+// implementation rather than two that drift. The probes classify kubectl failures
+// by reading stderr off *exec.ExitError, which only works because execOutput
+// wraps with %w — a second, plainer implementation in that package would silently
+// downgrade every genuine NotFound to probeUnknown.
+//
+// Tests must swap BOTH (withExecOutput does): reassigning execOutput alone leaves
+// the probes running against the real cluster, which is a hang, not a failure.
+func init() {
+	kubectlprobe.Exec = func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) }
+}
 
 // execOutput runs name with args and returns its standard output, exactly as
 // (*exec.Cmd).Output would (stderr is surfaced via *exec.ExitError on failure).

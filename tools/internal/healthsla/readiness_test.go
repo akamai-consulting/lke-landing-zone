@@ -1,4 +1,4 @@
-package main
+package healthsla
 
 import (
 	"errors"
@@ -7,26 +7,10 @@ import (
 	"testing"
 )
 
-// stubBaoExec replaces the RESILIENT bao exec seam for one test. runHealthOpenbao
-// reads seal state through baoExecFn (not a bare kubectl exec) so that documented
-// transient failures — konnectivity "No agent available" and friends — retry
-// instead of being reported as a sealed pod.
-func stubBaoExec(t *testing.T, fn func(pod string, args []string) (string, error)) {
-	t.Helper()
-	prev := baoExecFn
-	baoExecFn = func(pod, _, _ string, args ...string) (string, string, error) {
-		out, err := fn(pod, args)
-		if err != nil {
-			return "", err.Error(), err
-		}
-		return out, "", nil
-	}
-	t.Cleanup(func() { baoExecFn = prev })
-}
-
 func TestRunHealthOpenbao(t *testing.T) {
 	t.Run("all unsealed and ESO ready", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		summaryPath := os.Getenv("GITHUB_STEP_SUMMARY")
 		unsealed := `{"initialized":true,"sealed":false,"is_self":true,"ha_enabled":true}`
 		stubBaoExec(t, func(string, []string) (string, error) { return unsealed, nil })
@@ -39,7 +23,7 @@ func TestRunHealthOpenbao(t *testing.T) {
 			}
 		})
 		out := captureStdout(t, func() {
-			if err := runHealthOpenbao(); err != nil {
+			if err := RunOpenbao(td); err != nil {
 				t.Errorf("err = %v, want nil (warn-only)", err)
 			}
 		})
@@ -58,6 +42,7 @@ func TestRunHealthOpenbao(t *testing.T) {
 	// the 32-byte static key and Raft storage, all of which are fine.
 	t.Run("an unreadable pod is UNKNOWN, not sealed", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		stubBaoExec(t, func(string, []string) (string, error) {
 			return "", errors.New("error dialing backend: No agent available")
 		})
@@ -68,7 +53,7 @@ func TestRunHealthOpenbao(t *testing.T) {
 			return itemsJSON(), nil
 		})
 		captureStdout(t, func() {
-			if err := runHealthOpenbao(); err != nil {
+			if err := RunOpenbao(td); err != nil {
 				t.Errorf("err = %v, want nil (warn-only)", err)
 			}
 		})
@@ -89,6 +74,7 @@ func TestRunHealthOpenbao(t *testing.T) {
 	// operator to the unseal key and Raft storage. The two cases are now separate.
 	t.Run("a sealed pod is reported but never fails", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		stubBaoExec(t, func(string, []string) (string, error) {
 			return `{"initialized":true,"sealed":true,"ha_enabled":false}`, nil
 		})
@@ -103,7 +89,7 @@ func TestRunHealthOpenbao(t *testing.T) {
 		})
 		body := ""
 		captureStdout(t, func() {
-			if err := runHealthOpenbao(); err != nil {
+			if err := RunOpenbao(td); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})
@@ -121,10 +107,11 @@ func TestRunHealthOpenbao(t *testing.T) {
 func TestRunHealthCertManager(t *testing.T) {
 	t.Run("all ready", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		cert := `{"metadata":{"namespace":"observability","name":"otel"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}`
 		stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(cert), nil })
 		out := captureStdout(t, func() {
-			if err := runHealthCertManager(); err != nil {
+			if err := RunCertManager(td); err != nil {
 				t.Errorf("err = %v, want nil", err)
 			}
 		})
@@ -135,10 +122,11 @@ func TestRunHealthCertManager(t *testing.T) {
 
 	t.Run("a not-ready cert is warned but does not fail", func(t *testing.T) {
 		setSummary(t)
+		ensureDeps(t)
 		cert := `{"metadata":{"namespace":"observability","name":"otel"},"status":{"conditions":[{"type":"Ready","status":"False","message":"DNS-01 challenge failed"}]}}`
 		stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(cert), nil })
 		captureStdout(t, func() {
-			if err := runHealthCertManager(); err != nil {
+			if err := RunCertManager(td); err != nil {
 				t.Errorf("err = %v, want nil (warn-only)", err)
 			}
 		})

@@ -51,6 +51,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -217,7 +218,7 @@ func runCIRotateInclusterPAT() error {
 
 	// Probe BEFORE minting: an unbootstrapped region (no OpenBao pod) must not
 	// accumulate orphan tokens on every monthly run.
-	if !kExists("-n", openbaoNS, "get", "pod", rootOpenbaoPod) {
+	if !kubectlprobe.Exists("-n", openbaoNS, "get", "pod", rootOpenbaoPod) {
 		fmt.Fprintf(os.Stderr, "::warning::%s not found on %s — skipping in-cluster PAT rotation\n", rootOpenbaoPod, region)
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("> Skipped: OpenBao pod not found on `%s`.", region))
