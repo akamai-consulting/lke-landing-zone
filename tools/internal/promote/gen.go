@@ -1,4 +1,4 @@
-package main
+package promote
 
 // promote_gen.go renders the native code-promotion workflow
 // (.github/workflows/promote.yml) from the per-deployment `promotion_rank`
@@ -85,26 +85,27 @@ func callerFromWorkflow(path string) (promoCaller, bool) {
 //  1. the existing promote.yml  — preserve what it calls.
 //  2. the sibling terraform.yml — a fresh instance has this rendered already.
 //  3. .copier-answers.yml (instance_repo).
-func resolveCaller(workflowsDir string) (promoCaller, error) {
+func resolveCaller(d Deps, workflowsDir string) (promoCaller, error) {
 	if c, ok := callerFromWorkflow(filepath.Join(workflowsDir, "promote.yml")); ok {
 		return c, nil
 	}
 	if c, ok := callerFromWorkflow(filepath.Join(workflowsDir, "terraform.yml")); ok {
 		return c, nil
 	}
-	a, _ := readAnswers(".")
-	if a == nil || a.InstanceRepo == "" {
+	repo := d.InstanceRepo()
+	if repo == "" {
 		return promoCaller{}, fmt.Errorf("cannot determine the caller: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml has no instance_repo")
 	}
 	return promoCaller{
 		uses:         localTerraformUses, // the vendored body (ADR 0003)
-		instanceRepo: a.InstanceRepo,
+		instanceRepo: repo,
 	}, nil
 }
 
 // templateRefFromStamp reads the template_ref out of .template-version (best
 // effort; "" if absent/malformed).
-func templateRefFromStamp() string {
+// TemplateRefFromStamp reads the template ref recorded in the version stamp.
+func TemplateRefFromStamp() string {
 	b, err := os.ReadFile(".template-version")
 	if err != nil {
 		return ""
@@ -204,49 +205,64 @@ func promoteWorkflowPath(relPrefix string) (path string, generate bool) {
 //   - check=true: write nothing; return changed=true if the on-disk file differs
 //     from what the ranks would render (the CI drift gate).
 //
-// Returns changed=true when the file was (or would be) rewritten.
-func syncPromoteWorkflow(tfDir, relPrefix string, check bool) (changed bool, err error) {
+// Plan is what the caller must do to bring promote.yml in line with the ranks.
+// Content is empty when nothing needs writing.
+type Plan struct {
+	Path    string   // .github/workflows/promote.yml, or "" on a template-repo checkout
+	Content string   // rendered workflow; "" means "leave the file alone"
+	Changed bool     // the file is absent or differs
+	Order   []string // stage names, for the caller's progress line
+	Note    string   // a human note when nothing was generated and the reason is not obvious
+}
+
+// PlanWorkflow renders the promotion workflow and reports whether it differs from
+// what is on disk. IT WRITES NOTHING, and that is deliberate.
+//
+// The declaration for this extension is `transition:promoted[read-repo]`, and an
+// os.WriteFile in this package would make that declaration FALSE. The model has no
+// `write-repo` grant: `own-paths` is the nearest-looking one and is the wrong one —
+// per the catalog's Decision 1 it means "copier must not render these bytes", a
+// FENCE rather than a write permit, and Validate() rejects it here anyway because
+// it is only meaningful at `scaffolded` or `upgraded`.
+//
+// So the file split follows the declaration rather than the other way round:
+// rendering lives here, the write lives in cmd/llz. This is the SAME resolution
+// `guard-docs` reached for `llz ci gen-toc`, and the catalog records the reasoning
+// — two independent cases is enough to say the vocabulary has a hole, and not
+// enough to know its shape, so nothing is invented. This is the THIRD case and it
+// resolved the same way, which is evidence the split is a real answer and not a
+// workaround. TestPackageContainsNoWritePath keeps it honest.
+func PlanWorkflow(d Deps, tfDir, relPrefix string) (Plan, error) {
 	path, generate := promoteWorkflowPath(relPrefix)
 	if !generate {
-		return false, nil // template-repo checkout — nothing to generate
+		return Plan{}, nil // template-repo checkout — nothing to generate
 	}
 
-	stages, err := readPromotion(tfDir)
+	stages, err := ReadPromotion(d, tfDir)
 	if err != nil {
-		return false, err
+		return Plan{}, err
 	}
 	if len(stages) < 2 {
 		// A pipeline needs at least two stages. Leave any existing file untouched
 		// (an operator may be mid-setup) and say so rather than writing a stub.
-		if !check {
-			fmt.Printf("promote.yml: %d ranked deployment(s) — need ≥2 to form a pipeline; not generated yet (set promotion_rank on the stages you want to chain).\n", len(stages))
-		}
-		return false, nil
+		return Plan{Path: path, Note: fmt.Sprintf(
+			"promote.yml: %d ranked deployment(s) — need ≥2 to form a pipeline; not generated yet (set promotion_rank on the stages you want to chain).",
+			len(stages))}, nil
 	}
 
-	caller, err := resolveCaller(filepath.Dir(path))
+	caller, err := resolveCaller(d, filepath.Dir(path))
 	if err != nil {
-		return false, err
+		return Plan{}, err
 	}
 	want := renderPromoteWorkflow(caller, stages)
 
 	got, _ := os.ReadFile(path)
 	if string(got) == want {
-		return false, nil
-	}
-	if check {
-		return true, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
-		return false, err
+		return Plan{Path: path}, nil
 	}
 	order := make([]string, len(stages))
-	for i, s := range stages {
-		order[i] = s.name
+	for i, st := range stages {
+		order[i] = st.name
 	}
-	fmt.Printf("promote.yml: regenerated pipeline %s\n", strings.Join(order, " → "))
-	return true, nil
+	return Plan{Path: path, Content: want, Changed: true, Order: order}, nil
 }

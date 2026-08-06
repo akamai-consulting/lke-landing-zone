@@ -112,12 +112,16 @@ categories:
     #                       the only one needing NO injected capabilities. -192, the
     #                       smallest paydown so far — the cobra Long text is most of
     #                       what came back.
+    #   32,733 / 184 files  promote-pipeline, which binds `promoted` — the LAST
+    #                       unclaimed state. All ten now carry a binding. -232; the
+    #                       os.WriteFile stayed in cmd/llz so the read-repo grant
+    #                       remains true (3rd case, same resolution as gen-toc).
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 32965
+    budget: 32733
     exact: true
     include:
       - "tools/cmd/llz/*.go"

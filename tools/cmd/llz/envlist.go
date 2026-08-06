@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/spf13/cobra"
 )
 
@@ -86,11 +87,11 @@ func runEnvList(jsonOut, haOnly, ordered bool, role string) error {
 	case ordered:
 		// Promotion order, not alphabetical: the sequence a promote-on-color.Green
 		// workflow walks (dev → staging → prod). Only ranked deployments appear.
-		stages, err := readPromotion(tfDir)
+		stages, err := promote.ReadPromotion(promoteDeps(), tfDir)
 		if err != nil {
 			return err
 		}
-		names = promotionOrder(stages)
+		names = promote.PromotionOrder(stages)
 	case haOnly || role != "":
 		deps, err := readTopology(tfDir)
 		if err != nil {

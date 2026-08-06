@@ -215,7 +215,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `release-publish` | 1,150 | 5 | ✘ | ✘ | chart-publish-check 366, `gh_gitdata_native` 239, pin-images 204, publish-charts 187, deliver-docs 154. Template-repo-side, not instance-side. |
 | `teardown` | 1,070 | 4 | ✔ | ✘ | `ci_teardown` 492, `reap` 328, destroy-unwedge 207, crd-unwedge 43 **✅ Extracted** — the first transition; `reap` and `drain-obj-buckets` stayed. See [The first ten, extracted](#the-first-ten-extracted). |
 | `template-sustain` | 630 | 5 | ✔ | ✘ | `upgrade_policy` 236, `drift` 114, `template_removals` 94, `upgrade_churn_guard` 107, `stamp` 79. Consumes the `own-paths` grant. **◐ Partial** — the own-paths half cannot leave core (ADR 0014). See [The first ten, extracted](#the-first-ten-extracted). |
-| `promote-pipeline` | 307 | 2 | ✔ | ✘ | `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
+| `promote-pipeline` | 307 | 2 | ✔ | ✘ | **✅ Extracted — binds `promoted`, the last unclaimed state.** See [What `promote-pipeline` closed](#what-promote-pipeline-closed--the-last-state-and-the-third-write-repo-case). `promote_gen` 173, `promotion` 134. Already a codegen DAG — same shape as `extension_ci.go`; **the two should share one emitter**. Grants `read-repo` only: its output `promote.yml` is a copier-rendered `merge` stub, so it does *not* want `own-paths` (see Decision 1). |
 
 ## Gate — attach at `→ scaffolded` / `→ configured`, grants: `read-repo`
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first seventeen, extracted
+## The first eighteen, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -276,9 +276,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `converge` extracted | 34,359 | 188 | **−1,748** — the acid test, plus `cigate` (12 callers) |
 | `assert-platform` extracted | 33,877 | 185 | −482 — the first PURELY-assertion extension |
 | `assert-reconciler` extracted | 33,157 | 185 | −720 — the second OPT-IN, plus `promwire` |
-| `assert-registry` extracted | **32,965** | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
+| `assert-registry` extracted | 32,965 | 185 | −192 — the cheapest, and the only one needing NO `Deps` |
+| `promote-pipeline` extracted | **32,733** | 184 | −232 — binds `promoted`, **the last unclaimed state** |
 
-**Net −14,217 (30.1%) across seventeen extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −14,449 (30.6%) across eighteen extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1031,6 +1032,57 @@ hold the credential and try — which is precisely what `secret-read` on this bi
 that capability/assertion pairs should not merge; this shows why more sharply. `harbor-provisioner`
 will hold `cloud-mutate` and `secret-custody` to **mint** the robot; this holds `cluster-read` and
 `secret-read` to **use** it. Nothing in a merged union would be true of either half.
+
+### What `promote-pipeline` closed — the last state, and the third `write-repo` case
+
+Eighteenth, and it binds **`promoted`** — the last state in the vocabulary that nothing claimed. **All
+ten lifecycle states now carry at least one binding.**
+
+```
+promote-pipeline  transition:promoted[read-repo]
+```
+
+**The grant line is true because the file split was made to keep it true.** This extension's whole
+output is a file: it writes `.github/workflows/promote.yml`. `read-repo` does not say so. Both obvious
+fixes fail:
+
+- **`own-paths` is the nearest-looking grant and the wrong one.** Per [Decision 1](#1-generated-files-own-paths-is-a-fence-against-copier-not-a-claim-on-authorship)
+  it means *"copier must not render these bytes"* — a fence, not a write permit — and `promote.yml` is
+  a copier-rendered `merge` stub, so the fence would be factually wrong too. `Validate()` rejects it
+  regardless, and said so when probed:
+  ```
+  transition:promoted[read-repo, own-paths]: "own-paths" is only meaningful on a transition to
+  "scaffolded" or "upgraded" — it declares files the template must not re-render (ADR 0014)
+  ```
+- **Inventing `write-repo` was the other option, and was deliberately not taken.**
+
+**Why not invent it.** This catalog already reached the identical gap for `llz ci gen-toc` and wrote
+down the rule: *"two independent cases is enough to say the vocabulary has a hole and not enough to
+know its shape, so nothing was invented — the file split follows the declaration instead."*
+`guard-docs` resolved it that way. **This is the third case and it resolved the same way**, which is
+evidence the split is a real answer rather than a workaround being repeated.
+
+Contrast `secret-read`, which *was* invented two extractions earlier. The difference is the failure
+mode: `secret-custody` made `validate-tokens` **inexpressible**, so the model had to grow. Here
+`read-repo` validates fine — it merely under-reports, and a file split fixes that without touching the
+vocabulary. **A gap that makes a declaration impossible is a different thing from one that makes it
+incomplete**, and only the first justifies a new word.
+
+**The count for whoever does decide the grant's shape is now much larger than three.** Sixteen
+non-test files in package `main` call `os.WriteFile`. Those are `write-repo`'s candidates, and the
+question it has to answer is which of them write the **operator's repo** (this one, `gen-toc`) versus a
+build artifact or a temp file — a distinction none of the three cases so far has had to draw.
+
+So: rendering lives in the package as `PlanWorkflow`, returning the content and whether it differs;
+the `os.WriteFile` lives in `cmd/llz`. `TestPackageContainsNoWritePath` fails if that stops being
+true — the same check `internal/docsguard` runs, copied rather than shared, because two is a copy and
+three is a library.
+
+**A trap paid for again, by me, in the file I had already written the rule about.** Rebuilding a test
+helper, I wrote `open(p,'w').write(open(p).read() + …)` — which truncates before the inner read runs
+and destroyed the file. That exact line is recorded as a hard rule in the extraction notes from three
+sessions ago. Knowing a trap is not the same as not falling into it; the mitigation that works is the
+two-step `with open(...)` form, not the memory of having been bitten.
 
 ## The cost of the interesting half
 

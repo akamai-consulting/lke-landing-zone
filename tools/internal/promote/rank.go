@@ -1,9 +1,9 @@
-package main
+package promote
 
 // promotion.go derives an ordered code-promotion pipeline from each deployment's
 // `promotionRank`. The source of truth is the LandingZone spec
 // (cluster.promotionRank); Terraform never consumes it, so it is not a tfvars
-// field. For legacy pre-spec instances (no landingzone.yaml) promotionRanks()
+// field. For legacy pre-spec instances (no landingzone.yaml) PromotionRanks()
 // still falls back to parsing a `promotion_rank` line from cluster/<env>.tfvars.
 // The question it answers: "what order do I promote a change through my deployments?".
 //
@@ -28,8 +28,6 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
-
-	"github.com/spf13/cobra"
 )
 
 // promoStage is a deployment's position in the promotion pipeline.
@@ -58,8 +56,8 @@ func hclIntField(body, field string) (int, bool) {
 // in a pipeline). A rank used by two deployments is a hard error: the pipeline
 // must be a strict line so "promote to next" is well-defined. Reuses
 // listDeployments so the deployment set is identical to `llz env list`.
-func readPromotion(tfDir string) ([]promoStage, error) {
-	ranks, err := promotionRanks(tfDir)
+func ReadPromotion(d Deps, tfDir string) ([]promoStage, error) {
+	ranks, err := PromotionRanks(d, tfDir)
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +83,14 @@ func readPromotion(tfDir string) ([]promoStage, error) {
 	return stages, nil
 }
 
-// promotionRanks returns each deployment's promotion_rank from the LandingZone
+// EXPORTED because a coupling test spans the extraction boundary:
+// cmd/llz/spec_ux_test.go asserts that the SPEC's environments and their ranks
+// agree, and the two halves of that claim now live in different packages.
+//
+// PromotionRanks returns each deployment's promotion_rank from the LandingZone
 // spec when present (the source of truth), else from the committed cluster tfvars.
-func promotionRanks(tfDir string) (map[string]int, error) {
-	if lz, present, err := loadSpec(); present {
+func PromotionRanks(d Deps, tfDir string) (map[string]int, error) {
+	if lz, present, err := d.LoadSpec(); present {
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +100,7 @@ func promotionRanks(tfDir string) (map[string]int, error) {
 		}
 		return out, nil
 	}
-	names, err := listDeployments(tfDir)
+	names, err := d.ListDeployments(tfDir)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +118,8 @@ func promotionRanks(tfDir string) (map[string]int, error) {
 }
 
 // promotionOrder projects the ordered stages down to their names.
-func promotionOrder(stages []promoStage) []string {
+// PromotionOrder returns the deployments in promotion order.
+func PromotionOrder(stages []promoStage) []string {
 	out := make([]string, 0, len(stages))
 	for _, s := range stages {
 		out = append(out, s.name)
@@ -127,7 +130,8 @@ func promotionOrder(stages []promoStage) []string {
 // nextStage returns the deployment promoted into after name — the next-higher
 // rank. ok is false when name is unranked/unknown (not in the pipeline) or is the
 // final stage (nothing left to promote to).
-func nextStage(stages []promoStage, name string) (string, bool) {
+// NextStage returns the deployment promoted into after the named one.
+func NextStage(stages []promoStage, name string) (string, bool) {
 	idx := -1
 	for i, s := range stages {
 		if s.name == name {
@@ -141,36 +145,9 @@ func nextStage(stages []promoStage, name string) (string, bool) {
 	return stages[idx+1].name, true
 }
 
-func envNextCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "next <deployment>",
-		Short: "print the deployment promoted into after <deployment> (the next promotion_rank); errors on the last stage",
-		Long: "Reads each deployment's promotion_rank (cluster tfvars) and prints the\n" +
-			"next stage in the pipeline — what a promote-on-color.Green CI job builds after\n" +
-			"<deployment> goes color.Green. Errors if <deployment> is unranked (not in a\n" +
-			"pipeline) or is the final stage. Pair with `llz env list --ordered`.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			tfDir, _, _ := instanceLayout()
-			stages, err := readPromotion(tfDir)
-			if err != nil {
-				return err
-			}
-			if _, ok := findStage(stages, args[0]); !ok {
-				return fmt.Errorf("deployment %q has no promotion_rank — it is not in a promotion pipeline (set promotion_rank in cluster/%s.tfvars)", args[0], args[0])
-			}
-			next, ok := nextStage(stages, args[0])
-			if !ok {
-				return fmt.Errorf("deployment %q is the last stage — nothing to promote to", args[0])
-			}
-			fmt.Println(next)
-			return nil
-		},
-	}
-}
-
 // findStage reports whether name is a ranked member of the pipeline.
-func findStage(stages []promoStage, name string) (promoStage, bool) {
+// FindStage returns a stage by name.
+func FindStage(stages []promoStage, name string) (promoStage, bool) {
 	for _, s := range stages {
 		if s.name == name {
 			return s, true

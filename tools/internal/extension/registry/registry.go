@@ -35,6 +35,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
@@ -61,6 +62,7 @@ var declarations = []func() extension.Extension{
 	healthsla.Extension,
 	tokeninv.Extension,
 	objenc.Extension,
+	promote.Extension,
 	reconcilelanes.Extension,
 	sustain.Extension,
 	teardown.Extension,

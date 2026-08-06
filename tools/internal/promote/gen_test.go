@@ -1,4 +1,4 @@
-package main
+package promote
 
 import (
 	"os"
@@ -142,13 +142,18 @@ func TestSyncPromoteWorkflowRoundTrip(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(".github", "workflows", "terraform.yml"), testStub(localTerraformUses))
 
-	changed, err := syncPromoteWorkflow("tf", "", false)
+	plan, err := PlanWorkflow(testDeps(), "tf", "")
 	if err != nil {
-		t.Fatalf("sync: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
-	if !changed {
+	if !plan.Changed {
 		t.Fatal("expected the first generation to report changed")
 	}
+	// applyPlan is what cmd/llz does. The package plans and does not write (see
+	// TestPackageContainsNoWritePath), so the round trip is exercised by doing the
+	// write here — the same two lines the command runs.
+	applyPlan(t, plan)
+
 	got, err := os.ReadFile(filepath.Join(".github", "workflows", "promote.yml"))
 	if err != nil {
 		t.Fatalf("promote.yml not written: %v", err)
@@ -158,21 +163,35 @@ func TestSyncPromoteWorkflowRoundTrip(t *testing.T) {
 		t.Errorf("written content != rendered content")
 	}
 
-	// --check on the freshly-written file: no drift.
-	if drift, err := syncPromoteWorkflow("tf", "", true); err != nil || drift {
-		t.Errorf("check after write = drift %v, err %v; want false,nil", drift, err)
+	// Planning against the freshly-written file: no drift.
+	if p2, err := PlanWorkflow(testDeps(), "tf", ""); err != nil || p2.Changed {
+		t.Errorf("plan after write = changed %v, err %v; want false,nil", p2.Changed, err)
 	}
 
-	// Re-rank: insert a stage. --check must now report drift; a write reconciles it.
+	// Re-rank: insert a stage. The plan must now report drift; applying reconciles it.
 	mustWrite(t, filepath.Join("tf", "cluster", "canary.tfvars"), "promotion_rank = 4\n")
-	if drift, err := syncPromoteWorkflow("tf", "", true); err != nil || !drift {
-		t.Errorf("check after re-rank = drift %v, err %v; want true,nil", drift, err)
+	p3, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil || !p3.Changed {
+		t.Errorf("plan after re-rank = changed %v, err %v; want true,nil", p3.Changed, err)
 	}
-	if _, err := syncPromoteWorkflow("tf", "", false); err != nil {
-		t.Fatalf("re-sync: %v", err)
+	applyPlan(t, p3)
+	if p4, _ := PlanWorkflow(testDeps(), "tf", ""); p4.Changed {
+		t.Errorf("still drifting after re-apply")
 	}
-	if drift, _ := syncPromoteWorkflow("tf", "", true); drift {
-		t.Errorf("still drifting after re-sync")
+}
+
+// applyPlan mirrors cmd/llz's syncPromoteWorkflow write half, so this package's
+// tests can exercise the full round trip without this package containing a write.
+func applyPlan(t *testing.T, p Plan) {
+	t.Helper()
+	if !p.Changed {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.Path, []byte(p.Content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -185,15 +204,15 @@ func TestSyncPromoteWorkflowSkips(t *testing.T) {
 		"dev.tfvars": "promotion_rank = 1\n",
 		"lab.tfvars": "region = \"us-x\"\n",
 	})
-	if changed, err := syncPromoteWorkflow("tf", "", false); err != nil || changed {
-		t.Errorf("one ranked stage: changed %v err %v; want false,nil", changed, err)
+	if plan, err := PlanWorkflow(testDeps(), "tf", ""); err != nil || plan.Changed {
+		t.Errorf("one ranked stage: changed %v err %v; want false,nil", plan.Changed, err)
 	}
 	if _, err := os.Stat(filepath.Join(".github", "workflows", "promote.yml")); !os.IsNotExist(err) {
 		t.Errorf("promote.yml should not exist for a sub-pipeline rank set")
 	}
 
 	// Template-repo layout (relPrefix set): generation is skipped entirely.
-	if changed, err := syncPromoteWorkflow("tf", "instance-template/", false); err != nil || changed {
-		t.Errorf("template layout: changed %v err %v; want false,nil", changed, err)
+	if plan, err := PlanWorkflow(testDeps(), "tf", "instance-template/"); err != nil || plan.Changed {
+		t.Errorf("template layout: changed %v err %v; want false,nil", plan.Changed, err)
 	}
 }

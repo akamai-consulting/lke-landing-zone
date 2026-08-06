@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"sigs.k8s.io/yaml"
 )
 
@@ -42,7 +43,7 @@ func pinnedTemplateRef() string {
 			return r
 		}
 	}
-	return templateRefFromStamp()
+	return promote.TemplateRefFromStamp()
 }
 
 // readAnswers loads .copier-answers.yml from dir (use "." for the current

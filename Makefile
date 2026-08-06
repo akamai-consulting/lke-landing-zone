@@ -66,6 +66,7 @@ COVERAGE_MINS := \
 	internal/openbao=88 \
 	internal/pathglob=93 \
 	internal/promwire=92 \
+	internal/promote=85 \
 	internal/kubectlprobe=65 \
 	internal/tfbin=90 \
 	internal/preflight=95 \

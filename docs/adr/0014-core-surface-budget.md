@@ -106,7 +106,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > `token-inventory`, **34,359** with `converge` and **33,877** with `assert-platform`.
 > and **33,157** with `assert-reconciler`.
 > and **32,965** with `assert-registry`.
-> Seventeen extensions, net −14,217 (30.1%) — now BELOW the
+> and **32,733** with `promote-pipeline`.
+> Eighteen extensions, net −14,449 (30.6%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

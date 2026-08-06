@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 )
 
 // writeSpecInstance lays a minimal spec-driven instance into the current dir: a
@@ -66,7 +67,7 @@ func TestReadTopologyFromSpec(t *testing.T) {
 		t.Errorf("lab role = %q, want standalone default", lab.haRole)
 	}
 
-	ranks, err := promotionRanks("terraform-iac-bootstrap")
+	ranks, err := promote.PromotionRanks(promoteDeps(), "terraform-iac-bootstrap")
 	if err != nil {
 		t.Fatalf("promotionRanks: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package promote
 
 import (
 	"reflect"
@@ -43,11 +43,11 @@ func TestReadPromotionOrderAndNext(t *testing.T) {
 		"scratch": "region = \"us-x\"\n",                     // unranked → excluded
 		"sandbox": "region = \"us-x\"\npromotion_rank = 0\n", // rank 0 → excluded
 	})
-	stages, err := readPromotion(dir)
+	stages, err := ReadPromotion(testDeps(), dir)
 	if err != nil {
 		t.Fatalf("readPromotion: %v", err)
 	}
-	if got := promotionOrder(stages); !reflect.DeepEqual(got, []string{"dev", "staging", "prod"}) {
+	if got := PromotionOrder(stages); !reflect.DeepEqual(got, []string{"dev", "staging", "prod"}) {
 		t.Errorf("promotionOrder = %v, want [dev staging prod]", got)
 	}
 
@@ -61,17 +61,17 @@ func TestReadPromotionOrderAndNext(t *testing.T) {
 		{"scratch", "", false}, // unranked — not in the pipeline
 		{"nope", "", false},    // unknown
 	} {
-		next, ok := nextStage(stages, tc.from)
+		next, ok := NextStage(stages, tc.from)
 		if next != tc.want || ok != tc.ok {
-			t.Errorf("nextStage(%q) = %q,%v, want %q,%v", tc.from, next, ok, tc.want, tc.ok)
+			t.Errorf("NextStage(%q) = %q,%v, want %q,%v", tc.from, next, ok, tc.want, tc.ok)
 		}
 	}
 
-	if _, ok := findStage(stages, "dev"); !ok {
-		t.Errorf("findStage(dev) not found")
+	if _, ok := FindStage(stages, "dev"); !ok {
+		t.Errorf("FindStage(dev) not found")
 	}
-	if _, ok := findStage(stages, "scratch"); ok {
-		t.Errorf("findStage(scratch) found, want absent")
+	if _, ok := FindStage(stages, "scratch"); ok {
+		t.Errorf("FindStage(scratch) found, want absent")
 	}
 }
 
@@ -80,7 +80,7 @@ func TestReadPromotionDuplicateRankErrors(t *testing.T) {
 		"east": "promotion_rank = 1\n",
 		"west": "promotion_rank = 1\n",
 	})
-	if _, err := readPromotion(dir); err == nil {
+	if _, err := ReadPromotion(testDeps(), dir); err == nil {
 		t.Fatal("readPromotion: want error on duplicate promotion_rank, got nil")
 	}
 }
@@ -90,7 +90,7 @@ func TestReadPromotionEmptyWhenNoneRanked(t *testing.T) {
 		"east": "region = \"us-x\"\n",
 		"west": "region = \"us-x\"\npromotion_rank = 0\n",
 	})
-	stages, err := readPromotion(dir)
+	stages, err := ReadPromotion(testDeps(), dir)
 	if err != nil {
 		t.Fatalf("readPromotion: %v", err)
 	}
