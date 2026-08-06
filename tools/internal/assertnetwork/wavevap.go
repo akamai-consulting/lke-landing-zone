@@ -1,4 +1,4 @@
-package main
+package assertnetwork
 
 // ci_assert_wave_health_vap.go implements `llz ci assert-wave-health-vap` — the
 // runtime check that the llz-wave-health-guard ValidatingAdmissionPolicy is
@@ -36,11 +36,14 @@ import (
 // is ever created in it — the canary is dry-run only.
 const waveHealthCanaryNS = "default"
 
-// waveHealthCanaryManifest is the resource the guard MUST reject: a health-checked
+// EXPORTED for the coupling test in cmd/llz: the canary this lane classifies must
+// be a kind the Go guard's allowlist REJECTS, and the two must not drift.
+//
+// WaveHealthCanaryManifest is the resource the guard MUST reject: a health-checked
 // kind (apps/Deployment — absent from the VAP's allowedKinds) at a negative
 // sync-wave. replicas: 0 and a restricted-PSS-compliant pod spec keep every OTHER
 // admission policy indifferent to it, so a denial can only come from the guard.
-const waveHealthCanaryManifest = `apiVersion: apps/v1
+const WaveHealthCanaryManifest = `apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llz-wave-health-canary
@@ -107,7 +110,7 @@ func classifyWaveHealthCanary(out string, err error) (ok bool, msg string) {
 // collapseWS squeezes a multi-line kubectl error into one log line.
 func collapseWS(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func ciAssertWaveHealthVAPCmd() *cobra.Command {
+func WaveHealthVAPCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "assert-wave-health-vap",
 		Short: "assert the llz-wave-health-guard admission policy is bound and enforcing",
@@ -120,7 +123,7 @@ func ciAssertWaveHealthVAPCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			out, err := dryRunCanaryFn(waveHealthCanaryManifest)
+			out, err := dryRunCanaryFn(WaveHealthCanaryManifest)
 			ok, msg := classifyWaveHealthCanary(out, err)
 			if !ok {
 				return fmt.Errorf("assert-wave-health-vap: %s", msg)

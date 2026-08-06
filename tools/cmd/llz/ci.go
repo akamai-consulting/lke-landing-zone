@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
@@ -245,7 +246,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciWedgeGamedayCmd())
 	// Runtime counterpart to wave-health-guard: assert the VAP is bound + enforcing
 	// (negative canary), which is what makes the static guard's verdict hold live.
-	c.AddCommand(ciAssertWaveHealthVAPCmd())
+	c.AddCommand(assertnetwork.WaveHealthVAPCmd())
 	// Cluster diagnostic: list in-cluster Prometheus metric names matching a regex
 	// (metric-name discovery for writing error-rate/saturation alerts).
 	c.AddCommand(ciPromMetricsCmd())
@@ -290,13 +291,13 @@ func ciCmd() *cobra.Command {
 	// require that policy's own response. `kubectl get clusterpolicy` proves the
 	// YAML is present; it cannot tell an enforcing policy from a decorative one,
 	// and both ship failurePolicy: Ignore, so a downed Kyverno admits silently.
-	c.AddCommand(ciAssertAdmissionEnforcementCmd())
+	c.AddCommand(assertnetwork.AdmissionEnforcementCmd())
 	// The two enforcement properties that CANNOT be dry-run: admission answers
 	// from the API server, but a dropped packet is only knowable by sending one.
 	// assert-network-enforcement opens real connections from a real pod (each
 	// negative paired with a positive control, so a broken probe reports
 	// INCONCLUSIVE rather than passing); net-probe is the dial it runs there.
-	c.AddCommand(ciAssertNetworkEnforcementCmd(), ciNetProbeCmd())
+	c.AddCommand(assertnetwork.NetworkEnforcementCmd(), assertnetwork.NetProbeCmd())
 	// The e2e assert battery itself. Was ~40 lines of inline bash implementing a
 	// parallel job runner in YAML — untestable, and with the lane list written
 	// TWICE (once to run, once to collect) so a lane could run and never be able to

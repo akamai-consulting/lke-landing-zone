@@ -42,6 +42,7 @@ COVERAGE_MINS := \
 	internal/budget=92 \
 	internal/chartguard=70 \
 	internal/cli=95 \
+	internal/assertnetwork=52 \
 	internal/assertplatform=51 \
 	internal/assertreconciler=81 \
 	internal/assertregistry=68 \

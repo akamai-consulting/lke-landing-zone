@@ -1,4 +1,4 @@
-package main
+package assertnetwork
 
 // ci_net_probe.go implements `llz ci net-probe` — a TCP dial, and nothing else.
 //
@@ -87,7 +87,7 @@ func probeTCP(target string, timeout time.Duration) netProbeResult {
 	return netProbeResult{Target: target, Connected: err == nil, Reason: classifyDialError(err)}
 }
 
-func ciNetProbeCmd() *cobra.Command {
+func NetProbeCmd() *cobra.Command {
 	var timeout int
 	c := &cobra.Command{
 		Use:   "net-probe <host:port>",

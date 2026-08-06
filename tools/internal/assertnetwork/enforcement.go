@@ -1,4 +1,4 @@
-package main
+package assertnetwork
 
 // ci_assert_network_enforcement.go implements `llz ci assert-network-enforcement`
 // — the runtime proof that NetworkPolicy and mTLS are actually ENFORCED, not just
@@ -88,7 +88,7 @@ const (
 	netEnforceMTLSTarget = "harbor-core.harbor.svc.cluster.local:80"
 )
 
-func ciAssertNetworkEnforcementCmd() *cobra.Command {
+func NetworkEnforcementCmd() *cobra.Command {
 	var checks, image, namespace, allowed, denied, mtlsTarget string
 	var timeout int
 	var keep bool
@@ -216,7 +216,7 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 // in a namespace — the workload defaults and the portLevelMtls entries alike.
 // Seamed for tests.
 var readPeerAuthModes = func(ns string) ([]string, error) {
-	out, err := execOutput("kubectl", "-n", ns, "get", "peerauthentication",
+	out, err := deps.Exec("kubectl", "-n", ns, "get", "peerauthentication",
 		"-o", `jsonpath={range .items[*]}{.spec.mtls.mode}{" "}{range .spec.portLevelMtls.*}{.mode}{" "}{end}{end}`)
 	if err != nil {
 		return nil, err
@@ -395,16 +395,16 @@ var (
 		return string(out), err
 	}
 	deleteProbeNamespace = func(ns string) {
-		_ = execCombined("kubectl", "delete", "namespace", ns, "--ignore-not-found", "--wait=false")
+		_ = deps.ExecCombined("kubectl", "delete", "namespace", ns, "--ignore-not-found", "--wait=false")
 	}
 	waitProbePod = func(ns string, timeout time.Duration) error {
-		_, err := execOutput("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Succeeded",
+		_, err := deps.Exec("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Succeeded",
 			"pod/net-probe", fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())))
 		if err != nil {
 			// A pod whose containers all exited is Succeeded only when every exit
 			// code is 0; the denied dial exits 1 by design, so Failed is the normal
 			// terminal state. Fall through to reading the statuses either way.
-			_, err2 := execOutput("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Failed",
+			_, err2 := deps.Exec("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Failed",
 				"pod/net-probe", fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())))
 			if err2 != nil {
 				return fmt.Errorf("the probe pod reached neither Succeeded nor Failed: %w", err)
@@ -413,13 +413,13 @@ var (
 		return nil
 	}
 	readProbeStatuses = func(ns string) ([]byte, error) {
-		return execOutput("kubectl", "-n", ns, "get", "pod", "net-probe", "-o", "json")
+		return deps.Exec("kubectl", "-n", ns, "get", "pod", "net-probe", "-o", "json")
 	}
 	// readProbeLog returns one probe container's stdout — the line net-probe
 	// prints naming WHY the dial failed. Best-effort: a log that cannot be read
 	// must never change a verdict, only how well it is explained.
 	readProbeLog = func(ns, container string) string {
-		out, err := execOutput("kubectl", "-n", ns, "logs", "net-probe", "-c", container)
+		out, err := deps.Exec("kubectl", "-n", ns, "logs", "net-probe", "-c", container)
 		if err != nil {
 			return ""
 		}
@@ -429,7 +429,7 @@ var (
 	// probe uses an image already present and already signature-gated rather than
 	// one this file guesses at.
 	resolveProbeImage = func() (string, error) {
-		out, err := execOutput("kubectl", "-n", "llz-reconciler", "get", "deploy", "llz-reconciler",
+		out, err := deps.Exec("kubectl", "-n", "llz-reconciler", "get", "deploy", "llz-reconciler",
 			"-o", "jsonpath={.spec.template.spec.containers[0].image}")
 		if err != nil {
 			return "", fmt.Errorf("reading the llz image from the reconciler Deployment: %w", err)

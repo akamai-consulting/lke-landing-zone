@@ -128,12 +128,14 @@ categories:
     #                       branchpolicy.go went BACK to cmd/llz: its GitHub PUT is
     #                       cloud-mutate at `configured`, which grantStates refuses,
     #                       and one shipping case is below the two-case bar.
+    #   29,853 / 176 files  assert-network — BELOW 30,000, and the best ratio yet:
+    #                       closure 6 across 1,267 lines. -834.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 30687
+    budget: 29853
     exact: true
     include:
       - "tools/cmd/llz/*.go"

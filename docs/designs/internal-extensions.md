@@ -177,7 +177,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 |---|---:|---:|:-:|---|
 | `assert-observability` | 1,596 | 10 | ✔ | scrape 228, `ci_readiness` 225, alert-eval 213, log-ingestion 190, alert-delivery 193, grafana 164, `prom_query` 140, prom-rules 104, prom-metrics 70, `loki_query` 69 |
 | `assert-secrets` | 995 | 4 | ✔ | rotation-health 340, eso-roundtrip 266, broad-pat-rotation 204, openbao-audit 185 |
-| `assert-network` | 840 | 4 | ✔ | network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77 |
+| `assert-network` | 840 | 4 | ✔ | **✅ Extracted.** network-enforcement 440, admission-enforcement 240, net-probe 83, wave-health-vap 77. See [What `assert-network` corrected](#what-assert-network-corrected--a-name-that-read-like-a-capability). |
 | `assert-reconciler` | 725 | 2 | ✘ | 433 + effects 292 — pairs with `reconciler-runtime`. **✅ Extracted** — 1,044 lines, not 725. See [What `assert-reconciler` decided](#what-assert-reconciler-decided--the-pairing-question).|
 | `assert-storage` | 631 | 3 | ✔ | volume-encryption 265, reconcile-volume-tags 203, relabel-volumes 163 (holds `cloud-mutate` — the odd one out). **✅ Extracted** — the flag was a defect report, not a footnote; see [The first ten, extracted](#the-first-ten-extracted). |
 | `assert-identity` | 627 | 2 | ✔ | team-login-smoke 469, certificates 158 |
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty-one, extracted
+## The first twenty-two, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -280,9 +280,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `promote-pipeline` extracted | 32,733 | 184 | −232 — binds `promoted`, **the last unclaimed state** |
 | `posture-credential-coverage` extracted | 32,077 | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
 | `config-readiness` extracted | 31,372 | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
-| `env-topology` extracted | **30,687** | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
+| `env-topology` extracted | 30,687 | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
+| `assert-network` extracted | **29,853** | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
 
-**Net −16,495 (35.0%) across twenty-one extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −17,329 (36.7%) across twenty-two extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1262,6 +1263,43 @@ The `coverage_tier*` files are mis-filed because they are named for a **metric**
 mis-filed because it is named for the **command whose implementation happens to call the code** —
 a different cause with an identical effect: a test whose location says nothing about its subject. Ten
 tests have now been relocated across this branch, and the two naming patterns account for all of them.
+
+### What `assert-network` corrected — a name that read like a capability
+
+Twenty-second, **below 30,000**, and the best ratio of the lot: **closure 6 across 1,267 lines**.
+
+```
+assert-network  assertion:verified "network-enforcement"   [cluster-read]
+                assertion:verified "admission-enforcement" [cluster-read]
+                assertion:verified "net-probe"             [read-repo]
+                assertion:verified "wave-health-vap"       [cluster-read]
+```
+
+**I declared `net-probe` wrong first, and the model caught it for a better reason than it gave.** I
+wrote it as a `transition` holding `cluster-write`, reasoning that you cannot assert a NetworkPolicy
+denies a connection without a pod to attempt it from. `Validate()` refused — *"a transition binding
+cannot attach to `verified`"* — and the refusal was correct, but the real error was upstream of it:
+
+**the lane does not create the pod. It is the code that runs inside it.** Its entire body is a
+`net.DialTimeout` and an exit code; the pod is created by the workflow, and *"exit codes are the
+interface"* is the first thing the file says. So it holds no cluster grant at all.
+
+`ci_net_probe.go` **sounds** like a thing that probes the cluster. It is a thing the cluster runs.
+That is the filename-is-not-evidence lesson from the other direction — five catalog corrections have
+been "these files do not belong together", and this one was "this file does not do what its name
+implies". Reading the code beat reasoning about the name, as it has every time.
+
+**`ExecCombined` is a capability here, not a convenience.** The enforcement lanes assert a connection
+is *refused*, which means reading the failure TEXT: a NetworkPolicy drop usually blackholes (timeout)
+while an Istio sidecar refusing plaintext resets the connection (refused). Both are "blocked" for the
+gate, but which one happened is the difference between an operator checking Cilium and checking
+PeerAuthentication. An error-gated, stdout-only read discards exactly that — the same distinction
+`internal/kubectlprobe` draws between *absent* and *we never got an answer*.
+
+**One coupling test moved to package `main`** rather than being split: the wave-health VAP's CEL and
+the Go guard's allowlist must not drift, and `waveHealthAllowedKinds` is still in
+`ci_wave_health_guard.go`. `main` is the side that can see both halves. When `wave-health` is
+extracted the test moves with it and the assertion becomes cross-package.
 
 ## The cost of the interesting half
 

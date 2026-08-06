@@ -1,4 +1,4 @@
-package main
+package assertnetwork
 
 import (
 	"errors"
@@ -58,25 +58,8 @@ func TestClassifyWaveHealthCanary(t *testing.T) {
 	}
 }
 
-func TestWaveHealthCanaryIsAKindTheGuardMustReject(t *testing.T) {
-	// The canary only proves anything if the guard would genuinely deny it: a
-	// health-checked kind ABSENT from the allowlist, at a NEGATIVE sync-wave, and
-	// not an Argo hook (hooks are exempt via the VAP's not-argo-hook
-	// matchCondition). Guard against someone "fixing" the canary into an
-	// allowlisted kind, which would make this assert silently unfalsifiable.
-	if !strings.Contains(waveHealthCanaryManifest, `argocd.argoproj.io/sync-wave: "-5"`) {
-		t.Error("canary must carry a NEGATIVE sync-wave or the VAP's matchConditions skip it")
-	}
-	if strings.Contains(waveHealthCanaryManifest, "argocd.argoproj.io/hook") {
-		t.Error("canary must not be an Argo hook — the VAP exempts hooks")
-	}
-	if _, allowlisted := waveHealthAllowedKinds["apps/Deployment"]; allowlisted {
-		t.Error("apps/Deployment became allowlisted — the canary would now be ADMITTED and this assert would fail on a healthy cluster; pick another unvetted health-checked kind")
-	}
-}
-
 func TestCIAssertWaveHealthVAPCmdWiring(t *testing.T) {
-	c := ciAssertWaveHealthVAPCmd()
+	c := WaveHealthVAPCmd()
 	if c.Use != "assert-wave-health-vap" {
 		t.Errorf("Use = %q, want assert-wave-health-vap", c.Use)
 	}

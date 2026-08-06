@@ -1,4 +1,4 @@
-package main
+package assertnetwork
 
 // ci_assert_admission_enforcement.go implements `llz ci assert-admission-enforcement`
 // — the runtime proof that the admission policies this repo ships are actually
@@ -113,7 +113,7 @@ func classifyCloneCanary(out string, err error) enforcementVerdict {
 	return v
 }
 
-func ciAssertAdmissionEnforcementCmd() *cobra.Command {
+func AdmissionEnforcementCmd() *cobra.Command {
 	var checks string
 	c := &cobra.Command{
 		Use:   "assert-admission-enforcement",
@@ -174,7 +174,7 @@ var dryRunManifest = func(manifest string, extraArgs ...string) (string, error) 
 
 // readClusterPolicy fetches a Kyverno ClusterPolicy. Seamed for tests.
 var readClusterPolicy = func(name string) ([]byte, error) {
-	return execOutput("kubectl", "get", "clusterpolicy", name, "-o", "json")
+	return deps.Exec("kubectl", "get", "clusterpolicy", name, "-o", "json")
 }
 
 // ── signature policy ─────────────────────────────────────────────────────────
