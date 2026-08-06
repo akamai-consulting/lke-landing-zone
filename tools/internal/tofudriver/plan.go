@@ -1,4 +1,4 @@
-package main
+package tofudriver
 
 import (
 	"fmt"
@@ -33,7 +33,7 @@ var tfPlanRunFn = func(w io.Writer, tfFlags []string) error {
 	return cmd.Run()
 }
 
-func ciTFPlanCmd() *cobra.Command {
+func PlanCmd() *cobra.Command {
 	var out, title string
 	var lines int
 	c := &cobra.Command{
@@ -85,7 +85,7 @@ func runCITFPlan(out, title string, lines int, tfFlags []string) error {
 	if planErr != nil {
 		return fmt.Errorf("tf-plan: terraform plan %s: %w", strings.Join(tfFlags, " "), planErr)
 	}
-	return appendGHAFile("GITHUB_STEP_SUMMARY", strings.TrimSuffix(tfPlanSummary(title, buf.String(), lines), "\n"))
+	return caps.Summary("GITHUB_STEP_SUMMARY", strings.TrimSuffix(tfPlanSummary(title, buf.String(), lines), "\n"))
 }
 
 // tfPlanSummary renders the GITHUB_STEP_SUMMARY block: a heading, then the last

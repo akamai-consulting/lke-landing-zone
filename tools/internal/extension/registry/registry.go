@@ -43,6 +43,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
@@ -69,6 +70,7 @@ var declarations = []func() extension.Extension{
 	envtopology.Extension,
 	docsguard.Extension,
 	healthsla.Extension,
+	tofudriver.Extension,
 	tokeninv.Extension,
 	objenc.Extension,
 	promote.Extension,

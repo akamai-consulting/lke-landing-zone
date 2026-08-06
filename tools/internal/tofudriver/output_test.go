@@ -1,4 +1,4 @@
-package main
+package tofudriver
 
 import (
 	"os"
@@ -31,7 +31,7 @@ func TestTFOutputValue(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := tfOutputValue(clusterOutputs, c.out, c.asJSON, c.allow)
+			got, err := OutputValue(clusterOutputs, c.out, c.asJSON, c.allow)
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("want error, got %q", got)
@@ -52,10 +52,10 @@ func TestTFOutputValue(t *testing.T) {
 // must yield a clean absence, never leak warning text into the value.
 func TestTFOutputValue_ZeroOutputState(t *testing.T) {
 	for _, blob := range []string{"", "  ", "{}"} {
-		if _, err := tfOutputValue(blob, "cluster_id", false, false); err == nil {
+		if _, err := OutputValue(blob, "cluster_id", false, false); err == nil {
 			t.Errorf("blob %q: want missing-output error", blob)
 		}
-		got, err := tfOutputValue(blob, "cluster_id", false, true)
+		got, err := OutputValue(blob, "cluster_id", false, true)
 		if err != nil || got != "" {
 			t.Errorf("blob %q with --allow-missing: got (%q,%v), want empty", blob, got, err)
 		}
@@ -63,9 +63,9 @@ func TestTFOutputValue_ZeroOutputState(t *testing.T) {
 }
 
 func TestRunCITFOutput_Destinations(t *testing.T) {
-	prev := tfOutputRunFn
-	tfOutputRunFn = func() (string, error) { return clusterOutputs, nil }
-	t.Cleanup(func() { tfOutputRunFn = prev })
+	prev := OutputRunFn
+	OutputRunFn = func() (string, error) { return clusterOutputs, nil }
+	t.Cleanup(func() { OutputRunFn = prev })
 
 	// --out-key → GITHUB_OUTPUT line.
 	outPath := filepath.Join(t.TempDir(), "gho")

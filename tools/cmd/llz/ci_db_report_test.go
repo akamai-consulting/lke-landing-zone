@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 )
 
 // writeDBTfvars lays down terraform-iac-bootstrap/databases/<region>.tfvars in a
@@ -118,9 +120,9 @@ func TestDBApplySummaryDistinguishesProvisionedFromNone(t *testing.T) {
 }
 
 func TestDBSummaryPhaseRouting(t *testing.T) {
-	prev := tfOutputRunFn
-	t.Cleanup(func() { tfOutputRunFn = prev })
-	tfOutputRunFn = func() (string, error) {
+	prev := tofudriver.OutputRunFn
+	t.Cleanup(func() { tofudriver.OutputRunFn = prev })
+	tofudriver.OutputRunFn = func() (string, error) {
 		return `{"labels":{"value":{"shared":"platform-shared-prod"}}}`, nil
 	}
 

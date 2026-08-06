@@ -1,4 +1,4 @@
-package main
+package tofudriver
 
 import (
 	"bytes"
@@ -22,16 +22,21 @@ import (
 // output set as `-json` once and extracting the named value returns clean data
 // or a clean absence, with no inline warnings.
 
-// tfOutputRunFn runs `terraform output -json` (all outputs) and returns stdout.
+// EXPORTED, and it is a SEAM as much as a function: the db-report and
+// rotate-dbadmin verbs in package main read Terraform outputs through it, and
+// their tests stub it. Exporting the var rather than duplicating the exec keeps
+// one place where "how this repo asks Tofu for an output" is decided.
+//
+// OutputRunFn runs `terraform output -json` (all outputs) and returns stdout.
 // Package var so tests stub the terraform exec. stderr is discarded — a
 // zero-output state prints a warning there that must not reach the value.
-var tfOutputRunFn = func() (string, error) {
+var OutputRunFn = func() (string, error) {
 	cmd := tfbin.Command("output", "-json")
 	out, err := cmd.Output() // stdout only; stderr (the warning) dropped
 	return string(out), err
 }
 
-func ciTFOutputCmd() *cobra.Command {
+func OutputCmd() *cobra.Command {
 	var asJSON, allowMissing bool
 	var outKey, outFile string
 	c := &cobra.Command{
@@ -59,11 +64,11 @@ func ciTFOutputCmd() *cobra.Command {
 }
 
 func runCITFOutput(name string, asJSON, allowMissing bool, outKey, outFile string) error {
-	raw, err := tfOutputRunFn()
+	raw, err := OutputRunFn()
 	if err != nil {
 		return fmt.Errorf("tf-output: terraform output -json: %w", err)
 	}
-	value, err := tfOutputValue(raw, name, asJSON, allowMissing)
+	value, err := OutputValue(raw, name, asJSON, allowMissing)
 	if err != nil {
 		return err
 	}
@@ -74,7 +79,7 @@ func runCITFOutput(name string, asJSON, allowMissing bool, outKey, outFile strin
 			// corrupt the file; those (e.g. kubeconfig_raw) must use --out-file.
 			return fmt.Errorf("tf-output: value of %q is multi-line; use --out-file, not --out-key", name)
 		}
-		return appendGHAFile("GITHUB_OUTPUT", outKey+"="+value)
+		return caps.Summary("GITHUB_OUTPUT", outKey+"="+value)
 	case outFile != "":
 		if err := os.WriteFile(outFile, []byte(value), 0o600); err != nil {
 			return fmt.Errorf("tf-output: write %s: %w", outFile, err)
@@ -86,11 +91,11 @@ func runCITFOutput(name string, asJSON, allowMissing bool, outKey, outFile strin
 	}
 }
 
-// tfOutputValue extracts output `name` from a `terraform output -json` blob and
+// OutputValue extracts output `name` from a `terraform output -json` blob and
 // renders it. The blob is `{name: {value, type, sensitive}}` (or `{}` when the
 // state has no outputs). A string value renders raw unless asJSON; any other
 // value always renders as compact JSON.
-func tfOutputValue(outputsJSON, name string, asJSON, allowMissing bool) (string, error) {
+func OutputValue(outputsJSON, name string, asJSON, allowMissing bool) (string, error) {
 	var outputs map[string]struct {
 		Value json.RawMessage `json:"value"`
 	}

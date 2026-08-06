@@ -1,4 +1,4 @@
-package main
+package tofudriver
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ var tfDestroyRunFn = func(w io.Writer, args ...string) error {
 	return cmd.Run()
 }
 
-func ciTFDestroyCmd() *cobra.Command {
+func DestroyCmd() *cobra.Command {
 	var varFile, planOut string
 	var refreshOnly bool
 	c := &cobra.Command{

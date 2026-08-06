@@ -69,6 +69,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/spf13/cobra"
 )
 
@@ -322,13 +323,13 @@ func dbAdminLostCredentialErr(t dbAdminTarget, cause error) error {
 // dbAdminTargets builds the candidate list from the databases root's
 // `database_ids` output, joined against each path's rotated_at stamp.
 func dbAdminTargets(afterDays int, rotateNow bool) ([]dbAdminTarget, error) {
-	raw, err := tfOutputRunFn()
+	raw, err := tofudriver.OutputRunFn()
 	if err != nil {
 		return nil, fmt.Errorf("rotate-db-admin: terraform output -json: %w", err)
 	}
 	// allowMissing mirrors seed-db-admin: a state predating the databases root
 	// has no such output, which is "no clusters", not a broken state.
-	blob, err := tfOutputValue(raw, "database_ids", true, true)
+	blob, err := tofudriver.OutputValue(raw, "database_ids", true, true)
 	if err != nil {
 		return nil, err
 	}

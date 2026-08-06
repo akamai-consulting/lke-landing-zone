@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/spf13/cobra"
 )
 
@@ -88,14 +89,14 @@ func runCISeedDBAdmin(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	raw, err := tfOutputRunFn()
+	raw, err := tofudriver.OutputRunFn()
 	if err != nil {
 		return fmt.Errorf("seed-db-admin: terraform output -json: %w", err)
 	}
 	// allowMissing: a state predating the databases root has no `connections`
 	// output at all. That is the same "nothing to seed" as an empty map, and it
 	// must not fail a bootstrap that never declared a database.
-	blob, err := tfOutputValue(raw, "connections", true, true)
+	blob, err := tofudriver.OutputValue(raw, "connections", true, true)
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-package main
+package tofudriver
 
 import (
 	"bytes"
@@ -74,7 +74,7 @@ func stubTFPlan(t *testing.T, fn func(io.Writer, []string) error) {
 // execTFPlan runs the cobra command end-to-end with the given CLI args.
 func execTFPlan(t *testing.T, args ...string) error {
 	t.Helper()
-	c := ciTFPlanCmd()
+	c := PlanCmd()
 	c.SetOut(io.Discard)
 	c.SetErr(io.Discard)
 	c.SetArgs(args)

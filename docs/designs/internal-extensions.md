@@ -140,7 +140,7 @@ Realistic settled core: **~2,900**.
 | `cluster-bootstrap` | 964 | 2 | ✔ | ✘ | `ci_bootstrap_cluster` 771 + manifests 193. ADR 0011's payload. |
 | `cluster-access` | 952 | 4 | ✔ | ✘ | `runner_acl` 458, `runner_acl_configmap` 201, `fetchkubeconfig_state` 192, `fetchkubeconfig` 101. **✅ Extracted** — and the header above is now wrong for it: this state's grants are not `cloud-mutate` alone. See [What `cluster-access` found](#what-cluster-access-found--the-credential-the-table-forgot).|
 | `cloud-firewall` | 394 | 2 | ✔ | ✘ | `ci_discover_firewall` 215, `ci_firewall` 179. |
-| `tofu-driver` | 235 | 3 | ✔ | ✘ | `ci_tfoutput` 98, `ci_tfplan` 81, `ci_tfdestroy` 56. Thin — the real driver is `internal/terraform`. |
+| `tofu-driver` | 235 | 3 | ✔ | ✘ | **✅ Extracted — as THREE bindings across two states, not one.** Two of the three verbs mutate nothing. See [What `tofu-driver` split](#what-tofu-driver-split--the-two-verbs-a-reviewer-assumes-are-safe). Thin — the real driver is `internal/terraform`. |
 
 ## `→ seeded` — grants: `secret-custody` (+ `cloud-mutate` / `cluster-write`)
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty-three, extracted
+## The first twenty-four, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -282,9 +282,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `config-readiness` extracted | 31,372 | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
 | `env-topology` extracted | 30,687 | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
 | `assert-network` extracted | 29,853 | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
-| `wave-health` extracted | **29,450** | 174 | −403 — closure **3**, and the second state-level catalog correction |
+| `wave-health` extracted | 29,450 | 174 | −403 — closure **3**, and the second state-level catalog correction |
+| `tofu-driver` extracted | **29,230** | 172 | −220 — three verbs the catalog gave one row and one grant |
 
-**Net −17,732 (37.6%) across twenty-three extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −17,952 (38.0%) across twenty-four extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1327,6 +1328,39 @@ That is a stronger form of the same check. A kind vetted in one place and not th
 the cluster unchecked, or is blocked when the guard would have allowed it — and it is now verified
 across a package boundary rather than inside one file. **Extraction improved an assertion rather than
 merely relocating it**, which is the first time that has happened on this branch.
+
+### What `tofu-driver` split — the two verbs a reviewer assumes are safe
+
+Twenty-fourth, closure 3, and the catalog's thinnest row hiding a three-way split.
+
+```
+tofu-driver  assertion:provisioned "plan"    [cloud-read]
+             assertion:provisioned "output"  [cloud-read]
+             transition:destroyed  "destroy" [cloud-mutate]
+```
+
+The catalog files all three under `→ provisioned` with **`cloud-mutate`**, and **two of the three
+mutate nothing.** `tf-plan` computes a plan and reports changed/unchanged — that is the entire
+contract the calling job gates on, and a plan that applied something would be a plan nobody could
+trust. `tf-output` reads values out of state.
+
+**This over-grant matters more than the usual case.** `plan` and `output` are the two verbs a reviewer
+is *most* likely to assume are safe. A grant line claiming they mutate the cloud would either be
+ignored — or worse, would teach a reader that grant lines are approximations. The value of the whole
+declaration model rests on them being exact where it is cheap to be exact.
+
+`tf-destroy` is the one that mutates, and it belongs at **`destroyed`**, not `provisioned`: it is not
+a step toward having infrastructure, it is the step that ends it.
+
+**Why this is not `teardown` duplicated.** `teardown` (sixth extraction) holds `transition:destroyed`
+too, and the two are genuinely different: teardown is the **orchestration** — detach volumes, sweep
+orphans, assert nothing is left billing — while this is the raw `tofu destroy` it drives. One is the
+plan for ending a cluster's life; the other is a verb in it. **They share a state because they are
+about the same moment**, which is what states are for.
+
+`OutputRunFn` was exported rather than duplicated: the `db-report` and `rotate-dbadmin` verbs read
+Terraform outputs through it and their tests stub it, so exporting the var keeps one place where "how
+this repo asks Tofu for an output" is decided.
 
 ## The cost of the interesting half
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 )
 
 // databaseIDsOutput renders a `terraform output -json` blob carrying the
@@ -79,17 +80,17 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 		now:    time.Unix(1_800_000_000, 0),
 	}
 
-	prevTF, prevExec, prevPut := tfOutputRunFn, baoExecFn, baoKVPutFn
+	prevTF, prevExec, prevPut := tofudriver.OutputRunFn, baoExecFn, baoKVPutFn
 	prevNow, prevClient, prevSleep := dbAdminNow, dbAdminLinodeClient, dbAdminSleep
 	t.Cleanup(func() {
-		tfOutputRunFn, baoExecFn, baoKVPutFn = prevTF, prevExec, prevPut
+		tofudriver.OutputRunFn, baoExecFn, baoKVPutFn = prevTF, prevExec, prevPut
 		dbAdminNow, dbAdminLinodeClient, dbAdminSleep = prevNow, prevClient, prevSleep
 	})
 
 	t.Setenv("LINODE_TOKEN", "tok")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 
-	tfOutputRunFn = func() (string, error) { return outputs, nil }
+	tofudriver.OutputRunFn = func() (string, error) { return outputs, nil }
 	dbAdminNow = func() time.Time { return h.now }
 	dbAdminSleep = func(d time.Duration) { h.now = h.now.Add(d) }
 	dbAdminLinodeClient = func(string) dbAdminAPI { return h.api }

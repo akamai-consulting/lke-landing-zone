@@ -84,7 +84,8 @@ COVERAGE_MINS := \
 	internal/tokeninv=70 \
 	internal/terraform=95 \
 	internal/volumes=85 \
-	internal/wavehealth=74
+	internal/wavehealth=74 \
+	internal/tofudriver=68
 
 help:
 	@echo "lke-landing-zone — template repository targets"

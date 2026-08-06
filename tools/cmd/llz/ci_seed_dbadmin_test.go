@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 )
 
 // connectionsOutput renders a `terraform output -json` blob carrying the
@@ -34,12 +36,12 @@ func newSeedDBAdminHarness(t *testing.T, outputs string, seeded map[string]strin
 		seededEndpoints: seeded,
 	}
 
-	prevTF, prevExec, prevPut, prevNow := tfOutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow
+	prevTF, prevExec, prevPut, prevNow := tofudriver.OutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow
 	t.Cleanup(func() {
-		tfOutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow = prevTF, prevExec, prevPut, prevNow
+		tofudriver.OutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow = prevTF, prevExec, prevPut, prevNow
 	})
 
-	tfOutputRunFn = func() (string, error) { return outputs, nil }
+	tofudriver.OutputRunFn = func() (string, error) { return outputs, nil }
 	seedDBAdminNow = func() time.Time { return time.Unix(1700000000, 0) }
 
 	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {

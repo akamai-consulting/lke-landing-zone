@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
 	"github.com/spf13/cobra"
 
@@ -55,7 +56,7 @@ func ciCmd() *cobra.Command {
 			"in internal/terraform + internal/linode behind unit tests; these commands are\n" +
 			"the thin orchestration over it.",
 	}
-	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
+	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), tofudriver.PlanCmd(), tofudriver.OutputCmd(), tofudriver.DestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		configreadiness.PreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
 		assertplatform.AplVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged

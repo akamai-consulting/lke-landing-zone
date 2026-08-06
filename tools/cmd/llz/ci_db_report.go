@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/spf13/cobra"
 )
 
@@ -94,13 +95,13 @@ func runCIDBSummary(region, phase string) error {
 	case "destroy-plan":
 		return appendGHAFile("GITHUB_STEP_SUMMARY", dbDestroyWarning()...)
 	case "apply":
-		raw, err := tfOutputRunFn()
+		raw, err := tofudriver.OutputRunFn()
 		if err != nil {
 			return fmt.Errorf("db-summary: terraform output -json: %w", err)
 		}
 		// allowMissing: a state predating the databases root has no `labels`
 		// output, which is the same "nothing provisioned" as an empty map.
-		labels, err := tfOutputValue(raw, "labels", true, true)
+		labels, err := tofudriver.OutputValue(raw, "labels", true, true)
 		if err != nil {
 			return err
 		}

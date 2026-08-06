@@ -17,9 +17,10 @@ extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/inte
 (`tools/internal/credcoverage`) `config-readiness`
 (`tools/internal/configreadiness`) `env-topology`
 (`tools/internal/envtopology`) `assert-network`
-(`tools/internal/assertnetwork`) and `wave-health` (`tools/internal/wavehealth`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+(`tools/internal/assertnetwork`) `wave-health`
+(`tools/internal/wavehealth`) and `tofu-driver` (`tools/internal/tofudriver`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all twenty-three still run because `ci.go` and the reconciler register them, and the declarations are inert.
+all twenty-four still run because `ci.go` and the reconciler register them, and the declarations are inert.
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL EIGHT grants, both values of `Always`, multi-binding extensions,
 named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
 closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural

@@ -132,12 +132,14 @@ categories:
     #                       closure 6 across 1,267 lines. -834.
     #   29,450 / 174 files  wave-health, a GATE the catalog filed as an invariant —
     #                       2nd state-level correction. Closure 3, all noise. -403.
+    #   29,230 / 172 files  tofu-driver — three verbs the catalog gave ONE row and
+    #                       one grant; two of the three mutate nothing. -220.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 29450
+    budget: 29230
     exact: true
     include:
       - "tools/cmd/llz/*.go"
