@@ -132,7 +132,7 @@ func ciTeardownDeleteVPCCmd() *cobra.Command {
 }
 
 func ciAssertNoOrphansCmd() *cobra.Command {
-	var region, volumeRegion, clusterID, env string
+	var deployment, region, volumeRegion, clusterID, env string
 	var threshold, attempts, retryDelay int
 	c := &cobra.Command{
 		Use:   "assert-no-orphans",
@@ -153,10 +153,17 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 			"Reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// --deployment resolves the LINODE region from the rendered tfvars. The
+			// caller used to pass the DEPLOYMENT name as --volume-region, which is a
+			// Linode-region filter: no Volume ever matched, so this gate's Volume
+			// census read 0 and a destroy could go green leaving every Volume behind.
+			// Same fix, same mechanism as `llz ci preflight --deployment`.
+			region, volumeRegion, env = resolveDeploymentScope(deployment, region, volumeRegion, env)
 			return runCIAssertNoOrphans(region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
 		},
 	}
 	f := c.Flags()
+	f.StringVar(&deployment, "deployment", "", "deployment name; reads terraform-iac-bootstrap/cluster/<name>.tfvars from the repo root and fills the Linode region + --env. Without it, passing a deployment name to --volume-region silently scopes the Volume census to a region that does not exist (census always 0).")
 	f.StringVar(&region, "region", "", "scope the NB/VPC orphan census to one region (empty = account-wide)")
 	f.StringVar(&volumeRegion, "volume-region", "", "scope the pvc-* Volume orphan count to one region (empty = the --region value, or account-wide)")
 	f.StringVar(&env, "env", "", "deployment name; widens the Volume census to that deployment's RELABELED Volumes. Without it this gate counts only `pvc-`-prefixed Volumes and reports zero orphans while the deployment's own renamed Volumes leak.")

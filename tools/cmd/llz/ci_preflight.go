@@ -11,9 +11,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/preflight"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
@@ -21,6 +23,7 @@ import (
 )
 
 type preflightOpts struct {
+	deployment      string
 	region          string
 	env             string
 	volumeRegion    string
@@ -44,12 +47,13 @@ func ciPreflightCmd() *cobra.Command {
 			"stops before a 30-minute cluster-create hang. Optional capacity guards\n" +
 			"(--cluster-label same-label orphans, --vpc-limit, --vcpu-limit) catch quota\n" +
 			"caps up front; limits are operator-supplied (no Linode quota API), unset =\n" +
-			"report-only. Reads LINODE_TOKEN; fills --cluster-label/--node-type/--node-count\n" +
-			"from <region>.tfvars when run from the cluster TF dir.",
+			"report-only. Reads LINODE_TOKEN; --deployment fills --region/--volume-region/\n" +
+			"--cluster-label/--node-type/--node-count from the rendered cluster tfvars.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPreflight(o) },
 	}
 	f := c.Flags()
+	f.StringVar(&o.deployment, "deployment", "", "deployment name; reads terraform-iac-bootstrap/cluster/<name>.tfvars from the repo root and fills the Linode region + the capacity-guard inputs. Without it the guards that need them are inert, and --volume-region given a DEPLOYMENT name scopes the Volume census to a region that does not exist (census always 0).")
 	f.StringVar(&o.region, "region", "", "narrow the scan to one Linode region (empty = account-wide)")
 	f.StringVar(&o.env, "env", "", "deployment name; widens the Volume census to that deployment's RELABELED Volumes (<REGION_SHORT>-<ns>-<pvc>). Without it only the CSI default `pvc-` prefix is counted, so every Volume the volume-labels reconciler has renamed is invisible.")
 	f.StringVar(&o.volumeRegion, "volume-region", "", "scope the pvc-* Volume orphan count to one region (empty = the --region value, or account-wide). Volumes carry no cluster id, so an account-wide count flags other regions'/teams' detached Volumes that `llz reap` won't clean — scope to the deployment region to match reap.")
@@ -58,8 +62,13 @@ func ciPreflightCmd() *cobra.Command {
 	f.StringVar(&o.clusterLabel, "cluster-label", "", "the label this apply will create (enables the same-label orphan guard)")
 	f.StringVar(&o.nodeType, "node-type", "", "node pool Linode type, for the vCPU estimate (e.g. g6-standard-4)")
 	f.IntVar(&o.nodeCount, "node-count", 0, "node pool size, for the vCPU estimate")
-	f.IntVar(&o.vpcLimit, "vpc-limit", 0, "account VPC limit; fail if this apply would exceed it (0 = report-only)")
-	f.IntVar(&o.vcpuLimit, "vcpu-limit", 0, "account vCPU limit; fail if this apply would exceed it (0 = report-only)")
+	// Env-defaulted, like every other operator-supplied knob in this file
+	// (cli.EnvInt). Linode exposes no quota API, so these can only come from the
+	// account owner — and reading them from the environment keeps the workflow
+	// caller a single `run:` line instead of a multi-line block, which is budget
+	// the untestable-loc gate exists to protect.
+	f.IntVar(&o.vpcLimit, "vpc-limit", int(cli.EnvInt("PREFLIGHT_VPC_LIMIT", 0)), "account VPC limit; fail if this apply would exceed it (0 = report-only, env PREFLIGHT_VPC_LIMIT)")
+	f.IntVar(&o.vcpuLimit, "vcpu-limit", int(cli.EnvInt("PREFLIGHT_VCPU_LIMIT", 0)), "account vCPU limit; fail if this apply would exceed it (0 = report-only, env PREFLIGHT_VCPU_LIMIT)")
 	return c
 }
 
@@ -67,6 +76,25 @@ func runCIPreflight(o preflightOpts) error {
 	token, err := ciToken()
 	if err != nil {
 		return err
+	}
+
+	// --deployment fills the Linode region + --env from the rendered tfvars, and
+	// (below) the capacity-guard inputs. Shared with `llz ci assert-no-orphans`,
+	// which had the identical deployment-name-as-region bug.
+	o.region, o.volumeRegion, o.env = resolveDeploymentScope(o.deployment, o.region, o.volumeRegion, o.env)
+	if o.deployment != "" {
+		if content, rerr := os.ReadFile(filepath.Join("terraform-iac-bootstrap", "cluster", o.deployment+".tfvars")); rerr == nil {
+			v := tf.ParseTFVars(string(content))
+			if o.clusterLabel == "" {
+				o.clusterLabel = v.ClusterLabel
+			}
+			if o.nodeType == "" {
+				o.nodeType = v.NodeType
+			}
+			if o.nodeCount == 0 {
+				o.nodeCount = v.NodeCount
+			}
+		}
 	}
 
 	// Fall back to <region>.tfvars for the capacity-guard inputs (mirrors the
@@ -304,4 +332,42 @@ func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion
 		}
 	}
 	return s, nil
+}
+
+// resolveDeploymentScope fills the Linode-region and deployment scoping that the
+// orphan census needs, from the rendered cluster tfvars.
+//
+// WHY IT EXISTS. Both callers — `llz ci preflight` (before an apply) and
+// `llz ci assert-no-orphans` (after a destroy) — were handed the DEPLOYMENT name
+// as --volume-region. That flag is a Linode-REGION filter, so no Volume ever
+// matched it and both censuses reported 0 Volumes however many were stranded:
+// the apply-side guard could not warn, and the destroy-side gate could go green
+// on a deployment that leaked every one of its Volumes. Deriving the region from
+// the tfvars in ONE place is what stops the two sites disagreeing again.
+//
+// Every returned value keeps an explicit flag if the caller set one; deployment
+// only fills the gaps. An unreadable tfvars degrades to the caller's own values
+// (and the callers say so) rather than inventing a scope.
+func resolveDeploymentScope(deployment, region, volumeRegion, env string) (string, string, string) {
+	if deployment == "" {
+		return region, volumeRegion, env
+	}
+	if env == "" {
+		env = deployment
+	}
+	path := filepath.Join("terraform-iac-bootstrap", "cluster", deployment+".tfvars")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::--deployment %s but %s is unreadable (%v) — falling back to the flags as given.\n",
+			deployment, path, err)
+		return region, volumeRegion, env
+	}
+	v := tf.ParseTFVars(string(content))
+	if region == "" {
+		region = v.Region
+	}
+	if volumeRegion == "" {
+		volumeRegion = v.Region
+	}
+	return region, volumeRegion, env
 }

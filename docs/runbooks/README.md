@@ -11,6 +11,7 @@ are read by operators who do not have this repo checked out, often mid-incident.
 
 | What you are seeing | Runbook |
 |---|---|
+| Your first `llz up` / `llz build` went red and you need to know what to do | [first-build-failed](first-build-failed.md) |
 | Standing up OpenBao on a new cluster, or recovering a sealed/half-configured one | [bootstrap-openbao](bootstrap-openbao.md) |
 | An in-cluster alert is firing and you need the response for it | [reconciler-alerts](reconciler-alerts.md) |
 | A recreated cluster will not converge; the values repo still has the old `apl-<env>` branch | [apl-branch-recreate-wedge](apl-branch-recreate-wedge.md) |
