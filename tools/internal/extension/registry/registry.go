@@ -45,6 +45,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
 )
 
 // declarations is the built-in set. One line per extension; the catalog
@@ -74,6 +75,7 @@ var declarations = []func() extension.Extension{
 	reconcilelanes.Extension,
 	sustain.Extension,
 	teardown.Extension,
+	wavehealth.Extension,
 	volumes.Extension,
 }
 

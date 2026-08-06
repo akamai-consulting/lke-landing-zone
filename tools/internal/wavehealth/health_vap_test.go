@@ -1,4 +1,4 @@
-package main
+package wavehealth
 
 import (
 	"os"
@@ -16,7 +16,7 @@ import (
 // (the admission-time twin) to the CI guard's Go source of truth. The whole point of
 // the VAP is to reject the SAME wedge class `llz ci wave-health-guard` catches, on the
 // out-of-band write paths CI can't see — so its inline CEL allowlists MUST equal
-// waveHealthAllowedKinds + waveHealthAllowedNames. If they drift (a kind vetted in one
+// AllowedKinds + AllowedNames. If they drift (a kind vetted in one
 // place but not the other), the two guards disagree and this fails the build.
 func TestWaveHealthVAPMatchesGuard(t *testing.T) {
 	path := guardkit.RepoPath("../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
@@ -93,10 +93,10 @@ func TestWaveHealthVAPSkipsHooks(t *testing.T) {
 
 // waveHealthAllowedKindsSet / waveHealthAllowedNamesSet expose the guard maps' keys
 // (the maps themselves are unexported values in ci_wave_health_guard.go).
-func waveHealthAllowedKindsSet() map[string]waveHealthKindRule { return waveHealthAllowedKinds }
-func waveHealthAllowedNamesSet() map[string]waveHealthKindRule { return waveHealthAllowedNames }
+func waveHealthAllowedKindsSet() map[string]KindRule { return AllowedKinds }
+func waveHealthAllowedNamesSet() map[string]KindRule { return AllowedNames }
 
-func keySet(m map[string]waveHealthKindRule) map[string]bool {
+func keySet(m map[string]KindRule) map[string]bool {
 	out := make(map[string]bool, len(m))
 	for k := range m {
 		out[k] = true

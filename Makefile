@@ -83,7 +83,8 @@ COVERAGE_MINS := \
 	internal/teardown=80 \
 	internal/tokeninv=70 \
 	internal/terraform=95 \
-	internal/volumes=85
+	internal/volumes=85 \
+	internal/wavehealth=74
 
 help:
 	@echo "lke-landing-zone — template repository targets"

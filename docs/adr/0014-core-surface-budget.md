@@ -111,7 +111,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **31,372** with `config-readiness`.
 > and **30,687** with `env-topology`.
 > and **29,853** with `assert-network`.
-> Twenty-two extensions, net −17,329 (36.7%) — now BELOW the
+> and **29,450** with `wave-health`.
+> Twenty-three extensions, net −17,732 (37.6%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

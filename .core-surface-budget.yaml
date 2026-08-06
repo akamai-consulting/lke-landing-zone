@@ -130,12 +130,14 @@ categories:
     #                       and one shipping case is below the two-case bar.
     #   29,853 / 176 files  assert-network — BELOW 30,000, and the best ratio yet:
     #                       closure 6 across 1,267 lines. -834.
+    #   29,450 / 174 files  wave-health, a GATE the catalog filed as an invariant —
+    #                       2nd state-level correction. Closure 3, all noise. -403.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 29853
+    budget: 29450
     exact: true
     include:
       - "tools/cmd/llz/*.go"

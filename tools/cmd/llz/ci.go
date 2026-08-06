@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -225,7 +226,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(credcoverage.ExternalSecretPathsCmd())
 	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
-	c.AddCommand(ciWaveHealthGuardCmd())
+	c.AddCommand(wavehealth.HealthGuardCmd())
 	c.AddCommand(ciMTLSWiringGuardCmd())
 	c.AddCommand(ciPlaintextGuardCmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
@@ -239,7 +240,7 @@ func ciCmd() *cobra.Command {
 	// Static guard for the #163 wedge class: a workload that hard-depends on a
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
-	c.AddCommand(ciWaveDependencyGuardCmd())
+	c.AddCommand(wavehealth.DependencyGuardCmd())
 	// Live fault-injection game-day: break one platform ExternalSecret and assert
 	// the wedge is contained to its own carved Application (blast-radius
 	// decomposition proof). Run on a warm e2e cluster.

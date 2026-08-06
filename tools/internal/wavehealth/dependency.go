@@ -1,4 +1,4 @@
-package main
+package wavehealth
 
 // ci_wave_dependency_guard.go implements `llz ci wave-dependency-guard` — the
 // static guard extracted from the #163 converge wedge.
@@ -126,7 +126,7 @@ type wdInversion struct {
 	workloadApp, esApp             string
 }
 
-func ciWaveDependencyGuardCmd() *cobra.Command {
+func DependencyGuardCmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{
 		Use:   "wave-dependency-guard",

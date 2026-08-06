@@ -1,13 +1,16 @@
-package main
+package wavehealth
 
-// A COUPLING TEST THAT SPANS THE BOUNDARY, so it lives on the side that can see
-// both halves.
+// THE COUPLING TEST FINALLY LANDED WITH ITS SUBJECT.
 //
-// It asserts that the "canary" kind the VAP lane classifies is one the Go guard's
-// allowlist REJECTS — the two must not drift, or a kind vetted in one place
-// silently passes in the other. waveHealthAllowedKinds is in
-// ci_wave_health_guard.go (the `wave-health` candidate, not yet extracted); when
-// it moves, this test moves with it and the assertion becomes a cross-package one.
+// One extraction ago this sat in package main, because AllowedKinds was here and
+// the VAP canary was in internal/assertnetwork — main was the only side that could
+// see both. Now the allowlist is this package's, so the test comes here and the
+// assertion becomes a genuine cross-package one: the Go guard's allowlist must
+// reject the same kind the ValidatingAdmissionPolicy's CEL rejects.
+//
+// A kind vetted in one place and not the other is exactly the drift the pair
+// exists to prevent, and it is now checked across a boundary rather than inside
+// one file.
 
 import (
 	"strings"
@@ -28,7 +31,7 @@ func TestWaveHealthCanaryIsAKindTheGuardMustReject(t *testing.T) {
 	if strings.Contains(assertnetwork.WaveHealthCanaryManifest, "argocd.argoproj.io/hook") {
 		t.Error("canary must not be an Argo hook — the VAP exempts hooks")
 	}
-	if _, allowlisted := waveHealthAllowedKinds["apps/Deployment"]; allowlisted {
+	if _, allowlisted := AllowedKinds["apps/Deployment"]; allowlisted {
 		t.Error("apps/Deployment became allowlisted — the canary would now be ADMITTED and this assert would fail on a healthy cluster; pick another unvetted health-checked kind")
 	}
 }

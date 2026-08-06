@@ -1,4 +1,4 @@
-package main
+package wavehealth
 
 // ci_wave_health_guard.go implements `llz ci wave-health-guard` — the static
 // guard extracted from the 2026-07-04 four-wedge bootstrap outage (PR #142).
@@ -14,7 +14,7 @@ package main
 // The guard makes that class a PR-time failure: every resource kind that
 // appears at a NEGATIVE sync wave anywhere in the platform-bootstrap tree
 // (platform-apl/manifest/ + platform-apl/components/) must be listed in
-// waveHealthAllowedKinds — either because Argo assesses no health for it, or
+// AllowedKinds — either because Argo assesses no health for it, or
 // because apl-values/values.yaml carries a resource.customizations.health
 // override neutralizing its built-in check. Kinds whose safety DEPENDS on such
 // an override are cross-checked against values.yaml, so deleting the override
@@ -37,8 +37,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
-// waveHealthKindRule describes why a kind is safe at a negative sync wave.
-type waveHealthKindRule struct {
+// KindRule describes why a kind is safe at a negative sync wave.
+type KindRule struct {
 	// overrideKey non-empty → safety depends on the named
 	// resource.customizations.health entry in apl-values/values.yaml; the guard
 	// fails if that key is missing there.
@@ -46,9 +46,13 @@ type waveHealthKindRule struct {
 	reason      string
 }
 
-// waveHealthAllowedKinds maps "group/Kind" (core group = "") to the reason it
+// AllowedKinds maps "group/Kind" (core group = "") to the reason it
 // may appear at a negative sync wave in the platform-bootstrap tree.
-var waveHealthAllowedKinds = map[string]waveHealthKindRule{
+// EXPORTED because a coupling test in cmd/llz asserts this Go allowlist and the
+// wave-health ValidatingAdmissionPolicy's CEL agree. A kind vetted in one place
+// and not the other is the drift the pair exists to prevent, and the two halves
+// now live in different packages.
+var AllowedKinds = map[string]KindRule{
 	// Plain config/RBAC — Argo assesses no health; applied == done.
 	"/Namespace":                                   {reason: "no Argo health check"},
 	"/ServiceAccount":                              {reason: "no Argo health check"},
@@ -106,7 +110,7 @@ var waveHealthAllowedKinds = map[string]waveHealthKindRule{
 	},
 }
 
-// waveHealthAllowedNames are per-RESOURCE exceptions ("group/Kind/name") for
+// AllowedNames are per-RESOURCE exceptions ("group/Kind/name") for
 // kinds that are NOT kind-level safe. Certificates are the case in point: Argo
 // health-checks them (Ready-based), and an ACME Certificate at a negative wave
 // would re-create wedge #3 — but these specific certs are issued by in-cluster
@@ -115,7 +119,7 @@ var waveHealthAllowedKinds = map[string]waveHealthKindRule{
 // syncs. They have converged promptly through every color.Green bootstrap on record.
 // Keep this name-scoped: a NEW Certificate at a negative wave must be vetted
 // here, not waved through by kind.
-var waveHealthAllowedNames = map[string]waveHealthKindRule{
+var AllowedNames = map[string]KindRule{
 	"cert-manager.io/Certificate/openbao-ca":                  {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
 	"cert-manager.io/Certificate/otel-bootstrap-ca":           {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
 	"cert-manager.io/Certificate/platform-otel-collector-tls": {reason: "issued by the in-cluster otel-bootstrap-ca; no external dependency"},
@@ -165,11 +169,11 @@ type waveHealthDoc struct {
 type waveHealthFinding struct {
 	file, groupKind, name string
 	wave                  int
-	rule                  waveHealthKindRule
+	rule                  KindRule
 	allowed               bool
 }
 
-func ciWaveHealthGuardCmd() *cobra.Command {
+func HealthGuardCmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{
 		Use:   "wave-health-guard",
@@ -218,7 +222,7 @@ func runCIWaveHealthGuard(root string) error {
 				f.file, f.groupKind, f.name, f.wave, f.rule.overrideKey)
 			continue
 		}
-		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in waveHealthAllowedKinds (ci_wave_health_guard.go) with the override key, or register it with a documented reason it cannot wedge.\n",
+		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in AllowedKinds (ci_wave_health_guard.go) with the override key, or register it with a documented reason it cannot wedge.\n",
 			f.file, f.groupKind, f.name, f.wave, f.groupKind)
 	}
 	if failed {
@@ -229,7 +233,7 @@ func runCIWaveHealthGuard(root string) error {
 }
 
 // collectWaveHealthFindings walks the given dirs and classifies every
-// negative-wave resource against waveHealthAllowedKinds + the values overrides.
+// negative-wave resource against AllowedKinds + the values overrides.
 // It also returns how many manifest files were read, which the caller must gate
 // on (requireCorpus) — an empty corpus is a failure, not a pass.
 func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFinding, int, error) {
@@ -277,11 +281,11 @@ func classifyWaveHealthDoc(path string, d waveHealthDoc, values string) (waveHea
 	}
 	groupKind := group + "/" + d.Kind
 	f := waveHealthFinding{file: path, groupKind: groupKind, name: d.Metadata.Name, wave: wave}
-	if rule, ok := waveHealthAllowedNames[groupKind+"/"+d.Metadata.Name]; ok {
+	if rule, ok := AllowedNames[groupKind+"/"+d.Metadata.Name]; ok {
 		f.rule, f.allowed = rule, true
 		return f, true
 	}
-	rule, known := waveHealthAllowedKinds[groupKind]
+	rule, known := AllowedKinds[groupKind]
 	if !known {
 		return f, true // allowed=false: unvetted kind
 	}

@@ -206,7 +206,7 @@ The binding the current design has no room for; without it these 4,283 lines sta
 | `health-sla` | 405 | 3 | ✔ | ✔ | sla 165, readiness 162, incluster 78. **✅ Extracted — but only two of the three files.** `incluster` is part of `converge`, not this; grouping by filename prefix grouped it wrong. See [What `health-sla` corrected](#what-health-sla-corrected--a-catalog-row-that-grouped-by-filename).|
 | `posture-mesh` | 364 | 2 | ✘ | ✔ | mtls-wiring 211, mesh-egress 153 |
 | `posture-at-rest` | 304 | 1 | ✔ | ✔ | **✅ Extracted** — the first non-gate binding; see [The first ten, extracted](#the-first-ten-extracted). |
-| `wave-health` | 178 | 1 | ✔ | ✔ | |
+| `wave-health` | 178 | 1 | ✔ | ✔ | **✅ Extracted — and it is a GATE, not an invariant.** Also 619 lines in 2 files, not 178 in 1. See [What `wave-health` closed](#what-wave-health-closed--a-coupling-that-now-spans-packages). |
 
 ## `→ promoted` / `→ upgraded` / `→ destroyed`
 
@@ -243,7 +243,7 @@ Pure file-in/findings-out. All six externalisable; none needs a cluster or a cre
 
 ---
 
-## The first twenty-two, extracted
+## The first twenty-three, extracted
 
 `guard-budgets` and `guard-docs` are no longer rows in a table.
 
@@ -281,9 +281,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `posture-credential-coverage` extracted | 32,077 | 182 | −656 at 90.5% coverage — a GATE the catalog filed as an invariant |
 | `config-readiness` extracted | 31,372 | 182 | −705, plus `instancelayout` — a hub extracted to break a **cycle** |
 | `env-topology` extracted | 30,687 | 179 | −685, plus `yamledit` — and a binding **removed** rather than a row widened |
-| `assert-network` extracted | **29,853** | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
+| `assert-network` extracted | 29,853 | 176 | −834 — **below 30,000**, and the best ratio yet (closure 6 / 1,267 lines) |
+| `wave-health` extracted | **29,450** | 174 | −403 — closure **3**, and the second state-level catalog correction |
 
-**Net −17,329 (36.7%) across twenty-two extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −17,732 (37.6%) across twenty-three extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -1300,6 +1301,32 @@ PeerAuthentication. An error-gated, stdout-only read discards exactly that — t
 the Go guard's allowlist must not drift, and `waveHealthAllowedKinds` is still in
 `ci_wave_health_guard.go`. `main` is the side that can see both halves. When `wave-health` is
 extracted the test moves with it and the assertion becomes cross-package.
+
+### What `wave-health` closed — a coupling that now spans packages
+
+Twenty-third, **closure 3** (all three entries noise), and the second **state-level** catalog
+correction.
+
+```
+wave-health  gate:scaffolded[read-repo]
+```
+
+Filed under `invariant: operating` — *"the binding the current design has no room for"* — and it
+reaches no cluster at all: no exec, no HTTP, no `kubectlprobe`. Both checks are file scans. The line
+count is wrong in the usual direction too: **619 lines in 2 files, not 178 in 1.**
+
+Seven catalog corrections now, and every one was found by measuring rather than reading.
+
+**The coupling test finally landed with its subject.** One extraction ago, `assert-network`'s
+wave-health ValidatingAdmissionPolicy test had to sit in package `main` — `AllowedKinds` was there and
+the VAP canary was in `assertnetwork`, so `main` was the only side that could see both halves. With
+the allowlist now in this package, the test moved here and **the assertion became genuinely
+cross-package**: the Go guard's allowlist must reject the same kind the VAP's CEL rejects.
+
+That is a stronger form of the same check. A kind vetted in one place and not the other passes into
+the cluster unchecked, or is blocked when the guard would have allowed it — and it is now verified
+across a package boundary rather than inside one file. **Extraction improved an assertion rather than
+merely relocating it**, which is the first time that has happened on this branch.
 
 ## The cost of the interesting half
 
