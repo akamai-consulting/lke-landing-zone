@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/spf13/cobra"
 )
 
@@ -289,7 +290,7 @@ func patchWithWebhookRetry(patch string) error {
 			return nil
 		}
 		text := strings.TrimSpace(string(out)) + " " + err.Error()
-		if !isKyvernoWebhookRace(text) {
+		if !kyverno.IsWebhookRace(text) {
 			return fmt.Errorf("patch %s/%s hostAliases: %w: %s", openbaoNS, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
 		}
 		if !keycloakPinNow().Before(deadline) {

@@ -1,4 +1,4 @@
-package main
+package kyverno
 
 import (
 	"path/filepath"
@@ -89,7 +89,7 @@ func TestIsKyvernoWebhookRace(t *testing.T) {
 		`no endpoints available for service "kyverno-svc"`,
 	}
 	for _, s := range races {
-		if !isKyvernoWebhookRace(s) {
+		if !IsWebhookRace(s) {
 			t.Errorf("should classify as race: %q", s)
 		}
 	}
@@ -99,7 +99,7 @@ func TestIsKyvernoWebhookRace(t *testing.T) {
 		``,
 	}
 	for _, s := range notRace {
-		if isKyvernoWebhookRace(s) {
+		if IsWebhookRace(s) {
 			t.Errorf("should NOT classify as race: %q", s)
 		}
 	}
@@ -157,7 +157,7 @@ func testDeps(f *fakeKubectl, step time.Duration) cigate.Deps {
 }
 
 func TestApplyKyvernoPolicy(t *testing.T) {
-	base := kyvernoPolicyOpts{
+	base := Opts{
 		policyManifest: "manifests/kyverno-pvc.yaml",
 		fieldManager:   "fm",
 		waitForKyverno: true,
@@ -166,7 +166,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 
 	t.Run("ready then apply succeeds", func(t *testing.T) {
 		f := &fakeKubectl{} // everything succeeds
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
+		if err := Apply(base, testDeps(f, time.Second)); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !f.called("apply --server-side") {
@@ -185,7 +185,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		f := &fakeKubectl{responses: []kubectlRule{
 			{match: "wait --for=condition=Ready clusterpolicy", out: "timed out", ok: false},
 		}}
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
+		if err := Apply(base, testDeps(f, time.Second)); err != nil {
 			t.Fatalf("a not-Ready policy must soft-fail (nil err), got %v", err)
 		}
 		if !f.called("apply --server-side") {
@@ -200,7 +200,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		// 30s timeout, 20s/now-step → deadline passes after a couple polls.
 		o := base
 		o.waitTimeout = 30 * time.Second
-		if err := applyKyvernoPolicy(o, testDeps(f, 20*time.Second)); err != nil {
+		if err := Apply(o, testDeps(f, 20*time.Second)); err != nil {
 			t.Fatalf("timeout must soft-fail (nil err), got %v", err)
 		}
 		if f.called("apply --server-side") {
@@ -212,7 +212,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		f := &fakeKubectl{responses: []kubectlRule{
 			{match: "apply --server-side", out: `failed calling webhook "mutate-policy.kyverno.svc"`, ok: false},
 		}}
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
+		if err := Apply(base, testDeps(f, time.Second)); err != nil {
 			t.Fatalf("webhook race must soft-fail (nil err), got %v", err)
 		}
 	})
@@ -221,7 +221,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		f := &fakeKubectl{responses: []kubectlRule{
 			{match: "apply --server-side", out: `error validating "p.yaml": schema invalid`, ok: false},
 		}}
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err == nil {
+		if err := Apply(base, testDeps(f, time.Second)); err == nil {
 			t.Fatal("a non-race apply failure must return an error")
 		}
 	})
@@ -232,7 +232,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		f := &fakeKubectl{responses: []kubectlRule{
 			{match: "get crd clusterpolicies", out: "", ok: false},
 		}}
-		if err := applyKyvernoPolicy(o, testDeps(f, time.Second)); err != nil {
+		if err := Apply(o, testDeps(f, time.Second)); err != nil {
 			t.Fatalf("missing CRD must soft-fail, got %v", err)
 		}
 		if f.called("apply --server-side") {
@@ -244,7 +244,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		o := base
 		o.waitForKyverno = false
 		f := &fakeKubectl{}
-		if err := applyKyvernoPolicy(o, testDeps(f, time.Second)); err != nil {
+		if err := Apply(o, testDeps(f, time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		if f.called("wait --for=condition=Available") {
@@ -257,7 +257,7 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 }
 
 func TestRetrofitKyvernoConfigMap(t *testing.T) {
-	base := kyvernoPolicyOpts{
+	base := Opts{
 		policyManifest:    "manifests/kyverno-loki-gateway-resolver.yaml",
 		fieldManager:      "fm",
 		waitForKyverno:    true,
@@ -270,7 +270,7 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 
 	t.Run("configmap present -> annotate + rollout", func(t *testing.T) {
 		f := &fakeKubectl{} // apply ok, get cm ok, annotate ok, rollout ok
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
+		if err := Apply(base, testDeps(f, time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		if !f.called("annotate configmap loki-gateway") {
@@ -287,7 +287,7 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 		}}
 		o := base
 		o.retrofitWait = 30 * time.Second
-		if err := applyKyvernoPolicy(o, testDeps(f, 20*time.Second)); err != nil {
+		if err := Apply(o, testDeps(f, 20*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		if f.called("annotate configmap") {
@@ -299,7 +299,7 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 		o := base
 		o.retrofitRollout = ""
 		f := &fakeKubectl{}
-		if err := applyKyvernoPolicy(o, testDeps(f, time.Second)); err != nil {
+		if err := Apply(o, testDeps(f, time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		if !f.called("annotate configmap loki-gateway") {
@@ -320,12 +320,25 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 // Reads the real manifests rather than fixtures on purpose: the bug was precisely
 // that these two spellings drift, so the test has to compare against the shipped
 // files or it re-encodes the assumption instead of checking it.
+//
+// THE PATH REACHES BACK INTO cmd/llz, AND THAT IS NOT AN OVERSIGHT. The manifests
+// directory cannot follow this package: ci_bootstrap_cluster.go //go:embed-s three
+// of its files, and Go's embed cannot reach outside the embedding package's own
+// directory. Moving only the kyverno-* subset would split one directory of related
+// policy assets across two packages for the convenience of one test, which is
+// worse than a relative path that says what it means. manifestDir is the single
+// place to fix if either side ever moves.
+// manifestDir is where the shipped policy manifests live, relative to this
+// package. They stay in cmd/llz because ci_bootstrap_cluster.go embeds three of
+// them and //go:embed cannot reach outside its own package directory.
+const manifestDir = "../../cmd/llz/manifests"
+
 func TestPolicyName(t *testing.T) {
 	for manifest, want := range map[string]string{
-		"manifests/kyverno-pvc-encrypted-storage-class.yaml":         "pvc-force-encrypted-storage-class",
-		"manifests/kyverno-pvc-redirect-untagged-storage-class.yaml": "pvc-redirect-untagged-storage-class",
-		"manifests/kyverno-sc-default-demote.yaml":                   "sc-default-demote",
-		"manifests/kyverno-pvc-deny-untaggable-clone.yaml":           "pvc-deny-untaggable-clone",
+		manifestDir + "/kyverno-pvc-encrypted-storage-class.yaml":         "pvc-force-encrypted-storage-class",
+		manifestDir + "/kyverno-pvc-redirect-untagged-storage-class.yaml": "pvc-redirect-untagged-storage-class",
+		manifestDir + "/kyverno-sc-default-demote.yaml":                   "sc-default-demote",
+		manifestDir + "/kyverno-pvc-deny-untaggable-clone.yaml":           "pvc-deny-untaggable-clone",
 	} {
 		got := policyName(manifest)
 		if got != want {

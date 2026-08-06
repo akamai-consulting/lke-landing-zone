@@ -124,3 +124,12 @@ func prepareAplUpgradeBestEffort(d bootstrapDeps) {
 			aplOperatorNamespace, aplOperatorDeployment, aplSyncOptionsKey, aplSyncOptionsValue)
 	}
 }
+
+// warn prints a GitHub Actions warning annotation.
+//
+// A COPY, NOT AN EXPORT. It was defined in ci_kyverno.go, which moved to
+// tools/internal/kyverno; two package main files use it, and exporting a two-line
+// printf so both sides can reach it would put a symbol in a package's API whose
+// only job is to be reachable. Fixtures and printers travel by copy — the same
+// call the campaign made for firstNonEmpty, orAll and report.
+func warn(msg string) { fmt.Printf("::warning::%s\n", msg) }

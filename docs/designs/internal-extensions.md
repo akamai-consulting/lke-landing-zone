@@ -189,7 +189,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 | `converge` | 1,599 | 5 | ✔ | ✘ | `ci_health` 1,097, `ci_wait` 216, `statushealth` 114, `wait_apl_pipeline` 96, `nudge_argo` 76. **The acid test. ✅ Extracted — the prediction held exactly; see [What `converge` settled](#what-converge-settled--the-acid-test-and-what-it-did-not-break).** The action/assertion split it needs is already built and can be copied rather than invented: `internal/health` is 1,164 lines of pure classification that `health.go`'s header calls "the tested internal/health predicate", with the command reduced to the kubectl orchestration feeding it. That library half is an `assertion:converged`; the command half is the `transition:converged`. |
 | `apl-upgrade` | 306 | 2 | ✔ | ✘ | `ci_managed_lock` 230, `ci_prepare_apl_upgrade` 76. |
 | `argocd-diagnostics` | 243 | 1 | ✔ | ✔ | Read-only; pure argv. **✅ Extracted — and the first declaration that is knowingly wrong.** See [What `argocd-diagnostics` could not say](#what-argocd-diagnostics-could-not-say--the-first-missing-kind). |
-| `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. |
+| `kyverno-policies` | 180 | 1 | ✔ | ✘ | Writes policy — `cluster-write`, so not a `check`. **✅ Extracted — the first row whose note needed no correction.** See [What `kyverno-policies` confirmed](#what-kyverno-policies-confirmed--a-note-that-was-right). |
 
 ## `verified` — assertion contributors, grants: `cluster-read`
 
@@ -318,9 +318,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `assert-objstore` extracted | 23,387 | 149 | −266 — six for six, and the first mutation that was never hidden |
 | `wedge-gameday` extracted | 23,205 | 148 | −182 — the first binding forced in BOTH its kind and its state |
 | `phase-timing` extracted | 22,964 | 146 | −241 — the second diagnostic, and the two disagree about shape |
-| `doctor-probes` extracted | **22,726** | 143 | −238 — case three of three; the diagnostic family splits a third way |
+| `doctor-probes` extracted | 22,726 | 143 | −238 — case three of three; the diagnostic family splits a third way |
+| `kyverno-policies` extracted | **22,566** | 142 | −160 — the first catalog note that was right first time |
 
-**Net −24,456 (51.8%) across thirty-six extensions**, and now *below* the 41,803 this gate first recorded —
+**Net −24,616 (52.2%) across thirty-seven extensions**, and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2007,6 +2008,48 @@ whether they still work. It places none. That distinction is the entire content 
 `Deps` fields here defaulted to zero values; two tests failed immediately, because each writes a real
 file to a temp dir and asserts the reader finds it. **An installed default is a fixture too** — the
 defaults now read the spec and the copier answers for real.
+
+### What `kyverno-policies` confirmed — a note that was right
+
+Thirty-seventh. The catalog's note on this row is one line — *"Writes policy — `cluster-write`, so not
+a `check`"* — and it is **the first row whose note turned out to be exactly right, first time, with
+nothing to correct**. After eight corrections that is worth recording in the other direction.
+
+```
+kyverno-policies  transition:converged[cluster-read, cluster-write]
+```
+
+**An unforced `transition:converged`, and the contrast is the point.** Six extractions in a row had to
+spell a *check* as a transition because the vocabulary had nowhere to put a mutating observation —
+each true, each forced. This one is a transition because it genuinely **acts**: applying admission
+policy is a step that moves the platform toward `converged`, not an observation wearing a write grant.
+That contrast is evidence the forced spellings really were forced, rather than the model simply
+calling everything a transition.
+
+It holds `cluster-read` for a reason beyond the readiness poll: Kyverno's own admission webhook can
+reject the apply *while Kyverno is still starting*, and the command recognises that specific rejection
+and retries rather than failing the converge. `IsWebhookRace` is exported for exactly one other caller
+— the Keycloak gateway-alias apply, which hits the identical race.
+
+**Two constraints shaped the move, and neither was about the declaration.**
+
+`//go:embed` **pins data to its package directory.** The policy manifests could not follow this
+package: `ci_bootstrap_cluster.go` embeds three files from `tools/cmd/llz/manifests`, and Go's embed
+cannot reach outside the embedding package's own directory. Moving only the `kyverno-*` subset would
+split one directory of related policy assets across two packages for the convenience of one test. So
+the manifests stayed, and the test reaches back through a named `manifestDir` const with a test that
+fails if either side moves without the other. Same family of constraint as `internal/keycloak`: **the
+language decided the shape of the work, not the design.**
+
+`warn` was **copied, not exported.** It is a two-line `::warning::` printer that happened to live in
+this file and is used by two other package `main` files. Exporting it would put a symbol in this
+package's API whose only job is to be reachable from the other side. Printers and fixtures travel by
+copy — the same call made for `firstNonEmpty`, `orAll` and `report`.
+
+**And a process note.** The first attempt at this extraction used a greedy `\nfunc name(...\n}\n`
+regex to lift the cobra constructor and swallowed the import block with it. That trap is already
+written down — *split on line ranges computed from parsed `^func` boundaries* — and I reached for the
+regex anyway. Restored from git and redone the recorded way, which worked first time.
 
 ## The cost of the interesting half
 

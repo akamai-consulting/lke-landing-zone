@@ -1,4 +1,4 @@
-package main
+package kyverno
 
 import (
 	"testing"
@@ -41,13 +41,13 @@ func TestKyvernoReadinessPollsAtFiveSeconds(t *testing.T) {
 	}}
 	// 30s budget with a 20s/read clock → the loop probes, sleeps once, then times out.
 	d, slept := recordingDeps(f, 20*time.Second)
-	o := kyvernoPolicyOpts{
+	o := Opts{
 		policyManifest: "manifests/kyverno-pvc.yaml",
 		fieldManager:   "fm",
 		waitForKyverno: true,
 		waitTimeout:    30 * time.Second,
 	}
-	if err := applyKyvernoPolicy(o, d); err != nil {
+	if err := Apply(o, d); err != nil {
 		t.Fatalf("readiness timeout must soft-fail, got %v", err)
 	}
 	onlySleep(t, *slept, 5*time.Second, "readiness poll")
@@ -60,7 +60,7 @@ func TestKyvernoRetrofitPollsAtFiveSeconds(t *testing.T) {
 		{match: "get configmap loki-gateway", out: "", ok: false}, // never appears
 	}}
 	d, slept := recordingDeps(f, 20*time.Second)
-	o := kyvernoPolicyOpts{
+	o := Opts{
 		policyManifest:    "manifests/kyverno-loki-gateway-resolver.yaml",
 		fieldManager:      "fm",
 		waitForKyverno:    false, // skip the readiness loop; only the retrofit poll sleeps
@@ -68,7 +68,7 @@ func TestKyvernoRetrofitPollsAtFiveSeconds(t *testing.T) {
 		retrofitNamespace: "monitoring",
 		retrofitWait:      30 * time.Second,
 	}
-	if err := applyKyvernoPolicy(o, d); err != nil {
+	if err := Apply(o, d); err != nil {
 		t.Fatalf("retrofit is best-effort and must not error, got %v", err)
 	}
 	onlySleep(t, *slept, 5*time.Second, "retrofit poll")

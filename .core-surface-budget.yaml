@@ -187,7 +187,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 22726
+    budget: 22566
     exact: true
     include:
       - "tools/cmd/llz/*.go"
