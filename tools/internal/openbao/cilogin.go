@@ -1,4 +1,4 @@
-package main
+package openbao
 
 // ci_openbao_login.go — `llz ci openbao-login`: obtain a short-lived OpenBao
 // token and export it to $GITHUB_ENV (or print it) for later steps. The auth
@@ -44,55 +44,19 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
-	"github.com/spf13/cobra"
 )
 
-// inClusterOpenBaoAddr is the ClusterIP address an in-cluster workload reaches
+// InClusterAddr is the ClusterIP address an in-cluster workload reaches
 // OpenBao at — the same endpoint the reconciler and CronJobs use.
-const inClusterOpenBaoAddr = "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+const InClusterAddr = "https://platform-llz-svc.cluster.local:8200"
 
-func ciOpenBaoLoginCmd() *cobra.Command {
-	var method, role, addr, mount, saTokenFile, exportVar string
-	c := &cobra.Command{
-		Use:   "openbao-login",
-		Short: "obtain an OpenBao token via ServiceAccount (default) or GitHub OIDC and export it",
-		Long: "Logs in to OpenBao and writes the resulting short-lived token to $GITHUB_ENV\n" +
-			"as OPENBAO_TOKEN (override with --export-var), masked. The CI-agnostic auth\n" +
-			"primitive for in-cluster day-2 work (docs/designs/cross-org-reuse-pattern.md).\n\n" +
-			"--method kubernetes (default): the pod ServiceAccount token → OpenBao's\n" +
-			"kubernetes auth — works from any in-cluster workload, nothing GitHub-specific.\n" +
-			"--method oidc: a GitHub Actions OIDC token → OpenBao's jwt auth (needs\n" +
-			"`permissions: id-token: write`).\n\n" +
-			"BOTH methods now require this to run IN-CLUSTER with a client certificate:\n" +
-			"OpenBao's listener verifies client certs, so the caller must mount an\n" +
-			"llz-client-ca identity (OPENBAO_CLIENT_CERT_FILE / _KEY_FILE) plus the\n" +
-			"openbao-ca anchor (OPENBAO_CA_FILE). --method oidc was previously described\n" +
-			"as the fallback for an EXTERNAL GitHub-hosted caller; that is no longer\n" +
-			"true — an external runner has neither the certificate nor in-cluster DNS\n" +
-			"for the ClusterIP. Reach OpenBao from outside via\n" +
-			"`kubectl port-forward … :8210` (the loopback listener) instead.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runOpenBaoLogin(gopts, method, role, addr, mount, saTokenFile, exportVar)
-		},
-	}
-	c.Flags().StringVar(&method, "method", "kubernetes", "auth method: kubernetes (ServiceAccount, default) | oidc (GitHub OIDC)")
-	c.Flags().StringVar(&role, "role", "", "OpenBao role (default: reconciler for kubernetes, platform-ci for oidc)")
-	c.Flags().StringVar(&addr, "addr", "", "OpenBao API address (default: $OPENBAO_ADDR, else the in-cluster ClusterIP)")
-	c.Flags().StringVar(&mount, "kubernetes-mount", "", "kubernetes auth mount path (default: $OPENBAO_KUBERNETES_MOUNT, else kubernetes)")
-	c.Flags().StringVar(&saTokenFile, "sa-token-file", "", "ServiceAccount token file for --method kubernetes (default: $SA_TOKEN_FILE, else the projected SA token)")
-	c.Flags().StringVar(&exportVar, "export-var", "OPENBAO_TOKEN", "$GITHUB_ENV variable to export the token as")
-	return c
-}
-
-func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, exportVar string) error {
+func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar string) error {
 	if addr == "" {
 		if addr = os.Getenv("OPENBAO_ADDR"); addr == "" {
-			addr = inClusterOpenBaoAddr
+			addr = InClusterAddr
 		}
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) openbao-login method=%s role=%s addr=%s export=%s\n", method, role, addr, exportVar)
 		return nil
 	}
@@ -105,7 +69,7 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 	// A step that runs somewhere without one must go through the loopback
 	// listener instead (`kubectl port-forward … :8210`), not fall back to
 	// unverified TLS.
-	client, err := openbao.InClusterHTTPClient()
+	client, err := InClusterHTTPClient()
 	if err != nil {
 		return err
 	}
@@ -149,7 +113,7 @@ func kubernetesOpenBaoLogin(ctx context.Context, client *http.Client, addr, moun
 	if err != nil {
 		return "", fmt.Errorf("read ServiceAccount token %s: %w (is this running in-cluster?)", saTokenFile, err)
 	}
-	return openbao.KubernetesLogin(ctx, client, addr, mount, role, strings.TrimSpace(string(jwt)))
+	return KubernetesLogin(ctx, client, addr, mount, role, strings.TrimSpace(string(jwt)))
 }
 
 // oidcOpenBaoLogin mints a GitHub Actions OIDC token and exchanges it at OpenBao's
@@ -164,5 +128,5 @@ func oidcOpenBaoLogin(ctx context.Context, client *http.Client, addr, role strin
 		return "", fmt.Errorf("mint GitHub OIDC token: %w (does the job set `permissions: id-token: write`?)", err)
 	}
 	baoseed.MaskGHALines(oidcToken)
-	return openbao.JWTLogin(ctx, client, addr, role, oidcToken)
+	return JWTLogin(ctx, client, addr, role, oidcToken)
 }

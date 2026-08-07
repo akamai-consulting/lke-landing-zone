@@ -501,6 +501,21 @@ categories:
 #        in-cluster state and the firewall-controller does the reconciling. That
 #        split is why a one-shot bootstrap and a continuous reconciler cannot
 #        fight over the same Linode resource.
+#   66th: openbao-login -> internal/openbao   10,562 -> 10,291 (-271 / 95 files)
+#        The interactive `llz openbao login --team` and the in-cluster CI login,
+#        6 outbound together, all noise.
+#        THEY CARRIED A NAME COLLISION: runOpenbaoLogin and runOpenBaoLogin,
+#        differing by ONE CAPITAL, in two files that had never shared a package.
+#        Now RunTeamLogin and RunCILogin. Second such collision in this package.
+#        A TEST-BUILD IMPORT CYCLE, and Go names it misleadingly: teamlogin.go
+#        imported internal/identityconfig for the issuer lookup, giving
+#        identityconfig(test) -> reconcilelanes -> openbao -> identityconfig.
+#        The message says "import cycle not allowed in test", which reads like a
+#        test problem; it is the build saying two packages both want to own
+#        "which Keycloak issues our tokens". Settled as a seam defaulting to "".
+#        The seam PROVED ITSELF: TestKeycloakIssuerForLogin failed the moment it
+#        was introduced, which is the path confirming it really did depend on
+#        that lookup rather than on anything local.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -513,7 +528,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 10562
+    budget: 10291
     exact: true
     include:
       - "tools/cmd/llz/*.go"

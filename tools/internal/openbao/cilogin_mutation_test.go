@@ -1,4 +1,4 @@
-package main
+package openbao
 
 import (
 	"encoding/json"
@@ -54,7 +54,7 @@ func TestOpenBaoLoginResolvesAddr(t *testing.T) {
 	dryRunLine := func(addr string) string {
 		t.Helper()
 		out := captureStderr(t, func() {
-			err = runOpenBaoLogin(globalOpts{dryRun: true}, "kubernetes", "", addr, "", "", "OPENBAO_TOKEN")
+			err = RunCILogin(true, "kubernetes", "", addr, "", "", "OPENBAO_TOKEN")
 		})
 		if err != nil {
 			t.Fatalf("dry-run must be a no-op success: %v", err)
@@ -62,18 +62,18 @@ func TestOpenBaoLoginResolvesAddr(t *testing.T) {
 		return out
 	}
 
-	t.Setenv("OPENBAO_ADDR", "https://openbao.from-env:8200")
-	if got := dryRunLine(""); !strings.Contains(got, "addr=https://openbao.from-env:8200") {
+	t.Setenv("OPENBAO_ADDR", "https://from-env:8200")
+	if got := dryRunLine(""); !strings.Contains(got, "addr=https://from-env:8200") {
 		t.Errorf("$OPENBAO_ADDR must win when --addr is unset:\n%s", got)
 	}
 
 	t.Setenv("OPENBAO_ADDR", "")
-	if got := dryRunLine(""); !strings.Contains(got, "addr="+inClusterOpenBaoAddr) {
+	if got := dryRunLine(""); !strings.Contains(got, "addr="+InClusterAddr) {
 		t.Errorf("with neither --addr nor $OPENBAO_ADDR the in-cluster ClusterIP must be used:\n%s", got)
 	}
 
 	// An explicit --addr beats both.
-	t.Setenv("OPENBAO_ADDR", "https://openbao.from-env:8200")
+	t.Setenv("OPENBAO_ADDR", "https://from-env:8200")
 	if got := dryRunLine("https://explicit:8200"); !strings.Contains(got, "addr=https://explicit:8200") {
 		t.Errorf("--addr must win over the environment:\n%s", got)
 	}
@@ -92,7 +92,7 @@ func TestOpenBaoLoginKubernetesRoleAndMountReachOpenBao(t *testing.T) {
 	sa := writeSATokenFile(t)
 
 	// Explicit role + mount are used verbatim.
-	if err := runOpenBaoLogin(globalOpts{}, "kubernetes", "cluster-admin", srv.URL, "k8s-prod", sa, "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(false, "kubernetes", "cluster-admin", srv.URL, "k8s-prod", sa, "OPENBAO_TOKEN"); err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	if got.role != "cluster-admin" {
@@ -106,7 +106,7 @@ func TestOpenBaoLoginKubernetesRoleAndMountReachOpenBao(t *testing.T) {
 	}
 
 	// Omitted role and mount fall back to the documented defaults.
-	if err := runOpenBaoLogin(globalOpts{}, "kubernetes", "", srv.URL, "", sa, "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(false, "kubernetes", "", srv.URL, "", sa, "OPENBAO_TOKEN"); err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	if got.role != "reconciler" {
@@ -128,7 +128,7 @@ func TestOpenBaoLoginSurfacesAnExportFailure(t *testing.T) {
 	// A $GITHUB_ENV inside a directory that does not exist → the append fails.
 	t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "no-such-dir", "gh_env"))
 
-	err := runOpenBaoLogin(globalOpts{}, "kubernetes", "reconciler", srv.URL, "kubernetes", sa, "OPENBAO_TOKEN")
+	err := RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", sa, "OPENBAO_TOKEN")
 	if err == nil {
 		t.Fatal("a failed $GITHUB_ENV export must surface — silently exiting 0 leaves every later step tokenless")
 	}
@@ -147,7 +147,7 @@ func TestOpenBaoLoginConfirmsTheExport(t *testing.T) {
 
 	var err error
 	got := captureStderr(t, func() {
-		err = runOpenBaoLogin(globalOpts{}, "kubernetes", "reconciler", srv.URL, "kubernetes", sa, "OPENBAO_TOKEN")
+		err = RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", sa, "OPENBAO_TOKEN")
 	})
 	if err != nil {
 		t.Fatalf("login: %v", err)

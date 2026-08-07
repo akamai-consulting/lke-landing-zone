@@ -1,4 +1,4 @@
-package main
+package openbao
 
 import (
 	"net/http"
@@ -6,22 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 func TestOpenBaoLoginDryRun(t *testing.T) {
 	// dry-run must not touch the network or the filesystem, for either method.
-	if err := runOpenBaoLogin(globalOpts{dryRun: true}, "kubernetes", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(true, "kubernetes", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
 		t.Fatalf("kubernetes dry-run should be a no-op success: %v", err)
 	}
-	if err := runOpenBaoLogin(globalOpts{dryRun: true}, "oidc", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(true, "oidc", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
 		t.Fatalf("oidc dry-run should be a no-op success: %v", err)
 	}
 }
 
 func TestOpenBaoLoginUnknownMethod(t *testing.T) {
-	if err := runOpenBaoLogin(globalOpts{}, "carrier-pigeon", "", "", "", "", "OPENBAO_TOKEN"); err == nil {
+	if err := RunCILogin(false, "carrier-pigeon", "", "", "", "", "OPENBAO_TOKEN"); err == nil {
 		t.Fatal("expected an error for an unknown --method")
 	}
 }
@@ -29,12 +27,12 @@ func TestOpenBaoLoginUnknownMethod(t *testing.T) {
 // stubInClusterBaoClient replaces the pod→OpenBao mTLS transport for one test.
 // The real one reads a client keypair off disk (the workload's llz-client-ca
 // identity), which a unit test has no business minting — the keypair handling
-// itself is covered by TestHTTPClientMTLS_Handshake in internal/openbao.
+// itself is covered by TestHTTPClientMTLS_Handshake in internal/
 func stubInClusterBaoClient(t *testing.T, c *http.Client) {
 	t.Helper()
-	prev := openbao.InClusterHTTPClient
-	openbao.InClusterHTTPClient = func() (*http.Client, error) { return c, nil }
-	t.Cleanup(func() { openbao.InClusterHTTPClient = prev })
+	prev := InClusterHTTPClient
+	InClusterHTTPClient = func() (*http.Client, error) { return c, nil }
+	t.Cleanup(func() { InClusterHTTPClient = prev })
 }
 
 // TestOpenBaoLoginRequiresClientIdentity: with no client certificate mounted,
@@ -57,7 +55,7 @@ func TestOpenBaoLoginKubernetesExportsToken(t *testing.T) {
 	t.Setenv("GITHUB_ENV", ghEnv)
 
 	stubInClusterBaoClient(t, srv.Client())
-	if err := runOpenBaoLogin(globalOpts{}, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN"); err != nil {
 		t.Fatalf("kubernetes login: %v", err)
 	}
 	got, err := os.ReadFile(ghEnv)
@@ -71,7 +69,7 @@ func TestOpenBaoLoginKubernetesExportsToken(t *testing.T) {
 
 func TestOpenBaoLoginKubernetesMissingSAToken(t *testing.T) {
 	// No SA token file → a clear error (not a panic), the "not running in-cluster" case.
-	if err := runOpenBaoLogin(globalOpts{}, "kubernetes", "reconciler", "https://x", "kubernetes",
+	if err := RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes",
 		filepath.Join(t.TempDir(), "nope"), "OPENBAO_TOKEN"); err == nil {
 		t.Fatal("expected an error when the SA token file is absent")
 	}

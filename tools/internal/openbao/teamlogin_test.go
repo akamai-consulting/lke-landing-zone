@@ -1,4 +1,4 @@
-package main
+package openbao
 
 import (
 	"encoding/json"
@@ -149,7 +149,7 @@ func TestPollDeviceToken_RetriesTransientError(t *testing.T) {
 }
 
 func TestRunOpenbaoLogin_RequiresTeam(t *testing.T) {
-	if err := runOpenbaoLogin(openbaoLoginOpts{}); err == nil {
+	if err := RunTeamLogin(TeamLoginOpts{}); err == nil {
 		t.Error("login without --team must error")
 	}
 }
@@ -184,12 +184,12 @@ spec:
 		writeSpecInstance(t, map[string]string{
 			"prod": env("managedAppPlatform: true"),
 		})
-		withKubectl(t, func(args string) ([]byte, error) {
-			if !strings.Contains(args, "otomi-api") {
-				return nil, fmt.Errorf("unexpected kubectl %q", args)
-			}
-			return []byte(managedIssuer + "\n"), nil
-		})
+		// The discovery call is a SEAM now, not a direct call into
+		// internal/identityconfig — that import was a cycle in the test build. The
+		// stub replaces what identityconfig.DiscoverIssuerFromCluster used to do,
+		// and this test failing when the seam was introduced is the seam working:
+		// it proved the path really did depend on that lookup.
+		withIssuerDiscovery(t, func() string { return managedIssuer })
 		got, err := keycloakIssuerForLogin("prod")
 		if err != nil || got != managedIssuer {
 			t.Fatalf("managed issuer = (%q, %v), want (%q, nil)", got, err, managedIssuer)

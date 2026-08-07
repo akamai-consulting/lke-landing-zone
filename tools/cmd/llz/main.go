@@ -477,7 +477,7 @@ func openbaoCmd() *cobra.Command {
 }
 
 func openbaoLoginCmd() *cobra.Command {
-	var o openbaoLoginOpts
+	var o openbao.TeamLoginOpts
 	c := &cobra.Command{
 		Use:   "login --team <name>",
 		Short: "mint a team-scoped OpenBao token via Keycloak OIDC (no root token)",
@@ -495,13 +495,13 @@ func openbaoLoginCmd() *cobra.Command {
 			"(KUBECONFIG): it port-forwards OpenBao for the token exchange. See\n" +
 			"docs/designs/team-scoped-credentials.md.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runOpenbaoLogin(o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return openbao.RunTeamLogin(o) },
 	}
 	f := c.Flags()
-	f.StringVar(&o.team, "team", "", "team name == OpenBao keycloak role == spec.teams entry (required)")
-	f.StringVar(&o.region, "region", "", "spec env whose domainSuffix derives the Keycloak issuer (optional if the spec has one env)")
-	f.StringVar(&o.issuer, "issuer", "", "Keycloak realm issuer URL override (e.g. https://keycloak.<domain>/realms/otomi)")
-	f.StringVar(&o.clientID, "client-id", "", "Keycloak OIDC device-flow client id (default: $OPENBAO_OIDC_CLIENT_ID or 'llz')")
+	f.StringVar(&o.Team, "team", "", "team name == OpenBao keycloak role == spec.teams entry (required)")
+	f.StringVar(&o.Region, "region", "", "spec env whose domainSuffix derives the Keycloak issuer (optional if the spec has one env)")
+	f.StringVar(&o.Issuer, "issuer", "", "Keycloak realm issuer URL override (e.g. https://keycloak.<domain>/realms/otomi)")
+	f.StringVar(&o.ClientID, "client-id", "", "Keycloak OIDC device-flow client id (default: $OPENBAO_OIDC_CLIENT_ID or 'llz')")
 	return c
 }
 

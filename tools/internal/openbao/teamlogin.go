@@ -1,4 +1,4 @@
-package main
+package openbao
 
 // openbao_login.go — `llz openbao login`, the human-operator auth primitive for
 // team-scoped OpenBao writes. It runs an OAuth 2.0 Device Authorization Grant
@@ -10,7 +10,7 @@ package main
 // token. See docs/designs/team-scoped-credentials.md and ADR 0004.
 //
 // OpenBao has no external ingress, so the id_token→token exchange rides the same
-// ephemeral kubectl port-forward `get`/`set` use (openbao.PortForwardFn).
+// ephemeral kubectl port-forward `get`/`set` use (PortForwardFn).
 
 import (
 	"context"
@@ -25,8 +25,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // loginHTTPClient talks to Keycloak's OIDC endpoints. Keycloak is served on a
@@ -151,11 +149,11 @@ func readSnippet(r io.Reader) string {
 	return strings.TrimSpace(string(b))
 }
 
-type openbaoLoginOpts struct {
-	team     string
-	region   string
-	issuer   string
-	clientID string
+type TeamLoginOpts struct {
+	Team     string
+	Region   string
+	Issuer   string
+	ClientID string
 }
 
 // keycloakIssuerForLogin derives the realm issuer from the spec (region's
@@ -187,7 +185,7 @@ func keycloakIssuerForLogin(region string) (string, error) {
 	// cluster reach — it port-forwards OpenBao for the token exchange below — so the
 	// ConfigMap read is available here, and this removes the need to pass --issuer.
 	if e.Cluster.Bootstrap.ManagedAppPlatform {
-		if iss := identityconfig.DiscoverIssuerFromCluster(); iss != "" {
+		if iss := DiscoverIssuerFromCluster(); iss != "" {
 			return iss, nil
 		}
 		return "", fmt.Errorf("region %q is managedAppPlatform but the Keycloak issuer could not be discovered from the otomi/otomi-api ConfigMap — is your kubeconfig pointed at the target cluster? — pass --issuer https://keycloak.<domain>/realms/otomi", region)
@@ -198,19 +196,19 @@ func keycloakIssuerForLogin(region string) (string, error) {
 	return "https://keycloak." + e.Cluster.Bootstrap.DomainSuffix + "/realms/otomi", nil
 }
 
-func runOpenbaoLogin(o openbaoLoginOpts) error {
-	if o.team == "" {
+func RunTeamLogin(o TeamLoginOpts) error {
+	if o.Team == "" {
 		return fmt.Errorf("--team is required (the OpenBao keycloak role, == the spec.teams name)")
 	}
-	clientID := firstNonEmpty(o.clientID, os.Getenv("OPENBAO_OIDC_CLIENT_ID"), "llz")
-	issuer := o.issuer
+	clientID := firstNonEmpty(o.ClientID, os.Getenv("OPENBAO_OIDC_CLIENT_ID"), "llz")
+	issuer := o.Issuer
 	if issuer == "" {
 		var err error
-		if issuer, err = keycloakIssuerForLogin(o.region); err != nil {
+		if issuer, err = keycloakIssuerForLogin(o.Region); err != nil {
 			return err
 		}
 	}
-	fmt.Fprintf(os.Stderr, "→ Keycloak OIDC device login (issuer %s, client %s, team %s)\n", issuer, clientID, o.team)
+	fmt.Fprintf(os.Stderr, "→ Keycloak OIDC device login (issuer %s, client %s, team %s)\n", issuer, clientID, o.Team)
 
 	cfg, err := discoverOIDC(loginHTTPClient, issuer)
 	if err != nil {
@@ -234,12 +232,12 @@ func runOpenbaoLogin(o openbaoLoginOpts) error {
 
 	// Reach OpenBao over the same ephemeral port-forward get/set use, then swap
 	// the id_token for a team-scoped OpenBao token via the `keycloak` mount.
-	addr, cleanup, err := openbao.PortForwardFn()
+	addr, cleanup, err := PortForwardFn()
 	if err != nil {
 		return fmt.Errorf("port-forward to %s/%s: %w", baoread.Namespace, baoread.RootPod, err)
 	}
 	defer cleanup()
-	token, err := openbao.OIDCLogin(context.Background(), openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", o.team, idToken)
+	token, err := OIDCLogin(context.Background(), HTTPClientLoopback(30*time.Second), addr, "keycloak", o.Team, idToken)
 	if err != nil {
 		return err
 	}
@@ -248,8 +246,8 @@ func runOpenbaoLogin(o openbaoLoginOpts) error {
 	// (the first line isn't valid shell). This is a local-operator eval command —
 	// stdout carries only the export. Single-quote the value so a token is never
 	// re-parsed by the shell (OpenBao tokens contain no single quotes).
-	fmt.Fprintf(os.Stderr, "✓ authenticated as team %q — token scoped to the %s-writer policy\n", o.team, o.team)
-	fmt.Fprintf(os.Stderr, "  load it into your shell:  eval \"$(llz openbao login --team %s)\"\n", o.team)
+	fmt.Fprintf(os.Stderr, "✓ authenticated as team %q — token scoped to the %s-writer policy\n", o.Team, o.Team)
+	fmt.Fprintf(os.Stderr, "  load it into your shell:  eval \"$(llz openbao login --team %s)\"\n", o.Team)
 	fmt.Printf("export OPENBAO_TOKEN='%s'\n", token) // stdout only, so `eval` works
 	return nil
 }

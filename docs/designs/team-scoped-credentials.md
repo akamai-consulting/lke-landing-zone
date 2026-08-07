@@ -200,7 +200,7 @@ diverges in these specifics (the code is authoritative):
 
 Reference: [`ci_openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
 [`ci_keycloak_configure.go`](../../tools/internal/identityconfig/keycloak_configure.go),
-[`openbao_login.go`](../../tools/cmd/llz/openbao_login.go),
+[`openbao_login.go`](../../tools/internal/openbao/teamlogin.go),
 [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
 
 ## The read half (shipped in #336)
