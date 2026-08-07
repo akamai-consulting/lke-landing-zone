@@ -3,7 +3,7 @@ package main
 // baoread_deps.go — wires internal/baoread's two seams.
 //
 // WHICH POD HOLDS ROOT IS PACKAGE MAIN'S BUSINESS, not the read classifier's:
-// rootOpenbaoPod has six callers here, so the installer bakes it into Exec and the
+// baoread.RootPod has six callers here, so the installer bakes it into Exec and the
 // package's signature carries only the token and the argv. Likewise
 // baoread.ParsePodStatus has four other callers and stays; the package asks
 // "answering and unsealed?" through a seam rather than parsing status itself.
@@ -17,12 +17,12 @@ func init() {
 	// this campaign twice.
 	baoread.InstallWrites(
 		func(token, stdin string, args ...string) (string, string, error) {
-			return baoread.ExecFn(rootOpenbaoPod, token, stdin, args...)
+			return baoread.ExecFn(baoread.RootPod, token, stdin, args...)
 		},
 	)
 	baoread.Install(
 		func(token string, args ...string) (string, string, error) {
-			return baoread.ExecFn(rootOpenbaoPod, token, "", args...)
+			return baoread.ExecFn(baoread.RootPod, token, "", args...)
 		},
 		func(statusJSON string) bool {
 			st, ok := baoread.ParsePodStatus(statusJSON)

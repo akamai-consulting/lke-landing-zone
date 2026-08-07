@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"testing"
@@ -22,7 +22,7 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 		}
 		minted++
 		if !reaped[e.Label] {
-			t.Errorf("reapEnvObjKeys does not target minted obj-key label %q — it would leak on teardown", e.Label)
+			t.Errorf("ReapEnvObjKeys does not target minted obj-key label %q — it would leak on teardown", e.Label)
 		}
 	}
 	if minted == 0 {
@@ -37,7 +37,7 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("reapEnvObjKeys targets label %q that credrotate.BuildRotationTable never mints", l)
+			t.Errorf("ReapEnvObjKeys targets label %q that credrotate.BuildRotationTable never mints", l)
 		}
 	}
 }

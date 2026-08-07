@@ -17,11 +17,11 @@ import (
 )
 
 func init() {
-	// A delegating closure, not a direct assignment: openbaoClientForward is itself
+	// A delegating closure, not a direct assignment: openbao.ClientForward is itself
 	// reachable through seams a test may swap, and capturing its value at init
 	// would freeze whatever it pointed at. That bug has cost this campaign twice.
 	database.InstallOpenBaoForward(func(role string) (*openbao.Client, func(), error) {
-		return openbaoClientForward(role)
+		return openbao.ClientForward(role)
 	})
 }
 

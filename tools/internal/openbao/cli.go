@@ -1,6 +1,6 @@
-package main
+package openbao
 
-// openbao.go wires `llz openbao get|set|exec` over internal/openbao + kubectl.
+// go wires `llz openbao get|set|exec` over internal/openbao + kubectl.
 // `get` reads one field from a cluster by HA role (read-only). `set` writes:
 // for an HA pair it is the transactional dual write (active, then standby,
 // rollback + hash-verify); for a standalone deployment (no OPENBAO_ADDR_STANDBY)
@@ -36,15 +36,13 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
-// openbaoClient builds a client for an HA role from the OPENBAO_* env. Pure
+// Client builds a client for an HA role from the OPENBAO_* env. Pure
 // (env → client, no side effects); the auto port-forward default lives in
-// openbaoClientForward, which callers use.
-func openbaoClient(role string) (*openbao.Client, error) {
+// ClientForward, which callers use.
+func NewClientFor(role string) (*Client, error) {
 	var addr, token string
 	switch role {
 	case envtopology.RoleActive:
@@ -60,33 +58,33 @@ func openbaoClient(role string) (*openbao.Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("OPENBAO_TOKEN_%s (or OPENBAO_TOKEN) is not set — mint a team-scoped token with `eval \"$(llz openbao login --team <name>)\"`", strings.ToUpper(role))
 	}
-	return openbao.New(addr, token, os.Getenv("OPENBAO_NAMESPACE"), 30*time.Second), nil
+	return New(addr, token, os.Getenv("OPENBAO_NAMESPACE"), 30*time.Second), nil
 }
 
-// portForwardOpenbaoFn opens an ephemeral kubectl port-forward to the OpenBao
+// PortForwardFn opens an ephemeral kubectl port-forward to the OpenBao
 // pod-0 (writes/reads request-forward to the raft leader) and returns the local
 // https base URL plus a teardown func. A package var so tests can seam it
 // (mirrors withPrometheus in prom_query.go).
-var portForwardOpenbaoFn = portForwardOpenbao
+var PortForwardFn = portForward
 
-// openbaoClientForward is openbaoClient plus the auto port-forward default. It
+// ClientForward is Client plus the auto port-forward default. It
 // returns a cleanup func the caller MUST defer (a no-op unless a port-forward was
-// opened). When OPENBAO_ADDR_<role> is set it delegates to openbaoClient
+// opened). When OPENBAO_ADDR_<role> is set it delegates to Client
 // verbatim. Otherwise — only for the active role of a standalone deployment — it
 // opens a port-forward and builds an insecure (loopback) client. A standby, or an
 // active with a standby configured (an HA pair the operator addresses
 // explicitly), keeps the plain env behavior and its "not set" error.
-func openbaoClientForward(role string) (*openbao.Client, func(), error) {
+func ClientForward(role string) (*Client, func(), error) {
 	noop := func() {}
 	// An explicitly set address always wins — CI, HA, or a deliberate override.
 	if os.Getenv("OPENBAO_ADDR_"+strings.ToUpper(role)) != "" {
-		c, err := openbaoClient(role)
+		c, err := NewClientFor(role)
 		return c, noop, err
 	}
 	// Auto-forward only the active cluster of a standalone deployment; anything
-	// else keeps openbaoClient's explicit-addressing contract (and error text).
+	// else keeps Client's explicit-addressing contract (and error text).
 	if role != envtopology.RoleActive || standbyConfigured() {
-		c, err := openbaoClient(role)
+		c, err := NewClientFor(role)
 		return c, noop, err
 	}
 	// The port-forward supplies the address, never the token. Accept
@@ -104,24 +102,24 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 	if token == "" {
 		return nil, noop, fmt.Errorf("no OpenBao token in env: set OPENBAO_TOKEN from `eval \"$(llz openbao login --team <name>)\"` (team-scoped, preferred) or export OPENBAO_ROOT_TOKEN — auto port-forward supplies the address but not the token")
 	}
-	addr, cleanup, err := portForwardOpenbaoFn()
+	addr, cleanup, err := PortForwardFn()
 	if err != nil {
-		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", baoread.Namespace, rootOpenbaoPod, err)
+		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", baoread.Namespace, baoread.RootPod, err)
 	}
-	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", baoread.Namespace, rootOpenbaoPod, addr)
-	c := openbao.NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), openbao.HTTPClientLoopback(30*time.Second))
+	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", baoread.Namespace, baoread.RootPod, addr)
+	c := NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), HTTPClientLoopback(30*time.Second))
 	return c, cleanup, nil
 }
 
-// portForwardOpenbao runs `kubectl port-forward` to OpenBao pod-0 on a
+// portForward runs `kubectl port-forward` to OpenBao pod-0 on a
 // kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
 // warm up, and returns the https base URL and a kill/reap teardown.
-func portForwardOpenbao() (string, func(), error) {
+func portForward() (string, func(), error) {
 	// Forward to the LOOPBACK listener (8210), not the mTLS network listener
 	// (8200). port-forward is established inside the pod's network namespace, so
 	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
 	// `llz openbao get/set` from a laptop that holds no client certificate.
-	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+rootOpenbaoPod, ":"+baoread.LoopbackPort)
+	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+baoread.RootPod, ":"+baoread.LoopbackPort)
 	// Surface kubectl's own stderr live: without this the common failure modes
 	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
 	// swallowed and the operator only sees an opaque establish timeout. kubectl
@@ -147,18 +145,18 @@ func portForwardOpenbao() (string, func(), error) {
 	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 
 	base := "https://127.0.0.1:" + localPort
-	if err := warmUpOpenbao(base); err != nil {
+	if err := warmUp(base); err != nil {
 		stop()
 		return "", nil, err
 	}
 	return base, stop, nil
 }
 
-// warmUpOpenbao blocks (bounded) until the tunnel answers, so the first real KV
+// warmUp blocks (bounded) until the tunnel answers, so the first real KV
 // call doesn't race the port-forward coming up. Any HTTP response — even a
 // sealed/standby non-2xx from /v1/sys/seal-status — proves the tunnel is up.
-func warmUpOpenbao(base string) error {
-	client := openbao.HTTPClientLoopback(5 * time.Second)
+func warmUp(base string) error {
+	client := HTTPClientLoopback(5 * time.Second)
 	var lastErr error
 	for i := 0; i < 15; i++ {
 		resp, err := client.Get(base + "/v1/sys/seal-status")
@@ -191,11 +189,11 @@ func warnRootToken() {
 	fmt.Fprintln(os.Stderr, "  (set OPENBAO_ALLOW_ROOT=1 to silence this for root-only automation)")
 }
 
-func runOpenbaoGet(region, path, key string) error {
-	if err := openbao.ValidatePath(path); err != nil {
+func RunGet(region, path, key string) error {
+	if err := ValidatePath(path); err != nil {
 		return err
 	}
-	c, cleanup, err := openbaoClientForward(region)
+	c, cleanup, err := ClientForward(region)
 	if err != nil {
 		return err
 	}
@@ -212,8 +210,8 @@ func runOpenbaoGet(region, path, key string) error {
 	return nil
 }
 
-func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
-	if err := openbao.ValidatePath(path); err != nil {
+func RunSet(dryRun, yes bool, path string, kvPairs []string) error {
+	if err := ValidatePath(path); err != nil {
 		return err
 	}
 	data := map[string]string{}
@@ -236,11 +234,11 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 	// never opens a tunnel.
 	if !standbyConfigured() {
 		fmt.Fprintf(os.Stderr, "→ single-write %d key(s) to %s (standalone — no standby configured)\n", len(data), path)
-		if g.dryRun || !g.yes {
+		if dryRun || !yes {
 			fmt.Fprintln(os.Stderr, "  (dry-run — re-run with --yes to execute the write)")
 			return nil
 		}
-		active, cleanup, err := openbaoClientForward(envtopology.RoleActive)
+		active, cleanup, err := ClientForward(envtopology.RoleActive)
 		if err != nil {
 			return err
 		}
@@ -253,20 +251,20 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "→ dual-write %d key(s) to %s (active + standby)\n", len(data), path)
-	if g.dryRun || !g.yes {
+	if dryRun || !yes {
 		fmt.Fprintln(os.Stderr, "  (dry-run — re-run with --yes to execute the transactional write)")
 		return nil
 	}
-	active, cleanup, err := openbaoClientForward(envtopology.RoleActive)
+	active, cleanup, err := ClientForward(envtopology.RoleActive)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	standby, err := openbaoClient(envtopology.RoleStandby)
+	standby, err := NewClientFor(envtopology.RoleStandby)
 	if err != nil {
 		return err
 	}
-	if err := openbao.DualWrite(context.Background(), active, standby, path, data); err != nil {
+	if err := DualWrite(context.Background(), active, standby, path, data); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "✓ both clusters wrote %s\n", path)
@@ -275,14 +273,9 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 
 // ── openbao exec: kubectl-exec bao passthrough (day-2 auth/policy admin) ──────
 
-// rootOpenbaoPod is the pod `llz openbao exec` targets — fixed, as the
-// retired bao-exec.sh was. Writes are forwarded to the raft leader
-// by OpenBao's standby request-forwarding, so pod-0 is fine for day-2 admin.
-const rootOpenbaoPod = "platform-openbao-0"
-
 // ── in-pod `bao` CLI: the loopback listener ──────────────────────────────────
 
-func baoExecArgv(pod, token string, args []string) []string {
+func ExecArgv(pod, token string, args []string) []string {
 	argv := []string{"-n", baoread.Namespace, "exec", "-i", "-c", "openbao", pod, "--", "env"}
 	argv = append(argv, baoread.LoopbackEnv()...)
 	// Both names, same reason as the address above. The chart does not set
@@ -292,13 +285,13 @@ func baoExecArgv(pod, token string, args []string) []string {
 	return append(argv, args...)
 }
 
-// runOpenbaoExec runs `bao <args>` in the OpenBao pod via kubectl exec, wiring
+// RunExec runs `bao <args>` in the OpenBao pod via kubectl exec, wiring
 // the process stdio through so heredoc policy writes and JSON output work. The
 // root token comes from OPENBAO_ROOT_TOKEN (never argv-visible to anyone but the
 // in-cluster exec). Travels with the binary, so it works in an instance that
 // carries no scripts/ (the openbao-accounts.md playbook used to call the
 // now-retired instance-scripts/openbao/bao-exec.sh, which an instance never had).
-func runOpenbaoExec(g globalOpts, args []string) error {
+func RunExec(dryRun bool, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: llz openbao exec <bao args...>  (e.g. llz openbao exec policy list)")
 	}
@@ -310,11 +303,11 @@ func runOpenbaoExec(g globalOpts, args []string) error {
 	// that day-2 secret reads/writes do NOT need root — `llz openbao get/set`
 	// with a team-scoped token from `llz openbao login` cover those.
 	warnRootToken()
-	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+ghcli.Quote(baoExecArgv(rootOpenbaoPod, "$OPENBAO_ROOT_TOKEN", args)))
+	if dryRun {
+		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+quote(ExecArgv(baoread.RootPod, "$OPENBAO_ROOT_TOKEN", args)))
 		return nil
 	}
-	cmd := exec.Command("kubectl", baoExecArgv(rootOpenbaoPod, token, args)...)
+	cmd := exec.Command("kubectl", ExecArgv(baoread.RootPod, token, args)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -324,7 +317,11 @@ func runOpenbaoExec(g globalOpts, args []string) error {
 // slice predicate travels by copy rather than becoming an exported symbol whose
 // only job is to be reachable from both sides — the same call made for warn,
 // firstNonEmpty, orAll and report.
-func contains(ss []string, s string) bool {
+// sliceContains is membership in a []string. Renamed from `contains` on the way
+// into this package, where a test helper of the same name means SUBSTRING — two
+// functions one letter apart in meaning and identical in name is how a caller
+// ends up asking the wrong question and getting a plausible answer.
+func sliceContains(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {
 			return true

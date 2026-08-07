@@ -11,7 +11,7 @@ code is authoritative.
 Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
 [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
 [`tools/internal/identityconfig/openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
-[`tools/cmd/llz/openbao.go`](../../tools/cmd/llz/openbao.go).
+[`tools/internal/openbao/cli.go`](../../tools/internal/openbao/cli.go).
 
 ## Problem
 
@@ -96,7 +96,7 @@ whose policy/role sequence is already idempotent and root-driven at bootstrap:
    reached over the **existing auto port-forward** from PR #298 → caches a
    short-lived, team-scoped token in the shell. Subsequent `llz openbao set`
    picks it up via the normal `OPENBAO_TOKEN` path
-   ([`openbao.go`](../../tools/cmd/llz/openbao.go)).
+   ([`openbao.go`](../../tools/internal/openbao/cli.go)).
 
 **Outcome:** operators authenticate as themselves; writes are **attributed** (the
 `sub` claim) and **least-privilege** (their team subtree only); root stays

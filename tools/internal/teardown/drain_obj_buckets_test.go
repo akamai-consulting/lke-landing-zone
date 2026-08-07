@@ -1,4 +1,4 @@
-package main
+package teardown
 
 import (
 	"fmt"
@@ -41,7 +41,7 @@ func TestWorkflowsInvokeDrainObjBucketsWithYes(t *testing.T) {
 // false) and this flag are independent, so losing either leaves one deliberate step
 // between a routine destroy and erasing the logs.
 func TestDrainObjBucketsRefusesWithoutYes(t *testing.T) {
-	err := runDrainObjBuckets("e2e", false)
+	err := RunDrainObjBuckets("e2e", false)
 	if err == nil {
 		t.Fatal("drain-obj-buckets must refuse without --yes")
 	}
@@ -53,7 +53,7 @@ func TestDrainObjBucketsRefusesWithoutYes(t *testing.T) {
 // A missing --region must fail before anything is deleted, not default to a
 // deployment the caller did not name.
 func TestDrainObjBucketsRequiresARegion(t *testing.T) {
-	if err := runDrainObjBuckets("", true); err == nil || !strings.Contains(err.Error(), "region") {
+	if err := RunDrainObjBuckets("", true); err == nil || !strings.Contains(err.Error(), "region") {
 		t.Errorf("empty region must be rejected, got %v", err)
 	}
 }

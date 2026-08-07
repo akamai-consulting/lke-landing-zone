@@ -107,7 +107,7 @@ func assertNoOrphans(ctx context.Context, client OrphanGateScanner, region, volu
 			if scan, err = ScanOrphans(ctx, client, region, volRegion, env); err != nil {
 				return err
 			}
-			fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
+			fmt.Printf("orphan census (NB/VPC Region: %s, Volume Region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
 				orAll(region), orAll(volRegion), attempt, attempts, scan.Vol.Orphan, scan.NB.Orphan, scan.VPC.Orphan, scan.Orphans(), threshold)
 			if !preflight.OrphansExceedThreshold(scan.Orphans(), threshold) {
 				fmt.Println("no orphaned resources above threshold — destroy is clean.")
@@ -536,15 +536,6 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// orAll renders an empty scope as "(all)". A local copy of package main's helper
-// for the same reason as firstNonEmpty: presentation glue, not a rule.
-func orAll(s string) string {
-	if s == "" {
-		return "(all)"
-	}
-	return s
 }
 
 // nbBelongsToCluster reports whether a NodeBalancer is the destroyed cluster's

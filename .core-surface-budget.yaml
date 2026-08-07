@@ -402,6 +402,22 @@ categories:
 #        the two cleanest boundaries left.
 #        assert-suite is the runner that runs the other extensions, and the only
 #        member of the catalog for which `verified` is the honest state.
+#   58th: version-pins, openbao CLI, reap + drain   14,237 -> 13,183 (-1,054 / 112 files)
+#        Four candidates, closures 2/3/4/5, every edge noise -- and TWO of them went
+#        into packages that already existed (internal/openbao, internal/teardown)
+#        rather than new ones, which is what a campaign looks like when it is
+#        running out of genuinely new boundaries.
+#        A COPY MET ITS ORIGINAL: teardown.go carried orAll with a comment saying
+#        it was "a local copy of package main's helper", and reap.go IS that
+#        helper. Ten packages kept a three-line copy in this campaign; this is the
+#        first time two ended up in one package, and the copy is the one deleted.
+#        Two cycles broken: openbao -> ghcli -> configreadiness -> tokeninv ->
+#        reconcilelanes -> openbao, over ONE dry-run line, fixed with a local
+#        12-line quote(); and a self-import left by a bulk `openbao.` strip.
+#        COVERAGE DEBT, recorded not hidden: internal/openbao 88 -> 63 and
+#        internal/teardown 80 -> 47. Both absorbed exec/API-bound code that was
+#        equally untested in package main; the arithmetic moved, not the
+#        standard. See the comments on those two floors in the Makefile.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -414,7 +430,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 14237
+    budget: 13183
     exact: true
     include:
       - "tools/cmd/llz/*.go"

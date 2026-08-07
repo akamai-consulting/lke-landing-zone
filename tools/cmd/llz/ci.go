@@ -33,9 +33,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
 	"github.com/spf13/cobra"
 
@@ -424,7 +426,7 @@ func ciCmd() *cobra.Command {
 	// Tool-version pin agreement: the Dockerfile ARG block is the authority and
 	// every restatement (build matrix, container fallbacks, Go constants) must
 	// match it. This drifted once already — see ci_version_pins.go.
-	c.AddCommand(ciVersionPinsCmd())
+	c.AddCommand(versionpins.Cmd())
 	return c
 }
 
@@ -1044,10 +1046,10 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 		return err
 	}
 	del, fin := ciDeleter(ctx, g, client)
-	if err := reapEnvObjKeys(ctx, client, prefix, env, del); err != nil {
+	if err := teardown.ReapEnvObjKeys(ctx, client, prefix, env, del); err != nil {
 		return err
 	}
-	if err := reapEnvInclusterPAT(ctx, client, prefix, env, del); err != nil {
+	if err := teardown.ReapEnvInclusterPAT(ctx, client, prefix, env, del); err != nil {
 		return err
 	}
 	return fin()
@@ -1075,7 +1077,7 @@ func tfApplyLinodeToken() string {
 
 // ciDeleter returns a delete closure that honors --yes/--dry-run and tallies
 // outcomes, plus a finalize func that prints the summary and errors if any delete
-// failed. Mirrors the del/summary scaffolding in runReap.
+// failed. Mirrors the del/summary scaffolding in teardown.RunReap.
 func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(path, desc string), func() error) {
 	confirm := g.yes && !g.dryRun
 	if !confirm {
@@ -1223,7 +1225,7 @@ func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude strin
 		// volumes survived the destroy of lke637974, then squatted their labels so
 		// the NEXT cluster could not relabel 12 of its 17. `llz reap` already passed
 		// env here; this path never did.
-		return reapVolumes(ctx, client, reapOpts{env: env, region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
+		return teardown.ReapVolumes(ctx, client, teardown.ReapOpts{Env: env, Region: region, VolumeIDs: volumeIDs, TagMustInclude: tagMustInclude}, del)
 	}, func() (int, error) {
 		return countVolumesPresent(ctx, client, volumeIDs)
 	})
@@ -1356,7 +1358,7 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	if clusterID == "" {
 		del, fin := ciDeleter(ctx, g, client)
 		fmt.Printf("=== orphan NodeBalancers — account-wide (region=%q) ===\n", region)
-		if err := reapNodeBalancers(ctx, client, reapOpts{region: region}, del); err != nil {
+		if err := teardown.ReapNodeBalancers(ctx, client, teardown.ReapOpts{Region: region}, del); err != nil {
 			return err
 		}
 		return fin()

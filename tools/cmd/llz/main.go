@@ -24,7 +24,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -450,7 +452,7 @@ func openbaoCmd() *cobra.Command {
 		Use:   "exec [--] <bao args...>",
 		Short: "run a bao command in the cluster via kubectl exec (day-2 auth/policy admin; needs OPENBAO_ROOT_TOKEN)",
 		Args:  cobra.MinimumNArgs(1),
-		RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoExec(gopts, a) },
+		RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunExec(gopts.dryRun, a) },
 	}
 	execCmd.Flags().SetInterspersed(false)
 
@@ -459,13 +461,13 @@ func openbaoCmd() *cobra.Command {
 			Use:   "get <active|standby> <secret/path> <key>",
 			Short: "read one field from a cluster by HA role (value to stdout)",
 			Args:  cobra.ExactArgs(3),
-			RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoGet(a[0], a[1], a[2]) },
+			RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunGet(a[0], a[1], a[2]) },
 		},
 		&cobra.Command{
 			Use:   "set <secret/path> <key=value>...",
 			Short: "dual-write to active+standby, or single-write a standalone (--yes); rollback + hash-verify",
 			Args:  cobra.MinimumNArgs(2),
-			RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoSet(gopts, a[0], a[1:]) },
+			RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunSet(gopts.dryRun, gopts.yes, a[0], a[1:]) },
 		},
 		execCmd,
 		openbaoLoginCmd(),
@@ -548,7 +550,7 @@ func verifyCmd() *cobra.Command {
 }
 
 func reapCmd() *cobra.Command {
-	var o reapOpts
+	var o teardown.ReapOpts
 	c := &cobra.Command{
 		Use:   "reap",
 		Short: "sweep orphaned Linode resources from failed cluster cycles (--yes to delete)",
@@ -558,16 +560,16 @@ func reapCmd() *cobra.Command {
 			"PAT from LINODE_API_TOKEN (or LINODE_TOKEN). Dry-run by default; deletes only\n" +
 			"with --yes. Volumes need a scope (--region or --volume-ids).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runReap(gopts, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return teardown.RunReap(gopts.dryRun, gopts.yes, o) },
 	}
 	f := c.Flags()
-	f.StringVar(&o.region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
-	f.StringVar(&o.clusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
-	f.StringVar(&o.env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys <objLabelPrefix>-loki-<env>/<objLabelPrefix>-harbor-registry-<env> + in-cluster PAT llz-incluster-<objLabelPrefix>-<env>)")
-	f.StringVar(&o.fwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
-	f.StringVar(&o.volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
-	f.StringVar(&o.tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
-	f.BoolVar(&o.force, "force", false, "delete the node firewall even if a live cluster still carries --cluster-label")
+	f.StringVar(&o.Region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
+	f.StringVar(&o.ClusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
+	f.StringVar(&o.Env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys <objLabelPrefix>-loki-<env>/<objLabelPrefix>-harbor-registry-<env> + in-cluster PAT llz-incluster-<objLabelPrefix>-<env>)")
+	f.StringVar(&o.FwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
+	f.StringVar(&o.VolumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
+	f.StringVar(&o.TagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
+	f.BoolVar(&o.Force, "force", false, "delete the node firewall even if a live cluster still carries --cluster-label")
 	return c
 }
 

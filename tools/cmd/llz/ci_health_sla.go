@@ -11,6 +11,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
 
@@ -25,8 +26,8 @@ func healthSLADeps() healthsla.Deps {
 		},
 		Exec:        execOutput,
 		Reachable:   kubectlprobe.Reachable,
-		BaoExecArgv: baoExecArgv,
-		RootPod:     rootOpenbaoPod,
+		BaoExecArgv: openbao.ExecArgv,
+		RootPod:     baoread.RootPod,
 	}
 }
 

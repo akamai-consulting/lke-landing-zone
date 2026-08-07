@@ -1,4 +1,4 @@
-package main
+package openbao
 
 import (
 	"path"
@@ -48,7 +48,7 @@ func TestOpenBaoProbesAreExecNotHTTPGet(t *testing.T) {
 	// absent — setting it, even pointed at 8210, is the bug.
 	if readiness, ok := server["readinessProbe"].(map[string]any); ok {
 		if p, present := readiness["path"]; present {
-			t.Errorf("openbao.server.readinessProbe.path is set (%v) — that switches the subchart to an httpGet probe.\n"+
+			t.Errorf("server.readinessProbe.path is set (%v) — that switches the subchart to an httpGet probe.\n"+
 				"kubelet dials the POD IP (httpGet has no host field), but the cert-free listener binds 127.0.0.1 only,\n"+
 				"and the pod-network listener requires a client certificate kubelet cannot present. Remove `path` to\n"+
 				"keep the subchart's `bao status` exec, which runs inside the pod.", p)
@@ -60,11 +60,11 @@ func TestOpenBaoProbesAreExecNotHTTPGet(t *testing.T) {
 	// otherwise it renders httpGet from path/port.
 	liveness, ok := server["livenessProbe"].(map[string]any)
 	if !ok {
-		t.Fatal("openbao.server.livenessProbe missing from " + openbaoChartValues)
+		t.Fatal("server.livenessProbe missing from " + openbaoChartValues)
 	}
 	cmd, _ := liveness["execCommand"].([]any)
 	if len(cmd) == 0 {
-		t.Error("openbao.server.livenessProbe.execCommand is empty — the subchart falls back to an httpGet probe,\n" +
+		t.Error("server.livenessProbe.execCommand is empty — the subchart falls back to an httpGet probe,\n" +
 			"which kubelet sends to the pod IP. Neither listener answers there without a client certificate,\n" +
 			"so kubelet SIGKILLs the container on a loop (observed live: 18 restarts).")
 	}
@@ -78,7 +78,7 @@ func TestOpenBaoProbesAreExecNotHTTPGet(t *testing.T) {
 		joined += " " + toString(a)
 	}
 	if strings.Contains(joined, "bao status") && !strings.Contains(joined, "-eq 2") {
-		t.Error("openbao.server.livenessProbe.execCommand runs `bao status` but never accepts exit code 2.\n" +
+		t.Error("server.livenessProbe.execCommand runs `bao status` but never accepts exit code 2.\n" +
 			"2 means sealed/uninitialized, which is the NORMAL state from container start until\n" +
 			"bootstrap-openbao runs `bao operator init` — treating it as failure restarts the pod\n" +
 			"out from under the bootstrap.")
@@ -117,7 +117,7 @@ func TestOpenBaoExtraEnvNeverShadowsSubchartEnv(t *testing.T) {
 	for name := range extra {
 		for _, reserved := range subchartServerEnvNames {
 			if strings.EqualFold(name, reserved) {
-				t.Errorf("openbao.server.extraEnvironmentVars redeclares %q, which the upstream subchart already\n"+
+				t.Errorf("server.extraEnvironmentVars redeclares %q, which the upstream subchart already\n"+
 					"sets on the server container. That renders TWO env entries with the same name, and\n"+
 					"`container.env` is a server-side-apply list-map keyed on name — the apiserver REJECTS\n"+
 					"duplicate keys, so the StatefulSet is never applied and the Argo app sits OutOfSync\n"+
@@ -135,26 +135,26 @@ func TestOpenBaoInPodClientsCarryAClientCertificate(t *testing.T) {
 	server := openbaoServerValues(t)
 	extra, ok := server["extraEnvironmentVars"].(map[string]any)
 	if !ok {
-		t.Fatal("openbao.server.extraEnvironmentVars is missing — the in-pod `bao` clients (both probes)\n" +
+		t.Fatal("server.extraEnvironmentVars is missing — the in-pod `bao` clients (both probes)\n" +
 			"then reach the mTLS listener with no client certificate and fail the handshake.")
 	}
 	for _, k := range []string{"BAO_CLIENT_CERT", "BAO_CLIENT_KEY"} {
 		v := toString(extra[k])
 		if v == "" {
-			t.Errorf("openbao.server.extraEnvironmentVars.%s is unset — the readiness exec (`bao status`,\n"+
+			t.Errorf("server.extraEnvironmentVars.%s is unset — the readiness exec (`bao status`,\n"+
 				"hardcoded by the subchart to the container's BAO_ADDR of :8200) presents no client\n"+
 				"certificate and is rejected with `remote error: tls: certificate required`.", k)
 			continue
 		}
 		// The path must actually be mounted, or the env is a promise the pod cannot keep.
 		if !strings.Contains(rawOpenBaoValues(t), "mountPath: "+path.Dir(v)) {
-			t.Errorf("openbao.server.extraEnvironmentVars.%s = %q, but nothing mounts %q in server.volumeMounts —\n"+
+			t.Errorf("server.extraEnvironmentVars.%s = %q, but nothing mounts %q in server.volumeMounts —\n"+
 				"the probe would read a nonexistent file.", k, v, path.Dir(v))
 		}
 	}
 	// llz's exec paths do NOT go through the PodSpec, so they may (and must) point
 	// themselves at the cert-free loopback listener explicitly.
-	if !contains(baoread.LoopbackEnv(), "BAO_ADDR="+baoread.LoopbackAddr) {
+	if !sliceContains(baoread.LoopbackEnv(), "BAO_ADDR="+baoread.LoopbackAddr) {
 		t.Errorf("baoread.LoopbackEnv() does not export BAO_ADDR=%s: %v\n"+
 			"OpenBao prefers a present BAO_* over its VAULT_* alias unconditionally (api/env.go), so a\n"+
 			"VAULT_ADDR-only argv is silently overridden by the container's BAO_ADDR of :8200.",
@@ -191,7 +191,7 @@ func rawOpenBaoValues(t *testing.T) string {
 }
 
 // openbaoServerValues loads kubernetes-charts/llz-openbao-platform/values.yaml and
-// returns the `openbao.server` subtree the upstream chart is configured through.
+// returns the `server` subtree the upstream chart is configured through.
 func openbaoServerValues(t *testing.T) map[string]any {
 	t.Helper()
 	var doc struct {
@@ -204,7 +204,7 @@ func openbaoServerValues(t *testing.T) map[string]any {
 		t.Fatalf("parse %s: %v", openbaoChartValues, err)
 	}
 	if doc.OpenBao.Server == nil {
-		t.Fatalf("%s has no openbao.server block", openbaoChartValues)
+		t.Fatalf("%s has no server block", openbaoChartValues)
 	}
 	return doc.OpenBao.Server
 }

@@ -1,4 +1,4 @@
-package main
+package versionpins
 
 // ci_version_pins.go implements `llz ci version-pins` — the consistency gate over
 // tool-version pins.
@@ -107,7 +107,7 @@ type pinSite struct {
 
 func (s pinSite) ok() bool { return s.got == s.want }
 
-func ciVersionPinsCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var root string
 	var verbose bool
 	c := &cobra.Command{
@@ -123,7 +123,7 @@ func ciVersionPinsCmd() *cobra.Command {
 			"Runs offline — no registry, no network.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runVersionPins(root, verbose, os.Stdout, os.Stderr)
+			return Run(root, verbose, os.Stdout, os.Stderr)
 		},
 	}
 	c.Flags().StringVar(&root, "root", ".", "repository root to scan")
@@ -131,7 +131,7 @@ func ciVersionPinsCmd() *cobra.Command {
 	return c
 }
 
-func runVersionPins(root string, verbose bool, out, errOut io.Writer) error {
+func Run(root string, verbose bool, out, errOut io.Writer) error {
 	args, err := loadVersionAuthority(root)
 	if err != nil {
 		return err

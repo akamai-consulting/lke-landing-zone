@@ -11,6 +11,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op
@@ -89,38 +90,38 @@ func TestOpenbaoClient(t *testing.T) {
 	} {
 		t.Setenv(k, "")
 	}
-	if _, err := openbaoClient("bogus"); err == nil {
-		t.Error("openbaoClient(bogus role) = nil, want error")
+	if _, err := openbao.NewClientFor("bogus"); err == nil {
+		t.Error("openbao.NewClientFor(bogus role) = nil, want error")
 	}
-	if _, err := openbaoClient(envtopology.RoleActive); err == nil {
-		t.Error("openbaoClient(no addr) = nil, want error")
+	if _, err := openbao.NewClientFor(envtopology.RoleActive); err == nil {
+		t.Error("openbao.NewClientFor(no addr) = nil, want error")
 	}
 	t.Setenv("OPENBAO_ADDR_ACTIVE", "https://bao.example")
-	if _, err := openbaoClient(envtopology.RoleActive); err == nil {
-		t.Error("openbaoClient(no token) = nil, want error")
+	if _, err := openbao.NewClientFor(envtopology.RoleActive); err == nil {
+		t.Error("openbao.NewClientFor(no token) = nil, want error")
 	}
 	t.Setenv("OPENBAO_TOKEN_ACTIVE", "tok")
-	c, err := openbaoClient(envtopology.RoleActive)
+	c, err := openbao.NewClientFor(envtopology.RoleActive)
 	if err != nil || c == nil {
-		t.Errorf("openbaoClient(addr+token) = (%v, %v), want a client", c, err)
+		t.Errorf("openbao.NewClientFor(addr+token) = (%v, %v), want a client", c, err)
 	}
 }
 
 func TestRunOpenbaoPathValidation(t *testing.T) {
 	// Both commands reject a path outside the secret/ KV v2 mount up front.
-	if err := runOpenbaoGet("active", "not-secret/x", "k"); err == nil {
-		t.Error("runOpenbaoGet(bad path) = nil, want error")
+	if err := openbao.RunGet("active", "not-secret/x", "k"); err == nil {
+		t.Error("openbao.RunGet(bad path) = nil, want error")
 	}
-	if err := runOpenbaoSet(globalOpts{}, "not-secret/x", []string{"k=v"}); err == nil {
-		t.Error("runOpenbaoSet(bad path) = nil, want error")
+	if err := openbao.RunSet(false, false, "not-secret/x", []string{"k=v"}); err == nil {
+		t.Error("openbao.RunSet(bad path) = nil, want error")
 	}
 	// A malformed key=value pair is caught before any OpenBao call.
-	if err := runOpenbaoSet(globalOpts{}, "secret/app", []string{"noequals"}); err == nil {
-		t.Error("runOpenbaoSet(no '=') = nil, want error")
+	if err := openbao.RunSet(false, false, "secret/app", []string{"noequals"}); err == nil {
+		t.Error("openbao.RunSet(no '=') = nil, want error")
 	}
 	// No pairs at all is a usage error.
-	if err := runOpenbaoSet(globalOpts{}, "secret/app", nil); err == nil {
-		t.Error("runOpenbaoSet(no pairs) = nil, want error")
+	if err := openbao.RunSet(false, false, "secret/app", nil); err == nil {
+		t.Error("openbao.RunSet(no pairs) = nil, want error")
 	}
 }
 

@@ -1,14 +1,13 @@
-package main
+package openbao
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
-// clearOpenbaoEnv blanks every OPENBAO_* var openbaoClientForward reads so a test
+// clearOpenbaoEnv blanks every OPENBAO_* var ClientForward reads so a test
 // starts from a known-empty environment (t.Setenv restores them on cleanup).
 func clearOpenbaoEnv(t *testing.T) {
 	t.Helper()
@@ -21,16 +20,16 @@ func clearOpenbaoEnv(t *testing.T) {
 	}
 }
 
-// seamForward stubs portForwardOpenbaoFn and records whether it was invoked.
+// seamForward stubs PortForwardFn and records whether it was invoked.
 func seamForward(t *testing.T, addr string, err error) *bool {
 	t.Helper()
 	called := false
-	orig := portForwardOpenbaoFn
-	portForwardOpenbaoFn = func() (string, func(), error) {
+	orig := PortForwardFn
+	PortForwardFn = func() (string, func(), error) {
 		called = true
 		return addr, func() {}, err
 	}
-	t.Cleanup(func() { portForwardOpenbaoFn = orig })
+	t.Cleanup(func() { PortForwardFn = orig })
 	return &called
 }
 
@@ -40,9 +39,9 @@ func TestOpenbaoClientForward_ExplicitAddrWins(t *testing.T) {
 	t.Setenv("OPENBAO_TOKEN", "s.token")
 	called := seamForward(t, "https://127.0.0.1:1", nil)
 
-	c, cleanup, err := openbaoClientForward(envtopology.RoleActive)
+	c, cleanup, err := ClientForward(envtopology.RoleActive)
 	if err != nil || c == nil {
-		t.Fatalf("openbaoClientForward = (%v, %v), want a client", c, err)
+		t.Fatalf("ClientForward = (%v, %v), want a client", c, err)
 	}
 	cleanup()
 	if *called {
@@ -55,9 +54,9 @@ func TestOpenbaoClientForward_StandaloneAutoForwards(t *testing.T) {
 	t.Setenv("OPENBAO_TOKEN", "s.token") // addr unset, no standby → standalone
 	called := seamForward(t, "https://127.0.0.1:34567", nil)
 
-	c, cleanup, err := openbaoClientForward(envtopology.RoleActive)
+	c, cleanup, err := ClientForward(envtopology.RoleActive)
 	if err != nil || c == nil {
-		t.Fatalf("openbaoClientForward = (%v, %v), want a client", c, err)
+		t.Fatalf("ClientForward = (%v, %v), want a client", c, err)
 	}
 	defer cleanup()
 	if !*called {
@@ -73,9 +72,9 @@ func TestOpenbaoClientForward_RootTokenAccepted(t *testing.T) {
 	var cleanup func()
 	stderr := captureStderr(t, func() {
 		var err error
-		var c *openbao.Client
-		if c, cleanup, err = openbaoClientForward(envtopology.RoleActive); err != nil {
-			t.Fatalf("openbaoClientForward with OPENBAO_ROOT_TOKEN only = %v, want ok", err)
+		var c *Client
+		if c, cleanup, err = ClientForward(envtopology.RoleActive); err != nil {
+			t.Fatalf("ClientForward with OPENBAO_ROOT_TOKEN only = %v, want ok", err)
 		}
 		_ = c
 	})
@@ -98,7 +97,7 @@ func TestOpenbaoClientForward_TeamTokenNoWarn(t *testing.T) {
 
 	var cleanup func()
 	stderr := captureStderr(t, func() {
-		_, cleanup, _ = openbaoClientForward(envtopology.RoleActive)
+		_, cleanup, _ = ClientForward(envtopology.RoleActive)
 	})
 	if cleanup != nil {
 		defer cleanup()
@@ -116,7 +115,7 @@ func TestOpenbaoClientForward_AllowRootSilencesWarn(t *testing.T) {
 
 	var cleanup func()
 	stderr := captureStderr(t, func() {
-		_, cleanup, _ = openbaoClientForward(envtopology.RoleActive)
+		_, cleanup, _ = ClientForward(envtopology.RoleActive)
 	})
 	if cleanup != nil {
 		defer cleanup()
@@ -130,8 +129,8 @@ func TestOpenbaoClientForward_NoTokenErrors(t *testing.T) {
 	clearOpenbaoEnv(t) // addr unset AND no token
 	called := seamForward(t, "https://127.0.0.1:1", nil)
 
-	if _, _, err := openbaoClientForward(envtopology.RoleActive); err == nil {
-		t.Error("openbaoClientForward with no addr and no token = nil, want error")
+	if _, _, err := ClientForward(envtopology.RoleActive); err == nil {
+		t.Error("ClientForward with no addr and no token = nil, want error")
 	}
 	if *called {
 		t.Error("port-forward should not open when no token is available")
@@ -147,7 +146,7 @@ func TestOpenbaoClientForward_HAActiveDoesNotForward(t *testing.T) {
 	t.Setenv("OPENBAO_TOKEN", "s.token")
 	called := seamForward(t, "https://127.0.0.1:1", nil)
 
-	if _, _, err := openbaoClientForward(envtopology.RoleActive); err == nil {
+	if _, _, err := ClientForward(envtopology.RoleActive); err == nil {
 		t.Error("HA active with unset addr = nil, want the not-set error")
 	}
 	if *called {
@@ -160,7 +159,7 @@ func TestOpenbaoClientForward_StandbyNeverForwards(t *testing.T) {
 	t.Setenv("OPENBAO_TOKEN", "s.token")
 	called := seamForward(t, "https://127.0.0.1:1", nil)
 
-	if _, _, err := openbaoClientForward(envtopology.RoleStandby); err == nil {
+	if _, _, err := ClientForward(envtopology.RoleStandby); err == nil {
 		t.Error("standby with unset addr = nil, want the not-set error")
 	}
 	if *called {

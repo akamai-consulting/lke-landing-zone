@@ -1,4 +1,4 @@
-package main
+package teardown
 
 // reap.go is the operator-facing orchestrator for `llz reap` — the native port of
 // reap-all-orphaned-resources.sh: a one-shot manual sweep of Linode resources
@@ -23,22 +23,22 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
-type reapOpts struct {
-	region         string
-	clusterLabel   string
-	fwLabel        string
-	volumeIDs      string // space-separated allowlist
-	tagMustInclude string
-	env            string // deployment name; reaps its minted obj-keys + in-cluster PAT
-	force          bool
+type ReapOpts struct {
+	Region         string
+	ClusterLabel   string
+	FwLabel        string
+	VolumeIDs      string // space-separated allowlist
+	TagMustInclude string
+	Env            string // deployment name; reaps its minted obj-keys + in-cluster PAT
+	Force          bool
 }
 
-func runReap(g globalOpts, o reapOpts) error {
+func RunReap(dryRun, yes bool, o ReapOpts) error {
 	token := firstNonEmpty(os.Getenv("LINODE_API_TOKEN"), os.Getenv("LINODE_TOKEN"))
 	if token == "" {
 		return fmt.Errorf("set LINODE_API_TOKEN (or LINODE_TOKEN) to a Linode PAT (read_write to delete, read_only for a dry-run)")
 	}
-	confirm := g.yes && !g.dryRun
+	confirm := yes && !dryRun
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
@@ -46,9 +46,9 @@ func runReap(g globalOpts, o reapOpts) error {
 	if !confirm {
 		fmt.Println(color.Yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
 	}
-	fmt.Printf("  %s%s\n", color.Dim("region:        "), orAll(o.region))
-	fmt.Printf("  %s%s\n", color.Dim("cluster label: "), orNone(o.clusterLabel))
-	fmt.Printf("  %s%s\n\n", color.Dim("env (creds):   "), orNone(o.env))
+	fmt.Printf("  %s%s\n", color.Dim("Region:        "), orAll(o.Region))
+	fmt.Printf("  %s%s\n", color.Dim("cluster label: "), orNone(o.ClusterLabel))
+	fmt.Printf("  %s%s\n\n", color.Dim("env (creds):   "), orNone(o.Env))
 
 	deleted, failed := 0, 0
 	// del prints (dry-run) or deletes (confirm), tallying outcomes.
@@ -68,9 +68,9 @@ func runReap(g globalOpts, o reapOpts) error {
 
 	// ── 1. Orphan clusters by label (root) ───────────────────────────────────
 	clustersDeleted := false
-	if o.clusterLabel != "" {
-		fmt.Println(color.Bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.clusterLabel)))
-		ids, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+	if o.ClusterLabel != "" {
+		fmt.Println(color.Bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.ClusterLabel)))
+		ids, err := client.ClustersWithLabel(ctx, o.ClusterLabel)
 		if err != nil {
 			return fmt.Errorf("list clusters: %w", err)
 		}
@@ -90,7 +90,7 @@ func runReap(g globalOpts, o reapOpts) error {
 
 		// ── 2. Orphan node firewall ──────────────────────────────────────────
 		fmt.Println("\n" + color.Bold("==== orphan node firewall ===="))
-		if err := reapFirewalls(ctx, client, o, del); err != nil {
+		if err := ReapFirewalls(ctx, client, o, del); err != nil {
 			return err
 		}
 	} else {
@@ -99,21 +99,21 @@ func runReap(g globalOpts, o reapOpts) error {
 
 	// ── 3. NodeBalancers BEFORE VPCs (a parked NB blocks its VPC delete) ──────
 	fmt.Println("\n" + color.Bold("==== orphan NodeBalancers (account-wide) ===="))
-	if err := reapNodeBalancers(ctx, client, o, del); err != nil {
+	if err := ReapNodeBalancers(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 4. VPCs (lke<id> cluster-gone, + <label>-vpc when --cluster-label) ────
 	fmt.Println("\n" + color.Bold("==== orphan VPCs ===="))
-	if err := reapVPCs(ctx, client, o, del); err != nil {
+	if err := ReapVPCs(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 5. Volumes (needs a scope: --region or --volume-ids) ──────────────────
 	fmt.Println("\n" + color.Bold("==== orphan Volumes ===="))
-	if o.region == "" && o.volumeIDs == "" {
+	if o.Region == "" && o.VolumeIDs == "" {
 		fmt.Println(color.Dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
-	} else if err := reapVolumes(ctx, client, o, del); err != nil {
+	} else if err := ReapVolumes(ctx, client, o, del); err != nil {
 		return err
 	}
 
@@ -125,7 +125,7 @@ func runReap(g globalOpts, o reapOpts) error {
 	// 100-PAT caps until a fresh mint 400s. Needs an explicit --env (never a blind
 	// account-wide token/key delete).
 	fmt.Println("\n" + color.Bold("==== orphan per-env Linode creds (obj-keys + in-cluster PAT) ===="))
-	if o.env == "" {
+	if o.Env == "" {
 		fmt.Println(color.Dim("  skipped — set --env <deployment> to reap its minted keys + PAT"))
 	} else {
 		// The prefix namespaces the key labels this reaps. Read it from the spec —
@@ -135,10 +135,10 @@ func runReap(g globalOpts, o reapOpts) error {
 		if perr != nil {
 			return perr
 		}
-		if err := reapEnvObjKeys(ctx, client, prefix, o.env, del); err != nil {
+		if err := ReapEnvObjKeys(ctx, client, prefix, o.Env, del); err != nil {
 			return err
 		}
-		if err := reapEnvInclusterPAT(ctx, client, prefix, o.env, del); err != nil {
+		if err := ReapEnvInclusterPAT(ctx, client, prefix, o.Env, del); err != nil {
 			return err
 		}
 	}
@@ -159,22 +159,22 @@ func runReap(g globalOpts, o reapOpts) error {
 	return nil
 }
 
-func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+func ReapFirewalls(ctx context.Context, client *linode.Client, o ReapOpts, del func(path, desc string)) error {
 	// Candidate labels (account-unique, so each matches ≤1 firewall).
 	var candidates []string
-	if o.fwLabel != "" {
-		candidates = []string{o.fwLabel}
+	if o.FwLabel != "" {
+		candidates = []string{o.FwLabel}
 	} else {
-		candidates = []string{"platform-nodes-fw", truncate(o.clusterLabel, 26) + "-nodes"}
+		candidates = []string{"platform-nodes-fw", truncate(o.ClusterLabel, 26) + "-nodes"}
 	}
 	// Safety: never delete a live cluster's firewall.
-	if !o.force {
-		live, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+	if !o.Force {
+		live, err := client.ClustersWithLabel(ctx, o.ClusterLabel)
 		if err != nil {
 			return fmt.Errorf("firewall safety check: %w", err)
 		}
 		if len(live) > 0 {
-			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — refusing (delete the cluster first, or --force)", o.clusterLabel)))
+			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — refusing (delete the cluster first, or --force)", o.ClusterLabel)))
 			return nil
 		}
 	}
@@ -198,7 +198,7 @@ func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del f
 	return nil
 }
 
-func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+func ReapNodeBalancers(ctx context.Context, client *linode.Client, o ReapOpts, del func(path, desc string)) error {
 	live, err := client.LiveClusterIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("load live clusters: %w", err)
@@ -210,7 +210,7 @@ func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, d
 	matched := false
 	for _, nb := range nbs {
 		region := linode.MapString(nb, "region")
-		if o.region != "" && region != o.region {
+		if o.Region != "" && region != o.Region {
 			continue
 		}
 		tags := linode.MapTags(nb)
@@ -235,21 +235,21 @@ func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, d
 	return nil
 }
 
-func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+func ReapVPCs(ctx context.Context, client *linode.Client, o ReapOpts, del func(path, desc string)) error {
 	live, err := client.LiveClusterIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("load live clusters: %w", err)
 	}
 	byoLabel := ""
-	if o.clusterLabel != "" {
-		held, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+	if o.ClusterLabel != "" {
+		held, err := client.ClustersWithLabel(ctx, o.ClusterLabel)
 		if err != nil {
 			return err
 		}
 		if len(held) > 0 {
-			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — not targeting its %q VPC", o.clusterLabel, o.clusterLabel+"-vpc")))
+			fmt.Printf("  %s\n", color.Yellow(fmt.Sprintf("a live cluster still carries label %q — not targeting its %q VPC", o.ClusterLabel, o.ClusterLabel+"-vpc")))
 		} else {
-			byoLabel = o.clusterLabel + "-vpc"
+			byoLabel = o.ClusterLabel + "-vpc"
 		}
 	}
 	vpcs, err := client.ListVPCs(ctx)
@@ -259,7 +259,7 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 	matched := false
 	for _, vpc := range vpcs {
 		region := linode.MapString(vpc, "region")
-		if o.region != "" && region != o.region {
+		if o.Region != "" && region != o.Region {
 			continue
 		}
 		label := linode.MapString(vpc, "label")
@@ -286,9 +286,9 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 	return nil
 }
 
-func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+func ReapVolumes(ctx context.Context, client *linode.Client, o ReapOpts, del func(path, desc string)) error {
 	idAllow := map[string]bool{}
-	for _, id := range strings.Fields(o.volumeIDs) {
+	for _, id := range strings.Fields(o.VolumeIDs) {
 		idAllow[id] = true
 	}
 	vols, err := client.ListVolumes(ctx)
@@ -300,8 +300,8 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 		id := linode.MapIDString(v)
 		if !linode.VolumeIsCandidate(
 			linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"), linode.MapString(v, "region"),
-			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude,
-			linode.VolumeLabelPrefixes(o.env)...) {
+			linode.MapTags(v), o.Region, idAllow, id, o.TagMustInclude,
+			linode.VolumeLabelPrefixes(o.Env)...) {
 			skipped++
 			continue
 		}
@@ -313,7 +313,7 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 		// which is how a filter that excluded EVERYTHING stayed invisible for
 		// weeks. Say what was skipped and what would widen the net.
 		fmt.Printf("  none matched the filter (%d Volume(s) skipped)\n", skipped)
-		if o.env == "" {
+		if o.Env == "" {
 			fmt.Println(color.Dim("  NOTE: LLZ's volume-labels reconciler renames bound volumes to"))
 			fmt.Println(color.Dim("        <deployment>-<namespace>-<pvc>, which no longer start with \"pvc-\"."))
 			fmt.Println(color.Dim("        Pass --env <deployment> (e.g. --env e2e) to include those."))
@@ -332,7 +332,7 @@ func envObjKeyLabels(prefix, env string) []string {
 	return clusterspec.ObjKeyLabels(prefix, env)
 }
 
-// reapEnvObjKeys deletes the Object Storage keys minted for env — the loki +
+// ReapEnvObjKeys deletes the Object Storage keys minted for env — the loki +
 // harbor-registry keys (labels <objLabelPrefix>-loki-<env> / <objLabelPrefix>-harbor-registry-<env>,
 // per credrotate.BuildRotationTable). mint-bootstrap-objkeys and the in-cluster rotator each
 // create a fresh key under the same stable label; a failed teardown or failed
@@ -340,7 +340,7 @@ func envObjKeyLabels(prefix, env string) []string {
 // then 400s "reached your access key quota"). On a destroy the env is gone, so
 // every key under those two labels is orphaned. Exact-label match — never another
 // env's keys.
-func reapEnvObjKeys(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
+func ReapEnvObjKeys(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
 	keys, err := client.ListObjectStorageKeys(ctx)
 	if err != nil {
 		return fmt.Errorf("list object-storage keys: %w", err)
@@ -360,12 +360,12 @@ func reapEnvObjKeys(ctx context.Context, client *linode.Client, prefix, env stri
 	return nil
 }
 
-// reapEnvInclusterPAT deletes the narrow in-cluster PAT(s) minted for env (label
+// ReapEnvInclusterPAT deletes the narrow in-cluster PAT(s) minted for env (label
 // llz-incluster-<objLabelPrefix>-<env>, per credrotate.InClusterPATLabel). mint-bootstrap-pat drains older
 // siblings on each mint, but a failed drain / failed run leaks them toward the
 // account's 100-PAT cap. Exact-label match — the broad token this sweep RUNS under
 // carries a different label, so it is never self-revoked.
-func reapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
+func ReapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env string, del func(path, desc string)) error {
 	toks, err := client.ListProfileTokens(ctx)
 	if err != nil {
 		return fmt.Errorf("list profile tokens: %w", err)
@@ -381,12 +381,21 @@ func reapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env
 	return nil
 }
 
+// orAll renders an empty scope as "(all)".
+//
+// A COPY IN THIS PACKAGE HAS JUST BEEN DELETED IN FAVOUR OF THIS ONE. teardown.go
+// carried its own, with a comment saying it was "a local copy of package main's
+// helper" — and this is that helper, arriving with reap.go. Ten packages in this
+// campaign kept a three-line copy rather than import one for it; this is the first
+// time a copy and its original have ended up in the same package, and the copy is
+// the one that goes.
 func orAll(s string) string {
 	if s == "" {
 		return "(all)"
 	}
 	return s
 }
+
 func orNone(s string) string {
 	if s == "" {
 		return "(none — skipping cluster/firewall/BYO-VPC steps)"
