@@ -14,8 +14,8 @@ import (
 // upgrade-test` needs copier, git tags, and ~90s, and self-skips without them.
 // This one runs in microseconds on every `go test`, so the flag cannot be
 // dropped and rediscovered by an adopter — which is how it was found the first
-// time. Losing --defaults makes `llz upgrade` re-prompt, and with no terminal
-// that is an unhandled prompt_toolkit exception rather than a prompt.
+// time. Losing --defaults makes `llz upgrade` re-onboard.Prompt, and with no terminal
+// that is an unhandled prompt_toolkit exception rather than a onboard.Prompt.
 func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 	for _, ref := range []string{"v0.0.40", ""} {
 		argv := copierUpdateArgv(ref)
@@ -66,9 +66,9 @@ func TestCopierScaffoldArgv(t *testing.T) {
 			t.Errorf("scaffold argv is missing --data %s: %v", want, argv)
 		}
 	}
-	// The harness itself must never block on a prompt.
+	// The harness itself must never block on a onboard.Prompt.
 	if !containsArg(argv, "--defaults") {
-		t.Errorf("scaffold argv would prompt: %v", argv)
+		t.Errorf("scaffold argv would onboard.Prompt: %v", argv)
 	}
 	// Deterministic ordering, so a failure diff is stable across runs.
 	if got := copierScaffoldArgv("/t", "v1.0.0", "/d",

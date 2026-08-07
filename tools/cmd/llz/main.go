@@ -25,6 +25,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
@@ -50,6 +51,15 @@ func init() {
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
 // populated from the root command's flags before any RunE runs.
+// onboardOpts narrows globalOpts to the three fields internal/onboard reads.
+//
+// A CONVERTER, NOT AN EXPORT. Handing the whole struct over would put package
+// main's flag model on the other side of a package boundary and make every future
+// field visible there whether or not it is read. Three fields, named once.
+func (g globalOpts) onboardOpts() onboard.Opts {
+	return onboard.Opts{DryRun: g.dryRun, Open: g.open, Yes: g.yes}
+}
+
 type globalOpts struct {
 	dryRun bool
 	open   bool
@@ -188,7 +198,7 @@ func doctorCmd() *cobra.Command {
 		Short: "am I ready to build? tooling + gh auth + deployment readiness + repo config",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(repo, env, admin, cmd.Flags().Changed("env"), sshHost, knownHosts)
+			return onboard.RunDoctor(repo, env, admin, cmd.Flags().Changed("env"), sshHost, knownHosts)
 		},
 	}
 	c.Flags().StringVar(&repo, "repo", "", "instance repo for the readiness check (default: .copier-answers.yml, or example repo in --admin)")
@@ -204,7 +214,7 @@ func tokensCmd() *cobra.Command {
 	var env, cluster, bucket, repo string
 	c := &cobra.Command{
 		Use:   "tokens",
-		Short: "provision wizard: create state bucket/key, gather PATs, push",
+		Short: "provision wizard: create state bucket/key, onboard.Gather PATs, push",
 		Long: "Idempotently provisions an instance's credentials: creates the Terraform-\n" +
 			"state OBJ bucket + a scoped key (Linode API), generates the ArgoCD deploy\n" +
 			"key, gathers GitHub PATs, computes image vars, writes .llz/*.env, and pushes.\n" +
@@ -212,7 +222,7 @@ func tokensCmd() *cobra.Command {
 			"e2e harness and defaults to the example repo. Mutating steps need --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := runTokens(gopts, admin, env, cluster, bucket, repo); err != nil {
+			if err := onboard.RunTokens(gopts.onboardOpts(), admin, env, cluster, bucket, repo); err != nil {
 				return err
 			}
 			// Recommend the rest of the flow — but only after a real run (not a
@@ -221,9 +231,9 @@ func tokensCmd() *cobra.Command {
 			if gopts.yes && !gopts.dryRun {
 				eff := env
 				if eff == "" {
-					eff = "e2e" // matches runTokens' admin default
+					eff = "e2e" // matches onboard.RunTokens' admin default
 				}
-				printTokensNextSteps(eff)
+				onboard.PrintNextSteps(eff)
 			}
 			return nil
 		},
@@ -237,17 +247,17 @@ func tokensCmd() *cobra.Command {
 }
 
 func secretsCmd() *cobra.Command {
-	s := &cobra.Command{Use: "secrets", Short: "gather + push instance credentials"}
+	s := &cobra.Command{Use: "secrets", Short: "onboard.Gather + push instance credentials"}
 	s.AddCommand(
 		&cobra.Command{
-			Use: "gather", Short: "paste-everything token wizard (links + .llz/*.env)",
+			Use: "onboard.Gather", Short: "paste-everything token wizard (links + .llz/*.env)",
 			Args: cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error { return gather(gopts, ".") },
+			RunE: func(_ *cobra.Command, _ []string) error { return onboard.Gather(gopts.onboardOpts(), ".") },
 		},
 		&cobra.Command{
 			Use: "push <env>", Short: "write gathered tokens into infra-<env> (--yes)",
 			Args: cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error { return pushSecrets(gopts, args[0]) },
+			RunE: func(_ *cobra.Command, args []string) error { return onboard.PushSecrets(gopts.onboardOpts(), args[0]) },
 		},
 	)
 	return s

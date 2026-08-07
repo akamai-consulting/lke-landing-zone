@@ -17,6 +17,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
@@ -80,10 +81,10 @@ func copierCopyArgv(org, ref, dir string) []string {
 // copierUpdateArgv is the update invocation, and --defaults is load-bearing.
 //
 // Without it `copier update` RE-ASKS every question — upstream_org,
-// instance_repo, openbao_team — using the stored answers as prompt defaults. Two
+// instance_repo, openbao_team — using the stored answers as onboard.Prompt defaults. Two
 // costs, and the second is the one that bit:
 //
-//   - With no terminal that is not a prompt, it is an unhandled OSError out of
+//   - With no terminal that is not a onboard.Prompt, it is an unhandled OSError out of
 //     prompt_toolkit. `llz upgrade` inherits the operator's stdin, so it worked
 //     by hand and died in CI, in a wrapper script, and over `ssh host 'llz
 //     upgrade'` — with a Python traceback, not a message.
@@ -186,9 +187,9 @@ func runGated(g globalOpts, argv ...string) error {
 // templateSourceStatusFn reports whether the --org template source is reachable
 // on GitHub; seamed for tests. runNew preflights it because copier clones
 // gh:<org>/<template> over HTTPS, and a 404 there (typo'd/un-forked --org)
-// surfaces as an interactive `Username for 'https://github.com':` prompt rather
+// surfaces as an interactive `Username for 'https://github.com':` onboard.Prompt rather
 // than a clear error — the failure mode adopters actually hit.
-var templateSourceStatusFn = repoStatus
+var templateSourceStatusFn = onboard.RepoStatus
 
 // templateUnreachableTail states what an unanswerable lookup does NOT prove about
 // the --org template source. The default upstream is public, so gh is the only
@@ -388,7 +389,7 @@ func printNextSteps(dir string, pushed bool) {
 // for twice. instanceRepoExistsFn reports whether the instance repo itself is
 // already there (an adopter who created it by hand after a failed --push).
 var (
-	instanceRepoExistsFn = repoExists
+	instanceRepoExistsFn = onboard.RepoExists
 	ghLoginFn            = ghLogin
 )
 
@@ -875,7 +876,7 @@ func printUpgradeSummary(oldRef, newRef string) {
 // remediation verbatim, because an operator who ignores this will meet that one
 // next and the two must read as the same instruction.
 var reportCIImageSkew = func(ref string) {
-	local := readEnvFile(".llz/vars.env")
+	local := onboard.ReadEnvFile(".llz/vars.env")
 	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
 	if len(skew) == 0 {
 		return
@@ -949,8 +950,12 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 // unit test can record the call order and inject a failure without the
 // cloud-mutating side effects of the real commands. Defaults call the real ones.
 var (
-	upTokens = func(g globalOpts, admin bool, env string) error { return runTokens(g, admin, env, "", "", "") }
-	upDoctor = func(g globalOpts, admin bool, env string) error { return runDoctor("", env, admin, true, "", "") }
+	upTokens = func(g globalOpts, admin bool, env string) error {
+		return onboard.RunTokens(g.onboardOpts(), admin, env, "", "", "")
+	}
+	upDoctor = func(g globalOpts, admin bool, env string) error {
+		return onboard.RunDoctor("", env, admin, true, "", "")
+	}
 	// skipPreflight=true: cmdUp already ran buildpreflight.Run itself (upPreflight,
 	// before the token wizard), and running it again here printed the whole
 	// unpublished-edits warning block twice in one `llz up`.

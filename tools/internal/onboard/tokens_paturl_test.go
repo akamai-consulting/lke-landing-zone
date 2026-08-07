@@ -1,4 +1,4 @@
-package main
+package onboard
 
 // tokens_paturl_test.go — one test that travelled with the wrong file.
 //

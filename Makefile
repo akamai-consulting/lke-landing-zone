@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/onboard=13 \
 	internal/templatecommit=92 \
 	internal/selfupgrade=49 \
 	internal/buildpreflight=90 \

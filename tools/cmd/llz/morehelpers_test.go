@@ -9,6 +9,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
@@ -43,18 +44,18 @@ func TestTruncate(t *testing.T) {
 func TestPrompt(t *testing.T) {
 	var got string
 	out := captureStdout(t, func() {
-		got = prompt(bufio.NewScanner(strings.NewReader("  trimmed \n")), "Token")
+		got = onboard.Prompt(bufio.NewScanner(strings.NewReader("  trimmed \n")), "Token")
 	})
 	if got != "trimmed" {
-		t.Errorf("prompt = %q, want trimmed", got)
+		t.Errorf("onboard.Prompt = %q, want trimmed", got)
 	}
 	if !strings.Contains(out, "Token") {
-		t.Errorf("prompt did not print its label: %q", out)
+		t.Errorf("onboard.Prompt did not print its label: %q", out)
 	}
 	// Empty input -> empty answer.
 	captureStdout(t, func() {
-		if v := prompt(bufio.NewScanner(strings.NewReader("")), "x"); v != "" {
-			t.Errorf("prompt(empty) = %q, want empty", v)
+		if v := onboard.Prompt(bufio.NewScanner(strings.NewReader("")), "x"); v != "" {
+			t.Errorf("onboard.Prompt(empty) = %q, want empty", v)
 		}
 	})
 }

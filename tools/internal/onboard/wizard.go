@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"bufio"
@@ -200,11 +200,11 @@ func catalog() []secretSpec {
 			IsVar:   true,
 		},
 		{
-			// The quickstart offers `llz secrets gather` + `llz secrets push` as the
+			// The quickstart offers `llz secrets Gather` + `llz secrets push` as the
 			// manual alternative for operators who would rather llz did not create
 			// Linode resources for them. That path omitted this, so it produced an
 			// instance whose every Terraform root exits 1 at init — `llz tokens`
-			// generates it, but gather does not run that code. Prompted rather than
+			// generates it, but Gather does not run that code. Prompted rather than
 			// generated here, because this catalog's whole contract is "you paste
 			// every value yourself".
 			Name:    statepassphrase.SecretName,
@@ -214,18 +214,18 @@ func catalog() []secretSpec {
 	}
 }
 
-// gather walks the catalog interactively, writing values into dir/.llz. In
+// Gather walks the catalog interactively, writing values into dir/.llz. In
 // dry-run it prints the catalog + links and writes nothing.
-func gather(g globalOpts, dir string) error {
+func Gather(o Opts, dir string) error {
 	specs := catalog()
 
 	fmt.Println("\nToken wizard — create each credential at the link shown, then paste it.")
 	fmt.Println("Values are written to .llz/ (0600, gitignored) and never committed.")
-	if g.open {
+	if o.Open {
 		fmt.Println("(--open: each link opens in your browser)")
 	}
 
-	if g.dryRun {
+	if o.DryRun {
 		for _, s := range specs {
 			printSpec(s)
 		}
@@ -239,14 +239,14 @@ func gather(g globalOpts, dir string) error {
 	}
 	secretsPath := filepath.Join(llzDir, "secrets.env")
 	varsPath := filepath.Join(llzDir, "vars.env")
-	secrets := readEnvFile(secretsPath)
-	vars := readEnvFile(varsPath)
+	secrets := ReadEnvFile(secretsPath)
+	vars := ReadEnvFile(varsPath)
 
 	in := bufio.NewScanner(os.Stdin)
 	for _, s := range specs {
 		printSpec(s)
 		if s.URL != "" {
-			openURL(g, s.URL)
+			openURL(o, s.URL)
 		}
 		fmt.Print("  value (Enter to skip): ")
 		if !in.Scan() {
@@ -263,10 +263,10 @@ func gather(g globalOpts, dir string) error {
 		}
 	}
 
-	if err := writeEnvFile(secretsPath, secrets); err != nil {
+	if err := WriteEnvFile(secretsPath, secrets); err != nil {
 		return err
 	}
-	if err := writeEnvFile(varsPath, vars); err != nil {
+	if err := WriteEnvFile(varsPath, vars); err != nil {
 		return err
 	}
 	fmt.Printf("\nWrote %d secret(s) to %s and %d variable(s) to %s.\n",
@@ -288,7 +288,7 @@ func printSpec(s secretSpec) {
 // renderEnvFile serializes m as sorted KEY=value lines (pure; tested).
 func renderEnvFile(m map[string]string) string {
 	var b strings.Builder
-	for _, k := range sortedKeys(m) {
+	for _, k := range SortedKeys(m) {
 		b.WriteString(k)
 		b.WriteByte('=')
 		b.WriteString(m[k])
@@ -297,8 +297,8 @@ func renderEnvFile(m map[string]string) string {
 	return b.String()
 }
 
-// writeEnvFile writes m to path at 0600.
-func writeEnvFile(path string, m map[string]string) error {
+// WriteEnvFile writes m to path at 0600.
+func WriteEnvFile(path string, m map[string]string) error {
 	if err := os.WriteFile(path, []byte(renderEnvFile(m)), 0o600); err != nil {
 		return err
 	}
@@ -306,9 +306,9 @@ func writeEnvFile(path string, m map[string]string) error {
 	return os.Chmod(path, 0o600)
 }
 
-// readEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
+// ReadEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
 // file → empty map.
-func readEnvFile(path string) map[string]string {
+func ReadEnvFile(path string) map[string]string {
 	m := map[string]string{}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -326,7 +326,7 @@ func readEnvFile(path string) map[string]string {
 	return m
 }
 
-func sortedKeys(m map[string]string) []string {
+func SortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -335,8 +335,8 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-func openURL(g globalOpts, url string) {
-	if !g.open {
+func openURL(o Opts, url string) {
+	if !o.Open {
 		return
 	}
 	bin := "xdg-open"
@@ -351,24 +351,24 @@ func openURL(g globalOpts, url string) {
 
 // ── secrets / doctor commands ────────────────────────────────────────────────
 
-// pushSecrets writes the gathered values into the infra-<env> GitHub
+// PushSecrets writes the gathered values into the infra-<env> GitHub
 // Environment (secrets) and repo variables, then locks the env branch policy.
 // Cloud-mutating: prints the plan and executes only with --yes. Secret VALUES
 // are piped via stdin, never placed in argv, so even the printed plan is safe.
-func pushSecrets(g globalOpts, env string) error {
+func PushSecrets(o Opts, env string) error {
 	if err := validate.EnvName(env); err != nil {
 		return err
 	}
-	secrets := readEnvFile(filepath.Join(".llz", "secrets.env"))
-	vars := readEnvFile(filepath.Join(".llz", "vars.env"))
+	secrets := ReadEnvFile(filepath.Join(".llz", "secrets.env"))
+	vars := ReadEnvFile(filepath.Join(".llz", "vars.env"))
 	if len(secrets)+len(vars) == 0 {
-		return fmt.Errorf("nothing to push — run `llz secrets gather` first")
+		return fmt.Errorf("nothing to push — run `llz secrets Gather` first")
 	}
 
 	// The manual route has the same clobber hazard as the wizard and none of its
-	// guards: `gather` re-prompts every catalog entry on every run, and the
-	// passphrase's own prompt text says `openssl rand -base64 32` — so an operator
-	// re-running gather to add one missing token can paste a NEW passphrase over
+	// guards: `Gather` re-prompts every catalog entry on every run, and the
+	// passphrase's own Prompt text says `openssl rand -base64 32` — so an operator
+	// re-running Gather to add one missing token can paste a NEW passphrase over
 	// the live one and make every state file unreadable. Ask before pushing.
 	if repo, rerr := answers.ResolveInstanceRepo("", false); rerr == nil {
 		if err := statepassphrase.DropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
@@ -381,10 +381,10 @@ func pushSecrets(g globalOpts, env string) error {
 		val  string
 	}
 	var items []item
-	for _, k := range sortedKeys(secrets) {
+	for _, k := range SortedKeys(secrets) {
 		items = append(items, item{ghcli.SecretSetArgv(env, k), secrets[k]})
 	}
-	for _, k := range sortedKeys(vars) {
+	for _, k := range SortedKeys(vars) {
 		items = append(items, item{ghcli.VariableSetArgv(k), vars[k]})
 	}
 
@@ -392,11 +392,11 @@ func pushSecrets(g globalOpts, env string) error {
 		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(it.argv))
 	}
 
-	if g.dryRun {
-		_ = branchpolicy.Lock(gopts.dryRun, "", env) // prints the plan, changes nothing
+	if o.DryRun {
+		_ = branchpolicy.Lock(o.DryRun, "", env) // prints the plan, changes nothing
 		return nil
 	}
-	if !g.yes {
+	if !o.Yes {
 		fmt.Fprintln(os.Stderr, "→ lock infra-"+env+" branch policy to main")
 		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
 		return nil
@@ -404,7 +404,7 @@ func pushSecrets(g globalOpts, env string) error {
 	// Create + lock infra-<env> BEFORE pushing — `gh secret set --env` 404s if the
 	// environment doesn't exist yet, and branchpolicy.Lock is what creates
 	// it. The lock is also the secret-injection boundary (main-only).
-	protErr := branchpolicy.Lock(gopts.dryRun, "", env)
+	protErr := branchpolicy.Lock(o.DryRun, "", env)
 	if protErr != nil && !errors.Is(protErr, branchpolicy.ErrUnsupported) {
 		return protErr
 	}
@@ -419,12 +419,12 @@ func pushSecrets(g globalOpts, env string) error {
 	return nil
 }
 
-// runDoctor is the single "am I ready to build?" gate: it reports tooling + gh
+// RunDoctor is the single "am I ready to build?" gate: it reports tooling + gh
 // auth, then the file-level deployment readiness (the former `llz validate --env`)
 // and the e2e/repo-config readiness, aggregating every failure so one run shows
 // all the blockers. envExplicit distinguishes a user-supplied --env from the
 // default, so a bare `llz doctor` doesn't error on a scaffold that was never added.
-func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts string) error {
+func RunDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts string) error {
 	fmt.Println(color.Bold("Tooling:"))
 	// terraform OR tofu satisfies the Terraform requirement.
 	reportEither("terraform", "tofu")
@@ -527,7 +527,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 			return errors.Join(errs...)
 		}
 	}
-	if err := cmdDoctorE2E(repo, env, admin); err != nil {
+	if err := DoctorE2E(repo, env, admin); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

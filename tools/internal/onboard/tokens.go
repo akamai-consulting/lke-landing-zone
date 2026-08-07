@@ -1,7 +1,7 @@
-package main
+package onboard
 
 // `llz tokens` provisions the credentials an instance needs to stand up, doing
-// the parts the paste-everything wizard (`secrets gather`) can't: it CREATES the
+// the parts the paste-everything wizard (`secrets Gather`) can't: it CREATES the
 // Terraform-state OBJ bucket + a bucket-scoped key via the Linode API, gathers
 // the GitHub PATs (including the Contents:write APL_VALUES_REPO_TOKEN apl-core's
 // otomi.git uses), and writes everything to .llz/*.env so it can be pushed.
@@ -39,7 +39,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) error {
+func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	deployEnv := env
 	if deployEnv == "" {
 		if admin {
@@ -55,7 +55,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if err != nil {
 		return err
 	}
-	if err := requireInstanceRepo(instanceRepo); err != nil {
+	if err := RequireInstanceRepo(instanceRepo); err != nil {
 		return err
 	}
 
@@ -105,17 +105,17 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
 	if len(missing) == 0 && len(repin) == 0 {
-		_ = writeEnvFile(".llz/vars.env", vars)
+		_ = WriteEnvFile(".llz/vars.env", vars)
 		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", color.Green("✓"))
 		return nil
 	}
-	if g.dryRun {
+	if o.DryRun {
 		fmt.Printf("\n%s\n", color.Dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above%s.",
-			len(missing), repinPlanNote(repin))))
+			len(missing), RepinPlanNote(repin))))
 		return nil
 	}
-	if !g.yes {
-		fmt.Println("\n" + color.Dim("(no --yes: will gather + write .llz/*.env + print the push plan, but create/write nothing)"))
+	if !o.Yes {
+		fmt.Println("\n" + color.Dim("(no --yes: will Gather + write .llz/*.env + print the push plan, but create/write nothing)"))
 	}
 
 	// Decide the state-encryption passphrase's fate BEFORE the interactive section
@@ -138,9 +138,9 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	clusterID := clusterFromEndpoint(vars["TF_STATE_ENDPOINT"])
 	if needKeys || !have("LINODE_API_TOKEN", true) {
 		fmt.Printf("\n%s API token — full Read/Write (provisioning; also creates the state bucket)\n", color.Bold("[Linode]"))
-		openURL(g, linodeTokensURL)
+		openURL(o, linodeTokensURL)
 		fmt.Printf("      %s %s\n", color.Dim("create at:"), color.Cyan(linodeTokensURL))
-		token := prompt(in, "Linode PAT")
+		token := Prompt(in, "Linode PAT")
 		if token == "" {
 			return fmt.Errorf("a Linode PAT is required")
 		}
@@ -162,7 +162,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 			bucketName := firstNonEmpty(bucket, vars["TF_STATE_BUCKET"], repoSlug(instanceRepo)+"-tfstate")
 			vars["TF_STATE_BUCKET"] = bucketName
 			fmt.Printf("%s state bucket %q in %s\n", color.Bold("[Linode]"), bucketName, clusterID)
-			if g.yes {
+			if o.Yes {
 				if _, err := client.CreateObjectStorageBucket(ctx, clusterID, bucketName); err != nil {
 					return fmt.Errorf("create bucket: %w", err)
 				}
@@ -194,13 +194,13 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 			fmt.Printf("%s %s\n", color.Bold("[GitHub]"), color.Dim(name+" already set — skipping"))
 			return
 		}
-		openURL(g, primaryURL)
+		openURL(o, primaryURL)
 		fmt.Printf("\n%s %s — %s\n", color.Bold("[GitHub]"), name, note)
 		fmt.Printf("      %s:\n        %s\n", primaryLabel, color.Cyan(primaryURL))
 		if altURL != "" {
 			fmt.Printf("      %s:\n        %s\n", color.Dim(altLabel), color.Cyan(altURL))
 		}
-		if v := prompt(in, name); v != "" {
+		if v := Prompt(in, name); v != "" {
 			secrets[name] = v
 		}
 	}
@@ -259,7 +259,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 			continue
 		}
 		fmt.Printf("\n%s %s — %s\n", color.Bold("[optional]"), s.name, color.Dim(s.desc))
-		if v := prompt(in, s.name+" (Enter to skip)"); v != "" {
+		if v := Prompt(in, s.name+" (Enter to skip)"); v != "" {
 			secrets[s.name] = v
 		}
 	}
@@ -273,10 +273,10 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if !have("GHCR_READ_TOKEN", true) {
 		fmt.Printf("\n%s GHCR_READ_TOKEN — %s\n", color.Bold("[optional]"),
 			color.Dim("GitHub read:packages PAT — ONLY for a private fork or private image; Enter to skip (public charts pull anonymously)"))
-		if v := prompt(in, "GHCR_READ_TOKEN (Enter to skip)"); v != "" {
+		if v := Prompt(in, "GHCR_READ_TOKEN (Enter to skip)"); v != "" {
 			secrets["GHCR_READ_TOKEN"] = v
 			if !have("GHCR_USERNAME", false) {
-				if u := prompt(in, "GHCR_USERNAME (owner of that PAT)"); u != "" {
+				if u := Prompt(in, "GHCR_USERNAME (owner of that PAT)"); u != "" {
 					vars["GHCR_USERNAME"] = u
 				}
 			}
@@ -286,15 +286,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// ── state-encryption passphrase ──────────────────────────────────────────
 	// Generated, not prompted: it is machine material with no issuer to visit, and
 	// every Terraform root refuses to run without it.
-	if err := statepassphrase.EnsureStatePassphrase(g.dryRun, g.yes, passPlan, instanceRepo, secrets); err != nil {
+	if err := statepassphrase.EnsureStatePassphrase(o.DryRun, o.Yes, passPlan, instanceRepo, secrets); err != nil {
 		return err
 	}
 
 	// ── persist + push ───────────────────────────────────────────────────────
-	if err := writeEnvFile(".llz/secrets.env", secrets); err != nil {
+	if err := WriteEnvFile(".llz/secrets.env", secrets); err != nil {
 		return err
 	}
-	if err := writeEnvFile(".llz/vars.env", vars); err != nil {
+	if err := WriteEnvFile(".llz/vars.env", vars); err != nil {
 		return err
 	}
 	// AFTER the cache is written, so the operator keeps their local copy, and
@@ -313,23 +313,23 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// instance-repo push: a push / branch-policy failure on the instance repo
 	// must not suppress the E2E_DISPATCH_TOKEN creation link the maintainer needs.
 	if admin {
-		if err := configureTemplateHarness(g, in, instanceRepo, clusterID, tmplSt); err != nil {
+		if err := configureTemplateHarness(o, in, instanceRepo, clusterID, tmplSt); err != nil {
 			return err
 		}
 	}
-	if err := pushToRepo(g, instanceRepo, deployEnv, secrets, vars, instSt); err != nil {
+	if err := pushToRepo(o, instanceRepo, deployEnv, secrets, vars, instSt); err != nil {
 		return err
 	}
-	if !g.yes {
+	if !o.Yes {
 		fmt.Println("\n" + color.Dim("(no --yes: nothing was created or pushed — re-run with --yes to execute)"))
 	}
 	return nil
 }
 
-// printTokensNextSteps prints the recommended flow after a real `llz tokens` run
+// PrintNextSteps prints the recommended flow after a real `llz tokens` run
 // (credentials provisioned + pushed). Only the standalone command calls it — the
 // `llz up` chain runs tokens → doctor → build itself and prints its own guidance.
-func printTokensNextSteps(env string) {
+func PrintNextSteps(env string) {
 	const col = 26
 	cmd := func(c, note string) {
 		pad := col - len(c)
@@ -346,9 +346,9 @@ func printTokensNextSteps(env string) {
 	fmt.Println(color.Dim("  and delete OPENBAO_ROOT_TOKEN from infra-" + env + " (DNS-01 certs wire automatically via TF_VAR_linode_dns_token)."))
 }
 
-// cmdDoctorE2E reports e2e readiness of the env files + live repo (the wizard's
+// DoctorE2E reports e2e readiness of the env files + live repo (the wizard's
 // plan, runnable standalone). Wired as `llz doctor` (see cmdDoctor).
-func cmdDoctorE2E(repo, env string, admin bool) error {
+func DoctorE2E(repo, env string, admin bool) error {
 	instanceRepo, err := answers.ResolveInstanceRepo(repo, admin)
 	if err != nil {
 		return err
@@ -356,7 +356,7 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if env == "" {
 		env = "e2e"
 	}
-	if err := requireInstanceRepo(instanceRepo); err != nil {
+	if err := RequireInstanceRepo(instanceRepo); err != nil {
 		return err
 	}
 	secrets, vars := configreadiness.LoadEnvFiles()
@@ -394,16 +394,16 @@ func adminFlag(admin bool) string {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// repoExists reports whether the GitHub repo is reachable (it exists and the
+// RepoExists reports whether the GitHub repo is reachable (it exists and the
 // authenticated token can see it). The usual cause of a doctor/tokens run where
 // every secret reads "missing" is that the natural `llz new` (without --push) →
 // `llz tokens` sequence never created the remote repo.
-func repoExists(repo string) bool {
-	found, err := repoStatus(repo)
+func RepoExists(repo string) bool {
+	found, err := RepoStatus(repo)
 	return found && err == nil
 }
 
-// repoStatus is repoExists with the third answer kept: (false, nil) means GitHub
+// RepoStatus is RepoExists with the third answer kept: (false, nil) means GitHub
 // answered 404, while a non-nil error means llz could not ask at all — `gh`
 // absent, unauthenticated, offline, rate-limited. Collapsing those two into
 // "false" is fine for a readiness table (every row reads "missing" either way)
@@ -414,7 +414,7 @@ func repoExists(repo string) bool {
 // word it that way: an operator authed as the wrong account, or with a token
 // missing the repo scope, is told to create a repository that is already there,
 // and `gh repo create` then dead-ends on "Name already exists on this account".
-func repoStatus(repo string) (bool, error) {
+func RepoStatus(repo string) (bool, error) {
 	if _, err := execLookPath("gh"); err != nil {
 		return false, fmt.Errorf("the GitHub CLI is not on PATH: %w", err)
 	}
@@ -427,7 +427,7 @@ func repoStatus(repo string) (bool, error) {
 	return true, nil
 }
 
-// requireInstanceRepo gates `llz tokens` / `llz doctor` on the live instance repo
+// RequireInstanceRepo gates `llz tokens` / `llz doctor` on the live instance repo
 // — both read and write it, so neither means anything without it. It keeps the
 // two failures apart for the same reason `llz new`'s preflight does: a `gh` that
 // cannot answer (missing, unauthenticated, offline, rate-limited) used to be
@@ -435,25 +435,25 @@ func repoStatus(repo string) (bool, error) {
 // re-create a repo that was never missing. Skipped entirely when gh is absent —
 // doctor's own tooling table is where that belongs, and `llz tokens` fails on it
 // soon enough.
-func requireInstanceRepo(instanceRepo string) error {
+func RequireInstanceRepo(instanceRepo string) error {
 	if !kubectlprobe.Lookable("gh") {
 		return nil
 	}
-	found, err := repoStatus(instanceRepo)
+	found, err := RepoStatus(instanceRepo)
 	switch {
 	case err != nil:
 		return ghcli.UnreachableErr(instanceRepo, err,
 			"This does NOT mean the repo is missing — nothing was checked. Re-run once gh can answer")
 	case !found:
-		remediateMissingRepo(instanceRepo)
+		RemediateMissingRepo(instanceRepo)
 		return fmt.Errorf("instance repo %s is not visible to your `gh` login (absent, or private to an account you are not authed as)", instanceRepo)
 	}
 	return nil
 }
 
-// remediateMissingRepo prints the exact fix for an absent instance repo so the
+// RemediateMissingRepo prints the exact fix for an absent instance repo so the
 // failure is actionable instead of an all-missing readiness table.
-func remediateMissingRepo(repo string) {
+func RemediateMissingRepo(repo string) {
 	fmt.Fprintf(os.Stderr, "\n%s instance repo %q is not reachable on GitHub.\n", color.Red("✗"), repo)
 	fmt.Fprintln(os.Stderr, "  `llz tokens` and `llz doctor` read/write the live repo, so it must exist and be pushed first.")
 	// GitHub 404s a private repo you cannot see exactly as it 404s one that does
@@ -499,23 +499,14 @@ func repoSlug(repo string) string {
 	return strings.ToLower(repo)
 }
 
-// repinPlanNote is the dry-run tail that keeps a repin-only run from reporting
+// RepinPlanNote is the dry-run tail that keeps a repin-only run from reporting
 // "0 missing REQUIRED item(s)" and nothing else — which reads as "no work" for
 // precisely the run that has some.
-func repinPlanNote(repin []templatecommit.ImageSkew) string {
+func RepinPlanNote(repin []templatecommit.ImageSkew) string {
 	if len(repin) == 0 {
 		return ""
 	}
 	return fmt.Sprintf(" and re-pin %d ci image variable(s) to the current template pin", len(repin))
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // clusterFromEndpoint: https://us-ord-1.linodeobjects.com -> us-ord-1.
@@ -536,7 +527,7 @@ func regionFromCluster(clusterID string) string {
 	return clusterID
 }
 
-func prompt(in *bufio.Scanner, label string) string {
+func Prompt(in *bufio.Scanner, label string) string {
 	fmt.Printf("  %s: ", label)
 	if !in.Scan() {
 		return ""
@@ -557,7 +548,7 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 		fmt.Printf("    %s region=%-12s %s\n", color.Cyan(fmt.Sprintf("%-14s", id)), region, status)
 	}
 	fmt.Println(color.Dim("  (tip: pick the legacy \"-1\" cluster for your region — the Terraform provider rejects newer ones)"))
-	id := prompt(in, "OBJ cluster id")
+	id := Prompt(in, "OBJ cluster id")
 	if id == "" {
 		return "", fmt.Errorf("a cluster id is required")
 	}
@@ -567,7 +558,7 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 // pushToRepo writes gathered secrets (infra-<env>) + variables (repo-level) into
 // instanceRepo. Skips variables whose value already matches the repo. Gated by
 // --yes; secret values pipe via stdin.
-func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string, st configreadiness.LiveState) error {
+func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st configreadiness.LiveState) error {
 	fmt.Printf("\n%s %s\n", color.Bold("Configure"), repo)
 	type item struct {
 		argv []string
@@ -580,14 +571,14 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	// coincidence; reading EnvScope makes the table the single source of truth it
 	// already claims to be. An unknown name (not in the table) keeps the old
 	// env-scoped default.
-	for _, k := range sortedKeys(secrets) {
+	for _, k := range SortedKeys(secrets) {
 		argv := []string{"gh", "secret", "set", k, "--repo", repo}
 		if configreadiness.SecretIsEnvScoped(k) {
 			argv = append(argv, "--env", "infra-"+env)
 		}
 		items = append(items, item{argv, secrets[k]})
 	}
-	for _, k := range sortedKeys(vars) {
+	for _, k := range SortedKeys(vars) {
 		if st.Value(k) == vars[k] {
 			continue // already set to this value
 		}
@@ -600,11 +591,11 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	for _, it := range items {
 		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(it.argv))
 	}
-	if g.dryRun {
-		_ = branchpolicy.Lock(gopts.dryRun, repo, env) // prints the plan only
+	if o.DryRun {
+		_ = branchpolicy.Lock(o.DryRun, repo, env) // prints the plan only
 		return nil
 	}
-	if !g.yes {
+	if !o.Yes {
 		fmt.Fprintln(os.Stderr, "→ lock infra-"+env+" branch policy to main")
 		return nil
 	}
@@ -615,7 +606,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	// after the push loop. It also restricts secret injection to ref=main (the
 	// real boundary that stops a feature-branch dispatch from exfiltrating the
 	// OpenBao unseal keys).
-	protErr := branchpolicy.Lock(gopts.dryRun, repo, env)
+	protErr := branchpolicy.Lock(o.DryRun, repo, env)
 	if protErr != nil && !errors.Is(protErr, branchpolicy.ErrUnsupported) {
 		return protErr
 	}
@@ -634,7 +625,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 
 // configureTemplateHarness sets the template repo's e2e vars + E2E_DISPATCH_TOKEN
 // (skipping anything already set).
-func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st configreadiness.LiveState) error {
+func configureTemplateHarness(o Opts, in *bufio.Scanner, instanceRepo, clusterID string, st configreadiness.LiveState) error {
 	tr := templateid.Repo()
 	fmt.Printf("\n%s e2e harness on %s\n", color.Bold("[admin]"), tr)
 	want := map[string]string{
@@ -643,7 +634,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		"E2E_OBJ_CLUSTER":   clusterID,
 	}
 	var items [][]string
-	for _, k := range sortedKeys(want) {
+	for _, k := range SortedKeys(want) {
 		if want[k] == "" || st.Value(k) == want[k] {
 			continue
 		}
@@ -662,11 +653,11 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		}
 		classicURL := ghTokenURL("repo,workflow", "llz-e2e-dispatch")
 		fineURL := ghFineGrainedDispatchURL("llz-e2e-dispatch", owner)
-		openURL(g, classicURL)
+		openURL(o, classicURL)
 		fmt.Printf("    • E2E_DISPATCH_TOKEN — drives the e2e instance repo %s (force-push the instantiated tree + dispatch/watch its workflows)\n", instanceRepo)
 		fmt.Printf("      classic (scopes repo + workflow, recommended): %s\n", classicURL)
 		fmt.Printf("      fine-grained (then set Contents + Actions + Workflows: Read and write; Only select repositories: %s):\n        %s\n", instanceRepo, fineURL)
-		dispatch = prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)")
+		dispatch = Prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)")
 		if dispatch != "" {
 			dispArgv = []string{"gh", "secret", "set", "E2E_DISPATCH_TOKEN", "--repo", tr}
 			fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(dispArgv))
@@ -675,7 +666,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		fmt.Println(color.Dim("    • E2E_DISPATCH_TOKEN already set — skipping"))
 	}
 
-	if g.dryRun || !g.yes {
+	if o.DryRun || !o.Yes {
 		return nil
 	}
 	for _, argv := range items {

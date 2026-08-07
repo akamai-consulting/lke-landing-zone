@@ -70,6 +70,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
@@ -142,6 +143,7 @@ var declarations = []func() extension.Extension{
 	buildpreflight.Extension,
 	selfupgrade.Extension,
 	templatecommit.Extension,
+	onboard.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

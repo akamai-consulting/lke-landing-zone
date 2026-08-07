@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"os"
@@ -38,7 +38,7 @@ func TestWriteEnvFilePermsAndRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.env")
 	in := map[string]string{"LINODE_API_TOKEN": "abc=123", "TF_STATE_BUCKET": "tf-state"}
-	if err := writeEnvFile(path, in); err != nil {
+	if err := WriteEnvFile(path, in); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(path)
@@ -49,7 +49,7 @@ func TestWriteEnvFilePermsAndRoundTrip(t *testing.T) {
 		t.Errorf("perm = %o, want 600", perm)
 	}
 	// Value containing '=' must survive (split on first '=' only).
-	out := readEnvFile(path)
+	out := ReadEnvFile(path)
 	if out["LINODE_API_TOKEN"] != "abc=123" || out["TF_STATE_BUCKET"] != "tf-state" {
 		t.Errorf("round trip: %v", out)
 	}
@@ -61,14 +61,14 @@ func TestReadEnvFileIgnoresCommentsAndBlanks(t *testing.T) {
 	if err := os.WriteFile(path, []byte("# comment\n\nA=1\n  B=2 \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := readEnvFile(path)
+	m := ReadEnvFile(path)
 	if len(m) != 2 || m["A"] != "1" || m["B"] != "2" {
-		t.Errorf("readEnvFile: %v", m)
+		t.Errorf("ReadEnvFile: %v", m)
 	}
 }
 
 func TestReadEnvFileMissingIsEmpty(t *testing.T) {
-	if m := readEnvFile(filepath.Join(t.TempDir(), "nope.env")); len(m) != 0 {
+	if m := ReadEnvFile(filepath.Join(t.TempDir(), "nope.env")); len(m) != 0 {
 		t.Errorf("missing file should yield empty map, got %v", m)
 	}
 }

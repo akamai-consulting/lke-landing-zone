@@ -11,14 +11,15 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
 
 func TestWriteEnvFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.env")
-	if err := writeEnvFile(path, map[string]string{"A": "1", "B": "two"}); err != nil {
-		t.Fatalf("writeEnvFile: %v", err)
+	if err := onboard.WriteEnvFile(path, map[string]string{"A": "1", "B": "two"}); err != nil {
+		t.Fatalf("onboard.WriteEnvFile: %v", err)
 	}
-	got := readEnvFile(path) // round-trips through the sibling reader
+	got := onboard.ReadEnvFile(path) // round-trips through the sibling reader
 	if got["A"] != "1" || got["B"] != "two" {
 		t.Errorf("round-trip = %v", got)
 	}

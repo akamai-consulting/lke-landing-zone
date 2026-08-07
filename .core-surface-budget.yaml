@@ -607,6 +607,32 @@ categories:
 #        execOutput (localisable) and globalOpts/gopts/main (noise, 3 fields).
 #        1,238 lines, cleanly cuttable. That pair was the "design task" two
 #        iterations ago.
+#   74th: onboard -> internal/onboard   8,630 -> 7,758 (-872 / 85 files)
+#        wizard.go + tokens.go, 1,238 lines, AND THE ONE I WAS MOST WRONG ABOUT.
+#        Two iterations earlier this ledger recorded them as part of "the CLI
+#        front-end design task" needing its own PR. NINE enablers dissolved that
+#        without either file being touched; the last was 7 and 10 lines of gh
+#        helper. Apart they measure closure 6 and 13; together, 5.
+#
+#        THE MODEL REFUSED secret-custody@configured AND HAS A POINT. grantStates
+#        allows custody only at provisioned/seeded/operating because custody
+#        earlier "would mean a credential exists before anything has been built to
+#        issue one". That rationale assumes the PLATFORM mints it. Here a HUMAN
+#        pastes a Linode PAT and a GitHub token, so nothing needs to exist yet.
+#        A real gap -- and CASE ONE. Recorded under Incomplete rather than
+#        widening the row on a single case, as argocd-diagnostics did for the
+#        missing fifth kind. Case two would be another lane taking an
+#        operator-supplied credential before the substrate exists; there is NONE,
+#        which means this is the only place a human hands llz a secret.
+#
+#        Also: four symbols were briefly exported to satisfy main-side tests. The
+#        TESTS moved instead and the symbols went back to lowercase. Prompt stayed
+#        exported because commands.go really calls it -- that is a seam, the other
+#        four were internals reached for by a test.
+#        COVERAGE DEBT: internal/onboard lands at 13.7%. It is interactive --
+#        prompts, browser launches, gh/linode round-trips -- and it was equally
+#        untested in package main. Recorded, not hidden; raise it by testing
+#        the pure halves (Gather, RepoStatus, the token-URL builders).
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -619,7 +645,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 8630
+    budget: 7758
     exact: true
     include:
       - "tools/cmd/llz/*.go"

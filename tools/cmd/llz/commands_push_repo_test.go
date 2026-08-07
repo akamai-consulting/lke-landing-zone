@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 )
 
@@ -225,12 +226,12 @@ func TestRequireInstanceRepo(t *testing.T) {
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, nil })
-	if err := requireInstanceRepo("acme/inst"); err != nil {
+	if err := onboard.RequireInstanceRepo("acme/inst"); err != nil {
 		t.Errorf("reachable repo rejected: %v", err)
 	}
 
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("gh auth login") })
-	err := requireInstanceRepo("acme/inst")
+	err := onboard.RequireInstanceRepo("acme/inst")
 	if err == nil {
 		t.Fatal("expected an error when gh cannot answer")
 	}
@@ -250,7 +251,7 @@ func TestRequireInstanceRepo(t *testing.T) {
 	})
 	withGhOwnerKind(t, func(string) (string, error) { return "Organization", nil })
 	var missing error
-	out := captureStderr(t, func() { missing = requireInstanceRepo("acme/inst") })
+	out := captureStderr(t, func() { missing = onboard.RequireInstanceRepo("acme/inst") })
 	// A 404 is "absent OR private to another account" — GitHub hides the two
 	// behind the same status, so the message must not claim it is definitely gone.
 	if missing == nil || !strings.Contains(missing.Error(), "not visible to your `gh` login") {
@@ -598,7 +599,7 @@ func TestRepoStatus(t *testing.T) {
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, nil })
-	if found, err := repoStatus("o/r"); !found || err != nil {
+	if found, err := onboard.RepoStatus("o/r"); !found || err != nil {
 		t.Errorf("reachable repo = (%v, %v), want (true, nil)", found, err)
 	}
 	// A 404 is a definitive "not there" — no error.
@@ -606,15 +607,15 @@ func TestRepoStatus(t *testing.T) {
 		_, err := exec.Command("sh", "-c", "echo 'gh: Not Found (HTTP 404)' >&2; exit 1").Output()
 		return nil, err
 	})
-	if found, err := repoStatus("o/r"); found || err != nil {
+	if found, err := onboard.RepoStatus("o/r"); found || err != nil {
 		t.Errorf("absent repo = (%v, %v), want (false, nil)", found, err)
 	}
-	if repoExists("o/r") {
-		t.Error("repoExists = true for a 404")
+	if onboard.RepoExists("o/r") {
+		t.Error("onboard.RepoExists = true for a 404")
 	}
 	// Anything else is indeterminate and must surface as an error.
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("gh auth login") })
-	if found, err := repoStatus("o/r"); found || err == nil {
+	if found, err := onboard.RepoStatus("o/r"); found || err == nil {
 		t.Errorf("unauthenticated gh = (%v, %v), want (false, non-nil)", found, err)
 	}
 	// gh missing entirely is reported as such, without shelling out.
@@ -623,7 +624,7 @@ func TestRepoStatus(t *testing.T) {
 		t.Error("shelled out to a gh that is not installed")
 		return nil, nil
 	})
-	if _, err := repoStatus("o/r"); err == nil || !strings.Contains(err.Error(), "not on PATH") {
+	if _, err := onboard.RepoStatus("o/r"); err == nil || !strings.Contains(err.Error(), "not on PATH") {
 		t.Errorf("missing gh = %v, want a not-on-PATH error", err)
 	}
 }

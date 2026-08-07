@@ -28,7 +28,7 @@ func TestCopierCopyArgv(t *testing.T) {
 
 func TestRunNewMissingTemplateSource(t *testing.T) {
 	// A typo'd / un-forked --org must fail fast with the actionable error instead
-	// of letting copier drop into an interactive git username prompt.
+	// of letting copier drop into an interactive git username onboard.Prompt.
 	//
 	// copier is stubbed present: runNew now refuses before the GitHub lookup when
 	// it is absent, and whether the machine running the tests happens to have a

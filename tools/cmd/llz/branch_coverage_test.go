@@ -10,6 +10,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -46,27 +47,27 @@ func writeFileMkdir(t *testing.T, path, content string) {
 // ── item C: no-remote-repo detection (tokens.go) ─────────────────────────────
 
 func TestRepoExists(t *testing.T) {
-	// repoStatus resolves `gh` on PATH before shelling out; stub it so the test
+	// onboard.RepoStatus resolves `gh` on PATH before shelling out; stub it so the test
 	// asserts llz's logic rather than whether this machine has gh installed.
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) < 2 || args[0] != "api" || args[1] != "repos/o/r" {
-			t.Errorf("repoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
+			t.Errorf("onboard.RepoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
 		}
 		return nil, nil
 	})
-	if !repoExists("o/r") {
-		t.Error("repoExists = false when gh succeeds, want true")
+	if !onboard.RepoExists("o/r") {
+		t.Error("onboard.RepoExists = false when gh succeeds, want true")
 	}
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("HTTP 404") })
-	if repoExists("o/r") {
-		t.Error("repoExists = true when gh errors (repo absent), want false")
+	if onboard.RepoExists("o/r") {
+		t.Error("onboard.RepoExists = true when gh errors (repo absent), want false")
 	}
 }
 
 func TestRemediateMissingRepo(t *testing.T) {
 	withGhOwnerKind(t, func(string) (string, error) { return "Organization", nil })
-	out := captureStderr(t, func() { remediateMissingRepo("acme/inst") })
+	out := captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`instance repo "acme/inst" is not reachable`,
 		"gh repo create acme/inst",
@@ -78,7 +79,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 		"apps_repo_revision",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("remediateMissingRepo output missing %q:\n%s", want, out)
+			t.Errorf("onboard.RemediateMissingRepo output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "OWNER") {
@@ -88,7 +89,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 	// An absent owner needs a different first step — creating the repo under an
 	// org that does not exist fails with a bare CreateRepository error.
 	withGhOwnerKind(t, func(string) (string, error) { return "", nil })
-	out = captureStderr(t, func() { remediateMissingRepo("acme/inst") })
+	out = captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`OWNER "acme" does not exist`,
 		"check how it is spelled", // a typo is likelier than an uncreated org
@@ -210,7 +211,7 @@ func TestRunEnvReadinessChartPlaceholder(t *testing.T) {
 	}
 }
 
-// ── runDoctor: the envExplicit gating (wizard.go) ────────────────────────────
+// ── onboard.RunDoctor: the envExplicit gating (wizard.go) ────────────────────────────
 
 func TestRunDoctorEnvGating(t *testing.T) {
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
@@ -220,14 +221,14 @@ func TestRunDoctorEnvGating(t *testing.T) {
 	// A bare `llz doctor` (default env, NOT explicit) must not error just because
 	// no deployment has been scaffolded — readiness is skipped.
 	var errBare error
-	captureStdout(t, func() { errBare = runDoctor("", "e2e", false, false, "", "") })
+	captureStdout(t, func() { errBare = onboard.RunDoctor("", "e2e", false, false, "", "") })
 	if errBare != nil {
 		t.Errorf("bare doctor errored on a missing scaffold: %v", errBare)
 	}
 
 	// `llz doctor --env lab` (explicit) must surface the missing scaffold.
 	var errExplicit error
-	out := captureStdout(t, func() { errExplicit = runDoctor("", "lab", false, true, "", "") })
+	out := captureStdout(t, func() { errExplicit = onboard.RunDoctor("", "lab", false, true, "", "") })
 	if errExplicit == nil {
 		t.Fatalf("explicit --env with no scaffold should error:\n%s", out)
 	}

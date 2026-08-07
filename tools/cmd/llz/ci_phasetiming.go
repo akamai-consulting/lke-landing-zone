@@ -53,7 +53,7 @@ func ciCollectTimingCmd() *cobra.Command {
 	var imagePulls, aplOperator bool
 	c := &cobra.Command{
 		Use:   "collect-timing",
-		Short: "gather this run's timing artifacts (phase timeline + optional image pulls / apl-operator logs) into --dir",
+		Short: "onboard.Gather this run's timing artifacts (phase timeline + optional image pulls / apl-operator logs) into --dir",
 		Long: "One call for the end-of-job timing bundle so the workflow stays a single\n" +
 			"line: makes --dir, optionally collects kubelet image-pull durations\n" +
 			"(--image-pulls, needs cluster access) and the apl-operator logs\n" +

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 )
 
@@ -68,13 +69,13 @@ func TestPrintNextSteps(t *testing.T) {
 // one — docs-guard reads Markdown, and these are Go string literals — so the
 // assertions live here.
 func TestRepinPlanNote(t *testing.T) {
-	if got := repinPlanNote(nil); got != "" {
-		t.Errorf("repinPlanNote(nil) = %q; want empty", got)
+	if got := onboard.RepinPlanNote(nil); got != "" {
+		t.Errorf("onboard.RepinPlanNote(nil) = %q; want empty", got)
 	}
 	// A dry run that reports "0 missing REQUIRED item(s)" and stops reads as "no
 	// work" to the one operator who has some.
-	got := repinPlanNote([]templatecommit.ImageSkew{{Name: "TF_IMAGE"}, {Name: "KUBE_IMAGE"}})
+	got := onboard.RepinPlanNote([]templatecommit.ImageSkew{{Name: "TF_IMAGE"}, {Name: "KUBE_IMAGE"}})
 	if !strings.Contains(got, "2") || !strings.Contains(got, "re-pin") {
-		t.Errorf("repinPlanNote = %q; want it to count the re-pins", got)
+		t.Errorf("onboard.RepinPlanNote = %q; want it to count the re-pins", got)
 	}
 }
