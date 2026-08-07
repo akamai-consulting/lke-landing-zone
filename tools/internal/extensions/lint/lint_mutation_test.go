@@ -1,4 +1,4 @@
-package main
+package lint
 
 // Gap-closing tests for checks.go: the binary-file skip in the conflict-marker
 // scan, the line numbers the dropped-apiVersion guard reports, and the one
@@ -39,39 +39,9 @@ func TestStepConflictMarkersSkipsAFileWhoseFirstByteIsNUL(t *testing.T) {
 	}
 }
 
-// The report is a `file:line` an operator (and the ::error annotation) jumps to.
-// An off-by-one sends them to the wrong line — or to line 0/-1, which no editor
-// or PR annotation can resolve at all.
-func TestScanDroppedAPIVersionsReportsTheDeclaringLine(t *testing.T) {
-	root := t.TempDir()
-	rel := filepath.Join("kubernetes-custom", "es.yaml")
-	if err := os.MkdirAll(filepath.Join(root, "kubernetes-custom"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// The dropped apiVersion is on line 3 (1-based).
-	body := "# a comment\n---\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"
-	if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	hits, examined, err := scanDroppedAPIVersions(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if examined == 0 {
-		t.Fatal("examined = 0: the scan read nothing, so a clean result would be meaningless")
-	}
-	if len(hits) != 1 {
-		t.Fatalf("hits = %+v, want exactly one", hits)
-	}
-	if want := "kubernetes-custom/es.yaml:3"; hits[0].loc != want {
-		t.Errorf("hit loc = %q, want %q (1-based line of the declaration)", hits[0].loc, want)
-	}
-}
-
 // ── the gate runners ─────────────────────────────────────────────────────────
 
-// runLint's entire contract is that a failing step fails the gate. Inverting the
+// RunLint's entire contract is that a failing step fails the gate. Inverting the
 // error test makes `llz lint` (and the pre-commit hook, and every instance's CI)
 // pass while a check is actively reporting a problem — the silent-breakage class
 // these guards exist to close.
@@ -91,19 +61,19 @@ func TestRunLintFailsWhenAStepFails(t *testing.T) {
 	})
 
 	var err error
-	out := captureStderr(t, func() { err = runLint(globalOpts{}) })
+	out := captureStderr(t, func() { err = RunLint(cliopts.Opts{}) })
 	if err == nil {
-		t.Fatal("runLint = nil while a step reported a problem — the gate would pass a broken tree")
+		t.Fatal("RunLint = nil while a step reported a problem — the gate would pass a broken tree")
 	}
 	if !strings.Contains(err.Error(), "refusing to report clean") {
-		t.Errorf("runLint should surface the step's own error, got: %v", err)
+		t.Errorf("RunLint should surface the step's own error, got: %v", err)
 	}
 	if strings.Contains(out, "lint: ok") {
 		t.Errorf("a failed run must not print the all-clear:\n%s", out)
 	}
 }
 
-// The same contract for runValidate. LLZ_TERRAFORM points the step at a script
+// The same contract for RunValidate. LLZ_TERRAFORM points the step at a script
 // that exits non-zero, so nothing real is executed and no network is touched.
 func TestRunValidateFailsWhenAStepFails(t *testing.T) {
 	dir := t.TempDir()
@@ -116,9 +86,9 @@ func TestRunValidateFailsWhenAStepFails(t *testing.T) {
 	chdir(t, dir)
 
 	var err error
-	out := captureStderr(t, func() { err = runValidate(globalOpts{}) })
+	out := captureStderr(t, func() { err = RunValidate(cliopts.Opts{}) })
 	if err == nil {
-		t.Fatal("runValidate = nil while terraform validate failed — the gate would pass an invalid root")
+		t.Fatal("RunValidate = nil while terraform validate failed — the gate would pass an invalid root")
 	}
 	if strings.Contains(out, "validate: ok") {
 		t.Errorf("a failed run must not print the all-clear:\n%s", out)

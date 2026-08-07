@@ -64,6 +64,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/monitoringlabel"
@@ -153,6 +154,7 @@ var declarations = []func() extension.Extension{
 	upgrade.Extension,
 	newinstance.Extension,
 	pincoherence.Extension,
+	lint.Extension,
 	envadd.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,

@@ -18,15 +18,18 @@ func TestExtensionDeclarationValidates(t *testing.T) {
 	}
 }
 
-// Three of four lanes moved. Dropping the note would make the extension read as
-// complete, which is the ban-by-omission failure Incomplete exists to prevent.
-func TestPartialExtractionStaysMarked(t *testing.T) {
-	inc := strings.Join(Extension().Incomplete, " ")
-	if inc == "" {
-		t.Fatal("Incomplete was emptied — the dropped-apiversions lane is still in package main")
+// ALL FOUR LANES ARE HERE NOW, so the note that said otherwise must be gone —
+// and this test flipped with it. It used to assert Incomplete stayed non-empty,
+// guarding against someone quietly dropping the marker without moving the lane.
+// The lane moved, so the guard now runs the other way: a note reappearing here
+// means a lane left, and that should be argued rather than typed.
+func TestNoLanesAreOutstanding(t *testing.T) {
+	if inc := strings.Join(Extension().Incomplete, " "); inc != "" {
+		t.Errorf("Incomplete came back (%q) — if a lane really left, say which and why", inc)
 	}
-	if !strings.Contains(inc, "dropped-apiversions") {
-		t.Error("the note no longer names the lane that is missing")
+	// The lane that was missing longest: prove its entry point is reachable here.
+	if ScannedManifestTrees == nil || len(ScannedManifestTrees) == 0 {
+		t.Error("dropped-apiversions lost its scan roots")
 	}
 }
 

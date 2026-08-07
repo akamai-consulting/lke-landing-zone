@@ -860,6 +860,33 @@ categories:
 #        SEVEN FLOORS LOWERED, same dilution as the 82nd/84th: untested flag
 #        wiring joining a tested capability. cmd/llz`s own floor did NOT move --
 #        the wiring left, and what remains there is no better covered than before.
+#   87th: lint + dropped-apiversions -> extensions   2,968 -> 2,421 (-547)
+#        checks.go is GONE. `llz lint` / `fmt` / `validate` / `check` shipped for
+#        the whole campaign with NOTHING DECLARING THEM -- not composition like
+#        `up` and `import`, but thirteen steps owned outright. Now internal/
+#        extensions/lint, the 76th extension.
+#        TWO BINDINGS BECAUSE ONE VERB WRITES: gate:scaffolded[read-repo] for
+#        lint/check/validate, transition:scaffolded[read-repo,write-repo] for
+#        `llz fmt`, which runs the formatters in FIX mode. Folding fmt into the
+#        gate would have put a write behind a read-repo declaration -- the exact
+#        failure docsguard`s guard caught when gen-toc tried to move in.
+#        IT IMPORTS ITS STEPS RATHER THAN RE-EXEC`ING THEM, unlike assert-suite,
+#        and the declaration says why: lint is sequential and fails fast, so none
+#        of assert-suite`s three reasons (stdout interleaving, os.Exit isolation,
+#        independent seams) apply.
+#        AND A RECORDED `Incomplete` TURNED OUT TO BE WRONG. manifestguard said
+#        dropped-apiversions was "entangled with checks.go in BOTH directions".
+#        The entanglement was one of LOCATION, not logic: the whole cluster only
+#        ever had callers in checks.go and in the `llz ci` face of the same guard.
+#        Nothing of `llz check` came with it. The note is deleted and its pinning
+#        test FLIPPED -- it now fails if an Incomplete reappears unargued.
+#        Two sibling notes (reconcile-actions, template-sustain) say similar
+#        things and deserve the same re-measurement before being believed.
+#        COVERAGE FLOOR 45%. The uncovered half is the argv builders and the
+#        shell-out steps, every one of which no-ops when its tool is absent --
+#        they were equally untested in package main (floor 29%). What IS covered
+#        is the part with a wrong answer: the conflict-marker scanner, the
+#        dropped-apiVersion detector, and the two orchestrators` failure paths.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -872,7 +899,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 2968
+    budget: 2421
     exact: true
     include:
       - "tools/cmd/llz/*.go"

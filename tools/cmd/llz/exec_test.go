@@ -81,19 +81,15 @@ func TestKubectlOut(t *testing.T) {
 	}
 }
 
-func TestHaveToolAndLookable(t *testing.T) {
+// haveTool moved to internal/extensions/lint with the steps that call it; what
+// is left here is the kubectlprobe half this test always also covered.
+func TestLookable(t *testing.T) {
 	withLookPath(t, func(file string) (string, error) { return "/usr/bin/" + file, nil })
-	if !haveTool("tflint") {
-		t.Error("haveTool(present) = false, want true")
-	}
 	if !kubectlprobe.Lookable("gh") {
 		t.Error("kubectlprobe.Lookable(present) = false, want true")
 	}
 
 	withLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
-	if haveTool("tflint") {
-		t.Error("haveTool(absent) = true, want false")
-	}
 	if kubectlprobe.Lookable("gh") {
 		t.Error("kubectlprobe.Lookable(absent) = true, want false")
 	}

@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 // ci_dropped_apiversions.go — `llz ci dropped-apiversions`, the CI face of the
 // dropped-apiVersion guard that `llz lint` also runs at pre-commit.
@@ -27,7 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
 
-func ciDroppedAPIVersionsCmd() *cobra.Command {
+func DroppedAPIVersionsCmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{
 		Use:   "dropped-apiversions",
@@ -43,21 +43,21 @@ func ciDroppedAPIVersionsCmd() *cobra.Command {
 			"kubernetes-charts/*/ only. Every instance fetches platform-apl/ remotely, so\n" +
 			"a stale apiVersion there breaks every instance at once.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDroppedAPIVersions(root) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunCIDroppedAPIVersions(root) },
 	}
 	cmd.Flags().StringVar(&root, "root", ".", "repository root to scan")
 	return cmd
 }
 
-func runCIDroppedAPIVersions(root string) error {
-	hits, examined, err := scanDroppedAPIVersions(root)
+func RunCIDroppedAPIVersions(root string) error {
+	hits, examined, err := ScanDroppedAPIVersions(root)
 	if err != nil {
 		return err
 	}
-	if err := guardkit.RequireCorpus("dropped-apiversions", examined, scannedManifestTrees); err != nil {
+	if err := guardkit.RequireCorpus("dropped-apiversions", examined, ScannedManifestTrees); err != nil {
 		return err
 	}
-	if err := reportDroppedAPIVersions(hits); err != nil {
+	if err := ReportDroppedAPIVersions(hits); err != nil {
 		return err
 	}
 	fmt.Printf("dropped-apiversions: %d manifest(s) scanned, none declare a dropped apiVersion.\n", examined)

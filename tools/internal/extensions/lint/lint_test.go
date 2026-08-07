@@ -1,4 +1,4 @@
-package main
+package lint
 
 import (
 	"os"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 )
 
@@ -152,8 +153,8 @@ func TestIsDeclaredAPIVersion(t *testing.T) {
 		{"# bump apiVersion external-secrets.io/v1beta1 -> v1", false}, // prose/comment, not a key
 		{"  key: external-secrets.io/v1beta1", false},                  // some other key
 	} {
-		if got := isDeclaredAPIVersion(tc.line, api); got != tc.want {
-			t.Errorf("isDeclaredAPIVersion(%q) = %v, want %v", tc.line, got, tc.want)
+		if got := manifestguard.IsDeclaredAPIVersion(tc.line, api); got != tc.want {
+			t.Errorf("manifestguard.IsDeclaredAPIVersion(%q) = %v, want %v", tc.line, got, tc.want)
 		}
 	}
 }
@@ -229,11 +230,11 @@ func TestCIDroppedAPIVersionsNoGit(t *testing.T) {
 	if err := os.WriteFile(p, []byte("apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCIDroppedAPIVersions(dir); err != nil {
+	if err := manifestguard.RunCIDroppedAPIVersions(dir); err != nil {
 		t.Fatalf("clean tree outside a git repo must pass, got: %v", err)
 	}
 	// The empty-corpus guard still has to bite, or a moved tree passes silently.
-	if err := runCIDroppedAPIVersions(t.TempDir()); err == nil {
+	if err := manifestguard.RunCIDroppedAPIVersions(t.TempDir()); err == nil {
 		t.Error("expected failure: no manifests examined at all (trees moved)")
 	}
 }
@@ -347,7 +348,7 @@ func TestGoFmtGate(t *testing.T) {
 		if got := goModuleDirs(); len(got) != 0 {
 			t.Fatalf("goModuleDirs in an empty repo = %v, want none", got)
 		}
-		if err := stepGoFmt(globalOpts{}); err != nil {
+		if err := stepGoFmt(cliopts.Opts{}); err != nil {
 			t.Fatalf("stepGoFmt with no Go tree = %v, want nil (skip)", err)
 		}
 	})

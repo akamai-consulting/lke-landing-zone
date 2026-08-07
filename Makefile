@@ -124,6 +124,7 @@ COVERAGE_MINS := \
 	internal/extensions/upgrade=24 \
 	internal/extensions/newinstance=79 \
 	internal/extensions/pincoherence=87 \
+	internal/extensions/lint=45 \
 	internal/shared/copier=68 \
 	internal/extensions/onboard=12 \
 	internal/extensions/templatecommit=92 \

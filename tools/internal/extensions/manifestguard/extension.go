@@ -55,13 +55,19 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // `posture-credential-coverage` was filed as an invariant and is a gate — and the
 // first time a single row needed two different kinds.
 //
-// THE FOURTH LANE DID NOT COME, and Incomplete says so. `dropped-apiversions`
-// is entangled with checks.go in BOTH directions — it calls
-// scanDroppedAPIVersions / reportDroppedAPIVersions / scannedManifestTrees, which
-// checks.go defines, and checks_test.go in turn drives runCIDroppedAPIVersions.
-// Moving it means moving a piece of `llz check`, which is a different extension's
-// territory. Same shape as `reconcile-actions` (four invariants declared, four
-// lanes still in main) and `template-sustain`.
+// THE FOURTH LANE CAME, and the Incomplete note it used to carry is gone.
+// `dropped-apiversions` was recorded here as entangled with checks.go in BOTH
+// directions — it called that file's scanDroppedAPIVersions /
+// reportDroppedAPIVersions / scannedManifestTrees, and checks_test.go drove its
+// entry point. The entanglement turned out to be one of LOCATION, not of logic:
+// the whole cluster only ever had callers in checks.go and in the `llz ci` face
+// of this same guard. Nothing of `llz check` came with it, and what stayed behind
+// is a five-line lint step that now delegates here.
+//
+// Worth recording because the note was written in good faith and was WRONG in a
+// specific way: "it calls symbols checks.go defines" described where the code
+// SAT, not what owned it. `reconcile-actions` and `template-sustain` carry
+// similar notes; both deserve the same re-measurement before being believed.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "guard-manifests",
@@ -80,13 +86,6 @@ func Extension() extension.Extension {
 				State:  extension.Configured,
 				Grants: []extension.Grant{extension.ReadRepo, extension.CloudRead},
 			},
-		},
-		Incomplete: []string{
-			"the dropped-apiversions lane has not moved. It is entangled with checks.go in " +
-				"both directions — it calls that file's scanDroppedAPIVersions, " +
-				"reportDroppedAPIVersions and scannedManifestTrees, and checks_test.go drives " +
-				"its entry point — so extracting it means moving a piece of `llz check`, which " +
-				"belongs to a different extension.",
 		},
 	}
 }

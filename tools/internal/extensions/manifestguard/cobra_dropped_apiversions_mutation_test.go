@@ -1,4 +1,4 @@
-package main
+package manifestguard
 
 import (
 	"os"
@@ -29,7 +29,7 @@ func TestRunCIDroppedAPIVersionsFailsOnAHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runCIDroppedAPIVersions(root)
+	err := RunCIDroppedAPIVersions(root)
 	if err == nil {
 		t.Fatalf("a manifest declaring %s must FAIL the gate — passing it ships an un-appliable manifest to every instance", dropped)
 	}
@@ -42,7 +42,7 @@ func TestRunCIDroppedAPIVersionsFailsOnAHit(t *testing.T) {
 		[]byte("apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nmetadata:\n  name: x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCIDroppedAPIVersions(root); err != nil {
+	if err := RunCIDroppedAPIVersions(root); err != nil {
 		t.Errorf("a clean tree must pass, got: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
@@ -125,7 +126,7 @@ func runPrecommit(g globalOpts) error {
 
 	// ── lint ──
 	fmt.Fprintln(os.Stderr, "pre-commit: running llz lint")
-	if err := runLint(g); err != nil {
+	if err := lint.RunLint(g); err != nil {
 		return err
 	}
 

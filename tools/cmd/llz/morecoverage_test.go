@@ -10,24 +10,23 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op
 // pass — stubbing execLookPath absent drives that branch through both
-// orchestrators and the standalone fmt-fix step.
+// orchestrators. The standalone fmt-fix step went to internal/extensions/lint
+// with the rest of them and is covered there.
 func TestLintStepsSkipWhenToolsAbsent(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", errors.New("absent") })
 	g := globalOpts{}
-	if err := runLint(g); err != nil {
-		t.Errorf("runLint (tools absent) = %v, want nil", err)
+	if err := lint.RunLint(g); err != nil {
+		t.Errorf("lint.RunLint (tools absent) = %v, want nil", err)
 	}
-	if err := runValidate(g); err != nil {
-		t.Errorf("runValidate (tools absent) = %v, want nil", err)
-	}
-	if err := stepFmtFix(g); err != nil {
-		t.Errorf("stepFmtFix (tools absent) = %v, want nil", err)
+	if err := lint.RunValidate(g); err != nil {
+		t.Errorf("lint.RunValidate (tools absent) = %v, want nil", err)
 	}
 }
 

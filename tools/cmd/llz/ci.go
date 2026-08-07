@@ -398,7 +398,7 @@ func ciCmd() *cobra.Command {
 	// No manifest may declare an apiVersion apl-core's bundled operators no longer
 	// serve (it cannot apply — opaque Argo SyncFailed). Covers platform-apl/, which
 	// the $RENDER_DIR-based dry-run never sees — Makefile dropped-apiversions-check.
-	c.AddCommand(ciDroppedAPIVersionsCmd())
+	c.AddCommand(manifestguard.DroppedAPIVersionsCmd())
 	// Offline apl-core schema validation (helm template) — the check
 	// helm_release.apl runs at apply time, shifted left into scaffold-check.
 	c.AddCommand(manifestguard.AplSchemaValidateCmd())

@@ -1,16 +1,16 @@
-package main
+package lint
 
 import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
@@ -174,7 +174,7 @@ func goModuleDirs() []string {
 //
 // Deliberately NOT `make fmt-check`: this must run from any cwd inside the repo,
 // stay a no-op where there is no Go tree, and not depend on make.
-func stepGoFmt(g globalOpts) error {
+func stepGoFmt(g cliopts.Opts) error {
 	gofmtBin := tool("gofmt", "LLZ_GOFMT")
 	dirs := goModuleDirs()
 	if len(dirs) == 0 || !haveTool(gofmtBin) {
@@ -198,7 +198,7 @@ func stepGoFmt(g globalOpts) error {
 	return fmt.Errorf("gofmt: %d file(s) need formatting", len(unformatted))
 }
 
-func stepFmtCheck(g globalOpts) error {
+func stepFmtCheck(g cliopts.Opts) error {
 	tofu := tool("tofu", "LLZ_TOFU")
 	if !haveTool(tofu) {
 		return nil
@@ -223,7 +223,7 @@ func stepFmtCheck(g globalOpts) error {
 	return nil
 }
 
-func stepFmtFix(g globalOpts) error {
+func stepFmtFix(g cliopts.Opts) error {
 	tofu := tool("tofu", "LLZ_TOFU")
 	if !haveTool(tofu) {
 		return nil
@@ -236,7 +236,7 @@ func stepFmtFix(g globalOpts) error {
 	return nil
 }
 
-func stepTFLint(g globalOpts) error {
+func stepTFLint(g cliopts.Opts) error {
 	tflint := tool("tflint", "LLZ_TFLINT")
 	if !haveTool(tflint) {
 		return nil
@@ -255,7 +255,7 @@ func stepTFLint(g globalOpts) error {
 	return nil
 }
 
-func stepActionsLint(g globalOpts) error {
+func stepActionsLint(g cliopts.Opts) error {
 	actionlint := tool("actionlint", "LLZ_ACTIONLINT")
 	if !haveTool(actionlint) {
 		return nil
@@ -270,7 +270,7 @@ func stepActionsLint(g globalOpts) error {
 	return proc.RunEcho(g.DryRun, actionsLintArgv(actionlint, files)...)
 }
 
-func stepGitleaks(g globalOpts) error {
+func stepGitleaks(g cliopts.Opts) error {
 	gitleaks := tool("gitleaks", "LLZ_GITLEAKS")
 	if !haveTool(gitleaks) {
 		return nil
@@ -313,12 +313,12 @@ func conflictMarkerLines(content string) []int {
 //
 // Skips cleanly when there is no .template-manifest / no lock — a template-repo
 // checkout or a pre-lock instance has nothing to verify.
-func stepVendoredFresh(_ globalOpts) error {
+func stepVendoredFresh(_ cliopts.Opts) error {
 	if _, err := templatemanifest.Load(""); err != nil {
 		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
 		return nil
 	}
-	return sustain.RunManagedFresh(sustainDeps(), "", false, io.Discard, os.Stderr)
+	return sustain.RunManagedFresh(SustainDeps(), "", false, io.Discard, os.Stderr)
 }
 
 // stepRenderFresh fails the lint gate when the COMMITTED render output no longer
@@ -336,9 +336,9 @@ func stepVendoredFresh(_ globalOpts) error {
 // stepPinCoherence is the lint-gate wrapper. It runs in an instance's pre-commit
 // hook (where an upgrade's diff is about to be committed) and is a no-op in the
 // template repo, which has no .copier-answers.yml of its own.
-func stepPinCoherence(_ globalOpts) error { return pincoherence.Assert(".") }
+func stepPinCoherence(_ cliopts.Opts) error { return pincoherence.Assert(".") }
 
-func stepRenderFresh(g globalOpts) error {
+func stepRenderFresh(g cliopts.Opts) error {
 	tfDir, _, _ := instancelayout.Detect()
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil // no LandingZone spec — nothing renders here
@@ -361,7 +361,7 @@ func stepRenderFresh(g globalOpts) error {
 // skip" — so a corrupt index, a permissions problem, or git missing from PATH
 // silently passed a scan that exists precisely to stop silent breakage. Now the
 // two are told apart: no repo is a skip, a repo we cannot read is an error.
-func stepConflictMarkers(_ globalOpts) error {
+func stepConflictMarkers(_ cliopts.Opts) error {
 	out, err := gitOutput("", "ls-files")
 	if err != nil {
 		if _, repoErr := gitOutput("", "rev-parse", "--git-dir"); repoErr != nil {
@@ -399,179 +399,21 @@ func stepConflictMarkers(_ globalOpts) error {
 	return nil
 }
 
-// droppedAPIs are apiVersions a converged apl-core dependency no longer serves, so
-// a manifest still declaring one fails to apply ("no matches for kind … in version
-// …") and surfaces only as an opaque Argo SyncFailed at deploy. Add an entry when a
-// dependency drops one.
-//
-// Verify `served: false` (not merely "a newer version exists") before adding a row
-// — a CRD commonly keeps an old version listed but unserved:
-//
-//	helm template eso external-secrets/external-secrets --version <v> --set crds.create=true |
-//	  yq 'select(.kind=="CustomResourceDefinition") | .spec.names.kind + " " +
-//	      .spec.versions[].name + " served=" + (.spec.versions[].served|tostring)'
-var droppedAPIs = []struct{ apiVersion, since, fix string }{
-	{
-		apiVersion: "external-secrets.io/v1beta1",
-		since:      "apl-core v6 (bundled external-secrets 2.4.1)",
-		fix:        "bump to external-secrets.io/v1 (drop-in for standard ExternalSecret specs)",
-	},
-	// NB: external-secrets.io/v1alpha1 is NOT dropped — PushSecret/ClusterPushSecret
-	// and the generators are v1alpha1-only in 2.4.1 (served, and the storage version).
-	// platform-apl/components/harbor/harbor-admin-push.yaml is correct as-is.
-}
-
-// scannedManifestTrees are the manifest roots the dropped-apiVersion guard walks.
-// Two classes, each uncovered by every other gate:
-//
-//   - Operator-OWNED escape hatches (kubernetes-custom/, kubernetes-charts/).
-//     `llz upgrade` deliberately never rewrites these, so a dependency's version
-//     drop leaves them stale until the operator migrates them by hand.
-//   - The template's own SHARED tree (platform-apl/). No CRD-aware gate reads it:
-//     k8s-lint, k8s-validate and the kind server-side dry-run all scan $RENDER_DIR,
-//     which render-charts.sh builds from kubernetes-charts/*/ ONLY. Every instance
-//     fetches platform-apl/ remotely (clusterspec's kustomize remoteBasePrefix), so
-//     one stale apiVersion here breaks every instance at once with nothing upstream
-//     to catch it — exactly how llz-cidr-firewall's ExternalSecret shipped on
-//     external-secrets.io/v1beta1.
-//
-// Prefixes are repo-root-relative and cover both layouts: an instance repo carries
-// kubernetes-custom/ at its root, the template carries the scaffold copy under
-// instance-template/.
-var scannedManifestTrees = []string{
-	"kubernetes-custom/",
-	"instance-template/kubernetes-custom/",
-	"kubernetes-charts/",
-	"platform-apl/",
-}
-
-// isDeclaredAPIVersion reports whether a YAML line declares `apiVersion: <api>`
-// (allowing indentation, quotes, and a trailing comment). It matches only a real
-// manifest key, so a prose/comment mention (e.g. a changelog "… v1beta1 → v1")
-// does not false-positive.
-func isDeclaredAPIVersion(line, api string) bool {
-	s := strings.TrimSpace(line)
-	if !strings.HasPrefix(s, "apiVersion:") {
-		return false
-	}
-	v := strings.TrimSpace(strings.TrimPrefix(s, "apiVersion:"))
-	if i := strings.Index(v, "#"); i >= 0 {
-		v = strings.TrimSpace(v[:i])
-	}
-	return strings.Trim(v, `"'`) == api
-}
-
-type droppedAPIHit struct{ loc, api, since, fix string }
-
-// manifestYAMLFiles returns every .yaml/.yml path under scannedManifestTrees,
-// rooted at root. Paths are returned root-relative with forward slashes.
-//
-// Filesystem walk, deliberately NOT a `git ls-files` scan. The Kubernetes lint job
-// runs inside the ci-kubernetes container, where git against the mounted checkout
-// fails — a git-based scan reports "not a git repo" and takes the whole gate down
-// with it. Every sibling manifest guard walks the filesystem for the same reason.
-//
-// A tree that does not exist is skipped, not an error: an instance repo has no
-// platform-apl/ (it fetches that tree remotely) and the template has no
-// kubernetes-custom/ at its root.
-//
-// Vendored subchart directories (kubernetes-charts/<chart>/charts/, which `helm dep
-// build` populates during the same lint run) are skipped — upstream chart templates
-// are not ours to gate and would false-positive.
-func manifestYAMLFiles(root string) ([]string, error) {
-	var out []string
-	for _, tree := range scannedManifestTrees {
-		base := filepath.Join(root, filepath.FromSlash(tree))
-		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if os.IsNotExist(err) {
-					return fs.SkipDir // tree absent in this layout
-				}
-				return err
-			}
-			if d.IsDir() {
-				if n := d.Name(); n == ".git" || (n == "charts" && p != base) {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") {
-				rel, relErr := filepath.Rel(root, p)
-				if relErr != nil {
-					rel = p
-				}
-				out = append(out, filepath.ToSlash(rel))
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, fmt.Errorf("scan %s: %w", tree, err)
-		}
-	}
-	return out, nil
-}
-
-// scanDroppedAPIVersions looks for any droppedAPIs apiVersion in the manifest trees
-// rooted at root (""/"." = cwd). examined counts the files actually read, so a
-// caller can refuse to pass on an empty corpus.
-func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, err error) {
-	if root == "" {
-		root = "."
-	}
-	files, err := manifestYAMLFiles(root)
-	if err != nil {
-		return nil, 0, err
-	}
-	for _, f := range files {
-		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
-		if readErr != nil {
-			continue // race with a delete / unreadable — not this check's concern
-		}
-		examined++
-		for i, ln := range strings.Split(string(data), "\n") {
-			for _, d := range droppedAPIs {
-				if isDeclaredAPIVersion(ln, d.apiVersion) {
-					hits = append(hits, droppedAPIHit{fmt.Sprintf("%s:%d", f, i+1), d.apiVersion, d.since, d.fix})
-				}
-			}
-		}
-	}
-	return hits, examined, nil
-}
-
-// reportDroppedAPIVersions prints hits and returns the gate error, or nil if clean.
-func reportDroppedAPIVersions(hits []droppedAPIHit) error {
-	if len(hits) == 0 {
-		return nil
-	}
-	fmt.Fprintf(os.Stderr, "dropped apiVersion(s) in %d location(s):\n", len(hits))
-	for _, h := range hits {
-		// ::error file=…:: so each lands as a PR annotation rather than being buried
-		// in log output, matching the other manifest guards.
-		fmt.Fprintf(os.Stderr, "::error file=%s::%s no longer served since %s; %s\n",
-			strings.SplitN(h.loc, ":", 2)[0], h.api, h.since, h.fix)
-		fmt.Fprintf(os.Stderr, "  • %s — %s no longer served since %s; %s\n", h.loc, h.api, h.since, h.fix)
-	}
-	return fmt.Errorf("manifest(s) declare an apiVersion the cluster no longer serves — they fail to " +
-		"apply (Argo SyncFailed at deploy). Migrate them by hand: `llz upgrade` does not rewrite " +
-		"operator-owned files, and no CRD-aware gate covers the shared platform-apl/ tree")
-}
-
-// stepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
+// StepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
 // an apiVersion the cluster no longer serves (see droppedAPIs).
 //
 // Tolerates an empty corpus: an instance repo legitimately has no platform-apl/ and
 // may have no custom YAML at all. The CI face (`llz ci dropped-apiversions`) runs in
 // the template, where empty means the trees moved — and refuses to pass on it.
-func stepDroppedAPIVersions(_ globalOpts) error {
-	hits, _, err := scanDroppedAPIVersions("")
+func stepDroppedAPIVersions(_ cliopts.Opts) error {
+	hits, _, err := manifestguard.ScanDroppedAPIVersions("")
 	if err != nil {
 		return err
 	}
-	return reportDroppedAPIVersions(hits)
+	return manifestguard.ReportDroppedAPIVersions(hits)
 }
 
-func stepTFValidate(g globalOpts) error {
+func stepTFValidate(g cliopts.Opts) error {
 	terraform := tool(tfbin.Bin(), "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
 		return nil
@@ -587,7 +429,7 @@ func stepTFValidate(g globalOpts) error {
 	return nil
 }
 
-func stepCheckov(g globalOpts) error {
+func stepCheckov(g cliopts.Opts) error {
 	checkov := tool("checkov", "LLZ_CHECKOV")
 	if !haveTool(checkov) {
 		return nil
@@ -600,19 +442,19 @@ func stepCheckov(g globalOpts) error {
 	return nil
 }
 
-// lintSteps is the ordered gate. Named (not inlined into runLint) so a test can
+// lintSteps is the ordered gate. Named (not inlined into RunLint) so a test can
 // assert a step is actually WIRED IN — an unreferenced check protects nothing,
 // and that is a silent failure no amount of testing the step itself would catch.
-func lintSteps() []func(globalOpts) error {
-	return []func(globalOpts) error{
-		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, func(g globalOpts) error { return sustain.StepUpgradeChurnGuard(sustainDeps()) },
+func lintSteps() []func(cliopts.Opts) error {
+	return []func(cliopts.Opts) error{
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, func(g cliopts.Opts) error { return sustain.StepUpgradeChurnGuard(SustainDeps()) },
 		stepPinCoherence, stepRenderFresh,
 		stepFmtCheck, stepGoFmt, stepTFLint, stepActionsLint, stepGitleaks,
 	}
 }
 
-// runLint is the fast pre-commit gate (also called by `llz precommit`).
-func runLint(g globalOpts) error {
+// RunLint is the fast pre-commit gate (also called by `llz precommit`).
+func RunLint(g cliopts.Opts) error {
 	for _, step := range lintSteps() {
 		if err := step(g); err != nil {
 			return err
@@ -622,7 +464,7 @@ func runLint(g globalOpts) error {
 	return nil
 }
 
-func runValidate(g globalOpts) error {
+func RunValidate(g cliopts.Opts) error {
 	// The spec is config-as-code, so the code gate validates it first when present
 	// (this is where `llz validate` users look for "is my spec valid?"). Same check
 	// as `llz render --check`, run before the TF roots.
@@ -639,7 +481,7 @@ func runValidate(g globalOpts) error {
 		}
 		fmt.Fprintln(os.Stderr, "spec: ok")
 	}
-	for _, step := range []func(globalOpts) error{stepTFValidate, stepCheckov} {
+	for _, step := range []func(cliopts.Opts) error{stepTFValidate, stepCheckov} {
 		if err := step(g); err != nil {
 			return err
 		}
@@ -650,16 +492,16 @@ func runValidate(g globalOpts) error {
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-func lintCmd() *cobra.Command {
+func LintCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lint",
 		Short: "fast gate: tofu fmt-check + tflint + actionlint + gitleaks",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runLint(cliopts.Global) },
+		RunE:  func(_ *cobra.Command, _ []string) error { return RunLint(cliopts.Global) },
 	}
 }
 
-func fmtCmd() *cobra.Command {
+func FmtCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "fmt",
 		Short: "tofu fmt (auto-fix terraform formatting)",
@@ -668,7 +510,7 @@ func fmtCmd() *cobra.Command {
 	}
 }
 
-func validateCmd() *cobra.Command {
+func ValidateCmd() *cobra.Command {
 	var env string
 	c := &cobra.Command{
 		Use:   "validate",
@@ -687,7 +529,7 @@ func validateCmd() *cobra.Command {
 				// Thin back-compat alias — the readiness scan now lives in doctor.
 				return configreadiness.RunEnvReadiness(env)
 			}
-			return runValidate(cliopts.Global)
+			return RunValidate(cliopts.Global)
 		},
 	}
 	c.Flags().StringVar(&env, "env", "", "DEPRECATED: use `llz doctor --env <env>` (delegates to the same readiness scan)")
@@ -695,11 +537,11 @@ func validateCmd() *cobra.Command {
 	return c
 }
 
-// checkCmd groups the individual steps for debugging a single check in isolation
+// CheckCmd groups the individual steps for debugging a single check in isolation
 // (the Makefile exposed each target separately). It is an advanced escape hatch —
 // hidden from top-level help so newcomers reach for `llz lint` (fast gate) and
 // `llz validate` (deep gate) instead; both run the same underlying step functions.
-func checkCmd() *cobra.Command {
+func CheckCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:    "check",
 		Short:  "run an individual check step in isolation (advanced)",
@@ -708,7 +550,7 @@ func checkCmd() *cobra.Command {
 	}
 	steps := []struct {
 		use, short string
-		fn         func(globalOpts) error
+		fn         func(cliopts.Opts) error
 	}{
 		{"conflict-markers", "fail on committed merge-conflict markers", stepConflictMarkers},
 		{"vendored-fresh", "fail when a vendored .github/ file drifts from the template", stepVendoredFresh},

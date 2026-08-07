@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
@@ -62,6 +63,7 @@ func init() {
 	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
+	lint.SustainDeps = sustainDeps
 	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
 		return runHooksInstall(globalOpts{DryRun: dryRun, Yes: yes}, dir)
 	}
@@ -132,7 +134,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), onboard.SecretsCmd(), onboard.TokensCmd(), render.RenderCmd(), buildCmd(), upCmd(), statusCmd(),
-		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
+		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), hooksCmd(), precommitCmd(),
 		teardown.ReapCmd(), openbao.OpenbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
