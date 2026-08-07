@@ -15,7 +15,7 @@ package main
 //
 // Auth here is caller-supplied: the token and *http.Client are parameters, not
 // read from GH_TOKEN/os.Getenv, because the reconciler already holds the token
-// and wants control over the client (timeouts, transport). ghAPIBase is shared
+// and wants control over the client (timeouts, transport). ghsecret.APIBase is shared
 // with gh_secrets_native.go.
 
 import (
@@ -30,6 +30,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // errGHRefNotFound is returned (wrapped) when a branch ref 404s, so a caller can
@@ -60,7 +62,7 @@ type ghTreeEntry struct {
 // strip before decoding.
 func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref, path string) (content string, found bool, err error) {
 	u := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s",
-		ghAPIBase, repo, path, url.QueryEscape(ref))
+		ghsecret.APIBase, repo, path, url.QueryEscape(ref))
 	var body struct {
 		Content  string `json:"content"`
 		Encoding string `json:"encoding"`
@@ -87,7 +89,7 @@ func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref
 // commit's tree sha (two hops: git/ref/heads/<b> then git/commits/<sha>). A 404
 // on the ref returns errGHRefNotFound so a missing branch is distinguishable.
 func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo, branch string) (commitSHA, treeSHA string, err error) {
-	refURL := fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", ghAPIBase, repo, branch)
+	refURL := fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", ghsecret.APIBase, repo, branch)
 	var ref struct {
 		Object struct {
 			SHA string `json:"sha"`
@@ -105,7 +107,7 @@ func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo
 		return "", "", fmt.Errorf("get ref heads/%s: response missing object.sha", branch)
 	}
 
-	commitURL := fmt.Sprintf("%s/repos/%s/git/commits/%s", ghAPIBase, repo, commitSHA)
+	commitURL := fmt.Sprintf("%s/repos/%s/git/commits/%s", ghsecret.APIBase, repo, commitSHA)
 	var commit struct {
 		Tree struct {
 			SHA string `json:"sha"`
@@ -132,7 +134,7 @@ func ghCreateBlobNative(ctx context.Context, client *http.Client, token, repo, c
 		"encoding": "base64",
 	}
 	return ghPostForSHA(ctx, client, token,
-		fmt.Sprintf("%s/repos/%s/git/blobs", ghAPIBase, repo), body, "create blob")
+		fmt.Sprintf("%s/repos/%s/git/blobs", ghsecret.APIBase, repo), body, "create blob")
 }
 
 // ghCreateTreeNative creates a tree layered on base_tree: entries listed here
@@ -144,7 +146,7 @@ func ghCreateTreeNative(ctx context.Context, client *http.Client, token, repo, b
 		"tree":      entries,
 	}
 	return ghPostForSHA(ctx, client, token,
-		fmt.Sprintf("%s/repos/%s/git/trees", ghAPIBase, repo), body, "create tree")
+		fmt.Sprintf("%s/repos/%s/git/trees", ghsecret.APIBase, repo), body, "create tree")
 }
 
 // ghCreateCommitNative creates a commit pointing at treeSHA with the given
@@ -156,7 +158,7 @@ func ghCreateCommitNative(ctx context.Context, client *http.Client, token, repo,
 		"parents": parents,
 	}
 	return ghPostForSHA(ctx, client, token,
-		fmt.Sprintf("%s/repos/%s/git/commits", ghAPIBase, repo), body, "create commit")
+		fmt.Sprintf("%s/repos/%s/git/commits", ghsecret.APIBase, repo), body, "create commit")
 }
 
 // ghUpdateRefNative points heads/<branch> at newSHA. force=false requests a
@@ -167,7 +169,7 @@ func ghUpdateRefNative(ctx context.Context, client *http.Client, token, repo, br
 	if err != nil {
 		return false, err
 	}
-	u := fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", ghAPIBase, repo, branch)
+	u := fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", ghsecret.APIBase, repo, branch)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u, bytes.NewReader(body))
 	if err != nil {
 		return false, err

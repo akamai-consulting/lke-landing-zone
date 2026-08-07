@@ -61,14 +61,15 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
 // Seams for tests.
 var (
 	newProvisionerBaoStore = openHarborProvisionerBaoStore
-	ghPublishRepoSecret    = ghSetRepoSecretNative
-	ghRepoSecretExists     = ghRepoSecretExistsNative
+	ghPublishRepoSecret    = ghsecret.SetRepoNative
+	ghRepoSecretExists     = ghsecret.RepoSecretExistsNative
 	readAdminPasswordFile  = os.ReadFile
 )
 

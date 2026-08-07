@@ -335,6 +335,12 @@ categories:
 #        A set that measures badly is usually not entangled with the code it names
 #        -- it is waiting on a layer underneath that nobody has separated yet.
 #        Bonus: every lane took a globalOpts and read ONE field. They take a bool.
+#   50th: gh REST secret writers -> internal/ghsecret   18,245 -> 18,184 (-61 / 137 files)
+#        The `gh` CLI half moved in the 48th; this is the REST half, and the two
+#        belong together -- SetRepoNative/SetEnvNative are the same write with a
+#        different transport. Closure was 1 (`main`), so this was free. What it
+#        BUYS is harbor-provisioner: that set was 17 outbound at the start of the
+#        campaign, 10 after the 48th, and is 8 now with only two real edges left.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -347,7 +353,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 18245
+    budget: 18184
     exact: true
     include:
       - "tools/cmd/llz/*.go"

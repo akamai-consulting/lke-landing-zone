@@ -9,15 +9,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
-// setGHAPIBase points the shared ghAPIBase seam at a test server for the test's
+// setGHAPIBase points the shared ghsecret.APIBase seam at a test server for the test's
 // lifetime, restoring it on cleanup.
 func setGHAPIBase(t *testing.T, url string) {
 	t.Helper()
-	prev := ghAPIBase
-	ghAPIBase = url
-	t.Cleanup(func() { ghAPIBase = prev })
+	prev := ghsecret.APIBase
+	ghsecret.APIBase = url
+	t.Cleanup(func() { ghsecret.APIBase = prev })
 }
 
 func TestGHReadFileNative(t *testing.T) {

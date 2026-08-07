@@ -118,6 +118,7 @@ COVERAGE_MINS := \
 	internal/mutate=89 \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
+	internal/ghsecret=55 \
 	internal/baoread=72 \
 	internal/baolifecycle=60 \
 	internal/ghaout=70 \

@@ -1,4 +1,4 @@
-package main
+package ghsecret
 
 import (
 	"crypto/rand"
@@ -42,13 +42,13 @@ func TestGHSetRepoSecretNativeRoundTrip(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	prev := ghAPIBase
-	ghAPIBase = srv.URL
-	t.Cleanup(func() { ghAPIBase = prev })
+	prev := APIBase
+	APIBase = srv.URL
+	t.Cleanup(func() { APIBase = prev })
 	t.Setenv("GH_TOKEN", "ghp_test")
 	t.Setenv("GH_REPO", "acme/platform")
 
-	if err := ghSetRepoSecretNative("HARBOR_PASSWORD", "s3cr3t"); err != nil {
+	if err := SetRepoNative("HARBOR_PASSWORD", "s3cr3t"); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/repos/acme/platform/actions/secrets/HARBOR_PASSWORD" {
@@ -74,7 +74,7 @@ func TestGHSetRepoSecretNativeRoundTrip(t *testing.T) {
 func TestGHSetRepoSecretNativeErrors(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GH_REPO", "")
-	if err := ghSetRepoSecretNative("X", "v"); err == nil || !strings.Contains(err.Error(), "GH_TOKEN and GH_REPO") {
+	if err := SetRepoNative("X", "v"); err == nil || !strings.Contains(err.Error(), "GH_TOKEN and GH_REPO") {
 		t.Errorf("err = %v, want missing-env refusal", err)
 	}
 
@@ -83,12 +83,12 @@ func TestGHSetRepoSecretNativeErrors(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	prev := ghAPIBase
-	ghAPIBase = srv.URL
-	t.Cleanup(func() { ghAPIBase = prev })
+	prev := APIBase
+	APIBase = srv.URL
+	t.Cleanup(func() { APIBase = prev })
 	t.Setenv("GH_TOKEN", "ghp_test")
 	t.Setenv("GH_REPO", "acme/platform")
-	if err := ghSetRepoSecretNative("X", "v"); err == nil || !strings.Contains(err.Error(), "public key") {
+	if err := SetRepoNative("X", "v"); err == nil || !strings.Contains(err.Error(), "public key") {
 		t.Errorf("err = %v, want public-key fetch failure", err)
 	}
 }
@@ -121,13 +121,13 @@ func TestGHSetEnvSecretNativeRoundTrip(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	prev := ghAPIBase
-	ghAPIBase = srv.URL
-	t.Cleanup(func() { ghAPIBase = prev })
+	prev := APIBase
+	APIBase = srv.URL
+	t.Cleanup(func() { APIBase = prev })
 	t.Setenv("GH_TOKEN", "ghp_test")
 	t.Setenv("GH_REPO", "acme/platform")
 
-	if err := ghSetEnvSecretNative("LINODE_API_TOKEN", "infra-primary", "new-pat-value"); err != nil {
+	if err := SetEnvNative("LINODE_API_TOKEN", "infra-primary", "new-pat-value"); err != nil {
 		t.Fatal(err)
 	}
 	// Environment endpoint keys off the numeric repo id (4242), not owner/name.
@@ -144,7 +144,7 @@ func TestGHSetEnvSecretNativeRoundTrip(t *testing.T) {
 	}
 }
 
-// resolveGHAPIBase must honor $GITHUB_API (the bug: the write path used to
+// resolveAPIBase must honor $GITHUB_API (the bug: the write path used to
 // ignore it and target api.github.com even on a GHES instance) and derive a
 // GHES api base from a non-github.com GH_HOST, else default to github.com.
 func TestResolveGHAPIBase(t *testing.T) {
@@ -161,8 +161,8 @@ func TestResolveGHAPIBase(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("GITHUB_API", c.githubAPI)
 			t.Setenv("GH_HOST", c.ghHost)
-			if got := resolveGHAPIBase(); got != c.want {
-				t.Errorf("resolveGHAPIBase() = %q, want %q", got, c.want)
+			if got := resolveAPIBase(); got != c.want {
+				t.Errorf("resolveAPIBase() = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -178,13 +178,13 @@ func TestGHWriteTargetStrict(t *testing.T) {
 	t.Setenv("GITHUB_API", "")
 	t.Setenv("LLZ_FORGE", "")
 	t.Setenv("LLZ_FORGE_HOST", "")
-	if err := ghWriteTargetStrictOK(); err != nil {
+	if err := writeTargetStrictOK(); err != nil {
 		t.Errorf("non-strict must be OK, got %v", err)
 	}
 
 	// Strict + nothing declared → refuse.
 	t.Setenv("LLZ_FORGE_STRICT", "1")
-	if err := ghWriteTargetStrictOK(); err == nil {
+	if err := writeTargetStrictOK(); err == nil {
 		t.Error("strict with no forge target must refuse (clobber guard)")
 	}
 
@@ -195,7 +195,7 @@ func TestGHWriteTargetStrict(t *testing.T) {
 		t.Setenv("LLZ_FORGE", "")
 		t.Setenv("LLZ_FORGE_HOST", "")
 		t.Setenv(k, "declared")
-		if err := ghWriteTargetStrictOK(); err != nil {
+		if err := writeTargetStrictOK(); err != nil {
 			t.Errorf("strict with %s declared must be OK, got %v", k, err)
 		}
 	}
