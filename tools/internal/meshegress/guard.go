@@ -1,4 +1,4 @@
-package main
+package meshegress
 
 // ci_mesh_egress_guard.go implements `llz ci mesh-egress-guard` — the static
 // guard extracted from the harbor-reconciler mesh-isolation failure.
@@ -118,7 +118,7 @@ type meFinding struct {
 	file, policy, sourceNS, targetNS, reason string
 }
 
-func ciMeshEgressGuardCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{
 		Use:   "mesh-egress-guard",
@@ -128,13 +128,13 @@ func ciMeshEgressGuardCmd() *cobra.Command {
 			"NetworkPolicy that egresses there from a different namespace describes traffic that\n" +
 			"will be silently dropped at the sidecar. Run the client IN that namespace instead.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIMeshEgressGuard(root) },
+		RunE: func(_ *cobra.Command, _ []string) error { return Run(root) },
 	}
 	cmd.Flags().StringVar(&root, "root", ".", "repo root (template or instance layout)")
 	return cmd
 }
 
-func runCIMeshEgressGuard(root string) error {
+func Run(root string) error {
 	if err := requireRenderedCharts(root); err != nil {
 		return err
 	}

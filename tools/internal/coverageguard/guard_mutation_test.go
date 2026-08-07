@@ -1,4 +1,4 @@
-package main
+package coverageguard
 
 import (
 	"testing"

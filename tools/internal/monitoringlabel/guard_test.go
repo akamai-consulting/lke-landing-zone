@@ -1,4 +1,4 @@
-package main
+package monitoringlabel
 
 import (
 	"os"
@@ -78,7 +78,7 @@ func TestCollectMonitoringLabelFindings(t *testing.T) {
 // serviceMonitor.selectorLabels, so only the RENDERED tree shows the true value)
 // lives under rendered/, and an unbuilt rendered/ IS the missing-root case.
 func TestMonitoringGuardEmptyCorpusFails(t *testing.T) {
-	err := runMonitoringLabelGuard([]string{filepath.Join(t.TempDir(), "does-not-exist")})
+	err := Run([]string{filepath.Join(t.TempDir(), "does-not-exist")})
 	if err == nil {
 		t.Fatal("an empty corpus must FAIL — a guard with nothing to check reports the same color.Green as one that checked everything")
 	}
@@ -96,7 +96,7 @@ func TestMonitoringGuardRealCorpusWithNoFindingsPasses(t *testing.T) {
 		[]byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runMonitoringLabelGuard([]string{dir}); err != nil {
+	if err := Run([]string{dir}); err != nil {
 		t.Errorf("a non-empty corpus with no violations must pass, got %v", err)
 	}
 }

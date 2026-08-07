@@ -44,6 +44,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/database"
@@ -58,6 +60,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -77,6 +81,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/workflowshells"
 )
 
 // declarations is the built-in set. One line per extension; the catalog
@@ -114,6 +119,11 @@ var declarations = []func() extension.Extension{
 	mtlsguard.Extension,
 	seedspecial.Extension,
 	bootstrapcluster.Extension,
+	meshegress.Extension,
+	coverageguard.Extension,
+	cosignguard.Extension,
+	monitoringlabel.Extension,
+	workflowshells.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

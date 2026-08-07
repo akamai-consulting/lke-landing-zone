@@ -1,4 +1,4 @@
-package main
+package cosignguard
 
 // ci_cosign_subject_guard.go implements `llz ci cosign-subject-guard` — assert
 // that every workflow file named in a cosign keyless `subject:` still exists.
@@ -80,7 +80,7 @@ func extractCosignSubjects(body string) []cosignSubjectRef {
 	return out
 }
 
-func ciCosignSubjectGuardCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
 		Use:   "cosign-subject-guard",
@@ -93,14 +93,14 @@ func ciCosignSubjectGuardCmd() *cobra.Command {
 			"as pods that fail admission in every downstream cluster.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCosignSubjectGuard(root)
+			return Run(root)
 		},
 	}
 	c.Flags().StringVar(&root, "root", ".", "repository root")
 	return c
 }
 
-func runCosignSubjectGuard(root string) error {
+func Run(root string) error {
 	var refs []cosignSubjectRef
 
 	dirs := guardwalk.PlatformTreeDirs(root)

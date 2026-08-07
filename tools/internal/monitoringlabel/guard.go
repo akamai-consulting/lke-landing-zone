@@ -1,4 +1,4 @@
-package main
+package monitoringlabel
 
 // ci_monitoring_label_guard.go implements `llz ci monitoring-label-guard` — the
 // static guard extracted from the day-2-observability-blind outage (#175).
@@ -54,7 +54,7 @@ type monitoringLabelFinding struct {
 	file, kind, name string
 }
 
-func ciMonitoringLabelGuardCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var roots []string
 	cmd := &cobra.Command{
 		Use:   "monitoring-label-guard",
@@ -66,14 +66,14 @@ func ciMonitoringLabelGuardCmd() *cobra.Command {
 			"kube-linter cannot see. Scans final YAML; run `make render-charts` first so\n" +
 			"the rendered chart output (e.g. the openbao ServiceMonitor) is included.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runMonitoringLabelGuard(roots) },
+		RunE: func(_ *cobra.Command, _ []string) error { return Run(roots) },
 	}
 	cmd.Flags().StringSliceVar(&roots, "root", []string{"platform-apl", "rendered"},
 		"directories to scan (final YAML only; run render-charts to populate rendered/)")
 	return cmd
 }
 
-func runMonitoringLabelGuard(roots []string) error {
+func Run(roots []string) error {
 	findings, examined, err := collectMonitoringLabelFindings(roots)
 	if err != nil {
 		return err

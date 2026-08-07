@@ -1,4 +1,4 @@
-package main
+package coverageguard
 
 // ci_coverage_guard.go implements `llz ci check-coverage` — the native port of
 // template-scripts/ci/check-go-coverage.sh. It enforces PER-PACKAGE minimum
@@ -39,7 +39,7 @@ type covResult struct {
 	OK        bool
 }
 
-func ciCheckCoverageCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var profile string
 	c := &cobra.Command{
 		Use:   "check-coverage <pkg-suffix=min>...",
@@ -51,14 +51,14 @@ func ciCheckCoverageCmd() *cobra.Command {
 			"or produced no coverage data. Packages without a threshold are not gated.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runCheckCoverage(profile, args, os.Stdout)
+			return Run(profile, args, os.Stdout)
 		},
 	}
 	c.Flags().StringVar(&profile, "profile", "", "path to the Go coverprofile (required)")
 	return c
 }
 
-func runCheckCoverage(profile string, args []string, out io.Writer) error {
+func Run(profile string, args []string, out io.Writer) error {
 	if profile == "" {
 		return fmt.Errorf("--profile (path to the Go coverprofile) is required")
 	}

@@ -1,4 +1,4 @@
-package main
+package cosignguard
 
 import (
 	"os"
@@ -90,7 +90,7 @@ func TestCosignSubjectGuardRefusesEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runCosignSubjectGuard(root)
+	err := Run(root)
 	if err == nil {
 		t.Fatal("guard passed with zero subject pins found — an empty result must not read as 'all valid'")
 	}
@@ -118,7 +118,7 @@ func TestCosignSubjectGuardCatchesRename(t *testing.T) {
 	}
 
 	// No .github/workflows/build-images.yml — the rename case.
-	err := runCosignSubjectGuard(root)
+	err := Run(root)
 	if err == nil {
 		t.Fatal("guard passed while its pinned workflow was absent")
 	}
@@ -134,7 +134,7 @@ func TestCosignSubjectGuardCatchesRename(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wf, "build-images.yml"), []byte("name: build\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCosignSubjectGuard(root); err != nil {
+	if err := Run(root); err != nil {
 		t.Fatalf("guard failed with the pinned workflow present: %v", err)
 	}
 }

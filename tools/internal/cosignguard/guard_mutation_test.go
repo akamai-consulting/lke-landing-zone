@@ -1,4 +1,4 @@
-package main
+package cosignguard
 
 import (
 	"os"
@@ -27,7 +27,7 @@ func TestCosignSubjectGuardNamesFilesRepoRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runCosignSubjectGuard(root)
+	err := Run(root)
 	if err == nil {
 		t.Fatal("guard passed while its pinned workflow was absent")
 	}

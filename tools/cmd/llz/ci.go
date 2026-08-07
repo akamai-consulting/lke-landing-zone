@@ -30,8 +30,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
@@ -41,6 +45,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/workflowshells"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
@@ -350,13 +355,13 @@ func ciCmd() *cobra.Command {
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
-	c.AddCommand(ciMeshEgressGuardCmd())
+	c.AddCommand(meshegress.Cmd())
 	c.AddCommand(ciPlaceholderGuardCmd())
 	// Static guard for the #175 day-2-blind class: every ServiceMonitor/PodMonitor/
 	// PrometheusRule must carry `prometheus: system` or apl-core's Prometheus
 	// silently ignores it (metrics unscraped / rules unloaded) — Makefile
 	// monitoring-label-guard.
-	c.AddCommand(ciMonitoringLabelGuardCmd())
+	c.AddCommand(monitoringlabel.Cmd())
 	// No manifest may declare an apiVersion apl-core's bundled operators no longer
 	// serve (it cannot apply — opaque Argo SyncFailed). Covers platform-apl/, which
 	// the $RENDER_DIR-based dry-run never sees — Makefile dropped-apiversions-check.
@@ -371,7 +376,7 @@ func ciCmd() *cobra.Command {
 	// Render/coverage lint gates ported from template-scripts (the Makefile's
 	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
 	// coverage floor in `make coverage`).
-	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), ciCheckCoverageCmd())
+	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), coverageguard.Cmd())
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
 	c.AddCommand(ciUntestableLOCCmd())
@@ -388,7 +393,7 @@ func ciCmd() *cobra.Command {
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
-	c.AddCommand(ciCosignSubjectGuardCmd())
+	c.AddCommand(cosignguard.Cmd())
 	// Runtime companion: a pinned first-party chart version must actually EXIST in
 	// the OCI registry, or Argo 404s the pull on a feature-branch e2e (bumped-but-
 	// unpublished chart) and the OpenBao bootstrap dies on the missing llz-openbao ns.
@@ -419,7 +424,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciAssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
-	c.AddCommand(ciCheckWorkflowShellsCmd())
+	c.AddCommand(workflowshells.Cmd())
 	// Scaffold update-class manifest gate (former template-scripts/check-template-manifest.sh).
 	c.AddCommand(templatemanifest.Cmd())
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by

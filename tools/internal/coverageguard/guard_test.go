@@ -1,4 +1,4 @@
-package main
+package coverageguard
 
 import (
 	"os"
@@ -83,7 +83,7 @@ func TestRunCheckCoverage(t *testing.T) {
 
 	// All floors met.
 	var out strings.Builder
-	if err := runCheckCoverage(profile, []string{"a=70", "b=0"}, &out); err != nil {
+	if err := Run(profile, []string{"a=70", "b=0"}, &out); err != nil {
 		t.Errorf("expected pass, got %v", err)
 	}
 	if !strings.Contains(out.String(), "all gated packages meet") {
@@ -92,17 +92,17 @@ func TestRunCheckCoverage(t *testing.T) {
 
 	// One floor breached → error.
 	out.Reset()
-	if err := runCheckCoverage(profile, []string{"a=90"}, &out); err == nil {
+	if err := Run(profile, []string{"a=90"}, &out); err == nil {
 		t.Error("expected failure for a=90")
 	}
 
 	// Missing profile.
-	if err := runCheckCoverage(dir+"/nope.out", []string{"a=1"}, &out); err == nil {
+	if err := Run(dir+"/nope.out", []string{"a=1"}, &out); err == nil {
 		t.Error("expected error for missing profile")
 	}
 
 	// Missing --profile flag.
-	if err := runCheckCoverage("", []string{"a=1"}, &out); err == nil {
+	if err := Run("", []string{"a=1"}, &out); err == nil {
 		t.Error("expected error for empty --profile")
 	}
 }

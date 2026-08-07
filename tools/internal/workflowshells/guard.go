@@ -1,4 +1,4 @@
-package main
+package workflowshells
 
 // ci_workflow_shells.go implements `llz ci check-workflow-shells` — a CI guard
 // that fails when a workflow job runs in a `container:` but its `run:` steps can
@@ -23,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func ciCheckWorkflowShellsCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var dir string
 	c := &cobra.Command{
 		Use:   "check-workflow-shells",
@@ -34,13 +34,13 @@ func ciCheckWorkflowShellsCmd() *cobra.Command {
 			"falls back to the container's /bin/sh (dash) and a `set -o pipefail` fails the\n" +
 			"job. Reports each offending job as ::error:: and exits non-zero.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCheckWorkflowShells(dir) },
+		RunE: func(_ *cobra.Command, _ []string) error { return Run(dir) },
 	}
 	c.Flags().StringVar(&dir, "dir", ".github/workflows", "directory of workflow YAML files to scan")
 	return c
 }
 
-func runCheckWorkflowShells(dir string) error {
+func Run(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("check-workflow-shells: %w", err)

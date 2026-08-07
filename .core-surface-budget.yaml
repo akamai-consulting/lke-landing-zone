@@ -464,6 +464,19 @@ categories:
 #        Cost: a blanket type rename (Answers -> File) rewrote the STRING LITERAL
 #        ".copier-answers.yml" into ".copier-File.yml". Four tests caught it.
 #        Rename by exact symbol -- and check string literals, not just code.
+#   63rd: FIVE guards, all CLOSURE 1   11,730 -> 11,108 (-622 / 101 files)
+#        mesh-egress (245), coverage (208), cosign-subject (203), workflow-shells
+#        (125), monitoring-label (118). ~900 lines of real logic that needed
+#        NOTHING from package main except `main` itself, and had been sitting
+#        there for the entire campaign.
+#        THE THIRD TIME "mechanical extraction is complete" WAS WRONG. Found by
+#        running the per-file sweep instead of trusting the previous conclusion.
+#        All five built and vetted clean on the FIRST pass -- no stranded
+#        helpers, no path-keyed registry, no seam. That is what a genuinely
+#        separable file looks like, and it is why the sweep is now step one of
+#        every iteration rather than a thing done when hunches run out.
+#        Note guard-coverage: extracting it puts the thing that JUDGES coverage
+#        under a coverage floor of its own -- the same loop assert-suite closed.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -476,7 +489,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 11730
+    budget: 11108
     exact: true
     include:
       - "tools/cmd/llz/*.go"
