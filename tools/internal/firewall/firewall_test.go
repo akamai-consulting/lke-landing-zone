@@ -1,4 +1,4 @@
-package main
+package firewall
 
 import (
 	"encoding/json"
@@ -23,16 +23,16 @@ type fwCall struct {
 // decides per-argv whether an invocation errors.
 func withFirewallKubectl(t *testing.T, fail func(args []string) error) *[]fwCall {
 	t.Helper()
-	orig := firewallKubectlFn
+	orig := KubectlFn
 	calls := new([]fwCall)
-	firewallKubectlFn = func(stdin string, args ...string) error {
+	KubectlFn = func(stdin string, args ...string) error {
 		*calls = append(*calls, fwCall{stdin: stdin, args: strings.Join(args, " ")})
 		if fail != nil {
 			return fail(args)
 		}
 		return nil
 	}
-	t.Cleanup(func() { firewallKubectlFn = orig })
+	t.Cleanup(func() { KubectlFn = orig })
 	return calls
 }
 
@@ -88,9 +88,9 @@ func captureFirewallOutput(t *testing.T, fn func()) (stdout, stderr string) {
 // without a live account.
 func withFirewallResolve(t *testing.T, fid, cid string, rErr error) {
 	t.Helper()
-	orig := firewallResolveFn
-	firewallResolveFn = func(string, tf.Labels) (string, string, error) { return fid, cid, rErr }
-	t.Cleanup(func() { firewallResolveFn = orig })
+	orig := ResolveFn
+	ResolveFn = func(string, tf.Labels) (string, string, error) { return fid, cid, rErr }
+	t.Cleanup(func() { ResolveFn = orig })
 }
 
 // TestResolveFirewallInputsIntoEnv covers the --region path: the firewall + cluster
@@ -188,7 +188,7 @@ func TestRunCIBootstrapCloudFirewallEnvValidation(t *testing.T) {
 			firewallTestEnv(t, tc.overrides)
 			calls := withFirewallKubectl(t, nil)
 			var err error
-			_, stderr := captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+			_, stderr := captureFirewallOutput(t, func() { err = Run() })
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("err = %v, want %q", err, tc.wantErr)
 			}
@@ -216,7 +216,7 @@ func TestRunCIBootstrapCloudFirewallHappyPathWithClusterID(t *testing.T) {
 	firewallTestEnv(t, map[string]string{"CLUSTER_ID": "67890"})
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	stdout, stderr := captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	stdout, stderr := captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestRunCIBootstrapCloudFirewallPatchesVPCCIDR(t *testing.T) {
 	firewallTestEnv(t, map[string]string{"VPC_CIDR": "10.0.0.0/13", "CLUSTER_ID": "67890"})
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestRunCIBootstrapCloudFirewallWithoutVPCCIDR(t *testing.T) {
 	firewallTestEnv(t, nil)
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestRunCIBootstrapCloudFirewallWithoutClusterID(t *testing.T) {
 	firewallTestEnv(t, nil)
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	stdout, _ := captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	stdout, _ := captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestRunCIBootstrapCloudFirewallTokenFallback(t *testing.T) {
 	firewallTestEnv(t, map[string]string{"CLOUD_FIREWALL_TOKEN": "", "LINODE_TOKEN": "li-token"})
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	_, stderr := captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	_, stderr := captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestRunCIBootstrapCloudFirewallPrefersCloudFirewallToken(t *testing.T) {
 	firewallTestEnv(t, map[string]string{"CLOUD_FIREWALL_TOKEN": "cf-token", "LINODE_TOKEN": "li-token"})
 	calls := withFirewallKubectl(t, nil)
 	var err error
-	_, stderr := captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+	_, stderr := captureFirewallOutput(t, func() { err = Run() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestRunCIBootstrapCloudFirewallKubectlFailurePropagates(t *testing.T) {
 				return nil
 			})
 			var err error
-			captureFirewallOutput(t, func() { err = runCIBootstrapCloudFirewall() })
+			captureFirewallOutput(t, func() { err = Run() })
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("err = %v, want %q", err, tc.wantErr)
 			}
@@ -445,7 +445,7 @@ func TestFirewallManifestHelpers(t *testing.T) {
 }
 
 func TestCIBootstrapCloudFirewallCmd(t *testing.T) {
-	c := ciBootstrapCloudFirewallCmd()
+	c := Cmd()
 	if c.Use != "bootstrap-cloud-firewall" {
 		t.Errorf("Use = %q, want bootstrap-cloud-firewall", c.Use)
 	}

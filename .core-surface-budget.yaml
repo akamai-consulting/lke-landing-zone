@@ -489,6 +489,18 @@ categories:
 #        Also: the naive test-helper puller tried to drag runEnvAdd, a PRODUCTION
 #        function from scaffold.go, across the boundary. The guard against
 #        ciCmd/gopts/globalOpts/main must cover production symbols too.
+#   65th: ci_shared split + cloud-firewall-bootstrap   10,775 -> 10,562 (-213 / 96 files)
+#        A "SHARED HELPERS" FILE IS USUALLY TWO THINGS THAT WERE NEVER NAMED.
+#        cmd/llz/ci_shared.go was 66 lines used by six files, holding a Linode
+#        client constructor and a tfvars reader with nothing in common. NEITHER
+#        needed a new package: the client went to internal/linode beside
+#        NewClient, the reader to internal/tfvars beside the read/write pair
+#        extracted two moves earlier. That took ci_firewall.go from closure 3 to
+#        closure 1. Fourth enabler of this shape.
+#        cloud-firewall-bootstrap declares NO cloud-mutate on purpose: it seeds
+#        in-cluster state and the firewall-controller does the reconciling. That
+#        split is why a one-shot bootstrap and a continuous reconciler cannot
+#        fight over the same Linode resource.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -501,7 +513,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 10775
+    budget: 10562
     exact: true
     include:
       - "tools/cmd/llz/*.go"

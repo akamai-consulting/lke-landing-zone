@@ -33,6 +33,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
@@ -42,6 +43,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
@@ -116,7 +118,7 @@ func ciCmd() *cobra.Command {
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
 	// bootstrap-cloud-firewall is the manual/recovery fallback; the cidrFirewall
 	// component's CronJob (discover-firewall-config) is the steady-state owner.
-	c.AddCommand(ciBootstrapCloudFirewallCmd(), reconciler.DiscoverFirewallCmd())
+	c.AddCommand(firewall.Cmd(), reconciler.DiscoverFirewallCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	// fetch-kubeconfig (the Linode-API variant) is BREAK-GLASS and deliberately
 	// callerless: the workflows use fetch-kubeconfig-state, which reads the TF
@@ -470,7 +472,7 @@ func runCIVerifyObjectStorage(region string) error {
 	if err != nil {
 		return err
 	}
-	token, err := ciToken()
+	token, err := linode.TokenFromEnv()
 	if err != nil {
 		return err
 	}
@@ -574,12 +576,12 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	}
 	// Token first, so a missing credential still reports before a missing tfvars
 	// file — the order this verb has always failed in.
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
 
-	vars, varFile, err := readRegionTFVars("", region)
+	vars, varFile, err := tfvars.ReadRegion("", region)
 	if err != nil {
 		return err
 	}
@@ -1044,7 +1046,7 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
@@ -1062,17 +1064,8 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	return fin()
 }
 
-// ciToken reads the Linode PAT the CI sweeps run under.
-func ciToken() (string, error) {
-	t := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
-	if t == "" {
-		return "", fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT")
-	}
-	return t, nil
-}
-
 // tfApplyLinodeToken reads the Linode PAT available on the terraform apply path.
-// Deliberately NOT ciToken: the apply step is handed its credential as
+// Deliberately NOT linode.TokenFromEnv: the apply step is handed its credential as
 // TF_VAR_linode_token (terraform's own variable plumbing), not LINODE_API_TOKEN,
 // so the fallback name differs and folding the two readers together would
 // silently change which variable wins in jobs that set more than one. Returns ""
@@ -1192,7 +1185,7 @@ func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude strin
 	if requireEmpty && volumeIDs == "" {
 		return fmt.Errorf("--require-empty needs --volume-ids (the precise set whose disappearance is verified)")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
@@ -1355,7 +1348,7 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	if requireEmpty && clusterID == "" {
 		return fmt.Errorf("--require-empty needs --cluster-id (the scoped set whose disappearance is verified)")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}

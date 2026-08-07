@@ -54,6 +54,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
@@ -126,6 +127,7 @@ var declarations = []func() extension.Extension{
 	monitoringlabel.Extension,
 	workflowshells.Extension,
 	instanceresolve.Extension,
+	firewall.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

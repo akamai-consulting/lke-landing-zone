@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +20,7 @@ import (
 // plus the job-gating outputs.
 func tokenInvDepsFor() tokeninv.Deps {
 	return tokeninv.Deps{
-		CloudToken: ciToken,
+		CloudToken: linode.TokenFromEnv,
 		Summary:    ghaout.Append,
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package firewall
 
 // ci_firewall.go implements `llz ci bootstrap-cloud-firewall` — the native port
 // of bootstrap-cloud-firewall.sh, the canonical cloud-firewall bootstrap shared
@@ -36,14 +36,15 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/spf13/cobra"
 )
 
-// firewallKubectlFn runs kubectl with args, piping stdin (a rendered manifest /
+// KubectlFn runs kubectl with args, piping stdin (a rendered manifest /
 // patchless empty string) to it and streaming output. KUBECONFIG reaches
 // kubectl through the inherited environment, exactly as the script's
 // `export KUBECONFIG` did. Seamed for tests.
-var firewallKubectlFn = func(stdin string, args ...string) error {
+var KubectlFn = func(stdin string, args ...string) error {
 	cmd := exec.Command("kubectl", args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -52,7 +53,7 @@ var firewallKubectlFn = func(stdin string, args ...string) error {
 	return cmd.Run()
 }
 
-func ciBootstrapCloudFirewallCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var region string
 	cmd := &cobra.Command{
 		Use:   "bootstrap-cloud-firewall",
@@ -80,17 +81,17 @@ func ciBootstrapCloudFirewallCmd() *cobra.Command {
 					return err
 				}
 			}
-			return runCIBootstrapCloudFirewall()
+			return Run()
 		},
 	}
 	cmd.Flags().StringVar(&region, "region", "", "tfvars prefix (e.g. primary); resolve LINODE_FIREWALL_ID / CLUSTER_ID / VPC_CIDR from <region>.tfvars + the Linode API instead of the environment")
 	return cmd
 }
 
-// firewallResolveFn resolves the node firewall ID and LKE cluster ID by label via
+// ResolveFn resolves the node firewall ID and LKE cluster ID by label via
 // the Linode API. Seamed so tests exercise resolveFirewallInputsIntoEnv without a
 // live account.
-var firewallResolveFn = func(token string, labels tf.Labels) (firewallID, clusterID string, err error) {
+var ResolveFn = func(token string, labels tf.Labels) (firewallID, clusterID string, err error) {
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
@@ -115,23 +116,23 @@ var firewallResolveFn = func(token string, labels tf.Labels) (firewallID, cluste
 
 // resolveFirewallInputsIntoEnv derives the firewall-controller inputs from
 // <region>.tfvars + the Linode API and writes them into the environment that
-// runCIBootstrapCloudFirewall reads. Replaces the workflow's `terraform init`
+// Run reads. Replaces the workflow's `terraform init`
 // (cluster module) + three `terraform output` reads of remote state — the
 // firewall/cluster IDs come from the API by their account-unique labels and the
 // VPC subnet CIDR straight from tfvars. Any value already set in the environment
 // is left untouched, so an explicit override still wins.
 func resolveFirewallInputsIntoEnv(region string) error {
-	token, err := ciToken()
+	token, err := linode.TokenFromEnv()
 	if err != nil {
 		return fmt.Errorf("%w — needed so --region can resolve the firewall + cluster IDs by label", err)
 	}
 
-	vars, _, err := readRegionTFVars("", region)
+	vars, _, err := tfvars.ReadRegion("", region)
 	if err != nil {
 		return err
 	}
 
-	fid, cid, err := firewallResolveFn(token, tf.DeriveLabels(vars))
+	fid, cid, err := ResolveFn(token, tf.DeriveLabels(vars))
 	if err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func setenvIfEmpty(key, value string) {
 	}
 }
 
-func runCIBootstrapCloudFirewall() error {
+func Run() error {
 	kubeconfig := os.Getenv("KUBECONFIG")
 	if kubeconfig == "" {
 		return fmt.Errorf("KUBECONFIG must be set")
@@ -178,7 +179,7 @@ func runCIBootstrapCloudFirewall() error {
 	// ── Seed the controller's token Secret ────────────────────────────────────
 	// Mounted as env LINODE_TOKEN by the linode-internal-cidr-firewall
 	// Deployment. The manifest rides stdin so the token stays off argv.
-	if err := firewallKubectlFn(firewallSecretManifest(token), "apply", "-f", "-"); err != nil {
+	if err := KubectlFn(firewallSecretManifest(token), "apply", "-f", "-"); err != nil {
 		return fmt.Errorf("apply kube-system/linode Secret: %w", err)
 	}
 
@@ -189,7 +190,7 @@ func runCIBootstrapCloudFirewall() error {
 	// the Argo Application syncs with ServerSideApply, so the values written
 	// here under a different SSA field manager survive selfHeal (Argo does not
 	// own them).
-	if err := firewallKubectlFn(firewallConfigMapManifest(), "apply", "-f", "-"); err != nil {
+	if err := KubectlFn(firewallConfigMapManifest(), "apply", "-f", "-"); err != nil {
 		return fmt.Errorf("apply kube-system/%s ConfigMap: %w", reconciler.FirewallConfigMapName, err)
 	}
 
@@ -221,7 +222,7 @@ func runCIBootstrapCloudFirewall() error {
 	// placeholders picks up the values just patched in (configMapKeyRef env is
 	// read once at pod creation). A "not found" is benign — ArgoCD has not synced
 	// the Deployment yet, so it will start fresh from the already-patched ConfigMap.
-	if err := firewallKubectlFn("", "rollout", "restart", "deployment", reconciler.FirewallDeploymentName, "-n", "kube-system"); err != nil {
+	if err := KubectlFn("", "rollout", "restart", "deployment", reconciler.FirewallDeploymentName, "-n", "kube-system"); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::could not roll %s after patching its ConfigMap (likely not created by ArgoCD yet; it will start from the patched values): %v\n", reconciler.FirewallDeploymentName, err)
 	}
 	return nil
@@ -264,7 +265,7 @@ func firewallConfigPatch(key, value string) string {
 // patchFirewallConfig merge-patches one data key into the controller ConfigMap
 // and logs it, mirroring the script's per-key `kubectl patch` + echo.
 func patchFirewallConfig(key, value string) error {
-	if err := firewallKubectlFn("", "patch", "configmap", reconciler.FirewallConfigMapName,
+	if err := KubectlFn("", "patch", "configmap", reconciler.FirewallConfigMapName,
 		"-n", "kube-system", "--type", "merge", "--patch", firewallConfigPatch(key, value)); err != nil {
 		return fmt.Errorf("patch %s into %s: %w", key, reconciler.FirewallConfigMapName, err)
 	}

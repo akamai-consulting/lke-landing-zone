@@ -25,19 +25,21 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 func teardownDeps() teardown.Deps {
 	return teardown.Deps{
-		Client:         ciClient,
-		Token:          ciToken,
+		Client:         linode.ClientFromEnv,
+		Token:          linode.TokenFromEnv,
 		Exec:           execOutput,
 		TempKubeconfig: cigate.WriteTempKubeconfig,
-		RegionTFVars:   func(dir, region string) (tf.TFVars, string, error) { return readRegionTFVars(dir, region) },
+		RegionTFVars:   func(dir, region string) (tf.TFVars, string, error) { return tfvars.ReadRegion(dir, region) },
 		Combined: func(kubeconfigPath string, args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
 			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
