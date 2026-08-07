@@ -1,4 +1,4 @@
-package main
+package envdef
 
 // scaffold_spec.go is the spec-first half of `llz env add`: it authors the
 // declarative LandingZone spec (landingzone.yaml + environments/<env>.yaml) that
@@ -21,9 +21,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 )
 
-// shortRepoName returns the <name> half of an <owner>/<name> instance_repo (or
+// ShortRepoName returns the <name> half of an <owner>/<name> instance_repo (or
 // the whole string if there's no slash).
-func shortRepoName(repo string) string {
+func ShortRepoName(repo string) string {
 	if i := strings.LastIndex(repo, "/"); i >= 0 {
 		return repo[i+1:]
 	}
@@ -43,17 +43,17 @@ func tfvarsExampleValue(root, key string) string {
 	return strings.Trim(tfvars.Value(string(b), key), `"`)
 }
 
-// ensureLandingZone creates landingzone.yaml at specRoot from .copier-answers.yml
+// EnsureLandingZone creates landingzone.yaml at specRoot from .copier-answers.yml
 // (the instance identity) seeded with spec.defaults from the cluster
 // terraform.tfvars.example, unless it already exists. It returns the instance name
 // (the <name> half of instance_repo, used to derive per-env cluster identity) and
 // whether it created the file.
-func ensureLandingZone(specRoot string) (instanceName string, created bool, err error) {
+func EnsureLandingZone(specRoot string) (instanceName string, created bool, err error) {
 	a, _ := answers.Read(specRoot)
 	if a == nil {
 		a = &answers.File{}
 	}
-	instanceName = shortRepoName(a.InstanceRepo)
+	instanceName = ShortRepoName(a.InstanceRepo)
 	if instanceName == "" {
 		instanceName = filepath.Base(mustAbs(specRoot))
 	}
@@ -71,18 +71,18 @@ func ensureLandingZone(specRoot string) (instanceName string, created bool, err 
 		fmt.Fprintf(os.Stderr, "warning: no .copier-answers.yml identity — defaulting spec.instance to akamai-consulting / %s; edit %s if that's wrong.\n",
 			instanceName, clusterspec.LandingZoneFile)
 	}
-	upstreamOrg := orElse(a.UpstreamOrg, "akamai-consulting")
-	repo := orElse(a.InstanceRepo, instanceName+"/"+instanceName)
+	upstreamOrg := OrElse(a.UpstreamOrg, "akamai-consulting")
+	repo := OrElse(a.InstanceRepo, instanceName+"/"+instanceName)
 	// No templateVersion here on purpose: the pin is copier's, and a scaffolded copy
 	// of it in the spec only went stale (see Instance.TemplateVersion).
-	k8s := orElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
-	nodeType := orElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
-	nodeCount := orElse(tfvarsExampleValue("cluster", "node_count"), "5")
+	k8s := OrElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
+	nodeType := OrElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
+	nodeCount := OrElse(tfvarsExampleValue("cluster", "node_count"), "5")
 	// The default OpenBao team, chosen at `llz new` (copier openbao_team question);
 	// the built-in platform team when unset. Written as an explicit spec.teams so
 	// a NEW instance gets a non-root write path out of the box (there is no
 	// load-time default — existing instances opt in via the retrofit runbook).
-	team := orElse(a.OpenbaoTeam, clusterspec.DefaultTeamName)
+	team := OrElse(a.OpenbaoTeam, clusterspec.DefaultTeamName)
 
 	lz := fmt.Sprintf(`# LandingZone spec — created by `+"`llz env add`"+`. The single source for this
 # instance: edit it (+ one environments/<env>.yaml per deployment), then
@@ -142,13 +142,13 @@ spec:
 	return instanceName, true, nil
 }
 
-// writeEnvDefinition authors environments/<env>.yaml from the flags. Required
+// WriteEnvDefinition authors environments/<env>.yaml from the flags. Required
 // identity the flags don't carry (clusterLabel, bootstrap.name) is derived from
 // the instance name; unset optional fields are omitted so they inherit
 // spec.defaults. k8sVersion/nodePool are written only when overridden by a flag.
-func writeEnvDefinition(path, name string, o envAddOpts, instanceName string) error {
+func WriteEnvDefinition(path, name string, o Opts, instanceName string) error {
 	label := instanceName + "-" + name
-	role := orElse(o.haRole, "standalone")
+	role := OrElse(o.HARole, "standalone")
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: %s
@@ -159,59 +159,59 @@ spec:
   cluster:
     clusterLabel: %s
     region: %s
-`, clusterspec.APIVersion, clusterspec.KindClusterDefinition, name, label, o.region)
+`, clusterspec.APIVersion, clusterspec.KindClusterDefinition, name, label, o.Region)
 
-	if o.k8sVersion != "" {
-		fmt.Fprintf(&b, "    k8sVersion: %s\n", o.k8sVersion)
+	if o.K8sVersion != "" {
+		fmt.Fprintf(&b, "    k8sVersion: %s\n", o.K8sVersion)
 	}
-	if o.nodeType != "" || o.nodeCount != "" {
+	if o.NodeType != "" || o.NodeCount != "" {
 		b.WriteString("    nodePool: {")
 		var parts []string
-		if o.nodeType != "" {
-			parts = append(parts, " type: "+o.nodeType)
+		if o.NodeType != "" {
+			parts = append(parts, " type: "+o.NodeType)
 		}
-		if o.nodeCount != "" {
-			parts = append(parts, " count: "+o.nodeCount)
+		if o.NodeCount != "" {
+			parts = append(parts, " count: "+o.NodeCount)
 		}
 		b.WriteString(strings.Join(parts, ",") + " }\n")
 	}
-	if o.runnerIPv4CIDRs != "" || o.runnerIPv6CIDRs != "" {
+	if o.RunnerIPv4CIDRs != "" || o.RunnerIPv6CIDRs != "" {
 		b.WriteString("    apiServerAllowCIDRs:\n")
-		fmt.Fprintf(&b, "      ipv4: %s\n", yamlList(o.runnerIPv4CIDRs))
-		fmt.Fprintf(&b, "      ipv6: %s\n", yamlList(o.runnerIPv6CIDRs))
+		fmt.Fprintf(&b, "      ipv4: %s\n", yamlList(o.RunnerIPv4CIDRs))
+		fmt.Fprintf(&b, "      ipv6: %s\n", yamlList(o.RunnerIPv6CIDRs))
 	}
-	if o.network != "" || o.subnetCIDR != "" {
+	if o.Network != "" || o.SubnetCIDR != "" {
 		b.WriteString("    network: {")
 		var parts []string
-		if o.network != "" {
-			parts = append(parts, " vpc: "+o.network)
+		if o.Network != "" {
+			parts = append(parts, " vpc: "+o.Network)
 		}
-		if o.subnetCIDR != "" {
-			parts = append(parts, " subnetCIDR: "+o.subnetCIDR)
+		if o.SubnetCIDR != "" {
+			parts = append(parts, " subnetCIDR: "+o.SubnetCIDR)
 		}
 		b.WriteString(strings.Join(parts, ",") + " }\n")
 	}
 	b.WriteString("    ha:\n")
 	fmt.Fprintf(&b, "      role: %s\n", role)
-	if o.haGroup != "" {
-		fmt.Fprintf(&b, "      group: %s\n", o.haGroup)
+	if o.HAGroup != "" {
+		fmt.Fprintf(&b, "      group: %s\n", o.HAGroup)
 	}
-	if o.promotionRank > 0 {
-		fmt.Fprintf(&b, "    promotionRank: %d\n", o.promotionRank)
+	if o.PromotionRank > 0 {
+		fmt.Fprintf(&b, "    promotionRank: %d\n", o.PromotionRank)
 	}
 	b.WriteString("    bootstrap:\n")
 	fmt.Fprintf(&b, "      name: %s\n", label)
 	// domainSuffix is NOT authored: managedAppPlatform (inherited from spec.defaults)
 	// means Linode owns the lke<id>.akamai-apl.net domain; validateEnv rejects a
 	// non-empty domainSuffix. See docs/adr/0005-managed-app-platform.md.
-	if o.aplChartVersion != "" {
-		fmt.Fprintf(&b, "      aplChartVersion: %s\n", o.aplChartVersion)
+	if o.AplChartVersion != "" {
+		fmt.Fprintf(&b, "      aplChartVersion: %s\n", o.AplChartVersion)
 	}
-	if o.aplValuesRepoURL != "" {
+	if o.AplValuesRepoURL != "" {
 		b.WriteString("      aplValues:\n")
-		fmt.Fprintf(&b, "        repoURL: %s\n", o.aplValuesRepoURL)
+		fmt.Fprintf(&b, "        repoURL: %s\n", o.AplValuesRepoURL)
 	}
-	fmt.Fprintf(&b, "    objectStorage:\n      cluster: %s\n", o.objCluster)
+	fmt.Fprintf(&b, "    objectStorage:\n      cluster: %s\n", o.ObjCluster)
 	b.WriteString("  # components omitted → all default-enabled except dns. Add a components:\n")
 	b.WriteString("  # block to toggle or size them (see docs/landing-zone-spec.md).\n")
 
@@ -221,10 +221,10 @@ spec:
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
-// haGroupMissingRole returns the HA role (active|standby) still missing from
+// HAGroupMissingRole returns the HA role (active|standby) still missing from
 // group after the current env was authored, or "" when the pair is complete or no
 // spec loads. Used by `llz env add` to defer the render of a half-authored pair.
-func haGroupMissingRole(group string) string {
+func HAGroupMissingRole(group string) string {
 	lz, present, err := clusterspec.Detected()
 	if !present || err != nil {
 		return ""
@@ -262,7 +262,7 @@ func yamlList(csv string) string {
 	return "[" + strings.Join(out, ", ") + "]"
 }
 
-func orElse(v, fallback string) string {
+func OrElse(v, fallback string) string {
 	if v != "" {
 		return v
 	}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
@@ -342,7 +343,7 @@ func driftCmd() *cobra.Command {
 
 func envCmd() *cobra.Command {
 	env := &cobra.Command{Use: "env", Short: "manage deployments (environments)"}
-	var o envAddOpts
+	var o envdef.Opts
 	add := &cobra.Command{
 		Use:   "add <name>",
 		Short: "scaffold a deployment — authors the LandingZone spec, then renders it",
@@ -358,31 +359,31 @@ func envCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
 	}
 	f := add.Flags()
-	f.StringVar(&o.templateEnv, "template-env", "example", "template env to clone")
-	f.StringVar(&o.region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
-	f.StringVar(&o.regionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
+	f.StringVar(&o.TemplateEnv, "template-env", "example", "template env to clone")
+	f.StringVar(&o.Region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
+	f.StringVar(&o.RegionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
 	// DEPRECATED and WRITE-NOTHING. Linode owns the cluster domain on Managed App
 	// Platform (lke<id>.akamai-apl.net) and the spec validator REJECTS
 	// cluster.bootstrap.domainSuffix outright, so there is nothing for this to set.
 	// It survived as a flag that echoed the value back in the summary banner —
 	// which read exactly like it had been applied. Marked deprecated so cobra says
 	// so on every use rather than leaving the reader to discover it at apply time.
-	f.StringVar(&o.clusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
+	f.StringVar(&o.ClusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
 	_ = f.MarkDeprecated("cluster-domain", "ignored — Linode owns the cluster domain (lke<id>.akamai-apl.net) and LLZ discovers it in-cluster, so this writes nothing")
-	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
-	f.StringVar(&o.k8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
-	f.StringVar(&o.nodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")
-	f.StringVar(&o.nodeCount, "node-count", "", "node pool size, integer (default: example value)")
-	f.StringVar(&o.runnerIPv4CIDRs, "runner-ipv4-cidrs", "", "comma-separated operator/CI egress IPv4 CIDRs (never 0.0.0.0/0)")
-	f.StringVar(&o.runnerIPv6CIDRs, "runner-ipv6-cidrs", "", "comma-separated operator/CI egress IPv6 CIDRs")
-	f.StringVar(&o.aplChartVersion, "apl-chart-version", "", "apl-core chart version (apl_chart_version)")
-	f.StringVar(&o.aplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
-	f.StringVar(&o.haRole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
-	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
-	f.StringVar(&o.network, "network", "", "shared VPC name (spec.networks, see `llz network add`) to co-locate in; default: dedicated VPC")
-	f.StringVar(&o.subnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
-	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
-	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
+	f.StringVar(&o.ObjCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
+	f.StringVar(&o.K8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
+	f.StringVar(&o.NodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")
+	f.StringVar(&o.NodeCount, "node-count", "", "node pool size, integer (default: example value)")
+	f.StringVar(&o.RunnerIPv4CIDRs, "runner-ipv4-cidrs", "", "comma-separated operator/CI egress IPv4 CIDRs (never 0.0.0.0/0)")
+	f.StringVar(&o.RunnerIPv6CIDRs, "runner-ipv6-cidrs", "", "comma-separated operator/CI egress IPv6 CIDRs")
+	f.StringVar(&o.AplChartVersion, "apl-chart-version", "", "apl-core chart version (apl_chart_version)")
+	f.StringVar(&o.AplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
+	f.StringVar(&o.HARole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
+	f.StringVar(&o.HAGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
+	f.StringVar(&o.Network, "network", "", "shared VPC name (spec.networks, see `llz network add`) to co-locate in; default: dedicated VPC")
+	f.StringVar(&o.SubnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
+	f.IntVar(&o.PromotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
+	f.BoolVar(&o.DryRun, "dry-run", false, "print what would be created; write nothing")
 	env.AddCommand(add, envShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }

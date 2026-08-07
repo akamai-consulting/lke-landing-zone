@@ -1,12 +1,14 @@
 package main
 
-// TestHAGroupMissingRole STAYED: haGroupMissingRole is in scaffold_spec.go, part of
+// TestHAGroupMissingRole STAYED: envdef.HAGroupMissingRole is in scaffold_spec.go, part of
 // the scaffolding path, not the topology reader. It travelled to
 // internal/envtopology inside env_set_test.go and came straight back.
 
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
 func TestHaGroupMissingRole(t *testing.T) {
@@ -14,11 +16,11 @@ func TestHaGroupMissingRole(t *testing.T) {
 	writeSpecInstance(t, map[string]string{
 		"east": clusterDef("east", "    ha: { role: active, group: prod }\n"),
 	})
-	if got := haGroupMissingRole("prod"); got != "standby" {
+	if got := envdef.HAGroupMissingRole("prod"); got != "standby" {
 		t.Errorf("missing role with only active = %q, want standby", got)
 	}
 	writeFileMkdir(t, filepath.Join("environments", "west.yaml"), clusterDef("west", "    ha: { role: standby, group: prod }\n"))
-	if got := haGroupMissingRole("prod"); got != "" {
+	if got := envdef.HAGroupMissingRole("prod"); got != "" {
 		t.Errorf("complete pair should report no missing role, got %q", got)
 	}
 }

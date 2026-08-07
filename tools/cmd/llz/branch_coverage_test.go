@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -373,7 +374,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 // the sole reporter; this pins that.
 func TestEnvAddNextSteps_DoesNotClaimPlaceholdersUnconditionally(t *testing.T) {
 	out := captureStdout(t, func() {
-		printEnvAddNextSteps("lab", "environments/lab.yaml", envAddOpts{})
+		printEnvAddNextSteps("lab", "environments/lab.yaml", envdef.Opts{})
 	})
 	for _, banned := range []string{"Still to fill", "REPLACE_PER_ENV", "REPLACE_ME"} {
 		if strings.Contains(out, banned) {
@@ -392,8 +393,8 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
 	out := captureStdout(t, func() {
-		_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
-			region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+		_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envdef.Opts{
+			Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 		})
 	})
 	if strings.Contains(out, "domainSuffix:") {
@@ -409,8 +410,8 @@ func TestEnvAdd_ClusterDomainWarnsExactlyOnce(t *testing.T) {
 	var out, errOut string
 	errOut = captureStderr(t, func() {
 		out = captureStdout(t, func() {
-			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
-				region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envdef.Opts{
+				Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 			})
 		})
 	})

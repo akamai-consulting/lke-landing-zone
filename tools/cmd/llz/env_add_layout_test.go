@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
 // Tests that travelled with the resolve family but exercise runEnvAdd, which is
@@ -16,7 +18,7 @@ func TestRunEnvAddRefusesOutsideAnInstance(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	err := runEnvAdd(globalOpts{}, "lab", envAddOpts{region: "us-sea", objCluster: "us-sea-1"})
+	err := runEnvAdd(globalOpts{}, "lab", envdef.Opts{Region: "us-sea", ObjCluster: "us-sea-1"})
 	if err == nil {
 		t.Fatal("expected `llz env add` to refuse outside an instance root")
 	}

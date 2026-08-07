@@ -22,6 +22,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
@@ -33,32 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
-// envAddOpts mirrors new-deployment.sh's flags, plus the ADOPTER-MUST-SET values
-// that used to be "open the file and edit" steps (item 8): supplying them here
-// makes `env add → tokens → build` a guided path instead of a hand-edit detour.
-type envAddOpts struct {
-	templateEnv   string
-	region        string
-	regionShort   string
-	clusterDomain string
-	objCluster    string
-	// must-set values (empty = leave the scaffold placeholder for the operator)
-	k8sVersion       string
-	nodeType         string // Linode node type for the pool
-	nodeCount        string // pool size (integer; string so empty = leave default)
-	runnerIPv4CIDRs  string // comma-separated
-	runnerIPv6CIDRs  string // comma-separated
-	aplChartVersion  string
-	aplValuesRepoURL string
-	haRole           string // active | standby | standalone (default: leave example's standalone)
-	haGroup          string // HA pair id (required for active/standby)
-	network          string // shared VPC name (spec.networks) to attach to; "" = dedicated VPC
-	subnetCIDR       string // cluster.network.subnetCIDR (/13 or /14); "" = default
-	promotionRank    int    // code-promotion pipeline position; 0 = leave example's 0 (not in a pipeline)
-	dryRun           bool
-}
-
-func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
+func runEnvAdd(g globalOpts, name string, o envdef.Opts) error {
 	// Every path below is CWD-relative, so the wrong directory yields a complete
 	// but stray spec tree rather than an error. Gate on the CWD first — before the
 	// flag checks, so the operator who forgot `cd my-instance` is told THAT, not
@@ -66,8 +42,8 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if err := instanceresolve.RequireInstanceRoot("`llz env add`"); err != nil {
 		return err
 	}
-	if o.templateEnv == "" {
-		o.templateEnv = "example"
+	if o.TemplateEnv == "" {
+		o.TemplateEnv = "example"
 	}
 	if name == "" {
 		return fmt.Errorf("missing <env> argument")
@@ -75,44 +51,44 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if err := validate.EnvName(name); err != nil {
 		return err
 	}
-	if name == o.templateEnv {
-		return fmt.Errorf("new env must differ from --template-env (%s)", o.templateEnv)
+	if name == o.TemplateEnv {
+		return fmt.Errorf("new env must differ from --template-env (%s)", o.TemplateEnv)
 	}
-	if err := envtopology.ValidateHAFlags(o.haRole, o.haGroup); err != nil {
+	if err := envtopology.ValidateHAFlags(o.HARole, o.HAGroup); err != nil {
 		return err
 	}
 	// Spec-first must-sets: the spec validates these, so require them up front
 	// rather than scaffolding an env that won't render.
-	if o.region == "" {
+	if o.Region == "" {
 		return fmt.Errorf("--region is required (the spec's cluster.region)")
 	}
 	// The control-plane ACL seed. Written into the spec verbatim, so an unparseable
 	// entry reaches the LKE ACL API at apply, and an open-world entry quietly
 	// publishes the control plane — the one thing the flag help says never to do.
-	if err := validate.CIDRList("--runner-ipv4-cidrs", o.runnerIPv4CIDRs, validate.IPv4); err != nil {
+	if err := validate.CIDRList("--runner-ipv4-cidrs", o.RunnerIPv4CIDRs, validate.IPv4); err != nil {
 		return err
 	}
-	if err := validate.CIDRList("--runner-ipv6-cidrs", o.runnerIPv6CIDRs, validate.IPv6); err != nil {
+	if err := validate.CIDRList("--runner-ipv6-cidrs", o.RunnerIPv6CIDRs, validate.IPv6); err != nil {
 		return err
 	}
 	// Ask the account whether the region exists before authoring a spec against it
 	// (best-effort — see region_resolve.go). Runs BEFORE the obj-cluster resolution
 	// so a swapped --region/--obj-cluster pair is named for what it is.
-	if err := instanceresolve.CheckRegion(o.region); err != nil {
+	if err := instanceresolve.CheckRegion(o.Region); err != nil {
 		return err
 	}
 	// Derive/check obj-cluster against the account rather than making the operator
 	// invent it. Best-effort: with no LINODE_TOKEN this is exactly the old
 	// shape-only validation. See objcluster_resolve.go for why the id matters.
-	resolved, note, err := instanceresolve.ResolveOBJCluster(o.objCluster, o.region)
+	resolved, note, err := instanceresolve.ResolveOBJCluster(o.ObjCluster, o.Region)
 	if err != nil {
 		return err
 	}
-	o.objCluster = resolved
+	o.ObjCluster = resolved
 	if note != "" {
 		fmt.Printf("  %s\n", note)
 	}
-	dryRun := o.dryRun || g.dryRun
+	dryRun := o.DryRun || g.dryRun
 
 	tfDir, aplDir, relPrefix := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
@@ -144,8 +120,8 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// NO --cluster-domain warning here: cobra's MarkDeprecated (main.go) already
 	// emits one at parse time, before this banner. Printing a second warning mid-
 	// banner said the same thing twice and split the field list in half.
-	field("Linode region:  ", o.region)
-	field("OBJ cluster:    ", o.objCluster)
+	field("Linode Region:  ", o.Region)
+	field("OBJ cluster:    ", o.ObjCluster)
 	field("dry-run:        ", fmt.Sprintf("%v", dryRun))
 	fmt.Println()
 
@@ -163,7 +139,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 
 	// ── 1. landingzone.yaml (created on the first env, else left as-is) ───────
-	instanceName, created, err := ensureLandingZone(specRoot)
+	instanceName, created, err := envdef.EnsureLandingZone(specRoot)
 	if err != nil {
 		return fmt.Errorf("write landingzone.yaml: %w", err)
 	}
@@ -172,7 +148,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
-	if err := writeEnvDefinition(envFile, name, o, instanceName); err != nil {
+	if err := envdef.WriteEnvDefinition(envFile, name, o, instanceName); err != nil {
 		return fmt.Errorf("write %s: %w", envFile, err)
 	}
 	fmt.Printf("  %s  %s\n", color.Green("created"), envFile)
@@ -186,18 +162,18 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// active + one standby per group), so adding the first peer defers the render
 	// with guidance instead of failing; completing the pair renders both.
 	renderEnv, deferred := name, false
-	if o.haGroup != "" {
-		if missing := haGroupMissingRole(o.haGroup); missing != "" {
+	if o.HAGroup != "" {
+		if missing := envdef.HAGroupMissingRole(o.HAGroup); missing != "" {
 			deferred = true
-			fmt.Printf("\n%s deployment %q authored; HA group %q still needs its %s peer.\n", color.Cyan("○"), name, o.haGroup, missing)
-			fmt.Printf("  add it, then both render:  llz env add <peer> --ha-role %s --ha-group %s --region <r> --obj-cluster <o> --subnet-cidr <distinct/14>\n", missing, o.haGroup)
+			fmt.Printf("\n%s deployment %q authored; HA group %q still needs its %s peer.\n", color.Cyan("○"), name, o.HAGroup, missing)
+			fmt.Printf("  add it, then both render:  llz env add <peer> --ha-role %s --ha-group %s --region <r> --obj-cluster <o> --subnet-cidr <distinct/14>\n", missing, o.HAGroup)
 			fmt.Printf("  %s\n", color.Dim("HA peers need DISTINCT cluster.network.subnetCIDR (e.g. 10.0.0.0/14 + 10.4.0.0/14) — pass --subnet-cidr on each."))
 		} else {
 			renderEnv = "" // pair complete — render every env so both peers render
 		}
 	}
 	if !deferred {
-		fmt.Printf("\n%s %s\n", color.Bold("Reconciling the spec"), color.Dim("(`llz render "+orElse(renderEnv, "(all)")+"`):"))
+		fmt.Printf("\n%s %s\n", color.Bold("Reconciling the spec"), color.Dim("(`llz render "+envdef.OrElse(renderEnv, "(all)")+"`):"))
 		if err := runRender(g, renderEnv, false, false, false); err != nil {
 			// The rejected field is not always in the env file — spec.teams (the
 			// copier openbao_team answer) lives in landingzone.yaml — so name both,
@@ -275,7 +251,7 @@ func commitFiles(paths []string, msg string) bool {
 	return proc.Run([]string{"git", "commit", "-q", "--no-verify", "-m", msg}, "") == nil
 }
 
-func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
+func printEnvAddNextSteps(name, envFile string, o envdef.Opts) {
 	fmt.Printf("\n%s %s\n", color.Green("✓"), color.Bold(fmt.Sprintf("Deployment %q scaffolded", name)))
 	fmt.Println(color.Dim(fmt.Sprintf("  landingzone.yaml + %s are the source; `llz render` reconciled them into", envFile)))
 	fmt.Println(color.Dim(fmt.Sprintf("  the tfvars + apl-values/%s overlay. To change the cluster, edit %s", name, envFile)))

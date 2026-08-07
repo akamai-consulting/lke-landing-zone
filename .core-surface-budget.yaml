@@ -541,6 +541,23 @@ categories:
 #        branch-policy is the second shipping case behind cloud-mutate@configured:
 #        GitHub is configured before Linode is provisioned, and resolving an input
 #        can mean CREATING one.
+#   69th: env-definition -> internal/envdef   9,830 -> 9,597 (-233 / 90 files)
+#        THE RISKIEST RENAME IN THE CAMPAIGN: envAddOpts, 18 fields, read by five
+#        files, moved with the writer that consumes it. A blanket o.<field> pass
+#        was NOT safe -- envAddOpts has a `region` field and so do openbaoLoginOpts
+#        and ReapOpts, and that collision had already bitten twice.
+#        METHOD THAT WORKED: move the type FIRST, then let the COMPILER drive the
+#        repair -- each round applies only what `go build` reports, by exact file
+#        and line. Six rounds. The two ha* fields needed a separate pass because
+#        haRole -> HARole is too far apart for Go to offer a "but does have" hint,
+#        and one `dryRun :=` short declaration was caught by the `field:` pattern.
+#        IT STILL WENT WRONG ONCE: the `<field>:` rewrite matched YAML KEYS INSIDE
+#        STRING LITERALS, so the emitted spec said `Region:` where the schema says
+#        `region:`. go build was CLEAN; one test caught it. Repaired against the
+#        pre-move file and verified by diffing every quoted literal -- empty.
+#        VERIFY A LITERAL-TOUCHING RENAME WITH:
+#          diff <(git show HEAD:./<old> | grep -oE '"[^"]*"' | sort) \
+#               <(grep -oE '"[^"]*"' <new> | sort)
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -553,7 +570,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 9830
+    budget: 9597
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
 func TestWriteEnvFile(t *testing.T) {
@@ -31,19 +33,19 @@ func TestWriteEnvFile(t *testing.T) {
 
 func TestWriteEnvDefinition(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "environments", "prod.yaml")
-	o := envAddOpts{
-		region:          "us-ord",
-		k8sVersion:      "1.31",
-		nodeType:        "g6-standard-4",
-		nodeCount:       "3",
-		haRole:          "active",
-		haGroup:         "pair-1",
-		promotionRank:   2,
-		runnerIPv4CIDRs: "1.2.3.4/32",
-		objCluster:      "us-ord-1",
+	o := envdef.Opts{
+		Region:          "us-ord",
+		K8sVersion:      "1.31",
+		NodeType:        "g6-standard-4",
+		NodeCount:       "3",
+		HARole:          "active",
+		HAGroup:         "pair-1",
+		PromotionRank:   2,
+		RunnerIPv4CIDRs: "1.2.3.4/32",
+		ObjCluster:      "us-ord-1",
 	}
-	if err := writeEnvDefinition(path, "prod", o, "myinst"); err != nil {
-		t.Fatalf("writeEnvDefinition: %v", err)
+	if err := envdef.WriteEnvDefinition(path, "prod", o, "myinst"); err != nil {
+		t.Fatalf("envdef.WriteEnvDefinition: %v", err)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -74,7 +76,7 @@ func TestWriteEnvDefinition(t *testing.T) {
 
 	// Minimal opts: optional blocks omitted, role defaults to standalone.
 	min := filepath.Join(t.TempDir(), "dev.yaml")
-	if err := writeEnvDefinition(min, "dev", envAddOpts{region: "us-iad", objCluster: "us-iad-1"}, "myinst"); err != nil {
+	if err := envdef.WriteEnvDefinition(min, "dev", envdef.Opts{Region: "us-iad", ObjCluster: "us-iad-1"}, "myinst"); err != nil {
 		t.Fatal(err)
 	}
 	mb, _ := os.ReadFile(min)

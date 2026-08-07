@@ -53,6 +53,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
@@ -134,6 +135,7 @@ var declarations = []func() extension.Extension{
 	openbao.Extension,
 	reachability.Extension,
 	branchpolicy.Extension,
+	envdef.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

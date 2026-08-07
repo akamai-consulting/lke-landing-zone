@@ -30,6 +30,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
@@ -48,7 +49,7 @@ import (
 // hardcoding); ref is the template version the instance tracks (resolveTemplateRef,
 // "main" when un-scaffolded).
 func tfrootTokens() (upstreamOrg, ref string) {
-	return "akamai-consulting", orElse(resolveTemplateRef(), "main")
+	return "akamai-consulting", envdef.OrElse(resolveTemplateRef(), "main")
 }
 
 // tfrootExample reads a root's terraform.tfvars.example from the embedded tfroots

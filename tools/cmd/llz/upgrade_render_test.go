@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
 // writeInstanceFile writes rel under dir, creating parents.
@@ -29,12 +31,12 @@ func newRenderableInstance(t *testing.T, pin string) string {
 		"upstream_org: akamai-consulting\ninstance_repo: my-org/platform-support\nllz_version: "+pin+"\nopenbao_team: ops\n")
 	writeInstanceFile(t, dir, "terraform-iac-bootstrap/cluster/terraform.tfvars.example",
 		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
-	if _, _, err := ensureLandingZone(dir); err != nil {
-		t.Fatalf("ensureLandingZone: %v", err)
+	if _, _, err := envdef.EnsureLandingZone(dir); err != nil {
+		t.Fatalf("envdef.EnsureLandingZone: %v", err)
 	}
-	if err := writeEnvDefinition(filepath.Join(dir, "environments", "lab.yaml"), "lab",
-		envAddOpts{region: "us-sea", objCluster: "us-sea-1", nodeCount: "3"}, "platform-support"); err != nil {
-		t.Fatalf("writeEnvDefinition: %v", err)
+	if err := envdef.WriteEnvDefinition(filepath.Join(dir, "environments", "lab.yaml"), "lab",
+		envdef.Opts{Region: "us-sea", ObjCluster: "us-sea-1", NodeCount: "3"}, "platform-support"); err != nil {
+		t.Fatalf("envdef.WriteEnvDefinition: %v", err)
 	}
 	return dir
 }

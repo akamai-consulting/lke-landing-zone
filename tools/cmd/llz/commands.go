@@ -13,6 +13,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
@@ -462,7 +463,7 @@ func missingRepoOwnerErr(repo, owner, dir, login string) error {
 		"    meant your own account:      (e.g. instance_repo %s/%s — a user owner exists already, nothing to create)\n"+
 		"                                 instance_repo is rendered INTO the workflows, so correcting it means\n"+
 		"                                 re-scaffolding — editing .copier-answers.yml alone is not enough",
-		owner, repo, dir, owner, owner, ghcli.Host(), repo, dir, mine, shortRepoName(repo))
+		owner, repo, dir, owner, owner, ghcli.Host(), repo, dir, mine, envdef.ShortRepoName(repo))
 }
 
 // foreignUserOwnerErr covers an instance_repo owned by a DIFFERENT GitHub user.
@@ -481,7 +482,7 @@ func foreignUserOwnerErr(repo, owner, dir, login string) error {
 		"  • sharing with that person?    use an org you both belong to as the owner, and re-scaffold\n"+
 		"  • logged in as the wrong you?  gh auth switch --hostname %s --user %s, then from %s:\n"+
 		"                                 gh repo create %s --private --source . --remote origin --push",
-		owner, login, repo, login, shortRepoName(repo), ghcli.Host(), owner, dir, repo)
+		owner, login, repo, login, envdef.ShortRepoName(repo), ghcli.Host(), owner, dir, repo)
 }
 
 // createRepoErr wraps a failed `gh repo create` with the checks that explain it.
@@ -953,7 +954,7 @@ func commitUpgrade(g globalOpts, oldRef, newRef string) error {
 	return nil
 }
 
-func cmdEnvAdd(g globalOpts, name string, o envAddOpts) error {
+func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
 	return runEnvAdd(g, name, o)
 }
 

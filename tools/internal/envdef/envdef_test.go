@@ -1,4 +1,4 @@
-package main
+package envdef
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 )
 
 // TestEnvAddSpecAuthoring covers the spec-first half of `llz env add`:
-// ensureLandingZone + writeEnvDefinition must produce a spec that LoadInstance +
+// EnsureLandingZone + WriteEnvDefinition must produce a spec that LoadInstance +
 // Validate accept, with the env inheriting the seeded spec.defaults.
 func TestEnvAddSpecAuthoring(t *testing.T) {
 	dir := t.TempDir()
@@ -27,24 +27,24 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
 
 	// First env: creates landingzone.yaml from the answers + seeded defaults.
-	name, created, err := ensureLandingZone(dir)
+	name, created, err := EnsureLandingZone(dir)
 	if err != nil || !created {
-		t.Fatalf("ensureLandingZone created=%v err=%v", created, err)
+		t.Fatalf("EnsureLandingZone created=%v err=%v", created, err)
 	}
 	if name != "platform-support" {
 		t.Fatalf("instance name = %q, want platform-support", name)
 	}
 	// Idempotent: a second call leaves it as-is.
-	if _, created2, _ := ensureLandingZone(dir); created2 {
-		t.Error("ensureLandingZone recreated an existing landingzone.yaml")
+	if _, created2, _ := EnsureLandingZone(dir); created2 {
+		t.Error("EnsureLandingZone recreated an existing landingzone.yaml")
 	}
 
 	// Author one env from the must-set flags only; the rest inherits defaults.
 	envFile := filepath.Join(dir, "environments", "lab.yaml")
-	if err := writeEnvDefinition(envFile, "lab",
-		envAddOpts{region: "us-sea", objCluster: "us-sea-1", nodeCount: "3"},
+	if err := WriteEnvDefinition(envFile, "lab",
+		Opts{Region: "us-sea", ObjCluster: "us-sea-1", NodeCount: "3"},
 		name); err != nil {
-		t.Fatalf("writeEnvDefinition: %v", err)
+		t.Fatalf("WriteEnvDefinition: %v", err)
 	}
 
 	// The assembled spec must load + validate.
@@ -85,8 +85,8 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 
 func TestShortRepoName(t *testing.T) {
 	for in, want := range map[string]string{"o/r": "r", "a/b/c": "c", "plain": "plain", "": ""} {
-		if got := shortRepoName(in); got != want {
-			t.Errorf("shortRepoName(%q) = %q, want %q", in, got, want)
+		if got := ShortRepoName(in); got != want {
+			t.Errorf("ShortRepoName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
