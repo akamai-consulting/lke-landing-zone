@@ -75,6 +75,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
@@ -151,6 +152,7 @@ var declarations = []func() extension.Extension{
 	render.Extension,
 	upgrade.Extension,
 	newinstance.Extension,
+	pincoherence.Extension,
 	envadd.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,

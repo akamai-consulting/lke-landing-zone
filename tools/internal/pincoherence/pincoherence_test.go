@@ -1,4 +1,4 @@
-package main
+package pincoherence
 
 import (
 	"os"
@@ -38,9 +38,9 @@ func TestAssertPinCoherence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeAnswers(t, dir, tc.body)
-			err := assertPinCoherence(dir)
+			err := Assert(dir)
 			if tc.wantErr != (err != nil) {
-				t.Fatalf("assertPinCoherence() error = %v, wantErr %v", err, tc.wantErr)
+				t.Fatalf("Assert() error = %v, wantErr %v", err, tc.wantErr)
 			}
 			if !tc.wantErr {
 				return
@@ -59,7 +59,7 @@ func TestAssertPinCoherence(t *testing.T) {
 func TestAssertPinCoherenceOutsideInstance(t *testing.T) {
 	// No .copier-answers.yml at all — the template repo's own checkout, where the
 	// lint gate runs and there is no instance pin to check.
-	if err := assertPinCoherence(t.TempDir()); err != nil {
+	if err := Assert(t.TempDir()); err != nil {
 		t.Fatalf("expected a silent pass outside an instance, got %v", err)
 	}
 }
@@ -70,16 +70,7 @@ func TestAssertPinCoherenceUnparseable(t *testing.T) {
 	// for real. Asserted so a future "return err" here is a deliberate choice.
 	dir := t.TempDir()
 	writeAnswers(t, dir, "_commit: [unterminated\n")
-	if err := assertPinCoherence(dir); err != nil {
+	if err := Assert(dir); err != nil {
 		t.Fatalf("expected a silent pass on an unparseable answers file, got %v", err)
-	}
-}
-
-func TestStepPinCoherenceUsesWorkingDirectory(t *testing.T) {
-	dir := t.TempDir()
-	writeAnswers(t, dir, "_commit: v0.0.33\nllz_version: v0.0.34\n")
-	t.Chdir(dir)
-	if err := stepPinCoherence(globalOpts{}); err == nil {
-		t.Fatal("stepPinCoherence() should fail on a skewed pin in the working directory")
 	}
 }

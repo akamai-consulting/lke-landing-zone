@@ -15,6 +15,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
@@ -331,6 +332,11 @@ func stepVendoredFresh(_ globalOpts) error {
 // difference in what is DEPLOYED, not just what is checked in.
 //
 // Skips outside an instance (the template repo has no spec of its own).
+// stepPinCoherence is the lint-gate wrapper. It runs in an instance's pre-commit
+// hook (where an upgrade's diff is about to be committed) and is a no-op in the
+// template repo, which has no .copier-answers.yml of its own.
+func stepPinCoherence(_ globalOpts) error { return pincoherence.Assert(".") }
+
 func stepRenderFresh(g globalOpts) error {
 	tfDir, _, _ := instancelayout.Detect()
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {

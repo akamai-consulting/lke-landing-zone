@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/spf13/cobra"
 )
@@ -60,7 +61,7 @@ func ciAssertImageFreshCmd() *cobra.Command {
 			// operator commits the upgrade with --no-verify. An explicit
 			// --template-ref overrides the pin, so there is nothing to hold to it.
 			if templateRef == "" {
-				if err := assertPinCoherence("."); err != nil {
+				if err := pincoherence.Assert("."); err != nil {
 					return err
 				}
 			}

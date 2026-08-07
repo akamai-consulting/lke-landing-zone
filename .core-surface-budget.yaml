@@ -734,6 +734,18 @@ categories:
 #        prose damage that is the diff worth NOT taking.
 #        COVERAGE 71%% -> 77.6%%: the two defaults arrived untested, because in
 #        package main they were vars every test replaced with a stub. Pinned now.
+#   81st: pin-coherence -> internal/pincoherence   6,498 -> 6,475 (-23 / 83 files)
+#        A TEXTBOOK GATE: reads one file, decides, returns. No cluster, no network,
+#        no clock -- which is exactly what lets it hold read-repo and nothing else
+#        and run in the pre-commit path. 87.5%% covered on arrival.
+#        THE MODEL REFUSED THE FIRST DECLARATION AND WAS RIGHT. It was written as
+#        `gate:upgraded`, because only an upgrade can create the skew it catches --
+#        a fresh scaffold writes `_commit` and `llz_version` in one pass. Validate()
+#        rejected it: a gate PRECEDES the state it names, and this one follows an
+#        upgrade rather than preceding one. Declared `gate:scaffolded` with an
+#        Incomplete note, not widened. The gap has a name now -- "a check that runs
+#        after X to catch what X broke" -- and internal/argodiag is the same shape
+#        from the other side, a DIAGNOSTIC that runs after a state failed.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -746,7 +758,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 6498
+    budget: 6475
     exact: true
     include:
       - "tools/cmd/llz/*.go"

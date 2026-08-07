@@ -1,6 +1,6 @@
-package main
+package pincoherence
 
-// pin_coherence.go guards the ONE remaining place an instance records its
+// Package pincoherence guards the ONE remaining place an instance records its
 // template version twice: .copier-answers.yml carries both `_commit` (copier's
 // own record of the template state merged into this tree) and `llz_version`
 // (the answer `llz upgrade` passes with --data).
@@ -39,10 +39,10 @@ import (
 // only held to agree when each is an exact tag.
 var exactReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// assertPinCoherence fails when dir's .copier-answers.yml names two different
+// Assert fails when dir's .copier-answers.yml names two different
 // release tags for the one template pin. Silent (nil) when there is no instance
 // there, when either pin is absent, or when either is not an exact release tag.
-func assertPinCoherence(dir string) error {
+func Assert(dir string) error {
 	a, err := answers.Read(dir)
 	if err != nil || a == nil {
 		return nil //nolint:nilerr // no readable answers file — not an instance; other steps report that
@@ -60,8 +60,3 @@ func assertPinCoherence(dir string) error {
 		"  Fix: re-run `llz upgrade --ref %s` so copier rewrites both, then `llz render` and commit the result.",
 		commit, version, commit, version, commit, version)
 }
-
-// stepPinCoherence is the lint-gate wrapper. It runs in an instance's pre-commit
-// hook (where an upgrade's diff is about to be committed) and is a no-op in the
-// template repo, which has no .copier-answers.yml of its own.
-func stepPinCoherence(_ globalOpts) error { return assertPinCoherence(".") }
