@@ -1,4 +1,4 @@
-package main
+package buildpreflight
 
 import (
 	"encoding/json"
@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
-// writeMiniInstance lays down the smallest tree buildPreflight recognizes: a
+// writeMiniInstance lays down the smallest tree Run recognizes: a
 // landingzone.yaml (so InstancePresent is true) and one environments/<env>.yaml.
 func writeMiniInstance(t *testing.T, dir string, envs ...string) {
 	t.Helper()
@@ -38,9 +39,9 @@ func writeMiniInstance(t *testing.T, dir string, envs ...string) {
 // substring of the request path. A path with no entry 404s (returns an error).
 func stubGitHub(t *testing.T, bodies map[string]any) {
 	t.Helper()
-	orig := ghAPIJSON
-	t.Cleanup(func() { ghAPIJSON = orig })
-	ghAPIJSON = func(path string, out any) error {
+	orig := GHAPIJSON
+	t.Cleanup(func() { GHAPIJSON = orig })
+	GHAPIJSON = func(path string, out any) error {
 		// Longest match wins: "repos/<r>" is a prefix of "repos/<r>/contents/…",
 		// and map iteration order would otherwise pick between them at random.
 		best, found := "", false
@@ -65,7 +66,7 @@ func TestBuildPreflightUnknownDeployment(t *testing.T) {
 	chdir(t, dir)
 	stubGitHub(t, nil)
 
-	err := buildPreflight("labb")
+	err := Run("labb")
 	if err == nil {
 		t.Fatal("expected a refusal for a deployment that does not exist")
 	}
@@ -88,11 +89,11 @@ func TestBuildPreflightUnpushedDeployment(t *testing.T) {
 	chdir(t, dir)
 	// Repo resolves and has a default branch, but the file is not on it.
 	stubGitHub(t, map[string]any{"repos/my-org/mini": map[string]any{"default_branch": "main"}})
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 
-	err := buildPreflight("lab")
+	err := Run("lab")
 	if err == nil {
 		t.Fatal("expected a refusal when the deployment is not on the build branch")
 	}
@@ -114,16 +115,16 @@ func TestBuildPreflightPassesWhenPushed(t *testing.T) {
 		"repos/my-org/mini/contents/": map[string]any{"sha": "deadbeef"},
 		"repos/my-org/mini":           map[string]any{"default_branch": "main"},
 	})
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 
 	// Pushed, but the local file has since been edited (its blob differs from the
 	// one on the branch): that is advisory, not a refusal — building an older
 	// revision on purpose is legitimate — but it must SAY so, because the build
 	// will run the pushed spec and not the edits in front of you.
 	var err error
-	warn := captureStderr(t, func() { err = buildPreflight("lab") })
+	warn := captureStderr(t, func() { err = Run("lab") })
 	if err != nil {
 		t.Fatalf("a pushed deployment must pass: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestBuildPreflightSilentWithoutASpec(t *testing.T) {
 	// Legacy (pre-spec) instances and non-instance directories keep working: the
 	// gate can only ever fail a build that was already going to fail.
 	chdir(t, t.TempDir())
-	if err := buildPreflight("lab"); err != nil {
+	if err := Run("lab"); err != nil {
 		t.Fatalf("no spec ⇒ no opinion, got %v", err)
 	}
 }
@@ -152,25 +153,25 @@ func TestBuildPreflightUnreachableGitHubDoesNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 
 	for _, transient := range []string{
 		"dial tcp: lookup api.github.com: no such host",
 		"gh: You have exceeded a secondary rate limit (HTTP 403)",
 		"gh: Internal Server Error (HTTP 500)",
 	} {
-		orig := ghAPIJSON
-		ghAPIJSON = func(path string, out any) error {
+		orig := GHAPIJSON
+		GHAPIJSON = func(path string, out any) error {
 			if strings.Contains(path, "/contents/") {
 				return errors.New(transient)
 			}
 			return json.Unmarshal([]byte(`{"default_branch":"main"}`), out)
 		}
 		var err error
-		warn := captureStderr(t, func() { err = buildPreflight("lab") })
-		ghAPIJSON = orig
+		warn := captureStderr(t, func() { err = Run("lab") })
+		GHAPIJSON = orig
 		if err != nil {
 			t.Errorf("%q must not block the dispatch, got: %v", transient, err)
 		}
@@ -181,16 +182,16 @@ func TestBuildPreflightUnreachableGitHubDoesNotBlock(t *testing.T) {
 }
 
 func TestGhFileSHASeparatesAbsenceFromIgnorance(t *testing.T) {
-	orig := ghAPIJSON
-	t.Cleanup(func() { ghAPIJSON = orig })
+	orig := GHAPIJSON
+	t.Cleanup(func() { GHAPIJSON = orig })
 
 	// A real 404 is an ANSWER: the file is not on that ref.
-	ghAPIJSON = func(string, any) error { return errors.New("gh: Not Found (HTTP 404)") }
+	GHAPIJSON = func(string, any) error { return errors.New("gh: Not Found (HTTP 404)") }
 	if _, found, ok := ghFileSHA("o/r", "environments/lab.yaml", "main"); !ok || found {
 		t.Errorf("404 → found=false ok=true; got found=%v ok=%v", found, ok)
 	}
 	// Anything else is not an answer at all.
-	ghAPIJSON = func(string, any) error { return errors.New("HTTP 503 Service Unavailable") }
+	GHAPIJSON = func(string, any) error { return errors.New("HTTP 503 Service Unavailable") }
 	if _, _, ok := ghFileSHA("o/r", "environments/lab.yaml", "main"); ok {
 		t.Error("a 503 must not be reported as a usable answer")
 	}
@@ -207,14 +208,14 @@ func TestBuildPreflightChecksTheInstanceSpecToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 
 	// The deployment is on the branch; the instance spec is not.
-	orig := ghAPIJSON
-	t.Cleanup(func() { ghAPIJSON = orig })
-	ghAPIJSON = func(path string, out any) error {
+	orig := GHAPIJSON
+	t.Cleanup(func() { GHAPIJSON = orig })
+	GHAPIJSON = func(path string, out any) error {
 		switch {
 		case strings.Contains(path, "contents/landingzone.yaml"):
 			return errors.New("gh: Not Found (HTTP 404)")
@@ -225,7 +226,7 @@ func TestBuildPreflightChecksTheInstanceSpecToo(t *testing.T) {
 		}
 	}
 
-	err := buildPreflight("lab")
+	err := Run("lab")
 	if err == nil {
 		t.Fatal("an unpushed landingzone.yaml must block the dispatch")
 	}
@@ -239,15 +240,15 @@ func TestPublishHintNamesTheBranchYouAreOn(t *testing.T) {
 	// runs terraform.yml from the default branch, so an operator on a feature
 	// branch can push all day and never move the tree the build reads — telling
 	// them "git push" would send them round the loop a second time.
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
+	orig := kubectlprobe.Exec
+	t.Cleanup(func() { kubectlprobe.Exec = orig })
 
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("main\n"), nil }
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) { return []byte("main\n"), nil }
 	if got := publishHint("main"); got != color.Cyan("git push") {
 		t.Errorf("on the default branch the hint is a plain push, got %q", got)
 	}
 
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("feat/new-env\n"), nil }
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) { return []byte("feat/new-env\n"), nil }
 	got := publishHint("main")
 	for _, want := range []string{"git push -u origin feat/new-env", "merge it into main", "not from feat/new-env"} {
 		if !strings.Contains(got, want) {
@@ -257,7 +258,7 @@ func TestPublishHintNamesTheBranchYouAreOn(t *testing.T) {
 
 	// Detached HEAD / no git: fall back to the plain form rather than inventing a
 	// branch name.
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("HEAD\n"), nil }
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) { return []byte("HEAD\n"), nil }
 	if got := publishHint("main"); got != color.Cyan("git push") {
 		t.Errorf("detached HEAD should fall back to a plain push, got %q", got)
 	}
@@ -274,28 +275,12 @@ func TestBuildPreflightUnparseableSpecSaysSo(t *testing.T) {
 	chdir(t, dir)
 	stubGitHub(t, nil)
 
-	err := buildPreflight("lab")
+	err := Run("lab")
 	if err == nil {
 		t.Fatal("a broken spec must not pass the preflight")
 	}
 	if !strings.Contains(err.Error(), "does not load") {
 		t.Errorf("error %q should blame the spec, not the deployment name", err)
-	}
-}
-
-func TestCmdBuildSkipPreflightBypassesTheCheck(t *testing.T) {
-	// The escape hatch has to actually work: a spec that deliberately lives
-	// elsewhere (another branch, another checkout) must still be dispatchable.
-	dir := t.TempDir()
-	writeMiniInstance(t, dir) // no deployments at all — the preflight would refuse
-	chdir(t, dir)
-	stubGitHub(t, nil)
-
-	if err := cmdBuild([]string{"lab"}, globalOpts{}, false); err == nil {
-		t.Fatal("without --skip-preflight an unknown deployment must be refused")
-	}
-	if err := cmdBuild([]string{"lab"}, globalOpts{}, true); err != nil {
-		t.Errorf("--skip-preflight must bypass the check, got %v", err)
 	}
 }
 
@@ -310,16 +295,16 @@ func TestBuildPreflightStaleCheckoutIsNotAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 	stubGitHub(t, map[string]any{
 		"contents/environments/prod.yaml": map[string]any{"sha": "cafe1234"},
 		"repos/my-org/mini":               map[string]any{"default_branch": "main"},
 	})
 
 	var err error
-	warn := captureStderr(t, func() { err = buildPreflight("prod") })
+	warn := captureStderr(t, func() { err = Run("prod") })
 	if err != nil {
 		t.Fatalf("a deployment present on the build branch must dispatch: %v", err)
 	}
@@ -339,12 +324,12 @@ func TestBuildPreflightUnknownEverywhereStillRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	origLook := execLookPath
-	t.Cleanup(func() { execLookPath = origLook })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	origLook := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = origLook })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 	stubGitHub(t, map[string]any{"repos/my-org/mini": map[string]any{"default_branch": "main"}})
 
-	err := buildPreflight("labb")
+	err := Run("labb")
 	if err == nil {
 		t.Fatal("a name that exists nowhere must still be refused")
 	}
@@ -365,15 +350,15 @@ func TestBuildPreflightMissingRepoNamesTheRealProblem(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	origLook, origOut := execLookPath, execOutput
-	t.Cleanup(func() { execLookPath, execOutput = origLook, origOut })
-	execLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
-	// repoExists shells out to `gh api repos/...` through execOutput; fail it.
-	execOutput = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Not Found (HTTP 404)") }
+	origLook, origOut := kubectlprobe.LookPathFn, kubectlprobe.Exec
+	t.Cleanup(func() { kubectlprobe.LookPathFn, kubectlprobe.Exec = origLook, origOut })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
+	// repoExists shells out to `gh api repos/...` through kubectlprobe.Exec; fail it.
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Not Found (HTTP 404)") }
 	stubGitHub(t, nil) // ghDefaultBranch also 404s
 
 	var err error
-	warn := captureStderr(t, func() { err = buildPreflight("lab") })
+	warn := captureStderr(t, func() { err = Run("lab") })
 	if err != nil {
 		t.Fatalf("an absent repo must not block the dispatch (gh reports it): %v", err)
 	}
@@ -413,10 +398,10 @@ func TestGhFileSHAEscapesTheRef(t *testing.T) {
 	// A branch name may legally contain '#', which a query string treats as a
 	// fragment delimiter: "?ref=feat/#123" asks about the DEFAULT ref instead,
 	// answering a different question than the caller asked.
-	orig := ghAPIJSON
-	t.Cleanup(func() { ghAPIJSON = orig })
+	orig := GHAPIJSON
+	t.Cleanup(func() { GHAPIJSON = orig })
 	var seen string
-	ghAPIJSON = func(path string, out any) error {
+	GHAPIJSON = func(path string, out any) error {
 		seen = path
 		return json.Unmarshal([]byte(`{"sha":"abc"}`), out)
 	}
@@ -435,18 +420,18 @@ func TestRepoMissingOnlyOn404(t *testing.T) {
 	// tokens.go's repoExists returns false for ANY gh error, which would put
 	// "create the repo" in front of an operator whose repo exists and whose token
 	// merely cannot see it — advice that fails with "already exists".
-	orig := execOutput
-	t.Cleanup(func() { execOutput = orig })
+	orig := kubectlprobe.Exec
+	t.Cleanup(func() { kubectlprobe.Exec = orig })
 
-	execOutput = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Not Found (HTTP 404)") }
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Not Found (HTTP 404)") }
 	if !repoMissing("o/r") {
 		t.Error("a 404 means the repo is absent (or invisible)")
 	}
-	execOutput = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Bad credentials (HTTP 401)") }
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return nil, errors.New("gh: Bad credentials (HTTP 401)") }
 	if repoMissing("o/r") {
 		t.Error("a 401 says nothing about whether the repo exists")
 	}
-	execOutput = func(string, ...string) ([]byte, error) { return []byte("{}"), nil }
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return []byte("{}"), nil }
 	if repoMissing("o/r") {
 		t.Error("a success means it exists")
 	}

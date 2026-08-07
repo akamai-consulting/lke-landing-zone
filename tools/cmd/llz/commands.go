@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -20,6 +21,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -72,7 +74,7 @@ func scaffoldRef(ref, repo string) (string, error) {
 func copierCopyArgv(org, ref, dir string) []string {
 	return []string{"copier", "copy", "--trust", "--vcs-ref", ref,
 		"--data", "llz_version=" + ref,
-		"gh:" + org + "/" + templateName, dir}
+		"gh:" + org + "/" + templateid.Name, dir}
 }
 
 // copierUpdateArgv is the update invocation, and --defaults is load-bearing.
@@ -202,7 +204,7 @@ var templateSourceStatusFn = repoStatus
 // candidate; a fork named by --org may be private, where "it's public" would be a
 // false claim and the fix is a login that can see it.
 func templateUnreachableTail(org, repo string) string {
-	if org == defaultTemplateOrg {
+	if org == templateid.DefaultOrg {
 		return "This is NOT a missing template — " + repo + " is public. Re-run `llz new` once gh can answer"
 	}
 	return "This does NOT mean " + repo + " is missing — a private fork also needs a `gh` login that can see it.\n" +
@@ -217,7 +219,7 @@ func missingTemplateSourceErr(org string) error {
 		"  --org names the template to scaffold FROM, not where your instance lands.\n"+
 		"  • scaffold from the public upstream:  llz new <dir> --org %s --push --yes\n"+
 		"  • or fork the template there first:   gh repo fork %s/%s --org %s",
-		org, templateName, defaultTemplateOrg, defaultTemplateOrg, templateName, org)
+		org, templateid.Name, templateid.DefaultOrg, templateid.DefaultOrg, templateid.Name, org)
 }
 
 // checkNewTarget refuses to scaffold over a directory that already has content.
@@ -271,7 +273,7 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	if err := requireCopier(g, "`llz new`"); err != nil {
 		return err
 	}
-	repo := org + "/" + templateName
+	repo := org + "/" + templateid.Name
 	switch found, err := templateSourceStatusFn(repo); {
 	case err != nil:
 		return ghcli.UnreachableErr(repo, err, templateUnreachableTail(org, repo))
@@ -283,7 +285,7 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 		return err
 	}
 	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
-		dir, org, templateName, ref)
+		dir, org, templateid.Name, ref)
 
 	if err := run(g, copierCopyArgv(org, ref, dir)...); err != nil {
 		return fmt.Errorf("copier copy: %w", err)
@@ -855,12 +857,12 @@ func currentTemplateRef() string {
 // conflictMarkerLines predicate so this gate and `llz lint` agree.
 func upgradeConflictFiles() []string {
 	changed := map[string]bool{}
-	for _, f := range strings.Split(gitOut("diff", "--name-only"), "\n") {
+	for _, f := range strings.Split(buildpreflight.GitOut("diff", "--name-only"), "\n") {
 		if f = strings.TrimSpace(f); f != "" {
 			changed[f] = true
 		}
 	}
-	for _, f := range strings.Split(gitOut("ls-files", "--others", "--exclude-standard"), "\n") {
+	for _, f := range strings.Split(buildpreflight.GitOut("ls-files", "--others", "--exclude-standard"), "\n") {
 		if f = strings.TrimSpace(f); f != "" {
 			changed[f] = true
 		}
@@ -886,9 +888,9 @@ func printUpgradeSummary(oldRef, newRef string) {
 		from = "(unknown)"
 	}
 	fmt.Printf("\n%s template %s → %s\n", color.Bold("upgrade"), from, newRef)
-	if stat := gitOut("diff", "--stat"); stat != "" {
+	if stat := buildpreflight.GitOut("diff", "--stat"); stat != "" {
 		fmt.Println(stat)
-	} else if untracked := gitOut("ls-files", "--others", "--exclude-standard"); untracked != "" {
+	} else if untracked := buildpreflight.GitOut("ls-files", "--others", "--exclude-standard"); untracked != "" {
 		fmt.Printf("new files:\n%s\n", untracked)
 	} else {
 		fmt.Println(color.Dim("  no file changes — already up to date."))
@@ -935,7 +937,7 @@ var reportCIImageSkew = func(ref string) {
 // commit, so history reads "template vX → vY". No-op (not an error) when the
 // update produced no changes.
 func commitUpgrade(g globalOpts, oldRef, newRef string) error {
-	if strings.TrimSpace(gitOut("status", "--porcelain")) == "" {
+	if strings.TrimSpace(buildpreflight.GitOut("status", "--porcelain")) == "" {
 		fmt.Fprintln(os.Stderr, color.Green("✓")+" already up to date — nothing to commit.")
 		return nil
 	}
@@ -972,7 +974,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 	// spec deliberately lives elsewhere (another branch, another checkout).
 	// --dry-run prints the argv and dispatches nothing, so it has nothing to gate.
 	if !skipPreflight && !g.dryRun {
-		if err := buildPreflight(env); err != nil {
+		if err := buildpreflight.Run(env); err != nil {
 			return err
 		}
 	}
@@ -985,13 +987,13 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 var (
 	upTokens = func(g globalOpts, admin bool, env string) error { return runTokens(g, admin, env, "", "", "") }
 	upDoctor = func(g globalOpts, admin bool, env string) error { return runDoctor("", env, admin, true, "", "") }
-	// skipPreflight=true: cmdUp already ran buildPreflight itself (upPreflight,
+	// skipPreflight=true: cmdUp already ran buildpreflight.Run itself (upPreflight,
 	// before the token wizard), and running it again here printed the whole
 	// unpublished-edits warning block twice in one `llz up`.
 	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true) }
 	// upPreflight is the same dispatch check, run before the chain starts; seamed
 	// alongside the three stages so the order test can drive it.
-	upPreflight = buildPreflight
+	upPreflight = buildpreflight.Run
 )
 
 // cmdUp sequences the first-build flow into one command: provision credentials
@@ -1089,7 +1091,7 @@ func warnIfRootTokenPresent(env string) {
 	if !kubectlprobe.Lookable("gh") {
 		return
 	}
-	repo, err := resolveInstanceRepo("", false)
+	repo, err := answers.ResolveInstanceRepo("", false)
 	if err != nil {
 		return
 	}

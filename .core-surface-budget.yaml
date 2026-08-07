@@ -558,6 +558,17 @@ categories:
 #        VERIFY A LITERAL-TOUCHING RENAME WITH:
 #          diff <(git show HEAD:./<old> | grep -oE '"[^"]*"' | sort) \
 #               <(grep -oE '"[^"]*"' <new> | sort)
+#   70th: build-preflight (+ templateid, answers.ResolveInstanceRepo)
+#         9,597 -> 9,348 (-249 / 89 files)
+#        BOTH real edges were ENABLERS, not entanglement -- now the campaign s
+#        most reliable finding. resolveInstanceRepo (4 callers) went to
+#        internal/answers, where three of its four branches already lived; it in
+#        turn needed templateName and defaultTemplateOrg, two CONSTS with 23
+#        references, now internal/templateid. Facts, same call as baoread.Namespace.
+#        existingPaths was nine lines and got copied.
+#        NOTE FOR THE NEXT PASS: scaffold.go is closure 4 and its remaining edges
+#        are runRender (render.go) and syncPromoteWorkflow (promote.go) -- the
+#        "blocked mass" label is looking less true with every enabler.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -570,7 +581,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 9597
+    budget: 9348
     exact: true
     include:
       - "tools/cmd/llz/*.go"

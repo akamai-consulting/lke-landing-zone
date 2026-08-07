@@ -370,7 +370,7 @@ func pushSecrets(g globalOpts, env string) error {
 	// passphrase's own prompt text says `openssl rand -base64 32` — so an operator
 	// re-running gather to add one missing token can paste a NEW passphrase over
 	// the live one and make every state file unreadable. Ask before pushing.
-	if repo, rerr := resolveInstanceRepo("", false); rerr == nil {
+	if repo, rerr := answers.ResolveInstanceRepo("", false); rerr == nil {
 		if err := statepassphrase.DropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
 			return err
 		}

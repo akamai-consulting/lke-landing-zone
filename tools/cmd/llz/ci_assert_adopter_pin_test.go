@@ -144,7 +144,7 @@ func TestAssertAdopterPinCmdWiring(t *testing.T) {
 			t.Errorf("missing --%s flag", f)
 		}
 	}
-	// No --org: the GHCR owner comes from defaultTemplateOrg via computeCIImageVars,
+	// No --org: the GHCR owner comes from templateid.DefaultOrg via computeCIImageVars,
 	// so a flag here would accept a value and silently ignore it.
 	if c.Flags().Lookup("org") != nil {
 		t.Error("--org is a no-op flag; it must not exist")

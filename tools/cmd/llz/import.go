@@ -22,6 +22,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 )
@@ -50,7 +51,7 @@ func brownfieldDeps() brownfield.Deps {
 		KubectlOut:             kubectlprobe.Out,
 		Confirm:                func() bool { return gopts.yes },
 		DefaultAplChartVersion: clusterspec.BaselineAplChartVersion,
-		DefaultTemplateOrg:     defaultTemplateOrg,
+		DefaultTemplateOrg:     templateid.DefaultOrg,
 	}
 }
 
@@ -142,7 +143,7 @@ func importInitCmd() *cobra.Command {
 	c.Flags().StringVar(&o.Report, "report", brownfield.DefaultImportReport, "the import-report.yaml to scaffold from")
 	c.Flags().StringVar(&o.Dir, "dir", "lke-instance", "directory to scaffold the new instance into")
 	c.Flags().StringVar(&o.Env, "env", "prod", "deployment/environment name to author")
-	c.Flags().StringVar(&o.Org, "org", defaultTemplateOrg, "template org to scaffold from")
+	c.Flags().StringVar(&o.Org, "org", templateid.DefaultOrg, "template org to scaffold from")
 	c.Flags().StringVar(&o.Ref, "ref", "", "template release tag (default: this llz binary's version)")
 	return c
 }

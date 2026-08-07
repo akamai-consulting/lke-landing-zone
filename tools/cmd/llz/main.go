@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -39,11 +40,6 @@ var version = "dev"
 // The reconciler package needs the same stamp and cannot read this one, so main
 // hands it over at init. One source, set once.
 func init() { reconciler.Version = version }
-
-const (
-	templateName       = "lke-landing-zone"
-	defaultTemplateOrg = "akamai-consulting"
-)
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
 // populated from the root command's flags before any RunE runs.
@@ -171,7 +167,7 @@ func newCmd() *cobra.Command {
 			return runNew(gopts, org, ref, dir, push)
 		},
 	}
-	c.Flags().StringVar(&org, "org", defaultTemplateOrg, "template org to scaffold from")
+	c.Flags().StringVar(&org, "org", templateid.DefaultOrg, "template org to scaffold from")
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to scaffold + pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&push, "push", false, "create the instance_repo on GitHub and push the scaffold (gh repo create; needs --yes)")
 	return c

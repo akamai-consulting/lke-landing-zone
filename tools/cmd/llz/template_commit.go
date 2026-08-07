@@ -36,6 +36,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -275,16 +276,16 @@ func computeCIImageVarsForCommit(commit, ref string) (tfImage, kubeImage string,
 
 // floatingImageVars is the fallback pair: the version tags that track main.
 func floatingImageVars(why string) (string, string, bool, string) {
-	return ciImageRef(defaultTemplateOrg, "ci-tofu", ciTofuTag),
-		ciImageRef(defaultTemplateOrg, "ci-kubernetes", ciKubernetesTag),
+	return ciImageRef(templateid.DefaultOrg, "ci-tofu", ciTofuTag),
+		ciImageRef(templateid.DefaultOrg, "ci-kubernetes", ciKubernetesTag),
 		false, why
 }
 
 // ciImageVarsForTag builds the pinned pair for an image tag and verifies both are
 // pullable, falling back to the floating tags if either is definitively absent.
 func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
-	tf := ciImageRef(defaultTemplateOrg, "ci-tofu", tag)
-	kube := ciImageRef(defaultTemplateOrg, "ci-kubernetes", tag)
+	tf := ciImageRef(templateid.DefaultOrg, "ci-tofu", tag)
+	kube := ciImageRef(templateid.DefaultOrg, "ci-kubernetes", tag)
 	for _, im := range []string{tf, kube} {
 		// asked=false (registry unreachable) must NOT downgrade the pin: an offline
 		// operator would then silently get the floating tag, which is the exact
@@ -402,10 +403,10 @@ var ciImageVars = [...]struct{ name, image string }{
 // llzComputedImageRef reports whether ref is one LLZ itself produces for image —
 // the template org's GHCR repository, carrying any tag. It is the test for "this
 // value is ours to re-pin"; another registry, org, or image belongs to the
-// operator. defaultTemplateOrg (not the instance's upstream_org) because that is
+// operator. templateid.DefaultOrg (not the instance's upstream_org) because that is
 // where ciImageVarsForTag/floatingImageVars build every reference they hand out.
 func llzComputedImageRef(ref, image string) bool {
-	prefix := ciImageRef(defaultTemplateOrg, image, "")
+	prefix := ciImageRef(templateid.DefaultOrg, image, "")
 	return strings.HasPrefix(ref, prefix) && len(ref) > len(prefix)
 }
 

@@ -189,7 +189,7 @@ func tagOf(ref string) string {
 }
 
 func TestCIImageRef(t *testing.T) {
-	// The org is lower-cased: GHCR paths are case-sensitive and `defaultTemplateOrg`
+	// The org is lower-cased: GHCR paths are case-sensitive and `templateid.DefaultOrg`
 	// is the human-cased GitHub org.
 	if got := ciImageRef("Akamai-Consulting", "ci-tofu", "sha-abc"); got != "ghcr.io/akamai-consulting/ci-tofu:sha-abc" {
 		t.Errorf("ciImageRef = %q", got)

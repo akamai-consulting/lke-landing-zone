@@ -6,13 +6,14 @@ package main
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 )
 
 func init() {
 	statepassphrase.Install(statepassphrase.Deps{
 		Exec:        execOutput,
-		GHJSONPaged: ghAPIJSONPaged,
+		GHJSONPaged: buildpreflight.GHAPIJSONPaged,
 	})
 }
 

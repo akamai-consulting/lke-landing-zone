@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -333,7 +334,7 @@ func untrackRenderedTfvars(relPrefix string) {
 	// All tracked files under the TF roots, filtered in Go to the rendered per-env
 	// tfvars across every root (cluster, object-storage, vpc).
 	// terraform.tfvars.example stays tracked — it ends in .example, not .tfvars.
-	listed := gitOut("ls-files", "--", "terraform-iac-bootstrap")
+	listed := buildpreflight.GitOut("ls-files", "--", "terraform-iac-bootstrap")
 	var tracked []string
 	for _, p := range strings.Split(strings.TrimSpace(listed), "\n") {
 		if p = strings.TrimSpace(p); strings.HasSuffix(p, ".tfvars") {

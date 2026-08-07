@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
@@ -36,18 +37,18 @@ func withLookPath(t *testing.T, fn func(file string) (string, error)) {
 func TestGitOut(t *testing.T) {
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "git" {
-			t.Errorf("gitOut shelled out to %q, want git", name)
+			t.Errorf("buildpreflight.GitOut shelled out to %q, want git", name)
 		}
 		return []byte("  deadbeef\n"), nil
 	})
-	if got := gitOut("rev-parse", "HEAD"); got != "deadbeef" {
-		t.Errorf("gitOut = %q, want deadbeef (trimmed)", got)
+	if got := buildpreflight.GitOut("rev-parse", "HEAD"); got != "deadbeef" {
+		t.Errorf("buildpreflight.GitOut = %q, want deadbeef (trimmed)", got)
 	}
 
 	// Any error yields the empty string.
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("boom") })
-	if got := gitOut("status"); got != "" {
-		t.Errorf("gitOut(error) = %q, want empty", got)
+	if got := buildpreflight.GitOut("status"); got != "" {
+		t.Errorf("buildpreflight.GitOut(error) = %q, want empty", got)
 	}
 }
 

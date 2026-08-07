@@ -1,4 +1,4 @@
-package main
+package buildpreflight
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 type pageShape struct {
 	TotalCount int      `json:"total_count"`
 	Names      []string `json:"names"`
-	//lint:ignore U1000 exercised by reflection, not by name: mergeJSONPages walks
+	//lint:ignore U1000 exercised by reflection, not by name: MergeJSONPages walks
 	// every field and must skip this one (CanSet is false) rather than panic.
 	unexported int
 }
@@ -24,7 +24,7 @@ func TestMergeJSONPagesKeepsEveryPage(t *testing.T) {
 		json.RawMessage(`{"total_count":3,"names":["c"]}`),
 	}
 	var got pageShape
-	if err := mergeJSONPages(pages, &got); err != nil {
+	if err := MergeJSONPages(pages, &got); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	if strings.Join(got.Names, ",") != "a,b,c" {
@@ -40,7 +40,7 @@ func TestMergeJSONPagesKeepsEveryPage(t *testing.T) {
 func TestMergeJSONPagesEdgeCases(t *testing.T) {
 	t.Run("single page", func(t *testing.T) {
 		var got pageShape
-		if err := mergeJSONPages([]json.RawMessage{json.RawMessage(`{"total_count":1,"names":["x"]}`)}, &got); err != nil {
+		if err := MergeJSONPages([]json.RawMessage{json.RawMessage(`{"total_count":1,"names":["x"]}`)}, &got); err != nil {
 			t.Fatal(err)
 		}
 		if len(got.Names) != 1 || got.TotalCount != 1 {
@@ -49,7 +49,7 @@ func TestMergeJSONPagesEdgeCases(t *testing.T) {
 	})
 	t.Run("no pages leaves the zero value", func(t *testing.T) {
 		var got pageShape
-		if err := mergeJSONPages(nil, &got); err != nil {
+		if err := MergeJSONPages(nil, &got); err != nil {
 			t.Fatal(err)
 		}
 		if got.Names != nil || got.TotalCount != 0 {
@@ -58,7 +58,7 @@ func TestMergeJSONPagesEdgeCases(t *testing.T) {
 	})
 	t.Run("a malformed page errors rather than contributing nothing", func(t *testing.T) {
 		var got pageShape
-		if err := mergeJSONPages([]json.RawMessage{json.RawMessage(`{"names":`)}, &got); err == nil {
+		if err := MergeJSONPages([]json.RawMessage{json.RawMessage(`{"names":`)}, &got); err == nil {
 			t.Error("a truncated page must not merge silently")
 		}
 	})
@@ -66,14 +66,14 @@ func TestMergeJSONPagesEdgeCases(t *testing.T) {
 	// rather than a silent no-op.
 	t.Run("a non-struct target is refused", func(t *testing.T) {
 		var got []string
-		err := mergeJSONPages([]json.RawMessage{json.RawMessage(`["a"]`)}, &got)
+		err := MergeJSONPages([]json.RawMessage{json.RawMessage(`["a"]`)}, &got)
 		if err == nil || !strings.Contains(err.Error(), "pointer to struct") {
 			t.Errorf("err = %v, want a pointer-to-struct refusal", err)
 		}
 	})
 	t.Run("unexported fields are skipped, not panicked on", func(t *testing.T) {
 		var got pageShape
-		if err := mergeJSONPages([]json.RawMessage{json.RawMessage(`{"names":["a"]}`)}, &got); err != nil {
+		if err := MergeJSONPages([]json.RawMessage{json.RawMessage(`{"names":["a"]}`)}, &got); err != nil {
 			t.Fatalf("reflection must not panic or error on an unexported field: %v", err)
 		}
 	})
@@ -95,7 +95,7 @@ func TestGHAPIJSONPagedFallsBackWhenSlurpIsUnknown(t *testing.T) {
 		return []byte(`{"total_count":1,"names":["a"]}`), nil
 	})
 	var got pageShape
-	if err := ghAPIJSONPaged("repos/o/r/environments", &got); err != nil {
+	if err := GHAPIJSONPaged("repos/o/r/environments", &got); err != nil {
 		t.Fatalf("an older gh must degrade to one page, not hard-stop: %v", err)
 	}
 	if !sawPaginate || !sawPlain {
@@ -113,7 +113,7 @@ func TestGHAPIJSONPagedPropagatesRealErrors(t *testing.T) {
 		return nil, errors.New("gh: Forbidden (HTTP 403)")
 	})
 	var got pageShape
-	if err := ghAPIJSONPaged("repos/o/r/environments", &got); err == nil {
+	if err := GHAPIJSONPaged("repos/o/r/environments", &got); err == nil {
 		t.Fatal("a 403 must propagate, not degrade to a single page")
 	}
 }

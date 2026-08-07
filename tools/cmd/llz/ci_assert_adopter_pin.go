@@ -44,6 +44,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 )
 
 func ciAssertAdopterPinCmd() *cobra.Command {
@@ -251,8 +252,8 @@ var (
 // disagree about the same fact.
 func waitForCIImages(commit string) {
 	images := []string{
-		ciImageRef(defaultTemplateOrg, "ci-tofu", "sha-"+commit),
-		ciImageRef(defaultTemplateOrg, "ci-kubernetes", "sha-"+commit),
+		ciImageRef(templateid.DefaultOrg, "ci-tofu", "sha-"+commit),
+		ciImageRef(templateid.DefaultOrg, "ci-kubernetes", "sha-"+commit),
 	}
 	for attempt := 0; ; attempt++ {
 		missing := ""

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 )
 
 // withGhOwnerKind stubs the instance_repo owner classifier.
@@ -205,11 +206,11 @@ func TestRemediationHonorsGHHost(t *testing.T) {
 // The unreachable-GitHub message must not claim a repo is public when --org
 // points somewhere that could be a private fork.
 func TestTemplateUnreachableTail(t *testing.T) {
-	up := templateUnreachableTail(defaultTemplateOrg, defaultTemplateOrg+"/"+templateName)
+	up := templateUnreachableTail(templateid.DefaultOrg, templateid.DefaultOrg+"/"+templateid.Name)
 	if !strings.Contains(up, "is public") {
 		t.Errorf("upstream tail lost the public-repo fact:\n%s", up)
 	}
-	fork := templateUnreachableTail("acme", "acme/"+templateName)
+	fork := templateUnreachableTail("acme", "acme/"+templateid.Name)
 	if strings.Contains(fork, "is public") {
 		t.Errorf("claimed a --org fork is public:\n%s", fork)
 	}

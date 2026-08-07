@@ -40,6 +40,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartpublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
@@ -136,6 +137,7 @@ var declarations = []func() extension.Extension{
 	reachability.Extension,
 	branchpolicy.Extension,
 	envdef.Extension,
+	buildpreflight.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

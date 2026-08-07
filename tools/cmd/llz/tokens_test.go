@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
+)
 
 func TestRegionFromCluster(t *testing.T) {
 	cases := map[string]string{
@@ -32,15 +37,15 @@ func TestRepoSlug(t *testing.T) {
 
 func TestResolveInstanceRepo(t *testing.T) {
 	// Explicit flag always wins.
-	if r, err := resolveInstanceRepo("owner/explicit", false); err != nil || r != "owner/explicit" {
+	if r, err := answers.ResolveInstanceRepo("owner/explicit", false); err != nil || r != "owner/explicit" {
 		t.Fatalf("flag: got (%q,%v), want owner/explicit", r, err)
 	}
 	// Admin with no flag and no answers file falls back to the example repo.
-	if r, err := resolveInstanceRepo("", true); err != nil || r != defaultTemplateOrg+"/"+templateName+"-example" {
+	if r, err := answers.ResolveInstanceRepo("", true); err != nil || r != templateid.DefaultOrg+"/"+templateid.Name+"-example" {
 		t.Fatalf("admin default: got (%q,%v)", r, err)
 	}
 	// Non-admin with no flag and (presumably) no .copier-answers.yml here errors.
-	if _, err := resolveInstanceRepo("", false); err == nil {
+	if _, err := answers.ResolveInstanceRepo("", false); err == nil {
 		t.Errorf("expected error when no repo can be determined")
 	}
 }

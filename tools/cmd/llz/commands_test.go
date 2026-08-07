@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
@@ -39,7 +40,7 @@ func TestRunNewMissingTemplateSource(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when the template source is missing")
 	}
-	for _, want := range []string{"nonexistent-org/" + templateName, "--org " + defaultTemplateOrg, "gh repo fork"} {
+	for _, want := range []string{"nonexistent-org/" + templateid.Name, "--org " + templateid.DefaultOrg, "gh repo fork"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
@@ -55,7 +56,7 @@ func TestRunNewGitHubUnreachable(t *testing.T) {
 		return false, errors.New("gh: To get started with GitHub CLI, please run: gh auth login")
 	})
 
-	err := runNew(globalOpts{}, defaultTemplateOrg, "v0.1.0", "my-instance", false)
+	err := runNew(globalOpts{}, templateid.DefaultOrg, "v0.1.0", "my-instance", false)
 	if err == nil {
 		t.Fatal("expected an error when GitHub could not be reached")
 	}
@@ -330,7 +331,7 @@ func TestRunNewRefusesMissingCopierBeforeCallingGitHub(t *testing.T) {
 		return true, nil
 	})
 
-	err := runNew(globalOpts{}, defaultTemplateOrg, "v0.0.40", t.TempDir()+"/my-instance", false)
+	err := runNew(globalOpts{}, templateid.DefaultOrg, "v0.0.40", t.TempDir()+"/my-instance", false)
 	if err == nil {
 		t.Fatal("expected a refusal when copier is not on PATH")
 	}

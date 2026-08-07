@@ -32,6 +32,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -60,7 +61,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if err := validate.EnvName(deployEnv); err != nil {
 		return err
 	}
-	instanceRepo, err := resolveInstanceRepo(repo, admin)
+	instanceRepo, err := answers.ResolveInstanceRepo(repo, admin)
 	if err != nil {
 		return err
 	}
@@ -358,7 +359,7 @@ func printTokensNextSteps(env string) {
 // cmdDoctorE2E reports e2e readiness of the env files + live repo (the wizard's
 // plan, runnable standalone). Wired as `llz doctor` (see cmdDoctor).
 func cmdDoctorE2E(repo, env string, admin bool) error {
-	instanceRepo, err := resolveInstanceRepo(repo, admin)
+	instanceRepo, err := answers.ResolveInstanceRepo(repo, admin)
 	if err != nil {
 		return err
 	}
@@ -402,19 +403,6 @@ func adminFlag(admin bool) string {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-func resolveInstanceRepo(flagVal string, admin bool) (string, error) {
-	if flagVal != "" {
-		return flagVal, nil
-	}
-	if a, _ := answers.Read("."); a != nil && a.InstanceRepo != "" {
-		return a.InstanceRepo, nil
-	}
-	if admin {
-		return defaultTemplateOrg + "/" + templateName + "-example", nil
-	}
-	return "", fmt.Errorf("could not determine instance repo — pass --repo <owner>/<name>")
-}
 
 // repoExists reports whether the GitHub repo is reachable (it exists and the
 // authenticated token can see it). The usual cause of a doctor/tokens run where
@@ -507,7 +495,7 @@ func remediateMissingRepo(repo string) {
 	fmt.Fprintln(os.Stderr, "  …or re-scaffold with push next time: `llz new <name> --push --yes`.")
 }
 
-func templateRepo() string { return defaultTemplateOrg + "/" + templateName }
+func templateRepo() string { return templateid.DefaultOrg + "/" + templateid.Name }
 
 func adminBanner(admin bool) string {
 	if admin {

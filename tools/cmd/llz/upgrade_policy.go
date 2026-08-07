@@ -10,6 +10,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
 
@@ -200,7 +201,7 @@ func renderUpgradeScaffold(ref string) (string, func(), error) {
 
 func copierRenderArgv(a *answers.File, ref, dst string) []string {
 	source := "gh:" + updateRepo()
-	upstreamOrg := defaultTemplateOrg
+	upstreamOrg := templateid.DefaultOrg
 	instanceRepo := "your-org/your-instance-repo"
 	if a != nil {
 		if a.SrcPath != "" {

@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/buildpreflight=90 \
 	internal/envdef=52 \
 	internal/branchpolicy=31 \
 	internal/reachability=34 \
