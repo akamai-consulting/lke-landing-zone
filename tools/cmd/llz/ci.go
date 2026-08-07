@@ -34,6 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
@@ -160,7 +161,7 @@ func ciCmd() *cobra.Command {
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
-		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd(),
+		seedspecial.ResolveHarborURLCmd(), seedspecial.AuditPVCStorageClassCmd(),
 		// Must run BEFORE the OpenBao pods are waited on: it patches the
 		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
 		ciPinKeycloakGatewayAliasCmd())

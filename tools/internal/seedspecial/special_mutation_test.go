@@ -1,4 +1,4 @@
-package main
+package seedspecial
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 )
 
 // `key = ""` is the degenerate quoted value: len(val) is exactly 2 and the closing
@@ -13,15 +15,15 @@ import (
 // slip returns the raw two-character `""` instead of the empty string, and a
 // malformed-but-non-empty value defeats every `== ""` guard downstream.
 func TestTfvarsValueEmptyQuotedValue(t *testing.T) {
-	if got := tfvarsValue(`obj_cluster = ""`, "obj_cluster"); got != "" {
-		t.Errorf(`tfvarsValue(key = "") = %q, want "" (both quotes stripped)`, got)
+	if got := tfvars.Value(`obj_cluster = ""`, "obj_cluster"); got != "" {
+		t.Errorf(`tfvars.Value(key = "") = %q, want "" (both quotes stripped)`, got)
 	}
 	// One more character in and the same two boundaries must still strip.
-	if got := tfvarsValue(`obj_cluster = "x"`, "obj_cluster"); got != "x" {
-		t.Errorf(`tfvarsValue(key = "x") = %q, want x`, got)
+	if got := tfvars.Value(`obj_cluster = "x"`, "obj_cluster"); got != "x" {
+		t.Errorf(`tfvars.Value(key = "x") = %q, want x`, got)
 	}
 	// An unterminated quote falls through to the raw value (no panic, no strip).
-	if got := tfvarsValue(`obj_cluster = "oops`, "obj_cluster"); got != `"oops` {
+	if got := tfvars.Value(`obj_cluster = "oops`, "obj_cluster"); got != `"oops` {
 		t.Errorf("unterminated quote = %q, want the raw value", got)
 	}
 }
@@ -78,7 +80,7 @@ spec:
 	})
 
 	var err error
-	out := captureStdout(t, func() { err = runCIResolveHarborURL("e2e") })
+	out := captureStdout(t, func() { err = RunResolveHarborURL("e2e") })
 	if err != nil {
 		t.Fatalf("a pinned domainSuffix must resolve offline: %v", err)
 	}

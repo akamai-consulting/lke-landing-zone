@@ -425,6 +425,17 @@ categories:
 #        CLOSURE 1 -- `main`, and nothing else. 282 lines that needed nothing from
 #        package main and were never measured until the campaign ran out of hard
 #        candidates and started sweeping. Third time a sweep beat a hunch.
+#   60th: tfvars layer + seed-special   12,970 -> 12,721 (-249 / 110 files)
+#        The tfvars READER (ci_seed_special.go), WRITER (scaffold.go) and
+#        EXISTENCE CHECK (render.go) were in three different files. Putting them
+#        in one package surfaced a disagreement none could show alone: Value
+#        TrimSpace()s the left side and so accepts an INDENTED assignment, while
+#        SetField and HasKey anchor at column 0. llz can read a value it would
+#        never rewrite. Not yet a bug -- this tree generates these files
+#        unindented -- and now pinned by a test written to FAIL if one side is
+#        "fixed" without the other.
+#        Also took scaffold from 21 outbound to 19. Still blocked; still not a
+#        boundary problem.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -437,7 +448,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 12970
+    budget: 12721
     exact: true
     include:
       - "tools/cmd/llz/*.go"

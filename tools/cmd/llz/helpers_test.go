@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
@@ -154,11 +155,11 @@ func TestSha256Hex(t *testing.T) {
 
 func TestSetHCLField(t *testing.T) {
 	content := "foo = \"old\"\nbar = 1\n"
-	got := setHCLField(content, "foo", "\"new\"")
+	got := tfvars.SetField(content, "foo", "\"new\"")
 	if !strings.Contains(got, "foo = \"new\"") {
-		t.Errorf("setHCLField did not replace foo: %q", got)
+		t.Errorf("tfvars.SetField did not replace foo: %q", got)
 	}
 	if !strings.Contains(got, "bar = 1") {
-		t.Errorf("setHCLField clobbered bar: %q", got)
+		t.Errorf("tfvars.SetField clobbered bar: %q", got)
 	}
 }

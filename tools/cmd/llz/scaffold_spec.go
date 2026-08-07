@@ -17,6 +17,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 )
 
 // shortRepoName returns the <name> half of an <owner>/<name> instance_repo (or
@@ -38,7 +39,7 @@ func tfvarsExampleValue(root, key string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.Trim(tfvarsValue(string(b), key), `"`)
+	return strings.Trim(tfvars.Value(string(b), key), `"`)
 }
 
 // ensureLandingZone creates landingzone.yaml at specRoot from .copier-answers.yml

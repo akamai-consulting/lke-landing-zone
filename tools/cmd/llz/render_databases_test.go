@@ -12,8 +12,8 @@ import (
 // databases is the only root whose spec mapping emits a MULTI-LINE right-hand
 // side (`databases = { "<name>" = { … } }`, one entry per cluster — the 0-n
 // fan-out the root does `for_each` over). Every other assignment is a scalar or a
-// single-line list, so nothing else exercises applyAssigns/setHCLField with an
-// RHS containing newlines — setHCLField being a single-line `^key\s*=.*$` rewrite.
+// single-line list, so nothing else exercises applyAssigns/tfvars.SetField with an
+// RHS containing newlines — tfvars.SetField being a single-line `^key\s*=.*$` rewrite.
 //
 // It must hold WITHOUT a tofu/terraform binary. renderTfvars pipes through
 // `tofu fmt`, but fmtHCL is a best-effort pass-through when neither binary is

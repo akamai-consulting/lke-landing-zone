@@ -1,4 +1,4 @@
-package main
+package seedspecial
 
 import (
 	"errors"
@@ -6,12 +6,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 )
 
 func TestTfvarsValue(t *testing.T) {
@@ -30,11 +29,11 @@ unquoted = bare
 		{"absent", ""},
 	}
 	for _, tc := range cases {
-		if got := tfvarsValue(content, tc.key); got != tc.want {
-			t.Errorf("tfvarsValue(%q) = %q, want %q", tc.key, got, tc.want)
+		if got := tfvars.Value(content, tc.key); got != tc.want {
+			t.Errorf("tfvars.Value(%q) = %q, want %q", tc.key, got, tc.want)
 		}
 	}
-	if got := tfvarsValue("", "obj_cluster"); got != "" {
+	if got := tfvars.Value("", "obj_cluster"); got != "" {
 		t.Errorf("empty content must yield empty, got %q", got)
 	}
 }
@@ -84,98 +83,13 @@ func writeTFVars(t *testing.T, dir, sub, region, content string) {
 
 // ── mint-bootstrap-objkeys ────────────────────────────────────────────────────
 
-func TestRunCIMintBootstrapObjkeys(t *testing.T) {
-	dir := chdirTempDir(t)
-	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
-	t.Setenv("LINODE_API_TOKEN", "linode-tok")
-	withGHASummaryFile(t)
-
-	fixedNow := time.Unix(1_700_000_000, 0)
-	prevNow := credrotate.Now
-	credrotate.Now = func() time.Time { return fixedNow }
-	t.Cleanup(func() { credrotate.Now = prevNow })
-
-	stub := &stubLinode{}
-	prevClient := credrotate.MintObjkeysLinodeClient
-	credrotate.MintObjkeysLinodeClient = func(string) credrotate.LinodeAPI { return stub }
-	t.Cleanup(func() { credrotate.MintObjkeysLinodeClient = prevClient })
-
-	// mint runs in CI inside the instance checkout, so the label prefix comes from
-	// the committed spec (the in-cluster rotator gets OBJ_LABEL_PREFIX instead).
-	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
-		"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
-
-	// obj_cluster unresolvable → hard error, no mint.
-	if err := credrotate.RunMintBootstrapObjkeys("primary"); err == nil {
-		t.Error("missing obj_cluster must hard-fail")
-	}
-	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
-
-	// Fresh bootstrap: all objkey paths absent → three mints + three seeds carrying
-	// the complete field sets + rotated_at (loki + harbor + the consolidated
-	// obj-platform key); the DNS PAT entry is never minted here.
-	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
-	if err := credrotate.RunMintBootstrapObjkeys("primary"); err != nil {
-		t.Fatal(err)
-	}
-	if stub.objCreates != 3 {
-		t.Fatalf("objkey mints = %d, want 3 (loki + harbor + platform-obj; never the DNS PAT)", stub.objCreates)
-	}
-	if stub.patCreates != 0 {
-		t.Errorf("PAT mints = %d, want 0", stub.patCreates)
-	}
-	if len(*puts) != 3 {
-		t.Fatalf("want three kv puts, got %d: %v", len(*puts), *puts)
-	}
-	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
-	wantPuts := []string{
-		"kv put secret/loki/object-store AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
-		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=acme-harbor-registry-primary " +
-			"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 rotated_at=" + rotatedAt + " secret_access_key=SK",
-		"kv put secret/obj/platform AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
-	}
-	for i, want := range wantPuts {
-		if got := strings.Join((*puts)[i], " "); got != want {
-			t.Errorf("kv put %d:\n got %q\nwant %q", i, got, want)
-		}
-	}
-
-	// Idempotency: already-seeded paths (presentField has a value) → no mint,
-	// no put — a rotator-minted key is never clobbered.
-	stub.objCreates = 0
-	var putsAfterSkip [][]string
-	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
-		if strings.HasPrefix(strings.Join(args, " "), "kv get") {
-			return "present\n", "", nil // every probe finds a value
-		}
-		putsAfterSkip = append(putsAfterSkip, args)
-		return "", "", nil
-	})
-	if err := credrotate.RunMintBootstrapObjkeys("primary"); err != nil {
-		t.Fatal(err)
-	}
-	if stub.objCreates != 0 || len(putsAfterSkip) != 0 {
-		t.Errorf("seeded paths must skip: mints=%d puts=%v", stub.objCreates, putsAfterSkip)
-	}
-
-	if err := credrotate.RunMintBootstrapObjkeys(""); err == nil {
-		t.Error("missing --region must error")
-	}
-	t.Setenv("LINODE_API_TOKEN", "")
-	if err := credrotate.RunMintBootstrapObjkeys("primary"); err == nil || !strings.Contains(err.Error(), "LINODE_API_TOKEN") {
-		t.Errorf("err = %v, want missing-token refusal", err)
-	}
-}
-
-// ── resolve-harbor-url ────────────────────────────────────────────────────────
-
 func TestRunCIResolveHarborURL(t *testing.T) {
 	dir := chdirTempDir(t)
 
 	// vars.HARBOR_URL wins; nothing written to $GITHUB_ENV, no spec needed.
 	t.Setenv("HARBOR_URL", "harbor.example.com")
 	envFile := withGHAEnvFile(t)
-	if err := runCIResolveHarborURL("primary"); err != nil {
+	if err := RunResolveHarborURL("primary"); err != nil {
 		t.Fatal(err)
 	}
 	if ghaEnvContains(t, envFile, "HARBOR_URL=") {
@@ -185,14 +99,14 @@ func TestRunCIResolveHarborURL(t *testing.T) {
 	// Unset + no spec → hard error (the spec is mandatory; the tfvars
 	// side-channel this used to fall back to was retired).
 	t.Setenv("HARBOR_URL", "")
-	if err := runCIResolveHarborURL("primary"); err == nil {
+	if err := RunResolveHarborURL("primary"); err == nil {
 		t.Error("missing spec must error")
 	}
 
 	// Unset → derived from the spec's domainSuffix and exported.
 	writeResolveSpec(t, dir, "primary", "primary.internal")
 	envFile = withGHAEnvFile(t)
-	if err := runCIResolveHarborURL("primary"); err != nil {
+	if err := RunResolveHarborURL("primary"); err != nil {
 		t.Fatal(err)
 	}
 	if !ghaEnvContains(t, envFile, "HARBOR_URL=harbor.primary.internal") {
@@ -200,10 +114,10 @@ func TestRunCIResolveHarborURL(t *testing.T) {
 	}
 
 	// Env absent from the spec / empty domainSuffix → hard error.
-	if err := runCIResolveHarborURL("absent-region"); err == nil {
+	if err := RunResolveHarborURL("absent-region"); err == nil {
 		t.Error("env absent from the spec must error")
 	}
-	if err := runCIResolveHarborURL(""); err == nil {
+	if err := RunResolveHarborURL(""); err == nil {
 		t.Error("missing --region must error")
 	}
 }
@@ -284,7 +198,7 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		return nil, errors.New("unexpected: " + a)
 	})
 	sum := withGHASummaryFile(t)
-	if err := runCIAuditPVCStorageClass(); err != nil {
+	if err := RunAuditPVCStorageClass(); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(sum)
@@ -316,7 +230,7 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		return []byte(`{"items":[{"metadata":{"namespace":"a","name":"b"},"spec":{"storageClassName":"block-storage-retain"}}]}`), nil
 	})
 	sum = withGHASummaryFile(t)
-	if err := runCIAuditPVCStorageClass(); err != nil {
+	if err := RunAuditPVCStorageClass(); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(sum); len(b) != 0 {
@@ -325,7 +239,7 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 
 	// kubectl failure → best-effort clean exit (the bash || true).
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("no cluster") })
-	if err := runCIAuditPVCStorageClass(); err != nil {
+	if err := RunAuditPVCStorageClass(); err != nil {
 		t.Errorf("kubectl failure must not fail the audit: %v", err)
 	}
 }
@@ -375,7 +289,7 @@ spec:
 	t.Run("override matching the derivation is quiet", func(t *testing.T) {
 		t.Setenv("HARBOR_URL", "harbor.e2e.example.com")
 		errOut := captureStderr(t, func() {
-			if err := runCIResolveHarborURL("e2e"); err != nil {
+			if err := RunResolveHarborURL("e2e"); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -387,7 +301,7 @@ spec:
 	t.Run("override diverging from the derivation warns", func(t *testing.T) {
 		t.Setenv("HARBOR_URL", "registry.elsewhere.test")
 		errOut := captureStderr(t, func() {
-			if err := runCIResolveHarborURL("e2e"); err != nil {
+			if err := RunResolveHarborURL("e2e"); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -407,8 +321,13 @@ spec:
 // attributing an out-of-scope PVC to "Kyverno's webhook lagged" — sending the reader
 // after a timing bug that cannot explain it — or stop naming a namespace the policy
 // really does cover.
+// The path reaches BACK INTO cmd/llz on purpose: the policy is //go:embed-ed
+// there and did not move with this file. A relative path across a package
+// boundary is the trap that made two other guards go inert in this campaign, so
+// it is named here rather than left to be rediscovered — if the manifest moves,
+// this fails loudly, which is the behaviour that was wanted.
 func TestKyvernoScopeMatchesPolicy(t *testing.T) {
-	raw, err := os.ReadFile("manifests/kyverno-pvc-encrypted-storage-class.yaml")
+	raw, err := os.ReadFile("../../cmd/llz/manifests/kyverno-pvc-encrypted-storage-class.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

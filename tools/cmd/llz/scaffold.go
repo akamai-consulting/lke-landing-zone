@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
@@ -388,21 +387,3 @@ func countFiles(in []configreadiness.Finding) int {
 func first3(s string) string { return linode.RegionShort(s) }
 
 func quote(s string) string { return `"` + s + `"` }
-
-// setHCLField replaces EVERY `^<key> ... = ...` line with `<key> = <value>` (the
-// doc said "the first" for years; the call has always been a ReplaceAll). Harmless
-// today — no embedded terraform.tfvars.example declares the same key twice at
-// column 0, which a test asserts — but two would both be rewritten into a
-// duplicate assignment, which HCL rejects as a redefined attribute.
-// Matches the bash `replace_in_file "^<key> .*=.*"` line-rewrite.
-//
-// ReplaceAllLiteral, NOT ReplaceAllString: the replacement is a rendered HCL value,
-// and ReplaceAllString EXPANDS `$name`/`${name}` in it. Every value here comes from
-// the spec, so a `$` in one was silently eaten rather than written — a Linode tag
-// `cost$1center` rendered as `"cost"`, and `owner${team}` as `"owner"`, tagging real
-// infrastructure wrong with no error (spec.cluster.tags is free-form, so nothing
-// upstream rejects it). No caller wants expansion; these are literals.
-func setHCLField(content, key, value string) string {
-	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=.*$`)
-	return re.ReplaceAllLiteralString(content, key+" = "+value)
-}

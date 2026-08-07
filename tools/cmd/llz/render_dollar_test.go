@@ -7,7 +7,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
-// setHCLField writes a rendered HCL value through regexp replacement, where
+// tfvars.SetField writes a rendered HCL value through regexp replacement, where
 // `$name`/`${name}` in the REPLACEMENT are expansion syntax unless the literal
 // variant is used. Every value it writes comes from the spec, and spec.cluster.tags
 // is free-form — nothing upstream constrains it — so `$` in a tag was silently

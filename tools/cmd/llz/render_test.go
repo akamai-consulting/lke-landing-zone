@@ -11,6 +11,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 )
 
 // dealign collapses `tofu fmt`'s `=` column padding (key    = val → key = val) so
@@ -232,15 +233,15 @@ func TestRenderTargetsDriveCheck_IncludingTfvars(t *testing.T) {
 func TestHasHCLKey(t *testing.T) {
 	content := "region = \"us-ord\"\nnode_count=3\n# commented = 1\n  indented = 2\nnode_countx = 9\n"
 	for _, k := range []string{"region", "node_count"} {
-		if !hasHCLKey(content, k) {
-			t.Errorf("hasHCLKey(%q) = false, want true", k)
+		if !tfvars.HasKey(content, k) {
+			t.Errorf("tfvars.HasKey(%q) = false, want true", k)
 		}
 	}
 	// A commented-out key, an indented one, and a mere prefix of a longer key are all
 	// misses — the assignment must start the line (applyAssigns appends instead).
 	for _, k := range []string{"commented", "indented", "node_coun"} {
-		if hasHCLKey(content, k) {
-			t.Errorf("hasHCLKey(%q) = true, want false", k)
+		if tfvars.HasKey(content, k) {
+			t.Errorf("tfvars.HasKey(%q) = true, want false", k)
 		}
 	}
 }

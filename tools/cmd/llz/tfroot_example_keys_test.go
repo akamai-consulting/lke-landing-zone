@@ -7,7 +7,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 )
 
-// setHCLField rewrites EVERY matching `^<key> =` line, not just the first. That is
+// tfvars.SetField rewrites EVERY matching `^<key> =` line, not just the first. That is
 // safe only while no embedded terraform.tfvars.example declares the same key twice
 // at column 0 — two would both be rewritten to the same assignment, and HCL rejects
 // a redefined attribute, so `llz render` would emit a tfvars that cannot be parsed.
@@ -24,7 +24,7 @@ func TestTfrootExamples_NoDuplicateTopLevelKeys(t *testing.T) {
 		}
 		seen := map[string]int{}
 		for _, line := range strings.Split(base, "\n") {
-			// Column 0 only, matching hasHCLKey/setHCLField: a leading space or '#'
+			// Column 0 only, matching tfvars.HasKey/tfvars.SetField: a leading space or '#'
 			// is a comment or a nested attribute, neither of which they touch.
 			if line == "" || line[0] == '#' || line[0] == ' ' || line[0] == '\t' {
 				continue
@@ -41,7 +41,7 @@ func TestTfrootExamples_NoDuplicateTopLevelKeys(t *testing.T) {
 		for k, n := range seen {
 			if n > 1 {
 				t.Errorf("%s/terraform.tfvars.example declares %q %d times at column 0 — "+
-					"setHCLField rewrites every match, so render would emit a duplicate "+
+					"tfvars.SetField rewrites every match, so render would emit a duplicate "+
 					"assignment and HCL would reject it as a redefined attribute", root, k, n)
 			}
 		}

@@ -1,4 +1,4 @@
-package main
+package seedspecial
 
 // ci_seed_special.go implements the one-off seed/verify steps of
 // llz-bootstrap-openbao.yml that don't fit the generic `llz ci bao-seed`
@@ -29,30 +29,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 )
 
-// tfvarsValue returns the first `key = "value"` assignment in tfvars content
-// (quotes stripped, comments ignored) — the same first-wins grep/sed
-// semantics as internal/terraform.ParseTFVars, for keys outside its fixed
-// struct (obj_cluster).
-func tfvarsValue(content, key string) string {
-	for _, line := range strings.Split(content, "\n") {
-		i := strings.IndexByte(line, '=')
-		if i < 0 || strings.TrimSpace(line[:i]) != key {
-			continue
-		}
-		val := strings.TrimSpace(line[i+1:])
-		if len(val) >= 2 && val[0] == '"' {
-			if j := strings.IndexByte(val[1:], '"'); j >= 0 {
-				return val[1 : 1+j]
-			}
-		}
-		return val
-	}
-	return ""
-}
-
 // ── resolve-harbor-url ────────────────────────────────────────────────────────
 
-func ciResolveHarborURLCmd() *cobra.Command {
+func ResolveHarborURLCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "resolve-harbor-url",
@@ -69,13 +48,13 @@ func ciResolveHarborURLCmd() *cobra.Command {
 			"spec is mandatory now, so that tfvars side-channel (and the cluster_domain\n" +
 			"variable it existed for) was retired. Fails only when neither is available.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIResolveHarborURL(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunResolveHarborURL(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose domainSuffix derives the Harbor host (required)")
 	return c
 }
 
-func runCIResolveHarborURL(region string) error {
+func RunResolveHarborURL(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -222,7 +201,7 @@ var kyvernoScopedNamespaces = []string{"gitea", "istio-system"}
 // readiness lagged", which is only true INSIDE that scope; for a harbor or
 // keycloak PVC it sends the reader after a timing bug that isn't there. The real
 // cause outside the scope is the default-StorageClass ordering — see the step
-// summary in runCIAuditPVCStorageClass.
+// summary in RunAuditPVCStorageClass.
 func splitByKyvernoScope(rows []pvcRow) (inScope, outOfScope []pvcRow) {
 	scoped := make(map[string]bool, len(kyvernoScopedNamespaces))
 	for _, ns := range kyvernoScopedNamespaces {
@@ -238,7 +217,7 @@ func splitByKyvernoScope(rows []pvcRow) (inScope, outOfScope []pvcRow) {
 	return inScope, outOfScope
 }
 
-func ciAuditPVCStorageClassCmd() *cobra.Command {
+func AuditPVCStorageClassCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "audit-pvc-storageclass",
 		Short: "warn about PVCs that escaped the Kyverno encrypted-StorageClass mutation",
@@ -256,11 +235,11 @@ func ciAuditPVCStorageClassCmd() *cobra.Command {
 			"Never fails the workflow — the cluster is functional, just less secure\n" +
 			"than intended.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIAuditPVCStorageClass() },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunAuditPVCStorageClass() },
 	}
 }
 
-func runCIAuditPVCStorageClass() error {
+func RunAuditPVCStorageClass() error {
 	// kubectl/parse failures read as "no PVCs escaped" — the bash's
 	// `2>/dev/null … || true` made this audit best-effort by design.
 	var rows []pvcRow

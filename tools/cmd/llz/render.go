@@ -16,7 +16,7 @@ package main
 //
 // The pure spec→tfvars mapping lives in clusterspec (tfvars_map.go); this file is
 // the thin apply loop — it reads each root's terraform.tfvars.example and sets
-// (or appends) each assignment with setHCLField (shared with `llz env add`).
+// (or appends) each assignment with tfvars.SetField (shared with `llz env add`).
 
 import (
 	"fmt"
@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 
@@ -92,7 +93,7 @@ func envVPCCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read %s (for spec-driven instances run `llz render %s` first): %w", p, env, err)
 			}
-			fmt.Println(tfvarsValue(string(b), "vpc_network"))
+			fmt.Println(tfvars.Value(string(b), "vpc_network"))
 			return nil
 		},
 	}
@@ -671,7 +672,7 @@ func reportDrift(targets map[string]string, mustExist func(path string) bool) er
 }
 
 // applyAssigns sets each `key = value` in content, replacing an existing
-// assignment line (setHCLField) or appending the key when it is absent — so a
+// assignment line (tfvars.SetField) or appending the key when it is absent — so a
 // field the example commented out (e.g. obj_key_rotation_days) is still honored.
 // renderTfvars applies the spec assignments onto a root's terraform.tfvars.example
 // and returns the canonically-formatted result. Formatting matters because the
@@ -708,8 +709,8 @@ func fmtHCL(content string) string {
 
 func applyAssigns(content string, assigns []clusterspec.Assign) string {
 	for _, a := range assigns {
-		if hasHCLKey(content, a.Key) {
-			content = setHCLField(content, a.Key, a.Val)
+		if tfvars.HasKey(content, a.Key) {
+			content = tfvars.SetField(content, a.Key, a.Val)
 			continue
 		}
 		if len(content) > 0 && content[len(content)-1] != '\n' {
@@ -718,21 +719,6 @@ func applyAssigns(content string, assigns []clusterspec.Assign) string {
 		content += a.Key + " = " + a.Val + "\n"
 	}
 	return content
-}
-
-// hasHCLKey reports whether content has an uncommented `<key> =` assignment: a line
-// STARTING with key (so a commented-out `# key = …` does not match) followed by
-// optional blanks and `=`. A line scan rather than a regexp — this runs once per
-// assignment × per root × per env on both the write and the --diff path, and the
-// old `regexp.MustCompile` on every call recompiled the pattern every time.
-func hasHCLKey(content, key string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		rest, ok := strings.CutPrefix(line, key)
-		if ok && strings.HasPrefix(strings.TrimLeft(rest, " \t"), "=") {
-			return true
-		}
-	}
-	return false
 }
 
 // filepathRel renders dst relative to tfDir's parent for tidy operator output;
