@@ -394,8 +394,8 @@ func TestScanUntestable_EndToEnd(t *testing.T) {
 		"  }\n"+
 		"}\n") // 2
 
-	cfg := untestableBudget{
-		Categories: map[string]untestableCategory{
+	cfg := budgetConfig{
+		Categories: map[string]budgetCategory{
 			"wf": {Kind: "workflow-run", Budget: 1, Include: []string{".github/workflows/*.yml"}},
 			"sh": {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.sh"}},
 			"py": {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.py"}},
@@ -404,7 +404,7 @@ func TestScanUntestable_EndToEnd(t *testing.T) {
 		Exclude: []string{"scripts/install-*.sh"},
 	}
 
-	results, err := scanUntestable(root, cfg)
+	results, err := scanBudgetCategories(root, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestLoadUntestableBudget(t *testing.T) {
 	if err := os.WriteFile(p, []byte("categories:\n  sh:\n    kind: script\n    budget: 5\n    include: [\"*.sh\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadUntestableBudget(p)
+	cfg, err := loadBudgetConfig(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,13 +446,13 @@ func TestLoadUntestableBudget(t *testing.T) {
 		t.Errorf("unexpected parse: %+v", cfg.Categories["sh"])
 	}
 
-	if _, err := loadUntestableBudget(filepath.Join(root, "nope.yaml")); err == nil {
+	if _, err := loadBudgetConfig(filepath.Join(root, "nope.yaml")); err == nil {
 		t.Error("expected error for missing config")
 	}
 
 	empty := filepath.Join(root, "empty.yaml")
 	_ = os.WriteFile(empty, []byte("exclude: []\n"), 0o644)
-	if _, err := loadUntestableBudget(empty); err == nil {
+	if _, err := loadBudgetConfig(empty); err == nil {
 		t.Error("expected error for config with no categories")
 	}
 }

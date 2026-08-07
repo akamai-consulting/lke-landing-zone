@@ -347,6 +347,11 @@ func ciCmd() *cobra.Command {
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
 	c.AddCommand(ciUntestableLOCCmd())
+	// Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
+	// destination for converted logic but no capacity, so package main accretes.
+	// This budgets the destination. Ratchets DOWN as code moves to
+	// tools/internal/<pkg> or out to an extension.
+	c.AddCommand(ciCoreSurfaceCmd())
 	// Release-hygiene gate: a chart change must bump its Chart.yaml version, or
 	// publish-charts.yml never publishes it and clusters keep the stale artifact.
 	c.AddCommand(ciChartVersionGuardCmd())

@@ -27,53 +27,20 @@ package main
 //                         get their own counter that extracts the block body.
 // The counters are pure functions (countRunBlockLines / countScriptLines /
 // countTerraformProvisionerLines / countEmbeddedShellLines) with table-driven
-// tests; the walk + budget comparison is the only I/O.
+// tests, and they are all this file owns besides the command itself.
+//
+// The machinery underneath — config parse, glob walk, per-category tally,
+// over-budget report — is NOT here. It lives in ci_budget_gate.go, gate-neutral,
+// because `llz ci core-surface` (ADR 0014) runs on the same engine pointed the
+// opposite way. Anything added here should be specific to THIS gate; a change
+// that would serve both belongs in the engine.
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 )
-
-// untestableBudget is the on-disk config (.untestable-budget.yaml). Each
-// category names the globs it scans and the maximum logic lines it tolerates;
-// exclude removes files (install/glue scripts with no real logic) from every
-// category so the budget reflects only convertible logic.
-type untestableBudget struct {
-	Categories map[string]untestableCategory `json:"categories"`
-	Exclude    []string                      `json:"exclude,omitempty"`
-}
-
-type untestableCategory struct {
-	// Kind selects the counter: "workflow-run" parses run: blocks out of YAML;
-	// "script" counts non-blank/non-comment lines of the whole file;
-	// "terraform-provisioner" parses `command` heredocs out of *.tf provisioners.
-	Kind    string   `json:"kind"`
-	Budget  int      `json:"budget"`
-	Include []string `json:"include"`
-}
-
-// categoryResult is the per-category tally the gate reports.
-type categoryResult struct {
-	name   string
-	kind   string
-	budget int
-	total  int
-	files  []fileCount // sorted desc by count, for the offender breakdown
-}
-
-type fileCount struct {
-	path  string
-	count int
-}
-
-func (r categoryResult) over() bool { return r.total > r.budget }
 
 func ciUntestableLOCCmd() *cobra.Command {
 	var configPath, root string
@@ -100,136 +67,15 @@ func ciUntestableLOCCmd() *cobra.Command {
 	return c
 }
 
+// untestableRemedy is the untestable-loc gate's guidance. `{config}` expands to
+// the config path — a placeholder rather than a %s verb because the alternative
+// remedy comes from YAML, where a stray % would turn into a format error.
+const untestableRemedy = "Move the logic into unit-tested Go " +
+	"(tools/cmd/llz), or — for genuine install/glue with no logic — add the file to " +
+	"`exclude:` in {config} with a justification. Do NOT raise the budget to make this pass."
+
 func runUntestableLOC(root, configPath string, verbose bool) error {
-	cfg, err := loadUntestableBudget(filepath.Join(root, configPath))
-	if err != nil {
-		return err
-	}
-	results, err := scanUntestable(root, cfg)
-	if err != nil {
-		return err
-	}
-
-	var overBudget []string
-	for _, r := range results {
-		status := "ok"
-		if r.over() {
-			status = "OVER"
-			overBudget = append(overBudget, r.name)
-		}
-		fmt.Printf("%-26s %5d / %-5d  %s\n", r.name, r.total, r.budget, status)
-		if verbose || r.over() {
-			for _, f := range r.files {
-				fmt.Printf("    %5d  %s\n", f.count, f.path)
-			}
-		}
-	}
-
-	if len(overBudget) > 0 {
-		fmt.Fprintf(os.Stderr,
-			"\n::error::untestable-loc: %s over budget. Move the logic into unit-tested Go "+
-				"(tools/cmd/llz), or — for genuine install/glue with no logic — add the file to "+
-				"`exclude:` in %s with a justification. Do NOT raise the budget to make this pass.\n",
-			strings.Join(overBudget, ", "), configPath)
-		return fmt.Errorf("untestable-loc gate failed: %d category(ies) over budget", len(overBudget))
-	}
-	fmt.Println("\nuntestable-loc: all categories within budget.")
-	return nil
-}
-
-func loadUntestableBudget(path string) (untestableBudget, error) {
-	var cfg untestableBudget
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return cfg, fmt.Errorf("read budget config %s: %w", path, err)
-	}
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return cfg, fmt.Errorf("parse budget config %s: %w", path, err)
-	}
-	if len(cfg.Categories) == 0 {
-		return cfg, fmt.Errorf("budget config %s defines no categories", path)
-	}
-	return cfg, nil
-}
-
-// scanUntestable walks the repo once and tallies each category. Returns results
-// sorted by category name for stable output.
-func scanUntestable(root string, cfg untestableBudget) ([]categoryResult, error) {
-	// Collect candidate files per category by walking once and matching globs.
-	perCat := map[string][]string{}
-	for name := range cfg.Categories {
-		perCat[name] = nil
-	}
-
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			// Skip vendored / VCS / build dirs outright.
-			base := d.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".claude" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if matchAnyGlob(cfg.Exclude, rel) {
-			return nil
-		}
-		for name, cat := range cfg.Categories {
-			if matchAnyGlob(cat.Include, rel) {
-				perCat[name] = append(perCat[name], rel)
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
-	}
-
-	var results []categoryResult
-	for name, cat := range cfg.Categories {
-		r := categoryResult{name: name, kind: cat.Kind, budget: cat.Budget}
-		for _, rel := range perCat[name] {
-			b, err := os.ReadFile(filepath.Join(root, rel))
-			if err != nil {
-				return nil, err
-			}
-			var n int
-			switch cat.Kind {
-			case "workflow-run":
-				n = countRunBlockLines(string(b))
-			case "script":
-				n = countScriptLines(string(b))
-			case "terraform-provisioner":
-				n = countTerraformProvisionerLines(string(b))
-			case "makefile-recipe":
-				n = countMakefileRecipeLines(string(b))
-			case "embedded-shell":
-				n = countEmbeddedShellLines(string(b))
-			default:
-				return nil, fmt.Errorf("category %q has unknown kind %q (want workflow-run|script|terraform-provisioner|makefile-recipe|embedded-shell)", name, cat.Kind)
-			}
-			if n > 0 {
-				r.files = append(r.files, fileCount{path: rel, count: n})
-				r.total += n
-			}
-		}
-		sort.Slice(r.files, func(i, j int) bool {
-			if r.files[i].count != r.files[j].count {
-				return r.files[i].count > r.files[j].count
-			}
-			return r.files[i].path < r.files[j].path
-		})
-		results = append(results, r)
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].name < results[j].name })
-	return results, nil
+	return runBudgetGate("untestable-loc", root, configPath, verbose, untestableRemedy)
 }
 
 var runDirectiveRE = regexp.MustCompile(`^(\s*)(- )?run:\s*(.*)$`)
@@ -289,15 +135,7 @@ func countRunBlockLines(content string) int {
 // countScriptLines counts non-blank lines that are not whole-line comments.
 // Mirrors `grep -vE '^\s*(#|$)'` so shell and Python tallies are reproducible.
 func countScriptLines(content string) int {
-	total := 0
-	for _, l := range strings.Split(content, "\n") {
-		s := strings.TrimSpace(l)
-		if s == "" || strings.HasPrefix(s, "#") {
-			continue
-		}
-		total++
-	}
-	return total
+	return countLinesSkippingComments(content, "#")
 }
 
 // tfCommandHeredocRE matches the opening of a Terraform provisioner command
@@ -557,67 +395,4 @@ func stripQuotedSpans(s string) (rest, quoted string) {
 
 func lineIndent(l string) int {
 	return len(l) - len(strings.TrimLeft(l, " "))
-}
-
-func matchAnyGlob(patterns []string, path string) bool {
-	for _, p := range patterns {
-		if matchGlob(p, path) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchGlob matches a slash-path against a glob supporting `**` (any number of
-// path segments, including zero), `*` (within a segment), and `?`. Anchored at
-// both ends. filepath.Match lacks `**`, so we compile to a regexp.
-func matchGlob(pattern, path string) bool {
-	re, err := globToRegexp(pattern)
-	if err != nil {
-		return false
-	}
-	return re.MatchString(path)
-}
-
-var globCache = map[string]*regexp.Regexp{}
-
-func globToRegexp(pattern string) (*regexp.Regexp, error) {
-	if re, ok := globCache[pattern]; ok {
-		return re, nil
-	}
-	var b strings.Builder
-	b.WriteString("^")
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
-		switch c {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				// `**` — any sequence including slashes. Swallow a following
-				// slash so `a/**/b` also matches `a/b`.
-				i++
-				if i+1 < len(pattern) && pattern[i+1] == '/' {
-					i++
-					b.WriteString("(?:.*/)?")
-				} else {
-					b.WriteString(".*")
-				}
-			} else {
-				b.WriteString("[^/]*") // single * stays within a path segment
-			}
-		case '?':
-			b.WriteString("[^/]")
-		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\':
-			b.WriteByte('\\')
-			b.WriteByte(c)
-		default:
-			b.WriteByte(c)
-		}
-	}
-	b.WriteString("$")
-	re, err := regexp.Compile(b.String())
-	if err != nil {
-		return nil, err
-	}
-	globCache[pattern] = re
-	return re, nil
 }
