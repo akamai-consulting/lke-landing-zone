@@ -135,7 +135,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **20,835** with the rotation table (wall three of the credential family).
 > and **20,591** with broad-PAT + temp-objkey.
 > and **20,492** with wall four half down.
-> Forty-two extensions, net −26,690 (56.6%) — now BELOW the
+> and **20,269** with wall four finished for the credential family.
+> Forty-two extensions, net −26,913 (57.0%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

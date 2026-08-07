@@ -281,12 +281,19 @@ categories:
     #                       none of which seeds anything). The set fell 16 -> 12.
     #                       What is left is the OpenBao WRITE path proper:
     #                       baoExecFn, baoKVPutFn, baoSeedOpts/runCIBaoSeed.
+    #   20,269 / 120 files  wall 4 done for the credential family. -223. The
+    #                       OpenBao WRITE seams (ExecStdin, KVPut) went into
+    #                       internal/baoread rather than a new package — the read
+    #                       classifier and the write use the SAME in-pod bao CLI,
+    #                       and two packages installing one exec twice is worse
+    #                       than a package whose name describes its better half.
+    #                       mint-objkeys and incluster-pat followed.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 20492
+    budget: 20269
     exact: true
     include:
       - "tools/cmd/llz/*.go"

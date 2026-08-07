@@ -96,9 +96,9 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	t.Cleanup(func() { credrotate.Now = prevNow })
 
 	stub := &stubLinode{}
-	prevClient := mintObjkeysLinodeClient
-	mintObjkeysLinodeClient = func(string) credrotate.LinodeAPI { return stub }
-	t.Cleanup(func() { mintObjkeysLinodeClient = prevClient })
+	prevClient := credrotate.MintObjkeysLinodeClient
+	credrotate.MintObjkeysLinodeClient = func(string) credrotate.LinodeAPI { return stub }
+	t.Cleanup(func() { credrotate.MintObjkeysLinodeClient = prevClient })
 
 	// mint runs in CI inside the instance checkout, so the label prefix comes from
 	// the committed spec (the in-cluster rotator gets OBJ_LABEL_PREFIX instead).
@@ -106,7 +106,7 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 		"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
 
 	// obj_cluster unresolvable → hard error, no mint.
-	if err := runCIMintBootstrapObjkeys("primary"); err == nil {
+	if err := credrotate.RunMintBootstrapObjkeys("primary"); err == nil {
 		t.Error("missing obj_cluster must hard-fail")
 	}
 	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
@@ -115,7 +115,7 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	// the complete field sets + rotated_at (loki + harbor + the consolidated
 	// obj-platform key); the DNS PAT entry is never minted here.
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
-	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
+	if err := credrotate.RunMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)
 	}
 	if stub.objCreates != 3 {
@@ -151,18 +151,18 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 		putsAfterSkip = append(putsAfterSkip, args)
 		return "", "", nil
 	})
-	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
+	if err := credrotate.RunMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)
 	}
 	if stub.objCreates != 0 || len(putsAfterSkip) != 0 {
 		t.Errorf("seeded paths must skip: mints=%d puts=%v", stub.objCreates, putsAfterSkip)
 	}
 
-	if err := runCIMintBootstrapObjkeys(""); err == nil {
+	if err := credrotate.RunMintBootstrapObjkeys(""); err == nil {
 		t.Error("missing --region must error")
 	}
 	t.Setenv("LINODE_API_TOKEN", "")
-	if err := runCIMintBootstrapObjkeys("primary"); err == nil || !strings.Contains(err.Error(), "LINODE_API_TOKEN") {
+	if err := credrotate.RunMintBootstrapObjkeys("primary"); err == nil || !strings.Contains(err.Error(), "LINODE_API_TOKEN") {
 		t.Errorf("err = %v, want missing-token refusal", err)
 	}
 }

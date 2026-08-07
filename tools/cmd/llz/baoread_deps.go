@@ -11,6 +11,16 @@ package main
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 
 func init() {
+	// Delegating closures, never direct assignment: baoExecFn and baoKVPutFn are
+	// themselves test seams, and capturing their value at init would freeze
+	// whatever they pointed at before any test swapped them. That bug has cost
+	// this campaign twice.
+	baoread.InstallWrites(
+		func(token, stdin string, args ...string) (string, string, error) {
+			return baoExecFn(rootOpenbaoPod, token, stdin, args...)
+		},
+		func(path string, fields map[string]string) error { return baoKVPutFn(path, fields) },
+	)
 	baoread.Install(
 		func(token string, args ...string) (string, string, error) {
 			return baoExecFn(rootOpenbaoPod, token, "", args...)

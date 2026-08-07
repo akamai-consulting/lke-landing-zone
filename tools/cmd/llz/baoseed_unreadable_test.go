@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 )
 
 // The seeder must not overwrite a path it could not read. This is the bug:
@@ -67,7 +68,7 @@ func TestMintPathsRefuseOnUnreadablePath(t *testing.T) {
 	t.Setenv("LINODE_API_TOKEN", "broad")
 	withBaoReadSeam(t, "connection refused", false)
 
-	if err := runCIMintBootstrapPAT("primary"); err == nil ||
+	if err := credrotate.RunMintBootstrapPAT("primary"); err == nil ||
 		!strings.Contains(err.Error(), "NOT evidence") {
 		t.Errorf("mint-bootstrap-pat on an unreadable path: err = %v, want a fail-closed refusal", err)
 	}

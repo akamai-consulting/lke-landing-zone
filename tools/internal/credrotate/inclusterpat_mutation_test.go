@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -18,7 +19,7 @@ func TestRotateInclusterPATDoesNotReportASuccessfulDrainAsFailed(t *testing.T) {
 	sum := inclusterPATEnv(t, "broad-pat")
 	oidcServer(t)
 	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.Contains(a, "get pod "+rootOpenbaoPod) {
+		if strings.Contains(a, "get pod "+baoread.RootPod) {
 			return nil, nil
 		}
 		return nil, errors.New("unexpected: " + a)
@@ -32,7 +33,7 @@ func TestRotateInclusterPATDoesNotReportASuccessfulDrainAsFailed(t *testing.T) {
 	stubInclusterBaoExec(t, "", "propagator-token")
 
 	var err error
-	_, stderr := captureFirewallOutput(t, func() { err = runCIRotateInclusterPAT() })
+	_, stderr := captureFirewallOutput(t, func() { err = RunRotateInClusterPAT() })
 	if err != nil {
 		t.Fatalf("rotate-incluster-pat: %v", err)
 	}

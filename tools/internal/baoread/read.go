@@ -203,9 +203,49 @@ var (
 	PodStatusUnsealed = func(statusJSON string) bool { return false }
 )
 
+// ExecStdin is Exec with a stdin payload, for the writes that pipe JSON into the
+// in-pod `bao` CLI. Separate rather than a fifth parameter on Exec: every read in
+// this package passes an empty stdin, and a signature whose commonest argument is
+// always "" invites callers to stop thinking about it.
+var ExecStdin = func(token, stdin string, args ...string) (stdout, stderr string, err error) {
+	return "", "", fmt.Errorf("baoread: ExecStdin not installed")
+}
+
+// Namespace and RootPod name WHERE OpenBao runs.
+//
+// They are consts in package main with six callers between them, and they moved
+// here rather than being injected because they are FACTS, not capabilities — the
+// same call docsguard.DeliveredDocs and manifestguard.BootstrapValuePlaceholders
+// got. Anything that talks to OpenBao needs to agree on which pod that is, and the
+// only way two copies can disagree is if there are two.
+const (
+	Namespace = "llz-openbao"
+	RootPod   = "platform-openbao-0"
+)
+
+// KVPut writes fields to a KV path.
+//
+// THE WRITE SIDE, AND IT LIVES HERE DESPITE THE PACKAGE NAME. This package is
+// named for what it does BEST — classify what a read learned, fail-closed — but
+// the seam it needs and the seam a write needs are the same in-pod `bao` CLI, and
+// splitting them would mean two packages installing the same exec twice. The read
+// classifier is the interesting half; the write is the other end of one wire.
+//
+// The default ERRORS rather than returning nil. A seeder that silently "succeeded"
+// without writing is the failure this whole package's fail-closed discipline
+// exists to prevent, and an inert default would reintroduce it one layer up.
+var KVPut = func(path string, fields map[string]string) error {
+	return fmt.Errorf("baoread: KVPut not installed")
+}
+
 // Install wires the capabilities main owns. Call once, before any read runs.
 func Install(exec func(token string, args ...string) (string, string, error), unsealed func(string) bool) {
 	Exec, PodStatusUnsealed = exec, unsealed
+}
+
+// InstallWrites wires the write half: the stdin-carrying exec and the KV put.
+func InstallWrites(execStdin func(token, stdin string, args ...string) (string, string, error), kvPut func(string, map[string]string) error) {
+	ExecStdin, KVPut = execStdin, kvPut
 }
 
 // TransientMarkers are kube-apiserver/konnectivity transport failures that

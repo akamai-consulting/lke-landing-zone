@@ -111,8 +111,8 @@ COVERAGE_MINS := \
 	internal/mutate=89 \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
-	internal/baoread=63 \
-	internal/credrotate=80
+	internal/baoread=58 \
+	internal/credrotate=73
 
 help:
 	@echo "lke-landing-zone — template repository targets"

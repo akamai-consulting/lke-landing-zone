@@ -41,10 +41,10 @@ func parseScopes(s string) map[string]int {
 // broke the broad-pat e2e: the broad PAT (which the rotator publishes as each
 // deployment's LINODE_API_TOKEN) must be able to mint the narrow in-cluster PAT.
 // Linode rejects creating a token with scopes greater than the requesting token's,
-// so credrotate.BroadPATScopes must cover every inclusterPATScopes resource at >= its access.
+// so credrotate.BroadPATScopes must cover every credrotate.InClusterPATScopes resource at >= its access.
 func TestBroadPATScopesSupersetInclusterPAT(t *testing.T) {
 	broad := parseScopes(credrotate.BroadPATScopes)
-	for res, need := range parseScopes(inclusterPATScopes) {
+	for res, need := range parseScopes(credrotate.InClusterPATScopes) {
 		got, ok := broad[res]
 		if !ok {
 			t.Errorf("credrotate.BroadPATScopes is missing %q (in-cluster PAT needs it) — mint-bootstrap-pat 400s after a rotation", res)

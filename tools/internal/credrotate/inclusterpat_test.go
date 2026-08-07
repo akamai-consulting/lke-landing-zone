@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
@@ -38,8 +38,8 @@ func oidcServer(t *testing.T) {
 }
 
 // patMintStub wraps stubLinode to record the mint arguments (label/scopes) and
-// serve as BOTH client seams: credrotate.NewPATClient (mint + drain) and
-// credrotate.NewLinodeClient (the verify probe on the freshly-minted token).
+// serve as BOTH client seams: NewPATClient (mint + drain) and
+// NewLinodeClient (the verify probe on the freshly-minted token).
 type patMintStub struct {
 	stubLinode
 	label, scopes, expiry string
@@ -53,11 +53,11 @@ func (s *patMintStub) CreateProfileToken(ctx context.Context, label, scopes, exp
 
 func withInclusterPATStubs(t *testing.T, s *patMintStub, now time.Time) {
 	t.Helper()
-	op, ol, on := credrotate.NewPATClient, credrotate.NewLinodeClient, credrotate.Now
-	credrotate.NewPATClient = func(string) credrotate.PATAPI { return s }
-	credrotate.NewLinodeClient = func(string) credrotate.LinodeAPI { return s }
-	credrotate.Now = func() time.Time { return now }
-	t.Cleanup(func() { credrotate.NewPATClient, credrotate.NewLinodeClient, credrotate.Now = op, ol, on })
+	op, ol, on := NewPATClient, NewLinodeClient, Now
+	NewPATClient = func(string) PATAPI { return s }
+	NewLinodeClient = func(string) LinodeAPI { return s }
+	Now = func() time.Time { return now }
+	t.Cleanup(func() { NewPATClient, NewLinodeClient, Now = op, ol, on })
 }
 
 // stubInclusterBaoExec fakes the in-pod bao CLI: `kv get` answers the
@@ -66,9 +66,19 @@ func withInclusterPATStubs(t *testing.T, s *patMintStub, now time.Time) {
 func stubInclusterBaoExec(t *testing.T, seededToken, loginToken string) *[][]string {
 	t.Helper()
 	var calls [][]string
-	prev := baoExecFn
-	baoExecFn = func(pod, token, stdin string, args ...string) (string, string, error) {
-		calls = append(calls, append([]string{"pod=" + pod, "token=" + token, "stdin=" + stdin}, args...))
+	prev := baoread.ExecStdin
+	prevRead, prevPut := baoread.Exec, baoread.KVPut
+	// ALL THREE SEAMS, not just ExecStdin. The seeded-path check reads through
+	// baoread.Exec and the write goes through baoread.KVPut; stubbing only the one
+	// this test names leaves the other two at their defaults, which now ERROR — and
+	// before they errored, they would have reached a real pod. Fourth time the
+	// double-seam trap has surfaced in this campaign.
+	baoread.Exec = func(token string, args ...string) (string, string, error) {
+		return baoread.ExecStdin(token, "", args...)
+	}
+	baoread.KVPut = func(string, map[string]string) error { return nil }
+	baoread.ExecStdin = func(token, stdin string, args ...string) (string, string, error) {
+		calls = append(calls, append([]string{"pod=" + baoread.RootPod, "token=" + token, "stdin=" + stdin}, args...))
 		switch args[0] {
 		case "kv":
 			if args[1] == "get" {
@@ -86,13 +96,15 @@ func stubInclusterBaoExec(t *testing.T, seededToken, loginToken string) *[][]str
 		}
 		return "", "", errors.New("unexpected bao exec: " + strings.Join(args, " "))
 	}
-	t.Cleanup(func() { baoExecFn = prev })
+	t.Cleanup(func() {
+		baoread.ExecStdin, baoread.Exec, baoread.KVPut = prev, prevRead, prevPut
+	})
 	return &calls
 }
 
 func inclusterPATEnv(t *testing.T, broadToken string) string {
 	t.Helper()
-	// The PAT label is instance-scoped (see inclusterPATLabel), and these verbs
+	// The PAT label is instance-scoped (see InClusterPATLabel), and these verbs
 	// run from the instance checkout — so they read the prefix off the spec.
 	dir := chdirTempDir(t)
 	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
@@ -115,14 +127,14 @@ func TestMintBootstrapPATHappyPath(t *testing.T) {
 
 	var putPath string
 	var putFields map[string]string
-	prevPut := baoKVPutFn
-	baoKVPutFn = func(path string, fields map[string]string) error {
+	prevPut := baoread.KVPut
+	baoread.KVPut = func(path string, fields map[string]string) error {
 		putPath, putFields = path, fields
 		return nil
 	}
-	t.Cleanup(func() { baoKVPutFn = prevPut })
+	t.Cleanup(func() { baoread.KVPut = prevPut })
 
-	if err := runCIMintBootstrapPAT("primary"); err != nil {
+	if err := RunMintBootstrapPAT("primary"); err != nil {
 		t.Fatalf("mint-bootstrap-pat: %v", err)
 	}
 	if s.label != "llz-incluster-acme-primary" {
@@ -157,7 +169,7 @@ func TestMintBootstrapPATSkipsAndFailures(t *testing.T) {
 		s := &patMintStub{}
 		withInclusterPATStubs(t, s, time.Unix(1_800_000_000, 0))
 		stubInclusterBaoExec(t, "existing-token", "")
-		if err := runCIMintBootstrapPAT("primary"); err != nil {
+		if err := RunMintBootstrapPAT("primary"); err != nil {
 			t.Fatalf("seeded path must skip cleanly: %v", err)
 		}
 		if s.patCreates != 0 {
@@ -166,11 +178,11 @@ func TestMintBootstrapPATSkipsAndFailures(t *testing.T) {
 	})
 
 	t.Run("missing region / broad token", func(t *testing.T) {
-		if err := runCIMintBootstrapPAT(""); err == nil {
+		if err := RunMintBootstrapPAT(""); err == nil {
 			t.Error("empty region must fail")
 		}
 		inclusterPATEnv(t, "")
-		if err := runCIMintBootstrapPAT("primary"); err == nil {
+		if err := RunMintBootstrapPAT("primary"); err == nil {
 			t.Error("empty LINODE_API_TOKEN must fail")
 		}
 	})
@@ -180,11 +192,11 @@ func TestMintBootstrapPATSkipsAndFailures(t *testing.T) {
 		s := &patMintStub{stubLinode: stubLinode{verifyErr: errors.New("401")}}
 		withInclusterPATStubs(t, s, time.Unix(1_800_000_000, 0))
 		stubInclusterBaoExec(t, "", "")
-		prevPut := baoKVPutFn
+		prevPut := baoread.KVPut
 		puts := 0
-		baoKVPutFn = func(string, map[string]string) error { puts++; return nil }
-		t.Cleanup(func() { baoKVPutFn = prevPut })
-		if err := runCIMintBootstrapPAT("primary"); err == nil || !strings.Contains(err.Error(), "verify") {
+		baoread.KVPut = func(string, map[string]string) error { puts++; return nil }
+		t.Cleanup(func() { baoread.KVPut = prevPut })
+		if err := RunMintBootstrapPAT("primary"); err == nil || !strings.Contains(err.Error(), "verify") {
 			t.Fatalf("verify failure must abort, got %v", err)
 		}
 		if puts != 0 {
@@ -197,13 +209,13 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 	sum := inclusterPATEnv(t, "broad-pat")
 	oidcServer(t)
 	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.Contains(a, "get pod "+rootOpenbaoPod) {
+		if strings.Contains(a, "get pod "+baoread.RootPod) {
 			return nil, nil
 		}
 		return nil, errors.New("unexpected: " + a)
 	})
 	// Real wall-clock: the drain's grace cutoff (runCredentialsPATRevokeOld)
-	// uses time.Now(), not the credrotate.Now seam.
+	// uses time.Now(), not the Now seam.
 	now := time.Now()
 	s := &patMintStub{stubLinode: stubLinode{pats: []map[string]any{
 		// An older same-labeled sibling past the 7-day grace → drained; a
@@ -216,7 +228,7 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 	withInclusterPATStubs(t, s, now)
 	calls := stubInclusterBaoExec(t, "", "propagator-token")
 
-	if err := runCIRotateInclusterPAT(); err != nil {
+	if err := RunRotateInClusterPAT(); err != nil {
 		t.Fatalf("rotate-incluster-pat: %v", err)
 	}
 	if s.patCreates != 1 {
@@ -256,7 +268,7 @@ func TestRotateInclusterPATSkipsAndFailures(t *testing.T) {
 	// Empty broad token → hard error before anything runs.
 	t.Run("empty minting token", func(t *testing.T) {
 		inclusterPATEnv(t, "")
-		if err := runCIRotateInclusterPAT(); err == nil {
+		if err := RunRotateInClusterPAT(); err == nil {
 			t.Error("empty LINODE_API_TOKEN must fail")
 		}
 	})
@@ -269,7 +281,7 @@ func TestRotateInclusterPATSkipsAndFailures(t *testing.T) {
 		s := &patMintStub{}
 		withInclusterPATStubs(t, s, time.Unix(1_800_000_000, 0))
 		calls := stubInclusterBaoExec(t, "", "x")
-		if err := runCIRotateInclusterPAT(); err != nil {
+		if err := RunRotateInClusterPAT(); err != nil {
 			t.Errorf("absent pod must skip cleanly: %v", err)
 		}
 		if s.patCreates != 0 || len(*calls) != 0 {
@@ -286,7 +298,7 @@ func TestRotateInclusterPATSkipsAndFailures(t *testing.T) {
 		s := &patMintStub{}
 		withInclusterPATStubs(t, s, time.Unix(1_800_000_000, 0))
 		calls := stubInclusterBaoExec(t, "", "")
-		if err := runCIRotateInclusterPAT(); err == nil || !strings.Contains(err.Error(), "jwt login failed") {
+		if err := RunRotateInClusterPAT(); err == nil || !strings.Contains(err.Error(), "jwt login failed") {
 			t.Errorf("login failure must error, got %v", err)
 		}
 		if len(*calls) != 1 {
@@ -303,7 +315,7 @@ func TestRotateInclusterPATSkipsAndFailures(t *testing.T) {
 		s := &patMintStub{}
 		withInclusterPATStubs(t, s, time.Unix(1_800_000_000, 0))
 		calls := stubInclusterBaoExec(t, "", "x")
-		if err := runCIRotateInclusterPAT(); err == nil || !strings.Contains(err.Error(), "OIDC") {
+		if err := RunRotateInClusterPAT(); err == nil || !strings.Contains(err.Error(), "OIDC") {
 			t.Errorf("missing id-token permission must error, got %v", err)
 		}
 		if len(*calls) != 0 {

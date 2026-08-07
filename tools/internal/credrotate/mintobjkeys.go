@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // ci_mint_objkeys.go implements `llz ci mint-bootstrap-objkeys` — the
 // bootstrap-time twin of the in-cluster rotator (`llz ci rotate-linode-creds`).
@@ -35,43 +35,19 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
-// mintObjkeysLinodeClient is a seam for tests.
-var mintObjkeysLinodeClient = func(token string) credrotate.LinodeAPI {
+// MintObjkeysLinodeClient is a seam for tests.
+var MintObjkeysLinodeClient = func(token string) LinodeAPI {
 	return linode.NewClient(token, 30*time.Second)
 }
 
-func ciMintBootstrapObjkeysCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "mint-bootstrap-objkeys",
-		Short: "mint the first Loki/Harbor/platform-obj object-storage keys and seed them into OpenBao",
-		Long: "Bootstrap-time twin of the in-cluster rotator: mints the region's scoped\n" +
-			"object-storage keys (Loki chunks/ruler/admin, Harbor registry, and the broad\n" +
-			"managed platform-obj key spanning all buckets) via the Linode API and seeds\n" +
-			"secret/loki/object-store + secret/harbor/registry-s3 + secret/obj/platform in one\n" +
-			"step — no Terraform-minted keys, no LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub\n" +
-			"secrets, no stash/reseed relay. Idempotent: already-seeded paths are\n" +
-			"skipped (a rotator-minted key is never clobbered). Seeds carry rotated_at\n" +
-			"so the rotator adopts them on its own cadence. Reads LINODE_API_TOKEN,\n" +
-			"OPENBAO_ROOT_TOKEN; obj_cluster from the object-storage tfvars.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIMintBootstrapObjkeys(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment whose keys to mint (required)")
-	return c
-}
-
-func runCIMintBootstrapObjkeys(region string) error {
+func RunMintBootstrapObjkeys(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -88,9 +64,9 @@ func runCIMintBootstrapObjkeys(region string) error {
 		return fmt.Errorf("obj_cluster not found in %s", tfv)
 	}
 
-	lc := mintObjkeysLinodeClient(minting)
+	lc := MintObjkeysLinodeClient(minting)
 	ctx := context.Background()
-	now := credrotate.Now()
+	now := Now()
 
 	// CI, inside the instance checkout — read the prefix from the spec (the
 	// in-cluster rotator gets the same value via OBJ_LABEL_PREFIX instead).
@@ -98,8 +74,8 @@ func runCIMintBootstrapObjkeys(region string) error {
 	if err != nil {
 		return err
 	}
-	for _, e := range credrotate.BuildRotationTable(prefix, region, objCluster) {
-		if e.Kind != credrotate.CredKindObjKey {
+	for _, e := range BuildRotationTable(prefix, region, objCluster) {
+		if e.Kind != CredKindObjKey {
 			continue // the DNS PAT is seeded from LINODE_DNS_TOKEN / minted by the rotator
 		}
 		// Idempotency: a seeded path means an earlier bootstrap (or the rotator)
@@ -129,7 +105,7 @@ func runCIMintBootstrapObjkeys(region string) error {
 		// until rotate-after-days from now, so the rotator adopts rather than
 		// immediately re-mints.
 		fields["rotated_at"] = strconv.FormatInt(now.Unix(), 10)
-		if err := baoKVPutFn(e.BaoPath, fields); err != nil {
+		if err := baoread.KVPut(e.BaoPath, fields); err != nil {
 			return fmt.Errorf("seed %s: %w", e.BaoPath, err)
 		}
 		fmt.Printf("%s: minted %s and seeded %s.\n", e.Name, e.Label, e.BaoPath)

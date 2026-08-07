@@ -3,11 +3,14 @@ package credrotate
 // helpers_test.go — fixtures the moved tests need.
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
@@ -95,4 +98,52 @@ func withGHAEnvFile(t *testing.T) string {
 	p := filepath.Join(t.TempDir(), "gha-env")
 	t.Setenv("GITHUB_ENV", p)
 	return p
+}
+
+// withKubectl stubs the kubectlprobe.Exec seam to answer kubectl invocations via a
+// handler keyed on the joined args; non-kubectl shell-outs error. An unstubbed
+// kubectl call returns an error, which the section helpers treat as "empty".
+func withKubectl(t *testing.T, h func(args string) ([]byte, error)) {
+	t.Helper()
+	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
+		if name != "kubectl" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		return h(strings.Join(args, " "))
+	})
+}
+
+// withExecOutput swaps the kubectl seam these tests actually use.
+//
+// Package main's helper of the same name also reinstalls configreadiness's
+// capabilities, because there that seam is shared with half a dozen verbs. Copying
+// it wholesale drags an unrelated Deps install across the boundary to satisfy a
+// name — the third package in this campaign to need that correction.
+func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
+	t.Helper()
+	prev := kubectlprobe.Exec
+	kubectlprobe.Exec = fn
+	t.Cleanup(func() { kubectlprobe.Exec = prev })
+}
+
+// chdirTempDir moves the test into a fresh temp dir (the commands resolve tfvars
+// relative to the workflow's checkout root).
+func chdirTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+	return dir
+}
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

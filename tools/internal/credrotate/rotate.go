@@ -155,3 +155,23 @@ func maskGHA(v string) {
 		fmt.Printf("::add-mask::%s\n", v)
 	}
 }
+
+// tfvarsValue returns the first `key = "value"` assignment in tfvars content.
+// Pure, localised — internal/configreadiness keeps its own copy for the same
+// reason, and internal/terraform owns the real parser for the fixed struct.
+func tfvarsValue(content, key string) string {
+	for _, line := range strings.Split(content, "\n") {
+		i := strings.IndexByte(line, '=')
+		if i < 0 || strings.TrimSpace(line[:i]) != key {
+			continue
+		}
+		val := strings.TrimSpace(line[i+1:])
+		if len(val) >= 2 && val[0] == '"' {
+			if j := strings.IndexByte(val[1:], '"'); j >= 0 {
+				return val[1 : 1+j]
+			}
+		}
+		return val
+	}
+	return ""
+}

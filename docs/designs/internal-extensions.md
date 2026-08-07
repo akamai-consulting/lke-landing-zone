@@ -328,9 +328,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `credential-pat` + `credential-objkey` | 21,082 | 130 | −375 — the second wall down, and the first package to declare two extensions |
 | the rotation table (wall 3) | 20,835 | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
 | broad-PAT + temp-objkey | 20,591 | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
-| wall 4, half down | **20,492** | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
+| wall 4, half down | 20,492 | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
+| wall 4 done (for credentials) | **20,269** | 120 | −223 — two write seams, and the last two credential files followed |
 
-**Net −26,690 (56.6%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −26,913 (57.0%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2388,6 +2389,40 @@ finding new places to happen.
 
 **What is left of wall four** is the OpenBao *write* path proper — `baoExecFn`, `baoKVPutFn`,
 `baoSeedOpts`/`runCIBaoSeed` — and the set measurement fell from **16 to 12** accordingly.
+
+### Finishing wall four — two seams instead of a package
+
+The remaining half of wall four was the OpenBao **write** path. It did not need a new package: it
+needed **two seams**.
+
+```
+baoread.ExecStdin(token, stdin string, args ...string)   // the writes that pipe JSON to the bao CLI
+baoread.KVPut(path string, fields map[string]string)     // a KV write
+```
+
+**They went into `internal/baoread` despite its name**, and that is a deliberate choice worth stating.
+The package is named for what it does best — classify what a read learned, fail-closed — but the seam
+a read needs and the seam a write needs are *the same in-pod `bao` CLI*. Two packages installing one
+exec twice is worse than one package whose name describes its better half.
+
+`ExecStdin` is separate from `Exec` rather than a fifth parameter: every read passes an empty stdin,
+and a signature whose commonest argument is always `""` invites callers to stop thinking about it.
+
+**Both defaults ERROR rather than returning nil.** For a read, an inert default is merely useless; for
+a write, it is a seeder that reports success without writing — exactly the failure this package's
+fail-closed discipline exists to prevent, reintroduced one layer up.
+
+**`Namespace` and `RootPod` moved too, as facts rather than capabilities.** They were consts in
+package `main` with six callers between them. Anything that talks to OpenBao must agree on which pod
+that is, and the only way two copies can disagree is if there are two — the same reasoning as
+`docsguard.DeliveredDocs`.
+
+With that, `ci_mint_objkeys.go` and `ci_incluster_pat.go` followed into `internal/credrotate`.
+
+**The double-seam trap, fourth occurrence.** The in-cluster PAT test stubbed `ExecStdin` and left
+`Exec` and `KVPut` at their defaults — so the seeded-path check (which reads) and the write both
+missed the stub. Because the new defaults *error*, the test failed loudly; before this change they
+would have reached a live pod. That is the argument for erroring defaults in one line.
 
 ## The cost of the interesting half
 
