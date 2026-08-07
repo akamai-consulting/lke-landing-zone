@@ -288,7 +288,7 @@ categories:
     #                       and two packages installing one exec twice is worse
     #                       than a package whose name describes its better half.
     #                       mint-objkeys and incluster-pat followed.
-    #   19,436 / 115 files  database-provisioner + assert-database. -833, the
+    #   19,436 / 144 files  database-provisioner + assert-database. -833, the
     #                       largest single move since assert-observability. The
     #                       catalog's textbook capability/assertion pair, and the
     #                       code agreed — unlike credential-pat/objkey one
@@ -297,6 +297,14 @@ categories:
     #                       tables: rotation belongs at `operating`, and the two
     #                       tables disagree about where it may go instead.
     #
+    # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
+    # line counts are not. `exact: true` checks the NUMBER every commit, so every
+    # budget figure here has been verified by the gate; nothing checks the "/ N
+    # files" annotation, and it was being decremented by hand rather than measured.
+    # By the database entry it read 115 against an actual 144. Corrected there;
+    # earlier entries in that stretch are approximate and were left rather than
+    # invented. Read `llz ci core-surface --verbose | wc -l` for the real count.
+
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
