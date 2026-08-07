@@ -351,6 +351,12 @@ categories:
 #        openbao_k8s_login.go moved too and exposed a real cycle: openbao ->
 #        reconcilelanes -> openbao, because a LANE package was holding an OpenBao
 #        fact (DefaultOpenBaoAddr). Harbor is now 5 outbound, all noise.
+#   52nd: harbor-provisioner  -> internal/harbor   18,086 -> 17,690 (-396 / 133 files)
+#        THE CLEANEST MEASUREMENT IN THE CAMPAIGN. 17 outbound at the start, 5 when
+#        it moved, and nobody touched a harbor file in between: ghsecret took it to
+#        10 then 8, baoread.KVPut to 6, the in-cluster login to 5. The five left
+#        are main/ok/pass/spec/ReadFile, and the middle three are METHOD names the
+#        scanner cannot tell from package-level ones. Nothing here was tangled.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -363,7 +369,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 18086
+    budget: 17690
     exact: true
     include:
       - "tools/cmd/llz/*.go"

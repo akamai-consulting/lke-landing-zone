@@ -1,4 +1,4 @@
-package main
+package harbor
 
 // ci_harbor_steps.go — the shared helper left behind by the retired Harbor CI
 // steps. `llz ci harbor-port-forward`, `harbor-ensure-project` and

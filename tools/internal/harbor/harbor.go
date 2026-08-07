@@ -1,4 +1,4 @@
-package main
+package harbor
 
 // ci_harbor.go — the CI-side remainder of Harbor provisioning, plus the Harbor
 // REST plumbing shared with the in-cluster provisioner.
@@ -43,34 +43,13 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
-	"github.com/spf13/cobra"
 )
 
-func ciSeedStandbyHarborRobotsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "seed-standby-harbor-robots",
-		Short: "seed secret/harbor/{robot,pull-robot} on a standby peer from the active's published GitHub secrets",
-		Long: "The standby half of Harbor robot provisioning. A standby peer has no\n" +
-			"in-cluster Harbor, so it replicates the active's robot credentials from the\n" +
-			"repo-level HARBOR_* GitHub secrets the active's in-cluster\n" +
-			"harbor-robot-provisioner CronJob published (the EXISTING_* env). Each\n" +
-			"not-ready state (active's secrets not published yet) is a step-summary note\n" +
-			"+ clean exit so bootstrap can simply re-run. Env: HARBOR_URL,\n" +
-			"EXISTING_{ROBOT,SECRET,PULL_ROBOT,PULL_SECRET}, OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			harborURL := os.Getenv("HARBOR_URL")
-			registryHost := strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
-			return seedStandbyHarborRobots(registryHost)
-		},
-	}
-}
-
-// seedStandbyHarborRobots seeds both robot credentials from the GitHub secrets
+// SeedStandbyRobots seeds both robot credentials from the GitHub secrets
 // the active's provisioner set. The two pairs gate independently — a re-run
 // after only the push robot was provisioned still seeds it before skipping on
 // the missing pull pair — and each skip is a summary note + clean exit.
-func seedStandbyHarborRobots(registryHost string) error {
+func SeedStandbyRobots(registryHost string) error {
 	robot, secret := os.Getenv("EXISTING_ROBOT"), os.Getenv("EXISTING_SECRET")
 	if robot == "" || secret == "" {
 		return ghaout.Append("GITHUB_STEP_SUMMARY",

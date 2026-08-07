@@ -1,4 +1,4 @@
-package main
+package harbor
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +89,7 @@ func TestHarborProvisionerNoAdminPasswordIsCleanNoop(t *testing.T) {
 	t.Cleanup(func() { newProvisionerBaoStore = origStore })
 
 	var err error
-	out := captureStdout(t, func() { err = runCIHarborProvisioner() })
+	out := captureStdout(t, func() { err = RunProvisioner() })
 	if err != nil {
 		t.Fatalf("missing admin password must be a clean no-op, got %v", err)
 	}
@@ -115,7 +114,7 @@ func TestHarborProvisionerSteadyStateNoop(t *testing.T) {
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
 	var err error
-	out := captureStdout(t, func() { err = runCIHarborProvisioner() })
+	out := captureStdout(t, func() { err = RunProvisioner() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +141,7 @@ func TestHarborProvisionerUnreadableBaoDoesNotAdviseDeletingTheRobot(t *testing.
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
 	var err error
-	out := captureStdout(t, func() { err = runCIHarborProvisioner() })
+	out := captureStdout(t, func() { err = RunProvisioner() })
 	if err == nil {
 		t.Fatal("an unreadable OpenBao must fail the tick, not fall through to the create path")
 	}
@@ -167,7 +166,7 @@ func TestHarborProvisionerSteadySmoke401IsFatal(t *testing.T) {
 	setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	err := runCIHarborProvisioner()
+	err := RunProvisioner()
 	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "robot$stale") {
 		t.Errorf("err = %v, want a loud 401 naming the stale robot", err)
 	}
@@ -179,7 +178,7 @@ func TestHarborProvisionerUnreachableHarborRetriesNextTick(t *testing.T) {
 	t.Setenv("HARBOR_API_URL", "http://127.0.0.1:1") // nothing listens
 
 	var err error
-	out := captureStdout(t, func() { err = runCIHarborProvisioner() })
+	out := captureStdout(t, func() { err = RunProvisioner() })
 	if err != nil {
 		t.Fatalf("unreachable Harbor must defer to the next tick, got %v", err)
 	}
@@ -194,7 +193,7 @@ func TestHarborProvisionerProjectCreateFatal(t *testing.T) {
 	setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+	if err := RunProvisioner(); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Errorf("err = %v, want fatal project-create failure", err)
 	}
 }
@@ -205,7 +204,7 @@ func TestHarborProvisionerCreatesBothSeedsAndPublishes(t *testing.T) {
 	gh := setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +265,7 @@ func TestHarborProvisionerIgnoresUnusableHarborHost(t *testing.T) {
 			t.Setenv("HARBOR_API_URL", srv.URL)
 			t.Setenv("HARBOR_HOST", bad)
 
-			if err := runCIHarborProvisioner(); err != nil {
+			if err := RunProvisioner(); err != nil {
 				t.Fatal(err)
 			}
 			for _, w := range store.writes {
@@ -303,7 +302,7 @@ func TestHarborProvisionerRepairsSeededRegistryHost(t *testing.T) {
 	t.Setenv("HARBOR_API_URL", srv.URL)
 	t.Setenv("HARBOR_HOST", "harbor.") // the rendered value is equally unusable
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -331,7 +330,7 @@ func TestHarborProvisionerLeavesADeliberateRegistryHostAlone(t *testing.T) {
 	setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.writes) != 0 {
@@ -354,7 +353,7 @@ func TestHarborProvisionerRefusesRepairThatWouldDropCredentials(t *testing.T) {
 	t.Setenv("HARBOR_API_URL", srv.URL)
 	t.Setenv("HARBOR_HOST", "harbor.") // unusable → repair resolves via systeminfo
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	for _, w := range store.writes {
@@ -380,7 +379,7 @@ func TestHarborProvisionerUsableHarborHostWinsOverDiscovery(t *testing.T) {
 	setProvisionerEnv(t, "adminpass", store) // pins HARBOR_HOST=harbor.env.internal
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	for _, w := range store.writes {
@@ -396,7 +395,7 @@ func TestHarborProvisionerExistingUnseededRobotWarnsAndContinues(t *testing.T) {
 	gh := setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	// Push robot 409-unseeded → warned, skipped; pull robot still provisioned.
@@ -418,7 +417,7 @@ func TestHarborProvisionerWithoutGHTokenSkipsPublication(t *testing.T) {
 	t.Setenv("HARBOR_API_URL", srv.URL)
 	t.Setenv("GH_TOKEN", "")
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.writes) != 2 {
@@ -435,7 +434,7 @@ func TestHarborProvisionerBaoWriteFailureIsFatal(t *testing.T) {
 	setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
 
-	if err := runCIHarborProvisioner(); err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if err := RunProvisioner(); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("err = %v, want the OpenBao write failure surfaced", err)
 	}
 }
@@ -452,7 +451,7 @@ func TestHarborProvisionerSteadyStateRepublishesMissingGHSecrets(t *testing.T) {
 	// else published.
 	ghRepoSecretExists = func(name string) (bool, error) { return name != "HARBOR_PASSWORD", nil }
 
-	if err := runCIHarborProvisioner(); err != nil {
+	if err := RunProvisioner(); err != nil {
 		t.Fatal(err)
 	}
 	if len(*payloads) != 0 {
@@ -461,28 +460,4 @@ func TestHarborProvisionerSteadyStateRepublishesMissingGHSecrets(t *testing.T) {
 	if strings.Join(*gh, ",") != "HARBOR_PASSWORD=sec" {
 		t.Errorf("gh publications = %v, want only HARBOR_PASSWORD re-published from OpenBao", *gh)
 	}
-}
-
-func TestCIHarborProvisionerCmd(t *testing.T) {
-	c := ciHarborProvisionerCmd()
-	if c.Use != "harbor-provisioner" {
-		t.Errorf("Use = %q", c.Use)
-	}
-	if !strings.Contains(c.Long, "Kubernetes-auth") {
-		t.Error("Long help must describe the k8s-auth OpenBao write path")
-	}
-}
-
-// httptestNewSmoke401 serves 401 to the smoke's project list.
-func httptestNewSmoke401(t *testing.T) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/api/v2.0/projects") {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
 }

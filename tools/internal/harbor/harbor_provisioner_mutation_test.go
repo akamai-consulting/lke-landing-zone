@@ -1,4 +1,4 @@
-package main
+package harbor
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func TestHarborProvisionerNamesTheUnusableHarborHostItIgnores(t *testing.T) {
 			t.Setenv("HARBOR_HOST", tc.host)
 
 			out := captureStdout(t, func() {
-				if err := runCIHarborProvisioner(); err != nil {
+				if err := RunProvisioner(); err != nil {
 					t.Fatal(err)
 				}
 			})

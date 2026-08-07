@@ -91,7 +91,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"https:// would connect to nothing. This closes when the hop is meshed — i.e. when " +
 			"llz-openbao and monitoring are both enrolled in ambient",
 	},
-	"tools/cmd/llz/ci_harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
+	"tools/internal/harbor/harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
 		owner: "llz",
 		reason: "the harbor-robot-provisioner's REST base. Carries the Harbor ADMIN PASSWORD in a " +
 			"Basic-auth header and receives freshly minted ROBOT SECRETS in the response — the " +

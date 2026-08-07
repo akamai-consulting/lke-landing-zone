@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/harbor=74 \
 	internal/baoread=76 \
 	internal/baolifecycle=60 \
 	internal/ghaout=70 \

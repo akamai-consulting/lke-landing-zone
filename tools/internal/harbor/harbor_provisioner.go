@@ -1,4 +1,4 @@
-package main
+package harbor
 
 // ci_harbor_provisioner.go implements `llz ci harbor-provisioner` — the
 // IN-CLUSTER replacement for the retired `harbor` job in
@@ -57,8 +57,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
@@ -74,34 +72,11 @@ var (
 	readAdminPasswordFile  = os.ReadFile
 )
 
-func ciHarborProvisionerCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "harbor-provisioner",
-		Short: "in-cluster convergence loop: ensure Harbor project + robots, seed OpenBao, publish repo secrets",
-		Long: "In-cluster replacement for the bootstrap workflow's harbor job. Ensures the\n" +
-			"`platform` project and the ci-firewall-controller / pull-platform robots\n" +
-			"exist, seeds secret/harbor/{robot,pull-robot} via a Kubernetes-auth OpenBao\n" +
-			"role (no root token), publishes the repo-level HARBOR_* GitHub secrets the\n" +
-			"standby bootstrap seeds from, and smoke-tests the seeded credentials.\n" +
-			"Not-ready states exit 0 (the CronJob retries); a 401 smoke exits 1 —\n" +
-			"delete the stale robot in Harbor UI and the next tick recreates it.",
-		Args: cobra.NoArgs,
-		// The sidecar shutdown is deliberately HERE and not inside
-		// runCIHarborProvisioner: that function is also driven in-process by the
-		// reconciler's harbor lane (reconcile.go), which is a long-lived pod that
-		// must not shut anything down when one pass finishes.
-		RunE: func(_ *cobra.Command, _ []string) error {
-			defer shutdownIstioSidecar()
-			return runCIHarborProvisioner()
-		},
-	}
-}
-
 // istioQuitURL is the Envoy admin endpoint that asks an injected sidecar to exit.
 // Overridable so the test can point it at a stub.
 var istioQuitURL = "http://127.0.0.1:15020/quitquitquit"
 
-// shutdownIstioSidecar asks this pod's Istio sidecar to exit, so a MESHED Job
+// ShutdownIstioSidecar asks this pod's Istio sidecar to exit, so a MESHED Job
 // can reach Complete.
 //
 // Envoy does not exit when the application container does: the pod would stay
@@ -118,7 +93,7 @@ var istioQuitURL = "http://127.0.0.1:15020/quitquitquit"
 //
 // It must never turn a successful provisioning run into a failed one, so the
 // error is discarded rather than returned.
-func shutdownIstioSidecar() {
+func ShutdownIstioSidecar() {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Post(istioQuitURL, "", nil)
 	if err != nil {
@@ -149,7 +124,7 @@ func shutdownIstioSidecar() {
 // usableRegistryHost moved to internal/harborauth when objenc needed the registry
 // client; this is the one caller left on this side.
 
-func runCIHarborProvisioner() error {
+func RunProvisioner() error {
 	ctx := context.Background()
 	apiURL := cigate.EnvOr("HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
 	registryHost := os.Getenv("HARBOR_HOST")

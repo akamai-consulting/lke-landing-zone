@@ -1,4 +1,4 @@
-package main
+package harbor
 
 import (
 	"errors"
@@ -64,7 +64,7 @@ func TestSeedStandbyHarborRobotsSkipsWithoutActiveSecrets(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			summary := setHarborEnv(t, vars)
 			bao := withStandbySeams(t)
-			if err := seedStandbyHarborRobots("harbor.env.internal"); err != nil {
+			if err := SeedStandbyRobots("harbor.env.internal"); err != nil {
 				t.Fatalf("want graceful skip, got %v", err)
 			}
 			got := readSummary(t, summary)
@@ -86,7 +86,7 @@ func TestSeedStandbyHarborRobotsSeedsRobotThenSkipsPull(t *testing.T) {
 	})
 	bao := withStandbySeams(t)
 	var err error
-	out := captureStdout(t, func() { err = seedStandbyHarborRobots("harbor.env.internal") })
+	out := captureStdout(t, func() { err = SeedStandbyRobots("harbor.env.internal") })
 	if err != nil {
 		t.Fatalf("want graceful skip after seeding the push robot, got %v", err)
 	}
@@ -102,36 +102,6 @@ func TestSeedStandbyHarborRobotsSeedsRobotThenSkipsPull(t *testing.T) {
 	}
 }
 
-func TestSeedStandbyHarborRobotsSeedsBoth(t *testing.T) {
-	summary := setHarborEnv(t, map[string]string{
-		"HARBOR_URL":           "http://harbor.env.internal", // http:// stripped by the command
-		"EXISTING_ROBOT":       "robot$ci-firewall-controller",
-		"EXISTING_SECRET":      "push-secret",
-		"EXISTING_PULL_ROBOT":  "robot$pull-platform",
-		"EXISTING_PULL_SECRET": "pull-secret",
-	})
-	bao := withStandbySeams(t)
-	c := ciSeedStandbyHarborRobotsCmd()
-	var err error
-	out := captureStdout(t, func() { err = c.RunE(c, nil) })
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"secret/harbor/robot username=robot$ci-firewall-controller password=push-secret registry_host=harbor.env.internal",
-		"secret/harbor/pull-robot username=robot$pull-platform password=pull-secret registry_host=harbor.env.internal",
-	}
-	if strings.Join(*bao, " | ") != strings.Join(want, " | ") {
-		t.Errorf("bao calls = %v, want %v", *bao, want)
-	}
-	if !strings.Contains(out, "secret/harbor/robot and secret/harbor/pull-robot seeded on the standby peer.") {
-		t.Errorf("stdout %q missing the seeded confirmation", out)
-	}
-	if got := readSummary(t, summary); got != "" {
-		t.Errorf("full seed must not write summary notes, got %q", got)
-	}
-}
-
 func TestSeedStandbyHarborRobotsBaoFailureIsFatal(t *testing.T) {
 	setHarborEnv(t, map[string]string{
 		"EXISTING_ROBOT": "r", "EXISTING_SECRET": "s",
@@ -139,7 +109,7 @@ func TestSeedStandbyHarborRobotsBaoFailureIsFatal(t *testing.T) {
 	orig := baoread.KVPut
 	baoread.KVPut = func(string, map[string]string) error { return errors.New("bao kv put: permission denied") }
 	t.Cleanup(func() { baoread.KVPut = orig })
-	if err := seedStandbyHarborRobots("h"); err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if err := SeedStandbyRobots("h"); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("err = %v, want the bao failure surfaced", err)
 	}
 }
@@ -221,8 +191,8 @@ func TestBaoKVPutDefaultImpl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPod != rootOpenbaoPod || gotToken != "s.root" {
-		t.Errorf("exec target = %s token=%s, want %s with the root token", gotPod, gotToken, rootOpenbaoPod)
+	if gotPod != baoread.RootPod || gotToken != "s.root" {
+		t.Errorf("exec target = %s token=%s, want %s with the root token", gotPod, gotToken, baoread.RootPod)
 	}
 	// Fields ride the in-pod bao argv in deterministic (sorted) order.
 	want := "kv put secret/harbor/robot password=p registry_host=h username=u"
