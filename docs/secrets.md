@@ -629,7 +629,7 @@ Wired for the three workloads that hold an OpenBao token:
 | `broad-pat-rotator` CronJob | `llz-pat-rotator` |
 
 **The contract.** `inClusterBaoHTTPClient()`
-([`openbao_k8s_login.go`](../tools/cmd/llz/openbao_k8s_login.go)) is the single
+([`openbao_k8s_login.go`](../tools/internal/openbao/openbao_k8s_login.go)) is the single
 place the transport is chosen:
 
 1. `OPENBAO_CA_FILE` set → verify against that bundle.

@@ -1,4 +1,4 @@
-package main
+package openbao
 
 // credrotate_baostore.go — wires internal/credrotate's OpenBao login seam.
 //
@@ -14,6 +14,6 @@ import (
 
 func init() {
 	credrotate.InstallBaoStore(func(ctx context.Context, role string) (credrotate.BaoStore, error) {
-		return openInClusterBaoStore(ctx, role)
+		return OpenInClusterStore(ctx, role)
 	})
 }

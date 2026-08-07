@@ -38,7 +38,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
@@ -46,32 +45,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
-
-// baoKVPutFn writes one KV path through the in-pod bao CLI — the same kubectl
-// exec passthrough as `llz openbao exec kv put …` (which replaced the
-// bao-exec.sh the script shelled), run in-process via the baoread.ExecFn seam. The
-// field values appear only on the kubectl exec argv that passthrough already
-// exposes, never on any other local process argv. Seamed for tests.
-var baoKVPutFn = func(path string, fields map[string]string) error {
-	token := os.Getenv("OPENBAO_ROOT_TOKEN")
-	if token == "" {
-		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set (the OpenBao seed writes run through the in-pod bao CLI)")
-	}
-	args := []string{"kv", "put", path}
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys) // deterministic argv
-	for _, k := range keys {
-		args = append(args, k+"="+fields[k])
-	}
-	out, errOut, err := baoread.ExecFn(rootOpenbaoPod, token, "", args...)
-	if err != nil {
-		return fmt.Errorf("bao kv put %s: %s", path, strings.TrimSpace(firstNonEmpty(errOut, out)))
-	}
-	return nil
-}
 
 func ciSeedStandbyHarborRobotsCmd() *cobra.Command {
 	return &cobra.Command{
@@ -105,7 +78,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 			"Re-run this workflow after the active peer's provisioner has run.")
 	}
 	ghsecret.Mask(secret)
-	if err := baoKVPutFn("secret/harbor/robot", map[string]string{
+	if err := baoread.KVPut("secret/harbor/robot", map[string]string{
 		"username": robot, "password": secret, "registry_host": registryHost,
 	}); err != nil {
 		return err
@@ -117,7 +90,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not published — re-run after the active peer's provisioner has run.")
 	}
 	ghsecret.Mask(pullSecret)
-	if err := baoKVPutFn("secret/harbor/pull-robot", map[string]string{
+	if err := baoread.KVPut("secret/harbor/pull-robot", map[string]string{
 		"username": pullRobot, "password": pullSecret, "registry_host": registryHost,
 	}); err != nil {
 		return err

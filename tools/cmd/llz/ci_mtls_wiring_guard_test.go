@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"gopkg.in/yaml.v3"
 )
 
@@ -143,18 +144,18 @@ func TestMTLSWiringRealTree(t *testing.T) {
 }
 
 // TestMTLSWiringDefaultsMatchClientCode pins the guard's expected paths to the
-// ones inClusterBaoHTTPClient() actually reads. If the client code moves a
+// ones openbao.InClusterHTTPClient() actually reads. If the client code moves a
 // default and this is not updated, the guard would assert the wrong invariant
 // and pass a genuinely broken pod.
 func TestMTLSWiringDefaultsMatchClientCode(t *testing.T) {
-	if defaultOpenBaoCAFile != "/etc/openbao-ca/ca.crt" {
-		t.Errorf("CA default drifted: %s", defaultOpenBaoCAFile)
+	if openbao.DefaultCAFile != "/etc/openbao-ca/ca.crt" {
+		t.Errorf("CA default drifted: %s", openbao.DefaultCAFile)
 	}
-	if defaultOpenBaoClientCert != "/etc/openbao-client-tls/tls.crt" {
-		t.Errorf("client cert default drifted: %s", defaultOpenBaoClientCert)
+	if openbao.DefaultClientCertFile != "/etc/openbao-client-tls/tls.crt" {
+		t.Errorf("client cert default drifted: %s", openbao.DefaultClientCertFile)
 	}
-	if defaultOpenBaoClientKey != "/etc/openbao-client-tls/tls.key" {
-		t.Errorf("client key default drifted: %s", defaultOpenBaoClientKey)
+	if openbao.DefaultClientKeyFile != "/etc/openbao-client-tls/tls.key" {
+		t.Errorf("client key default drifted: %s", openbao.DefaultClientKeyFile)
 	}
 }
 

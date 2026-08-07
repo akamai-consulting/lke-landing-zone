@@ -43,7 +43,7 @@ var objencDeps = func() objenc.Deps {
 				return v, objenc.KVUnknown
 			}
 		},
-		KVPut:       func(path string, fields map[string]string) error { return baoKVPutFn(path, fields) },
+		KVPut:       func(path string, fields map[string]string) error { return baoread.KVPut(path, fields) },
 		KubectlOut:  kubectlOut,
 		SecretField: kube.SecretField,
 		MaskGHALines: func(vals ...string) {

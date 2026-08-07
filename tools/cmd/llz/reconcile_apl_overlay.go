@@ -53,7 +53,7 @@ type aplOverlayConfig struct {
 var openbaoGetClientFn = func(addr, token string) (interface {
 	Get(ctx context.Context, path, key string) (string, bool, error)
 }, error) {
-	hc, err := inClusterBaoHTTPClient()
+	hc, err := openbao.InClusterHTTPClient()
 	if err != nil {
 		return nil, err
 	}

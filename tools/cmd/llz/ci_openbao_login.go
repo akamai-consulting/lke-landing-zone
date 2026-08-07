@@ -105,7 +105,7 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 	// A step that runs somewhere without one must go through the loopback
 	// listener instead (`kubectl port-forward … :8210`), not fall back to
 	// unverified TLS.
-	client, err := inClusterBaoHTTPClient()
+	client, err := openbao.InClusterHTTPClient()
 	if err != nil {
 		return err
 	}

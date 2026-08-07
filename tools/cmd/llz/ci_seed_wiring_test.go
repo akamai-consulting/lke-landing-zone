@@ -9,7 +9,7 @@ import (
 // Every seeding COMMAND must be invoked by the bootstrap workflow.
 //
 // externalsecret-paths does not cover this and cannot: it proves some Go source
-// contains a `baoKVPutFn("secret/…")` call for each ExternalSecret's path, which is
+// contains a `baoread.KVPut("secret/…")` call for each ExternalSecret's path, which is
 // a statement about the SOURCE, not about anything running. `llz ci seed-ssec-key`
 // configreadiness.Satisfied that guard completely while being invoked by nothing — so the path was
 // never written, ESO reported SecretSyncedError, the DaemonSet could not mount the

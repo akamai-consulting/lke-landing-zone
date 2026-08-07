@@ -63,6 +63,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // Seams for tests.
@@ -449,5 +450,5 @@ func smokeSeededRobot(h *harborAPI, creds [2]string) error {
 // harbor-provisioner role using the pod's ServiceAccount token — the same
 // contract as the linode-cred-rotator's login (see openLinodeRotatorBaoStore).
 func openHarborProvisionerBaoStore(ctx context.Context) (credrotate.BaoStore, error) {
-	return openInClusterBaoStore(ctx, "harbor-provisioner")
+	return openbao.OpenInClusterStore(ctx, "harbor-provisioner")
 }

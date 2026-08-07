@@ -29,6 +29,7 @@ package baoread
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -234,8 +235,42 @@ const (
 // The default ERRORS rather than returning nil. A seeder that silently "succeeded"
 // without writing is the failure this whole package's fail-closed discipline
 // exists to prevent, and an inert default would reintroduce it one layer up.
-var KVPut = func(path string, fields map[string]string) error {
-	return fmt.Errorf("baoread: KVPut not installed")
+var KVPut = kvPut
+
+// kvPut is that default, and it moved here from cmd/llz/ci_harbor.go — where it
+// was the LAST straddling seam: defined in the harbor set, consumed by
+// ci_objenc.go, baoread_deps.go and (through this var) five other packages.
+//
+// WHY THIS ONE GETS A REAL DEFAULT AND THE OTHER THREE DO NOT. Exec, ExecStdin and
+// PodStatusUnsealed stay installed by package main, because their real bodies
+// shell out to kubectl: a test that forgot to stub one would reach whatever
+// cluster the developer's context points at, silently, and pass. kvPut cannot do
+// that. It requires OPENBAO_ROOT_TOKEN and returns an error when it is unset, so
+// an unstubbed call in a test fails loudly for the same reason the erroring
+// default did — the discipline is preserved by the token check rather than by the
+// stub, which is why the stub is no longer needed.
+// It writes through the SAME in-pod `bao` CLI passthrough as `llz openbao exec kv
+// put …`. Field values appear only on the kubectl exec argv that passthrough
+// already exposes, never on any other local process argv.
+func kvPut(path string, fields map[string]string) error {
+	token := os.Getenv("OPENBAO_ROOT_TOKEN")
+	if token == "" {
+		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set (the OpenBao seed writes run through the in-pod bao CLI)")
+	}
+	args := []string{"kv", "put", path}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic argv
+	for _, k := range keys {
+		args = append(args, k+"="+fields[k])
+	}
+	out, errOut, err := ExecFn(RootPod, token, "", args...)
+	if err != nil {
+		return fmt.Errorf("bao kv put %s: %s", path, strings.TrimSpace(firstNonEmpty(errOut, out)))
+	}
+	return nil
 }
 
 // Install wires the capabilities main owns. Call once, before any read runs.
@@ -243,9 +278,13 @@ func Install(exec func(token string, args ...string) (string, string, error), un
 	Exec, PodStatusUnsealed = exec, unsealed
 }
 
-// InstallWrites wires the write half: the stdin-carrying exec and the KV put.
-func InstallWrites(execStdin func(token, stdin string, args ...string) (string, string, error), kvPut func(string, map[string]string) error) {
-	ExecStdin, KVPut = execStdin, kvPut
+// InstallWrites wires the write half: the stdin-carrying exec.
+//
+// It used to take the KV put too. It no longer needs to — kvPut lives here now,
+// and the only reason main was handing it over was that it lived in
+// cmd/llz/ci_harbor.go, three files away from the seam it satisfied.
+func InstallWrites(execStdin func(token, stdin string, args ...string) (string, string, error)) {
+	ExecStdin = execStdin
 }
 
 // TransientMarkers are kube-apiserver/konnectivity transport failures that

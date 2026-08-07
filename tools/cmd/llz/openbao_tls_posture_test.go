@@ -8,7 +8,7 @@ import (
 )
 
 // Every in-cluster workload that talks to OpenBao must VERIFY its TLS. The
-// transport is chosen by inClusterBaoHTTPClient() from two env vars, so the
+// transport is chosen by openbao.InClusterHTTPClient() from two env vars, so the
 // posture lives in the manifests — and a manifest that quietly drops
 // OPENBAO_CA_FILE silently downgrades to unverified TLS while still looking
 // configured (OPENBAO_SKIP_VERIFY is deliberately kept as the cold-start

@@ -14,7 +14,7 @@ package main
 // thing a refactor breaks silently and CI blesses.
 //
 // THE INVARIANT, inferred rather than registered: a pod that declares
-// OPENBAO_ADDR is a pod that will call inClusterBaoHTTPClient(), and that
+// OPENBAO_ADDR is a pod that will call openbao.InClusterHTTPClient(), and that
 // function reads three files. So the pod must mount all three. There is no
 // allowlist to maintain — adding a new OpenBao consumer automatically inherits
 // the requirement, which is the property a registry-based version would lose.
@@ -36,11 +36,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
 )
 
-// The file paths inClusterBaoHTTPClient() reads when the corresponding env var
+// The file paths openbao.InClusterHTTPClient() reads when the corresponding env var
 // is unset. Kept in sync with openbao_k8s_login.go by
 // TestMTLSWiringDefaultsMatchClientCode, so a change to one side cannot drift
 // from the other.
@@ -123,7 +124,7 @@ func ciMTLSWiringGuardCmd() *cobra.Command {
 		Short: "fail when an OpenBao-consuming workload does not mount the mTLS material its code reads",
 		Long: "Gate on the correspondence between a workload's code path and its pod spec\n" +
 			"(docs/adr/0010-in-cluster-mtls.md). Any pod declaring OPENBAO_ADDR calls\n" +
-			"inClusterBaoHTTPClient(), which reads a CA bundle and a client keypair — so\n" +
+			"openbao.InClusterHTTPClient(), which reads a CA bundle and a client keypair — so\n" +
 			"the pod must mount paths covering all three, every TLS Secret it mounts must\n" +
 			"be created by a Certificate in the same namespace, and OPENBAO_SKIP_VERIFY\n" +
 			"must not reappear.",
@@ -224,9 +225,9 @@ func checkMTLSWiring(path string, d mtlsPodDoc, certSecrets map[string]bool) []m
 			mountVol[m.MountPath] = m.Name
 		}
 		for _, want := range []struct{ envKey, def, why string }{
-			{envCAFile, defaultOpenBaoCAFile, "verify OpenBao's serving certificate"},
-			{envClientCert, defaultOpenBaoClientCert, "present this workload's own identity, which the listener REQUIRES"},
-			{envClientKey, defaultOpenBaoClientKey, "present this workload's own identity, which the listener REQUIRES"},
+			{envCAFile, openbao.DefaultCAFile, "verify OpenBao's serving certificate"},
+			{envClientCert, openbao.DefaultClientCertFile, "present this workload's own identity, which the listener REQUIRES"},
+			{envClientKey, openbao.DefaultClientKeyFile, "present this workload's own identity, which the listener REQUIRES"},
 		} {
 			p := env[want.envKey]
 			if p == "" {
@@ -235,7 +236,7 @@ func checkMTLSWiring(path string, d mtlsPodDoc, certSecrets map[string]bool) []m
 			mp, covered := coveringMount(mounts, p)
 			if !covered {
 				out = append(out, mtlsFinding{path, label, fmt.Sprintf(
-					"container %q declares %s but nothing mounts %s (needed to %s). inClusterBaoHTTPClient() reads that path; without it every OpenBao call fails the TLS handshake, and no other gate in this repo notices",
+					"container %q declares %s but nothing mounts %s (needed to %s). openbao.InClusterHTTPClient() reads that path; without it every OpenBao call fails the TLS handshake, and no other gate in this repo notices",
 					c.Name, envOpenBaoAddr, p, want.why)})
 				continue
 			}

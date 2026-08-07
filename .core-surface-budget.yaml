@@ -341,6 +341,16 @@ categories:
 #        different transport. Closure was 1 (`main`), so this was free. What it
 #        BUYS is harbor-provisioner: that set was 17 outbound at the start of the
 #        campaign, 10 after the 48th, and is 8 now with only two real edges left.
+#   51st: baoKVPutFn + in-cluster k8s login -> baoread / openbao   18,184 -> 18,086 (-98 / 135 files)
+#        The LAST straddling seam. baoKVPutFn was defined in ci_harbor.go, consumed
+#        by ci_objenc.go, baoread_deps.go and five packages through baoread.KVPut --
+#        whose default main was installing was that very function, three files away.
+#        It gets a REAL default now, unlike Exec/ExecStdin/PodStatusUnsealed: those
+#        shell out to kubectl and an unstubbed test would silently reach a live
+#        cluster, while kvPut is gated on OPENBAO_ROOT_TOKEN and fails loudly.
+#        openbao_k8s_login.go moved too and exposed a real cycle: openbao ->
+#        reconcilelanes -> openbao, because a LANE package was holding an OpenBao
+#        fact (DefaultOpenBaoAddr). Harbor is now 5 outbound, all noise.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -353,7 +363,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 18184
+    budget: 18086
     exact: true
     include:
       - "tools/cmd/llz/*.go"

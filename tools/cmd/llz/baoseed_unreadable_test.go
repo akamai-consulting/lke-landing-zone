@@ -34,9 +34,9 @@ func TestBaoSeedRefusesToWriteOnUnreadablePath(t *testing.T) {
 	withBaoReadSeam(t, "Vault is sealed", false)
 
 	wrote := false
-	prevPut := baoKVPutFn
-	baoKVPutFn = func(string, map[string]string) error { wrote = true; return nil }
-	t.Cleanup(func() { baoKVPutFn = prevPut })
+	prevPut := baoread.KVPut
+	baoread.KVPut = func(string, map[string]string) error { wrote = true; return nil }
+	t.Cleanup(func() { baoread.KVPut = prevPut })
 
 	err := baoseed.RunSeed(baoseed.Opts{
 		Path:          "secret/grafana/admin",

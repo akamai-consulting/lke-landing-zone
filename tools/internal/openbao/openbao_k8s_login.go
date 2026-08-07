@@ -1,4 +1,4 @@
-package main
+package openbao
 
 // openbao_k8s_login.go holds the one in-cluster OpenBao k8s-auth login shared by
 // every workload that needs a write-capable client from inside the cluster, plus
@@ -10,7 +10,7 @@ package main
 // collapsing on principle: the branch below decides whether pod→OpenBao traffic
 // is mutually authenticated, and a fix applied to one copy and not the other is
 // a security difference nobody would see in review. Every pod-network caller now
-// routes through inClusterBaoHTTPClient for that reason.
+// routes through InClusterHTTPClient for that reason.
 
 import (
 	"context"
@@ -23,9 +23,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
 // Default mount paths for the client identity every in-cluster workload projects
@@ -35,12 +32,12 @@ import (
 // These are defaults, not policy: each workload's manifest may override via env.
 // They match the volumeMounts in components/{llzReconciler,harbor,broadPatRotator}.
 const (
-	defaultOpenBaoCAFile     = "/etc/openbao-ca/ca.crt"
-	defaultOpenBaoClientCert = "/etc/openbao-client-tls/tls.crt"
-	defaultOpenBaoClientKey  = "/etc/openbao-client-tls/tls.key"
+	DefaultCAFile         = "/etc/openbao-ca/ca.crt"
+	DefaultClientCertFile = "/etc/openbao-client-tls/tls.crt"
+	DefaultClientKeyFile  = "/etc/openbao-client-tls/tls.key"
 )
 
-// inClusterBaoHTTPClient builds the mutually-authenticated transport for
+// InClusterHTTPClient builds the mutually-authenticated transport for
 // pod→OpenBao traffic and memoizes it, so a command that logs in and then makes
 // many calls reuses one connection pool (and reads the keypair off disk once).
 //
@@ -54,9 +51,9 @@ const (
 // Errors are explicit about WHICH file is missing: a cert-less pod otherwise
 // fails deep in the TLS handshake with "remote error: tls: bad certificate",
 // which reads like a server problem.
-var inClusterBaoHTTPClient = newInClusterBaoHTTPClient()
+var InClusterHTTPClient = NewInClusterHTTPClient()
 
-// newInClusterBaoHTTPClient returns the memoizing constructor above.
+// NewInClusterHTTPClient returns the memoizing constructor above.
 //
 // It caches SUCCESS ONLY, and deliberately not with sync.OnceValues. The CA
 // bundle volume is `optional` on the reconciler (#358's posture — the pod's
@@ -69,7 +66,7 @@ var inClusterBaoHTTPClient = newInClusterBaoHTTPClient()
 // Retrying on failure costs one file read per OpenBao pass while the material
 // is missing, and nothing once it lands. Split out as a constructor so a test
 // can reset the cache.
-func newInClusterBaoHTTPClient() func() (*http.Client, error) {
+func NewInClusterHTTPClient() func() (*http.Client, error) {
 	var (
 		mu     sync.Mutex
 		cached *http.Client
@@ -90,9 +87,9 @@ func newInClusterBaoHTTPClient() func() (*http.Client, error) {
 }
 
 func buildInClusterBaoHTTPClient() (*http.Client, error) {
-	caFile := cigate.EnvOr("OPENBAO_CA_FILE", defaultOpenBaoCAFile)
-	certFile := cigate.EnvOr("OPENBAO_CLIENT_CERT_FILE", defaultOpenBaoClientCert)
-	keyFile := cigate.EnvOr("OPENBAO_CLIENT_KEY_FILE", defaultOpenBaoClientKey)
+	caFile := cigate.EnvOr("OPENBAO_CA_FILE", DefaultCAFile)
+	certFile := cigate.EnvOr("OPENBAO_CLIENT_CERT_FILE", DefaultClientCertFile)
+	keyFile := cigate.EnvOr("OPENBAO_CLIENT_KEY_FILE", DefaultClientKeyFile)
 
 	// FromFiles, not the byte-slice form: this client is memoized for the life of
 	// the process, and the reconciler's process outlives a 90-day certificate. A
@@ -100,14 +97,14 @@ func buildInClusterBaoHTTPClient() (*http.Client, error) {
 	// expired leaf after cert-manager renewed it — and since the liveness probe
 	// never touches OpenBao, nothing would restart the pod. FromFiles re-reads
 	// per handshake so a renewal is picked up without a restart.
-	c, err := openbao.HTTPClientMTLSFromFiles(caFile, certFile, keyFile, 30*time.Second)
+	c, err := HTTPClientMTLSFromFiles(caFile, certFile, keyFile, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("%w — this workload needs a Certificate issued by the llz-client-ca ClusterIssuer and the openbao-ca anchor mounted; see docs/adr/0010-in-cluster-mtls.md", err)
 	}
 	return c, nil
 }
 
-// openInClusterBaoStore logs in to OpenBao's kubernetes auth mount with the pod's
+// OpenInClusterStore logs in to OpenBao's kubernetes auth mount with the pod's
 // ServiceAccount token and returns a write-capable client.
 //
 // defaultRole is the k8s-auth role to assume when OPENBAO_KUBERNETES_ROLE is
@@ -119,13 +116,13 @@ func buildInClusterBaoHTTPClient() (*http.Client, error) {
 // the kubernetes auth mount which role it may assume. Neither replaces the
 // other — the cert says "you may speak to me", the token says "and this is what
 // you may read".
-func openInClusterBaoStore(ctx context.Context, defaultRole string) (credrotate.BaoStore, error) {
-	addr := cigate.EnvOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr)
+func OpenInClusterStore(ctx context.Context, defaultRole string) (credrotate.BaoStore, error) {
+	addr := cigate.EnvOr("OPENBAO_ADDR", DefaultAddr)
 	mount := cigate.EnvOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
 	role := cigate.EnvOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
 	saFile := cigate.EnvOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 
-	httpClient, err := inClusterBaoHTTPClient()
+	httpClient, err := InClusterHTTPClient()
 	if err != nil {
 		return nil, err
 	}
@@ -134,9 +131,9 @@ func openInClusterBaoStore(ctx context.Context, defaultRole string) (credrotate.
 	if err != nil {
 		return nil, fmt.Errorf("read ServiceAccount token: %w", err)
 	}
-	token, err := openbao.KubernetesLogin(ctx, httpClient, addr, mount, role, strings.TrimSpace(string(jwt)))
+	token, err := KubernetesLogin(ctx, httpClient, addr, mount, role, strings.TrimSpace(string(jwt)))
 	if err != nil {
 		return nil, err
 	}
-	return openbao.NewWithClient(addr, token, "", httpClient), nil
+	return NewWithClient(addr, token, "", httpClient), nil
 }

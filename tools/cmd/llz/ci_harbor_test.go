@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 )
 
 // harborEnvVars is the standby command's full env contract; setHarborEnv pins
@@ -39,14 +41,14 @@ func readSummary(t *testing.T, path string) string {
 // withStandbySeams swaps the OpenBao root-token seed seam, recording calls.
 func withStandbySeams(t *testing.T) (bao *[]string) {
 	t.Helper()
-	origBao := baoKVPutFn
+	origBao := baoread.KVPut
 	bao = new([]string)
-	baoKVPutFn = func(path string, fields map[string]string) error {
+	baoread.KVPut = func(path string, fields map[string]string) error {
 		*bao = append(*bao, fmt.Sprintf("%s username=%s password=%s registry_host=%s",
 			path, fields["username"], fields["password"], fields["registry_host"]))
 		return nil
 	}
-	t.Cleanup(func() { baoKVPutFn = origBao })
+	t.Cleanup(func() { baoread.KVPut = origBao })
 	return bao
 }
 
@@ -134,9 +136,9 @@ func TestSeedStandbyHarborRobotsBaoFailureIsFatal(t *testing.T) {
 	setHarborEnv(t, map[string]string{
 		"EXISTING_ROBOT": "r", "EXISTING_SECRET": "s",
 	})
-	orig := baoKVPutFn
-	baoKVPutFn = func(string, map[string]string) error { return errors.New("bao kv put: permission denied") }
-	t.Cleanup(func() { baoKVPutFn = orig })
+	orig := baoread.KVPut
+	baoread.KVPut = func(string, map[string]string) error { return errors.New("bao kv put: permission denied") }
+	t.Cleanup(func() { baoread.KVPut = orig })
 	if err := seedStandbyHarborRobots("h"); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("err = %v, want the bao failure surfaced", err)
 	}
@@ -213,7 +215,7 @@ func TestBaoKVPutDefaultImpl(t *testing.T) {
 		gotPod, gotToken, gotArgs = pod, token, args
 		return "", "", nil
 	})
-	err := baoKVPutFn("secret/harbor/robot", map[string]string{
+	err := baoread.KVPut("secret/harbor/robot", map[string]string{
 		"username": "u", "registry_host": "h", "password": "p",
 	})
 	if err != nil {
@@ -231,13 +233,13 @@ func TestBaoKVPutDefaultImpl(t *testing.T) {
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return "", "Code: 403. * permission denied", errors.New("exit status 2")
 	})
-	err = baoKVPutFn("secret/harbor/robot", map[string]string{"username": "u"})
+	err = baoread.KVPut("secret/harbor/robot", map[string]string{"username": "u"})
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("err = %v, want the in-pod stderr surfaced", err)
 	}
 
 	t.Setenv("OPENBAO_ROOT_TOKEN", "")
-	if err := baoKVPutFn("secret/harbor/robot", nil); err == nil || !strings.Contains(err.Error(), "OPENBAO_ROOT_TOKEN") {
+	if err := baoread.KVPut("secret/harbor/robot", nil); err == nil || !strings.Contains(err.Error(), "OPENBAO_ROOT_TOKEN") {
 		t.Errorf("err = %v, want missing-token refusal", err)
 	}
 }

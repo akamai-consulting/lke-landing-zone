@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	DefaultOpenBaoAddr    = "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+	DefaultOpenBaoAddr    = openbao.DefaultAddr
 	openbaoAuthMount      = "kubernetes"
 	openbaoReconcilerRole = "reconciler"
 )

@@ -5,7 +5,7 @@ package main
 // This file is deliberately narrow. A coverage sweep over cmd/llz found 183
 // zero-coverage functions, and most of them should stay that way: they are the
 // production halves of test seams (openHarborProvisionerBaoStore is one line
-// delegating to openInClusterBaoStore; ghOverlayRepo.ReadFile delegates to
+// delegating to openbao.OpenInClusterStore; ghOverlayRepo.ReadFile delegates to
 // ghReadFileNative), thin exec wrappers (runTF builds a cmd, wires stdio, runs
 // it), env readers (rotationInputsFromEnv is a struct literal of twelve
 // os.Getenv calls), or cobra entrypoints whose decision logic is already
