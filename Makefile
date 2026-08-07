@@ -142,6 +142,7 @@ COVERAGE_MINS := \
 	internal/extensions/workflowshells=48 \
 	internal/shared/answers=85 \
 	internal/shared/llzver=95 \
+	internal/shared/objstore=48 \
 	internal/extensions/bootstrapcluster=61 \
 	internal/extensions/seedspecial=84 \
 	internal/shared/tfvars=55 \

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
 
@@ -37,7 +38,7 @@ func signAsClient(t *testing.T, r *http.Request, c objProxyCreds, host string) {
 		"x-amz-date:" + amzDate + "\n"
 	sh := strings.Join(signed, ";")
 	cr := strings.Join([]string{
-		r.Method, S3EscapePath(r.URL.Path), S3CanonicalQuery(r.URL.RawQuery), canonical, sh,
+		r.Method, objstore.S3EscapePath(r.URL.Path), objstore.S3CanonicalQuery(r.URL.RawQuery), canonical, sh,
 		r.Header.Get("X-Amz-Content-Sha256"),
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
@@ -261,26 +262,6 @@ func TestFailedResignLeavesTheBodyIntactForThePassThrough(t *testing.T) {
 	}
 }
 
-// SigV4 signs query parameters SORTED and RFC3986-encoded. A multipart PUT carries
-// ?partNumber=N&uploadId=…, and signing them in arrival order yields a signature the
-// upstream cannot reproduce — so multipart uploads would 403 while single-part
-// writes worked, which reads as flaky object storage rather than as a bug here.
-func TestCanonicalQuerySortsAndEncodesForSigning(t *testing.T) {
-	if got := S3CanonicalQuery("uploadId=ZZZ&partNumber=1"); got != "partNumber=1&uploadId=ZZZ" {
-		t.Errorf("canonical query = %q, want the SORTED form", got)
-	}
-	// A space is %20 in SigV4, not the '+' net/url's Encode would produce.
-	if got := S3CanonicalQuery("k=a b"); got != "k=a%20b" {
-		t.Errorf("space encoded as %q, want %%20 — '+' is a different byte to the signer", got)
-	}
-	if got := S3CanonicalQuery("flag&b=2"); got != "b=2&flag=" {
-		t.Errorf("valueless key rendered %q, want `flag=`", got)
-	}
-	if got := S3CanonicalQuery(""); got != "" {
-		t.Errorf("empty query = %q", got)
-	}
-}
-
 // Repairing means buffering the whole object. This is a DaemonSet with a 512Mi limit
 // serving every pod on its node, so an unbounded buffer turns one large upload into
 // an object-storage outage for the whole node — worse than the write it would fix.
@@ -317,7 +298,7 @@ func TestResignRefusesWithoutADeclaredLength(t *testing.T) {
 // The canonical form must be used BY the signer, not merely exist. Parameter order
 // is the client's choice and the canonical form is order-independent, so the same
 // multipart PUT written two ways must produce the SAME signature. Testing
-// S3CanonicalQuery alone leaves the call site free to keep signing RawQuery.
+// objstore.S3CanonicalQuery alone leaves the call site free to keep signing RawQuery.
 func TestResignSignsTheCanonicalQueryNotTheArrivalOrder(t *testing.T) {
 	prev := objProxyResignNow
 	t.Cleanup(func() { objProxyResignNow = prev })
@@ -584,7 +565,7 @@ func TestResignVerifiesARequestSignedOverDuplicateHeaders(t *testing.T) {
 		"x-amz-content-sha256:" + sha256StreamingUnsignedTrailer + "\n" +
 		"x-amz-date:" + amzDate + "\n" +
 		"x-amz-meta-tag:first,second\n"
-	cr := strings.Join([]string{r.Method, S3EscapePath(r.URL.Path), "", canonical, sh, sha256StreamingUnsignedTrailer}, "\n")
+	cr := strings.Join([]string{r.Method, objstore.S3EscapePath(r.URL.Path), "", canonical, sh, sha256StreamingUnsignedTrailer}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	sts := strings.Join([]string{"AWS4-HMAC-SHA256", amzDate, scope, s3sig.SHA256Hex(cr)}, "\n")
 	sig := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(testCreds().SecretAccessKey, dateStamp, region, "s3"), sts))

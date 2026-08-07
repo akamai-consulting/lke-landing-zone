@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 )
 
 // pod builds a harbor-registry pod list. certDirs maps container name -> the
@@ -164,18 +165,18 @@ func TestAssertObjEncryptionCatchesRewriteToTheWrongTarget(t *testing.T) {
 func withSSECSample(t *testing.T, keys []string, listErr error, verdict func(string) ssecVerdict) {
 	t.Helper()
 	cutover := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	refs := make([]ObjectRef, 0, len(keys))
+	refs := make([]objstore.ObjectRef, 0, len(keys))
 	for i, k := range keys {
-		refs = append(refs, ObjectRef{Key: k, LastModified: cutover.Add(time.Duration(i+1) * time.Hour)})
+		refs = append(refs, objstore.ObjectRef{Key: k, LastModified: cutover.Add(time.Duration(i+1) * time.Hour)})
 	}
 	withSSECSampleAt(t, cutover, refs, listErr, verdict)
 }
 
-func withSSECSampleAt(t *testing.T, cutover time.Time, refs []ObjectRef, listErr error, verdict func(string) ssecVerdict) {
+func withSSECSampleAt(t *testing.T, cutover time.Time, refs []objstore.ObjectRef, listErr error, verdict func(string) ssecVerdict) {
 	t.Helper()
-	pk, pl, pc := ObjectSSECProbe, SampleObjectKeys, objProxyCutoverTime
-	SampleObjectKeys = func(_, _, _, b string, _ int) ([]ObjectRef, error) {
-		out := make([]ObjectRef, len(refs))
+	pk, pl, pc := ObjectSSECProbe, objstore.SampleObjectKeys, objProxyCutoverTime
+	objstore.SampleObjectKeys = func(_, _, _, b string, _ int) ([]objstore.ObjectRef, error) {
+		out := make([]objstore.ObjectRef, len(refs))
 		copy(out, refs)
 		for i := range out {
 			out[i].Bucket = b
@@ -187,7 +188,7 @@ func withSSECSampleAt(t *testing.T, cutover time.Time, refs []ObjectRef, listErr
 	prevCreds := ObjEncConsumerCreds
 	ObjEncConsumerCreds = func(_ Deps, _, _, _ string) (string, string, error) { return "ak", "sk", nil }
 	t.Cleanup(func() {
-		ObjectSSECProbe, SampleObjectKeys, objProxyCutoverTime, ObjEncConsumerCreds = pk, pl, pc, prevCreds
+		ObjectSSECProbe, objstore.SampleObjectKeys, objProxyCutoverTime, ObjEncConsumerCreds = pk, pl, pc, prevCreds
 	})
 }
 
@@ -517,7 +518,7 @@ func TestLooksLikeTLSFailure(t *testing.T) {
 func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) {
 	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []ObjectRef{
+	refs := []objstore.ObjectRef{
 		{Key: "written-after", LastModified: cutover.Add(time.Hour)},
 		{Key: "predates-1", LastModified: cutover.Add(-240 * time.Hour)},
 		{Key: "predates-2", LastModified: cutover.Add(-99 * time.Hour)},
@@ -538,7 +539,7 @@ func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) 
 func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *testing.T) {
 	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []ObjectRef{
+	refs := []objstore.ObjectRef{
 		{Key: "predates", LastModified: cutover.Add(-time.Hour)},
 		{Key: "leaked", LastModified: cutover.Add(time.Minute)},
 	}
@@ -565,7 +566,7 @@ func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *tes
 func TestCheckObjectsEncryptedReportsWhenNothingWasWrittenSinceTheCutover(t *testing.T) {
 	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
-	refs := []ObjectRef{{Key: "old", LastModified: cutover.Add(-time.Hour)}}
+	refs := []objstore.ObjectRef{{Key: "old", LastModified: cutover.Add(-time.Hour)}}
 	withSSECSampleAt(t, cutover, refs, nil, allEncrypted)
 	f := checkObjectsAreEncrypted(d, "us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 {
@@ -581,31 +582,6 @@ func TestCheckObjectsEncryptedReportsWhenNothingWasWrittenSinceTheCutover(t *tes
 	}
 }
 
-// Plain LIST order is lexicographic, so on a bucket with history the whole sample is
-// drawn from the OLDEST keys — every one of them pre-cutover, and the check then has
-// nothing to judge no matter how much fresh data exists. Newest-first is what makes
-// the sample relevant.
-func TestSampleReturnsNewestFirst(t *testing.T) {
-	base := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
-	body := ""
-	for i, name := range []string{"aaa-oldest", "mmm-middle", "zzz-newest"} {
-		body += fmt.Sprintf("<Contents><Key>%s</Key><LastModified>%s</LastModified></Contents>",
-			name, base.Add(time.Duration(i)*time.Hour).Format(time.RFC3339))
-	}
-	prev := s3SignedRequest
-	s3SignedRequest = func(_, _, _, _, _, _ string) (int, string, error) { return 200, body, nil }
-	t.Cleanup(func() { s3SignedRequest = prev })
-
-	got, err := SampleObjectKeys("ak", "sk", "e", "b", 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].Key != "zzz-newest" || got[1].Key != "mmm-middle" {
-		t.Errorf("sample = %+v, want the two NEWEST — lexicographic order samples only the oldest keys, "+
-			"which on a reused bucket are all pre-cutover and unjudgeable", got)
-	}
-}
-
 // Both buckets are sampled, and a finding names the one it came from.
 //
 // Pinning this to Loki's bucket alone is what made the check unsatisfiable on the
@@ -616,21 +592,21 @@ func TestSampleReturnsNewestFirst(t *testing.T) {
 func TestObjEncryptionSamplesEveryBucketAndAttributesFindings(t *testing.T) {
 	d := testDeps(t)
 	cutover := time.Date(2026, 8, 3, 19, 41, 0, 0, time.UTC)
-	prevList, prevProbe, prevCut, prevCreds := SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds
+	prevList, prevProbe, prevCut, prevCreds := objstore.SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds
 	t.Cleanup(func() {
-		SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds = prevList, prevProbe, prevCut, prevCreds
+		objstore.SampleObjectKeys, ObjectSSECProbe, objProxyCutoverTime, ObjEncConsumerCreds = prevList, prevProbe, prevCut, prevCreds
 	})
 	objProxyCutoverTime = func(Deps) (time.Time, error) { return cutover, nil }
 	ObjEncConsumerCreds = func(Deps, string, string, string) (string, string, error) { return "ak", "sk", nil }
 
 	var sampled []string
-	SampleObjectKeys = func(_, _, _, b string, _ int) ([]ObjectRef, error) {
+	objstore.SampleObjectKeys = func(_, _, _, b string, _ int) ([]objstore.ObjectRef, error) {
 		sampled = append(sampled, b)
 		switch b {
 		case "harbor-bucket": // the gate's own probe blob — always post-cutover
-			return []ObjectRef{{Key: "blobs/data", LastModified: cutover.Add(time.Minute), Bucket: b}}, nil
+			return []objstore.ObjectRef{{Key: "blobs/data", LastModified: cutover.Add(time.Minute), Bucket: b}}, nil
 		default: // Loki has not flushed yet: only a previous cluster's objects
-			return []ObjectRef{{Key: "old/chunk", LastModified: cutover.Add(-240 * time.Hour), Bucket: b}}, nil
+			return []objstore.ObjectRef{{Key: "old/chunk", LastModified: cutover.Add(-240 * time.Hour), Bucket: b}}, nil
 		}
 	}
 	ObjectSSECProbe = func(_, _, _, bucket, _ string) (ssecVerdict, string) {

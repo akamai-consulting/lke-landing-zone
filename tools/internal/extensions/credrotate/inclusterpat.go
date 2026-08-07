@@ -50,12 +50,11 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
 
 const (
@@ -120,7 +119,7 @@ func mintVerifiedInclusterPAT(ctx context.Context, mint PATAPI, prefix, region s
 func RunMintBootstrapPAT(region string) error {
 	// CI, inside the instance checkout — the label is instance-scoped so a peer
 	// instance's monthly drain cannot revoke this deployment's live PAT.
-	prefix, err := objenc.LabelPrefixFor("mint-bootstrap-pat")
+	prefix, err := clusterspec.LabelPrefixFor("mint-bootstrap-pat")
 	if err != nil {
 		return err
 	}
@@ -166,7 +165,7 @@ func RunRotateInClusterPAT() error {
 	// Runs from the instance checkout (llz-secret-rotation.yml), so the
 	// instance-scoped label comes from the spec — see InClusterPATLabel for why it
 	// must not be a bare llz-incluster-<env>.
-	prefix, err := objenc.LabelPrefixFor("rotate-incluster-pat")
+	prefix, err := clusterspec.LabelPrefixFor("rotate-incluster-pat")
 	if err != nil {
 		return err
 	}

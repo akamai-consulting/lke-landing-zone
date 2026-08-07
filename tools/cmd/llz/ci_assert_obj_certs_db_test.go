@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 )
 
 // ── assert-obj-roundtrip ─────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ func TestExplainS3Write(t *testing.T) {
 		{"InvalidAccessKeyId", "revoked or rotated"},
 		{"SignatureDoesNotMatch", "revoked or rotated"},
 	} {
-		if got := objenc.ExplainS3Write(403, tc.code, "b", "e"); !strings.Contains(got, tc.want) {
+		if got := objstore.ExplainS3Write(403, tc.code, "b", "e"); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: expected %q in %q", tc.code, tc.want, got)
 		}
 	}

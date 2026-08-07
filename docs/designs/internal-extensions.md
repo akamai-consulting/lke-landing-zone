@@ -1876,7 +1876,7 @@ the assertion would have made one extension's private helper part of another's w
 `kube.SecretField`. Decoding a Secret's `data` field is not either extension's business.
 
 **A fifth stranded-test find, and the first whose answer was a *third* package.** The four
-`S3ObjectRoundTrip` tests lived in `ci_assert_obj_certs_db_test.go` and drive `objenc.S3ObjectRoundTrip`
+`S3ObjectRoundTrip` tests lived in `ci_assert_obj_certs_db_test.go` and drive `objstore.S3ObjectRoundTrip` (which has since moved again, to internal/shared/objstore — see the in-degree guard)
 through a seam `internal/objenc` owns. They were never package `main`'s, and they were not the
 assertion's either — my first classification put them with the assertion, wrong for exactly the reason
 the original filename was wrong: **filed by the command that happened to exercise the code, not by the

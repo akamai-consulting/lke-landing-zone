@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/spf13/cobra"
 )
@@ -46,7 +46,7 @@ func runCIVerifyObjectStorage(region string) error {
 	// From the spec, never a constant: these have to be THIS instance's buckets. A
 	// hardcoded prefix would let the gate pass on another adopter's identically
 	// named buckets in the same region (clusterspec/objlabels.go).
-	prefix, err := objenc.LabelPrefixFor("verify-object-storage")
+	prefix, err := clusterspec.LabelPrefixFor("verify-object-storage")
 	if err != nil {
 		return err
 	}

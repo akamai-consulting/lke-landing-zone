@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
@@ -200,10 +201,10 @@ func lokiIngesterPods(nameMatch string) []lokiPod {
 	return out
 }
 
-// lokiNewestObject returns the newest object in the bucket. objenc.SampleObjectKeys sorts
+// lokiNewestObject returns the newest object in the bucket. objstore.SampleObjectKeys sorts
 // newest-first, so one key is enough.
 var lokiNewestObject = func(ak, sk, endpoint, bucket string) (time.Time, bool) {
-	refs, err := objenc.SampleObjectKeys(ak, sk, endpoint, bucket, 1)
+	refs, err := objstore.SampleObjectKeys(ak, sk, endpoint, bucket, 1)
 	if err != nil || len(refs) == 0 {
 		return time.Time{}, false
 	}

@@ -38,10 +38,9 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
 
 // MintObjkeysLinodeClient is a seam for tests.
@@ -72,7 +71,7 @@ func RunMintBootstrapObjkeys(region string) error {
 
 	// CI, inside the instance checkout — read the prefix from the spec (the
 	// in-cluster rotator gets the same value via OBJ_LABEL_PREFIX instead).
-	prefix, err := objenc.LabelPrefixFor("mint-bootstrap-objkeys")
+	prefix, err := clusterspec.LabelPrefixFor("mint-bootstrap-objkeys")
 	if err != nil {
 		return err
 	}

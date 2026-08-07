@@ -48,9 +48,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 )
 
 // objConsumer describes one writer of object storage and where its real
@@ -317,7 +317,7 @@ func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict
 	key := fmt.Sprintf("%s%s-%d", keyPrefix, c.Name, now.UnixNano())
 	payload := []byte(fmt.Sprintf("llz obj round-trip probe for %s at %s\n", c.Name, now.UTC().Format(time.RFC3339)))
 
-	r := objenc.S3ObjectRoundTrip(access, secret, endpoint, bucket, key, payload)
+	r := objstore.S3ObjectRoundTrip(access, secret, endpoint, bucket, key, payload)
 	if !r.OK() {
 		v.FailWhy = r.FailWhy
 		return v
