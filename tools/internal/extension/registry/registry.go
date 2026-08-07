@@ -58,6 +58,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
@@ -124,6 +125,7 @@ var declarations = []func() extension.Extension{
 	cosignguard.Extension,
 	monitoringlabel.Extension,
 	workflowshells.Extension,
+	instanceresolve.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

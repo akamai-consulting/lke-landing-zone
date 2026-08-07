@@ -477,6 +477,18 @@ categories:
 #        every iteration rather than a thing done when hunches run out.
 #        Note guard-coverage: extracting it puts the thing that JUDGES coverage
 #        under a coverage floor of its own -- the same loop assert-suite closed.
+#   64th: instance-resolve -> internal/instanceresolve   11,108 -> 10,775 (-333 / 97 files)
+#        546 lines, closure 2, both edges noise. Second sweep find in one
+#        iteration.
+#        THE MODEL CORRECTED ME. I declared it gate:scaffolded[read-repo,
+#        cloud-read] on the belief that the gate rule bars only MUTATING grants.
+#        It does not: a gate permits read-repo AND NOTHING ELSE, because "it runs
+#        in the fast pre-commit path over files alone". checkRegion and
+#        resolveOBJCluster call the Linode API. A gate is not defined by being
+#        harmless -- it is defined by being CHEAP AND OFFLINE. Now an assertion.
+#        Also: the naive test-helper puller tried to drag runEnvAdd, a PRODUCTION
+#        function from scaffold.go, across the boundary. The guard against
+#        ciCmd/gopts/globalOpts/main must cover production symbols too.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -489,7 +501,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 11108
+    budget: 10775
     exact: true
     include:
       - "tools/cmd/llz/*.go"

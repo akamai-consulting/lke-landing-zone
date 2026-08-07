@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 // instance_root.go — the "am I standing in the right directory?" guard.
 //
@@ -38,10 +38,10 @@ var instanceRootMarkers = []string{
 	"terraform-iac-bootstrap",
 }
 
-// isInstanceRoot reports whether dir is an instance checkout — or the template
+// IsInstanceRoot reports whether dir is an instance checkout — or the template
 // repo itself, whose instance-template/ subtree is the layout instanceLayout
 // resolves against (the scaffold-render checks in template CI run there).
-func isInstanceRoot(dir string) bool {
+func IsInstanceRoot(dir string) bool {
 	for _, m := range instanceRootMarkers {
 		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
 			return true
@@ -51,10 +51,10 @@ func isInstanceRoot(dir string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// instanceSubdirs returns the immediate children of dir that are themselves
+// InstanceSubdirs returns the immediate children of dir that are themselves
 // instance checkouts, sorted. This is the recovery hint: the operator who forgot
 // `cd my-instance` is, almost always, in its parent.
-func instanceSubdirs(dir string) []string {
+func InstanceSubdirs(dir string) []string {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -64,7 +64,7 @@ func instanceSubdirs(dir string) []string {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if isInstanceRoot(filepath.Join(dir, e.Name())) {
+		if IsInstanceRoot(filepath.Join(dir, e.Name())) {
 			out = append(out, e.Name())
 		}
 	}
@@ -72,12 +72,12 @@ func instanceSubdirs(dir string) []string {
 	return out
 }
 
-// enclosingInstanceRoot walks up from the CWD and returns the first ancestor that
+// EnclosingInstanceRoot walks up from the CWD and returns the first ancestor that
 // is an instance checkout, "" if there is none. This is the other half of the
 // mistake: `llz env add` run from INSIDE an instance but a level or two down
 // (terraform-iac-bootstrap/, apl-values/<env>/) is just as wrong and just as
 // silent, and telling that operator to run `llz new` would be nonsense.
-func enclosingInstanceRoot() string {
+func EnclosingInstanceRoot() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
@@ -88,17 +88,17 @@ func enclosingInstanceRoot() string {
 			return ""
 		}
 		dir = parent
-		if isInstanceRoot(dir) {
+		if IsInstanceRoot(dir) {
 			return dir
 		}
 	}
 }
 
-// requireInstanceRoot fails when the CWD is not an instance checkout, naming the
+// RequireInstanceRoot fails when the CWD is not an instance checkout, naming the
 // candidate it can see — below, or above — so the fix is one `cd` away. op names
 // the command in the message ("llz env add").
-func requireInstanceRoot(op string) error {
-	if isInstanceRoot(".") {
+func RequireInstanceRoot(op string) error {
+	if IsInstanceRoot(".") {
 		return nil
 	}
 	cwd, _ := os.Getwd()
@@ -107,15 +107,15 @@ func requireInstanceRoot(op string) error {
 	fmt.Fprintf(&b, "  (no %s here). Running it here would author a spec tree that no build ever reads —\n",
 		strings.Join(instanceRootMarkers, " / "))
 	b.WriteString("  CI builds from the instance repo, not from this directory.\n")
-	switch cands := instanceSubdirs("."); {
+	switch cands := InstanceSubdirs("."); {
 	case len(cands) > 0:
 		b.WriteString("  • your instance is right here — cd into it first:\n")
 		for _, c := range cands {
 			fmt.Fprintf(&b, "      %s\n", color.Cyan("cd "+c))
 		}
-	case enclosingInstanceRoot() != "":
+	case EnclosingInstanceRoot() != "":
 		fmt.Fprintf(&b, "  • you are inside an instance, below its root — go up to it:\n      %s\n",
-			color.Cyan("cd "+enclosingInstanceRoot()))
+			color.Cyan("cd "+EnclosingInstanceRoot()))
 	default:
 		fmt.Fprintf(&b, "  • already scaffolded one? cd into it:      %s\n", color.Cyan("cd <instance-dir>"))
 		fmt.Fprintf(&b, "  • not yet? scaffold + publish it first:    %s\n", color.Cyan("llz new <instance-dir> --push --yes"))

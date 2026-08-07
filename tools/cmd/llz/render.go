@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -170,7 +171,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	// on the paths that emit the manifest tree, since --tfvars-only never touches it.
 	// See custom_layout.go.
 	if !tfvarsOnly {
-		if err := checkCustomLayout(filepath.Join(specRoot, clusterspec.CustomRoot)); err != nil {
+		if err := instanceresolve.CheckCustomLayout(filepath.Join(specRoot, clusterspec.CustomRoot)); err != nil {
 			return fmt.Errorf("%s layout — fix these before rendering:\n%w", clusterspec.CustomRoot, err)
 		}
 	}

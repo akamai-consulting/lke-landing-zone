@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 import (
 	"os"
@@ -10,7 +10,7 @@ import (
 )
 
 // writeCustom builds a kubernetes-custom/ tree under a temp instance root and returns
-// the customDir checkCustomLayout takes. files maps a path relative to that tree to its
+// the customDir CheckCustomLayout takes. files maps a path relative to that tree to its
 // content; a "" content creates the directory only.
 func writeCustom(t *testing.T, files map[string]string) string {
 	t.Helper()
@@ -38,7 +38,7 @@ func writeCustom(t *testing.T, files map[string]string) string {
 
 // An absent tree is the template-repo case — silent, not an error.
 func TestCheckCustomLayout_AbsentIsFine(t *testing.T) {
-	if err := checkCustomLayout(filepath.Join(t.TempDir(), "nope")); err != nil {
+	if err := CheckCustomLayout(filepath.Join(t.TempDir(), "nope")); err != nil {
 		t.Errorf("absent kubernetes-custom/ must not error: %v", err)
 	}
 }
@@ -53,7 +53,7 @@ func TestCheckCustomLayout_ValidLayoutPasses(t *testing.T) {
 		"namespaces/argocd/app.yaml":        "kind: Application\n",
 		"global/crd.yaml":                   "kind: CustomResourceDefinition\n",
 	})
-	if err := checkCustomLayout(dir); err != nil {
+	if err := CheckCustomLayout(dir); err != nil {
 		t.Errorf("valid layout must pass: %v", err)
 	}
 }
@@ -68,7 +68,7 @@ func TestCheckCustomLayout_KustomizeRootBlocks(t *testing.T) {
 			dir := writeCustom(t, map[string]string{
 				filepath.Join("namespaces", "my-app", fn): "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n",
 			})
-			err := checkCustomLayout(dir)
+			err := CheckCustomLayout(dir)
 			if err == nil {
 				t.Fatalf("%s must block", fn)
 			}
@@ -84,7 +84,7 @@ func TestCheckCustomLayout_KustomizeRootBlocks(t *testing.T) {
 		filepath.Join("global", "kustomization.yaml"),
 		filepath.Join("namespaces", "my-app", "sub", "kustomization.yaml"),
 	} {
-		if err := checkCustomLayout(writeCustom(t, map[string]string{p: "kind: Kustomization\n"})); err == nil {
+		if err := CheckCustomLayout(writeCustom(t, map[string]string{p: "kind: Kustomization\n"})); err == nil {
 			t.Errorf("kustomize root at %s must block", p)
 		}
 	}
@@ -93,7 +93,7 @@ func TestCheckCustomLayout_KustomizeRootBlocks(t *testing.T) {
 // A tree with no namespaces/ at all is legal — the generator simply yields zero Apps.
 func TestCheckCustomLayout_NoNamespacesDirIsFine(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"README.md": "# hatch"})
-	if err := checkCustomLayout(dir); err != nil {
+	if err := CheckCustomLayout(dir); err != nil {
 		t.Errorf("a tree without namespaces/ must not error: %v", err)
 	}
 }
@@ -102,7 +102,7 @@ func TestCheckCustomLayout_NoNamespacesDirIsFine(t *testing.T) {
 // Application over the same resources puts them in contention.
 func TestCheckCustomLayout_ReservedAplPrefixBlocks(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"namespaces/apl-secrets/secret.yaml": "kind: Secret\n"})
-	err := checkCustomLayout(dir)
+	err := CheckCustomLayout(dir)
 	if err == nil {
 		t.Fatal("namespaces/apl-* must block")
 	}
@@ -113,7 +113,7 @@ func TestCheckCustomLayout_ReservedAplPrefixBlocks(t *testing.T) {
 	}
 	// A namespace that merely CONTAINS "apl" is not reserved — only the prefix is.
 	ok := writeCustom(t, map[string]string{"namespaces/my-apl-thing/x.yaml": "kind: ConfigMap\n"})
-	if err := checkCustomLayout(ok); err != nil {
+	if err := CheckCustomLayout(ok); err != nil {
 		t.Errorf("non-prefix apl match must not block: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestCheckCustomLayout_ReservedAplPrefixBlocks(t *testing.T) {
 // global/ generator emits.
 func TestCheckCustomLayout_ReservedGlobalNameBlocks(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"namespaces/global/x.yaml": "kind: ConfigMap\n"})
-	err := checkCustomLayout(dir)
+	err := CheckCustomLayout(dir)
 	if err == nil {
 		t.Fatal("namespaces/global must block")
 	}
@@ -135,7 +135,7 @@ func TestCheckCustomLayout_ReservedGlobalNameBlocks(t *testing.T) {
 // is not a collision and must not block.
 func TestCheckCustomLayout_ReservedPrefixOnlyAppliesToDirs(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"namespaces/apl-notes.md": "not a namespace"})
-	if err := checkCustomLayout(dir); err != nil {
+	if err := CheckCustomLayout(dir); err != nil {
 		t.Errorf("a file named apl-* is not a namespace dir: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestCheckCustomLayout_InvalidNamespaceNameBlocks(t *testing.T) {
 			dir := writeCustom(t, map[string]string{
 				filepath.Join("namespaces", name, "x.yaml"): "kind: ConfigMap\n",
 			})
-			err := checkCustomLayout(dir)
+			err := CheckCustomLayout(dir)
 			if err == nil {
 				t.Fatalf("namespace dir %q must block", name)
 			}
@@ -170,7 +170,7 @@ func TestCheckCustomLayout_InvalidNamespaceNameBlocks(t *testing.T) {
 		dir := writeCustom(t, map[string]string{
 			filepath.Join("namespaces", name, "x.yaml"): "kind: ConfigMap\n",
 		})
-		if err := checkCustomLayout(dir); err != nil {
+		if err := CheckCustomLayout(dir); err != nil {
 			t.Errorf("valid namespace dir %q must pass: %v", name, err)
 		}
 	}
@@ -182,7 +182,7 @@ func TestCheckCustomLayout_ReportsAllFindings(t *testing.T) {
 		"namespaces/apl-users/u.yaml": "kind: ConfigMap\n",
 		"namespaces/global/g.yaml":    "kind: ConfigMap\n",
 	})
-	err := checkCustomLayout(dir)
+	err := CheckCustomLayout(dir)
 	if err == nil {
 		t.Fatal("expected findings")
 	}

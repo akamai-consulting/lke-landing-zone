@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 // region_resolve.go — check `llz env add --region` against the account before a
 // spec is authored against it.
@@ -33,9 +33,9 @@ type regionLister interface {
 	ListRegions(ctx context.Context) ([]map[string]any, error)
 }
 
-// regionClient returns a live client, or nil when no token is configured.
+// RegionClient returns a live client, or nil when no token is configured.
 // Package var so tests substitute a fake.
-var regionClient = func() regionLister {
+var RegionClient = func() regionLister {
 	tok := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
 	if tok == "" {
 		return nil
@@ -47,7 +47,7 @@ var regionClient = func() regionLister {
 // answer is unknown (no token, API error, empty list) — which is NOT the same as
 // "the region does not exist", and callers must not treat it as one.
 func accountRegions() (ids []string, ok bool) {
-	c := regionClient()
+	c := RegionClient()
 	if c == nil {
 		return nil, false
 	}
@@ -66,9 +66,9 @@ func accountRegions() (ids []string, ok bool) {
 	return ids, len(ids) > 0
 }
 
-// checkRegion rejects a --region the account does not have, listing the regions
+// CheckRegion rejects a --region the account does not have, listing the regions
 // that look like what was asked for. nil whenever the answer is unknown.
-func checkRegion(region string) error {
+func CheckRegion(region string) error {
 	ids, ok := accountRegions()
 	if !ok {
 		return nil
@@ -87,7 +87,7 @@ func checkRegion(region string) error {
 	// Phrased as a resemblance, not a fact: all this knows is that the value is
 	// "<a real region>-<ordinal>", which is the SHAPE of an OBJ cluster id — it
 	// has not asked the object-storage API whether this particular one exists.
-	if err := instancelayout.ValidateOBJCluster(region); err == nil && isOBJClusterID(region, ids) {
+	if err := instancelayout.ValidateOBJCluster(region); err == nil && IsOBJClusterID(region, ids) {
 		base := region[:strings.LastIndex(region, "-")]
 		msg += fmt.Sprintf("\n  %q is shaped like an object-storage CLUSTER id in region %s — did you mean `--region %s --obj-cluster %s`?",
 			region, base, base, region)
@@ -96,12 +96,12 @@ func checkRegion(region string) error {
 	return fmt.Errorf("%s", msg)
 }
 
-// isOBJClusterID reports whether region parses as "<a real region>-<ordinal>" —
+// IsOBJClusterID reports whether region parses as "<a real region>-<ordinal>" —
 // the signature of an object-storage cluster id supplied where a region belongs.
 // Checking the prefix against the account's real regions is what keeps a genuine
 // numeric-suffixed region (de-fra-2) from being mislabelled: it is in ids, so
-// checkRegion never gets here for it.
-func isOBJClusterID(region string, ids []string) bool {
+// CheckRegion never gets here for it.
+func IsOBJClusterID(region string, ids []string) bool {
 	i := strings.LastIndex(region, "-")
 	if i < 0 {
 		return false

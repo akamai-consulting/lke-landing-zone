@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 import (
 	"os"
@@ -22,11 +22,11 @@ func TestIsInstanceRootMarkers(t *testing.T) {
 		} else if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if !isInstanceRoot(dir) {
+		if !IsInstanceRoot(dir) {
 			t.Errorf("%s alone should identify an instance root", marker)
 		}
 	}
-	if dir := t.TempDir(); isInstanceRoot(dir) {
+	if dir := t.TempDir(); IsInstanceRoot(dir) {
 		t.Error("an empty dir must not read as an instance root")
 	}
 	// The template repo itself: instanceLayout resolves against instance-template/,
@@ -35,7 +35,7 @@ func TestIsInstanceRootMarkers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpl, "instance-template", "terraform-iac-bootstrap"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !isInstanceRoot(tmpl) {
+	if !IsInstanceRoot(tmpl) {
 		t.Error("a template checkout must count as a valid working root")
 	}
 }
@@ -53,7 +53,7 @@ func TestRequireInstanceRootPointsAtTheInstance(t *testing.T) {
 	}
 	chdir(t, parent)
 
-	err := requireInstanceRoot("`llz env add`")
+	err := RequireInstanceRoot("`llz env add`")
 	if err == nil {
 		t.Fatal("expected a refusal outside an instance root")
 	}
@@ -66,31 +66,12 @@ func TestRequireInstanceRootPointsAtTheInstance(t *testing.T) {
 
 func TestRequireInstanceRootWithNoCandidateSuggestsNew(t *testing.T) {
 	chdir(t, t.TempDir())
-	err := requireInstanceRoot("`llz env add`")
+	err := RequireInstanceRoot("`llz env add`")
 	if err == nil {
 		t.Fatal("expected a refusal outside an instance root")
 	}
 	if !strings.Contains(err.Error(), "llz new") {
 		t.Errorf("with no instance in sight the error should point at `llz new`; got %q", err)
-	}
-}
-
-func TestRunEnvAddRefusesOutsideAnInstance(t *testing.T) {
-	// The whole point of the gate: no files are written. Before it, this call
-	// authored a full landingzone.yaml + environments/ + apl-values/ tree here.
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	err := runEnvAdd(globalOpts{}, "lab", envAddOpts{region: "us-sea", objCluster: "us-sea-1"})
-	if err == nil {
-		t.Fatal("expected `llz env add` to refuse outside an instance root")
-	}
-	ents, rerr := os.ReadDir(dir)
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	if len(ents) != 0 {
-		t.Errorf("nothing must be written outside an instance root; found %v", ents)
 	}
 }
 
@@ -108,7 +89,7 @@ func TestRequireInstanceRootFromInsideAnInstance(t *testing.T) {
 	}
 	chdir(t, deep)
 
-	err := requireInstanceRoot("`llz env add`")
+	err := RequireInstanceRoot("`llz env add`")
 	if err == nil {
 		t.Fatal("expected a refusal below the instance root")
 	}

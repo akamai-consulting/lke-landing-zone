@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -61,7 +62,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// but stray spec tree rather than an error. Gate on the CWD first — before the
 	// flag checks, so the operator who forgot `cd my-instance` is told THAT, not
 	// which flag they also mistyped. See instance_root.go.
-	if err := requireInstanceRoot("`llz env add`"); err != nil {
+	if err := instanceresolve.RequireInstanceRoot("`llz env add`"); err != nil {
 		return err
 	}
 	if o.templateEnv == "" {
@@ -96,13 +97,13 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// Ask the account whether the region exists before authoring a spec against it
 	// (best-effort — see region_resolve.go). Runs BEFORE the obj-cluster resolution
 	// so a swapped --region/--obj-cluster pair is named for what it is.
-	if err := checkRegion(o.region); err != nil {
+	if err := instanceresolve.CheckRegion(o.region); err != nil {
 		return err
 	}
 	// Derive/check obj-cluster against the account rather than making the operator
 	// invent it. Best-effort: with no LINODE_TOKEN this is exactly the old
 	// shape-only validation. See objcluster_resolve.go for why the id matters.
-	resolved, note, err := resolveOBJCluster(o.objCluster, o.region)
+	resolved, note, err := instanceresolve.ResolveOBJCluster(o.objCluster, o.region)
 	if err != nil {
 		return err
 	}

@@ -221,7 +221,7 @@ func TestCheckNewTarget(t *testing.T) {
 func TestCheckNewTargetIgnoresHiddenEntries(t *testing.T) {
 	// Scaffolding into a freshly cloned empty repo (only .git) is a legitimate
 	// path, and copier git-inits the dir itself — so hidden entries alone are not
-	// "content". A .copier-answers.yml is still caught, by isInstanceRoot.
+	// "content". A .copier-answers.yml is still caught, by instanceresolve.IsInstanceRoot.
 	cloned := t.TempDir()
 	if err := os.Mkdir(filepath.Join(cloned, ".git"), 0o755); err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 import (
 	"context"
@@ -19,9 +19,9 @@ func (f fakeOBJLister) ListObjectStorageClusters(context.Context) ([]map[string]
 // withOBJLister installs a fake account. Passing nil models "no LINODE_TOKEN".
 func withOBJLister(t *testing.T, l objClusterLister) {
 	t.Helper()
-	prev := objClusterClient
-	t.Cleanup(func() { objClusterClient = prev })
-	objClusterClient = func() objClusterLister {
+	prev := ObjClusterClient
+	t.Cleanup(func() { ObjClusterClient = prev })
+	ObjClusterClient = func() objClusterLister {
 		if l == nil {
 			return nil // nil interface, the no-token path
 		}
@@ -43,7 +43,7 @@ func objAccount(entries ...[2]string) fakeOBJLister {
 func TestResolveOBJClusterDegradesWithoutAnAccount(t *testing.T) {
 	t.Run("supplied value passes straight through", func(t *testing.T) {
 		withOBJLister(t, nil)
-		got, note, err := resolveOBJCluster("us-sea-1", "us-sea")
+		got, note, err := ResolveOBJCluster("us-sea-1", "us-sea")
 		if err != nil || got != "us-sea-1" {
 			t.Fatalf("got (%q, %v), want us-sea-1 with no error", got, err)
 		}
@@ -54,7 +54,7 @@ func TestResolveOBJClusterDegradesWithoutAnAccount(t *testing.T) {
 
 	t.Run("empty value still errors, and says how to get the derivation", func(t *testing.T) {
 		withOBJLister(t, nil)
-		_, _, err := resolveOBJCluster("", "us-sea")
+		_, _, err := ResolveOBJCluster("", "us-sea")
 		if err == nil {
 			t.Fatal("expected --obj-cluster to remain required")
 		}
@@ -65,7 +65,7 @@ func TestResolveOBJClusterDegradesWithoutAnAccount(t *testing.T) {
 
 	t.Run("an API error is unknown, not empty", func(t *testing.T) {
 		withOBJLister(t, fakeOBJLister{err: errors.New("503")})
-		got, _, err := resolveOBJCluster("us-sea-1", "us-sea")
+		got, _, err := ResolveOBJCluster("us-sea-1", "us-sea")
 		if err != nil || got != "us-sea-1" {
 			t.Fatalf("an unreachable API must not reject a valid-looking value: (%q, %v)", got, err)
 		}
@@ -74,7 +74,7 @@ func TestResolveOBJClusterDegradesWithoutAnAccount(t *testing.T) {
 	// Shape validation runs first and is unchanged.
 	t.Run("malformed value is rejected offline", func(t *testing.T) {
 		withOBJLister(t, nil)
-		if _, _, err := resolveOBJCluster("us-sea", "us-sea"); err == nil {
+		if _, _, err := ResolveOBJCluster("us-sea", "us-sea"); err == nil {
 			t.Fatal("a bare region is not a cluster id and must still be rejected")
 		}
 	})
@@ -83,7 +83,7 @@ func TestResolveOBJClusterDegradesWithoutAnAccount(t *testing.T) {
 func TestResolveOBJClusterDerivesWhenUnambiguous(t *testing.T) {
 	withOBJLister(t, objAccount([2]string{"us-sea-1", "us-sea"}, [2]string{"us-ord-1", "us-ord"}))
 
-	got, note, err := resolveOBJCluster("", "us-sea")
+	got, note, err := ResolveOBJCluster("", "us-sea")
 	if err != nil {
 		t.Fatalf("derivation failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestResolveOBJClusterDerivesWhenUnambiguous(t *testing.T) {
 func TestResolveOBJClusterRefusesToGuessBetweenGenerations(t *testing.T) {
 	withOBJLister(t, objAccount([2]string{"us-ord-1", "us-ord"}, [2]string{"us-ord-10", "us-ord"}))
 
-	_, _, err := resolveOBJCluster("", "us-ord")
+	_, _, err := ResolveOBJCluster("", "us-ord")
 	if err == nil {
 		t.Fatal("must not pick between two endpoint generations")
 	}
@@ -116,7 +116,7 @@ func TestResolveOBJClusterRejectsAValueNotInTheRegion(t *testing.T) {
 
 	// Well-formed, plausible, and wrong — the exact mistake nothing downstream
 	// catches, because the apply succeeds.
-	_, _, err := resolveOBJCluster("us-ord-1", "us-sea")
+	_, _, err := ResolveOBJCluster("us-ord-1", "us-sea")
 	if err == nil {
 		t.Fatal("a cluster from another region must be rejected")
 	}
@@ -130,7 +130,7 @@ func TestResolveOBJClusterRejectsAValueNotInTheRegion(t *testing.T) {
 
 func TestResolveOBJClusterConfirmsAGoodValue(t *testing.T) {
 	withOBJLister(t, objAccount([2]string{"us-sea-1", "us-sea"}))
-	got, note, err := resolveOBJCluster("us-sea-1", "us-sea")
+	got, note, err := ResolveOBJCluster("us-sea-1", "us-sea")
 	if err != nil || got != "us-sea-1" {
 		t.Fatalf("got (%q, %v)", got, err)
 	}
@@ -141,7 +141,7 @@ func TestResolveOBJClusterConfirmsAGoodValue(t *testing.T) {
 
 func TestResolveOBJClusterEmptyRegionListIsNamed(t *testing.T) {
 	withOBJLister(t, objAccount([2]string{"us-ord-1", "us-ord"}))
-	_, _, err := resolveOBJCluster("", "ap-south")
+	_, _, err := ResolveOBJCluster("", "ap-south")
 	if err == nil {
 		t.Fatal("expected an error when the region has no OBJ cluster")
 	}

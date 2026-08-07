@@ -15,6 +15,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -244,7 +245,7 @@ func checkNewTarget(dir string) error {
 		// "empty": copier would fail on it too, later and less legibly.
 		return fmt.Errorf("cannot read %s: %w", dir, err)
 	}
-	if !isInstanceRoot(dir) {
+	if !instanceresolve.IsInstanceRoot(dir) {
 		// Hidden entries don't count as content: scaffolding into a freshly cloned
 		// empty repo (only .git) is a legitimate path, and copier git-inits anyway.
 		visible := 0
@@ -257,7 +258,7 @@ func checkNewTarget(dir string) error {
 			return nil
 		}
 	}
-	if isInstanceRoot(dir) {
+	if instanceresolve.IsInstanceRoot(dir) {
 		return fmt.Errorf("%s is already a landing-zone instance — `llz new` would render a second scaffold over it.\n"+
 			"  • add a deployment to it:     %s\n"+
 			"  • move it to a new release:   %s\n"+

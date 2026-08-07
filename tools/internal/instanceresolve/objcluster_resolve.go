@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 // objcluster_resolve.go — turn `--obj-cluster` from an identifier the operator has
 // to invent into one `llz env add` derives, or at least checks.
@@ -39,9 +39,9 @@ type objClusterLister interface {
 	ListObjectStorageClusters(ctx context.Context) ([]map[string]any, error)
 }
 
-// objClusterClient returns a live client, or nil when no token is configured.
+// ObjClusterClient returns a live client, or nil when no token is configured.
 // Package var so tests substitute a fake.
-var objClusterClient = func() objClusterLister {
+var ObjClusterClient = func() objClusterLister {
 	tok := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
 	if tok == "" {
 		return nil
@@ -53,7 +53,7 @@ var objClusterClient = func() objClusterLister {
 // sorted. ok is false when the answer is unknown (no token, API error) — which is
 // NOT the same as "none exist", and callers must not treat it as one.
 func objClustersInRegion(region string) (ids []string, ok bool) {
-	c := objClusterClient()
+	c := ObjClusterClient()
 	if c == nil {
 		return nil, false
 	}
@@ -75,7 +75,7 @@ func objClustersInRegion(region string) (ids []string, ok bool) {
 	return ids, true
 }
 
-// resolveOBJCluster decides the obj-cluster for `llz env add`. Returns the value to
+// ResolveOBJCluster decides the obj-cluster for `llz env add`. Returns the value to
 // use, plus a human note to print (empty when there is nothing worth saying).
 //
 // Supplied value  → checked against the region's real list; a value that is not in
@@ -88,7 +88,7 @@ func objClustersInRegion(region string) (ids []string, ok bool) {
 //	several it refuses and lists them rather than guessing: the
 //	choice between generations is the whole hazard, and picking
 //	for the operator would just move the silent failure.
-func resolveOBJCluster(objCluster, region string) (string, string, error) {
+func ResolveOBJCluster(objCluster, region string) (string, string, error) {
 	ids, ok := objClustersInRegion(region)
 
 	if objCluster != "" {

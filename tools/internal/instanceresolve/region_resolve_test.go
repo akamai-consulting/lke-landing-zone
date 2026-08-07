@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 import (
 	"context"
@@ -25,9 +25,9 @@ func (f fakeRegions) ListRegions(context.Context) ([]map[string]any, error) {
 
 func stubRegions(t *testing.T, l regionLister) {
 	t.Helper()
-	orig := regionClient
-	t.Cleanup(func() { regionClient = orig })
-	regionClient = func() regionLister { return l }
+	orig := RegionClient
+	t.Cleanup(func() { RegionClient = orig })
+	RegionClient = func() regionLister { return l }
 }
 
 func TestCheckRegionAcceptsARealRegion(t *testing.T) {
@@ -35,8 +35,8 @@ func TestCheckRegionAcceptsARealRegion(t *testing.T) {
 	// could tell it from the object-storage cluster id us-sea-1.
 	stubRegions(t, fakeRegions{ids: []string{"us-sea", "us-ord", "de-fra-2"}})
 	for _, r := range []string{"us-sea", "de-fra-2"} {
-		if err := checkRegion(r); err != nil {
-			t.Errorf("checkRegion(%q) = %v, want nil", r, err)
+		if err := CheckRegion(r); err != nil {
+			t.Errorf("CheckRegion(%q) = %v, want nil", r, err)
 		}
 	}
 }
@@ -46,7 +46,7 @@ func TestCheckRegionNamesTheObjClusterSwap(t *testing.T) {
 	// is the transposition to expect. "us-sea-1" is an OBJ cluster in region
 	// us-sea; say so rather than just "not a region".
 	stubRegions(t, fakeRegions{ids: []string{"us-sea", "us-ord"}})
-	err := checkRegion("us-sea-1")
+	err := CheckRegion("us-sea-1")
 	if err == nil {
 		t.Fatal("expected an error for an OBJ cluster id passed as --region")
 	}
@@ -59,7 +59,7 @@ func TestCheckRegionNamesTheObjClusterSwap(t *testing.T) {
 
 func TestCheckRegionSuggestsNearMisses(t *testing.T) {
 	stubRegions(t, fakeRegions{ids: []string{"us-sea", "us-ord", "us-iad", "eu-west"}})
-	err := checkRegion("us-seat")
+	err := CheckRegion("us-seat")
 	if err == nil {
 		t.Fatal("expected an error for a typo'd region")
 	}
@@ -76,11 +76,11 @@ func TestCheckRegionSilentWhenTheAnswerIsUnknown(t *testing.T) {
 	// No token, or the API is unreachable: `llz env add` has never required a
 	// Linode token and must not start. Unknown is not "wrong".
 	stubRegions(t, nil)
-	if err := checkRegion("nonsense"); err != nil {
+	if err := CheckRegion("nonsense"); err != nil {
 		t.Errorf("no client ⇒ no opinion, got %v", err)
 	}
 	stubRegions(t, fakeRegions{err: errors.New("500 Internal Server Error")})
-	if err := checkRegion("nonsense"); err != nil {
+	if err := CheckRegion("nonsense"); err != nil {
 		t.Errorf("API error ⇒ no opinion, got %v", err)
 	}
 }

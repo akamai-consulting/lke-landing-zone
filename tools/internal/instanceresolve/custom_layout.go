@@ -1,4 +1,4 @@
-package main
+package instanceresolve
 
 // custom_layout.go guards the operator escape hatch's directory contract —
 // kubernetes-custom/ (clusterspec.CustomRoot), the instance-owned tree whose content the
@@ -51,11 +51,11 @@ var dnsLabelRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 const dnsLabelMax = 63
 
-// checkCustomLayout validates the escape-hatch tree at customDir (an instance root joined
+// CheckCustomLayout validates the escape-hatch tree at customDir (an instance root joined
 // with clusterspec.CustomRoot). It returns nil when there is nothing to say — including
 // when the tree is absent entirely, which is the case for any caller pointed at a tree
 // with no instance scaffold.
-func checkCustomLayout(customDir string) error {
+func CheckCustomLayout(customDir string) error {
 	if _, err := os.Stat(customDir); err != nil {
 		return nil // no escape hatch in this tree — nothing to check.
 	}

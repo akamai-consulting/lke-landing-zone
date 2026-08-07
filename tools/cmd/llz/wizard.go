@@ -19,6 +19,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -460,7 +461,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	fmt.Println("\n" + color.Bold("Custom resources:"))
 	tfDir, _, _ := instancelayout.Detect()
 	customDir := filepath.Join(filepath.Dir(tfDir), clusterspec.CustomRoot)
-	if err := checkCustomLayout(customDir); err != nil {
+	if err := instanceresolve.CheckCustomLayout(customDir); err != nil {
 		report(clusterspec.CustomRoot+" layout", false)
 		errs = append(errs, err)
 	} else if _, statErr := os.Stat(customDir); statErr == nil {
