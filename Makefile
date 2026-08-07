@@ -79,11 +79,6 @@ COVERAGE_MINS := \
 	internal/guardkit=100 \
 	internal/guardwalk=46 \
 	internal/objenc=52 \
-	# LOWERED 88 -> 63 when cmd/llz/openbao.go (the port-forward + `bao exec` CLI)
-	# moved in. This is DEBT, not a rewrite of the standard: the HTTP client half
-	# is still ~88%, and the arithmetic changed because 334 lines of exec-bound
-	# code arrived with the same tests it had in package main. Raise by testing
-	# cli.go, not by moving code back out.
 	internal/openbao=63 \
 	internal/pathglob=93 \
 	internal/promwire=92 \
@@ -100,9 +95,6 @@ COVERAGE_MINS := \
 	internal/s3sig=100 \
 	internal/shquote=100 \
 	internal/sustain=55 \
-	# LOWERED 80 -> 47 when reap.go and ci_drain_obj_buckets.go moved in. Same debt,
-	# same cause: both are mostly Linode/S3 API calls that were untested in
-	# package main too. The teardown logic that WAS tested still is.
 	internal/teardown=47 \
 	internal/tokeninv=70 \
 	internal/terraform=95 \
@@ -127,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/mtlsguard=89 \
 	internal/versionpins=83 \
 	internal/assertsuite=70 \
 	internal/templatemanifest=87 \

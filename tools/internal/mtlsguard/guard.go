@@ -1,4 +1,4 @@
-package main
+package mtlsguard
 
 // ci_mtls_wiring_guard.go implements `llz ci mtls-wiring-guard` — the gate on
 // the correspondence between "this workload talks to OpenBao" and "this workload
@@ -117,7 +117,7 @@ func (d mtlsPodDoc) podTemplate() (mtlsPodTemplate, bool) {
 	return mtlsPodTemplate{}, false
 }
 
-func ciMTLSWiringGuardCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var root string
 	cmd := &cobra.Command{
 		Use:   "mtls-wiring-guard",
@@ -129,7 +129,7 @@ func ciMTLSWiringGuardCmd() *cobra.Command {
 			"be created by a Certificate in the same namespace, and OPENBAO_SKIP_VERIFY\n" +
 			"must not reappear.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIMTLSWiringGuard(root) },
+		RunE: func(_ *cobra.Command, _ []string) error { return Run(root) },
 	}
 	cmd.Flags().StringVar(&root, "root", ".", "repo root (template or instance layout)")
 	return cmd
@@ -139,7 +139,7 @@ type mtlsFinding struct {
 	file, workload, problem string
 }
 
-func runCIMTLSWiringGuard(root string) error {
+func Run(root string) error {
 	dirs := guardwalk.PlatformTreeDirs(root)
 	findings, examined, err := collectMTLSWiringFindings(dirs)
 	if err != nil {

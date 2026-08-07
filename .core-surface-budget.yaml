@@ -417,7 +417,14 @@ categories:
 #        COVERAGE DEBT, recorded not hidden: internal/openbao 88 -> 63 and
 #        internal/teardown 80 -> 47. Both absorbed exec/API-bound code that was
 #        equally untested in package main; the arithmetic moved, not the
-#        standard. See the comments on those two floors in the Makefile.
+#        standard. THE EXPLANATION LIVES HERE AND NOT IN THE MAKEFILE: the
+#        untestable-loc gate counts Makefile COMMENT lines, and two lines of
+#        justification put makefile-recipe at 30/28. Lower a floor here, not
+#        there.
+#   59th: mtls-wiring -> internal/mtlsguard   13,183 -> 12,970 (-213 / 111 files)
+#        CLOSURE 1 -- `main`, and nothing else. 282 lines that needed nothing from
+#        package main and were never measured until the campaign ran out of hard
+#        candidates and started sweeping. Third time a sweep beat a hunch.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -430,7 +437,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 13183
+    budget: 12970
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -1,4 +1,4 @@
-package main
+package mtlsguard
 
 import (
 	"os"
@@ -51,7 +51,7 @@ func TestMTLSWiringGuardVerbFailsOnAFinding(t *testing.T) {
 	})
 
 	var err error
-	out := captureStdout(t, func() { err = runCIMTLSWiringGuard(root) })
+	out := captureStdout(t, func() { err = Run(root) })
 	if err == nil {
 		t.Fatalf("an OpenBao consumer mounting no TLS material must FAIL the guard; stdout:\n%s", out)
 	}
@@ -84,7 +84,7 @@ spec: {secretName: llz-reconciler-client-tls}
 		"llzReconciler/deployment.yaml": "apiVersion: apps/v1" + wiredDeployment,
 		"llzReconciler/certs.yaml":      certs,
 	})
-	if err := runCIMTLSWiringGuard(root); err != nil {
+	if err := Run(root); err != nil {
 		t.Fatalf("a correctly wired tree must pass: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ spec: {secretName: llz-reconciler-client-tls}
 // a permanently inert gate.
 func TestMTLSWiringGuardRefusesAnEmptyCorpus(t *testing.T) {
 	root := t.TempDir() // no platform-apl/ at all
-	if err := runCIMTLSWiringGuard(root); err == nil {
+	if err := Run(root); err == nil {
 		t.Fatal("an empty corpus must fail — 'walked nothing' must not read as 'all clean'")
 	}
 }

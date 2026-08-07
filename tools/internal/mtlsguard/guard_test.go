@@ -1,4 +1,4 @@
-package main
+package mtlsguard
 
 import (
 	"os"
@@ -138,7 +138,7 @@ spec:
 // test that fails when someone drops a mount from a real workload.
 func TestMTLSWiringRealTree(t *testing.T) {
 	root := repoRootForMTLSTest(t)
-	if err := runCIMTLSWiringGuard(root); err != nil {
+	if err := Run(root); err != nil {
 		t.Errorf("mtls-wiring-guard failed on the real tree: %v", err)
 	}
 }

@@ -57,6 +57,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
@@ -108,6 +109,7 @@ var declarations = []func() extension.Extension{
 	assertsuite.Extension,
 	templatemanifest.Extension,
 	versionpins.Extension,
+	mtlsguard.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,
