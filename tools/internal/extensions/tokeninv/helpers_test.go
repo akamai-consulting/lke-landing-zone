@@ -36,23 +36,9 @@ func realAppend(envVar string, lines ...string) error {
 	return err
 }
 
-func mustReadFile(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(b)
-}
-
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	return capture(t, &os.Stdout, fn)
-}
-
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	return capture(t, &os.Stderr, fn)
 }
 
 func capture(t *testing.T, target **os.File, fn func()) string {

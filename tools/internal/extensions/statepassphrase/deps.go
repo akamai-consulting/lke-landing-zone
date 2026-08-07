@@ -1,7 +1,6 @@
 package statepassphrase
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
@@ -56,26 +55,4 @@ func ghHost() string {
 // isNotFoundErr reports whether a `gh api` failure was a 404.
 func isNotFoundErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "HTTP 404")
-}
-
-// appendGHAFile appends lines to the GitHub Actions command file named by envVar.
-// Outside Actions the variable is unset and the write is skipped, keeping the
-// commands runnable from a workstation. THE REAL THING, not a stub: the dry-run
-// path asserts on what it writes.
-func appendGHAFile(envVar string, lines ...string) error {
-	path := os.Getenv(envVar)
-	if path == "" {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open $%s: %w", envVar, err)
-	}
-	for _, l := range lines {
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			f.Close()
-			return fmt.Errorf("write $%s: %w", envVar, err)
-		}
-	}
-	return f.Close()
 }

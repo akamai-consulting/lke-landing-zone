@@ -10,8 +10,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
 )
 
-func srvBase(r *http.Request) string { return "http://" + r.Host }
-
 func withScopeWait(attempts int) func() {
 	old := keycloak.ScopeAttempts
 	keycloak.ScopeAttempts = attempts
@@ -44,18 +42,4 @@ func TestKeycloakConnect_Timeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Errorf("persistent failure must time out with an actionable error, got %v", err)
 	}
-}
-
-// TestKeycloakConnect_FailsFastOnAuthDenied: a 401 from the token endpoint is a
-// permanent credential failure (wrong/disabled admin), so Connect returns
-// immediately with an actionable error instead of retrying it as a not-ready
-// timeout that would mask the real problem.
-func countPrefix(ss []string, prefix string) int {
-	n := 0
-	for _, s := range ss {
-		if strings.HasPrefix(s, prefix) {
-			n++
-		}
-	}
-	return n
 }

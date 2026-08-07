@@ -161,20 +161,6 @@ func harborStub(t *testing.T, projectStatus int, robotStatuses []int) (*httptest
 
 // ── shared GHA-file test helpers (used by ci_bao_seed_test / ci_seed_special_test) ──
 
-// withGHAEnvFile captures $GITHUB_ENV writes; returns the path.
-func withGHAEnvFile(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "gha-env")
-	t.Setenv("GITHUB_ENV", p)
-	return p
-}
-
-func ghaEnvContains(t *testing.T, path, want string) bool {
-	t.Helper()
-	b, _ := os.ReadFile(path)
-	return strings.Contains(string(b), want)
-}
-
 // ── the baoKVPut default implementation ───────────────────────────────────────
 
 func TestBaoKVPutDefaultImpl(t *testing.T) {

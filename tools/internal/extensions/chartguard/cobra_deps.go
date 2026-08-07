@@ -15,8 +15,6 @@ import (
 
 func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
-func execCombined(name string, args ...string) string { return kubectlprobe.Combined(name, args...) }
-
 // gitOutput runs git in dir and returns trimmed stdout. A local four-line copy
 // rather than a shared helper: `git -C dir` is the whole implementation, and the
 // original lives in hooks.go, which is main's and is not moving.

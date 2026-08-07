@@ -47,21 +47,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(b)
 }
 
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stderr = w
-	fn()
-	w.Close()
-	os.Stderr = orig
-	b, _ := io.ReadAll(r)
-	return string(b)
-}
-
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	prev, err := os.Getwd()

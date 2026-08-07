@@ -1,7 +1,6 @@
 package assertsecrets
 
 import (
-	"os"
 	"strings"
 	"time"
 
@@ -61,21 +60,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// realGHAAppend is the default Summary contract this package's lanes use when
-// they publish a verdict. Real, not a no-op — an installed default is a fixture
-// too.
-func realGHAAppend(envVar string, lines ...string) error {
-	path := os.Getenv(envVar)
-	if path == "" {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(strings.Join(lines, "\n") + "\n")
-	return err
 }

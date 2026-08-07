@@ -10,5 +10,3 @@ package clusteraccess
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 
 func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
-
-func execCombined(name string, args ...string) string { return kubectlprobe.Combined(name, args...) }

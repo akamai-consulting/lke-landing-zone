@@ -39,46 +39,12 @@ package render
 
 import (
 	"crypto/sha256"
-	"flag"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
-
-var updateGolden = flag.Bool("update", false, "rewrite testdata/render_golden.txt from the current render")
-
-// goldenSpec is deliberately richer than renderSpec: two environments (so
-// per-env variation shows), an explicit component toggle, a non-default node
-// pool, databases and object storage. Every field here widens what the golden
-// guards, so additions are cheap and worthwhile.
-const goldenSpec = `
-apiVersion: llz.akamai-consulting.io/v1alpha1
-kind: LandingZone
-metadata: { name: goldeninst }
-spec:
-  instance: { upstreamOrg: akamai-consulting, repo: akamai-consulting/goldeninst, forge: github, templateVersion: main }
-  environments:
-    prod:
-      cluster:
-        clusterLabel: platform-prod
-        region: us-ord
-        k8sVersion: v1.33.6+lke7
-        nodePool: { type: g8-dedicated-8-4, count: 5 }
-        bootstrap: { name: platform-prod, domainSuffix: prod.example.com }
-        objectStorage: { cluster: us-ord-7 }
-      components:
-        harbor: { enabled: false }
-    staging:
-      cluster:
-        clusterLabel: platform-staging
-        region: us-sea
-        k8sVersion: v1.33.6+lke7
-        nodePool: { type: g6-standard-4, count: 2 }
-        bootstrap: { name: platform-staging, domainSuffix: staging.example.com }
-        objectStorage: { cluster: us-sea-1 }
-`
 
 // specDerived reports whether a rendered path's CONTENT is produced by the
 // spec→artifact mapping (golden it in full) rather than copied from the embedded

@@ -47,26 +47,6 @@ func Install(apply func(string) error, setSecret func(name, env, value string) e
 
 // ── localised pure helpers: copies, not seams ──────────────────────────────
 
-// appendGHAFile appends lines to the GitHub Actions command file named by envVar.
-// THE REAL THING, not a stub — the seed summary is asserted on.
-func appendGHAFile(envVar string, lines ...string) error {
-	path := os.Getenv(envVar)
-	if path == "" {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open $%s: %w", envVar, err)
-	}
-	for _, l := range lines {
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			f.Close()
-			return fmt.Errorf("write $%s: %w", envVar, err)
-		}
-	}
-	return f.Close()
-}
-
 // maskGHA asks GitHub Actions to redact a value from the log.
 func maskGHA(v string) {
 	if os.Getenv("GITHUB_ACTIONS") != "" && v != "" {

@@ -205,25 +205,6 @@ func (s *stubLinode) DeleteObjectStorageKey(_ context.Context, id uint64) error 
 }
 func (s *stubLinode) Verify(context.Context) error { return s.verifyErr }
 
-// stubBao is a COPY, same reasoning as stubLinode above.
-type stubBao struct{ data map[string]map[string]string }
-
-func (b *stubBao) Get(_ context.Context, path, key string) (string, bool, error) {
-	v, ok := b.data[path][key]
-	return v, ok, nil
-}
-func (b *stubBao) Write(_ context.Context, path string, d map[string]string) error {
-	b.data[path] = d
-	return nil
-}
-func withRotatorStubs(t *testing.T, lc credrotate.LinodeAPI, bao credrotate.BaoStore, now time.Time) {
-	t.Helper()
-	ol, ob, on := credrotate.NewLinodeClient, credrotate.NewBaoStore, credrotate.Now
-	credrotate.NewLinodeClient = func(string) credrotate.LinodeAPI { return lc }
-	credrotate.NewBaoStore = func(context.Context) (credrotate.BaoStore, error) { return bao, nil }
-	credrotate.Now = func() time.Time { return now }
-	t.Cleanup(func() { credrotate.NewLinodeClient, credrotate.NewBaoStore, credrotate.Now = ol, ob, on })
-}
 func strconvI(n int64) string { return strconv.FormatInt(n, 10) }
 
 // jn mirrors how the Linode client decodes ids — json.Number, the only type

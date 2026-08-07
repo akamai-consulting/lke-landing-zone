@@ -340,15 +340,3 @@ func TestMaskGHALines(t *testing.T) {
 	// per-line split is the behavior under test and is exercised via fmt.)
 	MaskGHALines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
 }
-
-func funcBody(src, decl string) string {
-	i := strings.Index(src, decl)
-	if i < 0 {
-		return ""
-	}
-	rest := src[i+len(decl):]
-	if j := strings.Index(rest, "\nfunc "); j >= 0 {
-		return rest[:j]
-	}
-	return rest
-}

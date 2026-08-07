@@ -1031,6 +1031,22 @@ categories:
 #        ~20 of main`s symbols had to be repointed at their new homes
 #        (appendGHAFile -> ghaout.Append, execArgv -> proc.Run, probeTokenValidities
 #        -> doctor.ProbeTokenValidities, lookable -> kubectlprobe.Lookable, ...).
+#   94th: staticcheck`s first run on this branch   1,885 -> 1,853 (-32)
+#        122 FINDINGS, TWO OF THEM REAL, and both were this campaign`s doing:
+#        teardown lost the `!dryRun` half of its confirm gate (see e1f79ba5), and
+#        a bootstrap-cluster skew guard became value-against-itself when the alias
+#        it compared was deleted. Neither was visible because lint.yml -- the only
+#        workflow that runs go test AND staticcheck -- is filtered to
+#        branches [main, master], and #415 targeted a branch until today.
+#        THE OTHER 120 WERE DEAD TEST HELPERS the extraction left behind as tests
+#        moved between packages, plus THREE DEAD NON-TEST FILES in cmd/llz
+#        (forge_env.go, sortedmapkeys.go, orq.go, indent.go -- the last two had
+#        only their own tests as callers, their production users having moved to
+#        configreadiness and extension.go`s own copy).
+#        A LINE-ARITHMETIC PRUNER TRUNCATED A RAW STRING LITERAL on the first
+#        attempt -- the trap this campaign already had on record -- and deleted a
+#        helper that was in use. Reverted whole, then redone with a go/ast pruner
+#        that cannot be confused by a brace in a comment or a backtick block.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1043,7 +1059,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1885
+    budget: 1853
     exact: true
     include:
       - "tools/cmd/llz/*.go"

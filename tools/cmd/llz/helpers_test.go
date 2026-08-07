@@ -32,16 +32,6 @@ func TestFirstNonEmpty(t *testing.T) {
 	}
 }
 
-func TestIndent(t *testing.T) {
-	if got := indent("a\nb", "  "); got != "  a\n  b" {
-		t.Errorf("indent = %q, want '  a\\n  b'", got)
-	}
-	// Trailing newline is trimmed before indenting.
-	if got := indent("x\n", ">"); got != ">x" {
-		t.Errorf("indent(trailing nl) = %q, want '>x'", got)
-	}
-}
-
 func TestNormalizeTemplateRepo(t *testing.T) {
 	cases := map[string]string{
 		"  ":                                "",

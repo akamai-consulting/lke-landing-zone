@@ -4,8 +4,6 @@ package main
 // assert-obj-roundtrip, assert-certificates and assert-database.
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -13,14 +11,6 @@ import (
 )
 
 // ── assert-obj-roundtrip ─────────────────────────────────────────────────────
-
-func objSecretJSON(access, secret string) []byte {
-	b, _ := json.Marshal(map[string]any{"data": map[string]string{
-		"AWS_ACCESS_KEY_ID":     base64.StdEncoding.EncodeToString([]byte(access)),
-		"AWS_SECRET_ACCESS_KEY": base64.StdEncoding.EncodeToString([]byte(secret)),
-	}})
-	return b
-}
 
 func TestExplainS3Write(t *testing.T) {
 	for _, tc := range []struct {
@@ -35,13 +25,4 @@ func TestExplainS3Write(t *testing.T) {
 			t.Errorf("%s: expected %q in %q", tc.code, tc.want, got)
 		}
 	}
-}
-
-func certListJSON(items ...string) []byte {
-	return []byte(`{"items":[` + strings.Join(items, ",") + `]}`)
-}
-
-func certItemJSON(ns, name, ready, notAfter, reason string) string {
-	return `{"metadata":{"name":"` + name + `","namespace":"` + ns + `"},
-	  "status":{"notAfter":"` + notAfter + `","conditions":[{"type":"Ready","status":"` + ready + `","reason":"` + reason + `","message":"m"}]}}`
 }

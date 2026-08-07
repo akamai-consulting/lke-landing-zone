@@ -28,6 +28,3 @@ func execOutput(name string, args ...string) ([]byte, error) { return kubectlpro
 
 // execCombined returns combined stdout+stderr as a string, ignoring exit status.
 func execCombined(name string, args ...string) string { return kubectlprobe.Combined(name, args...) }
-
-// execLookPath reports a binary's location on PATH.
-func execLookPath(file string) (string, error) { return kubectlprobe.LookPathFn(file) }
