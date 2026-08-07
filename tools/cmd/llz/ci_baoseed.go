@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
@@ -39,7 +40,7 @@ func ciBaoSeedSealKeyCmd() *cobra.Command {
 			"to infra-<region> for DR (requires GH_TOKEN/GH_REPO), and prints an offline-backup\n" +
 			"banner — losing this key loses the data.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoseed.RunSeedSealKey(gopts.dryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return baoseed.RunSeedSealKey(cliopts.Global.DryRun, region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> environment backs up the key for DR (required)")
 	return c

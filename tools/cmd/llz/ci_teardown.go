@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
@@ -47,7 +48,7 @@ func teardownDeps() teardown.Deps {
 		},
 		Summary: ghaout.Append,
 		TFBin:   tfbin.Bin,
-		Confirm: func() bool { return gopts.yes },
+		Confirm: func() bool { return cliopts.Global.Yes },
 	}
 }
 

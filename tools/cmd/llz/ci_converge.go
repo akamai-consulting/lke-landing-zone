@@ -39,7 +39,7 @@ func installConvergeDeps(g globalOpts) {
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		Summary:      ghaout.Append,
-		DryRun:       g.dryRun,
+		DryRun:       g.DryRun,
 		StripOversizedCRDLastApplied: func() []string {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		},

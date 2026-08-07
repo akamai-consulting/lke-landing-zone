@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/spf13/cobra"
 )
@@ -73,7 +74,7 @@ func runHooksInstall(g globalOpts, dir string) error {
 	hookPath := filepath.Join(hooksDir, "pre-commit")
 	shim := preCommitShim(self)
 
-	if g.dryRun {
+	if g.DryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would write %s:\n%s", hookPath, shim)
 		return nil
 	}
@@ -130,7 +131,7 @@ func runPrecommit(g globalOpts) error {
 
 	// ── operator escape hatch ──
 	if fi, err := os.Stat(".githooks/pre-commit.local"); err == nil && fi.Mode()&0o111 != 0 {
-		return proc.RunEcho(g.dryRun, ".githooks/pre-commit.local")
+		return proc.RunEcho(g.DryRun, ".githooks/pre-commit.local")
 	}
 	return nil
 }
@@ -145,7 +146,7 @@ func hooksCmd() *cobra.Command {
 			"secrets guard + `llz lint` on every commit. The shim exec's llz by absolute\n" +
 			"path, so it works even when llz isn't on $PATH. Re-run in each fresh clone.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runHooksInstall(gopts, ".") },
+		RunE: func(_ *cobra.Command, _ []string) error { return runHooksInstall(cliopts.Global, ".") },
 	}
 }
 
@@ -155,6 +156,6 @@ func precommitCmd() *cobra.Command {
 		Short:  "pre-commit hook entrypoint (invoked by the installed git hook)",
 		Hidden: true,
 		Args:   cobra.NoArgs,
-		RunE:   func(_ *cobra.Command, _ []string) error { return runPrecommit(gopts) },
+		RunE:   func(_ *cobra.Command, _ []string) error { return runPrecommit(cliopts.Global) },
 	}
 }

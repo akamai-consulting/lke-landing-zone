@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/spf13/cobra"
 )
@@ -30,7 +31,7 @@ func ciDrainObjBucketsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return teardown.RunDrainObjBuckets(region, gopts.yes)
+			return teardown.RunDrainObjBuckets(region, cliopts.Global.Yes)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose buckets to empty")

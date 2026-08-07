@@ -18,6 +18,7 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
@@ -33,11 +34,11 @@ import (
 func brownfieldDeps() brownfield.Deps {
 	return brownfield.Deps{
 		New: func(org, ref, dir string) error {
-			return newinstance.Run(gopts.dryRun, gopts.yes, org, ref, dir, false)
+			return newinstance.Run(cliopts.Global.DryRun, cliopts.Global.Yes, org, ref, dir, false)
 		},
 		ValidateEnvName: validate.EnvName,
 		EnvAdd: func(env string, spec brownfield.EnvSpec) error {
-			return envadd.Run(gopts.dryRun, env, envdef.Opts{
+			return envadd.Run(cliopts.Global.DryRun, env, envdef.Opts{
 				Region:          spec.Region,
 				ClusterDomain:   spec.ClusterDomain,
 				ObjCluster:      spec.ObjCluster,
@@ -52,9 +53,9 @@ func brownfieldDeps() brownfield.Deps {
 			return yamledit.EditSpecFile(path, mutate, parse)
 		},
 		SetSpecPath:            yamledit.SetSpecPath,
-		Render:                 func(env string) error { return render.Run(gopts.dryRun, env, false, false, false) },
+		Render:                 func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
 		KubectlOut:             kubectlprobe.Out,
-		Confirm:                func() bool { return gopts.yes },
+		Confirm:                func() bool { return cliopts.Global.Yes },
 		DefaultAplChartVersion: clusterspec.BaselineAplChartVersion,
 		DefaultTemplateOrg:     templateid.DefaultOrg,
 	}

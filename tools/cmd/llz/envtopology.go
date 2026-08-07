@@ -10,6 +10,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
@@ -35,8 +36,8 @@ func installEnvTopologyDeps() {
 		},
 		// `llz env set` writes the declarative source and then re-renders; this is
 		// the second half of every mutation the extension performs.
-		Render:      func(env string) error { return render.Run(gopts.dryRun, env, false, false, false) },
-		DryRun:      gopts.dryRun,
+		Render:      func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
+		DryRun:      cliopts.Global.DryRun,
 		PromoteDeps: promoteDeps,
 	})
 }

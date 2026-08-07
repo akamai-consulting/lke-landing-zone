@@ -5,6 +5,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
@@ -45,7 +46,7 @@ func statusArgv() [][]string {
 }
 
 func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
-	return envadd.Run(g.dryRun, name, o)
+	return envadd.Run(g.DryRun, name, o)
 }
 
 func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
@@ -61,12 +62,12 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 	// (build_preflight.go); --skip-preflight is the escape hatch for a build whose
 	// spec deliberately lives elsewhere (another branch, another checkout).
 	// --dry-run prints the argv and dispatches nothing, so it has nothing to gate.
-	if !skipPreflight && !g.dryRun {
+	if !skipPreflight && !g.DryRun {
 		if err := buildpreflight.Run(env); err != nil {
 			return err
 		}
 	}
-	return newinstance.Gated(g.dryRun, g.yes, buildArgv(env)...)
+	return newinstance.Gated(g.DryRun, g.Yes, buildArgv(env)...)
 }
 
 // up{Tokens,Doctor,Build} are the seams cmdUp drives — package-level vars so a
@@ -74,7 +75,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 // cloud-mutating side effects of the real commands. Defaults call the real ones.
 var (
 	upTokens = func(g globalOpts, admin bool, env string) error {
-		return onboard.RunTokens(g.onboardOpts(), admin, env, "", "", "")
+		return onboard.RunTokens(onboardOptsOf(g), admin, env, "", "", "")
 	}
 	upDoctor = func(g globalOpts, admin bool, env string) error {
 		return onboard.RunDoctor("", env, admin, true, "", "")
@@ -99,7 +100,7 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 	// Stage 3 preflights the dispatch anyway, but stage 1 is an interactive token
 	// wizard: discovering "this deployment was never pushed" AFTER minting PATs
 	// and creating a state bucket is a bad trade for a read-only check. Ask now.
-	if !g.dryRun {
+	if !g.DryRun {
 		if err := upPreflight(env); err != nil {
 			return err
 		}
@@ -158,13 +159,13 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	// Read-only kubectl checks against the cluster kubectl currently points at.
 	var firstErr error
 	for _, argv := range statusArgv() {
-		if err := proc.RunEcho(g.dryRun, argv...); err != nil && firstErr == nil {
+		if err := proc.RunEcho(g.DryRun, argv...); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	// Argo CD Application health (report-only by default; --wait polls + gates).
 	fmt.Println()
-	if err := converge.ReportArgoHealth(g.dryRun, wait, timeout); err != nil && firstErr == nil {
+	if err := converge.ReportArgoHealth(g.DryRun, wait, timeout); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	// Standing security-hygiene check: the OpenBao root token must not linger in
@@ -211,6 +212,6 @@ func sustainDeps() sustain.Deps {
 		},
 		Exec:    execOutput,
 		Run:     proc.Run,
-		Confirm: func() bool { return gopts.yes },
+		Confirm: func() bool { return cliopts.Global.Yes },
 	}
 }

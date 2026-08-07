@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
@@ -181,7 +182,7 @@ func stepGoFmt(g globalOpts) error {
 	}
 	argv := goFmtListArgv(gofmtBin, dirs)
 	fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
-	if g.dryRun {
+	if g.DryRun {
 		return nil
 	}
 	out, _ := cigate.RunCombined(exec.Command(argv[0], argv[1:]...))
@@ -210,12 +211,12 @@ func stepFmtCheck(g globalOpts) error {
 			if len(paths) == 0 {
 				continue
 			}
-			if err := proc.RunEcho(g.dryRun, fmtCheckArgvPaths(tofu, paths)...); err != nil {
+			if err := proc.RunEcho(g.DryRun, fmtCheckArgvPaths(tofu, paths)...); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := proc.RunEcho(g.dryRun, fmtCheckArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, fmtCheckArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -228,7 +229,7 @@ func stepFmtFix(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := proc.RunEcho(g.dryRun, fmtArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, fmtArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -247,7 +248,7 @@ func stepTFLint(g globalOpts) error {
 		return err
 	}
 	for _, d := range tfDirs() {
-		if err := proc.RunEcho(g.dryRun, tfLintArgv(tflint, d, config)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, tfLintArgv(tflint, d, config)...); err != nil {
 			return err
 		}
 	}
@@ -266,7 +267,7 @@ func stepActionsLint(g globalOpts) error {
 	if len(files) == 0 {
 		return nil
 	}
-	return proc.RunEcho(g.dryRun, actionsLintArgv(actionlint, files)...)
+	return proc.RunEcho(g.DryRun, actionsLintArgv(actionlint, files)...)
 }
 
 func stepGitleaks(g globalOpts) error {
@@ -274,7 +275,7 @@ func stepGitleaks(g globalOpts) error {
 	if !haveTool(gitleaks) {
 		return nil
 	}
-	return proc.RunEcho(g.dryRun, gitleaksArgv(gitleaks)...)
+	return proc.RunEcho(g.DryRun, gitleaksArgv(gitleaks)...)
 }
 
 // conflictMarkerLines scans text for git/copier merge-conflict markers and
@@ -342,7 +343,7 @@ func stepRenderFresh(g globalOpts) error {
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil // no LandingZone spec — nothing renders here
 	}
-	if err := render.Run(g.dryRun, "", false, true, false); err != nil {
+	if err := render.Run(g.DryRun, "", false, true, false); err != nil {
 		return fmt.Errorf("committed render output is stale (`llz render` to refresh): %w", err)
 	}
 	return nil
@@ -576,10 +577,10 @@ func stepTFValidate(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := proc.RunEcho(g.dryRun, tfInitArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, tfInitArgv(terraform, d)...); err != nil {
 			return err
 		}
-		if err := proc.RunEcho(g.dryRun, tfValidateArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, tfValidateArgv(terraform, d)...); err != nil {
 			return err
 		}
 	}
@@ -592,7 +593,7 @@ func stepCheckov(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := proc.RunEcho(g.dryRun, checkovArgv(checkov, d)...); err != nil {
+		if err := proc.RunEcho(g.DryRun, checkovArgv(checkov, d)...); err != nil {
 			return err
 		}
 	}
@@ -654,7 +655,7 @@ func lintCmd() *cobra.Command {
 		Use:   "lint",
 		Short: "fast gate: tofu fmt-check + tflint + actionlint + gitleaks",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runLint(gopts) },
+		RunE:  func(_ *cobra.Command, _ []string) error { return runLint(cliopts.Global) },
 	}
 }
 
@@ -663,7 +664,7 @@ func fmtCmd() *cobra.Command {
 		Use:   "fmt",
 		Short: "tofu fmt (auto-fix terraform formatting)",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return stepFmtFix(gopts) },
+		RunE:  func(_ *cobra.Command, _ []string) error { return stepFmtFix(cliopts.Global) },
 	}
 }
 
@@ -686,7 +687,7 @@ func validateCmd() *cobra.Command {
 				// Thin back-compat alias — the readiness scan now lives in doctor.
 				return configreadiness.RunEnvReadiness(env)
 			}
-			return runValidate(gopts)
+			return runValidate(cliopts.Global)
 		},
 	}
 	c.Flags().StringVar(&env, "env", "", "DEPRECATED: use `llz doctor --env <env>` (delegates to the same readiness scan)")
@@ -725,7 +726,7 @@ func checkCmd() *cobra.Command {
 			Use:   s.use,
 			Short: s.short,
 			Args:  cobra.NoArgs,
-			RunE:  func(_ *cobra.Command, _ []string) error { return s.fn(gopts) },
+			RunE:  func(_ *cobra.Command, _ []string) error { return s.fn(cliopts.Global) },
 		})
 	}
 	return c

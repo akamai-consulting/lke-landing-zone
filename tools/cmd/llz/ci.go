@@ -35,6 +35,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartpublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -76,9 +77,9 @@ import (
 
 func ciCmd() *cobra.Command {
 	// Install converge's capability set before any of its verbs can run. Here
-	// rather than in main() because gopts is populated by flag parsing, and DryRun
+	// rather than in main() because cliopts.Global is populated by flag parsing, and DryRun
 	// is one of the capabilities.
-	installConvergeDeps(gopts)
+	installConvergeDeps(cliopts.Global)
 	installAssertPlatformDeps()
 	installAssertReconcilerDeps()
 	c := &cobra.Command{
@@ -543,7 +544,7 @@ func ciTFImportCmd() *cobra.Command {
 			"Reads LINODE_TOKEN (or LINODE_API_TOKEN). --nonfatal logs+skips import failures\n" +
 			"instead of aborting (destroy workflows only).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCITFImport(gopts, region, nonfatal) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCITFImport(cliopts.Global, region, nonfatal) },
 	}
 	c.Flags().StringVar(&region, "region", "", "tfvars prefix, e.g. primary (required)")
 	c.Flags().BoolVar(&nonfatal, "nonfatal", false, "log+skip import failures instead of aborting (destroy only)")
@@ -569,7 +570,7 @@ func ciTFApplyCmd() *cobra.Command {
 			"Any other error passes through. Reads LINODE_TOKEN (or TF_VAR_linode_token)\n" +
 			"for Heal B.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCITFApply(gopts, plan, varFile) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCITFApply(cliopts.Global, plan, varFile) },
 	}
 	c.Flags().StringVar(&plan, "plan", "", "saved terraform plan file to apply (required)")
 	c.Flags().StringVar(&varFile, "var-file", "", "tfvars file for re-plan/import (required)")
@@ -748,7 +749,7 @@ func ensureKubeconfig(ctx context.Context, g globalOpts, client *linode.Client, 
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
-	if g.dryRun {
+	if g.DryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) ensure kubeconfig "+path)
 		return nil
 	}
@@ -777,7 +778,7 @@ func ensureKubeconfig(ctx context.Context, g globalOpts, client *linode.Client, 
 // now in state.
 func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err error) {
 	fmt.Printf("Importing %s (id=%s)\n", addr, id)
-	if g.dryRun {
+	if g.DryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) terraform import -var-file=%s %s %s\n", varFile, addr, id)
 		return true, nil
 	}
@@ -828,7 +829,7 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 	if plan == "" || varFile == "" {
 		return fmt.Errorf("--plan and --var-file are required")
 	}
-	if g.dryRun {
+	if g.DryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) terraform apply -auto-approve %s (with self-heal + one retry)\n", plan)
 		return nil
 	}
@@ -993,7 +994,7 @@ func ciReapVolumesCmd() *cobra.Command {
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIReapVolumes(gopts, env, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
+			return runCIReapVolumes(cliopts.Global, env, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
 		},
 	}
 	f := c.Flags()
@@ -1027,7 +1028,7 @@ func ciReapNodeBalancersCmd() *cobra.Command {
 			"blocks the next apply's preflight.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIReapNodeBalancers(gopts, clusterID, region, attempts, retryDelay, requireEmpty)
+			return runCIReapNodeBalancers(cliopts.Global, clusterID, region, attempts, retryDelay, requireEmpty)
 		},
 	}
 	f := c.Flags()
@@ -1055,7 +1056,7 @@ func ciReapObjKeysCmd() *cobra.Command {
 			"broad token this runs under (a different label). Reads LINODE_TOKEN; dry-run by\n" +
 			"default, --yes to delete.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIReapObjKeys(gopts, env) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIReapObjKeys(cliopts.Global, env) },
 	}
 	c.Flags().StringVar(&env, "env", "", "deployment whose minted keys + PAT to reap (required)")
 	return c
@@ -1098,7 +1099,7 @@ func tfApplyLinodeToken() string {
 // outcomes, plus a finalize func that prints the summary and errors if any delete
 // failed. Mirrors the del/summary scaffolding in teardown.RunReap.
 func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(path, desc string), func() error) {
-	confirm := g.yes && !g.dryRun
+	confirm := g.Yes && !g.DryRun
 	if !confirm {
 		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
 	}
@@ -1154,7 +1155,7 @@ type sweepOpts struct {
 func sweepUntilEmpty(ctx context.Context, g globalOpts, client *linode.Client, o sweepOpts,
 	sweep func(del func(path, desc string)) error,
 	count func() (int, error)) error {
-	confirm := g.yes && !g.dryRun
+	confirm := g.Yes && !g.DryRun
 	if o.attempts < 1 {
 		o.attempts = 1
 	}

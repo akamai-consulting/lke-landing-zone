@@ -60,7 +60,7 @@ func testSweepOpts(attempts int, requireEmpty bool) sweepOpts {
 
 // confirmOpts is the --yes, non-dry-run combination: the only one under which
 // the verify/retry half of the loop engages.
-var confirmOpts = globalOpts{yes: true}
+var confirmOpts = globalOpts{Yes: true}
 
 func TestSweepUntilEmptyVerifiesEmptyOnFirstPass(t *testing.T) {
 	p := &sweepProbe{remaining: []int{0}}
@@ -144,7 +144,7 @@ func TestSweepUntilEmptySinglePassWhenNotConfirmed(t *testing.T) {
 		g    globalOpts
 	}{
 		{"no --yes", globalOpts{}},
-		{"--yes with --dry-run", globalOpts{yes: true, dryRun: true}},
+		{"--yes with --dry-run", globalOpts{Yes: true, DryRun: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &sweepProbe{remaining: []int{5}}

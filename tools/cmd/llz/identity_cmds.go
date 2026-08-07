@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/spf13/cobra"
 )
@@ -31,7 +32,7 @@ func ciKeycloakConfigureCmd() *cobra.Command {
 			"bootstrap path. No-op when spec.teams is empty.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return identityconfig.RunKeycloakConfigure(gopts.dryRun, region)
+			return identityconfig.RunKeycloakConfigure(cliopts.Global.DryRun, region)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing messages (required)")
@@ -68,7 +69,9 @@ func ciBaoConfigureCmd() *cobra.Command {
 			"file/ audit device is active (warns + sets BOOTSTRAP_ERRORS=true when not).\n" +
 			"Idempotent: enables tolerate already-enabled, writes upsert.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return identityconfig.RunBaoConfigure(gopts.dryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return identityconfig.RunBaoConfigure(cliopts.Global.DryRun, region)
+		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing error messages (required)")
 	return c
@@ -120,7 +123,9 @@ func usersAddCmd() *cobra.Command {
 			"password is left untouched (add-only). Creating a user is cloud-mutating, so\n" +
 			"it runs only with --yes; without it (or with --dry-run) the plan is printed.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return identityconfig.RunUserAdd(gopts.dryRun, gopts.yes, o) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return identityconfig.RunUserAdd(cliopts.Global.DryRun, cliopts.Global.Yes, o)
+		},
 	}
 	f := c.Flags()
 	f.StringVar(&o.Email, "email", "", "user's email address; also the username unless --username is given (required)")

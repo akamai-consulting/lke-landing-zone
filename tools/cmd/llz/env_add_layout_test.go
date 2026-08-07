@@ -10,7 +10,7 @@ import (
 
 // Tests that travelled with the resolve family but exercise envadd.Run, which is
 // scaffold.go's and stays in main. The naive puller tried to drag a PRODUCTION
-// function across the boundary to satisfy them — the guard against ciCmd/gopts/
+// function across the boundary to satisfy them — the guard against ciCmd/cliopts.Global/
 // globalOpts/main needs to cover production symbols too, not just main-only ones.
 
 func TestRunEnvAddRefusesOutsideAnInstance(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
@@ -72,7 +73,7 @@ func renderCmd() *cobra.Command {
 			if len(args) == 1 {
 				env = args[0]
 			}
-			return render.Run(gopts.dryRun, env, tfvarsOnly, check, diff)
+			return render.Run(cliopts.Global.DryRun, env, tfvarsOnly, check, diff)
 		},
 	}
 	c.Flags().BoolVar(&tfvarsOnly, "tfvars-only", false, "render only the tfvars (skip the committed manifest kustomizations)")

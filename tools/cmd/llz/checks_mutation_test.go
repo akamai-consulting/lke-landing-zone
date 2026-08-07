@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 )
 
 // A NUL anywhere means "binary, skip it" — including at offset 0, which is where
@@ -32,7 +34,7 @@ func TestStepConflictMarkersSkipsAFileWhoseFirstByteIsNUL(t *testing.T) {
 		}
 		return nil, errors.New("unexpected git call")
 	})
-	if err := stepConflictMarkers(gopts); err != nil {
+	if err := stepConflictMarkers(cliopts.Global); err != nil {
 		t.Fatalf("a file whose first byte is NUL is binary and must be skipped, got: %v", err)
 	}
 }

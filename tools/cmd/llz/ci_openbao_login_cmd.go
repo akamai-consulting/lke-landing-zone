@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
@@ -30,7 +31,7 @@ func ciOpenBaoLoginCmd() *cobra.Command {
 			"`kubectl port-forward … :8210` (the loopback listener) instead.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return openbao.RunCILogin(gopts.dryRun, method, role, addr, mount, saTokenFile, exportVar)
+			return openbao.RunCILogin(cliopts.Global.DryRun, method, role, addr, mount, saTokenFile, exportVar)
 		},
 	}
 	c.Flags().StringVar(&method, "method", "kubernetes", "auth method: kubernetes (ServiceAccount, default) | oidc (GitHub OIDC)")

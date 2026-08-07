@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
@@ -62,7 +63,7 @@ func init() {
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
 	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
-		return runHooksInstall(globalOpts{dryRun: dryRun, yes: yes}, dir)
+		return runHooksInstall(globalOpts{DryRun: dryRun, Yes: yes}, dir)
 	}
 }
 
@@ -73,17 +74,16 @@ func init() {
 // A CONVERTER, NOT AN EXPORT. Handing the whole struct over would put package
 // main's flag model on the other side of a package boundary and make every future
 // field visible there whether or not it is read. Three fields, named once.
-func (g globalOpts) onboardOpts() onboard.Opts {
-	return onboard.Opts{DryRun: g.dryRun, Open: g.open, Yes: g.yes}
+// A FUNCTION, NOT A METHOD, since globalOpts became an alias for cliopts.Opts
+// and Go will not let a package define methods on a type it does not own.
+func onboardOptsOf(g globalOpts) onboard.Opts {
+	return onboard.Opts{DryRun: g.DryRun, Open: g.Open, Yes: g.Yes}
 }
 
-type globalOpts struct {
-	dryRun bool
-	open   bool
-	yes    bool
-}
-
-var gopts globalOpts
+// globalOpts is an ALIAS, not a definition: the fields moved to internal/cliopts
+// so an extension's command can read them at RunE time. See that package for why
+// the read has to be late rather than threaded in at construction.
+type globalOpts = cliopts.Opts
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -104,9 +104,9 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	pf := root.PersistentFlags()
-	pf.BoolVar(&gopts.dryRun, "dry-run", false, "print commands; change nothing")
-	pf.BoolVar(&gopts.open, "open", false, "open token-creation links in a browser")
-	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
+	pf.BoolVar(&cliopts.Global.DryRun, "dry-run", false, "print commands; change nothing")
+	pf.BoolVar(&cliopts.Global.Open, "open", false, "open token-creation links in a browser")
+	pf.BoolVarP(&cliopts.Global.Yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), clusterspec.ComponentsCmd(),
@@ -198,7 +198,7 @@ func newCmd() *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return newinstance.Run(gopts.dryRun, gopts.yes, org, ref, dir, push)
+			return newinstance.Run(cliopts.Global.DryRun, cliopts.Global.Yes, org, ref, dir, push)
 		},
 	}
 	c.Flags().StringVar(&org, "org", templateid.DefaultOrg, "template org to scaffold from")
@@ -239,13 +239,13 @@ func tokensCmd() *cobra.Command {
 			"e2e harness and defaults to the example repo. Mutating steps need --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := onboard.RunTokens(gopts.onboardOpts(), admin, env, cluster, bucket, repo); err != nil {
+			if err := onboard.RunTokens(onboardOptsOf(cliopts.Global), admin, env, cluster, bucket, repo); err != nil {
 				return err
 			}
 			// Recommend the rest of the flow — but only after a real run (not a
 			// dry-run / no-yes plan), and only standalone (`llz up` chains the
 			// next gates itself, so it would be redundant there).
-			if gopts.yes && !gopts.dryRun {
+			if cliopts.Global.Yes && !cliopts.Global.DryRun {
 				eff := env
 				if eff == "" {
 					eff = "e2e" // matches onboard.RunTokens' admin default
@@ -269,12 +269,14 @@ func secretsCmd() *cobra.Command {
 		&cobra.Command{
 			Use: "onboard.Gather", Short: "paste-everything token wizard (links + .llz/*.env)",
 			Args: cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error { return onboard.Gather(gopts.onboardOpts(), ".") },
+			RunE: func(_ *cobra.Command, _ []string) error { return onboard.Gather(onboardOptsOf(cliopts.Global), ".") },
 		},
 		&cobra.Command{
 			Use: "push <env>", Short: "write gathered tokens into infra-<env> (--yes)",
 			Args: cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error { return onboard.PushSecrets(gopts.onboardOpts(), args[0]) },
+			RunE: func(_ *cobra.Command, args []string) error {
+				return onboard.PushSecrets(onboardOptsOf(cliopts.Global), args[0])
+			},
 		},
 	)
 	return s
@@ -292,7 +294,7 @@ func buildCmd() *cobra.Command {
 			"locally AND on that branch — a spec that was committed but never pushed would\n" +
 			"otherwise fail minutes later, in CI. --skip-preflight bypasses the check.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdBuild(args, gopts, skipPreflight) },
+		RunE: func(_ *cobra.Command, args []string) error { return cmdBuild(args, cliopts.Global, skipPreflight) },
 	}
 	c.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "dispatch without checking the deployment is on the branch CI builds from")
 	return c
@@ -310,7 +312,7 @@ func upCmd() *cobra.Command {
 			"token, delete OPENBAO_ROOT_TOKEN). Cloud-mutating steps need --yes; --dry-run\n" +
 			"previews the whole chain.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdUp(args[0], gopts, admin, skipTokens) },
+		RunE: func(_ *cobra.Command, args []string) error { return cmdUp(args[0], cliopts.Global, admin, skipTokens) },
 	}
 	c.Flags().BoolVar(&admin, "admin", false, "maintainer mode: pass through to `llz tokens --admin`")
 	c.Flags().BoolVar(&skipTokens, "skip-tokens", false, "skip the `llz tokens` step (credentials already provisioned)")
@@ -323,7 +325,7 @@ func statusCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use: "status <env>", Short: "convergence checks (openbao / argocd / ESO) + Application health",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdStatus(args, gopts, wait, timeout) },
+		RunE: func(_ *cobra.Command, args []string) error { return cmdStatus(args, cliopts.Global, wait, timeout) },
 	}
 	c.Flags().BoolVar(&wait, "wait", false, "poll until the required support-plane Applications are Synced+Healthy")
 	c.Flags().IntVar(&timeout, "timeout", 300, "seconds to wait when --wait is set")
@@ -346,7 +348,9 @@ func upgradeCmd() *cobra.Command {
 			"a one-view summary of the churn, and — with --commit — records it as a single\n" +
 			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return upgrade.Run(gopts.dryRun, ref, commit, noRender) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return upgrade.Run(cliopts.Global.DryRun, ref, commit, noRender)
+		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to update + re-pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&commit, "commit", false, "stage + record the upgrade as one labeled git commit")
@@ -386,7 +390,7 @@ func envCmd() *cobra.Command {
 			"root or template checkout). Edit environments/<name>.yaml + re-run `llz render`\n" +
 			"(or `llz env set`) to change a deployment.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
+		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(cliopts.Global, args[0], o) },
 	}
 	f := add.Flags()
 	f.StringVar(&o.TemplateEnv, "template-env", "example", "template env to clone")
@@ -484,7 +488,7 @@ func openbaoCmd() *cobra.Command {
 		Use:   "exec [--] <bao args...>",
 		Short: "run a bao command in the cluster via kubectl exec (day-2 auth/policy admin; needs OPENBAO_ROOT_TOKEN)",
 		Args:  cobra.MinimumNArgs(1),
-		RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunExec(gopts.dryRun, a) },
+		RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunExec(cliopts.Global.DryRun, a) },
 	}
 	execCmd.Flags().SetInterspersed(false)
 
@@ -499,7 +503,9 @@ func openbaoCmd() *cobra.Command {
 			Use:   "set <secret/path> <key=value>...",
 			Short: "dual-write to active+standby, or single-write a standalone (--yes); rollback + hash-verify",
 			Args:  cobra.MinimumNArgs(2),
-			RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunSet(gopts.dryRun, gopts.yes, a[0], a[1:]) },
+			RunE: func(_ *cobra.Command, a []string) error {
+				return openbao.RunSet(cliopts.Global.DryRun, cliopts.Global.Yes, a[0], a[1:])
+			},
 		},
 		execCmd,
 		openbaoLoginCmd(),
@@ -557,7 +563,9 @@ func regenRootCmd() *cobra.Command {
 			"<region> names the infra-<region> GitHub environment for --update-gha-secret.\n" +
 			"Run after a bootstrap revokes root.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, a []string) error { return baolifecycle.RunRegenRoot(gopts.dryRun, a[0], o) },
+		RunE: func(_ *cobra.Command, a []string) error {
+			return baolifecycle.RunRegenRoot(cliopts.Global.DryRun, a[0], o)
+		},
 	}
 	c.Flags().BoolVar(&o.UpdateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
 	c.Flags().StringVar(&o.Repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
@@ -575,7 +583,7 @@ func verifyCmd() *cobra.Command {
 			"pointed at the external HTTPS repo, OpenBao seal status, and the ESO store.\n" +
 			"It does not wait — re-run if a check is just mid-reconcile.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return reachability.RunVerify(gopts.dryRun, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return reachability.RunVerify(cliopts.Global.DryRun, o) },
 	}
 	c.Flags().StringVar(&o.SSHSourceHost, "ssh-source-host", "", "SSH source-of-truth host to check for (e.g. a self-hosted Git host); empty skips the SSH-source checks")
 	return c
@@ -592,7 +600,9 @@ func reapCmd() *cobra.Command {
 			"PAT from LINODE_API_TOKEN (or LINODE_TOKEN). Dry-run by default; deletes only\n" +
 			"with --yes. Volumes need a scope (--region or --volume-ids).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return teardown.RunReap(gopts.dryRun, gopts.yes, o) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return teardown.RunReap(cliopts.Global.DryRun, cliopts.Global.Yes, o)
+		},
 	}
 	f := c.Flags()
 	f.StringVar(&o.Region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
@@ -622,7 +632,9 @@ func selfUpdateCmd() *cobra.Command {
 			"release SHA256SUMS, and atomically overwrites the running binary. Defaults to\n" +
 			"the latest vX.Y.Z release; --dry-run reports the target without installing.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return selfupgrade.RunSelfUpdate(gopts.dryRun, repo, ref) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return selfupgrade.RunSelfUpdate(cliopts.Global.DryRun, repo, ref)
+		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release to install, e.g. v0.0.39 (default: latest)")
 	c.Flags().StringVar(&repo, "repo", "", "template repo to pull from (default: upstream_org/lke-landing-zone)")

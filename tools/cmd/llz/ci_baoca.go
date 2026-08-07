@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 )
 
 func ciExtractOpenbaoCACmd() *cobra.Command {
@@ -47,7 +48,7 @@ func ciProvisionPeerCACmd() *cobra.Command {
 			"(the runner's kubeconfig already points there). Establishes cross-cluster\n" +
 			"trust so standby operations can run with VAULT_SKIP_VERIFY=false.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoca.RunProvisionPeerCA(gopts.dryRun) },
+		RunE: func(_ *cobra.Command, _ []string) error { return baoca.RunProvisionPeerCA(cliopts.Global.DryRun) },
 	}
 	return c
 }

@@ -783,6 +783,17 @@ categories:
 #        about moving LOGIC in; this moved wiring, and testing wiring to restore
 #        a ratio would be writing tests for the coverage number rather than for
 #        the code.
+#   83rd: globals -> internal/cliopts   5,043 -> 5,073 (+30 / 56 files)
+#        A DELIBERATE GROWTH, and the only one in this campaign. --dry-run, --yes
+#        and --open are PERSISTENT flags: cobra parses them when a command
+#        EXECUTES, long after every constructor ran. Moving commands into
+#        extension packages made it tempting to thread `dryRun bool` in as a
+#        constructor argument -- which would capture the pre-parse ZERO. Nothing
+#        would fail. --dry-run would just stop working, on cloud-mutating
+#        commands. So the globals became a value any package can read at RunE
+#        time, `globalOpts` is now an alias for it, and the +30 is the alias plus
+#        the comment explaining the binding moment. TestGlobalFlagsAreParsedBefore
+#        RunE pins it. The next entry spends this back many times over.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -795,7 +806,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 5043
+    budget: 5073
     exact: true
     include:
       - "tools/cmd/llz/*.go"

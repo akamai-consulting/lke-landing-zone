@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +37,7 @@ func ciBaoEnsureReadyCmd() *cobra.Command {
 			"GH_TOKEN/GH_REPO (first-init persistence).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return baolifecycle.RunEnsureReady(gopts.dryRun, region,
+			return baolifecycle.RunEnsureReady(cliopts.Global.DryRun, region,
 				time.Duration(leaderTimeout)*time.Second, time.Duration(joinTimeout)*time.Second)
 		},
 	}
@@ -63,7 +64,7 @@ func ciBaoInitCmd() *cobra.Command {
 			"environment secrets. Emits did_init=true. Requires GH_TOKEN/GH_REPO (the\n" +
 			"secrets-write PAT).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baolifecycle.RunInit(gopts.dryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return baolifecycle.RunInit(cliopts.Global.DryRun, region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment receives the secrets (required)")
 	return c
@@ -85,7 +86,9 @@ func ciBaoRegenRootCmd() *cobra.Command {
 			"infra-<region> OPENBAO_ROOT_TOKEN environment secret. Interactive operator\n" +
 			"twin: `llz openbao regen-root`.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baolifecycle.RunRegenRootCI(gopts.dryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return baolifecycle.RunRegenRootCI(cliopts.Global.DryRun, region)
+		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment holds OPENBAO_ROOT_TOKEN (required)")
 	return c
@@ -108,7 +111,7 @@ func ciBaoBreakglassCmd() *cobra.Command {
 			"(a base64 file at $RUNNER_TEMP/root-token.b64 + a job-summary block).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return baolifecycle.RunBreakglass(gopts.dryRun, region, action, pubkeyB64)
+			return baolifecycle.RunBreakglass(cliopts.Global.DryRun, region, action, pubkeyB64)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment whose infra-<region> Environment holds the recovery quorum + OPENBAO_ROOT_TOKEN (required)")

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 )
 
 func TestCheckArgvBuilders(t *testing.T) {
@@ -122,7 +124,7 @@ func TestStepConflictMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	if err := stepConflictMarkers(gopts); err != nil {
+	if err := stepConflictMarkers(cliopts.Global); err != nil {
 		t.Fatalf("clean tree should pass: %v", err)
 	}
 
@@ -131,7 +133,7 @@ func TestStepConflictMarkers(t *testing.T) {
 	if _, err := gitOutput(dir, "add", "kustomization.yaml"); err != nil {
 		t.Fatal(err)
 	}
-	if err := stepConflictMarkers(gopts); err == nil {
+	if err := stepConflictMarkers(cliopts.Global); err == nil {
 		t.Fatal("expected failure on a tracked file with conflict markers")
 	}
 }
@@ -188,7 +190,7 @@ func TestStepDroppedAPIVersionsClean(t *testing.T) {
 		// upstream content, not ours to gate — skipped even on the dropped version.
 		"kubernetes-charts/llz-openbao-platform/charts/openbao/templates/es.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
 	})
-	if err := stepDroppedAPIVersions(gopts); err != nil {
+	if err := stepDroppedAPIVersions(cliopts.Global); err != nil {
 		t.Fatalf("migrated manifests + prose mention + served v1alpha1 + out-of-scope docs/ + vendored subchart should pass: %v", err)
 	}
 }
@@ -207,7 +209,7 @@ func TestStepDroppedAPIVersionsFlagsEveryScannedTree(t *testing.T) {
 	} {
 		t.Run(f, func(t *testing.T) {
 			droppedAPITree(t, map[string]string{f: "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"})
-			if err := stepDroppedAPIVersions(gopts); err == nil {
+			if err := stepDroppedAPIVersions(cliopts.Global); err == nil {
 				t.Errorf("expected failure: %s declares external-secrets.io/v1beta1", f)
 			}
 		})
@@ -253,7 +255,7 @@ func chdir(t *testing.T, dir string) {
 // LandingZone spec of its own, and lint runs there on every commit.
 func TestStepRenderFreshSkipsWithoutASpec(t *testing.T) {
 	chdir(t, t.TempDir())
-	if err := stepRenderFresh(gopts); err != nil {
+	if err := stepRenderFresh(cliopts.Global); err != nil {
 		t.Fatalf("no spec present must skip, got: %v", err)
 	}
 }
@@ -288,7 +290,7 @@ spec:
 	chdir(t, dir)
 	// Nothing rendered yet, so every committed apl-values target is missing — the
 	// same shape as output left behind by an older pin.
-	err := stepRenderFresh(gopts)
+	err := stepRenderFresh(cliopts.Global)
 	if err == nil {
 		t.Fatal("expected stale/absent committed render output to fail lint")
 	}
