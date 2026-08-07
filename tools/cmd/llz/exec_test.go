@@ -53,21 +53,6 @@ func TestGitOut(t *testing.T) {
 	}
 }
 
-func TestGitOutputPassesDirFlag(t *testing.T) {
-	var gotArgs []string
-	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
-		gotArgs = args
-		return []byte("ok\n"), nil
-	})
-	out, err := gitOutput("/work/dir", "rev-parse", "--show-toplevel")
-	if err != nil || out != "ok" {
-		t.Fatalf("gitOutput = (%q, %v), want (ok, nil)", out, err)
-	}
-	if len(gotArgs) < 2 || gotArgs[0] != "-C" || gotArgs[1] != "/work/dir" {
-		t.Errorf("gitOutput did not pass `-C /work/dir`: %v", gotArgs)
-	}
-}
-
 func TestKubectlOut(t *testing.T) {
 	withExecOutput(t, func(name string, _ ...string) ([]byte, error) {
 		if name != "kubectl" {

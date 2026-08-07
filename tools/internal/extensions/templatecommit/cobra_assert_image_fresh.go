@@ -1,6 +1,6 @@
-package main
+package templatecommit
 
-// ci_assert_image_fresh.go implements `llz ci assert-image-fresh` — a fast
+// cobra_assert_image_fresh.go implements `llz ci assert-image-fresh` — a fast
 // preflight that fails LOUD when the ci-tofu image's baked `llz` is not built
 // from the template ref the instance pins.
 //
@@ -18,6 +18,12 @@ package main
 // was skipped until a live adopter hit it — and it is not exotic, it is what a
 // freshly scaffolded instance looks like by default.
 //
+// IT NEEDED NO NEW DECLARATION. This extension already reads
+// "resolve the pinned template commit and report CI image refs that have drifted
+// from it" and already binds assertion:configured[read-repo, cloud-read] — the
+// command was simply still in package main. hexSHARe came out on arrival: this
+// package had the original.
+//
 // The ref is read from the instance's own .copier-answers.yml rather than passed
 // in as a workflow input: a hand-maintained input is a third pin that can skew
 // from the other two, which is the very failure this guard exists to catch.
@@ -25,20 +31,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/spf13/cobra"
 )
 
-// hexSHARe matches a git object name (short or full). Anchored so a branch/tag
-// name like "main" or "v1.2.3" is NOT treated as a SHA.
-var hexSHARe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
-
-func ciAssertImageFreshCmd() *cobra.Command {
+func AssertImageFreshCmd() *cobra.Command {
 	var templateRef string
 	c := &cobra.Command{
 		Use:   "assert-image-fresh",
@@ -65,7 +65,7 @@ func ciAssertImageFreshCmd() *cobra.Command {
 					return err
 				}
 			}
-			return runAssertImageFresh(version, firstNonEmpty(templateRef, answers.PinnedTemplateRef()), templatecommit.InstanceTemplateRepo())
+			return runAssertImageFresh(Version, firstNonEmpty(templateRef, answers.PinnedTemplateRef()), InstanceTemplateRepo())
 		},
 	}
 	c.Flags().StringVar(&templateRef, "template-ref", "", "override the ref compared against the baked llz build (default: the instance's pin)")
@@ -93,7 +93,7 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	// as commits. See template_commit.go.
 	pinCommit := templateRef
 	if isDevBuild(bakedVersion) && !hexSHARe.MatchString(templateRef) {
-		sha, ok := templatecommit.Resolve(templateRepo, templateRef)
+		sha, ok := Resolve(templateRepo, templateRef)
 		if !ok {
 			fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: template-ref %q is not a SHA and could not be resolved to one — cannot compare against baked dev build %q; skipping.\n", templateRef, strings.TrimSpace(bakedVersion))
 			return nil

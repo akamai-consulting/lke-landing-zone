@@ -1,4 +1,4 @@
-package main
+package templatecommit
 
 import (
 	"strings"
@@ -63,7 +63,7 @@ func TestAssertAdopterPinDefaultsToLatestRelease(t *testing.T) {
 }
 
 // THE REGRESSION. This is the gate reproducing the pre-fix behaviour: `llz tokens`
-// computes a floating version tag for a release-pinned instance. It has to FAIL —
+// computes a floating Version tag for a release-pinned instance. It has to FAIL —
 // this exact configuration shipped to a live adopter with e2e color.Green throughout.
 func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 	stubPublishWait(t)
@@ -137,7 +137,7 @@ func TestForeignCommit(t *testing.T) {
 }
 
 func TestAssertAdopterPinCmdWiring(t *testing.T) {
-	c := ciAssertAdopterPinCmd()
+	c := AssertAdopterPinCmd()
 	if c.Use != "assert-adopter-pin" {
 		t.Errorf("Use = %q", c.Use)
 	}

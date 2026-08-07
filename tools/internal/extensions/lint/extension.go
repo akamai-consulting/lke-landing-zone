@@ -33,6 +33,13 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // to move in. `write-repo` is legal at `scaffolded`, so this needs no widening;
 // it needs the second row.
 //
+// `llz hooks` and `llz precommit` arrived later and needed NEITHER a new row nor
+// a new extension. precommit is RunLint plus a secret-path refusal, and hooks
+// installs the shim whose only job is to call it — the gate covers one and the
+// write row covers the other. That the write lands in .git/hooks rather than in
+// tracked content is a detail the grant does not distinguish, and should not:
+// arming a hook changes what a commit does, which is what write-repo is about.
+//
 // `gate`, not `assertion`, even though the steps shell out to gofmt/tflint/
 // actionlint/gitleaks. The campaign's rule is that a gate is cheap and OFFLINE:
 // these are local binaries on PATH, there is no network and no cluster, and this
@@ -42,7 +49,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "lint",
-		Short:  "the local gate: formatters, linters, secret scan, and the tree's own guards",
+		Short:  "the local gate: formatters, linters, secret scan, the tree's own guards, and the hook that arms them",
 		Always: true,
 		Bindings: []extension.Binding{
 			{

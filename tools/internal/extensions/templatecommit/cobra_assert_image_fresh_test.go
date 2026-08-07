@@ -1,22 +1,11 @@
-package main
+package templatecommit
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/spf13/cobra"
 )
-
-// stubTemplateCommit replaces the tag→commit round-trip for the duration of a
-// test. Every test in this file installs one: without it a non-SHA ref would send
-// a real request to api.github.com, which is both slow and a hermeticity break.
-func stubTemplateCommit(t *testing.T, fn func(repo, ref string) (string, bool)) {
-	t.Helper()
-	prev := templatecommit.Resolve
-	t.Cleanup(func() { templatecommit.Resolve = prev })
-	templatecommit.Resolve = fn
-}
 
 func TestRunAssertImageFresh(t *testing.T) {
 	const sha = "0d634d7d54a138314be21d0891c376fbae99519a"
@@ -35,7 +24,7 @@ func TestRunAssertImageFresh(t *testing.T) {
 		{"dev sha mismatch", "dev-" + sha, other, unresolvable, "image/template skew"},
 		{"dev vs unresolvable ref skips", "dev-" + sha, "main", unresolvable, ""},
 		{"unstamped dev skips", "dev", sha, unresolvable, ""},
-		{"empty version skips", "", sha, unresolvable, ""},
+		{"empty Version skips", "", sha, unresolvable, ""},
 		{"release tag matches", "v1.2.3", "v1.2.3", unresolvable, ""},
 		{"release tag mismatch", "v1.2.3", "v1.2.4", unresolvable, "image/template skew"},
 		{"release vs sha skips", "v1.2.3", sha, unresolvable, ""},
@@ -93,7 +82,7 @@ func TestAssertImageFreshSkewMessageIsActionable(t *testing.T) {
 }
 
 func TestAssertImageFreshCmdWiring(t *testing.T) {
-	c := ciAssertImageFreshCmd()
+	c := AssertImageFreshCmd()
 	if c.Use != "assert-image-fresh" {
 		t.Errorf("Use = %q", c.Use)
 	}

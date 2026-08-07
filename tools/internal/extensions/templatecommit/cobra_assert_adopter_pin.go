@@ -1,6 +1,6 @@
-package main
+package templatecommit
 
-// ci_assert_adopter_pin.go implements `llz ci assert-adopter-pin` — the release
+// cobra_assert_adopter_pin.go implements `llz ci assert-adopter-pin` — the release
 // gate that stands up the shape a REAL ADOPTER is in, which nothing else does.
 //
 // THE GAP THIS CLOSES. Every e2e run pins the throwaway instance to
@@ -44,11 +44,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
-func ciAssertAdopterPinCmd() *cobra.Command {
+func AssertAdopterPinCmd() *cobra.Command {
 	var ref, repo string
 	c := &cobra.Command{
 		Use:   "assert-adopter-pin",
@@ -62,7 +61,7 @@ func ciAssertAdopterPinCmd() *cobra.Command {
 			"release-e2e lane's pre-flight job, ahead of any cluster spend.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runAssertAdopterPin(firstNonEmpty(repo, templatecommit.InstanceTemplateRepo()), ref)
+			return runAssertAdopterPin(firstNonEmpty(repo, InstanceTemplateRepo()), ref)
 		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release tag to check (default: the template repo's latest release)")
@@ -85,7 +84,7 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    warning because it cannot tell "skewed" from "unreachable" — an
 	//    unresolvable ref IS a failure here: this gate's entire job is to answer
 	//    this question, so being unable to ask it is a failed gate, not a pass.
-	commit, ok := templatecommit.Resolve(templateRepo, ref)
+	commit, ok := Resolve(templateRepo, ref)
 	if !ok {
 		return fmt.Errorf("could not resolve %s@%s to a commit — the gate cannot verify what an adopter "+
 			"scaffolding at this tag would run", templateRepo, ref)
@@ -106,11 +105,11 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	// ForCommit: leg 1 already resolved this tag. Re-resolving here would make the
 	// verdict depend on a second round-trip, and a blip on it reported "could not
 	// resolve" as a pin-computation failure — blaming the code for the network.
-	tfImage, kubeImage, pinned, why := templatecommit.ComputeImageVarsForCommit(commit, ref)
+	tfImage, kubeImage, pinned, why := ComputeImageVarsForCommit(commit, ref)
 	if !pinned {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
 		return fmt.Errorf("`llz tokens` would not pin an instance scaffolded at %s to an immutable image: %s.\n"+
-			"  It would compute TF_IMAGE=%s, KUBE_IMAGE=%s — version tags that build-images.yml republishes on\n"+
+			"  It would compute TF_IMAGE=%s, KUBE_IMAGE=%s — Version tags that build-images.yml republishes on\n"+
 			"  every push to main. An instance pinned at %s would then run main's llz against %s's rendered\n"+
 			"  manifests and fail its FIRST pipeline run on `llz render --check` drift. That fallback is correct\n"+
 			"  behaviour for an OLD release (see computeCIImageVars), but it is not acceptable for one being cut:\n"+
@@ -135,7 +134,7 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    legs vouched for, and the pull itself is the backstop — an absent image
 	//    fails the first job with `manifest unknown`, which is unambiguous.
 	for _, im := range []struct{ name, ref string }{{"TF_IMAGE", tfImage}, {"KUBE_IMAGE", kubeImage}} {
-		if published, asked := templatecommit.ImagePublished(im.ref); published && asked {
+		if published, asked := ImagePublished(im.ref); published && asked {
 			fmt.Printf("  ✓ %s is published\n", im.ref)
 			continue
 		}
@@ -191,22 +190,22 @@ func foreignCommit(commit string) string {
 // whole reason a release candidate can be published without being consumable —
 // so the tag this returns is the one an adopter running `llz new` today gets.
 //
-// Bounded HTTP rather than `gh api`, for the same reason templatecommit.Resolve
+// Bounded HTTP rather than `gh api`, for the same reason Resolve
 // dropped it: execOutput has no timeout, and this runs in a gate.
 var latestReleaseTag = func(repo string) (string, bool) {
 	if repo == "" {
 		return "", false
 	}
-	req, err := http.NewRequest(http.MethodGet, templatecommit.GithubAPIBase+"/repos/"+repo+"/releases/latest", nil)
+	req, err := http.NewRequest(http.MethodGet, GithubAPIBase+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return "", false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if t := templatecommit.GithubToken(); t != "" {
+	if t := GithubToken(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
-	resp, err := (&http.Client{Timeout: templatecommit.HTTPAskTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: HTTPAskTimeout}).Do(req)
 	if err != nil {
 		return "", false
 	}
@@ -248,18 +247,18 @@ var (
 // is spent, or the registry stops answering.
 //
 // Returns nothing: it is a WAIT, not a check. Whether the images are there is
-// still decided downstream by templatecommit.ComputeImageVarsForCommit, which owns that verdict
+// still decided downstream by ComputeImageVarsForCommit, which owns that verdict
 // and its message — duplicating the decision here would mean two places that can
 // disagree about the same fact.
 func waitForCIImages(commit string) {
 	images := []string{
-		templatecommit.CIImageRef(templateid.DefaultOrg, "ci-tofu", "sha-"+commit),
-		templatecommit.CIImageRef(templateid.DefaultOrg, "ci-kubernetes", "sha-"+commit),
+		CIImageRef(templateid.DefaultOrg, "ci-tofu", "sha-"+commit),
+		CIImageRef(templateid.DefaultOrg, "ci-kubernetes", "sha-"+commit),
 	}
 	for attempt := 0; ; attempt++ {
 		missing := ""
 		for _, im := range images {
-			published, asked := templatecommit.ImagePublished(im)
+			published, asked := ImagePublished(im)
 			// !asked means the registry never answered. Waiting on that is pointless —
 			// polling an unreachable endpoint ten more times tells us nothing new, and
 			// the downstream check treats "could not ask" as "do not downgrade" anyway.

@@ -11,6 +11,16 @@ import (
 
 // writeInstanceDir runs the test in a fresh directory containing files
 // (name → content) — chdirTemp plus the instance files the case needs.
+// stubTemplateCommit replaces the tag→commit round-trip for the duration of a
+// test. Every test in this file installs one: without it a non-SHA ref would send
+// a real request to api.github.com, which is both slow and a hermeticity break.
+func stubTemplateCommit(t *testing.T, fn func(repo, ref string) (string, bool)) {
+	t.Helper()
+	prev := templatecommit.Resolve
+	t.Cleanup(func() { templatecommit.Resolve = prev })
+	templatecommit.Resolve = fn
+}
+
 func writeInstanceDir(t *testing.T, files map[string]string) {
 	t.Helper()
 	chdirTemp(t)

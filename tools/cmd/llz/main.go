@@ -35,6 +35,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -57,6 +58,7 @@ func init() {
 	selfupgrade.Version = version
 	// copier anchors a scaffold to this binary's release when it has one.
 	copier.Version = version
+	templatecommit.Version = version
 	// envadd regenerates promote.yml after adding an environment, but the WRITE
 	// stays here: internal/promote declares transition:promoted[read-repo] and its
 	// own guard refuses a write path, and write-repo is not legal at `promoted`.
@@ -65,7 +67,7 @@ func init() {
 	upgrade.SustainDeps = sustainDeps
 	lint.SustainDeps = sustainDeps
 	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
-		return runHooksInstall(globalOpts{DryRun: dryRun, Yes: yes}, dir)
+		return lint.RunHooksInstall(globalOpts{DryRun: dryRun, Yes: yes}, dir)
 	}
 }
 
@@ -134,7 +136,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), onboard.SecretsCmd(), onboard.TokensCmd(), render.RenderCmd(), buildCmd(), upCmd(), statusCmd(),
-		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), hooksCmd(), precommitCmd(),
+		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), lint.HooksCmd(), lint.PrecommitCmd(),
 		teardown.ReapCmd(), openbao.OpenbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)

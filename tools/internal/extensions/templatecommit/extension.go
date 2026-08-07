@@ -45,5 +45,19 @@ func Extension() extension.Extension {
 			State:  extension.Configured,
 			Grants: []extension.Grant{extension.ReadRepo, extension.CloudRead},
 		}},
+		Incomplete: []string{
+			"`assert-adopter-pin` is bound at `configured` and does not run against a " +
+				"configured instance. It runs on the TEMPLATE REPO when a release " +
+				"candidate is cut, and asserts that an adopter who scaffolds from that tag " +
+				"WOULD reach `configured` coherently — tag resolves, `llz tokens` computes " +
+				"an immutable image pin naming the same commit, both images are published, " +
+				"and assert-image-fresh accepts a binary stamped there. Every grant and the " +
+				"kind are exactly right; the STATE is a stand-in, because the model " +
+				"describes an instance's lifecycle and has no word for a gate on the " +
+				"template's own release. That is a different gap from `pin-coherence`'s " +
+				"(a check that runs AFTER a state to catch what it broke) and from " +
+				"`argocd-diagnostics`' (a diagnostic that runs when a state FAILED), so it " +
+				"is recorded as its own rather than folded into either.",
+		},
 	}
 }

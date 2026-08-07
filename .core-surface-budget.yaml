@@ -887,6 +887,32 @@ categories:
 #        they were equally untested in package main (floor 29%). What IS covered
 #        is the part with a wrong answer: the conflict-marker scanner, the
 #        dropped-apiVersion detector, and the two orchestrators` failure paths.
+#   88th: the last three undeclared verbs   2,421 -> 2,033 (-388)
+#        NONE OF THEM NEEDED A NEW EXTENSION, which is the finding. All three were
+#        recorded as "unclaimed" because no extension named them; measuring showed
+#        every one already had an owner whose declaration covered it.
+#          - assert-image-fresh -> template-commit, whose Short already reads
+#            "resolve the pinned template commit and report CI image refs that
+#            have drifted from it" and which already binds
+#            assertion:configured[read-repo,cloud-read]. Zero declaration change.
+#          - assert-adopter-pin -> template-commit too. Its leg four IS
+#            assert-image-fresh, called directly. Same grants, same kind.
+#          - hooks + precommit -> lint. precommit is RunLint plus a secret-path
+#            refusal; hooks installs the shim whose only job is to call it. The
+#            gate row covers one, the write row (earned by `llz fmt`) the other.
+#        A THIRD MODEL GAP, RECORDED NOT WIDENED. assert-adopter-pin is bound at
+#        `configured` and does not run against a configured instance -- it runs on
+#        the TEMPLATE REPO when a release is cut, asserting an adopter scaffolding
+#        from that tag WOULD reach `configured` coherently. Kind and grants are
+#        exactly right; the STATE is a stand-in, because the model describes an
+#        INSTANCE`s lifecycle and has no word for a gate on the template`s own
+#        release. Distinct from pin-coherence`s gap (a check running AFTER a state)
+#        and argodiag`s (a diagnostic running when a state FAILED); recorded as its
+#        own on template-commit rather than folded into either.
+#        cmd/llz is now 33 files and holds no undeclared capability.
+#        TWO FLOORS DOWN: lint 45->37 and template-commit 92->84, the same
+#        dilution every batch has had -- untested cobra wiring joining a tested
+#        capability. Both files were equally untested in package main.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -899,7 +925,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 2421
+    budget: 2033
     exact: true
     include:
       - "tools/cmd/llz/*.go"

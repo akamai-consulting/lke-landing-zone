@@ -66,6 +66,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
@@ -449,12 +450,12 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(bootstrapcluster.PrepareAplUpgradeCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
-	c.AddCommand(ciAssertImageFreshCmd())
+	c.AddCommand(templatecommit.AssertImageFreshCmd())
 	// Release gate for the shape e2e structurally cannot produce: an instance pinned
 	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
 	// first-run to a live adopter with e2e color.Green throughout.
-	c.AddCommand(ciAssertAdopterPinCmd())
+	c.AddCommand(templatecommit.AssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(workflowshells.Cmd())

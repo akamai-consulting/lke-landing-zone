@@ -1,4 +1,14 @@
-package main
+package lint
+
+// hooks.go — `llz hooks` and `llz precommit`, which is where the local gate gets
+// ARMED and how it runs.
+//
+// IT NEEDED NO NEW EXTENSION. `llz precommit` is RunLint plus a secret-path
+// refusal, and `llz hooks` installs the shim whose entire job is to call it. Both
+// are covered by the two bindings already declared here: the gate for precommit,
+// and the write row (earned by `llz fmt`) for dropping a shim into .git/hooks.
+//
+// gitOutput did not come with it — deps.go already had the four-line copy.
 
 import (
 	"fmt"
@@ -7,7 +17,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
@@ -52,15 +61,8 @@ echo "pre-commit: llz not found; skipping checks" >&2
 `, llzPath, llzPath)
 }
 
-// gitOutput runs git in dir and returns trimmed stdout. `git -C dir` is
-// equivalent to setting cmd.Dir and keeps the call on the execOutput seam.
-func gitOutput(dir string, args ...string) (string, error) {
-	out, err := execOutput("git", append([]string{"-C", dir}, args...)...)
-	return strings.TrimSpace(string(out)), err
-}
-
-// runHooksInstall writes the pre-commit shim into dir's git hooks directory.
-func runHooksInstall(g globalOpts, dir string) error {
+// RunHooksInstall writes the pre-commit shim into dir's git hooks directory.
+func RunHooksInstall(g cliopts.Opts, dir string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate llz binary: %w", err)
@@ -91,7 +93,7 @@ func runHooksInstall(g globalOpts, dir string) error {
 
 // runPrecommit is the hook entrypoint: secrets guard on staged files, then the
 // fast lint gate, then the optional operator escape hatch.
-func runPrecommit(g globalOpts) error {
+func runPrecommit(g cliopts.Opts) error {
 	root, err := gitOutput(".", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("not in a git repo: %w", err)
@@ -126,7 +128,7 @@ func runPrecommit(g globalOpts) error {
 
 	// ── lint ──
 	fmt.Fprintln(os.Stderr, "pre-commit: running llz lint")
-	if err := lint.RunLint(g); err != nil {
+	if err := RunLint(g); err != nil {
 		return err
 	}
 
@@ -139,7 +141,7 @@ func runPrecommit(g globalOpts) error {
 
 // ── commands ──────────────────────────────────────────────────────────────────
 
-func hooksCmd() *cobra.Command {
+func HooksCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "hooks",
 		Short: "install the pre-commit hook (secrets guard + llz lint)",
@@ -147,11 +149,11 @@ func hooksCmd() *cobra.Command {
 			"secrets guard + `llz lint` on every commit. The shim exec's llz by absolute\n" +
 			"path, so it works even when llz isn't on $PATH. Re-run in each fresh clone.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runHooksInstall(cliopts.Global, ".") },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunHooksInstall(cliopts.Global, ".") },
 	}
 }
 
-func precommitCmd() *cobra.Command {
+func PrecommitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "precommit",
 		Short:  "pre-commit hook entrypoint (invoked by the installed git hook)",
