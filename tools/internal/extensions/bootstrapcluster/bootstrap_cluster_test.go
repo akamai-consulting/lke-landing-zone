@@ -50,10 +50,12 @@ func TestDefaultAplChartVersion(t *testing.T) {
 	if clusterspec.BaselineAplChartVersion != "v6.1.0" {
 		t.Errorf("clusterspec.BaselineAplChartVersion = %q, want \"v6.1.0\" — bump deliberately, in lockstep with the platform baseline", clusterspec.BaselineAplChartVersion)
 	}
-	if clusterspec.BaselineAplChartVersion != clusterspec.BaselineAplChartVersion {
-		t.Errorf("clusterspec.BaselineAplChartVersion = %q but clusterspec.BaselineAplChartVersion = %q — they are one fact and must not skew",
-			clusterspec.BaselineAplChartVersion, clusterspec.BaselineAplChartVersion)
-	}
+	// The skew check that used to sit here is GONE, and getting what it wanted is
+	// why. It compared package main's `defaultAplChartVersion` against
+	// clusterspec.BaselineAplChartVersion — two copies of one fact. The alias was
+	// deleted during the extraction, so there is one constant and nothing left to
+	// skew; the comparison had quietly become value-against-itself, which
+	// staticcheck (SA4000) named the first time it ran on this branch.
 }
 
 // ── manifest builders (spot checks) ──────────────────────────────────────────

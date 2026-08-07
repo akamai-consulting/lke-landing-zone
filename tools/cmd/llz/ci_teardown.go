@@ -49,7 +49,12 @@ func teardownDeps() teardown.Deps {
 		},
 		Summary: ghaout.Append,
 		TFBin:   tfbin.Bin,
-		Confirm: func() bool { return cliopts.Global.Yes },
+		// AUTHORISED **AND NOT A DRY RUN**. The teardown extraction turned
+		// `g.yes && !g.dryRun` into `d.Confirm() && !!d.Confirm()` and installed
+		// Confirm as `yes` alone, which silently dropped the dry-run half: with
+		// `--yes --dry-run` the destroy paths deleted. staticcheck flagged the
+		// double negation the first time it ever ran on this branch.
+		Confirm: func() bool { return cliopts.Global.Yes && !cliopts.Global.DryRun },
 	}
 }
 

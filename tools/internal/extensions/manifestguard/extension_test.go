@@ -28,7 +28,7 @@ func TestNoLanesAreOutstanding(t *testing.T) {
 		t.Errorf("Incomplete came back (%q) — if a lane really left, say which and why", inc)
 	}
 	// The lane that was missing longest: prove its entry point is reachable here.
-	if ScannedManifestTrees == nil || len(ScannedManifestTrees) == 0 {
+	if len(ScannedManifestTrees) == 0 {
 		t.Error("dropped-apiversions lost its scan roots")
 	}
 }
