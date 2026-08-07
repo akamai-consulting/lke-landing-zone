@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
 
@@ -231,7 +232,7 @@ func sliceOr(v any) []any {
 // instanceRepoFromAnswers reads `instance_repo` from .copier-answers.yml, or ""
 // when absent.
 func instanceRepoFromAnswers() string {
-	a, _ := readAnswers(".")
+	a, _ := answers.Read(".")
 	if a == nil {
 		return ""
 	}

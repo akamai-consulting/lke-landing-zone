@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
@@ -178,7 +179,7 @@ func applyUpgradeManifestPolicy(g globalOpts, ref string, before upgradeSnapshot
 }
 
 func renderUpgradeScaffold(ref string) (string, func(), error) {
-	a, err := readAnswers(".")
+	a, err := answers.Read(".")
 	if err != nil {
 		return "", nil, err
 	}
@@ -196,7 +197,7 @@ func renderUpgradeScaffold(ref string) (string, func(), error) {
 	return dst, cleanup, nil
 }
 
-func copierRenderArgv(a *answers, ref, dst string) []string {
+func copierRenderArgv(a *answers.File, ref, dst string) []string {
 	source := "gh:" + updateRepo()
 	upstreamOrg := defaultTemplateOrg
 	instanceRepo := "your-org/your-instance-repo"

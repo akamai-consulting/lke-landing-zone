@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/bootstrapcluster"
 	"github.com/spf13/cobra"
 )
@@ -12,7 +13,7 @@ import (
 // mass. Installed here as a delegating closure, never by assignment — a direct
 // assignment would snapshot pinnedTemplateRef before any test could swap it.
 func init() {
-	bootstrapcluster.PinnedTemplateRef = func() string { return pinnedTemplateRef() }
+	bootstrapcluster.PinnedTemplateRef = func() string { return answers.PinnedTemplateRef() }
 }
 
 // ci_bootstrap_cluster_cmd.go — the flag sets for `llz ci bootstrap-cluster` and

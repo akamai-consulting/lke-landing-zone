@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +63,7 @@ func ciAssertImageFreshCmd() *cobra.Command {
 					return err
 				}
 			}
-			return runAssertImageFresh(version, firstNonEmpty(templateRef, pinnedTemplateRef()), instanceTemplateRepo())
+			return runAssertImageFresh(version, firstNonEmpty(templateRef, answers.PinnedTemplateRef()), instanceTemplateRepo())
 		},
 	}
 	c.Flags().StringVar(&templateRef, "template-ref", "", "override the ref compared against the baked llz build (default: the instance's pin)")

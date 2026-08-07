@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
@@ -516,7 +517,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// e2e readiness — .llz/*.env merged with the live repo config. Needs a repo:
 	// the flag, an instance's .copier-answers.yml, or --admin (the example repo).
 	if repo == "" && !admin {
-		if a, _ := readAnswers("."); a == nil || a.InstanceRepo == "" {
+		if a, _ := answers.Read("."); a == nil || a.InstanceRepo == "" {
 			fmt.Println("\ne2e readiness: pass --repo <owner>/<name>, run inside an instance, or use --admin.")
 			return errors.Join(errs...)
 		}

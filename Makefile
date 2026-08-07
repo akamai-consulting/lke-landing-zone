@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/answers=85 \
 	internal/bootstrapcluster=68 \
 	internal/seedspecial=84 \
 	internal/tfvars=99 \

@@ -10,6 +10,7 @@ package main
 // keep-set both exist to prevent.
 
 import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 )
@@ -20,7 +21,7 @@ func installDoctorDeps() {
 	doctor.Install(doctor.Deps{
 		LoadSpec: clusterspec.Detected,
 		InstanceRepo: func() string {
-			a, _ := readAnswers(".")
+			a, _ := answers.Read(".")
 			if a == nil {
 				return ""
 			}

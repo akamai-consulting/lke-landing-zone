@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -528,7 +529,7 @@ func createRepoErr(repo, dir, ownerKind string, err error) error {
 // scaffolded tree, closing the §3 loop (the repo learned from .copier-answers.yml).
 // Returns whether the push actually happened. Gated by --yes; respects --dry-run.
 func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
-	a, err := readAnswers(dir)
+	a, err := answers.Read(dir)
 	if err != nil || a == nil || a.InstanceRepo == "" || a.InstanceRepo == "your-org/your-instance-repo" {
 		fmt.Fprintf(os.Stderr, "llz: --push: instance_repo is still the placeholder in %s/.copier-answers.yml — skipping the repo create.\n", dir)
 		// runNew has already normalised the branch to `main` (ensureScaffoldBranch),
@@ -844,7 +845,7 @@ func renderAfterUpgrade(g globalOpts) error {
 // currentTemplateRef reads the ref this checkout is pinned to (copier's answers,
 // see stamp.go), falling back to the short SHA. "" outside an instance.
 func currentTemplateRef() string {
-	if ref := pinnedTemplateRef(); ref != "" {
+	if ref := answers.PinnedTemplateRef(); ref != "" {
 		return ref
 	}
 	tv := sustain.ResolveTemplateVersion(sustainDeps())
@@ -922,7 +923,7 @@ var reportCIImageSkew = func(ref string) {
 		return
 	}
 	repo := "<owner>/<instance>"
-	if a, _ := readAnswers("."); a != nil && strings.Contains(a.InstanceRepo, "/") {
+	if a, _ := answers.Read("."); a != nil && strings.Contains(a.InstanceRepo, "/") {
 		repo = a.InstanceRepo
 	}
 	fmt.Fprintf(os.Stderr, "\n%s the new pin moved the ci images this instance should run — %d variable(s) still name the old commit:\n",
@@ -1116,7 +1117,7 @@ func sustainDeps() sustain.Deps {
 	return sustain.Deps{
 		LockableScaffoldFiles: lockableScaffoldFiles,
 		ReadAnswers: func(dir string) (*sustain.Answers, error) {
-			a, err := readAnswers(dir)
+			a, err := answers.Read(dir)
 			if err != nil || a == nil {
 				return nil, err
 			}

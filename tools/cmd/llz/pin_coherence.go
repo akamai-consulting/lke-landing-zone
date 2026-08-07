@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 )
 
 // exactReleaseTag matches ONLY a bare release tag (v1.2.3). It is deliberately
@@ -41,7 +43,7 @@ var exactReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // release tags for the one template pin. Silent (nil) when there is no instance
 // there, when either pin is absent, or when either is not an exact release tag.
 func assertPinCoherence(dir string) error {
-	a, err := readAnswers(dir)
+	a, err := answers.Read(dir)
 	if err != nil || a == nil {
 		return nil //nolint:nilerr // no readable answers file — not an instance; other steps report that
 	}

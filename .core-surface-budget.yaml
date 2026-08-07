@@ -450,6 +450,20 @@ categories:
 #        The manifests/ dir travelled with its embedder, which moved a constraint
 #        internal/kyverno had DOCUMENTED rather than solving it -- and kyverno's
 #        own TestManifestsStayWithTheEmbeddingPackage is what caught the move.
+#   62nd: the copier-answers hub -> internal/answers   11,756 -> 11,730 (-26 / 106 files)
+#        A CORRECTION TO THE PREVIOUS ENTRY. This ledger had just written the
+#        scaffold mass off as "a design task, no enabler to extract first". That
+#        was wrong about instance.go: 65 lines, CLOSURE 1, and the hub FOURTEEN
+#        cmd/llz files reached through.
+#        It was also only partly wrong. Moving it took template_commit 10 -> 8,
+#        selfupdate 8 -> 7, render 11 -> 10 -- real, and nothing like the
+#        collapses ghsecret and ghgitdata produced. The rest of the coupling is
+#        not one shared helper; it is main.go's globals and the
+#        answers/spec/tfvars read path genuinely interleaving. THAT part is still
+#        a design task.
+#        Cost: a blanket type rename (Answers -> File) rewrote the STRING LITERAL
+#        ".copier-answers.yml" into ".copier-File.yml". Four tests caught it.
+#        Rename by exact symbol -- and check string literals, not just code.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -462,7 +476,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 11756
+    budget: 11730
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
@@ -368,7 +369,7 @@ func resolveTemplateRef() string {
 	if r := strings.TrimSpace(os.Getenv("LLZ_TEMPLATE_REF")); r != "" {
 		return r
 	}
-	a, _ := readAnswers(".")
+	a, _ := answers.Read(".")
 	if a == nil {
 		return ""
 	}
@@ -394,7 +395,7 @@ func resolveLLZImageTag() string {
 		}
 		return r
 	}
-	if a, _ := readAnswers("."); a != nil {
+	if a, _ := answers.Read("."); a != nil {
 		if v := strings.TrimSpace(a.Version); v != "" {
 			return llzImageTagFor(v)
 		}

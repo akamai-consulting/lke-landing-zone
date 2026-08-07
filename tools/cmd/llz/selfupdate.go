@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 )
 
 // self-update replaces the running llz binary with a release build from the
@@ -134,7 +136,7 @@ func releaseDownloadArgv(repo, tag, asset, dir string) []string {
 // template org (an instance's .copier-answers.yml answer, else the default).
 func updateRepo() string {
 	org := defaultTemplateOrg
-	if a, _ := readAnswers("."); a != nil && a.UpstreamOrg != "" {
+	if a, _ := answers.Read("."); a != nil && a.UpstreamOrg != "" {
 		org = a.UpstreamOrg
 	}
 	return org + "/" + templateName

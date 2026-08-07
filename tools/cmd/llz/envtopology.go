@@ -9,6 +9,7 @@ package main
 // reach this extension's copy too.
 
 import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
@@ -24,7 +25,7 @@ func installEnvTopologyDeps() {
 		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 		// Narrowed to the one field, as internal/promote's is.
 		InstanceRepo: func() string {
-			a, _ := readAnswers(".")
+			a, _ := answers.Read(".")
 			if a == nil {
 				return ""
 			}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
 
@@ -93,7 +94,7 @@ func TestUpgradeConflictFilesFindsMergeMarkersNotMarkdownRules(t *testing.T) {
 }
 
 func TestCopierRenderArgvUsesAnswersAndSkipsTasks(t *testing.T) {
-	got := copierRenderArgv(&answers{SrcPath: "gh:my-org/lke-landing-zone", UpstreamOrg: "my-org", InstanceRepo: "my-org/inst"}, "v1.2.3", "/tmp/render")
+	got := copierRenderArgv(&answers.File{SrcPath: "gh:my-org/lke-landing-zone", UpstreamOrg: "my-org", InstanceRepo: "my-org/inst"}, "v1.2.3", "/tmp/render")
 	joined := strings.Join(got, " ")
 	for _, want := range []string{"copier copy", "--skip-tasks", "--force", "--vcs-ref v1.2.3", "upstream_org=my-org", "instance_repo=my-org/inst", "llz_version=v1.2.3", "gh:my-org/lke-landing-zone", "/tmp/render"} {
 		if !strings.Contains(joined, want) {

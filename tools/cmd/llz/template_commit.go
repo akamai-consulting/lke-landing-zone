@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 
@@ -191,7 +192,7 @@ var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 // read from copier's `_src_path`. Falls back to the first-party template so a
 // pre-copier or hand-assembled instance still resolves.
 func instanceTemplateRepo() string {
-	if a, _ := readAnswers("."); a != nil {
+	if a, _ := answers.Read("."); a != nil {
 		if r := sustain.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
 			return r
 		}
@@ -304,7 +305,7 @@ func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool,
 // Writes ONLY the variables asked for: an operator's existing TF_IMAGE is theirs,
 // and this command's contract is to skip what is already configreadiness.Satisfied.
 func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
-	ref := pinnedTemplateRef()
+	ref := answers.PinnedTemplateRef()
 	tfImage, kubeImage, pinned, why := computeCIImageVars(instanceTemplateRepo(), ref)
 	if needTF {
 		vars["TF_IMAGE"] = tfImage

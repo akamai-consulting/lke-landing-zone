@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -30,7 +31,7 @@ func promoteDeps() promote.Deps {
 		// `answers` struct would put package main's copier-answers model on the
 		// other side of the boundary to answer a one-line question.
 		InstanceRepo: func() string {
-			a, _ := readAnswers(".")
+			a, _ := answers.Read(".")
 			if a == nil {
 				return ""
 			}

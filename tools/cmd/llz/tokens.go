@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
@@ -92,7 +93,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	//
 	// A fresh instance costs nothing here — staleCIImageVars returns before its
 	// network round-trips when neither variable is recorded yet.
-	repin := staleCIImageVars(pinnedTemplateRef(), func(k string) string {
+	repin := staleCIImageVars(answers.PinnedTemplateRef(), func(k string) string {
 		return firstNonEmpty(vars[k], instSt.Value(k))
 	})
 	for _, s := range repin {
@@ -403,7 +404,7 @@ func resolveInstanceRepo(flagVal string, admin bool) (string, error) {
 	if flagVal != "" {
 		return flagVal, nil
 	}
-	if a, _ := readAnswers("."); a != nil && a.InstanceRepo != "" {
+	if a, _ := answers.Read("."); a != nil && a.InstanceRepo != "" {
 		return a.InstanceRepo, nil
 	}
 	if admin {

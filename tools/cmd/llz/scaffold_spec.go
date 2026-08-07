@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
@@ -48,9 +49,9 @@ func tfvarsExampleValue(root, key string) string {
 // (the <name> half of instance_repo, used to derive per-env cluster identity) and
 // whether it created the file.
 func ensureLandingZone(specRoot string) (instanceName string, created bool, err error) {
-	a, _ := readAnswers(specRoot)
+	a, _ := answers.Read(specRoot)
 	if a == nil {
-		a = &answers{}
+		a = &answers.File{}
 	}
 	instanceName = shortRepoName(a.InstanceRepo)
 	if instanceName == "" {
