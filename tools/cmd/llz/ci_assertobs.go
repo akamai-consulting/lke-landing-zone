@@ -14,7 +14,7 @@ func init() { installAssertObsDeps() }
 
 func installAssertObsDeps() {
 	assertobs.Install(assertobs.Deps{
-		Exec:       func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:       execOutput,
 		KubectlOut: kubectlprobe.Out,
 		Summary:    ghaout.Append,
 		ObjEncDeps: func() objenc.Deps { return objenc.ObjencDeps() },

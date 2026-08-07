@@ -22,7 +22,7 @@ func init() { installEnvTopologyDeps() }
 
 func installEnvTopologyDeps() {
 	envtopology.Install(envtopology.Deps{
-		Exec:     func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:     execOutput,
 		ExecArgv: proc.Run,
 		Summary:  ghaout.Append,
 		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },

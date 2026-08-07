@@ -15,8 +15,8 @@ func init() { installAssertSecretsDeps() }
 
 func installAssertSecretsDeps() {
 	assertsecrets.Install(assertsecrets.Deps{
-		Exec:         func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
-		ExecCombined: func(n string, a ...string) string { return execCombined(n, a...) },
+		Exec:         execOutput,
+		ExecCombined: execCombined,
 		BroadPATSeedEnabled: func(lz *clusterspec.LandingZone, region string) bool {
 			return baoseed.BroadPATSeedEnabled(lz, region)
 		},

@@ -16,5 +16,5 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube
 // already paid for once, with harborCARetrofitKubectl. The closure reads the
 // variable at call time, which is the whole point of a seam.
 func init() {
-	kube.Exec = func(name string, args ...string) ([]byte, error) { return execOutput(name, args...) }
+	kube.Exec = execOutput
 }

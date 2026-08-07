@@ -962,6 +962,30 @@ categories:
 #        Three more help strings restored: "onboard.Gather + push instance
 #        credentials" was USER-FACING (`llz secrets`), plus a color.Green and an
 #        onboard.Prompt in prose. Same blanket-rename class as traps 55 and 61.
+#   91st: nine vestigial closures collapsed   1,700 -> 1,700 (0 lines)
+#        ZERO LINES, and that is worth saying: each closure was a ONE-LINE field
+#        assignment, so collapsing it changed characters and not the count. The
+#        gate stayed green without a re-baseline, which is how it was noticed.
+#        SELF-INFLICTED AND SELF-FOUND. The 80th move turned execOutput/
+#        execCombined from package-level VARS into plain funcs delegating to
+#        kubectlprobe. The deps assemblers wrapped them in
+#        `func(n string, a ...string) (...) { return execOutput(n, a...) }` for a
+#        reason that expired at that moment: a closure defers reading a VAR, and a
+#        func reference is already deferred. Nine of them across seven files,
+#        redundant since e655adc8 and flagged by nothing.
+#        MEASUREMENT THAT CORRECTS AN EARLIER CLAIM: the deps-ABI was reported at
+#        511 lines. That was the FILES. The actual assembler bodies total 199
+#        across 14 functions, and ci_teardown.go -- the biggest contributor to the
+#        511 -- is mostly cobra commands with one Deps func in it.
+#        A SHARED Deps CORE WAS CONSIDERED AND REJECTED ON THE NUMBERS. Six fields
+#        recur (Exec 11x, LoadSpec 5, ExecCombined 5, Summary 4, InstanceRepo 3,
+#        Confirm 3 = 31 assignments). Embedding a core replaces those 31 with 14
+#        `Core: core` lines plus ~8 of construction -- a saving of about nine
+#        lines, in exchange for a shared type every embedder depends on and
+#        LoadSpec dragging clusterspec into packages that only wanted Exec.
+#        The uniformity is still the useful finding: 14 identical Exec signatures,
+#        5 identical LoadSpec, one Summary variant. A grant->handle resolver has
+#        six handles to produce, not eighteen bespoke structs.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N

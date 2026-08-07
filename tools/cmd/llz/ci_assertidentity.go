@@ -13,7 +13,7 @@ func init() { installAssertIdentityDeps() }
 
 func installAssertIdentityDeps() {
 	assertidentity.Install(assertidentity.Deps{
-		Exec:           func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:           execOutput,
 		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  identityconfig.DiscoverManagedDomain,
 		DescribeSecret: kube.DescribeSecret,

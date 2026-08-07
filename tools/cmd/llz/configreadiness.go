@@ -20,7 +20,7 @@ func init() { installConfigReadinessDeps() }
 
 func installConfigReadinessDeps() {
 	configreadiness.Install(configreadiness.Deps{
-		Exec:               func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:               execOutput,
 		CloudToken:         linode.TokenFromEnv,
 		LoadSpec:           func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 		CheckManifestDrift: render.CheckManifestDrift,

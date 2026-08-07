@@ -9,7 +9,7 @@ func init() { installAssertNetworkDeps() }
 
 func installAssertNetworkDeps() {
 	assertnetwork.Install(assertnetwork.Deps{
-		Exec:         func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
-		ExecCombined: func(n string, a ...string) string { return execCombined(n, a...) },
+		Exec:         execOutput,
+		ExecCombined: execCombined,
 	})
 }
