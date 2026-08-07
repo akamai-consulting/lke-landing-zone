@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // ci_temp_objkey.go implements `llz ci temp-objkey create|delete` — a
 // short-lived scoped object-storage key for the destroy-time bucket drain in
@@ -28,56 +28,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
-// tempObjkeyLinodeClient is a seam for tests.
-var tempObjkeyLinodeClient = func(token string) credrotate.LinodeAPI {
+// TempObjkeyLinodeClient is a seam for tests.
+var TempObjkeyLinodeClient = func(token string) LinodeAPI {
 	return linode.NewClient(token, 30*time.Second)
 }
 
-func ciTempObjkeyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "temp-objkey",
-		Short: "mint/delete a short-lived scoped OBJ key for the destroy-time bucket drain",
-	}
-
-	var region, endpoint, buckets string
-	create := &cobra.Command{
-		Use:   "create",
-		Short: "mint a temporary read_write key on the given buckets; export TEMP_OBJKEY_* via $GITHUB_ENV",
-		Long: "Mints a short-lived scoped key (label llz-drain-<region> — distinct from\n" +
-			"the rotator's labels so its keep-newest-N drain never touches it) with\n" +
-			"read_write on --buckets, for the destroy job's s5cmd sweep. The OBJ\n" +
-			"cluster is derived from --endpoint (https://<cluster>.linodeobjects.com —\n" +
-			"the module's s3_endpoint output). Exports TEMP_OBJKEY_ID/ACCESS/SECRET to\n" +
-			"$GITHUB_ENV (secret masked). Pair with `temp-objkey delete` in an\n" +
-			"always() step. Reads LINODE_API_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCITempObjkeyCreate(region, endpoint, buckets)
-		},
-	}
-	create.Flags().StringVar(&region, "region", "", "deployment name — labels the key llz-drain-<region> (required)")
-	create.Flags().StringVar(&endpoint, "endpoint", "", "S3 endpoint URL, e.g. https://us-ord-1.linodeobjects.com (required)")
-	create.Flags().StringVar(&buckets, "buckets", "", "comma-separated bucket labels the key may drain (required)")
-
-	del := &cobra.Command{
-		Use:   "delete",
-		Short: "revoke the temporary key exported by `temp-objkey create` (no-op when unset)",
-		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runCITempObjkeyDelete() },
-	}
-
-	c.AddCommand(create, del)
-	return c
-}
-
-func runCITempObjkeyCreate(region, endpoint, bucketsCSV string) error {
+func RunTempObjkeyCreate(region, endpoint, bucketsCSV string) error {
 	if region == "" || endpoint == "" || bucketsCSV == "" {
 		return fmt.Errorf("--region, --endpoint and --buckets are required")
 	}
@@ -99,7 +59,7 @@ func runCITempObjkeyCreate(region, endpoint, bucketsCSV string) error {
 		return fmt.Errorf("--buckets resolved to an empty list")
 	}
 
-	m, err := tempObjkeyLinodeClient(token).CreateObjectStorageKeyBuckets(
+	m, err := TempObjkeyLinodeClient(token).CreateObjectStorageKeyBuckets(
 		context.Background(), "llz-drain-"+region, objCluster, buckets, "read_write")
 	if err != nil {
 		return fmt.Errorf("mint temp drain key: %w", err)
@@ -117,7 +77,7 @@ func runCITempObjkeyCreate(region, endpoint, bucketsCSV string) error {
 		"TEMP_OBJKEY_SECRET="+secret)
 }
 
-func runCITempObjkeyDelete() error {
+func RunTempObjkeyDelete() error {
 	idRaw := strings.TrimSpace(os.Getenv("TEMP_OBJKEY_ID"))
 	if idRaw == "" {
 		fmt.Println("TEMP_OBJKEY_ID unset — no temp drain key to delete.")
@@ -131,7 +91,7 @@ func runCITempObjkeyDelete() error {
 	if err != nil {
 		return fmt.Errorf("TEMP_OBJKEY_ID %q is not a key id", idRaw)
 	}
-	if err := tempObjkeyLinodeClient(token).DeleteObjectStorageKey(context.Background(), id); err != nil {
+	if err := TempObjkeyLinodeClient(token).DeleteObjectStorageKey(context.Background(), id); err != nil {
 		return fmt.Errorf("delete temp drain key id=%d: %w", id, err)
 	}
 	fmt.Printf("temp drain key id=%d deleted.\n", id)

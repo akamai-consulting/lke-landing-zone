@@ -147,3 +147,11 @@ func appendGHAFile(envVar string, lines ...string) error {
 	}
 	return f.Close()
 }
+
+// maskGHA asks GitHub Actions to redact a value from the log. Pure, localised —
+// four lines, and package main keeps its own for the verbs that stayed.
+func maskGHA(v string) {
+	if os.Getenv("GITHUB_ACTIONS") != "" && v != "" {
+		fmt.Printf("::add-mask::%s\n", v)
+	}
+}

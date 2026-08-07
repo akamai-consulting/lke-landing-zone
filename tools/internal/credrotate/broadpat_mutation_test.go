@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // Mutation-test gap closure for ci_rotate_broad_pat.go. Everything here pins a
 // decision that decides WHICH Linode PAT is minted, kept or revoked — the places
@@ -68,29 +68,29 @@ func (s *recordingBroadLinode) Verify(context.Context) error                    
 func TestRotateBroadPATMintsWithNinetyDayExpiry(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 	bao := &stubBao{data: map[string]map[string]string{
-		broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())},
+		BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())},
 	}}
 	lc := &recordingBroadLinode{newID: 42}
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
 
-	if _, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true}); err != nil {
+	if _, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true}); err != nil {
 		t.Fatal(err)
 	}
-	if want := linode.FmtLinodeTS(now.Unix() + broadPATValidityDays*linode.DaySecs); lc.expiry != want {
-		t.Errorf("mint expiry = %q, want %q (now + %dd)", lc.expiry, want, broadPATValidityDays)
+	if want := linode.FmtLinodeTS(now.Unix() + BroadPATValidityDays*linode.DaySecs); lc.expiry != want {
+		t.Errorf("mint expiry = %q, want %q (now + %dd)", lc.expiry, want, BroadPATValidityDays)
 	}
 	// Belt-and-braces on the direction + magnitude, independent of the formatter.
 	secs, ok := linode.ParseTS(lc.expiry)
 	if !ok {
 		t.Fatalf("expiry %q is not a Linode timestamp", lc.expiry)
 	}
-	if got := secs - now.Unix(); got != broadPATValidityDays*linode.DaySecs {
+	if got := secs - now.Unix(); got != BroadPATValidityDays*linode.DaySecs {
 		t.Errorf("expiry is %d seconds out, want %d (a past or near-instant expiry breaks CI at the next run)",
-			got, broadPATValidityDays*linode.DaySecs)
+			got, BroadPATValidityDays*linode.DaySecs)
 	}
-	if lc.label != "L" || lc.scopes != broadPATScopes {
+	if lc.label != "L" || lc.scopes != BroadPATScopes {
 		t.Errorf("mint called with label=%q scopes=%q", lc.label, lc.scopes)
 	}
 }
@@ -104,7 +104,7 @@ func TestRotateBroadPATNeverRevokesTheJustMintedTokenOnACreatedTie(t *testing.T)
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 	stamp := linode.FmtLinodeTS(now.Unix())
 	bao := &stubBao{data: map[string]map[string]string{
-		broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())},
+		BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())},
 	}}
 	lc := &recordingBroadLinode{
 		newID:   42,
@@ -116,8 +116,8 @@ func TestRotateBroadPATNeverRevokesTheJustMintedTokenOnACreatedTie(t *testing.T)
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
 
-	rec, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 0, apply: true})
+	rec, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 0, apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestRevokeOldBroadPATsGraceWindowEdges(t *testing.T) {
 		{"id": jn(9), "label": "OTHER", "created": linode.FmtLinodeTS(cutoff - 1)},  // another family entirely
 	}}
 
-	revoked, skipped := revokeOldBroadPATs(context.Background(), lc, "L", graceDays, now)
+	revoked, skipped := RevokeOldBroadPATs(context.Background(), lc, "L", graceDays, now)
 	if !sameIDs(revoked, []uint64{3, 4}) {
 		t.Errorf("revoked = %v, want [3 4] (a PAT created exactly on the cutoff is outside the window)", revoked)
 	}
@@ -177,7 +177,7 @@ func TestRevokeOldBroadPATsFailedDeleteIsNotReportedRevoked(t *testing.T) {
 			{"id": jn(12), "label": "L", "created": old}, // delete succeeds
 		},
 	}
-	revoked, _ := revokeOldBroadPATs(context.Background(), lc, "L", 7, now)
+	revoked, _ := RevokeOldBroadPATs(context.Background(), lc, "L", 7, now)
 	if !sameIDs(revoked, []uint64{12}) {
 		t.Errorf("revoked = %v, want [12] only — a failed DeleteProfileToken must never be recorded as a revocation", revoked)
 	}

@@ -133,7 +133,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **21,457** with `internal/baoread` (a shared package, not an extension).
 > and **21,082** with `credential-pat` + `credential-objkey`.
 > and **20,835** with the rotation table (wall three of the credential family).
-> Forty-two extensions, net −26,347 (55.8%) — now BELOW the
+> and **20,591** with broad-PAT + temp-objkey.
+> Forty-two extensions, net −26,591 (56.4%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

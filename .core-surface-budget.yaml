@@ -268,12 +268,19 @@ categories:
     #                       handles one could leave while it stayed. Measured
     #                       result: every remaining file in the family dropped
     #                       from unmeasurable to closure 4-10.
+    #   20,591 / 125 files  broad-PAT rotation + temp-objkey, into credrotate.
+    #                       -244, and a FOURTH wall found: the other three files
+    #                       (seed-broad-pat, mint-objkeys, incluster-pat) reach
+    #                       the OpenBao WRITE/seed layer (baoKVPutFn, runCIBaoSeed,
+    #                       baoExecFn) and the GitHub OIDC layer. My "these are
+    #                       ordinary extractions now" was right for two of five —
+    #                       per-file closures were clean, the COMBINED set was 16.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 20835
+    budget: 20591
     exact: true
     include:
       - "tools/cmd/llz/*.go"

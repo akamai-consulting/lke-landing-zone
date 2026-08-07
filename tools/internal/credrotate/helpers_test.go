@@ -5,6 +5,7 @@ package credrotate
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,4 +87,12 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+// withGHAEnvFile captures $GITHUB_ENV writes; returns the path.
+func withGHAEnvFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "gha-env")
+	t.Setenv("GITHUB_ENV", p)
+	return p
 }

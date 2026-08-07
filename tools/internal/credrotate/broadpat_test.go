@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -24,7 +23,7 @@ func (f *fakeEnvWriter) write(name, env, value string) error {
 	return nil
 }
 
-func broadDeps(lc credrotate.LinodeAPI, bao credrotate.BaoStore, w envSecretWriter, now time.Time) broadPATDeps {
+func broadDeps(lc LinodeAPI, bao BaoStore, w envSecretWriter, now time.Time) broadPATDeps {
 	return broadPATDeps{lc: lc, bao: bao, writeSecret: w, now: func() time.Time { return now }}
 }
 
@@ -32,13 +31,13 @@ func TestRotateBroadPAT_NotDue(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 	// rotated 10 days ago, threshold 60 → not due.
 	bao := &stubBao{data: map[string]map[string]string{
-		broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -10).Unix())},
+		BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -10).Unix())},
 	}}
 	lc := &stubLinode{}
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
-	rec, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
+	rec, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,12 +51,12 @@ func TestRotateBroadPAT_NotDue(t *testing.T) {
 
 func TestRotateBroadPAT_DryRun(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
-	bao := &stubBao{data: map[string]map[string]string{broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
+	bao := &stubBao{data: map[string]map[string]string{BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
 	lc := &stubLinode{}
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
-	rec, _ := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, apply: false})
+	rec, _ := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, apply: false})
 	if rec["action"] != "would-rotate" {
 		t.Errorf("want would-rotate, got %v", rec["action"])
 	}
@@ -68,7 +67,7 @@ func TestRotateBroadPAT_DryRun(t *testing.T) {
 
 func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
-	bao := &stubBao{data: map[string]map[string]string{broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
+	bao := &stubBao{data: map[string]map[string]string{BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
 	// Two OLD siblings (past grace) to revoke + one recent (in grace) to keep.
 	old1 := now.AddDate(0, 0, -80)
 	old2 := now.AddDate(0, 0, -70)
@@ -81,8 +80,8 @@ func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 	}}
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
-	rec, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary", "secondary"}, rotateAfter: 60, graceDays: 7, apply: true})
+	rec, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary", "secondary"}, rotateAfter: 60, graceDays: 7, apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +93,8 @@ func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 		t.Errorf("want 1 mint, got %d", lc.patCreates)
 	}
 	// OpenBao got the new token + a fresh rotated_at.
-	if bao.data[broadPATBaoPath]["token"] != "new-pat" || bao.data[broadPATBaoPath]["rotated_at"] != itoa(now.Unix()) {
-		t.Errorf("OpenBao not updated: %v", bao.data[broadPATBaoPath])
+	if bao.data[BroadPATBaoPath]["token"] != "new-pat" || bao.data[BroadPATBaoPath]["rotated_at"] != itoa(now.Unix()) {
+		t.Errorf("OpenBao not updated: %v", bao.data[BroadPATBaoPath])
 	}
 	// Published to BOTH deployments' env secrets, with the new token.
 	if len(w.calls) != 2 ||
@@ -112,19 +111,19 @@ func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 
 func TestRotateBroadPAT_VerifyFailAbortsBeforeAnyWrite(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
-	bao := &stubBao{data: map[string]map[string]string{broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
+	bao := &stubBao{data: map[string]map[string]string{BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
 	lc := &stubLinode{verifyErr: context.DeadlineExceeded, pats: []map[string]any{
 		{"id": jn(11), "label": "L", "created": linode.FmtLinodeTS(now.AddDate(0, 0, -80).Unix())},
 	}}
 	w := &fakeEnvWriter{}
 	withRotatorStubs(t, lc, bao, now)
-	_, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
+	_, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
 	if err == nil {
 		t.Fatal("verify failure must error")
 	}
 	// A bad mint must publish nothing, write nothing to OpenBao, revoke nothing.
-	if _, ok := bao.data[broadPATBaoPath]["token"]; ok {
+	if _, ok := bao.data[BroadPATBaoPath]["token"]; ok {
 		t.Error("OpenBao must not be written on verify failure")
 	}
 	if len(w.calls) != 0 || len(lc.deleted) != 0 {
@@ -134,14 +133,14 @@ func TestRotateBroadPAT_VerifyFailAbortsBeforeAnyWrite(t *testing.T) {
 
 func TestRotateBroadPAT_PublishFailSkipsRevoke(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
-	bao := &stubBao{data: map[string]map[string]string{broadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
+	bao := &stubBao{data: map[string]map[string]string{BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
 	lc := &stubLinode{pats: []map[string]any{
 		{"id": jn(11), "label": "L", "created": linode.FmtLinodeTS(now.AddDate(0, 0, -80).Unix())},
 	}}
 	w := &fakeEnvWriter{err: context.DeadlineExceeded} // publish fails
 	withRotatorStubs(t, lc, bao, now)
-	_, err := rotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
-		broadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
+	_, err := RotateBroadPAT(context.Background(), broadDeps(lc, bao, w.write, now),
+		BroadPATOpts{label: "L", deployments: []string{"primary"}, rotateAfter: 60, graceDays: 7, apply: true})
 	if err == nil {
 		t.Fatal("publish failure must error")
 	}
@@ -152,11 +151,11 @@ func TestRotateBroadPAT_PublishFailSkipsRevoke(t *testing.T) {
 	}
 	// And rotated_at must still be the OLD stamp. This is the ordering the FLOW
 	// comment now depends on: the OpenBao write is what stamps rotated_at, and
-	// rotated_at is what credrotate.IsDue reads. Stamping it before the publish meant a single
+	// rotated_at is what IsDue reads. Stamping it before the publish meant a single
 	// failed publish told every subsequent run "not due" — action=skip, exit 0, for
 	// the whole 60-day window, while the 90-day PAT GitHub still held expired ~30
 	// days into it. No failing job, and no alert either: the credential-age gauge reads the OpenBao stamp the premature write had just refreshed.
-	if got := bao.data[broadPATBaoPath]["rotated_at"]; got != itoa(now.AddDate(0, 0, -90).Unix()) {
+	if got := bao.data[BroadPATBaoPath]["rotated_at"]; got != itoa(now.AddDate(0, 0, -90).Unix()) {
 		t.Errorf("rotated_at = %q — a failed publish must leave the stamp OLD so the next run is still due", got)
 	}
 }

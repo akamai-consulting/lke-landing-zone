@@ -43,6 +43,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 
@@ -161,7 +162,7 @@ var drainObjMintKey = func(region, endpoint string, buckets []string) (string, s
 			want = append(want, b)
 		}
 	}
-	api := tempObjkeyLinodeClient(token)
+	api := credrotate.TempObjkeyLinodeClient(token)
 	m, err := api.CreateObjectStorageKeyBuckets(context.Background(),
 		"llz-drain-"+region, objCluster, want, "read_write")
 	if err != nil {

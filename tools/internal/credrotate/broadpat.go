@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // ci_rotate_broad_pat.go implements `llz ci rotate-broad-pat` — the in-cluster
 // rotator for the BROAD Linode CI/TF PAT (the account:read_write LINODE_API_TOKEN
@@ -22,7 +22,7 @@ package main
 //      the next run's LINODE_TOKEN, via ESO) update
 //
 //      GitHub BEFORE OpenBao, because the OpenBao write is what stamps rotated_at
-//      and rotated_at is what `credrotate.IsDue` reads. With the writes the other way round, a
+//      and rotated_at is what `IsDue` reads. With the writes the other way round, a
 //      single failed publish left a FRESH stamp behind: the next weekly run saw
 //      "not due", returned action=skip with exit 0, and did so for the whole
 //      60-day ROTATE_AFTER_DAYS window — while the 90-day PAT that GitHub still
@@ -50,26 +50,24 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 const (
-	// broadPATScopes MUST include account:read_write (to mint successor PATs) — the
+	// BroadPATScopes MUST include account:read_write (to mint successor PATs) — the
 	// scope the narrow in-cluster PAT deliberately withholds. Mirrors the scope set
 	// the CI create-linode-pat job used.
-	// MUST remain a superset of inclusterPATScopes: the rotated broad PAT becomes
+	// MUST remain a superset of InClusterPATScopes: the rotated broad PAT becomes
 	// each deployment's LINODE_API_TOKEN, which mint-bootstrap-pat then uses to mint
 	// the narrow in-cluster PAT — and Linode rejects creating a token with scopes
 	// GREATER than the requesting token's. `domains:read_write` is here for exactly
 	// that reason (the in-cluster PAT carries it); dropping it 400s the next bootstrap
 	// after a rotation. TestBroadPATScopesSupersetInclusterPAT guards the invariant.
-	broadPATScopes       = "domains:read_write linodes:read_write object_storage:read_write lke:read_write firewall:read_write vpc:read_write volumes:read_write nodebalancers:read_write events:read_only account:read_write"
-	broadPATValidityDays = 90
-	// broadPATBaoPath is the cluster's own copy of the broad token; ESO syncs it to
+	BroadPATScopes       = "domains:read_write linodes:read_write object_storage:read_write lke:read_write firewall:read_write vpc:read_write volumes:read_write nodebalancers:read_write events:read_only account:read_write"
+	BroadPATValidityDays = 90
+	// BroadPATBaoPath is the cluster's own copy of the broad token; ESO syncs it to
 	// the rotator's LINODE_TOKEN Secret so the NEXT run mints with the freshest token.
-	broadPATBaoPath = "secret/linode/broad-pat"
+	BroadPATBaoPath = "secret/linode/broad-pat"
 	// broadPATSecretName is the GitHub Actions secret every workflow reads.
 	broadPATSecretName = "LINODE_API_TOKEN"
 )
@@ -78,19 +76,25 @@ const (
 // secret `name` (seamed for tests; real = ghSetEnvSecretNative).
 type envSecretWriter func(name, env, value string) error
 
-var ghSetEnvSecretFn envSecretWriter = ghSetEnvSecretNative
+// ghSetEnvSecretFn defaults to this package's own SetSecret seam.
+//
+// It used to point at package main's ghSetEnvSecretNative directly. Both are the
+// same capability — write a GitHub secret, scoped to an environment — and this
+// package already had a seam for it, installed by cmd/llz. Keeping two would mean
+// two things to stub and one of them silently reaching a live forge.
+var ghSetEnvSecretFn envSecretWriter = func(name, env, value string) error { return SetSecret(name, env, value) }
 
 // broadPATDeps are the injected collaborators (Linode API, OpenBao, GitHub writeback,
 // clock) so the rotation flow is unit-testable without any network.
 type broadPATDeps struct {
-	lc          credrotate.LinodeAPI
-	bao         credrotate.BaoStore
+	lc          LinodeAPI
+	bao         BaoStore
 	writeSecret envSecretWriter
 	now         func() time.Time
 }
 
-// broadPATOpts are the run parameters (label, deployments, cadence, safety windows).
-type broadPATOpts struct {
+// BroadPATOpts are the run parameters (label, deployments, cadence, safety windows).
+type BroadPATOpts struct {
 	label       string
 	deployments []string // infra-<d> environments to publish LINODE_API_TOKEN into
 	rotateAfter int      // days; rotate when the OpenBao rotated_at is older
@@ -98,27 +102,7 @@ type broadPATOpts struct {
 	apply       bool
 }
 
-func ciRotateBroadPATCmd() *cobra.Command {
-	var apply bool
-	c := &cobra.Command{
-		Use:   "rotate-broad-pat",
-		Short: "rotate the broad Linode CI/TF PAT in-cluster: mint, seed OpenBao, publish to GitHub env secrets, revoke old",
-		Long: "In-cluster rotator for the broad account:read_write Linode PAT (LINODE_API_TOKEN).\n" +
-			"Runs in a dedicated CronJob (not the reconciler). When the OpenBao rotated_at is\n" +
-			"older than --rotate-after-days: mints a fresh broad PAT with the current token,\n" +
-			"verifies it, publishes it to each infra-<deployment>, writes it to OpenBao GitHub\n" +
-			"environment secret (sealed box), then revokes older same-labeled PATs outside the\n" +
-			"grace window. Dry-run unless --apply. Env: LINODE_TOKEN (current broad PAT),\n" +
-			"BROAD_PAT_LABEL, BROAD_PAT_DEPLOYMENTS (space-separated), GH_TOKEN, GH_REPO,\n" +
-			"ROTATE_AFTER_DAYS, GRACE_DAYS, OPENBAO_* (Kubernetes-auth: broad-pat-rotator role).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runRotateBroadPAT(context.Background(), apply) },
-	}
-	c.Flags().BoolVar(&apply, "apply", false, "actually rotate; without it, report whether a rotation is due and exit")
-	return c
-}
-
-func runRotateBroadPAT(ctx context.Context, apply bool) error {
+func RunRotateBroadPAT(ctx context.Context, apply bool) error {
 	minting := os.Getenv("LINODE_TOKEN")
 	if minting == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (the current broad PAT used to mint its successor)")
@@ -136,7 +120,7 @@ func runRotateBroadPAT(ctx context.Context, apply bool) error {
 			return fmt.Errorf("GH_TOKEN and GH_REPO must be set to publish the rotated %s", broadPATSecretName)
 		}
 	}
-	opts := broadPATOpts{
+	opts := BroadPATOpts{
 		label:       label,
 		deployments: deployments,
 		rotateAfter: int(cli.EnvInt("ROTATE_AFTER_DAYS", 60)),
@@ -144,31 +128,31 @@ func runRotateBroadPAT(ctx context.Context, apply bool) error {
 		apply:       apply,
 	}
 
-	bao, err := credrotate.NewBaoStore(ctx)
+	bao, err := NewBaoStore(ctx)
 	if err != nil {
 		return err
 	}
 	deps := broadPATDeps{
-		lc:          credrotate.NewLinodeClient(minting),
+		lc:          NewLinodeClient(minting),
 		bao:         bao,
 		writeSecret: ghSetEnvSecretFn,
-		now:         credrotate.Now,
+		now:         Now,
 	}
-	record, err := rotateBroadPAT(ctx, deps, opts)
+	record, err := RotateBroadPAT(ctx, deps, opts)
 	if err != nil {
 		return err
 	}
 	return cli.PrintRecord(record)
 }
 
-// rotateBroadPAT is the pure-ish rotation flow (all I/O behind broadPATDeps). It
+// RotateBroadPAT is the pure-ish rotation flow (all I/O behind broadPATDeps). It
 // returns a JSON audit record. Not-due and dry-run runs mint nothing and revoke
 // nothing.
-func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[string]any, error) {
+func RotateBroadPAT(ctx context.Context, d broadPATDeps, o BroadPATOpts) (map[string]any, error) {
 	now := d.now()
-	rotatedAt, _, err := d.bao.Get(ctx, broadPATBaoPath, "rotated_at")
+	rotatedAt, _, err := d.bao.Get(ctx, BroadPATBaoPath, "rotated_at")
 	if err != nil {
-		return nil, fmt.Errorf("read %s rotated_at: %w", broadPATBaoPath, err)
+		return nil, fmt.Errorf("read %s rotated_at: %w", BroadPATBaoPath, err)
 	}
 	record := map[string]any{
 		"event":          "broad-pat-rotator",
@@ -177,7 +161,7 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 		"dry_run":        !o.apply,
 		"rotated_at":     rotatedAt,
 	}
-	if !credrotate.IsDue(rotatedAt, now, o.rotateAfter) {
+	if !IsDue(rotatedAt, now, o.rotateAfter) {
 		record["action"] = "skip"
 		record["reason"] = fmt.Sprintf("not due (threshold %dd)", o.rotateAfter)
 		return record, nil
@@ -188,8 +172,8 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 	}
 
 	// 1-2. Mint the successor with the current token, VERIFY before touching anything.
-	expiry := linode.FmtLinodeTS(now.Unix() + broadPATValidityDays*linode.DaySecs)
-	minted, err := d.lc.CreateProfileToken(ctx, o.label, broadPATScopes, expiry)
+	expiry := linode.FmtLinodeTS(now.Unix() + BroadPATValidityDays*linode.DaySecs)
+	minted, err := d.lc.CreateProfileToken(ctx, o.label, BroadPATScopes, expiry)
 	if err != nil {
 		return nil, fmt.Errorf("mint broad PAT %q: %w", o.label, err)
 	}
@@ -199,7 +183,7 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 		return nil, fmt.Errorf("mint broad PAT: response missing .token")
 	}
 	maskGHA(newToken)
-	if err := credrotate.NewLinodeClient(newToken).Verify(ctx); err != nil {
+	if err := NewLinodeClient(newToken).Verify(ctx); err != nil {
 		return nil, fmt.Errorf("verify freshly-minted broad PAT (id=%d): %w — nothing written or revoked", newID, err)
 	}
 
@@ -222,16 +206,16 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 	// 4. Write to OpenBao (the cluster's own copy; ESO refreshes LINODE_TOKEN for next
 	//    run). This is the step that stamps rotated_at, so it goes AFTER the publish —
 	//    see the FLOW note above.
-	if err := d.bao.Write(ctx, broadPATBaoPath, map[string]string{
+	if err := d.bao.Write(ctx, BroadPATBaoPath, map[string]string{
 		"token":      newToken,
 		"rotated_at": strconv.FormatInt(now.Unix(), 10),
 	}); err != nil {
 		return nil, fmt.Errorf("write %s: %w — new PAT id=%d is published to GitHub but the cluster copy is stale; "+
-			"not revoking anything, and rotated_at is unstamped so the next run retries", broadPATBaoPath, err, newID)
+			"not revoking anything, and rotated_at is unstamped so the next run retries", BroadPATBaoPath, err, newID)
 	}
 
 	// 5. Only now revoke older siblings, keeping the newest + anything within grace.
-	revoked, skipped := revokeOldBroadPATs(ctx, d.lc, o.label, o.graceDays, now)
+	revoked, skipped := RevokeOldBroadPATs(ctx, d.lc, o.label, o.graceDays, now)
 
 	record["action"] = "rotated"
 	record["new_pat_id"] = newID
@@ -241,11 +225,11 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 	return record, nil
 }
 
-// revokeOldBroadPATs revokes same-labeled PATs older than the grace window, ALWAYS
+// RevokeOldBroadPATs revokes same-labeled PATs older than the grace window, ALWAYS
 // keeping the newest (the just-minted one). Best-effort: the new token is already
 // live + published, so a failed list/revoke is logged and converges next run — it
 // never fails the rotation. Mirrors the credentials-pat revoke-old grace logic.
-func revokeOldBroadPATs(ctx context.Context, lc credrotate.LinodeAPI, label string, graceDays int64, now time.Time) (revoked, skipped []uint64) {
+func RevokeOldBroadPATs(ctx context.Context, lc LinodeAPI, label string, graceDays int64, now time.Time) (revoked, skipped []uint64) {
 	revoked, skipped = []uint64{}, []uint64{}
 	items, err := lc.ListProfileTokens(ctx)
 	if err != nil {

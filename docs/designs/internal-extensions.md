@@ -326,9 +326,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `credential-state-passphrase` extracted | 21,542 | 136 | −299 — the first credential row, and a state the grant table refuses |
 | `internal/baoread` extracted | 21,457 | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
 | `credential-pat` + `credential-objkey` | 21,082 | 130 | −375 — the second wall down, and the first package to declare two extensions |
-| the rotation table (wall 3) | **20,835** | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
+| the rotation table (wall 3) | 20,835 | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
+| broad-PAT + temp-objkey | **20,591** | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
 
-**Net −26,347 (55.8%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −26,591 (56.4%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2319,6 +2320,38 @@ fixed it also undid two `git mv`s, resurrecting the files it had just moved; and
 copied in pieces because a non-greedy method regex truncated at the first nested brace. The lesson is
 the one already written down — **rename by exact symbol, per file, after eyeballing** — and the reason
 it keeps recurring is that the shortcut looks cheaper every time.
+
+### What the fourth wall was — and why per-file closure is not enough
+
+The rotation-table extraction reported five files freed, with closures of 4 to 10. **Two of them were
+ordinary extractions. Three were not**, and the measurement that said otherwise was mine.
+
+| file | closure alone | real blocker |
+|---|---:|---|
+| `ci_rotate_broad_pat.go` | 4 | none — **extracted** |
+| `ci_temp_objkey.go` | 5 | none — **extracted** |
+| `ci_seed_broad_pat.go` | 4 | `runCIBaoSeed` / `baoSeedOpts` — the OpenBao **write** layer |
+| `ci_mint_objkeys.go` | 6 | `baoKVPutFn` + `tfvarsValue` |
+| `ci_incluster_pat.go` | 10 | `baoExecFn`, `baoKVPutFn`, `githubActionsOIDCToken`, `oidcAudienceForRepo` |
+
+**Measured together the set reports 16, not 4–10.** Each file individually touches only a couple of
+package `main` symbols; collectively they touch the OpenBao *write* path and the GitHub OIDC path. A
+per-file closure answers "what does this one file reach", and an extraction moves a **set** — so the
+number that governs is the set's, and the two are not the same when files share a dependency the
+per-file view rounds away.
+
+That is a genuine limit of the tool worth writing down next to the two already recorded: `closure.py`
+measures **outbound only** (fixed by `edges.py`), it stripped backticks before quotes (fixed), and now
+**per-file measurement understates a set**. Measure the set you intend to move.
+
+**`internal/baoread` handles OpenBao READS. Nothing yet handles WRITES** — `baoKVPutFn`,
+`baoExecFn`, `runCIBaoSeed` — and that is the fourth wall, shared with `openbao-lifecycle` and
+`database-provisioner`. It is the same shape as the first three, one layer further in.
+
+**Two seams collapsed into one, which is the small win here.** `broad-PAT` carried
+`ghSetEnvSecretFn`, pointing at package `main`'s GitHub secret writer; `internal/credrotate` already
+had `SetSecret` for exactly that. Keeping both would mean two things to stub — and one of them
+silently reaching a live forge when a test remembered only the other.
 
 ## The cost of the interesting half
 
