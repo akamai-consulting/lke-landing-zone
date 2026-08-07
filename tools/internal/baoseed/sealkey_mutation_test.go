@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 import (
 	"strings"
@@ -27,7 +27,7 @@ func TestWaitForOpenbaoNamespaceThrottlesTheHardRefresh(t *testing.T) {
 			return "failed to list refs: repository not found", true
 		}
 	})
-	if err := waitForOpenbaoNamespace(d, "llz-openbao", 15*time.Second); err == nil {
+	if err := WaitForNamespace(d, "llz-openbao", 15*time.Second); err == nil {
 		t.Fatal("a namespace that never appears must fail loud at the deadline")
 	}
 	if refreshes != 2 {
@@ -45,7 +45,7 @@ func TestWaitForOpenbaoNamespaceDeadlineCarriesTheComparisonError(t *testing.T) 
 		// Non-transient (so no refresh loop), but still reportable.
 		return "error: kind ExternalSecret not registered", true
 	})
-	err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second)
+	err := WaitForNamespace(d, "llz-openbao", 30*time.Second)
 	if err == nil {
 		t.Fatal("want a fail-loud deadline error")
 	}
@@ -65,7 +65,7 @@ func TestWaitForOpenbaoNamespaceDeadlineOmitsAnAbsentComparisonError(t *testing.
 		}
 		return "", true // no ComparisonError condition
 	})
-	err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second)
+	err := WaitForNamespace(d, "llz-openbao", 30*time.Second)
 	if err == nil {
 		t.Fatal("want a fail-loud deadline error")
 	}

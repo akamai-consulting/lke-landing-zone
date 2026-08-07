@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 // ci_bao_seed.go implements `llz ci bao-seed` — the generic OpenBao KV seeder
 // that replaced eight near-identical "Seed … in OpenBao" inline-bash steps in
@@ -35,7 +35,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
-	"github.com/spf13/cobra"
 )
 
 // seedRandRead fills b from crypto/rand — a seam so the gen:* sources are
@@ -155,7 +154,7 @@ func defaultMissingAnnotation(path string, missing []string) string {
 	return fmt.Sprintf("%s not set — %s not seeded", strings.Join(missing, " / "), path)
 }
 
-func maskGHALines(v string) {
+func MaskGHALines(v string) {
 	for _, line := range strings.Split(v, "\n") {
 		if strings.TrimSpace(line) != "" {
 			maskGHA(line)
@@ -163,71 +162,38 @@ func maskGHALines(v string) {
 	}
 }
 
-type baoSeedOpts struct {
-	path                string
-	fieldSpecs          []string
-	skipIfPresent       string
-	onMissing           string
-	onMissingStandby    string
-	missingNotes        []string
-	missingNotesStandby []string
-	missingAnnotations  []string
-	summaryOnSeed       []string
-	seededMessage       string
-}
-
-func ciBaoSeedCmd() *cobra.Command {
-	var o baoSeedOpts
-	c := &cobra.Command{
-		Use:   "bao-seed",
-		Short: "seed one OpenBao KV path from env/random/K8s-Secret sources (generic seed step)",
-		Long: "Generic native port of the \"Seed … in OpenBao\" inline steps of\n" +
-			"llz-bootstrap-openbao.yml. Resolves each --field <key>=<source> (env:VAR,\n" +
-			"gen:hex:N, gen:base64:N, k8s:NS/SECRET/KEY, literal:VALUE), ::add-mask::es\n" +
-			"every resolved secret (literals excepted — they're already visible in the\n" +
-			"workflow), and writes them in ONE `kv put` through the in-pod bao CLI.\n" +
-			"--skip-if-present makes re-runs idempotent (don't rotate a live credential).\n" +
-			"A missing env:/k8s: source follows --on-missing: skip (summary notes only),\n" +
-			"warn (::warning:: + notes), or error (::error:: + BOOTSTRAP_ERRORS=true for\n" +
-			"the job's final gate) — all exit 0 so the remaining seed steps still run.\n" +
-			"--on-missing-standby/--missing-note-standby override the mode/notes when\n" +
-			"HA_ROLE=standby. Reads OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeed(o) },
-	}
-	f := c.Flags()
-	f.StringVar(&o.path, "path", "", "KV path to seed, e.g. secret/grafana/admin (required)")
-	f.StringArrayVar(&o.fieldSpecs, "field", nil, "<key>=<source> field spec (repeatable, required)")
-	f.StringVar(&o.skipIfPresent, "skip-if-present", "", "skip (exit 0) when this field of --path already has a value")
-	f.StringVar(&o.onMissing, "on-missing", "error", "behavior when an env:/k8s: source is empty: skip|warn|error")
-	f.StringVar(&o.onMissingStandby, "on-missing-standby", "", "on-missing override applied when HA_ROLE=standby")
-	f.StringArrayVar(&o.missingNotes, "missing-note", nil, "$GITHUB_STEP_SUMMARY line emitted on missing sources (repeatable)")
-	f.StringArrayVar(&o.missingNotesStandby, "missing-note-standby", nil, "summary lines replacing --missing-note when the standby override applies (repeatable)")
-	f.StringArrayVar(&o.missingAnnotations, "missing-annotation", nil, "::warning::/::error:: line(s) on missing sources (repeatable; default derived from the missing names)")
-	f.StringArrayVar(&o.summaryOnSeed, "summary-on-seed", nil, "$GITHUB_STEP_SUMMARY line appended only when a fresh seed happened (repeatable)")
-	f.StringVar(&o.seededMessage, "seeded-message", "", "stdout line after a successful seed (default '<path> seeded.')")
-	return c
+type Opts struct {
+	Path                string
+	FieldSpecs          []string
+	SkipIfPresent       string
+	OnMissing           string
+	OnMissingStandby    string
+	MissingNotes        []string
+	MissingNotesStandby []string
+	MissingAnnotations  []string
+	SummaryOnSeed       []string
+	SeededMessage       string
 }
 
 func validOnMissing(mode string) bool {
 	return mode == "skip" || mode == "warn" || mode == "error"
 }
 
-func runCIBaoSeed(o baoSeedOpts) error {
-	if o.path == "" {
+func RunSeed(o Opts) error {
+	if o.Path == "" {
 		return fmt.Errorf("--path is required")
 	}
-	if len(o.fieldSpecs) == 0 {
+	if len(o.FieldSpecs) == 0 {
 		return fmt.Errorf("at least one --field <key>=<source> is required")
 	}
-	if !validOnMissing(o.onMissing) {
-		return fmt.Errorf("--on-missing must be skip|warn|error, got %q", o.onMissing)
+	if !validOnMissing(o.OnMissing) {
+		return fmt.Errorf("--on-missing must be skip|warn|error, got %q", o.OnMissing)
 	}
-	if o.onMissingStandby != "" && !validOnMissing(o.onMissingStandby) {
-		return fmt.Errorf("--on-missing-standby must be skip|warn|error, got %q", o.onMissingStandby)
+	if o.OnMissingStandby != "" && !validOnMissing(o.OnMissingStandby) {
+		return fmt.Errorf("--on-missing-standby must be skip|warn|error, got %q", o.OnMissingStandby)
 	}
-	fields := make([]seedField, 0, len(o.fieldSpecs))
-	for _, spec := range o.fieldSpecs {
+	fields := make([]seedField, 0, len(o.FieldSpecs))
+	for _, spec := range o.FieldSpecs {
 		f, err := parseSeedField(spec)
 		if err != nil {
 			return err
@@ -244,13 +210,13 @@ func runCIBaoSeed(o baoSeedOpts) error {
 	// crypto/rand bytes — the precise outcome this branch exists to prevent. An
 	// unreadable path is now fatal: a failed run is recoverable, a clobbered
 	// credential is not.
-	if o.skipIfPresent != "" {
-		val, verdict := baoread.KVGetFieldOK(o.path, o.skipIfPresent)
+	if o.SkipIfPresent != "" {
+		val, verdict := baoread.KVGetFieldOK(o.Path, o.SkipIfPresent)
 		if verdict == baoread.Unknown {
-			return baoread.ErrReadUnknown(o.path, o.skipIfPresent, "seed it")
+			return baoread.ErrReadUnknown(o.Path, o.SkipIfPresent, "seed it")
 		}
 		if val != "" {
-			fmt.Printf("%s already exists — skipping.\n", o.path)
+			fmt.Printf("%s already exists — skipping.\n", o.Path)
 			return nil
 		}
 	}
@@ -261,17 +227,17 @@ func runCIBaoSeed(o baoSeedOpts) error {
 	}
 	if len(missing) > 0 {
 		haRole := os.Getenv("HA_ROLE")
-		mode := effectiveOnMissing(o.onMissing, o.onMissingStandby, haRole)
-		notes := o.missingNotes
-		if o.onMissingStandby != "" && haRole == "standby" && len(o.missingNotesStandby) > 0 {
-			notes = o.missingNotesStandby
+		mode := effectiveOnMissing(o.OnMissing, o.OnMissingStandby, haRole)
+		notes := o.MissingNotes
+		if o.OnMissingStandby != "" && haRole == "standby" && len(o.MissingNotesStandby) > 0 {
+			notes = o.MissingNotesStandby
 		}
 		if err := appendGHAFile("GITHUB_STEP_SUMMARY", notes...); err != nil {
 			return err
 		}
-		annotations := o.missingAnnotations
+		annotations := o.MissingAnnotations
 		if len(annotations) == 0 {
-			annotations = []string{defaultMissingAnnotation(o.path, missing)}
+			annotations = []string{defaultMissingAnnotation(o.Path, missing)}
 		}
 		switch mode {
 		case "skip":
@@ -295,17 +261,17 @@ func runCIBaoSeed(o baoSeedOpts) error {
 	// workflow-visible non-secrets — see the file header).
 	for _, f := range fields {
 		if f.src.kind != "literal" {
-			maskGHALines(values[f.key])
+			MaskGHALines(values[f.key])
 		}
 	}
 
-	if err := baoKVPutFn(o.path, values); err != nil {
+	if err := baoread.KVPut(o.Path, values); err != nil {
 		return err
 	}
-	msg := o.seededMessage
+	msg := o.SeededMessage
 	if msg == "" {
-		msg = o.path + " seeded."
+		msg = o.Path + " seeded."
 	}
 	fmt.Println(msg)
-	return appendGHAFile("GITHUB_STEP_SUMMARY", o.summaryOnSeed...)
+	return appendGHAFile("GITHUB_STEP_SUMMARY", o.SummaryOnSeed...)
 }

@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 import (
 	"encoding/base64"
@@ -29,7 +29,7 @@ func withSeedRand(t *testing.T, fill byte) {
 	t.Cleanup(func() { seedRandRead = prev })
 }
 
-// withSeedNamespace makes waitForOpenbaoNamespace resolve on the first probe
+// withSeedNamespace makes WaitForNamespace resolve on the first probe
 // (namespace present), so the Secret-logic tests below exercise the key handling
 // without the convergence wait. The wait itself is covered by
 // TestWaitForOpenbaoNamespace*.
@@ -59,7 +59,7 @@ func TestWaitForOpenbaoNamespaceAppears(t *testing.T) {
 		}
 		return "", true // ComparisonError probe: empty → no refresh
 	})
-	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
+	if err := WaitForNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
 		t.Fatalf("should succeed once the namespace appears: %v", err)
 	}
 }
@@ -72,7 +72,7 @@ func TestWaitForOpenbaoNamespaceTimesOut(t *testing.T) {
 		}
 		return "", true
 	})
-	err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second)
+	err := WaitForNamespace(d, "llz-openbao", 30*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "not found after") {
 		t.Errorf("err = %v, want a fail-loud timeout", err)
 	}
@@ -97,7 +97,7 @@ func TestWaitForOpenbaoNamespaceRefreshesWedgedParent(t *testing.T) {
 			return "failed to list refs: repository not found", true
 		}
 	})
-	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
+	if err := WaitForNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
 		t.Fatalf("should recover after a hard refresh: %v", err)
 	}
 	if !refreshed {
@@ -121,7 +121,7 @@ func TestWaitForOpenbaoNamespaceLeavesRealErrorAlone(t *testing.T) {
 			return "error: kind Foo not registered", true // a real, non-transient error
 		}
 	})
-	if err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second); err == nil {
+	if err := WaitForNamespace(d, "llz-openbao", 30*time.Second); err == nil {
 		t.Error("a real manifest error must still fail loud")
 	}
 	if refreshed {
@@ -156,7 +156,7 @@ func TestRunCIBaoSeedSealKeyExistingIsNoop(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("openbao-unseal-key"), nil }) // get secret succeeds
 	applied := withKubectlApply(t)
 	gh := withGHSetSecret(t, nil)
-	if err := runCIBaoSeedSealKey(globalOpts{}, "primary"); err != nil {
+	if err := RunSeedSealKey(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 	if *applied != "" || len(*gh) != 0 {
@@ -176,7 +176,7 @@ func TestRunCIBaoSeedSealKeyRestoreFromEnv(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") }) // get secret fails → absent
 	applied := withKubectlApply(t)
 	gh := withGHSetSecret(t, nil)
-	if err := runCIBaoSeedSealKey(globalOpts{}, "primary"); err != nil {
+	if err := RunSeedSealKey(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(*applied, "unseal.key: "+enc) {
@@ -193,7 +193,7 @@ func TestRunCIBaoSeedSealKeyRestoreBadLength(t *testing.T) {
 	t.Setenv("OPENBAO_SEAL_KEY", base64.StdEncoding.EncodeToString([]byte("too-short")))
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })
 	withKubectlApply(t)
-	if err := runCIBaoSeedSealKey(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "want 32") {
+	if err := RunSeedSealKey(false, "primary"); err == nil || !strings.Contains(err.Error(), "want 32") {
 		t.Errorf("err = %v, want wrong-length rejection", err)
 	}
 }
@@ -211,7 +211,7 @@ func TestRunCIBaoSeedSealKeyGenerate(t *testing.T) {
 	applied := withKubectlApply(t)
 	gh := withGHSetSecret(t, nil)
 
-	if err := runCIBaoSeedSealKey(globalOpts{}, "primary"); err != nil {
+	if err := RunSeedSealKey(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,26 +238,10 @@ func TestRunCIBaoSeedSealKeyGenerateNeedsGHToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })
 	applied := withKubectlApply(t)
-	if err := runCIBaoSeedSealKey(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
+	if err := RunSeedSealKey(false, "primary"); err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
 		t.Errorf("err = %v, want GH_TOKEN-required error", err)
 	}
 	if *applied != "" {
 		t.Error("must not apply a key it cannot back up")
-	}
-}
-
-func TestRunCIBaoSeedSealKeyDryRunAndWiring(t *testing.T) {
-	withExecOutput(t, func(string, ...string) ([]byte, error) {
-		t.Error("dry-run must not exec kubectl")
-		return nil, nil
-	})
-	if err := runCIBaoSeedSealKey(globalOpts{dryRun: true}, "primary"); err != nil {
-		t.Fatalf("dry-run: %v", err)
-	}
-	if err := runCIBaoSeedSealKey(globalOpts{}, ""); err == nil || !strings.Contains(err.Error(), "--region") {
-		t.Errorf("missing region = %v, want --region error", err)
-	}
-	if c := ciBaoSeedSealKeyCmd(); c.Use != "bao-seed-seal-key" {
-		t.Errorf("Use = %q, want bao-seed-seal-key", c.Use)
 	}
 }

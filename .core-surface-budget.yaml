@@ -296,6 +296,13 @@ categories:
     #                       subject. Also the first binding refused by BOTH
     #                       tables: rotation belongs at `operating`, and the two
     #                       tables disagree about where it may go instead.
+    #   19,074 / 142 files  openbao-seed — the seeding THIRD of the
+    #                       openbao-lifecycle row. -362. The whole row measures 20
+    #                       outbound against ~25 inbound across six other files:
+    #                       not one boundary, six. The seeders ARE one, and only
+    #                       because four earlier walls had already turned
+    #                       baoKVPutFn into baoread.KVPut and openbaoNS into
+    #                       baoread.Namespace.
     #
     # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
@@ -309,7 +316,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 19436
+    budget: 19074
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 // ci_bao_seed_seal_key.go implements `llz ci bao-seed-seal-key` — it creates the
 // per-cluster 32-byte static auto-unseal key as the `openbao-unseal-key` Secret
@@ -25,9 +25,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
@@ -52,7 +51,7 @@ const (
 	openbaoNSParent   = "platform-bootstrap"
 )
 
-// waitForOpenbaoNamespace polls until the llz-openbao namespace exists or the
+// WaitForNamespace polls until the llz-openbao namespace exists or the
 // budget is spent. The namespace is pre-created at wave -20 of llz-cluster-
 // foundation, a child of the platform-bootstrap app-of-apps. When
 // platform-bootstrap is wedged on a transient remote-base fetch flake — the
@@ -63,7 +62,7 @@ const (
 // assert-argo-app, force a throttled hard refresh on the parent while we wait.
 // A non-transient ComparisonError (a real manifest error) is left alone and
 // surfaces at the deadline; fail loud either way per the convergence contract.
-func waitForOpenbaoNamespace(d cigate.Deps, ns string, within time.Duration) error {
+func WaitForNamespace(d cigate.Deps, ns string, within time.Duration) error {
 	deadline := d.Now().Add(within)
 	var lastRefresh time.Time
 	announced := false
@@ -94,34 +93,12 @@ func waitForOpenbaoNamespace(d cigate.Deps, ns string, within time.Duration) err
 	}
 }
 
-func ciBaoSeedSealKeyCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "bao-seed-seal-key",
-		Short: "create the per-cluster static auto-unseal key Secret (openbao-unseal-key)",
-		Long: "Creates the `openbao-unseal-key` Secret holding this cluster's 32-byte static\n" +
-			"auto-unseal key, which the chart's `seal \"static\"` stanza mounts at\n" +
-			"/openbao/seal/unseal.key so every OpenBao pod unseals itself at boot (no managed\n" +
-			"KMS on Linode). Run it before the OpenBao pods start; a missing Secret leaves a\n" +
-			"pod in ContainerCreating, not crash-looping, so it need only complete. Idempotent\n" +
-			"and never-rotating: an existing Secret is left untouched (a changed key bricks\n" +
-			"unseal). On a namespace rebuild it restores the key from the infra-<region>\n" +
-			"OPENBAO_SEAL_KEY secret; a first-ever bootstrap generates a new key, persists it\n" +
-			"to infra-<region> for DR (requires GH_TOKEN/GH_REPO), and prints an offline-backup\n" +
-			"banner — losing this key loses the data.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeedSealKey(gopts, region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> environment backs up the key for DR (required)")
-	return c
-}
-
-func runCIBaoSeedSealKey(g globalOpts, region string) error {
+func RunSeedSealKey(dryRun bool, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	if g.dryRun {
-		fmt.Fprintf(os.Stderr, "→ (dry-run) would ensure the %s/%s static auto-unseal key Secret exists\n", openbaoNS, sealKeySecretName)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "→ (dry-run) would ensure the %s/%s static auto-unseal key Secret exists\n", baoread.Namespace, sealKeySecretName)
 		return nil
 	}
 
@@ -131,13 +108,13 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := waitForOpenbaoNamespace(cigate.NewDeps(), openbaoNS, openbaoNSWait); err != nil {
+	if err := WaitForNamespace(cigate.NewDeps(), baoread.Namespace, openbaoNSWait); err != nil {
 		return err
 	}
 
 	// An existing Secret is the live unseal key — never overwrite it.
-	if kubectlprobe.Exists("-n", openbaoNS, "get", "secret", sealKeySecretName) {
-		fmt.Printf("%s/%s already exists — leaving the static seal key untouched.\n", openbaoNS, sealKeySecretName)
+	if kubectlprobe.Exists("-n", baoread.Namespace, "get", "secret", sealKeySecretName) {
+		fmt.Printf("%s/%s already exists — leaving the static seal key untouched.\n", baoread.Namespace, sealKeySecretName)
 		return nil
 	}
 
@@ -149,10 +126,10 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	// The Secret stores the RAW 32 bytes under unseal.key; the chart mounts it at
 	// /openbao/seal/unseal.key and the `seal "static"` stanza reads it as
 	// file:///openbao/seal/unseal.key.
-	if err := kubectlApplyFn(sealKeySecretManifest(openbaoNS, sealKeySecretName, key)); err != nil {
-		return fmt.Errorf("apply %s/%s: %w", openbaoNS, sealKeySecretName, err)
+	if err := KubectlApply(sealKeySecretManifest(baoread.Namespace, sealKeySecretName, key)); err != nil {
+		return fmt.Errorf("apply %s/%s: %w", baoread.Namespace, sealKeySecretName, err)
 	}
-	fmt.Printf("Created %s/%s (32-byte static auto-unseal key).\n", openbaoNS, sealKeySecretName)
+	fmt.Printf("Created %s/%s (32-byte static auto-unseal key).\n", baoread.Namespace, sealKeySecretName)
 	return nil
 }
 
@@ -177,7 +154,7 @@ func resolveSealKey(region string) ([]byte, error) {
 	// secrets-write PAT is fatal — otherwise the only copy would be the in-cluster
 	// Secret, and a namespace loss would be unrecoverable.
 	if os.Getenv("GH_TOKEN") == "" {
-		return nil, fmt.Errorf("no existing %s/%s, no OPENBAO_SEAL_KEY to restore, and GH_TOKEN (OPENBAO_SECRETS_WRITE_TOKEN) is not set — a new static seal key must be persisted as the infra-%s OPENBAO_SEAL_KEY secret for disaster recovery", openbaoNS, sealKeySecretName, region)
+		return nil, fmt.Errorf("no existing %s/%s, no OPENBAO_SEAL_KEY to restore, and GH_TOKEN (OPENBAO_SECRETS_WRITE_TOKEN) is not set — a new static seal key must be persisted as the infra-%s OPENBAO_SEAL_KEY secret for disaster recovery", baoread.Namespace, sealKeySecretName, region)
 	}
 
 	key := make([]byte, sealKeyBytes)
@@ -200,7 +177,7 @@ func resolveSealKey(region string) ([]byte, error) {
 		"CANNOT decrypt the root key, so losing this key loses the data."); err != nil {
 		return nil, err
 	}
-	if err := ghSetSecretFn("OPENBAO_SEAL_KEY", "infra-"+region, enc); err != nil {
+	if err := SetGitHubSecret("OPENBAO_SEAL_KEY", "infra-"+region, enc); err != nil {
 		return nil, err
 	}
 	fmt.Printf("Generated a new static seal key and persisted it to infra-%s::OPENBAO_SEAL_KEY.\n", region)

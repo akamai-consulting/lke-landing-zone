@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 // ci_bao_seed_all.go implements `llz ci bao-seed-all` — the data-driven driver
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
@@ -14,16 +14,14 @@ package main
 // the in-cluster provisioner / seed-standby-harbor-robots) keep their
 // dedicated commands — only the plain `bao-seed` invocations fold in.
 //
-// Each entry IS a baoSeedOpts (the exact flag set ci_bao_seed.go parses), so the
+// Each entry IS a Opts (the exact flag set ci_bao_seed.go parses), so the
 // behavior of every seed — sources, idempotency guard, on-missing mode, summary
-// notes — is identical to the inline steps it replaces; runCIBaoSeed does the
+// notes — is identical to the inline steps it replaces; RunSeed does the
 // work. The infra-<region> references the inline steps built by shell-
 // interpolating ${REGION} are filled from --region here.
 
 import (
 	"fmt"
-
-	"github.com/spf13/cobra"
 )
 
 // bootstrapSeeds returns the generic KV seeds the OpenBao bootstrap runs, in the
@@ -31,11 +29,11 @@ import (
 // the inline steps produced by shell-interpolating ${REGION}.
 //
 // onMissing is set on EVERY entry (even the gen:-only ones that can never go
-// missing) because runCIBaoSeed validates it up front — an empty mode is
+// missing) because RunSeed validates it up front — an empty mode is
 // rejected. "error" matches the bao-seed flag default the inline steps relied on
 // when they passed no --on-missing.
-func bootstrapSeeds(region string) []baoSeedOpts {
-	return []baoSeedOpts{
+func bootstrapSeeds(region string) []Opts {
+	return []Opts{
 		// secret/harbor/admin is NO LONGER seeded here — an ESO PushSecret
 		// (platform-apl/components/harbor/harbor-admin-push.yaml) mirrors Harbor's
 		// Helm-generated harbor-admin-password Secret into OpenBao via the
@@ -45,26 +43,26 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// active/standalone (BOOTSTRAP_ERRORS); summary-note skip on a standby,
 		// where harbor-ready is the active peer's concern.
 		{
-			path:             "secret/infra/github-dispatch-token",
-			fieldSpecs:       []string{"token=env:OPENBAO_SECRETS_WRITE_TOKEN"},
-			onMissing:        "error",
-			onMissingStandby: "skip",
-			missingAnnotations: []string{
+			Path:             "secret/infra/github-dispatch-token",
+			FieldSpecs:       []string{"token=env:OPENBAO_SECRETS_WRITE_TOKEN"},
+			OnMissing:        "error",
+			OnMissingStandby: "skip",
+			MissingAnnotations: []string{
 				fmt.Sprintf("OPENBAO_SECRETS_WRITE_TOKEN is not set for the infra-%s environment.", region),
 				"Without it, secret/infra/github-dispatch-token cannot be seeded and the harbor-ready",
 				"PostSync hook will fail to dispatch build-firewall-controller. Add the secret and re-run.",
 			},
-			missingNotesStandby: []string{
+			MissingNotesStandby: []string{
 				"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/infra/github-dispatch-token (standby).",
 			},
 		},
 		// cert-automation GitHub token (same PAT) for the cert-automation-github-token
 		// ExternalSecret in llz-cert-automation.
 		{
-			path:         "secret/cert-automation/github-token",
-			fieldSpecs:   []string{"token=env:OPENBAO_SECRETS_WRITE_TOKEN"},
-			onMissing:    "skip",
-			missingNotes: []string{"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token."},
+			Path:         "secret/cert-automation/github-token",
+			FieldSpecs:   []string{"token=env:OPENBAO_SECRETS_WRITE_TOKEN"},
+			OnMissing:    "skip",
+			MissingNotes: []string{"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token."},
 		},
 		// apl-values repo Contents:write PAT (the same APL_VALUES_REPO_TOKEN the
 		// bootstrap already require-secrets and uses for the managed BYO-Git config)
@@ -72,10 +70,10 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// git-sync the apl-overlay onto apl-<env>. property `token`, under secret/infra/
 		// so the openbao store policy that already covers github-dispatch-token applies.
 		{
-			path:         "secret/infra/apl-values-repo-token",
-			fieldSpecs:   []string{"token=env:APL_VALUES_REPO_TOKEN"},
-			onMissing:    "skip",
-			missingNotes: []string{"APL_VALUES_REPO_TOKEN not set — skipping secret/infra/apl-values-repo-token (apl-overlay reconciler no-ops until it appears)."},
+			Path:         "secret/infra/apl-values-repo-token",
+			FieldSpecs:   []string{"token=env:APL_VALUES_REPO_TOKEN"},
+			OnMissing:    "skip",
+			MissingNotes: []string{"APL_VALUES_REPO_TOKEN not set — skipping secret/infra/apl-values-repo-token (apl-overlay reconciler no-ops until it appears)."},
 		},
 		// secret/linode/api-token is NO LONGER seeded here (and no longer holds
 		// the broad provisioning PAT): `llz ci mint-bootstrap-pat` mints the
@@ -101,39 +99,14 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 	}
 }
 
-func ciBaoSeedAllCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "bao-seed-all",
-		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
-		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
-			"(github-dispatch-token, cert-automation token, linode api-token)\n" +
-			"from the bootstrapSeeds() table — replacing\n" +
-			"near-identical inline steps in llz-bootstrap-openbao.yml with one. (harbor\n" +
-			"admin, grafana admin + otel bearer are written in-cluster via ESO\n" +
-			"PushSecrets; loki object-store + harbor registry-s3 are minted + seeded by\n" +
-			"`llz ci mint-bootstrap-objkeys`.) Each entry is the same flag set\n" +
-			"`bao-seed` parses, so behavior is unchanged: per-seed idempotency guards,\n" +
-			"on-missing modes, and summary notes. A missing env:/k8s: source follows\n" +
-			"that seed's on-missing mode (exit 0, deferring via BOOTSTRAP_ERRORS where\n" +
-			"the inline step did); a genuine kv-put failure aborts before the remaining\n" +
-			"seeds. Reads OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN,\n" +
-			"LINODE_API_TOKEN, and HA_ROLE.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeedAll(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> references fill the seed notes (required)")
-	return c
-}
-
-func runCIBaoSeedAll(region string) error {
+func RunSeedAll(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
 	for _, o := range bootstrapSeeds(region) {
-		fmt.Printf("=== seeding %s ===\n", o.path)
-		if err := runCIBaoSeed(o); err != nil {
-			return fmt.Errorf("seed %s: %w", o.path, err)
+		fmt.Printf("=== seeding %s ===\n", o.Path)
+		if err := RunSeed(o); err != nil {
+			return fmt.Errorf("seed %s: %w", o.Path, err)
 		}
 	}
 	return nil

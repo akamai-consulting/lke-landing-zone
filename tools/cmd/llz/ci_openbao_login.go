@@ -40,6 +40,7 @@ import (
 
 	"net/http"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
@@ -126,7 +127,7 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 	if err != nil {
 		return err
 	}
-	maskGHALines(token)
+	baoseed.MaskGHALines(token)
 	if err := appendGHAFile("GITHUB_ENV", exportVar+"="+token); err != nil {
 		return err
 	}
@@ -161,6 +162,6 @@ func oidcOpenBaoLogin(ctx context.Context, client *http.Client, addr, role strin
 	if err != nil {
 		return "", fmt.Errorf("mint GitHub OIDC token: %w (does the job set `permissions: id-token: write`?)", err)
 	}
-	maskGHALines(oidcToken)
+	baoseed.MaskGHALines(oidcToken)
 	return openbao.JWTLogin(ctx, client, addr, role, oidcToken)
 }

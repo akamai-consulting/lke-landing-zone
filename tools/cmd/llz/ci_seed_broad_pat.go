@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
@@ -81,10 +82,10 @@ func runCISeedBroadPAT(region string) error {
 	// Delegate the actual OpenBao write to the generic seed primitive so the
 	// skip-if-present guard, ::add-mask::, and error handling stay identical to
 	// every other bootstrap seed.
-	return runCIBaoSeed(baoSeedOpts{
-		path:          "secret/linode/broad-pat",
-		fieldSpecs:    []string{"token=env:LINODE_API_TOKEN", "rotated_at=literal:0"},
-		skipIfPresent: "token",
-		onMissing:     "error",
+	return baoseed.RunSeed(baoseed.Opts{
+		Path:          "secret/linode/broad-pat",
+		FieldSpecs:    []string{"token=env:LINODE_API_TOKEN", "rotated_at=literal:0"},
+		SkipIfPresent: "token",
+		OnMissing:     "error",
 	})
 }

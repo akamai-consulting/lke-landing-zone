@@ -137,7 +137,8 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > and **20,492** with wall four half down.
 > and **20,269** with wall four finished for the credential family.
 > and **19,436** with `database-provisioner` + `assert-database`.
-> Forty-three extensions, net −27,746 (58.8%) — now BELOW the
+> and **19,074** with `openbao-seed`.
+> Forty-four extensions, net −28,108 (59.6%) — now BELOW the
 > 41,803 this gate first recorded, and below the pre-rebase number — a floor on
 > the effort rather than a schedule, since the cheapest went first. The catalog's
 > [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)

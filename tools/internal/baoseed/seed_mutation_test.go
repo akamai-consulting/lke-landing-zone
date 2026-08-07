@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 // Mutation-test gap closure for ci_bao_seed.go: the masking that keeps freshly
 // minted credentials out of CI logs, the on-missing reporting the bootstrap gate
@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-// maskGHALines must emit one ::add-mask:: per NON-BLANK line. Masking a blank or
+// MaskGHALines must emit one ::add-mask:: per NON-BLANK line. Masking a blank or
 // whitespace-only line is worse than useless: Actions would then redact matching
 // whitespace across the whole log, and — the real hazard — a mask registered for
 // the wrong lines leaves the actual secret lines unmasked.
 func TestMaskGHALinesMasksOnlyNonBlankLines(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "true")
 	out := captureStdout(t, func() {
-		maskGHALines("-----BEGIN KEY-----\n\n   \nsecret-body\n-----END KEY-----\n")
+		MaskGHALines("-----BEGIN KEY-----\n\n   \nsecret-body\n-----END KEY-----\n")
 	})
 	want := "::add-mask::-----BEGIN KEY-----\n::add-mask::secret-body\n::add-mask::-----END KEY-----\n"
 	if out != want {
-		t.Errorf("maskGHALines output:\n%q\nwant:\n%q", out, want)
+		t.Errorf("MaskGHALines output:\n%q\nwant:\n%q", out, want)
 	}
 }
 
@@ -38,10 +38,10 @@ func TestRunCIBaoSeedMasksResolvedSecretsButNotLiterals(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		err = runCIBaoSeed(baoSeedOpts{
-			path:       "secret/x/y",
-			fieldSpecs: []string{"token=env:SEED_SECRET_VALUE", "username=literal:admin"},
-			onMissing:  "error",
+		err = RunSeed(Opts{
+			Path:       "secret/x/y",
+			FieldSpecs: []string{"token=env:SEED_SECRET_VALUE", "username=literal:admin"},
+			OnMissing:  "error",
 		})
 	})
 	if err != nil {
@@ -68,11 +68,11 @@ func TestRunCIBaoSeedSeededMessage(t *testing.T) {
 			withGHASummaryFile(t)
 			var err error
 			out := captureStdout(t, func() {
-				err = runCIBaoSeed(baoSeedOpts{
-					path:          "secret/x/y",
-					fieldSpecs:    []string{"username=literal:admin"},
-					onMissing:     "error",
-					seededMessage: tc.msg,
+				err = RunSeed(Opts{
+					Path:          "secret/x/y",
+					FieldSpecs:    []string{"username=literal:admin"},
+					OnMissing:     "error",
+					SeededMessage: tc.msg,
 				})
 			})
 			if err != nil {
@@ -100,12 +100,12 @@ func TestRunCIBaoSeedStandbyKeepsBaseNotesWhenNoStandbyNotes(t *testing.T) {
 	sum := withGHASummaryFile(t)
 	withGHAEnvFile(t)
 
-	err := runCIBaoSeed(baoSeedOpts{
-		path:             "secret/x/y",
-		fieldSpecs:       []string{"token=env:UNSET_SEED_VAR"},
-		onMissing:        "error",
-		onMissingStandby: "skip",
-		missingNotes:     []string{"base note explaining the skip"},
+	err := RunSeed(Opts{
+		Path:             "secret/x/y",
+		FieldSpecs:       []string{"token=env:UNSET_SEED_VAR"},
+		OnMissing:        "error",
+		OnMissingStandby: "skip",
+		MissingNotes:     []string{"base note explaining the skip"},
 		// missingNotesStandby deliberately empty
 	})
 	if err != nil {
@@ -142,11 +142,11 @@ func TestRunCIBaoSeedMissingAnnotationSelection(t *testing.T) {
 
 			var err error
 			errOut := captureStderr(t, func() {
-				err = runCIBaoSeed(baoSeedOpts{
-					path:               "secret/x/y",
-					fieldSpecs:         []string{"token=env:UNSET_SEED_VAR"},
-					onMissing:          "warn",
-					missingAnnotations: tc.annotations,
+				err = RunSeed(Opts{
+					Path:               "secret/x/y",
+					FieldSpecs:         []string{"token=env:UNSET_SEED_VAR"},
+					OnMissing:          "warn",
+					MissingAnnotations: tc.annotations,
 				})
 			})
 			if err != nil {
@@ -177,10 +177,10 @@ func TestRunCIBaoSeedUnwritableGHAEnvIsFatal(t *testing.T) {
 
 	var err error
 	captureStderr(t, func() {
-		err = runCIBaoSeed(baoSeedOpts{
-			path:       "secret/x/y",
-			fieldSpecs: []string{"token=env:UNSET_SEED_VAR"},
-			onMissing:  "error",
+		err = RunSeed(Opts{
+			Path:       "secret/x/y",
+			FieldSpecs: []string{"token=env:UNSET_SEED_VAR"},
+			OnMissing:  "error",
 		})
 	})
 	if err == nil {

@@ -1,12 +1,15 @@
-package main
+package baoseed
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 )
 
 func TestParseSeedField(t *testing.T) {
@@ -166,8 +169,25 @@ func lastArg(args []string) string {
 func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string {
 	t.Helper()
 	var puts [][]string
-	prev := baoExecFn
-	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
+	prevStdin, prevExec, prevPut := baoread.ExecStdin, baoread.Exec, baoread.KVPut
+	// THREE SEAMS, ONE RECORDER. The seeder reads through baoread.Exec, writes
+	// through baoread.KVPut, and only the stdin-carrying exec is named here. Before
+	// this, `kv put` was recorded via ExecStdin and the real write went out through
+	// an unstubbed KVPut — so the assertions counted zero puts while the code
+	// believed it had written. Sixth instance of the double-seam trap.
+	baoread.Exec = func(token string, args ...string) (string, string, error) {
+		return baoread.ExecStdin(token, "", args...)
+	}
+	baoread.KVPut = func(path string, fields map[string]string) error {
+		args := []string{"kv", "put", path}
+		for k, v := range fields {
+			args = append(args, k+"="+v)
+		}
+		sort.Strings(args[3:])
+		puts = append(puts, args)
+		return nil
+	}
+	baoread.ExecStdin = func(_, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.HasPrefix(joined, "kv get"):
@@ -184,7 +204,9 @@ func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string 
 		}
 		return "", "unexpected: " + joined, errors.New("unexpected")
 	}
-	t.Cleanup(func() { baoExecFn = prev })
+	t.Cleanup(func() {
+		baoread.ExecStdin, baoread.Exec, baoread.KVPut = prevStdin, prevExec, prevPut
+	})
 	return &puts
 }
 
@@ -198,11 +220,11 @@ func withGHASummaryFile(t *testing.T) string {
 func TestRunCIBaoSeedSkipIfPresent(t *testing.T) {
 	puts := stubBaoSeedKV(t, "password", "already-there")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
-	err := runCIBaoSeed(baoSeedOpts{
-		path:          "secret/grafana/admin",
-		fieldSpecs:    []string{"password=gen:base64:24"},
-		skipIfPresent: "password",
-		onMissing:     "error",
+	err := RunSeed(Opts{
+		Path:          "secret/grafana/admin",
+		FieldSpecs:    []string{"password=gen:base64:24"},
+		SkipIfPresent: "password",
+		OnMissing:     "error",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -233,14 +255,14 @@ func TestRunCIBaoSeedMissingModes(t *testing.T) {
 			t.Setenv("UNSET_SEED_VAR", "")
 			envFile := withGHAEnvFile(t)
 			sum := withGHASummaryFile(t)
-			err := runCIBaoSeed(baoSeedOpts{
-				path:                "secret/x/y",
-				fieldSpecs:          []string{"token=env:UNSET_SEED_VAR"},
-				onMissing:           tc.onMissing,
-				onMissingStandby:    tc.onMissingStandby,
-				missingNotes:        []string{"base note"},
-				missingNotesStandby: []string{"standby note"},
-				missingAnnotations:  []string{"the annotation"},
+			err := RunSeed(Opts{
+				Path:                "secret/x/y",
+				FieldSpecs:          []string{"token=env:UNSET_SEED_VAR"},
+				OnMissing:           tc.onMissing,
+				OnMissingStandby:    tc.onMissingStandby,
+				MissingNotes:        []string{"base note"},
+				MissingNotesStandby: []string{"standby note"},
+				MissingAnnotations:  []string{"the annotation"},
 			})
 			if err != nil {
 				t.Fatalf("missing inputs must exit 0: %v", err)
@@ -271,11 +293,11 @@ func TestRunCIBaoSeedSeeds(t *testing.T) {
 	})
 	envFile := withGHAEnvFile(t)
 	sum := withGHASummaryFile(t)
-	err := runCIBaoSeed(baoSeedOpts{
-		path:          "secret/x/y",
-		fieldSpecs:    []string{"a=env:SEED_A", "b=k8s:ns/s/k", "c=literal:lit"},
-		onMissing:     "error",
-		summaryOnSeed: []string{"seed summary line"},
+	err := RunSeed(Opts{
+		Path:          "secret/x/y",
+		FieldSpecs:    []string{"a=env:SEED_A", "b=k8s:ns/s/k", "c=literal:lit"},
+		OnMissing:     "error",
+		SummaryOnSeed: []string{"seed summary line"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +306,7 @@ func TestRunCIBaoSeedSeeds(t *testing.T) {
 		t.Fatalf("want exactly one kv put, got %d", len(*puts))
 	}
 	got := strings.Join((*puts)[0], " ")
-	// baoKVPutFn sorts fields for a deterministic argv.
+	// baoread.KVPut sorts fields for a deterministic argv.
 	if want := "kv put secret/x/y a=alpha b=beta c=lit"; got != want {
 		t.Errorf("kv put argv = %q, want %q", got, want)
 	}
@@ -298,14 +320,14 @@ func TestRunCIBaoSeedSeeds(t *testing.T) {
 }
 
 func TestRunCIBaoSeedValidation(t *testing.T) {
-	for _, o := range []baoSeedOpts{
-		{fieldSpecs: []string{"a=env:X"}, onMissing: "error"}, // no path
-		{path: "secret/x", onMissing: "error"},                // no fields
-		{path: "secret/x", fieldSpecs: []string{"a=env:X"}, onMissing: "explode"},
-		{path: "secret/x", fieldSpecs: []string{"a=env:X"}, onMissing: "error", onMissingStandby: "loudly"},
-		{path: "secret/x", fieldSpecs: []string{"bogus"}, onMissing: "error"},
+	for _, o := range []Opts{
+		{FieldSpecs: []string{"a=env:X"}, OnMissing: "error"}, // no path
+		{Path: "secret/x", OnMissing: "error"},                // no fields
+		{Path: "secret/x", FieldSpecs: []string{"a=env:X"}, OnMissing: "explode"},
+		{Path: "secret/x", FieldSpecs: []string{"a=env:X"}, OnMissing: "error", OnMissingStandby: "loudly"},
+		{Path: "secret/x", FieldSpecs: []string{"bogus"}, OnMissing: "error"},
 	} {
-		if err := runCIBaoSeed(o); err == nil {
+		if err := RunSeed(o); err == nil {
 			t.Errorf("opts %+v must fail validation", o)
 		}
 	}
@@ -316,7 +338,7 @@ func TestMaskGHALines(t *testing.T) {
 	// maskGHA prints to stdout; just assert it doesn't panic on multiline +
 	// blank-line input. (Output assertion would need stdout capture; the
 	// per-line split is the behavior under test and is exercised via fmt.)
-	maskGHALines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
+	MaskGHALines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
 }
 
 func funcBody(src, decl string) string {

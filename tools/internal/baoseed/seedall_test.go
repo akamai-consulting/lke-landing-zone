@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 )
 
 // TestBootstrapSeedsTable pins the data-driven table the workflow relies on:
-// the generic seeds, each with a valid on-missing mode (runCIBaoSeed rejects
+// the generic seeds, each with a valid on-missing mode (RunSeed rejects
 // an empty one) and parseable field specs, and region interpolated into the
 // infra-<region> references the inline steps built from ${REGION}.
 func TestBootstrapSeedsTable(t *testing.T) {
@@ -23,25 +23,25 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		t.Fatalf("bootstrapSeeds returned %d entries, want %d", len(seeds), len(wantPaths))
 	}
 	for i, o := range seeds {
-		if o.path != wantPaths[i] {
-			t.Errorf("seed %d path = %q, want %q", i, o.path, wantPaths[i])
+		if o.Path != wantPaths[i] {
+			t.Errorf("seed %d path = %q, want %q", i, o.Path, wantPaths[i])
 		}
-		if !validOnMissing(o.onMissing) {
-			t.Errorf("seed %s has invalid on-missing %q (runCIBaoSeed would reject it)", o.path, o.onMissing)
+		if !validOnMissing(o.OnMissing) {
+			t.Errorf("seed %s has invalid on-missing %q (RunSeed would reject it)", o.Path, o.OnMissing)
 		}
-		if len(o.fieldSpecs) == 0 {
-			t.Errorf("seed %s has no field specs", o.path)
+		if len(o.FieldSpecs) == 0 {
+			t.Errorf("seed %s has no field specs", o.Path)
 		}
-		for _, spec := range o.fieldSpecs {
+		for _, spec := range o.FieldSpecs {
 			if _, err := parseSeedField(spec); err != nil {
-				t.Errorf("seed %s field %q does not parse: %v", o.path, spec, err)
+				t.Errorf("seed %s field %q does not parse: %v", o.Path, spec, err)
 			}
 		}
 	}
 	// Region interpolation reached the dispatch-token annotation.
 	dispatch := seeds[0]
-	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
-		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
+	if !strings.Contains(strings.Join(dispatch.MissingAnnotations, " "), "infra-primary") {
+		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.MissingAnnotations)
 	}
 }
 
@@ -53,8 +53,8 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
-	if err := runCIBaoSeedAll("primary"); err != nil {
-		t.Fatalf("runCIBaoSeedAll: %v", err)
+	if err := RunSeedAll("primary"); err != nil {
+		t.Fatalf("RunSeedAll: %v", err)
 	}
 	var gotPaths []string
 	for _, p := range *puts {
@@ -79,7 +79,7 @@ func TestRunCIBaoSeedAllAbortsOnPutFailure(t *testing.T) {
 	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("HA_ROLE", "")
 	puts := 0
-	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+	withBaoExec(t, func(_, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.HasPrefix(joined, "kv get"):
@@ -90,20 +90,11 @@ func TestRunCIBaoSeedAllAbortsOnPutFailure(t *testing.T) {
 		}
 		return "", "unexpected " + joined, errors.New("unexpected")
 	})
-	err := runCIBaoSeedAll("primary")
+	err := RunSeedAll("primary")
 	if err == nil || !strings.Contains(err.Error(), "secret/infra/github-dispatch-token") {
 		t.Errorf("err = %v, want abort on the first seed (secret/infra/github-dispatch-token)", err)
 	}
 	if puts != 1 {
 		t.Errorf("kv put attempts = %d, want 1 (driver must abort before later seeds)", puts)
-	}
-}
-
-func TestRunCIBaoSeedAllRequiresRegion(t *testing.T) {
-	if err := runCIBaoSeedAll(""); err == nil || !strings.Contains(err.Error(), "--region") {
-		t.Errorf("runCIBaoSeedAll(\"\") = %v, want --region error", err)
-	}
-	if c := ciBaoSeedAllCmd(); c.Use != "bao-seed-all" {
-		t.Errorf("Use = %q, want bao-seed-all", c.Use)
 	}
 }

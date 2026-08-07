@@ -32,6 +32,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
@@ -90,6 +91,7 @@ var declarations = []func() extension.Extension{
 	clusteraccess.Extension,
 	configreadiness.Extension,
 	converge.Extension,
+	baoseed.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

@@ -112,6 +112,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/baoread=58 \
+	internal/baoseed=88 \
 	internal/credrotate=73 \
 	internal/database=69
 

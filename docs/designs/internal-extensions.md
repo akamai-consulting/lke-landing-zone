@@ -171,7 +171,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 
 | extension | lines | files | always | ext? | notes |
 |---|---:|---:|:-:|:-:|---|
-| `openbao-lifecycle` | 2,185 | 13 | ✔ | ✘ | init/configure/CA/breakglass/seal-key/login. The largest `→ seeded` block; holds root material. |
+| `openbao-lifecycle` | 2,185 | 13 | ✔ | ✘ | init/configure/CA/breakglass/seal-key/login. The largest `→ seeded` block; holds root material. **✅ Partially extracted — the seeding third is `openbao-seed`.** See [What `openbao-seed` could take](#what-openbao-seed-could-take--one-boundary-out-of-six). |
 | `keycloak-provisioner` | 803 | 3 | ✘ | ✘ | `ci_keycloak_configure` 328, `users` 284, `gateway_alias` 191. Textbook optional-capability-that-seeds. |
 | `database-provisioner` | 770 | 4 | ✘ | ✘ | `ci_rotate_dbadmin` 282, `pg_probe` 229, `ci_seed_dbadmin` 140, `ci_db_report` 119. **✅ Extracted with `assert-database`.** See [What `database-provisioner` could not place](#what-database-provisioner-could-not-place--a-binding-both-tables-refuse). |
 | `credential-pat` | 630 | 4 | ✔ | ✘ | ~~`credentials_pat` 201~~, `ci_rotate_broad_pat` 196, `ci_incluster_pat` 178, `ci_seed_broad_pat` 55. **✅ Partially extracted** — the rotator moved; the in-cluster and broad-PAT paths sit behind the rotation table. See [What the credential family cost](#what-the-credential-family-cost--three-walls-not-one).
@@ -330,9 +330,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | broad-PAT + temp-objkey | 20,591 | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
 | wall 4, half down | 20,492 | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
 | wall 4 done (for credentials) | 20,269 | 120 | −223 — two write seams, and the last two credential files followed |
-| `database-provisioner` + `assert-database` | **19,436** | 115 | −833 — the pairing the model predicted, and a binding both tables refuse |
+| `database-provisioner` + `assert-database` | 19,436 | 144 | −833 — the pairing the model predicted, and a binding both tables refuse |
+| `openbao-seed` | **19,074** | 142 | −362 — one boundary out of the six the largest row actually contains |
 
-**Net −27,746 (58.8%) across forty-three extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −28,108 (59.6%) across forty-four extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2477,6 +2478,46 @@ different axis from kind or state, and two cases is not enough to invent an axis
 `baoread.ExecStdin` and `KVPut` while the carried-field reads went through `baoread.Exec`. Because
 that default now errors, both failed loudly rather than reaching a live pod — the erroring defaults
 added one extraction ago earning their keep twice in one commit.
+
+### What `openbao-seed` could take — one boundary out of six
+
+The catalog's `openbao-lifecycle` row is **13 files and ~2,185 lines**, the largest single unit left.
+Measuring the whole set reported an outbound closure of **20** against **~25 inbound** symbols spread
+across `ci_harbor`, `ci_health_sla`, `ci_converge`, `secret_apply`, `verify` and
+`ci_keycloak_configure`.
+
+**That is not one boundary. It is six.** So this extraction took the one that *is* a boundary.
+
+```
+openbao-seed  transition:seeded[read-repo, cluster-read, secret-custody]
+```
+
+The three seeders measure **11 outbound** between them — of which two were genuine capabilities, and
+the rest were printers, flags, or symbols **this campaign had already turned into seams**:
+`baoKVPutFn` is now `baoread.KVPut`, `openbaoNS` is now `baoread.Namespace`. The four credential walls
+paid for this one.
+
+**The state is exactly right, for once.** After three extractions running whose bindings had to be
+pushed — `wedge-gameday`, `credential-state-passphrase`, `rotate-admin` — this one fits without
+argument. `seeded` is defined as *"credentials and secret material are in place"*, and this is the
+code that puts them there. `Validate()`'s rule that a transition to `seeded` **must** declare
+`secret-custody` was written for precisely this shape.
+
+**What it refuses to do is the point.** A seed that cannot *read* a path does not overwrite it —
+`baoread`'s fail-closed verdict distinguishes *"bao answered: absent"* from *"nothing answered"*, and
+only the first permits a write. The failure it prevents is a seeder that treats an unreachable OpenBao
+as an empty one and overwrites a live credential. That is why both capability defaults here **error**
+rather than doing nothing, with a test pinning it.
+
+**A new variant of the seam trap, and the sharpest one yet.** The seed fixture stubbed
+`kubectlprobe.Exec` while the `k8s:` field source reads through `kube.Exec`. Nothing errored: the field
+resolved as **absent**, the seeder reported missing inputs and exited 0 *by design*, and the test then
+found zero writes with no error to explain them. The double-seam trap makes a test pass against a live
+system; **this one makes it pass against nothing at all** — and only the assertion count gave it away.
+
+**And a fixture that was vacuous in the other direction.** The shared bao stub returned `nil` from
+`KVPut` while its exec fake refused every `kv put`, so `TestRunCIBaoSeedAllAbortsOnPutFailure` passed
+without the abort path ever running. Both now route through one fake.
 
 ## The cost of the interesting half
 
