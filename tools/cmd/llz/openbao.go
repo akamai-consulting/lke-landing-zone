@@ -36,6 +36,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
@@ -189,13 +190,6 @@ func warnRootToken() {
 	fmt.Fprintln(os.Stderr, "  (set OPENBAO_ALLOW_ROOT=1 to silence this for root-only automation)")
 }
 
-// maskGHA emits ::add-mask:: for a value when running in GitHub Actions.
-func maskGHA(v string) {
-	if os.Getenv("GITHUB_ACTIONS") != "" && v != "" {
-		fmt.Printf("::add-mask::%s\n", v)
-	}
-}
-
 func runOpenbaoGet(region, path, key string) error {
 	if err := openbao.ValidatePath(path); err != nil {
 		return err
@@ -212,7 +206,7 @@ func runOpenbaoGet(region, path, key string) error {
 	if !ok {
 		return fmt.Errorf("key %q not found at %s in %s", key, path, region)
 	}
-	maskGHA(val)
+	ghsecret.Mask(val)
 	fmt.Print(val) // raw value to stdout; diagnostics went to stderr
 	return nil
 }
@@ -228,7 +222,7 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 			return fmt.Errorf("argument must be key=value: %q", kv)
 		}
 		data[k] = v
-		maskGHA(v)
+		ghsecret.Mask(v)
 	}
 	if len(data) == 0 {
 		//lint:ignore ST1005 usage string: the trailing ... is variadic-argument syntax, not sentence punctuation

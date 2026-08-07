@@ -7,21 +7,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // withGHSetSecret swaps the gh-secret seam, recording "name@env" calls.
 func withGHSetSecret(t *testing.T, fail func(name string) error) *[]string {
 	t.Helper()
-	orig := ghSetSecretFn
+	orig := ghsecret.SetFn
 	calls := new([]string)
-	ghSetSecretFn = func(name, ghEnv, value string) error {
+	ghsecret.SetFn = func(name, ghEnv, value string) error {
 		*calls = append(*calls, name+"@"+ghEnv+"="+value)
 		if fail != nil {
 			return fail(name)
 		}
 		return nil
 	}
-	t.Cleanup(func() { ghSetSecretFn = orig })
+	t.Cleanup(func() { ghsecret.SetFn = orig })
 	return calls
 }
 

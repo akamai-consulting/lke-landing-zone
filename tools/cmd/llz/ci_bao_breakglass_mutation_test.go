@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // The revoke step's two arms report OPPOSITE facts to the operator ("the token
@@ -51,14 +53,14 @@ func TestBreakglassDeleteStoredReportsTheDeleteHonestly(t *testing.T) {
 		sum := filepath.Join(t.TempDir(), "summary")
 		t.Setenv("GITHUB_STEP_SUMMARY", sum)
 		t.Setenv("GITHUB_ACTOR", "octocat")
-		orig := ghDeleteSecretFn
-		ghDeleteSecretFn = func(name, ghEnv string) error {
+		orig := ghsecret.DeleteFn
+		ghsecret.DeleteFn = func(name, ghEnv string) error {
 			if name != "OPENBAO_ROOT_TOKEN" || ghEnv != "infra-primary" {
 				t.Errorf("delete called with (%q, %q)", name, ghEnv)
 			}
 			return delErr
 		}
-		t.Cleanup(func() { ghDeleteSecretFn = orig })
+		t.Cleanup(func() { ghsecret.DeleteFn = orig })
 		out := captureStdout(t, func() {
 			if err := breakglassDeleteStored("primary"); err != nil {
 				t.Fatalf("breakglassDeleteStored: %v", err)

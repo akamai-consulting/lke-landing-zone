@@ -320,6 +320,13 @@ categories:
 #        write a step output, so it came straight back. The paydown is the retry
 #        wrapper, the pod-status parse, the loopback addressing and baoExec — which
 #        is what unblocks breakglass, init, configure and ensure-ready.
+#   48th: gh-secret writers  -> internal/ghsecret   18,870 -> 18,851 (-19 / 141 files)
+#        TINY, AND NOT THE POINT. The OpenBao lifecycle family had exactly three
+#        outbound edges that were not localisable noise and all three were these,
+#        STRADDLING: ci_openbao_init.go DEFINED ghSetSecretFn while ci_baoseed.go
+#        and credrotate_deps.go consumed it, and commands.go/openbao.go/
+#        ci_clear_secrets.go pointed the other way. Settling it first is what took
+#        that family from 11 outbound to 8, all noise.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -332,7 +339,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 18870
+    budget: 18851
     exact: true
     include:
       - "tools/cmd/llz/*.go"

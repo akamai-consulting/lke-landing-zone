@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
 
@@ -156,7 +157,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		}
 		return appendGHAFile("GITHUB_OUTPUT", "available=false")
 	}
-	maskGHA(token)
+	ghsecret.Mask(token)
 	if err := appendGHAFile("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+token); err != nil {
 		return err
 	}

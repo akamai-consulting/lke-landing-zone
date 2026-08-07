@@ -158,25 +158,6 @@ func secretSetArgv(env, name string) []string {
 	return argv
 }
 
-// ghSecretSetStdin pipes value into `gh secret set <name>` (with --env <ghEnv>
-// when ghEnv is non-empty), keeping the value off argv. gh resolves auth + repo
-// from the ambient GH_TOKEN/GH_REPO. Shared body for the ghSetSecretFn (--env,
-// ci_openbao_init.go) and ghSetRepoSecretFn (repo-level, ci_harbor.go) seams.
-func ghSecretSetStdin(name, ghEnv, value string) error {
-	args := []string{"secret", "set", name}
-	label := name
-	if ghEnv != "" {
-		args = append(args, "--env", ghEnv)
-		label = fmt.Sprintf("%s --env %s", name, ghEnv)
-	}
-	cmd := exec.Command("gh", args...)
-	cmd.Stdin = strings.NewReader(value)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh secret set %s: %s", label, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 func variableSetArgv(name string) []string {
 	return []string{"gh", "variable", "set", name}
 }

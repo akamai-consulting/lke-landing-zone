@@ -16,26 +16,10 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
 
-// ghSetSecretFn writes a GitHub Actions environment secret via
-// `gh secret set <name> --env <ghEnv>` with the value piped over stdin (never
-// argv-visible). gh resolves auth + repo from the ambient GH_TOKEN/GH_REPO —
-// the same contract the shell scripts ran under. Seamed for tests.
-var ghSetSecretFn = func(name, ghEnv, value string) error {
-	return ghSecretSetStdin(name, ghEnv, value)
-}
-
-// ── bao-init ──────────────────────────────────────────────────────────────────
-
-// baoInitResult is the payload of `bao operator init -format=json`. Under an
-// auto-unseal seal (the chart configures `seal "static"`) init yields RECOVERY
-// keys, not unseal keys: the seal mechanism unseals every pod at boot, and the
-// recovery shares exist only to authorize `operator generate-root` /
-// `operator rekey` quorum flows. They CANNOT decrypt the root key, so they are
-// not sufficient to unseal if the static key is lost — that key must be backed
-// up offline (see runCIBaoInit's summary banner).
 type baoInitResult struct {
 	RootToken       string   `json:"root_token"`
 	RecoveryKeysB64 []string `json:"recovery_keys_b64"`
@@ -98,9 +82,9 @@ func runCIBaoInit(g globalOpts, region string) error {
 	}
 
 	// Mask everything before any other output can echo it.
-	maskGHA(res.RootToken)
+	ghsecret.Mask(res.RootToken)
 	for _, k := range res.RecoveryKeysB64 {
-		maskGHA(k)
+		ghsecret.Mask(k)
 	}
 
 	// Job summary first — before any step that can fail (see Long help).
@@ -149,11 +133,11 @@ func runCIBaoInit(g globalOpts, region string) error {
 	// leftover fails clean on the next cold bootstrap's preflight.
 	ghEnv := "infra-" + region
 	for i, key := range res.RecoveryKeysB64[:3] {
-		if err := ghSetSecretFn(fmt.Sprintf("OPENBAO_RECOVERY_KEY_%d", i+1), ghEnv, key); err != nil {
+		if err := ghsecret.SetFn(fmt.Sprintf("OPENBAO_RECOVERY_KEY_%d", i+1), ghEnv, key); err != nil {
 			return err
 		}
 	}
-	if err := ghSetSecretFn("OPENBAO_ROOT_TOKEN", ghEnv, res.RootToken); err != nil {
+	if err := ghsecret.SetFn("OPENBAO_ROOT_TOKEN", ghEnv, res.RootToken); err != nil {
 		return err
 	}
 
@@ -257,7 +241,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	if nonce == "" || otp == "" {
 		return fmt.Errorf("generate-root -init returned no nonce/otp: %s", strings.TrimSpace(initOut))
 	}
-	maskGHA(otp)
+	ghsecret.Mask(otp)
 
 	// Submit the 3 keys against the same nonce; the final submission returns
 	// encoded_token. Keys ride stdin (`-`), not argv.
@@ -287,7 +271,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	if newRoot == "" {
 		return fmt.Errorf("generate-root decode produced no token")
 	}
-	maskGHA(newRoot)
+	ghsecret.Mask(newRoot)
 
 	// Update env for downstream steps + the GH secret for the next run. The
 	// os.Setenv mirror lets the in-process `bao-ensure-ready` availability gate
@@ -297,7 +281,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 		return err
 	}
 	os.Setenv("OPENBAO_ROOT_TOKEN", newRoot)
-	if err := ghSetSecretFn("OPENBAO_ROOT_TOKEN", "infra-"+region, newRoot); err != nil {
+	if err := ghsecret.SetFn("OPENBAO_ROOT_TOKEN", "infra-"+region, newRoot); err != nil {
 		return err
 	}
 	fmt.Printf("New root token written to infra-%s::OPENBAO_ROOT_TOKEN.\n", region)

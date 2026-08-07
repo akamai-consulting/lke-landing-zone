@@ -10,6 +10,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op
@@ -40,17 +41,17 @@ func containsSub(ss []string, sub string) bool {
 
 func TestMaskGHA(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "true")
-	if out := captureStdout(t, func() { maskGHA("topsecret") }); !strings.Contains(out, "::add-mask::topsecret") {
-		t.Errorf("maskGHA in GHA = %q, want an add-mask line", out)
+	if out := captureStdout(t, func() { ghsecret.Mask("topsecret") }); !strings.Contains(out, "::add-mask::topsecret") {
+		t.Errorf("ghsecret.Mask in GHA = %q, want an add-mask line", out)
 	}
 	// Empty value emits nothing even inside GHA.
-	if out := captureStdout(t, func() { maskGHA("") }); out != "" {
-		t.Errorf("maskGHA(\"\") = %q, want empty", out)
+	if out := captureStdout(t, func() { ghsecret.Mask("") }); out != "" {
+		t.Errorf("ghsecret.Mask(\"\") = %q, want empty", out)
 	}
 	// Outside GHA, nothing is masked.
 	t.Setenv("GITHUB_ACTIONS", "")
-	if out := captureStdout(t, func() { maskGHA("topsecret") }); out != "" {
-		t.Errorf("maskGHA outside GHA = %q, want empty", out)
+	if out := captureStdout(t, func() { ghsecret.Mask("topsecret") }); out != "" {
+		t.Errorf("ghsecret.Mask outside GHA = %q, want empty", out)
 	}
 }
 

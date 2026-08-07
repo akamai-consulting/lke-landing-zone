@@ -38,6 +38,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/spf13/cobra"
@@ -196,7 +197,7 @@ func reportUserAdd(o usersAddOpts, username string, res identity.AddResult) {
 	case o.invite:
 		fmt.Fprintf(os.Stderr, "  a set-password email was sent to %s\n", o.email)
 	case res.TempPassword != "":
-		maskGHA(res.TempPassword)
+		ghsecret.Mask(res.TempPassword)
 		fmt.Fprintln(os.Stderr, "  temporary password (must be changed at first login):")
 		fmt.Println(res.TempPassword) // value to stdout so it can be captured; diagnostics went to stderr
 	}

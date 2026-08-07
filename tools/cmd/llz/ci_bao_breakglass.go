@@ -44,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
 
@@ -149,7 +150,7 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 			"so the revoke did not take (transient `token revoke -self` failure). Refusing to redeliver the " +
 			"un-rotated token; re-run once OpenBao is reachable")
 	}
-	maskGHA(token)
+	ghsecret.Mask(token)
 
 	return breakglassEncryptAndDeliver(region, action, recipient, token)
 }
@@ -177,7 +178,7 @@ func breakglassRevokeCurrent(region string) {
 func breakglassDeleteStored(region string) error {
 	ghEnv := "infra-" + region
 	deleted := true
-	if err := ghDeleteSecretFn("OPENBAO_ROOT_TOKEN", ghEnv); err != nil {
+	if err := ghsecret.DeleteFn("OPENBAO_ROOT_TOKEN", ghEnv); err != nil {
 		deleted = false
 		fmt.Printf("::warning::Could not delete %s::OPENBAO_ROOT_TOKEN (already absent, or the OPENBAO_SECRETS_WRITE_TOKEN PAT lacks Environments admin). Verify it is gone manually: %v\n", ghEnv, err)
 	} else {

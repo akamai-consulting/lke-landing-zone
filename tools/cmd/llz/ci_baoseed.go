@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
@@ -18,7 +19,7 @@ func init() {
 	// seam, and capturing its value at init would freeze whatever it pointed at.
 	baoseed.Install(
 		func(manifest string) error { return kube.Apply(manifest) },
-		func(name, env, value string) error { return ghSetSecretFn(name, env, value) },
+		func(name, env, value string) error { return ghsecret.SetFn(name, env, value) },
 	)
 }
 

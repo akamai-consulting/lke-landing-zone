@@ -7,8 +7,11 @@ package main
 // the repo level on pre-env-scoped instances. That split is why the fan-out lives
 // on the package side and the writer stays here.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
+)
 
 func init() {
-	credrotate.Install(func(name, env, value string) error { return ghSetSecretFn(name, env, value) })
+	credrotate.Install(func(name, env, value string) error { return ghsecret.SetFn(name, env, value) })
 }

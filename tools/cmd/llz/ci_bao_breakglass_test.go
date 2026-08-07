@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // rsaPubB64 returns the base64(PEM PKIX public key) an operator would paste, plus
@@ -157,12 +159,12 @@ func TestRunCIBaoBreakglassRevoke(t *testing.T) {
 	})
 
 	var deleted []string
-	origDel := ghDeleteSecretFn
-	ghDeleteSecretFn = func(name, ghEnv string) error {
+	origDel := ghsecret.DeleteFn
+	ghsecret.DeleteFn = func(name, ghEnv string) error {
 		deleted = append(deleted, name+"@"+ghEnv)
 		return nil
 	}
-	t.Cleanup(func() { ghDeleteSecretFn = origDel })
+	t.Cleanup(func() { ghsecret.DeleteFn = origDel })
 
 	if err := runCIBaoBreakglass(globalOpts{}, "primary", "revoke", ""); err != nil {
 		t.Fatal(err)
@@ -187,9 +189,9 @@ func TestRunCIBaoBreakglassRevokeNoTokenDeleteFails(t *testing.T) {
 		t.Error("no token means nothing to revoke — exec must not run")
 		return "", "", nil
 	})
-	origDel := ghDeleteSecretFn
-	ghDeleteSecretFn = func(string, string) error { return errors.New("404") }
-	t.Cleanup(func() { ghDeleteSecretFn = origDel })
+	origDel := ghsecret.DeleteFn
+	ghsecret.DeleteFn = func(string, string) error { return errors.New("404") }
+	t.Cleanup(func() { ghsecret.DeleteFn = origDel })
 
 	if err := runCIBaoBreakglass(globalOpts{}, "primary", "revoke", ""); err != nil {
 		t.Errorf("revoke should be best-effort, got %v", err)

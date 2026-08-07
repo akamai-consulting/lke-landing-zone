@@ -23,7 +23,7 @@ func setHarborEnv(t *testing.T, vars map[string]string) (summaryPath string) {
 	t.Helper()
 	summaryPath = filepath.Join(t.TempDir(), "summary")
 	t.Setenv("GITHUB_STEP_SUMMARY", summaryPath)
-	t.Setenv("GITHUB_ACTIONS", "1") // maskGHA emits ::add-mask:: like the script's CI runs
+	t.Setenv("GITHUB_ACTIONS", "1") // ghsecret.Mask emits ::add-mask:: like the script's CI runs
 	for _, v := range harborEnvVars {
 		t.Setenv(v, vars[v])
 	}

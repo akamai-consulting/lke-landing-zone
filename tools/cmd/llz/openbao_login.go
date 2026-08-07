@@ -241,7 +241,7 @@ func runOpenbaoLogin(o openbaoLoginOpts) error {
 	if err != nil {
 		return err
 	}
-	// Deliberately NOT maskGHA(token): that writes a `::add-mask::` workflow command
+	// Deliberately NOT ghsecret.Mask(token): that writes a `::add-mask::` workflow command
 	// to STDOUT, which would land in the `eval "$(…)"` output and break the shell
 	// (the first line isn't valid shell). This is a local-operator eval command —
 	// stdout carries only the export. Single-quote the value so a token is never

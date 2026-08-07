@@ -42,6 +42,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
 
@@ -102,7 +103,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 			"HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet published — the active peer's harbor-robot-provisioner CronJob sets them once Harbor is up.",
 			"Re-run this workflow after the active peer's provisioner has run.")
 	}
-	maskGHA(secret)
+	ghsecret.Mask(secret)
 	if err := baoKVPutFn("secret/harbor/robot", map[string]string{
 		"username": robot, "password": secret, "registry_host": registryHost,
 	}); err != nil {
@@ -114,7 +115,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
 			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not published — re-run after the active peer's provisioner has run.")
 	}
-	maskGHA(pullSecret)
+	ghsecret.Mask(pullSecret)
 	if err := baoKVPutFn("secret/harbor/pull-robot", map[string]string{
 		"username": pullRobot, "password": pullSecret, "registry_host": registryHost,
 	}); err != nil {
@@ -272,6 +273,6 @@ func (h *harborAPI) createRobot(payload harborRobotPayload) (name, secret string
 	if err := json.Unmarshal([]byte(respBody), &res); err != nil {
 		return "", "", false, fmt.Errorf("harbor robot create returned unparseable JSON: %w", err)
 	}
-	maskGHA(res.Secret)
+	ghsecret.Mask(res.Secret)
 	return res.Name, res.Secret, true, nil
 }
