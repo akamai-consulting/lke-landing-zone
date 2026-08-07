@@ -39,6 +39,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/spf13/cobra"
 )
 
@@ -143,8 +144,8 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 		return nil
 	}
 
-	user := k8sSecretField(keycloakNS, keycloakAdminSecret, "username")
-	pass := k8sSecretField(keycloakNS, keycloakAdminSecret, "password")
+	user := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "username")
+	pass := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "password")
 	if user == "" || pass == "" {
 		return fmt.Errorf("admin creds not readable from %s/%s (keys username/password) — is your kubectl context the target cluster?", keycloakNS, keycloakAdminSecret)
 	}

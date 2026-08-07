@@ -156,37 +156,6 @@ func TestDefaultMissingAnnotation(t *testing.T) {
 	}
 }
 
-func TestK8sSecretField(t *testing.T) {
-	withKubectl(t, func(a string) ([]byte, error) {
-		switch {
-		case strings.Contains(a, "get secret good"):
-			return []byte("aHVudGVyMg=="), nil // "hunter2"
-		case strings.Contains(a, "get secret badb64"):
-			return []byte("!!not-base64!!"), nil
-		// Dotted keys must be jsonpath-escaped or kubectl resolves
-		// .data.tls.crt as a nested path.
-		case strings.Contains(a, `jsonpath={.data.tls\.crt}`):
-			return []byte("Y2VydA=="), nil // "cert"
-		default:
-			return nil, errors.New("NotFound")
-		}
-	})
-	if got := k8sSecretField("ns", "good", "k"); got != "hunter2" {
-		t.Errorf("k8sSecretField good = %q", got)
-	}
-	if got := k8sSecretField("ns", "dotted", "tls.crt"); got != "cert" {
-		t.Errorf("k8sSecretField dotted key = %q", got)
-	}
-	if got := k8sSecretField("ns", "absent", "k"); got != "" {
-		t.Errorf("absent Secret must read as empty, got %q", got)
-	}
-	if got := k8sSecretField("ns", "badb64", "k"); got != "" {
-		t.Errorf("bad base64 must read as empty, got %q", got)
-	}
-}
-
-// stubBaoSeedKV stubs baoExecFn for bao-seed runs: `kv get` of presentPath/
-// presentField returns presentValue; every `kv put` is recorded.
 func lastArg(args []string) string {
 	if len(args) == 0 {
 		return ""
@@ -350,51 +319,6 @@ func TestMaskGHALines(t *testing.T) {
 	maskGHALines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
 }
 
-func TestBaoSeedCmdFlagWiring(t *testing.T) {
-	c := ciBaoSeedCmd()
-	for _, f := range []string{"path", "field", "skip-if-present", "on-missing",
-		"on-missing-standby", "missing-note", "missing-note-standby",
-		"missing-annotation", "summary-on-seed", "seeded-message"} {
-		if c.Flags().Lookup(f) == nil {
-			t.Errorf("bao-seed must define --%s", f)
-		}
-	}
-	if got := c.Flags().Lookup("on-missing").DefValue; got != "error" {
-		t.Errorf("--on-missing default = %q, want error", got)
-	}
-}
-
-// TestDescribeSecretForDiagNeverLeaksValues is the load-bearing property. This
-// helper exists to be printed into a CI log on a failure path, so it must report
-// key NAMES and never key CONTENTS. Asserting on the jsonpath it asks kubectl for
-// is what actually pins that: `{$k}` iterates keys, and any expression reaching
-// `$v` (or a `.data.<key>` selector) would put decoded secret material in the log.
-func TestDescribeSecretForDiagNeverLeaksValues(t *testing.T) {
-	src, err := os.ReadFile("ci_bao_seed.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fn := funcBody(string(src), "func describeSecretForDiag")
-	if fn == "" {
-		t.Fatal("describeSecretForDiag not found")
-	}
-	if strings.Contains(fn, "{$v}") {
-		t.Error("jsonpath emits {$v} — that is the secret VALUE, and this string is logged")
-	}
-	if strings.Contains(fn, ".data.") {
-		t.Error("selects .data.<key> — that reads a secret value, and this string is logged")
-	}
-	if !strings.Contains(fn, "{$k}") {
-		t.Error("expected the key-name jsonpath {$k}; did the query change shape?")
-	}
-	// It must also never hand back raw base64 by dumping the whole .data map.
-	if strings.Contains(fn, "jsonpath={.data}") {
-		t.Error("dumps the entire .data map (base64 values) into the message")
-	}
-}
-
-// funcBody returns the source text of a top-level func, from its declaration to
-// the next one. Good enough to assert on a single function's contents.
 func funcBody(src, decl string) string {
 	i := strings.Index(src, decl)
 	if i < 0 {
@@ -405,13 +329,4 @@ func funcBody(src, decl string) string {
 		return rest[:j]
 	}
 	return rest
-}
-
-func TestNonEmptyFields(t *testing.T) {
-	if got := nonEmptyFields("  a   b \n c  "); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
-		t.Fatalf("got %v", got)
-	}
-	if got := nonEmptyFields("   \n  "); len(got) != 0 {
-		t.Fatalf("whitespace-only should yield nothing, got %v", got)
-	}
 }

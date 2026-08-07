@@ -3,16 +3,19 @@ package main
 // ci_assertidentity.go — the capability wiring for the `assert-identity`
 // extension (internal/assertidentity).
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+)
 
 func init() { installAssertIdentityDeps() }
 
 func installAssertIdentityDeps() {
 	assertidentity.Install(assertidentity.Deps{
 		Exec:           func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
-		SecretField:    k8sSecretField,
+		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  discoverManagedDomain,
-		DescribeSecret: describeSecretForDiag,
+		DescribeSecret: kube.DescribeSecret,
 		SpecTeams: func() []string {
 			var out []string
 			for _, t := range specTeams() {

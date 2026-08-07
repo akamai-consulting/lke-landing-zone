@@ -275,12 +275,18 @@ categories:
     #                       baoExecFn) and the GitHub OIDC layer. My "these are
     #                       ordinary extractions now" was right for two of five —
     #                       per-file closures were clean, the COMBINED set was 16.
+    #   20,492 / 122 files  wall 4, HALF DOWN. -99. The GitHub OIDC layer went to
+    #                       internal/forge and two kubectl Secret probes that were
+    #                       never the seeder's went to internal/kube (four callers,
+    #                       none of which seeds anything). The set fell 16 -> 12.
+    #                       What is left is the OpenBao WRITE path proper:
+    #                       baoExecFn, baoKVPutFn, baoSeedOpts/runCIBaoSeed.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 20591
+    budget: 20492
     exact: true
     include:
       - "tools/cmd/llz/*.go"

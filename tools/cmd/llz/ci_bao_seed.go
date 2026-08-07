@@ -30,12 +30,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/spf13/cobra"
 )
 
@@ -156,66 +155,6 @@ func defaultMissingAnnotation(path string, missing []string) string {
 	return fmt.Sprintf("%s not set — %s not seeded", strings.Join(missing, " / "), path)
 }
 
-// k8sSecretField reads one key of a K8s Secret, "" on any failure (absent
-// Secret/key, bad base64) — the bash `kubectl get secret … -o jsonpath …
-// 2>/dev/null | base64 -d || true`.
-func k8sSecretField(ns, name, key string) string {
-	out, err := execOutput("kubectl", "-n", ns, "get", "secret", name,
-		"-o", "jsonpath={.data."+strings.ReplaceAll(key, ".", `\.`)+"}")
-	if err != nil {
-		return ""
-	}
-	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
-	if err != nil {
-		return ""
-	}
-	return string(dec)
-}
-
-// describeSecretForDiag explains WHY k8sSecretField came back empty, for error
-// messages. k8sSecretField deliberately collapses every failure to "" — missing
-// namespace, missing Secret, renamed key, no cluster access all look identical —
-// so a caller reporting "creds not readable" leaves the reader with nowhere to go.
-// This distinguishes them.
-//
-// It prints KEY NAMES ONLY, never values. The whole point is to be safe to emit
-// into a CI log on the failure path, so it must stay that way: `-o jsonpath` over
-// `.data` keys, never over `.data.*` contents.
-func describeSecretForDiag(ns, name string) string {
-	if out, ok := cigate.RunCombined(exec.Command("kubectl", "get", "namespace", ns)); !ok {
-		return fmt.Sprintf("namespace %q is not readable (%s) — cluster access or RBAC, not the Secret",
-			ns, cigate.FirstLine(out))
-	}
-	out, ok := cigate.RunCombined(exec.Command("kubectl", "-n", ns, "get", "secret", name,
-		"-o", `jsonpath={range $k, $v := .data}{$k}{" "}{end}`))
-	if !ok {
-		// Name the alternatives: on managed vs self-install these Secrets differ, and
-		// that rename is exactly what broke keycloak-configure before.
-		names, _ := cigate.RunCombined(exec.Command("kubectl", "-n", ns, "get", "secrets",
-			"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`))
-		return fmt.Sprintf("Secret %s/%s does not exist (%s). Secrets present in %s: %s",
-			ns, name, cigate.FirstLine(out), ns, strings.Join(nonEmptyFields(names), ", "))
-	}
-	keys := nonEmptyFields(out)
-	if len(keys) == 0 {
-		return fmt.Sprintf("Secret %s/%s exists but has NO data keys", ns, name)
-	}
-	return fmt.Sprintf("Secret %s/%s exists; its keys are: %s", ns, name, strings.Join(keys, ", "))
-}
-
-// nonEmptyFields splits on whitespace, dropping empties.
-func nonEmptyFields(s string) []string {
-	var out []string
-	for _, f := range strings.Fields(s) {
-		if f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// maskGHALines registers a possibly-multiline secret with ::add-mask:: —
-// one directive per line, since Actions masking is line-oriented.
 func maskGHALines(v string) {
 	for _, line := range strings.Split(v, "\n") {
 		if strings.TrimSpace(line) != "" {
@@ -316,7 +255,7 @@ func runCIBaoSeed(o baoSeedOpts) error {
 		}
 	}
 
-	values, missing, err := resolveSeedFields(fields, os.Getenv, k8sSecretField, seedRandRead)
+	values, missing, err := resolveSeedFields(fields, os.Getenv, kube.SecretFieldOf, seedRandRead)
 	if err != nil {
 		return err
 	}

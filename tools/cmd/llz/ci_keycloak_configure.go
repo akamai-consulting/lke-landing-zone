@@ -26,6 +26,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/spf13/cobra"
 )
 
@@ -153,8 +154,8 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 	// Best-effort from here: warn + succeed on any Keycloak-side failure so a
 	// realm/API-shape surprise never wedges the bootstrap this runs in. The
 	// manual fallback is docs/runbooks/openbao-team-login.md step 3.
-	user := k8sSecretField(keycloakNS, keycloakAdminSecret, "username")
-	pass := k8sSecretField(keycloakNS, keycloakAdminSecret, "password")
+	user := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "username")
+	pass := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "password")
 	if user == "" || pass == "" {
 		warnKeycloakSkip(region, fmt.Errorf("admin creds not readable from %s/%s (keys username/password)", keycloakNS, keycloakAdminSecret))
 		return nil

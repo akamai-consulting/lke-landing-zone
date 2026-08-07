@@ -327,9 +327,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `internal/baoread` extracted | 21,457 | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
 | `credential-pat` + `credential-objkey` | 21,082 | 130 | −375 — the second wall down, and the first package to declare two extensions |
 | the rotation table (wall 3) | 20,835 | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
-| broad-PAT + temp-objkey | **20,591** | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
+| broad-PAT + temp-objkey | 20,591 | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
+| wall 4, half down | **20,492** | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
 
-**Net −26,591 (56.4%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −26,690 (56.6%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2352,6 +2353,41 @@ measures **outbound only** (fixed by `edges.py`), it stripped backticks before q
 `ghSetEnvSecretFn`, pointing at package `main`'s GitHub secret writer; `internal/credrotate` already
 had `SetSecret` for exactly that. Keeping both would mean two things to stub — and one of them
 silently reaching a live forge when a test remembered only the other.
+
+### Taking half of wall four — and a diagnostic nobody could run
+
+Wall four was two things wearing one name. **The GitHub OIDC half came away cleanly**
+(`ci_github_oidc.go`, closure 2) into `internal/forge`, which is where a GitHub OIDC audience resolver
+belongs. `forgeFromEnv` went with it: four lines constructing a `Forge` from two env vars this package
+already defines the meaning of, which package `main` was merely the only place that could not test.
+
+**And two helpers were never the seeder's at all.** `k8sSecretField` and `describeSecretForDiag` were
+defined in `ci_bao_seed.go` and called from `users.go`, `ci_assertidentity.go` and
+`ci_keycloak_configure.go` — **four callers, none of which seeds anything**. They read a Kubernetes
+Secret and explain why one is missing. They now live in `internal/kube` beside `SecretField`, which was
+already there for the same reason. Seventh stranded-code find, and the same pattern as the sixth: the
+file was named for the **verb that happened to define the helper**, not for what the helper is.
+
+**`DescribeSecret` measured 0% coverage, and the reason was the interesting part.** It called
+`exec.Command` directly rather than through a seam, so nothing could drive it — **a diagnostic nobody
+can run in a test is a diagnostic nobody has seen the output of**, which is precisely the failure it
+exists to prevent. Routing it through a `Combined` seam fixed the design and the number together, and
+its four branches now each have a test: namespace unreadable, Secret absent (listing the
+alternatives), present-but-empty, and present. That third case is the one that matters — on managed
+versus self-install the platform's Secrets differ by name, and that rename broke keycloak-configure
+once.
+
+`internal/kube` came out at **89.0%**, so its 88 floor is unchanged — the ratchet held rather than
+needing the documented exception that `template-sustain` required.
+
+**The capture bug, for the second time.** Wiring the new seam as `kube.Exec = execOutput` in an `init`
+snapshots whatever `execOutput` points at *when init runs* — before any test swaps it — so every test
+stubbing `execOutput` would still have reached real kubectl. It is a delegating closure now. The first
+occurrence was `harborCARetrofitKubectl`, and it is in the traps list; this is the shape that keeps
+finding new places to happen.
+
+**What is left of wall four** is the OpenBao *write* path proper — `baoExecFn`, `baoKVPutFn`,
+`baoSeedOpts`/`runCIBaoSeed` — and the set measurement fell from **16 to 12** accordingly.
 
 ## The cost of the interesting half
 

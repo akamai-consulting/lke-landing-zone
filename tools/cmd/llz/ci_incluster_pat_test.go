@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -314,7 +315,7 @@ func TestRotateInclusterPATSkipsAndFailures(t *testing.T) {
 func TestGithubActionsOIDCToken(t *testing.T) {
 	t.Run("mints with audience + bearer", func(t *testing.T) {
 		oidcServer(t)
-		got, err := githubActionsOIDCToken("https://github.com/acme", nil)
+		got, err := forge.ActionsOIDCToken("https://github.com/acme", nil)
 		if err != nil || got != "oidc-jwt" {
 			t.Fatalf("got %q, err=%v; want oidc-jwt", got, err)
 		}
@@ -322,17 +323,17 @@ func TestGithubActionsOIDCToken(t *testing.T) {
 	t.Run("errors without request env", func(t *testing.T) {
 		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
-		if _, err := githubActionsOIDCToken("aud", nil); err == nil {
+		if _, err := forge.ActionsOIDCToken("aud", nil); err == nil {
 			t.Error("missing request env must error")
 		}
 	})
 }
 
 func TestOIDCAudienceForRepo(t *testing.T) {
-	if got := oidcAudienceForRepo("acme/platform"); got != "https://github.com/acme" {
+	if got := forge.OIDCAudienceForRepo("acme/platform"); got != "https://github.com/acme" {
 		t.Errorf("got %q", got)
 	}
-	if got := oidcAudienceForRepo("noslash"); got != "https://github.com/noslash" {
+	if got := forge.OIDCAudienceForRepo("noslash"); got != "https://github.com/noslash" {
 		t.Errorf("got %q", got)
 	}
 }

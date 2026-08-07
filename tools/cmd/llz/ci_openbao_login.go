@@ -41,6 +41,7 @@ import (
 	"net/http"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
@@ -156,7 +157,7 @@ func oidcOpenBaoLogin(ctx context.Context, client *http.Client, addr, role strin
 	if ghRepo == "" {
 		return "", fmt.Errorf("GITHUB_REPOSITORY is empty — cannot derive the OIDC audience for the %s jwt login", role)
 	}
-	oidcToken, err := githubActionsOIDCToken(oidcAudienceForRepo(ghRepo), nil)
+	oidcToken, err := forge.ActionsOIDCToken(forge.OIDCAudienceForRepo(ghRepo), nil)
 	if err != nil {
 		return "", fmt.Errorf("mint GitHub OIDC token: %w (does the job set `permissions: id-token: write`?)", err)
 	}

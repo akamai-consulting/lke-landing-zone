@@ -1,4 +1,4 @@
-package main
+package forge
 
 // ci_github_oidc.go — mint a GitHub Actions OIDC JWT for OpenBao's jwt auth
 // method. Replaces the long-lived AppRole secret_id (stashed in GitHub Actions
@@ -16,32 +16,30 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
-// oidcAudienceForRepo returns the OpenBao jwt-role audience for a repo slug
+// OIDCAudienceForRepo returns the OpenBao jwt-role audience for a repo slug
 // ("<owner>/<name>"): the owner's OIDC default audience, matching the
 // bound_audiences `llz ci bao-configure` pins on the role. Forge-derived so the
 // minted audience and the role's bound audience stay in lockstep across GitHub /
 // GHES / GitLab; defaults to GitHub. See docs/designs/forge-abstraction.md.
-func oidcAudienceForRepo(ghRepo string) string {
+func OIDCAudienceForRepo(ghRepo string) string {
 	owner := ghRepo
 	if i := strings.IndexByte(ghRepo, '/'); i > 0 {
 		owner = ghRepo[:i]
 	}
-	f, err := forgeFromEnv()
+	f, err := FromEnv()
 	if err != nil {
 		return "https://github.com/" + owner // conservative fallback
 	}
-	return forge.AudienceFor(f, owner)
+	return AudienceFor(f, owner)
 }
 
-// githubActionsOIDCToken mints a GitHub Actions OIDC JWT for the given audience.
+// ActionsOIDCToken mints a GitHub Actions OIDC JWT for the given audience.
 // Requires `permissions: id-token: write` on the job, which populates
 // ACTIONS_ID_TOKEN_REQUEST_URL + ACTIONS_ID_TOKEN_REQUEST_TOKEN. httpGet is
 // injectable for tests; nil uses the default client.
-func githubActionsOIDCToken(audience string, httpGet func(*http.Request) (*http.Response, error)) (string, error) {
+func ActionsOIDCToken(audience string, httpGet func(*http.Request) (*http.Response, error)) (string, error) {
 	reqURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	reqTok := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if reqURL == "" || reqTok == "" {
@@ -82,4 +80,20 @@ func githubActionsOIDCToken(audience string, httpGet func(*http.Request) (*http.
 		return "", fmt.Errorf("GitHub OIDC token response missing 'value'")
 	}
 	return out.Value, nil
+}
+
+// FromEnv resolves the instance's forge from the environment, defaulting to
+// GitHub.
+//
+// IT MOVED HERE FROM cmd/llz/forge_env.go, which is where it should always have
+// been: it constructs a Forge out of two env vars this package already defines the
+// meaning of, and package main was the only place that could not test it without
+// building a whole command. The four-line copy in forge_env.go is gone; that file
+// keeps only the wiring that genuinely needs main's flags.
+func FromEnv() (Forge, error) {
+	flavor := Flavor(os.Getenv("LLZ_FORGE"))
+	if flavor == "" {
+		flavor = GitHub
+	}
+	return New(flavor, os.Getenv("LLZ_FORGE_HOST"))
 }

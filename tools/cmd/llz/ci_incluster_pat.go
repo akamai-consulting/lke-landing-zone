@@ -53,6 +53,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
@@ -267,7 +268,7 @@ func secretPropagatorKVPut(region string, fields map[string]string) error {
 	if ghRepo == "" {
 		return fmt.Errorf("GITHUB_REPOSITORY is empty — cannot derive the OIDC audience for the secret-propagator jwt login")
 	}
-	oidcToken, err := githubActionsOIDCToken(oidcAudienceForRepo(ghRepo), nil)
+	oidcToken, err := forge.ActionsOIDCToken(forge.OIDCAudienceForRepo(ghRepo), nil)
 	if err != nil {
 		return fmt.Errorf("mint GitHub OIDC token for %s: %w (does the job set `permissions: id-token: write`?)", region, err)
 	}
