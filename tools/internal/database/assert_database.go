@@ -1,4 +1,4 @@
-package main
+package database
 
 // ci_assert_database.go implements `llz ci assert-database` — the gate that each
 // declared Managed Postgres accepts the admin credential the platform holds.
@@ -32,8 +32,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
@@ -44,55 +42,6 @@ import (
 // a startup target. Nothing is read from it.
 const dbProbeDatabase = "defaultdb"
 
-func ciAssertDatabaseCmd() *cobra.Command {
-	var settle, interval, timeout int
-	c := &cobra.Command{
-		Use:   "assert-database",
-		Short: "fail unless every declared Managed Postgres accepts its seeded admin credential",
-		Long: "Connects to each Managed Postgres declared under " + reconcilelanes.DBAdminRoot + " and completes\n" +
-			"the TLS + authentication handshake with the seeded admin credential. No query is\n" +
-			"issued — reaching ReadyForQuery is the whole answer.\n\n" +
-			"db-declared and db-summary report what the spec asks for; seed-db-admin writes\n" +
-			"the credential. Nothing checked it still WORKS, and rotate-db-admin resets the\n" +
-			"password IN PLACE with no overlap window, so the failure mode is a live endpoint\n" +
-			"that answers every TCP connect and rejects the credential every consumer holds —\n" +
-			"a rotation that half landed, or an OpenBao copy never re-seeded. A reachability\n" +
-			"check passes straight through that; only authentication separates them.\n\n" +
-			"Self-skips when no cluster is declared. Does NOT skip when one is declared and\n" +
-			"its credential is missing — that is the half-seeded state, and it is a finding.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			return runCIAssertDatabase(time.Duration(timeout)*time.Second,
-				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
-		},
-	}
-	c.Flags().IntVar(&timeout, "timeout", 20, "seconds for the TLS + auth handshake")
-	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
-	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
-	return c
-}
-
-// dbVerdict is one cluster's outcome.
-type dbVerdict struct {
-	Cluster string
-	Detail  string
-	FailWhy string
-}
-
-// dbAdminCreds is the connection record seed-db-admin writes.
-type dbAdminCreds struct {
-	Endpoint string
-	Port     string
-	Username string
-	Password string
-}
-
-// missingFields names the empty required fields. Pure.
-//
-// A half-populated record is its own failure and must not be probed: dialing
-// with an empty password would produce a "rejected" verdict that blames the
-// database for a seeding problem.
 func (c dbAdminCreds) missingFields() []string {
 	var missing []string
 	for _, f := range []struct{ name, val string }{
@@ -132,7 +81,7 @@ func evalDBProbe(cluster string, v pgVerdict, msg string) dbVerdict {
 // ── OpenBao reads (seamed) ───────────────────────────────────────────────────
 
 // dbBao is the ONE OpenBao connection every read in this gate shares, opened
-// lazily and torn down by runCIAssertDatabase.
+// lazily and torn down by RunAssertDatabase.
 //
 // It goes through openbaoClientForward, not openbaoClient, and that is the whole
 // point. OpenBao has no external ingress, so NOTHING in the bootstrap workflow
@@ -140,7 +89,7 @@ func evalDBProbe(cluster string, v pgVerdict, msg string) dbVerdict {
 // exec` (baoKVPutFn) or by ephemeral port-forward (team-login-smoke). This gate
 // shipped calling the plain constructor and died in 70ms on "OPENBAO_ADDR_ACTIVE
 // is not set", failing a whole release-e2e for want of an address rather than
-// for anything about a database.
+// for anything about a
 //
 // Shared rather than per-read because the settle loop re-reads every cluster on
 // every attempt: a client per read would open, warm up and tear down a
@@ -154,23 +103,23 @@ var dbBao struct {
 
 func dbBaoClient() (*openbao.Client, error) {
 	if !dbBao.opened {
-		dbBao.client, dbBao.cleanup, dbBao.err = openbaoClientForward(envtopology.RoleActive)
+		dbBao.client, dbBao.cleanup, dbBao.err = OpenBaoForward(envtopology.RoleActive)
 		dbBao.opened = true
 	}
 	return dbBao.client, dbBao.err
 }
 
-// closeDBBao tears the connection down and resets it, so a second call in the
+// CloseBao tears the connection down and resets it, so a second call in the
 // same process (and every test) starts from a closed state.
-func closeDBBao() {
+func CloseBao() {
 	if dbBao.cleanup != nil {
 		dbBao.cleanup()
 	}
 	dbBao.client, dbBao.cleanup, dbBao.err, dbBao.opened = nil, nil, nil, false
 }
 
-// listDBClusters returns the cluster names declared under reconcilelanes.DBAdminRoot.
-var listDBClusters = func(ctx context.Context) ([]string, error) {
+// ListClusters returns the cluster names declared under reconcilelanes.DBAdminRoot.
+var ListClusters = func(ctx context.Context) ([]string, error) {
 	bao, err := dbBaoClient()
 	if err != nil {
 		return nil, err
@@ -186,8 +135,8 @@ var listDBClusters = func(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-// readDBCreds fetches one cluster's admin connection record.
-var readDBCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error) {
+// ReadCreds fetches one cluster's admin connection record.
+var ReadCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error) {
 	bao, err := dbBaoClient()
 	if err != nil {
 		return dbAdminCreds{}, err
@@ -205,7 +154,7 @@ var readDBCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error
 func probeDBClusters(ctx context.Context, clusters []string, timeout time.Duration) []dbVerdict {
 	out := make([]dbVerdict, 0, len(clusters))
 	for _, name := range clusters {
-		creds, err := readDBCreds(ctx, name)
+		creds, err := ReadCreds(ctx, name)
 		if err != nil {
 			out = append(out, dbVerdict{Cluster: name,
 				FailWhy: fmt.Sprintf("could not read its admin credential from %s/%s: %v", reconcilelanes.DBAdminRoot, name, err)})
@@ -233,12 +182,12 @@ func failedDBs(vs []dbVerdict) []string {
 	return out
 }
 
-func runCIAssertDatabase(timeout, settle, interval time.Duration) error {
+func RunAssertDatabase(timeout, settle, interval time.Duration) error {
 	fmt.Println("## Managed Postgres credential assertion")
-	defer closeDBBao()
+	defer CloseBao()
 	ctx := context.Background()
 
-	clusters, err := listDBClusters(ctx)
+	clusters, err := ListClusters(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::could not list declared databases under %s (%v)\n", reconcilelanes.DBAdminRoot, err)
 		return fmt.Errorf("could not list declared databases under %s: %w", reconcilelanes.DBAdminRoot, err)
@@ -274,3 +223,41 @@ func runCIAssertDatabase(timeout, settle, interval time.Duration) error {
 	fmt.Printf("All %d declared database(s) accept their seeded admin credential.\n", len(last))
 	return nil
 }
+
+// OpenBaoForward opens an OpenBao client for a role, port-forwarding when no
+// address is configured, and returns a cleanup.
+//
+// THE ONE SEAM THIS FAMILY NEEDS. Package main owns how to reach OpenBao — the
+// address overrides, the port-forward, the CA — and six other verbs use it; this
+// package owns WHICH ROLE the database credential lives under. The default errors
+// rather than returning a nil client, because a probe that "succeeded" against no
+// store would report a healthy credential it never checked.
+var OpenBaoForward = func(role string) (*openbao.Client, func(), error) {
+	return nil, func() {}, fmt.Errorf("database: OpenBaoForward not installed")
+}
+
+// InstallOpenBaoForward wires the reach-OpenBao capability main owns.
+func InstallOpenBaoForward(fn func(role string) (*openbao.Client, func(), error)) {
+	OpenBaoForward = fn
+}
+
+type dbVerdict struct {
+	Cluster string
+	Detail  string
+	FailWhy string
+}
+
+// dbAdminCreds is the connection record seed-db-admin writes.
+// dbAdminCreds is the connection record seed-db-admin writes.
+type dbAdminCreds struct {
+	Endpoint string
+	Port     string
+	Username string
+	Password string
+}
+
+// missingFields names the empty required fields. Pure.
+//
+// A half-populated record is its own failure and must not be probed: dialing
+// with an empty password would produce a "rejected" verdict that blames the
+// database for a seeding problem.

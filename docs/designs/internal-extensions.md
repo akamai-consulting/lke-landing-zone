@@ -173,7 +173,7 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 |---|---:|---:|:-:|:-:|---|
 | `openbao-lifecycle` | 2,185 | 13 | ✔ | ✘ | init/configure/CA/breakglass/seal-key/login. The largest `→ seeded` block; holds root material. |
 | `keycloak-provisioner` | 803 | 3 | ✘ | ✘ | `ci_keycloak_configure` 328, `users` 284, `gateway_alias` 191. Textbook optional-capability-that-seeds. |
-| `database-provisioner` | 770 | 4 | ✘ | ✘ | `ci_rotate_dbadmin` 282, `pg_probe` 229, `ci_seed_dbadmin` 140, `ci_db_report` 119. |
+| `database-provisioner` | 770 | 4 | ✘ | ✘ | `ci_rotate_dbadmin` 282, `pg_probe` 229, `ci_seed_dbadmin` 140, `ci_db_report` 119. **✅ Extracted with `assert-database`.** See [What `database-provisioner` could not place](#what-database-provisioner-could-not-place--a-binding-both-tables-refuse). |
 | `credential-pat` | 630 | 4 | ✔ | ✘ | ~~`credentials_pat` 201~~, `ci_rotate_broad_pat` 196, `ci_incluster_pat` 178, `ci_seed_broad_pat` 55. **✅ Partially extracted** — the rotator moved; the in-cluster and broad-PAT paths sit behind the rotation table. See [What the credential family cost](#what-the-credential-family-cost--three-walls-not-one).
 | `openbao-seed` | 611 | 4 | ✔ | ✘ | `ci_bao_seed` 279, `ci_seed_special` 236, `bao_seed_all` 71, `secret_apply` 25. |
 | `harbor-provisioner` | 551 | 4 | ✘ | ✘ | `ci_harbor_provisioner` 265, `ci_harbor` 191, kick 94. |
@@ -208,7 +208,7 @@ one of these is externalisable — read-only, argv-shaped, already a lane in `as
 | `assert-objstore` | 560 | 3 | ✘ | obj-roundtrip 307, ~~`s3_object` 131, `s3_probe` 122~~ (both already in `internal/s3sig`/`internal/objenc`). **✅ Extracted.** See [What `assert-objstore` said out loud](#what-assert-objstore-said-out-loud--the-write-is-the-check). |
 | `assert-registry` | 381 | 1 | ✘ | harbor-roundtrip — pairs with `harbor-provisioner`. **✅ Extracted** — closure **2**, the cleanest boundary of all seventeen. See [What `assert-registry` cost](#what-assert-registry-cost--nothing-and-that-is-the-finding).|
 | `wedge-gameday` | 224 | 1 | ✘ | negative/chaos testing; `cluster-write`, so not a plain assertion. **✅ Extracted.** See [What `wedge-gameday` could not place](#what-wedge-gameday-could-not-place--a-state-not-just-a-kind). |
-| `assert-database` | 194 | 1 | ✘ | pairs with `database-provisioner` |
+| `assert-database` | 194 | 1 | ✘ | pairs with `database-provisioner` — **✅ extracted as its third binding**, and the pairing the model predicted held. |
 
 **The pairing pattern is the strongest structural signal in the catalog.** `harbor-provisioner` ↔
 `assert-registry`, `database-provisioner` ↔ `assert-database`, `reconciler-runtime` ↔
@@ -329,9 +329,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | the rotation table (wall 3) | 20,835 | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
 | broad-PAT + temp-objkey | 20,591 | 125 | −244 — two of the five unblocked files; the other three found a fourth wall |
 | wall 4, half down | 20,492 | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
-| wall 4 done (for credentials) | **20,269** | 120 | −223 — two write seams, and the last two credential files followed |
+| wall 4 done (for credentials) | 20,269 | 120 | −223 — two write seams, and the last two credential files followed |
+| `database-provisioner` + `assert-database` | **19,436** | 115 | −833 — the pairing the model predicted, and a binding both tables refuse |
 
-**Net −26,913 (57.0%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −27,746 (58.8%) across forty-three extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2423,6 +2424,59 @@ With that, `ci_mint_objkeys.go` and `ci_incluster_pat.go` followed into `interna
 `Exec` and `KVPut` at their defaults — so the seeded-path check (which reads) and the write both
 missed the stub. Because the new defaults *error*, the test failed loudly; before this change they
 would have reached a live pod. That is the argument for erroring defaults in one line.
+
+### What `database-provisioner` could not place — a binding both tables refuse
+
+Forty-third, **−833 lines** (the largest single move since `assert-observability`), and the catalog's
+textbook capability/assertion pair.
+
+```
+database-provisioner  transition:seeded  "seed-admin"   [cloud-read, secret-custody]
+                      transition:seeded  "rotate-admin" [cloud-mutate, secret-custody]  ← pushed
+                      assertion:verified "admin-usable" [cloud-read, secret-read]
+```
+
+**The pairing the model predicted held.** `Binding`'s own doc names `database-provisioner ↔
+assert-database` as its strongest structural signal — a capability and its assertion enable together,
+so one extension should hold both. The code agrees: there is no sense in which an instance seeds a
+database admin credential and does not want to know whether it works.
+
+That is worth stating because the *same* reasoning went the **other way** one extraction ago.
+`credential-pat` and `credential-objkey` share a framework and nothing else — an instance with no
+object storage still wants PATs — so they stayed two extensions in one package. **Shared subject, one
+extension; shared machinery, two.**
+
+**`cloud-mutate` on rotation, `cloud-read` on seeding**, and the asymmetry is real: Linode's
+admin-password reset is an API **write** against a live database, while seeding reads the cluster list
+and writes only to OpenBao. Collapsing them would hide that seeding cannot break a running database
+and rotation can.
+
+**And the interesting part: rotation is refused by both tables.**
+
+Its true home is `operating` — a scheduled rotation runs against a platform that is already up.
+`bindableStates` refuses a transition there, rightly for a rule about *reaching* a state: `operating`
+is a condition that holds, not a place you move to. **But this binding does not move the platform
+anywhere; it requires the platform to already be there.** That is the second case of a shape
+`wedge-gameday` found and could not name.
+
+`converged` was the obvious fallback, and `grantStates` refuses *that*: `secret-custody` is legal only
+at provisioned, seeded and operating. **Meanwhile that row's own comment says `operating` is in it for
+"credentials the platform MINTS (seeding) or REPLACES (rotation)"** — so `grantStates` expects a
+rotation at `operating` while `bindableStates` forbids a transition there.
+
+They are not strictly contradictory: an *invariant* at `operating` may hold custody, and
+`reconcile-actions`' token restorers are exactly that. But a periodic rotation is not an invariant
+either — it does not hold continuously.
+
+So `seeded`, the one state both tables allow, defensible on its own terms because a rotation re-seeds
+the credential — with `Incomplete` recording the approximation and a test pinning **both** refusals.
+Nothing was invented: what these two cases want is a way to declare a **precondition**, which is a
+different axis from kind or state, and two cases is not enough to invent an axis.
+
+**The double-seam trap, fifth and sixth occurrences.** Both the rotate and seed harnesses stubbed
+`baoread.ExecStdin` and `KVPut` while the carried-field reads went through `baoread.Exec`. Because
+that default now errors, both failed loudly rather than reaching a live pod — the erroring defaults
+added one extraction ago earning their keep twice in one commit.
 
 ## The cost of the interesting half
 

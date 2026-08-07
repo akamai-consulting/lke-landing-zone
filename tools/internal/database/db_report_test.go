@@ -1,4 +1,4 @@
-package main
+package database
 
 import (
 	"os"
@@ -67,7 +67,7 @@ func TestDBDeclaredDetectsTheAssignment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			writeDBTfvars(t, "prod", tc.body)
 			read := ghaOutput(t, "GITHUB_OUTPUT")
-			if err := runCIDBDeclared("prod"); err != nil {
+			if err := RunDBDeclared("prod"); err != nil {
 				t.Fatalf("db-declared: %v", err)
 			}
 			if got := strings.TrimSpace(read()); got != tc.want {
@@ -83,7 +83,7 @@ func TestDBDeclaredDetectsTheAssignment(t *testing.T) {
 func TestDBDeclaredTreatsAMissingTfvarsAsNone(t *testing.T) {
 	writeDBTfvars(t, "prod", "")
 	read := ghaOutput(t, "GITHUB_OUTPUT")
-	if err := runCIDBDeclared("prod"); err != nil {
+	if err := RunDBDeclared("prod"); err != nil {
 		t.Fatalf("a missing tfvars must not fail: %v", err)
 	}
 	if got := strings.TrimSpace(read()); got != "declared=false" {
@@ -92,7 +92,7 @@ func TestDBDeclaredTreatsAMissingTfvarsAsNone(t *testing.T) {
 }
 
 func TestDBDeclaredRequiresRegion(t *testing.T) {
-	if err := runCIDBDeclared(""); err == nil {
+	if err := RunDBDeclared(""); err == nil {
 		t.Fatal("expected --region to be required")
 	}
 }
@@ -128,7 +128,7 @@ func TestDBSummaryPhaseRouting(t *testing.T) {
 
 	t.Run("apply reads the labels output", func(t *testing.T) {
 		read := ghaOutput(t, "GITHUB_STEP_SUMMARY")
-		if err := runCIDBSummary("prod", "apply"); err != nil {
+		if err := RunDBSummary("prod", "apply"); err != nil {
 			t.Fatalf("db-summary apply: %v", err)
 		}
 		if !strings.Contains(read(), "platform-shared-prod") {
@@ -138,7 +138,7 @@ func TestDBSummaryPhaseRouting(t *testing.T) {
 
 	t.Run("destroy-plan warns about data loss", func(t *testing.T) {
 		read := ghaOutput(t, "GITHUB_STEP_SUMMARY")
-		if err := runCIDBSummary("prod", "destroy-plan"); err != nil {
+		if err := RunDBSummary("prod", "destroy-plan"); err != nil {
 			t.Fatalf("db-summary destroy-plan: %v", err)
 		}
 		out := read()
@@ -150,16 +150,16 @@ func TestDBSummaryPhaseRouting(t *testing.T) {
 	})
 
 	t.Run("an unknown phase is rejected", func(t *testing.T) {
-		if err := runCIDBSummary("prod", "apply-maybe"); err == nil {
+		if err := RunDBSummary("prod", "apply-maybe"); err == nil {
 			t.Fatal("expected an unknown --phase to error")
 		}
-		if err := runCIDBSummary("prod", ""); err == nil {
+		if err := RunDBSummary("prod", ""); err == nil {
 			t.Fatal("expected an empty --phase to error")
 		}
 	})
 
 	t.Run("region is required", func(t *testing.T) {
-		if err := runCIDBSummary("", "apply"); err == nil {
+		if err := RunDBSummary("", "apply"); err == nil {
 			t.Fatal("expected --region to be required")
 		}
 	})

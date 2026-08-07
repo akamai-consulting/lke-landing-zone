@@ -1,4 +1,4 @@
-package main
+package database
 
 import (
 	"errors"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 )
 
@@ -16,7 +17,7 @@ func connectionsOutput(inner string) string {
 	return `{"connections":{"sensitive":true,"type":"map","value":` + inner + `}}`
 }
 
-// seedDBAdminHarness stubs every seam runCISeedDBAdmin touches and records the
+// seedDBAdminHarness stubs every seam RunSeedDBAdmin touches and records the
 // OpenBao writes. seededEndpoints maps a KV path to the ENDPOINT already stored
 // there ("" = unseeded) — the identity field the command now compares on, since
 // OpenBao (not Terraform state) owns the password. baoStderr, when set, is
@@ -36,15 +37,17 @@ func newSeedDBAdminHarness(t *testing.T, outputs string, seeded map[string]strin
 		seededEndpoints: seeded,
 	}
 
-	prevTF, prevExec, prevPut, prevNow := tofudriver.OutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow
+	prevTF, prevExec, prevPut, prevNow := tofudriver.OutputRunFn, baoread.ExecStdin, baoread.KVPut, seedDBAdminNow
+	prevRead := baoread.Exec
 	t.Cleanup(func() {
-		tofudriver.OutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow = prevTF, prevExec, prevPut, prevNow
+		tofudriver.OutputRunFn, baoread.ExecStdin, baoread.KVPut, seedDBAdminNow = prevTF, prevExec, prevPut, prevNow
+		baoread.Exec = prevRead
 	})
 
 	tofudriver.OutputRunFn = func() (string, error) { return outputs, nil }
 	seedDBAdminNow = func() time.Time { return time.Unix(1700000000, 0) }
 
-	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
+	baoread.ExecStdin = func(_, _ string, args ...string) (string, string, error) {
 		if h.baoStderr != "" {
 			return "", h.baoStderr, errors.New("exit 2")
 		}
@@ -58,7 +61,13 @@ func newSeedDBAdminHarness(t *testing.T, outputs string, seeded map[string]strin
 		return "", "", errors.New("unexpected bao exec: " + strings.Join(args, " "))
 	}
 
-	baoKVPutFn = func(path string, fields map[string]string) error {
+	// The seeded-path check reads through baoread.Exec, not ExecStdin. Delegating
+	// keeps one fake behaviour — see the rotate harness for the same note.
+	baoread.Exec = func(token string, args ...string) (string, string, error) {
+		return baoread.ExecStdin(token, "", args...)
+	}
+
+	baoread.KVPut = func(path string, fields map[string]string) error {
 		if h.putErr != nil {
 			return h.putErr
 		}
@@ -81,7 +90,7 @@ const twoClusterConnections = `{
 func TestSeedDBAdminSeedsEveryClusterUnderItsOwnPath(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), nil)
 
-	if err := runCISeedDBAdmin("prod"); err != nil {
+	if err := RunSeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
 	if len(h.writes) != 2 {
@@ -127,7 +136,7 @@ func TestSeedDBAdminIsANoOpWithoutClusters(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newSeedDBAdminHarness(t, tc.outputs, nil)
-			if err := runCISeedDBAdmin("prod"); err != nil {
+			if err := RunSeedDBAdmin("prod"); err != nil {
 				t.Fatalf("expected a clean no-op, got %v", err)
 			}
 			if len(h.writes) != 0 {
@@ -148,7 +157,7 @@ func TestSeedDBAdminLeavesALiveCredentialAlone(t *testing.T) {
 		"secret/infra/db-admin/shared":    "shared.vpc.internal",
 		"secret/infra/db-admin/analytics": "analytics.vpc.internal",
 	})
-	if err := runCISeedDBAdmin("prod"); err != nil {
+	if err := RunSeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
 	if len(h.writes) != 0 {
@@ -165,7 +174,7 @@ func TestSeedDBAdminReseedsARecreatedCluster(t *testing.T) {
 		"secret/infra/db-admin/shared":    "shared-OLD.vpc.internal",
 		"secret/infra/db-admin/analytics": "analytics.vpc.internal",
 	})
-	if err := runCISeedDBAdmin("prod"); err != nil {
+	if err := RunSeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
 	if len(h.writes) != 1 || h.writes["secret/infra/db-admin/shared"]["password"] != "pw-shared" {
@@ -183,7 +192,7 @@ func TestSeedDBAdminFailsClosedOnAnUnreadablePath(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), nil)
 	h.baoStderr = "Vault is sealed"
 
-	err := runCISeedDBAdmin("prod")
+	err := RunSeedDBAdmin("prod")
 	if err == nil {
 		t.Fatal("expected an error when the KV read is unknown")
 	}
@@ -198,7 +207,7 @@ func TestSeedDBAdminRejectsAnIncompleteConnection(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(
 		`{"shared":{"endpoint":"shared.vpc.internal","port":5432,"username":"akmadmin","password":"","ca":"x"}}`), nil)
 
-	err := runCISeedDBAdmin("prod")
+	err := RunSeedDBAdmin("prod")
 	if err == nil || !strings.Contains(err.Error(), "apply did not complete") {
 		t.Fatalf("expected an incomplete-apply error, got %v", err)
 	}
@@ -209,7 +218,7 @@ func TestSeedDBAdminRejectsAnIncompleteConnection(t *testing.T) {
 
 func TestSeedDBAdminRequiresRegion(t *testing.T) {
 	newSeedDBAdminHarness(t, connectionsOutput(`{}`), nil)
-	if err := runCISeedDBAdmin(""); err == nil {
+	if err := RunSeedDBAdmin(""); err == nil {
 		t.Fatal("expected --region to be required")
 	}
 }

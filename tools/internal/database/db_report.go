@@ -1,4 +1,4 @@
-package main
+package database
 
 // ci_db_report.go — the two workflow-facing helpers around the `databases` root,
 // kept in Go rather than inline `run:` bash for the reason .untestable-budget.yaml
@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
-	"github.com/spf13/cobra"
 )
 
 // dbDeclaredAssignRe matches the `databases = …` assignment in a rendered tfvars.
@@ -25,27 +24,7 @@ import (
 // declared at least one cluster.
 var dbDeclaredAssignRe = regexp.MustCompile(`(?m)^[ \t]*databases[ \t]*=`)
 
-func ciDBDeclaredCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "db-declared",
-		Short: "report whether a deployment declares any database clusters",
-		Long: "Writes `declared=true|false` to $GITHUB_OUTPUT so the bootstrap workflow can\n" +
-			"skip the databases terraform-init + admin seed on the majority of instances\n" +
-			"that declare no databases — initializing that root unconditionally would put\n" +
-			"a new failure mode on the critical bootstrap path for no benefit.\n\n" +
-			"Reads the RENDERED terraform-iac-bootstrap/databases/<region>.tfvars. Reading\n" +
-			"the per-env file is sound because `databases` is deliberately NOT inherited\n" +
-			"from spec.defaults.cluster (llz validate rejects it there), so the env's own\n" +
-			"tfvars is the whole truth.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDBDeclared(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) to check (required)")
-	return c
-}
-
-func runCIDBDeclared(region string) error {
+func RunDBDeclared(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -67,27 +46,7 @@ func runCIDBDeclared(region string) error {
 	return appendGHAFile("GITHUB_OUTPUT", fmt.Sprintf("declared=%t", declared))
 }
 
-func ciDBSummaryCmd() *cobra.Command {
-	var region, phase string
-	c := &cobra.Command{
-		Use:   "db-summary",
-		Short: "render the databases step summary (apply | destroy-plan)",
-		Long: "Appends the $GITHUB_STEP_SUMMARY block for the databases root.\n\n" +
-			"--phase apply: reads the `labels` output and lists what was provisioned, or\n" +
-			"says plainly that nothing was — a deployment declaring no clusters applies\n" +
-			"cleanly and must not look like a silent failure. Points at the bootstrap\n" +
-			"workflow, which owns the admin seed.\n\n" +
-			"--phase destroy-plan: the data-loss caution. Unlike a bucket, a destroyed\n" +
-			"Managed Postgres takes its data with it and Linode keeps no snapshot.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDBSummary(region, phase) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being reported (required)")
-	c.Flags().StringVar(&phase, "phase", "", "apply | destroy-plan (required)")
-	return c
-}
-
-func runCIDBSummary(region, phase string) error {
+func RunDBSummary(region, phase string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}

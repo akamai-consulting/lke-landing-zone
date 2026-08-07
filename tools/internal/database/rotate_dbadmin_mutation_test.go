@@ -1,4 +1,4 @@
-package main
+package database
 
 // Mutation-test gap closure for ci_rotate_dbadmin.go. The Postgres admin reset is
 // irreversible, so every predicate that decides WHETHER a cluster is rotated, and
@@ -20,7 +20,7 @@ func dbAdminRunStepSummary(t *testing.T, stored map[string]string, afterDays int
 	t.Helper()
 	sum := withGHASummaryFile(t)
 	newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), stored, &fakeDBAPI{statuses: []string{"active"}})
-	if err := runCIRotateDBAdmin("prod", false, false, afterDays); err != nil {
+	if err := RunRotateDBAdmin("prod", false, false, afterDays); err != nil {
 		t.Fatalf("report-only run: %v", err)
 	}
 	b, err := os.ReadFile(sum)
@@ -82,7 +82,7 @@ func TestRotateDBAdminExactThresholdIsDue(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "new-pw"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 80, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 1 {

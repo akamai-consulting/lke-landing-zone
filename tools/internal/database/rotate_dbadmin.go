@@ -1,4 +1,4 @@
-package main
+package database
 
 // ci_rotate_dbadmin.go implements `llz ci rotate-db-admin` — admin-credential
 // rotation for the Linode Managed PostgreSQL clusters the `databases` root
@@ -71,14 +71,13 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
-	"github.com/spf13/cobra"
 )
 
 const (
-	// dbAdminRotateAfterDays is the default rotation threshold. Below the 90d
+	// RotateAfterDays is the default rotation threshold. Below the 90d
 	// policy the credential inventory alerts on, so a scheduled monthly run has
 	// two chances to land before LLZCredentialRotationOverdue would fire.
-	dbAdminRotateAfterDays = 80
+	RotateAfterDays = 80
 	// dbAdminActiveTimeout bounds the wait for a cluster to return to `active`
 	// after a reset. Generous: the Aiven-backed platform applies a credential
 	// reset in seconds, but the cluster may already be mid-maintenance.
@@ -109,42 +108,7 @@ type dbAdminTarget struct {
 	due     bool
 }
 
-func ciRotateDBAdminCmd() *cobra.Command {
-	var region string
-	var apply, rotateNow bool
-	var afterDays int
-	c := &cobra.Command{
-		Use:   "rotate-db-admin",
-		Short: "rotate the admin password on each Managed Postgres cluster (due-based)",
-		Long: "Rotates the `akmadmin` password on every Linode Managed PostgreSQL cluster in\n" +
-			"the deployment whose secret/infra/db-admin/<name> credential is older than\n" +
-			"--rotate-after-days, and writes the replacement back to OpenBao.\n\n" +
-			"REPORT-ONLY unless --apply is passed. The Linode API offers only an in-place\n" +
-			"credential RESET — there is no second credential to verify before swapping, and\n" +
-			"the old password dies immediately — so the mutation is irreversible and is not\n" +
-			"armed by default.\n\n" +
-			"After a successful rotation the command refreshes Terraform state, because\n" +
-			"`llz ci seed-db-admin` reconciles OpenBao toward state and would otherwise push\n" +
-			"the pre-rotation password back over the live one.\n\n" +
-			"--rotate-now ignores the age check and rotates every seeded cluster. This is\n" +
-			"rotate-on-create: bootstrap runs it right after `llz ci seed-db-admin` so the\n" +
-			"PROVISIONING credential Terraform handed over — the one sitting in Terraform\n" +
-			"state — is replaced within the same run that created it.\n\n" +
-			"Run with the databases root as the working directory. Reads LINODE_TOKEN and\n" +
-			"OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIRotateDBAdmin(region, apply, rotateNow, afterDays)
-		},
-	}
-	c.Flags().BoolVar(&rotateNow, "rotate-now", false, "rotate every seeded cluster regardless of age (rotate-on-create; still requires --apply)")
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being rotated — labels the run summary (required)")
-	c.Flags().BoolVar(&apply, "apply", false, "arm the rotation; without it the command only reports what is due")
-	c.Flags().IntVar(&afterDays, "rotate-after-days", dbAdminRotateAfterDays, "rotate a credential older than this many days")
-	return c
-}
-
-func runCIRotateDBAdmin(region string, apply, rotateNow bool, afterDays int) error {
+func RunRotateDBAdmin(region string, apply, rotateNow bool, afterDays int) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -245,7 +209,7 @@ func rotateOneDBAdmin(ctx context.Context, api dbAdminAPI, t dbAdminTarget) erro
 	fields["username"] = creds.Username
 	fields["password"] = creds.Password
 	fields["rotated_at"] = strconv.FormatInt(dbAdminNow().Unix(), 10)
-	if err := baoKVPutFn(t.path, fields); err != nil {
+	if err := baoread.KVPut(t.path, fields); err != nil {
 		return dbAdminLostCredentialErr(t, fmt.Errorf("write %s: %w", t.path, err))
 	}
 	return nil

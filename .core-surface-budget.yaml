@@ -288,12 +288,20 @@ categories:
     #                       and two packages installing one exec twice is worse
     #                       than a package whose name describes its better half.
     #                       mint-objkeys and incluster-pat followed.
+    #   19,436 / 115 files  database-provisioner + assert-database. -833, the
+    #                       largest single move since assert-observability. The
+    #                       catalog's textbook capability/assertion pair, and the
+    #                       code agreed — unlike credential-pat/objkey one
+    #                       extraction earlier, which share a framework and NOT a
+    #                       subject. Also the first binding refused by BOTH
+    #                       tables: rotation belongs at `operating`, and the two
+    #                       tables disagree about where it may go instead.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 20269
+    budget: 19436
     exact: true
     include:
       - "tools/cmd/llz/*.go"

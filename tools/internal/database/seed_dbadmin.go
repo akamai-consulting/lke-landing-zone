@@ -1,4 +1,4 @@
-package main
+package database
 
 // ci_seed_dbadmin.go implements `llz ci seed-db-admin` — the OpenBao half of the
 // `databases` root (docs/designs/shared-managed-postgres.md). The root provisions
@@ -30,7 +30,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
-	"github.com/spf13/cobra"
 )
 
 // dbAdminSeedRoot is the KV v2 prefix each cluster's admin credential lands under.
@@ -60,33 +59,7 @@ type dbConnection struct {
 // seedDBAdminNow is a seam for tests (the rotated_at stamp).
 var seedDBAdminNow = func() time.Time { return time.Now() }
 
-func ciSeedDBAdminCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "seed-db-admin",
-		Short: "seed each Managed Postgres cluster's admin connection into OpenBao",
-		Long: "Reads the `databases` root's single `connections` output (a map keyed by\n" +
-			"cluster name) and writes one secret/infra/db-admin/<name> per entry —\n" +
-			"endpoint, port, username, password, ca, sslmode. Reading ONE output keeps a\n" +
-			"cluster's endpoint and password from ever being paired across clusters.\n\n" +
-			"A no-op when the map is empty, so it runs unconditionally on a deployment\n" +
-			"that declared no databases. Idempotent, and it compares the cluster's\n" +
-			"ENDPOINT, not its password: OpenBao is authoritative for the credential once\n" +
-			"`llz ci rotate-db-admin` has run, so a path already pointing at this cluster\n" +
-			"is left completely alone. A path pointing at a DIFFERENT cluster (a recreate)\n" +
-			"is re-seeded. Paths are never deleted — removing a cluster from the spec\n" +
-			"leaves its credential for an operator to reap, because the cluster usually\n" +
-			"still exists at that point and this is the only way back into it.\n\n" +
-			"Run with the databases root as the working directory. Reads\n" +
-			"OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCISeedDBAdmin(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being seeded — labels the run summary (required)")
-	return c
-}
-
-func runCISeedDBAdmin(region string) error {
+func RunSeedDBAdmin(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -96,7 +69,7 @@ func runCISeedDBAdmin(region string) error {
 	}
 	// allowMissing: a state predating the databases root has no `connections`
 	// output at all. That is the same "nothing to seed" as an empty map, and it
-	// must not fail a bootstrap that never declared a database.
+	// must not fail a bootstrap that never declared a
 	blob, err := tofudriver.OutputValue(raw, "connections", true, true)
 	if err != nil {
 		return err
@@ -164,14 +137,14 @@ func runCISeedDBAdmin(region string) error {
 		switch {
 		case existingEndpoint == "":
 			fields["rotated_at"] = stamp
-			if err := baoKVPutFn(path, fields); err != nil {
+			if err := baoread.KVPut(path, fields); err != nil {
 				return fmt.Errorf("seed %s: %w", path, err)
 			}
 			seeded = append(seeded, name)
 			fmt.Printf("%s: seeded %s (%s).\n", name, path, c.Endpoint)
 		case existingEndpoint != c.Endpoint:
 			fields["rotated_at"] = stamp
-			if err := baoKVPutFn(path, fields); err != nil {
+			if err := baoread.KVPut(path, fields); err != nil {
 				return fmt.Errorf("update %s: %w", path, err)
 			}
 			updated = append(updated, name)

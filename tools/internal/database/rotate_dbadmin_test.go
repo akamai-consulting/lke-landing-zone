@@ -1,4 +1,4 @@
-package main
+package database
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 )
@@ -59,7 +60,7 @@ func (f *fakeDBAPI) PostgresCredentials(_ context.Context, _ uint64) (linode.DBC
 	return f.creds, nil
 }
 
-// rotateDBHarness stubs every seam runCIRotateDBAdmin touches. stored maps a KV
+// rotateDBHarness stubs every seam RunRotateDBAdmin touches. stored maps a KV
 // path+field to its value, so a test can seed a complete secret, a partial one,
 // or none at all.
 type rotateDBHarness struct {
@@ -80,10 +81,12 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 		now:    time.Unix(1_800_000_000, 0),
 	}
 
-	prevTF, prevExec, prevPut := tofudriver.OutputRunFn, baoExecFn, baoKVPutFn
+	prevTF, prevExec, prevPut := tofudriver.OutputRunFn, baoread.ExecStdin, baoread.KVPut
+	prevRead := baoread.Exec
 	prevNow, prevClient, prevSleep := dbAdminNow, dbAdminLinodeClient, dbAdminSleep
 	t.Cleanup(func() {
-		tofudriver.OutputRunFn, baoExecFn, baoKVPutFn = prevTF, prevExec, prevPut
+		tofudriver.OutputRunFn, baoread.ExecStdin, baoread.KVPut = prevTF, prevExec, prevPut
+		baoread.Exec = prevRead
 		dbAdminNow, dbAdminLinodeClient, dbAdminSleep = prevNow, prevClient, prevSleep
 	})
 
@@ -95,7 +98,7 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 	dbAdminSleep = func(d time.Duration) { h.now = h.now.Add(d) }
 	dbAdminLinodeClient = func(string) dbAdminAPI { return h.api }
 
-	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
+	baoread.ExecStdin = func(_, _ string, args ...string) (string, string, error) {
 		if h.baoStderr != "" {
 			return "", h.baoStderr, errors.New("exit 2")
 		}
@@ -110,7 +113,15 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 		return "", "", errors.New("unexpected bao exec: " + strings.Join(args, " "))
 	}
 
-	baoKVPutFn = func(path string, fields map[string]string) error {
+	// ALL THREE SEAMS. The carried-field reads go through baoread.KVGetFieldOK,
+	// which uses baoread.Exec — NOT ExecStdin. Stubbing only the two this harness
+	// names left every read hitting the erroring default, which is the double-seam
+	// trap for the fifth time. Delegating keeps one fake behaviour.
+	baoread.Exec = func(token string, args ...string) (string, string, error) {
+		return baoread.ExecStdin(token, "", args...)
+	}
+
+	baoread.KVPut = func(path string, fields map[string]string) error {
 		if h.putErr != nil {
 			return h.putErr
 		}
@@ -145,7 +156,7 @@ func TestRotateDBAdminSkipsWhenNotDue(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 10, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 0 {
@@ -164,7 +175,7 @@ func TestRotateDBAdminReportOnlyDoesNotMutate(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", false, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", false, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 0 {
@@ -186,7 +197,7 @@ func TestRotateDBAdminRotatesAndCarriesFields(t *testing.T) {
 	}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 1 || api.resets[0] != 12345 {
@@ -231,7 +242,7 @@ func TestRotateDBAdminRefusesUnchangedPassword(t *testing.T) {
 	}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	err := runCIRotateDBAdmin("prod", true, false, 80)
+	err := RunRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unchanged password after a reset must be an error")
 	}
@@ -269,7 +280,7 @@ func TestRotateDBAdminPostResetFailuresAreLoud(t *testing.T) {
 			h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 			c.mutate(api, h)
 
-			err := runCIRotateDBAdmin("prod", true, false, 80)
+			err := RunRotateDBAdmin("prod", true, false, 80)
 			if err == nil {
 				t.Fatal("want an error")
 			}
@@ -296,7 +307,7 @@ func TestRotateDBAdminRefusesUnseededPath(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), map[string]string{}, api)
 
-	err := runCIRotateDBAdmin("prod", true, false, 80)
+	err := RunRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unseeded path must not be rotated")
 	}
@@ -315,7 +326,7 @@ func TestRotateDBAdminFailsClosedOnUnreadableBao(t *testing.T) {
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), map[string]string{}, api)
 	h.baoStderr = "Error making API request: connection refused"
 
-	err := runCIRotateDBAdmin("prod", true, false, 80)
+	err := RunRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unreadable OpenBao must fail the run")
 	}
@@ -330,7 +341,7 @@ func TestRotateDBAdminNoDatabasesIsNoOp(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	newRotateDBHarness(t, `{}`, map[string]string{}, api)
 
-	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("a deployment with no databases must be a clean no-op: %v", err)
 	}
 	if len(api.resets) != 0 {
@@ -348,7 +359,7 @@ func TestRotateDBAdminMissingStampIsDue(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "new-pw"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), stored, api)
 
-	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 1 {
@@ -373,7 +384,7 @@ func TestRotateDBAdminTimesOutWaitingForActive(t *testing.T) {
 		return now.Add(time.Duration(calls) * dbAdminActiveTimeout)
 	}
 
-	err := runCIRotateDBAdmin("prod", true, false, 80)
+	err := RunRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("a cluster that never returns to active must fail the run")
 	}
@@ -421,10 +432,10 @@ func TestParseDBIDs(t *testing.T) {
 }
 
 func TestRotateDBAdminRejectsBadFlags(t *testing.T) {
-	if err := runCIRotateDBAdmin("", true, false, 80); err == nil {
+	if err := RunRotateDBAdmin("", true, false, 80); err == nil {
 		t.Error("--region is required")
 	}
-	if err := runCIRotateDBAdmin("prod", true, false, 0); err == nil {
+	if err := RunRotateDBAdmin("prod", true, false, 0); err == nil {
 		t.Error("--rotate-after-days must be positive")
 	}
 }
@@ -439,7 +450,7 @@ func TestRotateDBAdminRotateNowIgnoresAge(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "post-bootstrap-pw"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 0, now, "provisioning-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, true, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", true, true, 80); err != nil {
 		t.Fatalf("rotate-now: %v", err)
 	}
 	if len(api.resets) != 1 {
@@ -462,7 +473,7 @@ func TestRotateDBAdminRotateNowStillNeedsApply(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 0, now, "provisioning-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", false, true, 80); err != nil {
+	if err := RunRotateDBAdmin("prod", false, true, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 0 || len(h.writes) != 0 {
