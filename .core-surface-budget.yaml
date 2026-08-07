@@ -835,6 +835,31 @@ categories:
 #        tfroots/roots/*.tf (embedded Terraform, relative to the RENDERED
 #        instance), clusterspec+render kustomize refs (EMITTED, not read), and
 #        deliverdocs` ../../../etc/passwd traversal fixture.
+#   86th: root + ci verbs -> their extensions   3,657 -> 2,968 (-689 / 39 files)
+#        main.go 561 -> 289 and ci.go 1,001 -> 545. Eleven ROOT-level flag sets
+#        (llz doctor/tokens/secrets/upgrade/openbao/reap/self-update/verify/...)
+#        and the ci orphan-reap family, each to the extension that owns it.
+#        TWO LANDED SOMEWHERE THE PLAN DID NOT SAY, and the compiler picked:
+#          - doctorCmd went to internal/extensions/onboard, not .../doctor. It
+#            calls onboard.RunDoctor and onboard already imports doctor, so the
+#            obvious home closed an import cycle. The verb is named for the
+#            capability it REPORTS on; the code that runs it lives elsewhere.
+#          - driftCmd came BACK to main. It is handed sustainDeps(), one of the
+#            fifteen deps assemblers -- the same boundary ci_managedlock.go hit.
+#        THE REAP VERBS WERE DECLARED ALL ALONG, just not by name: teardown`s own
+#        doc says "the reaper is the transition`s job and the gate only counts",
+#        so they belong to the transition:destroyed binding already there.
+#        tf-import/tf-apply did NOT move: tofudriver declares only ASSERTIONS at
+#        `provisioned`, and an apply is a transition. That needs a new binding
+#        argued, which is a declaration change rather than a move.
+#        TRAP 62: A BRACE MATCHER MUST SKIP THE PARAMETER LIST. Three reap helpers
+#        take an inline `interface { ... }` as a parameter; latching onto that
+#        brace ended the span inside the signature and silently truncated the
+#        function. The parser caught it, but only because the truncation happened
+#        to be syntactically invalid -- a shorter one would have compiled.
+#        SEVEN FLOORS LOWERED, same dilution as the 82nd/84th: untested flag
+#        wiring joining a tested capability. cmd/llz`s own floor did NOT move --
+#        the wiring left, and what remains there is no better covered than before.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -847,7 +872,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 3657
+    budget: 2968
     exact: true
     include:
       - "tools/cmd/llz/*.go"

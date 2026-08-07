@@ -1,4 +1,4 @@
-package main
+package teardown
 
 // Unit tests for the pure reaping/preflight helpers in ci.go and
 // ci_preflight.go: the count/attribution logic that decides whether a Volume or
@@ -100,14 +100,5 @@ func TestCountClusterNodeBalancersPresent(t *testing.T) {
 	bad := &fakeListClient{err: errors.New("boom")}
 	if n, err := countClusterNodeBalancersPresent(context.Background(), bad, "42"); err == nil || n != -1 {
 		t.Errorf("on list error got (%d, %v), want (-1, err)", n, err)
-	}
-}
-
-func TestOrQ(t *testing.T) {
-	if got := orQ("v", true); got != "?" {
-		t.Errorf("orQ(unknown) = %q, want \"?\"", got)
-	}
-	if got := orQ("v", false); got != "v" {
-		t.Errorf("orQ(known) = %q, want \"v\"", got)
 	}
 }

@@ -7,6 +7,9 @@ package main
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/spf13/cobra"
 )
@@ -37,10 +40,10 @@ func aplCmd() *cobra.Command {
 		identityconfig.AplUserCmd(), // apl user — onboarding (retired from the top level)
 		aplAppCmd(),                 // apl app — list | enable | disable App Platform apps
 		aplValuesCmd(),              // apl values — render | validate the apl-values
-		openbaoCmd(),                // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
+		openbao.OpenbaoCmd(),        // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
 		statusCmd(),                 // apl status — platform health
-		doctorCmd(),                 // apl doctor — APL-scoped readiness
-		verifyCmd(),                 // apl verify — platform verification
+		onboard.DoctorCmd(),         // apl doctor — APL-scoped readiness
+		reachability.VerifyCmd(),    // apl verify — platform verification
 	)
 	return c
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 )
 
 // The flag-set tests for `llz openbao`, which stay with the command tree.
@@ -18,7 +20,7 @@ func TestOpenbaoExecPassthroughFlags(t *testing.T) {
 		{"explicit --", append([]string{"exec", "--"}, baoArgs...)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, rest, err := openbaoCmd().Find(tc.args)
+			cmd, rest, err := openbao.OpenbaoCmd().Find(tc.args)
 			if err != nil {
 				t.Fatalf("Find: %v", err)
 			}

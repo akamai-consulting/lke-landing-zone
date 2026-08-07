@@ -1,11 +1,11 @@
-package main
+package teardown
 
-// Unit tests for the shared destroy-path sweep loop in ci.go. sweepUntilEmpty is
+// Unit tests for the shared destroy-path sweep loop, moved here with it. sweepUntilEmpty is
 // what stands between a half-finished teardown and orphaned Volumes /
 // NodeBalancers blocking the NEXT apply's preflight, so the retry, gating and
 // terminal-error behavior are pinned here rather than left to the live CI job.
 //
-// The loop only touches its *linode.Client to build the ciDeleter closure, so a
+// The loop only touches its *linode.Client to build the Deleter closure, so a
 // sweep body that deletes nothing can pass a nil client and run offline.
 
 import (
@@ -13,6 +13,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 )
 
 // sweepProbe counts how many passes the loop drove and serves canned verify
@@ -60,7 +62,7 @@ func testSweepOpts(attempts int, requireEmpty bool) sweepOpts {
 
 // confirmOpts is the --yes, non-dry-run combination: the only one under which
 // the verify/retry half of the loop engages.
-var confirmOpts = globalOpts{Yes: true}
+var confirmOpts = cliopts.Opts{Yes: true}
 
 func TestSweepUntilEmptyVerifiesEmptyOnFirstPass(t *testing.T) {
 	p := &sweepProbe{remaining: []int{0}}
@@ -141,10 +143,10 @@ func TestSweepUntilEmptySinglePassWhenNotConfirmed(t *testing.T) {
 	// attempt budget confirming what was never attempted.
 	for _, tc := range []struct {
 		name string
-		g    globalOpts
+		g    cliopts.Opts
 	}{
-		{"no --yes", globalOpts{}},
-		{"--yes with --dry-run", globalOpts{Yes: true, DryRun: true}},
+		{"no --yes", cliopts.Opts{}},
+		{"--yes with --dry-run", cliopts.Opts{Yes: true, DryRun: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &sweepProbe{remaining: []int{5}}

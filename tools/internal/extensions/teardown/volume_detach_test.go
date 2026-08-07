@@ -1,4 +1,4 @@
-package main
+package teardown
 
 // ci_volume_detach_test.go — waitVolumesDetached lives in ci.go and STAYED when
 // the destroy verbs were extracted; its test travelled with the teardown file by

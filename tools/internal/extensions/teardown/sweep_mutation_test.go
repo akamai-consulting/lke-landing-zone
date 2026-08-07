@@ -1,4 +1,4 @@
-package main
+package teardown
 
 // Gap-closing tests for the destroy-path plumbing in ci.go: where sweepUntilEmpty
 // backs off between attempts, and how waitVolumesDetached polls and reports.
