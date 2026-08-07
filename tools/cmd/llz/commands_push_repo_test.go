@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 )
 
 // withGhOwnerKind stubs the instance_repo owner classifier.
@@ -178,7 +180,7 @@ func TestCreateRepoErrTailorsChecksToOwnerKind(t *testing.T) {
 func TestRemediationHonorsGHHost(t *testing.T) {
 	t.Setenv("GH_HOST", "ghe.example.com")
 	msgs := map[string]string{
-		"unreachable": ghUnreachableErr("acme/inst", errors.New("boom"), "tail").Error(),
+		"unreachable": ghcli.UnreachableErr("acme/inst", errors.New("boom"), "tail").Error(),
 		"create/org":  createRepoErr("acme/inst", "d", "Organization", errors.New("boom")).Error(),
 		"create/user": createRepoErr("me/inst", "d", "User", errors.New("boom")).Error(),
 		"foreign":     foreignUserOwnerErr("them/inst", "them", "d", "me").Error(),

@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/ghcli=68 \
 	internal/reconciler=70 \
 	internal/ghgitdata=78 \
 	internal/identityconfig=61 \

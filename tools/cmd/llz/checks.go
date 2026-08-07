@@ -13,6 +13,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/spf13/cobra"
 
@@ -175,7 +176,7 @@ func stepGoFmt(g globalOpts) error {
 		return nil
 	}
 	argv := goFmtListArgv(gofmtBin, dirs)
-	fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+	fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
 	if g.dryRun {
 		return nil
 	}

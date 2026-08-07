@@ -25,8 +25,10 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -51,7 +53,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 			return fmt.Errorf("--env is required (e.g. --env primary)")
 		}
 	}
-	if err := validateEnvName(deployEnv); err != nil {
+	if err := validate.EnvName(deployEnv); err != nil {
 		return err
 	}
 	instanceRepo, err := resolveInstanceRepo(repo, admin)
@@ -458,7 +460,7 @@ func requireInstanceRepo(instanceRepo string) error {
 	found, err := repoStatus(instanceRepo)
 	switch {
 	case err != nil:
-		return ghUnreachableErr(instanceRepo, err,
+		return ghcli.UnreachableErr(instanceRepo, err,
 			"This does NOT mean the repo is missing — nothing was checked. Re-run once gh can answer")
 	case !found:
 		remediateMissingRepo(instanceRepo)
@@ -476,7 +478,7 @@ func remediateMissingRepo(repo string) {
 	// not exist, so "create it" is the wrong first move for an operator who is
 	// simply authed as the wrong account — `gh repo create` would then dead-end
 	// on "Name already exists on this account".
-	fmt.Fprintf(os.Stderr, "  If it DOES exist, you are authed as an account that cannot see it: gh auth status --hostname %s\n", ghHost())
+	fmt.Fprintf(os.Stderr, "  If it DOES exist, you are authed as an account that cannot see it: gh auth status --hostname %s\n", ghcli.Host())
 	// An absent OWNER is the more common cause and needs a different first step —
 	// `gh repo create` makes a repository, never the org that holds it, so
 	// printing the create line alone sends the operator into a bare
@@ -486,7 +488,7 @@ func remediateMissingRepo(repo string) {
 	if owner, _, ok := strings.Cut(repo, "/"); ok {
 		if kind, err := ghOwnerKindFn(owner); err == nil && kind == "" {
 			fmt.Fprintf(os.Stderr, "  The OWNER %q does not exist either — check how it is spelled in .copier-answers.yml,\n", owner)
-			fmt.Fprintf(os.Stderr, "  or, if that org is simply not created yet: https://%s/organizations/new\n", ghHost())
+			fmt.Fprintf(os.Stderr, "  or, if that org is simply not created yet: https://%s/organizations/new\n", ghcli.Host())
 		}
 	}
 	// `--source . --push` pushes whatever branch is checked out, and `git init`
@@ -616,7 +618,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		return nil
 	}
 	for _, it := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(it.argv))
+		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(it.argv))
 	}
 	if g.dryRun {
 		_ = lockInfraEnvBranchPolicy(repo, env) // prints the plan only
@@ -668,7 +670,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		items = append(items, []string{"gh", "variable", "set", k, "--repo", tr, "--body", want[k]})
 	}
 	for _, argv := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
 	}
 
 	var dispArgv []string
@@ -687,7 +689,7 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		dispatch = prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)")
 		if dispatch != "" {
 			dispArgv = []string{"gh", "secret", "set", "E2E_DISPATCH_TOKEN", "--repo", tr}
-			fmt.Fprintln(os.Stderr, "→ "+shellQuote(dispArgv))
+			fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(dispArgv))
 		}
 	} else {
 		fmt.Println(color.Dim("    • E2E_DISPATCH_TOKEN already set — skipping"))

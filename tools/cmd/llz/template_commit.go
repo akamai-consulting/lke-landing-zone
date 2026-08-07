@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -173,7 +174,7 @@ func githubToken() string {
 // Unset means github.com — the overwhelmingly common case, and the historical
 // behaviour, so a laptop with neither variable keeps working.
 func envIsGitHubDotCom() bool {
-	if ghHost() != "github.com" {
+	if ghcli.Host() != "github.com" {
 		return false
 	}
 	server := strings.TrimSpace(os.Getenv("GITHUB_SERVER_URL"))

@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
 func TestCopierCopyArgv(t *testing.T) {
@@ -138,14 +141,14 @@ func TestBuildArgv(t *testing.T) {
 
 func TestSecretAndVariableArgv(t *testing.T) {
 	// The value must NEVER appear in argv — it is piped via stdin.
-	got := secretSetArgv("lab", "LINODE_API_TOKEN")
+	got := ghcli.SecretSetArgv("lab", "LINODE_API_TOKEN")
 	want := []string{"gh", "secret", "set", "LINODE_API_TOKEN", "--env", "infra-lab"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("secretSetArgv\n got: %v\nwant: %v", got, want)
+		t.Errorf("ghcli.SecretSetArgv\n got: %v\nwant: %v", got, want)
 	}
-	if got := variableSetArgv("TF_STATE_BUCKET"); !reflect.DeepEqual(got,
+	if got := ghcli.VariableSetArgv("TF_STATE_BUCKET"); !reflect.DeepEqual(got,
 		[]string{"gh", "variable", "set", "TF_STATE_BUCKET"}) {
-		t.Errorf("variableSetArgv: got %v", got)
+		t.Errorf("ghcli.VariableSetArgv: got %v", got)
 	}
 }
 
@@ -155,24 +158,24 @@ func TestValidateEnvName(t *testing.T) {
 	// "-" IS accepted — the contract is exactly that regex.
 	valid := []string{"primary", "secondary", "staging", "lab", "e2e", "myteam-dev", "a1", "ab"}
 	for _, v := range valid {
-		if err := validateEnvName(v); err != nil {
-			t.Errorf("validateEnvName(%q) = %v, want nil", v, err)
+		if err := validate.EnvName(v); err != nil {
+			t.Errorf("validate.EnvName(%q) = %v, want nil", v, err)
 		}
 	}
 	invalid := []string{"", "a", "1bad", "Bad", "with_underscore", "has space",
 		"way-too-long-environment-name-exceeding-limit"}
 	for _, v := range invalid {
-		if err := validateEnvName(v); err == nil {
-			t.Errorf("validateEnvName(%q) = nil, want error", v)
+		if err := validate.EnvName(v); err == nil {
+			t.Errorf("validate.EnvName(%q) = nil, want error", v)
 		}
 	}
 }
 
 func TestShellQuote(t *testing.T) {
-	if got := shellQuote([]string{"gh", "secret", "set", "X"}); got != "gh secret set X" {
+	if got := ghcli.Quote([]string{"gh", "secret", "set", "X"}); got != "gh secret set X" {
 		t.Errorf("plain: got %q", got)
 	}
-	if got := shellQuote([]string{"region=us sea"}); got != "'region=us sea'" {
+	if got := ghcli.Quote([]string{"region=us sea"}); got != "'region=us sea'" {
 		t.Errorf("space: got %q", got)
 	}
 }

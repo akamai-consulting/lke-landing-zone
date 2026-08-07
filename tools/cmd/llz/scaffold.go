@@ -71,7 +71,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if name == "" {
 		return fmt.Errorf("missing <env> argument")
 	}
-	if err := validateEnvName(name); err != nil {
+	if err := validate.EnvName(name); err != nil {
 		return err
 	}
 	if name == o.templateEnv {

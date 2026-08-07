@@ -19,13 +19,14 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 )
 
 func brownfieldDeps() brownfield.Deps {
 	return brownfield.Deps{
 		New:             func(org, ref, dir string) error { return runNew(gopts, org, ref, dir, false) },
-		ValidateEnvName: validateEnvName,
+		ValidateEnvName: validate.EnvName,
 		EnvAdd: func(env string, spec brownfield.EnvSpec) error {
 			return runEnvAdd(gopts, env, envAddOpts{
 				region:          spec.Region,

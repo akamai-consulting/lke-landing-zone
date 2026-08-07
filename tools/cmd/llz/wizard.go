@@ -16,8 +16,10 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -348,7 +350,7 @@ func openURL(g globalOpts, url string) {
 // Cloud-mutating: prints the plan and executes only with --yes. Secret VALUES
 // are piped via stdin, never placed in argv, so even the printed plan is safe.
 func pushSecrets(g globalOpts, env string) error {
-	if err := validateEnvName(env); err != nil {
+	if err := validate.EnvName(env); err != nil {
 		return err
 	}
 	secrets := readEnvFile(filepath.Join(".llz", "secrets.env"))
@@ -374,14 +376,14 @@ func pushSecrets(g globalOpts, env string) error {
 	}
 	var items []item
 	for _, k := range sortedKeys(secrets) {
-		items = append(items, item{secretSetArgv(env, k), secrets[k]})
+		items = append(items, item{ghcli.SecretSetArgv(env, k), secrets[k]})
 	}
 	for _, k := range sortedKeys(vars) {
-		items = append(items, item{variableSetArgv(k), vars[k]})
+		items = append(items, item{ghcli.VariableSetArgv(k), vars[k]})
 	}
 
 	for _, it := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(it.argv))
+		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(it.argv))
 	}
 
 	if g.dryRun {
@@ -436,7 +438,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		// exits non-zero if ANY configured host is broken (e.g. an expired GHE
 		// token from an unrelated account), which would wrongly fail this gate
 		// for a user who is properly logged in to github.com.
-		host := ghHost()
+		host := ghcli.Host()
 		_, err := execOutput("gh", "auth", "status", "--hostname", host)
 		report("gh auth status ("+host+")", err == nil)
 	}
@@ -532,16 +534,6 @@ func lookable(bin string) bool {
 
 func reportEither(a, b string) {
 	report(a+" or "+b, lookable(a) || lookable(b))
-}
-
-// ghHost is the GitHub host llz authenticates against — github.com unless GH_HOST
-// overrides it (e.g. a GHE-hosted template fork). Auth checks scope to this host
-// so an unrelated gh account in a broken state doesn't fail the gate.
-func ghHost() string {
-	if h := strings.TrimSpace(os.Getenv("GH_HOST")); h != "" {
-		return h
-	}
-	return "github.com"
 }
 
 func report(name string, ok bool) {

@@ -12,6 +12,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -19,15 +20,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
-
-// validateEnvName returns an error if env is not a legal deployment name.
-// The deployment-name contract (^[a-z][a-z0-9-]{1,30}$) lives in internal/validate
-// so the LandingZone spec validator enforces the IDENTICAL rule. Deployments are
-// created dynamically (there is no hardcoded env list — terraform.yml's region
-// input is a free-form string, not a choice), so build/status/tokens validate the
-// SHAPE of the name, not membership in a fixed set: otherwise `llz env add
-// myteam-dev` would succeed but `llz build myteam-dev` refuse.
-func validateEnvName(env string) error { return validate.EnvName(env) }
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
 
@@ -146,22 +138,6 @@ func buildArgv(env string) []string {
 		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
 }
 
-// secretSetArgv routes a secret to its scope. Reads the requirement table rather
-// than hardcoding --env, matching pushToRepo: TF_STATE_ENCRYPTION_PASSPHRASE is
-// repo-level (one per instance), and pushing it env-scoped through `llz secrets
-// push` would give a second deployment a different passphrase.
-func secretSetArgv(env, name string) []string {
-	argv := []string{"gh", "secret", "set", name}
-	if configreadiness.SecretIsEnvScoped(name) {
-		argv = append(argv, "--env", "infra-"+env)
-	}
-	return argv
-}
-
-func variableSetArgv(name string) []string {
-	return []string{"gh", "variable", "set", name}
-}
-
 // statusArgv is the read-only convergence check set (matches the verify steps in
 // docs/runbooks/bootstrap-openbao.md).
 //
@@ -182,7 +158,7 @@ func statusArgv() [][]string {
 
 // run executes argv, streaming stdio. In dry-run it prints and returns.
 func run(g globalOpts, argv ...string) error {
-	fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+	fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
 	if g.dryRun {
 		return nil
 	}
@@ -194,11 +170,11 @@ func run(g globalOpts, argv ...string) error {
 // reach Linode/GitHub.
 func runGated(g globalOpts, argv ...string) error {
 	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) "+shellQuote(argv))
+		fmt.Fprintln(os.Stderr, "→ (dry-run) "+ghcli.Quote(argv))
 		return nil
 	}
 	if !g.yes {
-		fmt.Fprintln(os.Stderr, "would run: "+shellQuote(argv))
+		fmt.Fprintln(os.Stderr, "would run: "+ghcli.Quote(argv))
 		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
 		return nil
 	}
@@ -218,22 +194,6 @@ func execArgv(argv []string, stdin string) error {
 	return cmd.Run()
 }
 
-// shellQuote renders argv for display, quoting tokens that need it.
-func shellQuote(argv []string) string {
-	var b strings.Builder
-	for i, a := range argv {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		if a == "" || strings.ContainsAny(a, " \t\"'$&|;<>()") {
-			b.WriteString("'" + strings.ReplaceAll(a, "'", `'\''`) + "'")
-		} else {
-			b.WriteString(a)
-		}
-	}
-	return b.String()
-}
-
 // ── commands ─────────────────────────────────────────────────────────────────
 
 // templateSourceStatusFn reports whether the --org template source is reachable
@@ -242,23 +202,6 @@ func shellQuote(argv []string) string {
 // surfaces as an interactive `Username for 'https://github.com':` prompt rather
 // than a clear error — the failure mode adopters actually hit.
 var templateSourceStatusFn = repoStatus
-
-// ghUnreachableErr covers the case a preflight must NOT blame on the repo: we
-// could not ask GitHub at all. `gh` missing or unauthenticated makes every lookup
-// fail, and reporting that as "not found" sends the operator off to fix something
-// that is fine. tail is the caller's one-line "so do not conclude X" — the checks
-// are identical everywhere, the wrong conclusion is not.
-// The host is ghHost(), never the github.com literal: `llz doctor` already scopes
-// its own auth check that way (GH_HOST), so a remediation naming the default host
-// would tell a GHE operator to authenticate somewhere doctor is not even looking
-// — and doctor would go on failing after they followed it exactly.
-func ghUnreachableErr(subject string, err error, tail string) error {
-	return fmt.Errorf("could not check %s on GitHub: %w\n"+
-		"  llz drives GitHub through the `gh` CLI, so this is almost always gh, not your instance:\n"+
-		"  • installed?      gh version                             (https://cli.github.com)\n"+
-		"  • authenticated?  gh auth status --hostname %s   (then: gh auth login --hostname %s)\n"+
-		"  %s", subject, err, ghHost(), ghHost(), tail)
-}
 
 // templateUnreachableTail states what an unanswerable lookup does NOT prove about
 // the --org template source. The default upstream is public, so gh is the only
@@ -337,7 +280,7 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	repo := org + "/" + templateName
 	switch found, err := templateSourceStatusFn(repo); {
 	case err != nil:
-		return ghUnreachableErr(repo, err, templateUnreachableTail(org, repo))
+		return ghcli.UnreachableErr(repo, err, templateUnreachableTail(org, repo))
 	case !found:
 		return missingTemplateSourceErr(org)
 	}
@@ -526,7 +469,7 @@ func missingRepoOwnerErr(repo, owner, dir, login string) error {
 		"    meant your own account:      (e.g. instance_repo %s/%s — a user owner exists already, nothing to create)\n"+
 		"                                 instance_repo is rendered INTO the workflows, so correcting it means\n"+
 		"                                 re-scaffolding — editing .copier-answers.yml alone is not enough",
-		owner, repo, dir, owner, owner, ghHost(), repo, dir, mine, shortRepoName(repo))
+		owner, repo, dir, owner, owner, ghcli.Host(), repo, dir, mine, shortRepoName(repo))
 }
 
 // foreignUserOwnerErr covers an instance_repo owned by a DIFFERENT GitHub user.
@@ -545,7 +488,7 @@ func foreignUserOwnerErr(repo, owner, dir, login string) error {
 		"  • sharing with that person?    use an org you both belong to as the owner, and re-scaffold\n"+
 		"  • logged in as the wrong you?  gh auth switch --hostname %s --user %s, then from %s:\n"+
 		"                                 gh repo create %s --private --source . --remote origin --push",
-		owner, login, repo, login, shortRepoName(repo), ghHost(), owner, dir, repo)
+		owner, login, repo, login, shortRepoName(repo), ghcli.Host(), owner, dir, repo)
 }
 
 // createRepoErr wraps a failed `gh repo create` with the checks that explain it.
@@ -562,7 +505,7 @@ func createRepoErr(repo, dir, ownerKind string, err error) error {
 	if !ok {
 		owner = repo
 	}
-	host := ghHost()
+	host := ghcli.Host()
 	first := fmt.Sprintf("  • is `gh` authed as the right account?    gh auth status --hostname %s\n"+
 		"  • does the token carry the repo scope?    gh auth refresh -h %s -s repo\n"+
 		"  • is the owner one you can create in?     %q must be your own account, or an org you belong to\n",
@@ -715,10 +658,10 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 	if _, err := execOutput("git", "-C", dir, "remote", "get-url", "origin"); err == nil {
 		sub = "set-url"
 	}
-	// ghHost(), not the github.com literal: `gh repo create` resolves the host
+	// ghcli.Host(), not the github.com literal: `gh repo create` resolves the host
 	// itself from GH_HOST, but this remote URL is hand-built, so on GHE it would
 	// point origin at a host the repo does not live on and the push below fails.
-	if err := runGated(g, "git", "-C", dir, "remote", sub, "origin", "https://"+ghHost()+"/"+repo+".git"); err != nil {
+	if err := runGated(g, "git", "-C", dir, "remote", sub, "origin", "https://"+ghcli.Host()+"/"+repo+".git"); err != nil {
 		return err
 	}
 	if err := runGated(g, "git", "-C", dir, "push", "-u", "origin", "HEAD"); err != nil {
@@ -1026,7 +969,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 		return fmt.Errorf("usage: llz build <env>")
 	}
 	env := args[0]
-	if err := validateEnvName(env); err != nil {
+	if err := validate.EnvName(env); err != nil {
 		return err
 	}
 	// The dispatch is fire-and-forget — GitHub accepts any `region` string and
@@ -1062,7 +1005,7 @@ var (
 // then print the steps the tooling can't do for you. It stops at the first
 // failure. Cloud-mutating steps honour --yes/--dry-run via the delegated commands.
 func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
-	if err := validateEnvName(env); err != nil {
+	if err := validate.EnvName(env); err != nil {
 		return err
 	}
 	// Stage 3 preflights the dispatch anyway, but stage 1 is an interactive token

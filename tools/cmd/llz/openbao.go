@@ -36,6 +36,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
@@ -310,7 +311,7 @@ func runOpenbaoExec(g globalOpts, args []string) error {
 	// with a team-scoped token from `llz openbao login` cover those.
 	warnRootToken()
 	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+shellQuote(baoExecArgv(rootOpenbaoPod, "$OPENBAO_ROOT_TOKEN", args)))
+		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+ghcli.Quote(baoExecArgv(rootOpenbaoPod, "$OPENBAO_ROOT_TOKEN", args)))
 		return nil
 	}
 	cmd := exec.Command("kubectl", baoExecArgv(rootOpenbaoPod, token, args)...)

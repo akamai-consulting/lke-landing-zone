@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -70,7 +71,7 @@ func envVPCCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := args[0]
-			if err := validateEnvName(env); err != nil {
+			if err := validate.EnvName(env); err != nil {
 				return err
 			}
 			// Spec is the source of truth; the committed tfvars can lag a spec edit.

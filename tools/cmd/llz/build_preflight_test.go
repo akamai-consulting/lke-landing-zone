@@ -58,7 +58,7 @@ func stubGitHub(t *testing.T, bodies map[string]any) {
 }
 
 func TestBuildPreflightUnknownDeployment(t *testing.T) {
-	// `llz build labb` — a name no spec declares. validateEnvName can't catch it
+	// `llz build labb` — a name no spec declares. validate.EnvName can't catch it
 	// (deployment names are free-form), and GitHub accepts any `region` input.
 	dir := t.TempDir()
 	writeMiniInstance(t, dir, "lab")

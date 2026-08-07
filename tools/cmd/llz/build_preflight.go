@@ -186,7 +186,7 @@ func knownLocally(tfDir, env string) (bool, error) {
 // unknownDeploymentErr decides what an unknown-here deployment means by asking
 // the branch the build reads. Present there → a stale checkout, which is not an
 // error: the dispatch will work, and the operator is told why they can't see it.
-// Absent there (or unanswerable) → the typo `validateEnvName` cannot catch,
+// Absent there (or unanswerable) → the typo `validate.EnvName` cannot catch,
 // because deployment names are free-form and the dispatch input is a plain
 // string that GitHub accepts unconditionally.
 func unknownDeploymentErr(tfDir, env string) error {
@@ -361,7 +361,7 @@ func ghFileSHA(repo, path, ref string) (sha string, found, ok bool) {
 	// query string reserves: `feat/#123` would silently truncate at the `#` and
 	// ask about the DEFAULT ref instead — answering a different question than the
 	// one the caller asked. (The path needs no escaping: rel is landingzone.yaml
-	// or environments/<env>.yaml, and env is bound by validateEnvName.)
+	// or environments/<env>.yaml, and env is bound by validate.EnvName.)
 	err := ghAPIJSON("repos/"+repo+"/contents/"+path+"?ref="+url.QueryEscape(ref), &r)
 	if err != nil {
 		return "", false, isNotFoundErr(err)
