@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 )
 
 // TestCopierUpdateArgvIsNonInteractive is the unit-speed twin of the gate's
@@ -18,21 +20,21 @@ import (
 // that is an unhandled prompt_toolkit exception rather than a onboard.Prompt.
 func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 	for _, ref := range []string{"v0.0.40", ""} {
-		argv := copierUpdateArgv(ref)
+		argv := copier.UpdateArgv(ref)
 		if !containsArg(argv, "--defaults") {
-			t.Errorf("copierUpdateArgv(%q) = %v\n"+
+			t.Errorf("copier.UpdateArgv(%q) = %v\n"+
 				"missing --defaults: `copier update` re-asks every question without it, which is an\n"+
 				"unhandled exception in CI/scripts/ssh and three silent re-answer prompts by hand.", ref, argv)
 		}
 		if !containsArg(argv, "--trust") {
-			t.Errorf("copierUpdateArgv(%q) lost --trust; the template's _tasks would not run: %v", ref, argv)
+			t.Errorf("copier.UpdateArgv(%q) lost --trust; the template's _tasks would not run: %v", ref, argv)
 		}
 	}
 	// The ref is what the upgrade exists to move. A bare update floats the code to
 	// the latest tag while leaving llz_version stale, which is the skew the
 	// explicit --data pin prevents.
-	if argv := copierUpdateArgv("v0.0.40"); !containsArg(argv, "llz_version=v0.0.40") {
-		t.Errorf("copierUpdateArgv did not pin llz_version: %v", argv)
+	if argv := copier.UpdateArgv("v0.0.40"); !containsArg(argv, "llz_version=v0.0.40") {
+		t.Errorf("copier.UpdateArgv did not pin llz_version: %v", argv)
 	}
 }
 
@@ -40,8 +42,8 @@ func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 // must be silent. Pinning that keeps a future "make everything non-interactive"
 // sweep from turning the scaffold's questions into silent defaults.
 func TestCopierCopyArgvStillPrompts(t *testing.T) {
-	if argv := copierCopyArgv("acme", "v0.0.40", "dest"); containsArg(argv, "--defaults") {
-		t.Errorf("copierCopyArgv gained --defaults: `llz new` must ASK for instance_repo, not "+
+	if argv := copier.CopyArgv("acme", "v0.0.40", "dest"); containsArg(argv, "--defaults") {
+		t.Errorf("copier.CopyArgv gained --defaults: `llz new` must ASK for instance_repo, not "+
 			"scaffold silently onto the placeholder: %v", argv)
 	}
 }

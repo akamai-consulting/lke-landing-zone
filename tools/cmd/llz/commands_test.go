@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -17,12 +18,12 @@ import (
 func TestCopierCopyArgv(t *testing.T) {
 	// --data llz_version mirrors --vcs-ref, so the rendered instance pins to exactly
 	// the release it was scaffolded from.
-	got := copierCopyArgv("akamai-consulting", "v0.0.38", "my-instance")
+	got := copier.CopyArgv("akamai-consulting", "v0.0.38", "my-instance")
 	want := []string{"copier", "copy", "--trust", "--vcs-ref", "v0.0.38",
 		"--data", "llz_version=v0.0.38",
 		"gh:akamai-consulting/lke-landing-zone", "my-instance"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("copierCopyArgv\n got: %v\nwant: %v", got, want)
+		t.Errorf("copier.CopyArgv\n got: %v\nwant: %v", got, want)
 	}
 }
 
@@ -70,15 +71,15 @@ func TestRunNewGitHubUnreachable(t *testing.T) {
 	}
 }
 
-// --defaults is not cosmetic — see copierUpdateArgv's comment and
+// --defaults is not cosmetic — see copier.UpdateArgv's comment and
 // TestCopierUpdateArgvIsNonInteractive. Without it `copier update` re-asks every
 // question, which is three silent re-answer prompts by hand and an unhandled
 // prompt_toolkit exception with no terminal.
 func TestCopierUpdateArgv(t *testing.T) {
-	if got := copierUpdateArgv(""); !reflect.DeepEqual(got, []string{"copier", "update", "--trust", "--defaults"}) {
+	if got := copier.UpdateArgv(""); !reflect.DeepEqual(got, []string{"copier", "update", "--trust", "--defaults"}) {
 		t.Errorf("no-ref: got %v", got)
 	}
-	if got := copierUpdateArgv("v0.0.39"); !reflect.DeepEqual(got,
+	if got := copier.UpdateArgv("v0.0.39"); !reflect.DeepEqual(got,
 		[]string{"copier", "update", "--trust", "--defaults", "--vcs-ref", "v0.0.39", "--data", "llz_version=v0.0.39"}) {
 		t.Errorf("ref: got %v", got)
 	}
@@ -86,43 +87,43 @@ func TestCopierUpdateArgv(t *testing.T) {
 
 func TestResolveScaffoldRef(t *testing.T) {
 	// Explicit ref is taken verbatim (tag, branch, or SHA).
-	if got := resolveScaffoldRef("v0.3.0"); got != "v0.3.0" {
+	if got := copier.ResolveRef("v0.3.0"); got != "v0.3.0" {
 		t.Errorf("explicit ref = %q, want v0.3.0", got)
 	}
-	if got := resolveScaffoldRef("some-branch"); got != "some-branch" {
+	if got := copier.ResolveRef("some-branch"); got != "some-branch" {
 		t.Errorf("explicit branch = %q, want some-branch", got)
 	}
 	// Empty ref falls back to the binary version. In tests `version` is "dev"
-	// (not selfupgrade.Semver), so it resolves to "" — the signal for scaffoldRef to look up
+	// (not selfupgrade.Semver), so it resolves to "" — the signal for copier.Ref to look up
 	// the latest published release instead of floating on main.
-	if got := resolveScaffoldRef(""); got != "" {
+	if got := copier.ResolveRef(""); got != "" {
 		t.Errorf("dev-build sentinel = %q, want \"\"", got)
 	}
 }
 
 func TestScaffoldRef(t *testing.T) {
 	// Explicit ref and the released-binary anchor short-circuit before any lookup.
-	if got, err := scaffoldRef("v0.3.0", "org/repo"); err != nil || got != "v0.3.0" {
+	if got, err := copier.Ref("v0.3.0", "org/repo"); err != nil || got != "v0.3.0" {
 		t.Errorf("explicit ref = (%q, %v), want (v0.3.0, nil)", got, err)
 	}
 
-	orig := latestReleaseFn
-	t.Cleanup(func() { latestReleaseFn = orig })
+	orig := copier.LatestReleaseFn
+	t.Cleanup(func() { copier.LatestReleaseFn = orig })
 
 	// Dev build (version=="dev" in tests) → empty sentinel → resolve latest release.
-	latestReleaseFn = func(repo string) (string, error) {
+	copier.LatestReleaseFn = func(repo string) (string, error) {
 		if repo != "org/repo" {
 			t.Errorf("selfupgrade.LatestRelease called with %q, want org/repo", repo)
 		}
 		return "v9.9.9", nil
 	}
-	if got, err := scaffoldRef("", "org/repo"); err != nil || got != "v9.9.9" {
+	if got, err := copier.Ref("", "org/repo"); err != nil || got != "v9.9.9" {
 		t.Errorf("dev fallback = (%q, %v), want (v9.9.9, nil)", got, err)
 	}
 
 	// A resolution failure surfaces an actionable error, never a silent `main`.
-	latestReleaseFn = func(string) (string, error) { return "", fmt.Errorf("boom") }
-	got, err := scaffoldRef("", "org/repo")
+	copier.LatestReleaseFn = func(string) (string, error) { return "", fmt.Errorf("boom") }
+	got, err := copier.Ref("", "org/repo")
 	if err == nil {
 		t.Fatalf("expected error on resolution failure, got %q", got)
 	}
@@ -287,7 +288,7 @@ func TestRequireCopierNamesAnInstallRoute(t *testing.T) {
 	// copier, so the error has to carry a way to get it.
 	withoutCopier(t)
 
-	err := requireCopier(globalOpts{}, "`llz new`")
+	err := copier.Require(false, "`llz new`")
 	if err == nil {
 		t.Fatal("expected a refusal when copier is not on PATH")
 	}
@@ -303,7 +304,7 @@ func TestRequireCopierNamesAnInstallRoute(t *testing.T) {
 func TestRequireCopierWarnsButPassesUnderDryRun(t *testing.T) {
 	withoutCopier(t)
 	var err error
-	out := captureStderr(t, func() { err = requireCopier(globalOpts{dryRun: true}, "`llz new`") })
+	out := captureStderr(t, func() { err = copier.Require(true, "`llz new`") })
 	if err != nil {
 		t.Fatalf("--dry-run must not fail on a tool it will not invoke: %v", err)
 	}
@@ -316,7 +317,7 @@ func TestRequireCopierWarnsButPassesUnderDryRun(t *testing.T) {
 
 func TestRequireCopierSilentWhenInstalled(t *testing.T) {
 	withCopierInstalled(t)
-	if err := requireCopier(globalOpts{}, "`llz new`"); err != nil {
+	if err := copier.Require(false, "`llz new`"); err != nil {
 		t.Fatalf("copier is on PATH, nothing to say: %v", err)
 	}
 }

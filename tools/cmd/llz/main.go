@@ -22,6 +22,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -47,6 +48,8 @@ func init() {
 	// a stale "dev" there would make every release look newer than the running
 	// binary, forever.
 	selfupgrade.Version = version
+	// copier anchors a scaffold to this binary's release when it has one.
+	copier.Version = version
 }
 
 // globalOpts holds the persistent flags shared by every subcommand. It's

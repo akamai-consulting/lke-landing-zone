@@ -12,6 +12,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -32,116 +33,6 @@ import (
 )
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
-
-// resolveScaffoldRef picks the template ref to scaffold/upgrade from: an explicit
-// --ref verbatim (tag, branch, or SHA), else this llz binary's own version when it
-// is a real release (the CLI is the version anchor), else "" — signalling the
-// caller (scaffoldRef) to resolve the latest published release tag, since a dev
-// build has no version to anchor to. The chosen value is rendered into the
-// instance's pins as copier's llz_version, so the scaffold references exactly the
-// release it was cut from.
-func resolveScaffoldRef(ref string) string {
-	if ref != "" {
-		return ref
-	}
-	if _, _, _, ok := selfupgrade.Semver(version); ok {
-		return selfupgrade.NormalizeLLZTag(version)
-	}
-	return ""
-}
-
-// latestReleaseFn resolves the newest published vX.Y.Z release of a template repo;
-// seamed for tests. It reuses self-update's release picker, which drops drafts /
-// pre-releases and ignores the llz/v* CLI tag track (selfupgrade.LatestLLZTag).
-var latestReleaseFn = selfupgrade.LatestRelease
-
-// scaffoldRef resolves the concrete ref to scaffold/pin to. It falls back from a
-// dev build (no anchor version) to the latest published vX.Y.Z release of repo, so
-// a scaffold never floats on `main` — which the template's own tflint gate
-// (terraform_module_pinned_source) rejects, Renovate can't bump, and copier now
-// refuses (the llz_version validator). repo is the template's <org>/<name>.
-func scaffoldRef(ref, repo string) (string, error) {
-	if r := resolveScaffoldRef(ref); r != "" {
-		return r, nil
-	}
-	tag, err := latestReleaseFn(repo)
-	if err != nil {
-		return "", fmt.Errorf("this is a dev build of llz (no anchor version) and the latest %s release could not be resolved to pin to: %w\n"+
-			"  pass --ref vX.Y.Z to pin to a release explicitly", repo, err)
-	}
-	return tag, nil
-}
-
-func copierCopyArgv(org, ref, dir string) []string {
-	return []string{"copier", "copy", "--trust", "--vcs-ref", ref,
-		"--data", "llz_version=" + ref,
-		"gh:" + org + "/" + templateid.Name, dir}
-}
-
-// copierUpdateArgv is the update invocation, and --defaults is load-bearing.
-//
-// Without it `copier update` RE-ASKS every question — upstream_org,
-// instance_repo, openbao_team — using the stored answers as onboard.Prompt defaults. Two
-// costs, and the second is the one that bit:
-//
-//   - With no terminal that is not a onboard.Prompt, it is an unhandled OSError out of
-//     prompt_toolkit. `llz upgrade` inherits the operator's stdin, so it worked
-//     by hand and died in CI, in a wrapper script, and over `ssh host 'llz
-//     upgrade'` — with a Python traceback, not a message.
-//   - Interactively it is three unexplained prompts mid-upgrade, on answers that
-//     are rendered INTO managed files. instance_repo becomes the ArgoCD repoURL
-//     and every `gh` target, so one stray keystroke re-renders the instance
-//     against a repo that does not exist.
-//
-// --defaults keeps the stored answers (verified: a non-default instance_repo and
-// openbao_team both survive v0.0.39 → v0.0.40 untouched). It does NOT make the
-// answers safe on its own — copier still falls back to the template DEFAULT for
-// an answer it cannot keep, which is why runUpgrade verifies them afterwards
-// rather than trusting this flag. `llz ci upgrade-test` runs this exact argv.
-func copierUpdateArgv(ref string) []string {
-	a := []string{"copier", "update", "--trust", "--defaults"}
-	if ref != "" {
-		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
-	}
-	return a
-}
-
-// requireCopier fails with an install route when the copier CLI is absent.
-//
-// `llz new` and `llz upgrade` are thin wrappers around `copier copy` / `copier
-// update`, and copier is a Python tool that is on no machine by default. Without
-// this, the scaffold died on exec's own words — `copier copy: exec: "copier":
-// executable file not found in $PATH` — as the SECOND command of the quickstart,
-// naming a tool the operator has never heard of and no way to get it. The
-// installer only checks `gh`, and `llz doctor` (which does list copier) reports
-// rather than gates AND is two steps further down the quickstart, so nothing
-// between install and scaffold said this out loud.
-//
-// action names the command, because the two have different recovery paths: a
-// failed `llz new` leaves nothing behind, a failed `llz upgrade` is mid-flight.
-// g so a --dry-run, which never execs copier (run() returns before exec), reports
-// the gap without failing on it — the flag's contract is "print what would run,
-// change nothing", and a dry-run that hard-errors on a tool it was not going to
-// invoke breaks it. Warn rather than stay silent: "this would work" is the wrong
-// answer too.
-func requireCopier(g globalOpts, action string) error {
-	if kubectlprobe.Lookable("copier") {
-		return nil
-	}
-	if g.dryRun {
-		fmt.Fprintf(os.Stderr, "%s `copier` is not on PATH — %s would fail here (dry-run: not executing it).\n",
-			color.Yellow("!"), action)
-		fmt.Fprintf(os.Stderr, "  install it first: %s\n", color.Cyan("pipx install copier"))
-		return nil
-	}
-	//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded install-route block, not a sentence fragment
-	return fmt.Errorf("the `copier` CLI is not on PATH — %s renders the scaffold with it.\n"+
-		"  copier is a Python tool and is not installed by default (the llz installer does not add it):\n"+
-		"  • pipx install copier      (what this repo's own CI uses)\n"+
-		"  • uv tool install copier\n"+
-		"  • brew install copier\n"+
-		"  Then re-run %s. `llz doctor` lists the rest of the toolchain it expects.", action, action)
-}
 
 func buildArgv(env string) []string {
 	return []string{"gh", "workflow", "run", "terraform.yml",
@@ -262,7 +153,7 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	// Before the GitHub round-trips below: copier is what actually renders the
 	// scaffold, the check is free and local, and finding out it is missing AFTER
 	// resolving a release tag wastes two API calls to reach the same dead end.
-	if err := requireCopier(g, "`llz new`"); err != nil {
+	if err := copier.Require(g.dryRun, "`llz new`"); err != nil {
 		return err
 	}
 	repo := org + "/" + templateid.Name
@@ -272,14 +163,14 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	case !found:
 		return missingTemplateSourceErr(org)
 	}
-	ref, err := scaffoldRef(ref, repo)
+	ref, err := copier.Ref(ref, repo)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
 		dir, org, templateid.Name, ref)
 
-	if err := proc.RunEcho(g.dryRun, copierCopyArgv(org, ref, dir)...); err != nil {
+	if err := proc.RunEcho(g.dryRun, copier.CopyArgv(org, ref, dir)...); err != nil {
 		return fmt.Errorf("copier copy: %w", err)
 	}
 
@@ -639,7 +530,7 @@ func adoptExistingRepo(g globalOpts, dir, repo string) error {
 func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// Same prerequisite as `llz new`, and worse to discover late: this one runs
 	// snapshot/restore around copier, so failing at the exec is failing mid-flight.
-	if err := requireCopier(g, "`llz upgrade`"); err != nil {
+	if err := copier.Require(g.dryRun, "`llz upgrade`"); err != nil {
 		return err
 	}
 	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
@@ -651,7 +542,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// lockstep with the template code (a bare `copier update` would float the code
 	// to the latest tag but leave the recorded llz_version stale). selfupgrade.UpdateRepo()
 	// names the template this instance tracks (its .copier-answers upstream_org).
-	ref, err := scaffoldRef(ref, selfupgrade.UpdateRepo())
+	ref, err := copier.Ref(ref, selfupgrade.UpdateRepo())
 	if err != nil {
 		return err
 	}
@@ -673,7 +564,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 		}
 		defer owned.Cleanup()
 	}
-	if err := proc.RunEcho(g.dryRun, copierUpdateArgv(ref)...); err != nil {
+	if err := proc.RunEcho(g.dryRun, copier.UpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
 	if policyErr == nil {

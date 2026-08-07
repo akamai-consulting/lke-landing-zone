@@ -633,6 +633,18 @@ categories:
 #        prompts, browser launches, gh/linode round-trips -- and it was equally
 #        untested in package main. Recorded, not hidden; raise it by testing
 #        the pure halves (Gather, RepoStatus, the token-URL builders).
+#   75th: the copier layer -> internal/copier   7,758 -> 7,712 (-46 / 85 files)
+#        THE INTERNAL ENABLER INSIDE commands.go, which is what the loop was told
+#        to look for before calling that file blocked. commands.go is not one
+#        thing: it is `llz new` (~570 lines), `llz upgrade` (~270) and four thin
+#        dispatchers -- and the two commands SHARE a copier layer. Measured:
+#        six symbols used by both halves, zero used by new from upgrade.
+#        Extracting the shared layer first is what stops the split duplicating it.
+#        commands.go: closure 13 -> 8.
+#        Ref carries the rule worth keeping: a scaffold must NEVER float on main
+#        (tflint rejects an unpinned module source, Renovate cannot bump it,
+#        copier s llz_version validator refuses it), so it errors rather than
+#        returning "". That behaviour had no direct test; it has four now.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -645,7 +657,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 7758
+    budget: 7712
     exact: true
     include:
       - "tools/cmd/llz/*.go"

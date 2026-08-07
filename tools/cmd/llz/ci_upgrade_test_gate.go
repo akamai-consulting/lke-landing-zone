@@ -13,7 +13,7 @@ package main
 // harness that covers the configuration we build and not the one operators run.
 // It cost two bugs, both found by hand rather than by CI:
 //
-//  1. `llz upgrade` re-prompted every copier question, because copierUpdateArgv
+//  1. `llz upgrade` re-prompted every copier question, because copier.UpdateArgv
 //     omitted --defaults. With no TTY that is not a onboard.Prompt, it is an unhandled
 //     OSError out of prompt_toolkit — so the command was unusable in CI, in a
 //     wrapper script, over `ssh host 'llz upgrade'`. Check `update-is-
@@ -50,6 +50,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 )
@@ -158,13 +159,13 @@ func answerRegressions(before, after map[string]string) []string {
 }
 
 // copierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
-// copierCopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
+// copier.CopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
 // gate must point copier at a local path so it works offline, on a branch, and
 // in a fork. --defaults here is a harness choice — `llz new` legitimately
 // prompts for its three answers, and they are supplied below as --data.
 //
 // The UPGRADE invocation is deliberately NOT built here. It is
-// copierUpdateArgv — the exact argv `llz upgrade` runs — because a gate that
+// copier.UpdateArgv — the exact argv `llz upgrade` runs — because a gate that
 // composed its own would be testing copier rather than testing us, and would
 // have passed cleanly while `llz upgrade` was unusable in every unattended
 // context. That is the blind spot this whole file exists to remove; re-creating
@@ -355,7 +356,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	}
 
 	// 2. The upgrade, with stdin closed. THE check — see runCopier.
-	out, upErr := runCopier(inst, copierUpdateArgv(to))
+	out, upErr := runCopier(inst, copier.UpdateArgv(to))
 	var failures []string
 	if upErr != nil {
 		detail := indentedTail(string(out), 25)
@@ -364,7 +365,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			hint = "\n    This is copier PROMPTING. `copier update` re-asks every question unless it is\n" +
 				"    passed --defaults, and with no terminal that is an unhandled exception rather\n" +
 				"    than a onboard.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
-				"    over ssh. Fix: add --defaults to the update argv (copierUpdateArgv)."
+				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
 		failures = append(failures, fmt.Sprintf("update-is-noninteractive: `copier update` to %s failed:\n%s%s",
 			shortRef(to), detail, hint))
