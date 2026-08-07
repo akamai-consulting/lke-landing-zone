@@ -305,7 +305,7 @@ func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool,
 // decision is unit-testable rather than buried in a 200-line interactive wizard.
 //
 // Writes ONLY the variables asked for: an operator's existing TF_IMAGE is theirs,
-// and this command's contract is to skip what is already configreadiness.Satisfied.
+// and this command's contract is to skip what is already envreq.Satisfied.
 func ComputeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 	ref := answers.PinnedTemplateRef()
 	tfImage, kubeImage, pinned, why := computeCIImageVars(InstanceTemplateRepo(), ref)

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 )
@@ -97,7 +97,7 @@ func TestBuildArgv(t *testing.T) {
 
 func TestSecretAndVariableArgv(t *testing.T) {
 	// The value must NEVER appear in argv — it is piped via stdin.
-	got := ghcli.SecretSetArgv("lab", "LINODE_API_TOKEN", configreadiness.SecretIsEnvScoped("LINODE_API_TOKEN"))
+	got := ghcli.SecretSetArgv("lab", "LINODE_API_TOKEN", envreq.SecretIsEnvScoped("LINODE_API_TOKEN"))
 	want := []string{"gh", "secret", "set", "LINODE_API_TOKEN", "--env", "infra-lab"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ghcli.SecretSetArgv\n got: %v\nwant: %v", got, want)

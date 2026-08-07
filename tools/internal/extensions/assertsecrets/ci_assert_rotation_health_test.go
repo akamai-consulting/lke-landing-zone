@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/promwire"
 )
 
@@ -266,9 +266,9 @@ func TestEveryCredPathClassIsKnown(t *testing.T) {
 // and the one credential expected ABSENT is absent.
 func presenceSteadyState() map[string]float64 {
 	m := map[string]float64{}
-	for _, t := range tokeninv.GHSecretTargets {
+	for _, t := range credtargets.GHSecretTargets {
 		v := 1.0
-		if t.Expect == tokeninv.CredExpectAbsent {
+		if t.Expect == credtargets.CredExpectAbsent {
 			v = 0
 		}
 		m[credLabelForSecret(t.Name)] = v
@@ -396,8 +396,8 @@ func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
 func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
 	m := presenceSteadyState()
 	var optional []string
-	for _, tgt := range tokeninv.GHSecretTargets {
-		if tgt.Expect == tokeninv.CredExpectOptional {
+	for _, tgt := range credtargets.GHSecretTargets {
+		if tgt.Expect == credtargets.CredExpectOptional {
 			optional = append(optional, credLabelForSecret(tgt.Name))
 			delete(m, credLabelForSecret(tgt.Name)) // absent AND publishing nothing
 		}
@@ -463,9 +463,9 @@ func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
 				  {"metric":{"namespace":"llz-reconciler"},"value":[1,"1"]}]}}`), nil
 			}
 			var rows []string
-			for _, tgt := range tokeninv.GHSecretTargets {
+			for _, tgt := range credtargets.GHSecretTargets {
 				v := "1"
-				if tgt.Expect == tokeninv.CredExpectAbsent {
+				if tgt.Expect == credtargets.CredExpectAbsent {
 					v = "0"
 				}
 				rows = append(rows, `{"metric":{"cred":"`+credLabelForSecret(tgt.Name)+`"},"value":[1,"`+v+`"]}`)

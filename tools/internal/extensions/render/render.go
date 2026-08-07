@@ -396,7 +396,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
 	// carried by LLZ on managed, but that is now proven harmless rather than a
 	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
-	// has been configreadiness.Satisfied — the full observability stack (grafana, prometheus,
+	// has been envreq.Satisfied — the full observability stack (grafana, prometheus,
 	// loki→S3) converges Synced+Healthy on a managed cluster without them, because
 	// grafana-admin is apl-core's own and the otel ingress bearer is optional. So
 	// the previous ::warning:: here is retired; see docs/adr/0005-managed-app-platform.md.

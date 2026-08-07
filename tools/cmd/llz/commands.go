@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
@@ -13,6 +12,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
@@ -211,7 +211,7 @@ func warnIfRootTokenPresent(env string) {
 	if err != nil {
 		return
 	}
-	for _, n := range configreadiness.GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+	for _, n := range envreq.GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
 			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", color.Yellow("⚠"), env)
 			fmt.Println(color.Dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))

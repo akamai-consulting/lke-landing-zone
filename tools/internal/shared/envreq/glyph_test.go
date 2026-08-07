@@ -1,4 +1,4 @@
-package configreadiness
+package envreq
 
 // Followed validGlyph here — it renders a token-validity verdict as a table glyph,
 // which is part of the readiness report this package owns.

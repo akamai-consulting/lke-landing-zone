@@ -1,4 +1,18 @@
-package configreadiness
+// Package envreq is the model of what an environment REQUIRES: which vars and
+// secrets an instance needs, what is actually present on GitHub, and whether a
+// requirement is satisfied.
+//
+// IT CAME OUT OF internal/extensions/configreadiness, which is the COMMAND that
+// reports on all this. Four peers imported that extension and what doctor and
+// onboard wanted was this model -- Requirement, LiveState, Satisfied,
+// E2ERequirements -- not the `llz ci env-readiness` verb.
+//
+// IT COULD NOT MOVE UNTIL ONE COMMIT AGO. ReportReadiness renders the validity
+// column, which meant this file referenced tokeninv.TokenValidity and so could not
+// be substrate while the token probe was still inside the token INVENTORY. Two
+// packages each waiting on the other, for the third time in this sweep; splitting
+// tokenprobe out is what unblocked it.
+package envreq
 
 // Shared model for "what does an e2e-ready instance need, and what's already
 // there?" — used by both `llz doctor` (report) and `llz tokens` (skip what's
@@ -8,10 +22,12 @@ package configreadiness
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
@@ -189,7 +205,11 @@ func GHSecretNames(path string) []string {
 // ghAPI runs `gh api <path>` and returns stdout (nil on error — callers treat a
 // failed/absent endpoint as "nothing configured").
 func ghAPI(path string) []byte {
-	out, err := deps.Exec("gh", "api", path)
+	// kubectlprobe.Exec DIRECTLY. package main installed this seam as execOutput,
+	// which IS kubectlprobe.Exec, while the package default returned (nil, nil) --
+	// so the seam had one real implementation and one silent no-op that every test
+	// in this package got instead. Collapsing it removes the second.
+	out, err := kubectlprobe.Exec("gh", "api", path)
 	if err != nil {
 		return nil
 	}
@@ -354,4 +374,30 @@ func LoadEnvFiles() (secrets, vars map[string]string) {
 		vars = map[string]string{}
 	}
 	return secrets, vars
+}
+
+// statePassphraseSecret and readEnvFile are LOCAL COPIES rather than imports. Both
+// are a handful of lines, and the alternative was dragging configreadiness's whole
+// Deps struct -- which carries a clusterspec loader and a manifest-drift checker
+// this model does not use -- across the layer to reach them.
+const statePassphraseSecret = "TF_STATE_ENCRYPTION_PASSPHRASE"
+
+// readEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
+// file → empty map.
+func readEnvFile(path string) map[string]string {
+	m := map[string]string{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return m
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			m[strings.TrimSpace(k)] = v
+		}
+	}
+	return m
 }

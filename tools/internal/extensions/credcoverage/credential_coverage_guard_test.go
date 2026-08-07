@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 )
 
 // writeWorkflows lays out a minimal instance-template/.github/workflows tree.
@@ -49,7 +49,7 @@ func TestCredentialCoverageGuardFailsOnUnmeasuredSecret(t *testing.T) {
 // "the registry is stale", which is a different rule with a different remedy.
 func TestCredentialCoverageGuardAcceptsMeasuredSecrets(t *testing.T) {
 	unmeasured, _ := classifyCredentialCoverage(
-		[]string{tokeninv.GHSecretTargets[0].Name, tokeninv.GHPATTargets[0].Name}, io.Discard)
+		[]string{credtargets.GHSecretTargets[0].Name, credtargets.GHPATTargets[0].Name}, io.Discard)
 	if len(unmeasured) != 0 {
 		t.Errorf("measured credentials must be accounted for, got %v", unmeasured)
 	}
@@ -60,15 +60,15 @@ func TestCredentialCoverageGuardAcceptsMeasuredSecrets(t *testing.T) {
 // bootstrap workflow and measured by nothing, and no gate in the repo said so.
 // Re-create that state by measuring everything EXCEPT it.
 func TestCredentialCoverageGuardWouldHaveCaughtTheSealKey(t *testing.T) {
-	orig := tokeninv.GHSecretTargets
-	t.Cleanup(func() { tokeninv.GHSecretTargets = orig })
-	var trimmed []tokeninv.SecretTarget
+	orig := credtargets.GHSecretTargets
+	t.Cleanup(func() { credtargets.GHSecretTargets = orig })
+	var trimmed []credtargets.SecretTarget
 	for _, tgt := range orig {
 		if tgt.Name != "OPENBAO_SEAL_KEY" {
 			trimmed = append(trimmed, tgt)
 		}
 	}
-	tokeninv.GHSecretTargets = trimmed
+	credtargets.GHSecretTargets = trimmed
 
 	unmeasured, _ := classifyCredentialCoverage([]string{"OPENBAO_SEAL_KEY"}, io.Discard)
 	if len(unmeasured) != 1 || unmeasured[0] != "OPENBAO_SEAL_KEY" {
@@ -76,7 +76,7 @@ func TestCredentialCoverageGuardWouldHaveCaughtTheSealKey(t *testing.T) {
 	}
 
 	// And with the entry restored — the shipping state — it is accounted for.
-	tokeninv.GHSecretTargets = orig
+	credtargets.GHSecretTargets = orig
 	if unmeasured, _ := classifyCredentialCoverage([]string{"OPENBAO_SEAL_KEY"}, io.Discard); len(unmeasured) != 0 {
 		t.Errorf("the seal key must now be measured, got %v", unmeasured)
 	}

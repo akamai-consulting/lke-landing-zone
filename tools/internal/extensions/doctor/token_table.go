@@ -14,17 +14,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // ProbeTokenValidities probes every probeable requirement and returns a verdict
 // keyed by credential NAME, plus the count of INVALID ones. It does NOT print —
-// configreadiness.ReportReadiness renders the results as the table's VALID column. A probeable
+// envreq.ReportReadiness renders the results as the table's VALID column. A probeable
 // token with no locally-readable value gets a vSkipped verdict (probe it in CI);
 // non-credential requirements (plain vars, image refs) get no entry.
-func ProbeTokenValidities(reqs []configreadiness.Requirement, secrets, vars map[string]string, instance configreadiness.LiveState, ghcrUser string) (map[string]tokenprobe.TokenValidity, int) {
+func ProbeTokenValidities(reqs []envreq.Requirement, secrets, vars map[string]string, instance envreq.LiveState, ghcrUser string) (map[string]tokenprobe.TokenValidity, int) {
 	now := time.Now()
 	out := map[string]tokenprobe.TokenValidity{}
 
@@ -76,7 +76,7 @@ func ProbeTokenValidities(reqs []configreadiness.Requirement, secrets, vars map[
 
 // localValue returns a requirement's value from the local .llz cache (secrets or
 // vars, by kind) and whether it was present.
-func localValue(r configreadiness.Requirement, secrets, vars map[string]string) (string, bool) {
+func localValue(r envreq.Requirement, secrets, vars map[string]string) (string, bool) {
 	m := vars
 	if r.Secret {
 		m = secrets

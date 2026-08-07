@@ -19,6 +19,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
@@ -382,7 +383,7 @@ func PushSecrets(o Opts, env string) error {
 	}
 	var items []item
 	for _, k := range SortedKeys(secrets) {
-		items = append(items, item{ghcli.SecretSetArgv(env, k, configreadiness.SecretIsEnvScoped(k)), secrets[k]})
+		items = append(items, item{ghcli.SecretSetArgv(env, k, envreq.SecretIsEnvScoped(k)), secrets[k]})
 	}
 	for _, k := range SortedKeys(vars) {
 		items = append(items, item{ghcli.VariableSetArgv(k), vars[k]})

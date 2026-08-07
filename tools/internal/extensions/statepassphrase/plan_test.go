@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 )
 
 // withStubbedInfraEnvs pins the environment listing so a test exercising the
@@ -308,7 +308,7 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 	// of every deployment), and GitHub resolves a repo-level secret inside an
 	// infra-<env> job. An env-scoped copy would let a second deployment be
 	// provisioned with a different passphrase.
-	if configreadiness.SecretIsEnvScoped(SecretName) {
+	if envreq.SecretIsEnvScoped(SecretName) {
 		t.Error("the state-encryption passphrase must be repo-level")
 	}
 	// Everything else is unchanged — this generalization must not move any
@@ -318,12 +318,12 @@ func TestStatePassphraseIsPushedRepoLevel(t *testing.T) {
 		"OPENBAO_SECRETS_WRITE_TOKEN", "APL_VALUES_REPO_TOKEN", "LINODE_DNS_TOKEN",
 		"GHCR_READ_TOKEN",
 	} {
-		if !configreadiness.SecretIsEnvScoped(n) {
+		if !envreq.SecretIsEnvScoped(n) {
 			t.Errorf("%s must stay env-scoped (infra-<env>)", n)
 		}
 	}
 	// An unknown name keeps the old default rather than silently going repo-level.
-	if !configreadiness.SecretIsEnvScoped("SOMETHING_NOT_IN_THE_TABLE") {
+	if !envreq.SecretIsEnvScoped("SOMETHING_NOT_IN_THE_TABLE") {
 		t.Error("unknown secrets must default to env-scoped")
 	}
 }
@@ -333,7 +333,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 	// the table, so `llz doctor` reported a color.Green instance whose first build could
 	// not init.
 	var found bool
-	for _, r := range configreadiness.E2ERequirements(false) {
+	for _, r := range envreq.E2ERequirements(false) {
 		if r.Name != SecretName {
 			continue
 		}
@@ -346,7 +346,7 @@ func TestStatePassphraseIsRequiredForReadiness(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("%s missing from configreadiness.E2ERequirements — doctor cannot report it", SecretName)
+		t.Fatalf("%s missing from envreq.E2ERequirements — doctor cannot report it", SecretName)
 	}
 }
 

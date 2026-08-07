@@ -24,7 +24,7 @@ import (
 // repo-level (one per instance), and pushing it env-scoped through `llz secrets
 // push` would give a second deployment a different passphrase.
 // envScoped IS A PARAMETER RATHER THAN A LOOKUP. It used to call
-// configreadiness.SecretIsEnvScoped, which made this substrate package import an
+// envreq.SecretIsEnvScoped, which made this substrate package import an
 // extension — the inversion the boundary test now forbids. Scoping is a property
 // of the requirement table, which is configreadiness's to own; building the argv
 // is this package's. The one real caller already imports configreadiness, so

@@ -1,10 +1,12 @@
-package configreadiness
+package envreq
 
 // TestLiveStateValue had to move IN-PACKAGE: it constructs a LiveState from its
 // unexported maps, which is the right way to test the env-wins-over-repo
 // resolution and impossible from outside.
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestLiveStateValue(t *testing.T) {
 	s := LiveState{

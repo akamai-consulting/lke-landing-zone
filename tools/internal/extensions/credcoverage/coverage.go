@@ -47,7 +47,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
 
@@ -168,14 +168,14 @@ type credCoverage struct {
 // Derived from the two target lists — never a copy of them.
 func credMeasuredByName() map[string]credCoverage {
 	out := map[string]credCoverage{}
-	for _, t := range tokeninv.GHPATTargets {
+	for _, t := range credtargets.GHPATTargets {
 		d := "expiry probed via the token-expiration header"
 		if t.Optional {
 			d += " (optional — skipped when unset)"
 		}
 		out[t.Name] = credCoverage{how: "expiry", detail: d}
 	}
-	for _, t := range tokeninv.GHSecretTargets {
+	for _, t := range credtargets.GHSecretTargets {
 		out[t.Name] = credCoverage{
 			how:    "write-time",
 			detail: fmt.Sprintf("GitHub secret write time, class %s, expect %s", t.Class, t.Expect),

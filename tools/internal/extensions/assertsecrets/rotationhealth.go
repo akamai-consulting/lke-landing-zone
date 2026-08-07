@@ -69,8 +69,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/promwire"
 )
 
@@ -359,13 +359,13 @@ func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSee
 		}(),
 	}}
 
-	for _, tgt := range tokeninv.GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		cred := credLabelForSecret(tgt.Name)
 		v := credVerdict{Cred: cred, Class: tgt.Class, Lane: presenceLane, Gated: true}
 		got, ok := configured[cred]
 		v.Present = ok
 		switch {
-		case tgt.Expect == tokeninv.CredExpectOptional:
+		case tgt.Expect == credtargets.CredExpectOptional:
 			// Legitimately absent on a healthy deployment (the Harbor robot pair on
 			// a standby peer, before the ACTIVE peer's provisioner has published
 			// them). Visible on the dashboard, never a gate in either direction.
@@ -376,11 +376,11 @@ func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSee
 				"likely one — environment-secret metadata needs different token permissions from " +
 				"repo-scoped, and the OpenBao credentials are environment-scoped), or the funnel " +
 				"between writer and reconciler is broken. It is NOT evidence the credential is missing"
-		case tgt.Expect == tokeninv.CredExpectPresent && got != 1:
+		case tgt.Expect == credtargets.CredExpectPresent && got != 1:
 			v.FailWhy = "expected present and the GitHub secrets API reports it ABSENT. It has no age " +
 				"because it has no value, so no age rule can fire for it. Seed it (docs/secrets.md), or " +
 				"drop it from ghSecretTargets if this instance genuinely does not use it"
-		case tgt.Expect == tokeninv.CredExpectAbsent && got != 0:
+		case tgt.Expect == credtargets.CredExpectAbsent && got != 0:
 			v.FailWhy = "expected ABSENT and it is set. A root token is ephemeral by design — bootstrap " +
 				"revokes it and the recovery quorum is what survives — so this is a live full-admin " +
 				"credential left by a break-glass whose revoke never ran. Dispatch " +

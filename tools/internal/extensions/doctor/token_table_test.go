@@ -1,13 +1,13 @@
 package doctor
 
 // doctor_token_table_test.go — the half of token_validate_test.go that stayed,
-// because ProbeTokenValidities did: it is keyed by the wizard's `configreadiness.Requirement`
+// because ProbeTokenValidities did: it is keyed by the wizard's `envreq.Requirement`
 // and renders `llz doctor`'s table, not a CI verdict.
 
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
@@ -17,7 +17,7 @@ func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	tokenprobe.LinodeProbe = func(string) (int, error) { return 401, nil } // invalid
 	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
-	reqs := []configreadiness.Requirement{
+	reqs := []envreq.Requirement{
 		{Name: "LINODE_API_TOKEN", Secret: true, Required: true},
 		{Name: "APL_VALUES_REPO_TOKEN", Secret: true, Required: true}, // no local value → skipped/GH-only
 		{Name: "TF_STATE_BUCKET", Secret: false},                      // not a probeable kind
@@ -25,7 +25,7 @@ func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	secrets := map[string]string{"LINODE_API_TOKEN": "dead-token"}
 	vars := map[string]string{}
 	// APL_VALUES_REPO_TOKEN is set on GitHub but has no local value.
-	inst := configreadiness.NewLiveState(nil, map[string]bool{"APL_VALUES_REPO_TOKEN": true}, nil, nil)
+	inst := envreq.NewLiveState(nil, map[string]bool{"APL_VALUES_REPO_TOKEN": true}, nil, nil)
 
 	validity, invalid := ProbeTokenValidities(reqs, secrets, vars, inst, "")
 	if invalid != 1 {

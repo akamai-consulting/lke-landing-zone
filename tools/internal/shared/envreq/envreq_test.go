@@ -1,4 +1,4 @@
-package configreadiness
+package envreq
 
 // The five tests here all drive this package's own state model — LoadEnvFiles,
 // E2ERequirements, GHSecretNames and ghVars. ghVars in particular returns an

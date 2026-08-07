@@ -8,7 +8,7 @@ package onboard
 //
 // It is idempotent: it first reads what's already configured (live repo +
 // .llz/*.env), prepopulates variable values, prints the readiness plan (the same
-// one `llz doctor` shows), and SKIPS anything already configreadiness.Satisfied.
+// one `llz doctor` shows), and SKIPS anything already envreq.Satisfied.
 //
 // Default (adopter) mode targets one instance repo. --admin (maintainer) mode
 // additionally wires the template repo's e2e harness and defaults to the example
@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/branchpolicy"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -64,17 +64,17 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	if err := os.MkdirAll(".llz", 0o700); err != nil {
 		return err
 	}
-	secrets, vars := configreadiness.LoadEnvFiles()
+	secrets, vars := envreq.LoadEnvFiles()
 
 	// Discover existing config (instance + template), pull variable VALUES into
 	// vars.env, then print the readiness plan (same as `llz doctor`).
-	reqs := configreadiness.E2ERequirements(admin)
-	instSt := configreadiness.FetchLiveState(instanceRepo, deployEnv)
-	var tmplSt configreadiness.LiveState
+	reqs := envreq.E2ERequirements(admin)
+	instSt := envreq.FetchLiveState(instanceRepo, deployEnv)
+	var tmplSt envreq.LiveState
 	if admin {
-		tmplSt = configreadiness.FetchLiveState(templateid.Repo(), "")
+		tmplSt = envreq.FetchLiveState(templateid.Repo(), "")
 	}
-	if n := configreadiness.PrepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
+	if n := envreq.PrepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
 	// PRESENCE isn't CORRECTNESS either, for the two variables llz derives rather
@@ -100,7 +100,7 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalidN := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if invalidN > 0 {
 		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
@@ -127,9 +127,9 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 		return err
 	}
 
-	// have(name) — already configreadiness.Satisfied (env file or live instance repo) → skip.
+	// have(name) — already envreq.Satisfied (env file or live instance repo) → skip.
 	have := func(name string, secret bool) bool {
-		return configreadiness.Satisfied(configreadiness.Requirement{Name: name, Secret: secret}, secrets, vars, instSt)
+		return envreq.Satisfied(envreq.Requirement{Name: name, Secret: secret}, secrets, vars, instSt)
 	}
 	in := bufio.NewScanner(os.Stdin)
 
@@ -254,7 +254,7 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	// Gated on actually having something to compute. computeCIImageVars makes up to
 	// five network requests and can print a warning about a fallback, and this
 	// command's headline property is that a re-run "SKIPS anything already
-	// configreadiness.Satisfied" — so doing that work for two variables it is not going to touch
+	// envreq.Satisfied" — so doing that work for two variables it is not going to touch
 	// both slows the idempotent path and, worse, warns that TF_IMAGE/KUBE_IMAGE are
 	// unpinned when they are already set to something the operator chose.
 	needTF, needKube := !have("TF_IMAGE", false), !have("KUBE_IMAGE", false)
@@ -373,19 +373,19 @@ func DoctorE2E(repo, env string, admin bool) error {
 	if err := RequireInstanceRepo(instanceRepo); err != nil {
 		return err
 	}
-	secrets, vars := configreadiness.LoadEnvFiles()
-	reqs := configreadiness.E2ERequirements(admin)
-	instSt := configreadiness.FetchLiveState(instanceRepo, env)
-	var tmplSt configreadiness.LiveState
+	secrets, vars := envreq.LoadEnvFiles()
+	reqs := envreq.E2ERequirements(admin)
+	instSt := envreq.FetchLiveState(instanceRepo, env)
+	var tmplSt envreq.LiveState
 	if admin {
-		tmplSt = configreadiness.FetchLiveState(templateid.Repo(), "")
+		tmplSt = envreq.FetchLiveState(templateid.Repo(), "")
 	}
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
 	// Actively probe validity, not just presence — a set-but-dead token is the
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalid := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := configreadiness.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	// PRESENCE is not FRESHNESS. reportReadiness ticks TF_IMAGE/KUBE_IMAGE as set;
 	// `llz ci assert-image-fresh` — the first step of the apply's first job —
 	// additionally requires them to name THIS instance's pin. Same merged lookup
@@ -597,7 +597,7 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 // pushToRepo writes gathered secrets (infra-<env>) + variables (repo-level) into
 // instanceRepo. Skips variables whose value already matches the repo. Gated by
 // --yes; secret values pipe via stdin.
-func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st configreadiness.LiveState) error {
+func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st envreq.LiveState) error {
 	fmt.Printf("\n%s %s\n", color.Bold("Configure"), repo)
 	type item struct {
 		argv []string
@@ -612,7 +612,7 @@ func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st co
 	// env-scoped default.
 	for _, k := range SortedKeys(secrets) {
 		argv := []string{"gh", "secret", "set", k, "--repo", repo}
-		if configreadiness.SecretIsEnvScoped(k) {
+		if envreq.SecretIsEnvScoped(k) {
 			argv = append(argv, "--env", "infra-"+env)
 		}
 		items = append(items, item{argv, secrets[k]})
@@ -675,7 +675,7 @@ func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st co
 
 // configureTemplateHarness sets the template repo's e2e vars + E2E_DISPATCH_TOKEN
 // (skipping anything already set).
-func configureTemplateHarness(o Opts, in *bufio.Scanner, instanceRepo, clusterID string, st configreadiness.LiveState) error {
+func configureTemplateHarness(o Opts, in *bufio.Scanner, instanceRepo, clusterID string, st envreq.LiveState) error {
 	tr := templateid.Repo()
 	fmt.Printf("\n%s e2e harness on %s\n", color.Bold("[admin]"), tr)
 	want := map[string]string{

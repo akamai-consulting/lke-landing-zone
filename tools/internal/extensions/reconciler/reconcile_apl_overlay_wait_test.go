@@ -121,13 +121,13 @@ func TestWaitForAplOverlayPreconditionAlreadyMetReturnsWithoutKicking(t *testing
 	kicked := false
 	waitForAplOverlayPreconditionThenKick(context.Background(), func() { kicked = true })
 	if kicked {
-		t.Error("kicked on an already-configreadiness.Satisfied precondition — a redundant pass on every pod start")
+		t.Error("kicked on an already-envreq.Satisfied precondition — a redundant pass on every pod start")
 	}
 }
 
 // The precondition is a scheduling hint, not a health check: OpenBao is genuinely
 // unreachable early (the reconciler starts at wave 0, before it), and that must read
-// as "not yet", never as configreadiness.Satisfied.
+// as "not yet", never as envreq.Satisfied.
 func TestAplOverlayPreconditionUnmetCases(t *testing.T) {
 	t.Run("openbao unreachable", func(t *testing.T) {
 		setAplOverlayEnv(t)
@@ -256,12 +256,12 @@ func TestBuildReconcilersAplOverlayCarriesPreconditionWatch(t *testing.T) {
 
 // The watch HOLDS after kicking. The manager reads a returning watch as a dropped
 // stream and re-establishes it after watchReconnectBackoff, so returning once
-// configreadiness.Satisfied would hot-loop the lane at the reconnect cadence for the pod's life.
+// envreq.Satisfied would hot-loop the lane at the reconnect cadence for the pod's life.
 func TestWatchAplOverlayPreconditionHoldsUntilContextDone(t *testing.T) {
 	setAplOverlayEnv(t)
 	withFastPreconditionPoll(t)
 	seeded := withObjCredSeams(t, nil)
-	seeded.Store(true) // configreadiness.Satisfied up front → the waiter returns at once
+	seeded.Store(true) // envreq.Satisfied up front → the waiter returns at once
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
