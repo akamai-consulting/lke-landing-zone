@@ -187,7 +187,7 @@ of at e2e time.
    `ci_assert_openbao_audit.go` are the models.
 2. **Unit-test it** — the pure evaluator, the fail-closed arms (empty, malformed,
    unreachable), and the static half of the contract.
-3. **Add the lane** to `assertSuiteLanes` in `tools/cmd/llz/ci_assert_suite.go`.
+3. **Add the lane** to `assertSuiteLanes` in `tools/internal/assertsuite/suite.go`.
    It is ONE list — a lane there is both run and collected — and every field is
    load-bearing:
    - `Steps` run in order and short-circuit at the first failure. Order them only

@@ -90,7 +90,7 @@ func ciUpgradeTestCmd() *cobra.Command {
 	f.StringVar(&from, "from", "", "release tag to scaffold at (default: the highest vX.Y.Z tag that is not the commit under test)")
 	f.StringVar(&to, "to", "", "ref to upgrade to (default: HEAD)")
 	f.StringVar(&template, "template", "", "template repo path (default: this checkout's root)")
-	f.StringVar(&dir, "dir", ".upgrade-test", "build directory (gitignored)")
+	f.StringVar(&dir, "dir", ".Upgrade-test", "build directory (gitignored)")
 	f.BoolVar(&keep, "keep", false, "leave the built instance in place for inspection")
 	return c
 }

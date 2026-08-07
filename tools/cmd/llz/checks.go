@@ -15,6 +15,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
@@ -309,7 +310,7 @@ func conflictMarkerLines(content string) []int {
 // Skips cleanly when there is no .template-manifest / no lock — a template-repo
 // checkout or a pre-lock instance has nothing to verify.
 func stepVendoredFresh(_ globalOpts) error {
-	if _, err := loadTemplateManifest(""); err != nil {
+	if _, err := templatemanifest.Load(""); err != nil {
 		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
 		return nil
 	}

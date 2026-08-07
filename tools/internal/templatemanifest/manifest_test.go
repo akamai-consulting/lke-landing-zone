@@ -1,4 +1,4 @@
-package main
+package templatemanifest
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ func TestTemplateManifestCheckClassifyAndList(t *testing.T) {
 	writeTestFile(t, filepath.Join(scaffold, ".terraform"), "ignored.tf", "ignored\n")
 
 	var out, errOut bytes.Buffer
-	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+	if err := Run(scaffold, "", "", &out, &errOut); err != nil {
 		t.Fatalf("check failed: %v\nstderr: %s", err, errOut.String())
 	}
 	for _, want := range []string{"managed=2", "merge=1", "owned=1", "4 files"} {
@@ -32,7 +32,7 @@ func TestTemplateManifestCheckClassifyAndList(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if err := runTemplateManifest(scaffold, "docs/local.md", "", &out, &errOut); err != nil {
+	if err := Run(scaffold, "docs/local.md", "", &out, &errOut); err != nil {
 		t.Fatalf("classify failed: %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "owned" {
@@ -40,7 +40,7 @@ func TestTemplateManifestCheckClassifyAndList(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runTemplateManifest(scaffold, "", "merge", &out, &errOut); err != nil {
+	if err := Run(scaffold, "", "merge", &out, &errOut); err != nil {
 		t.Fatalf("list failed: %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "docs/guide.md" {
@@ -55,7 +55,7 @@ func TestTemplateManifestReportsUnclassifiedFiles(t *testing.T) {
 	writeTestFile(t, root, "values.yaml", "x\n")
 
 	var out, errOut bytes.Buffer
-	err := runTemplateManifest(root, "", "", &out, &errOut)
+	err := Run(root, "", "", &out, &errOut)
 	if err == nil {
 		t.Fatal("expected unclassified-file error")
 	}
@@ -67,7 +67,7 @@ func TestTemplateManifestReportsUnclassifiedFiles(t *testing.T) {
 }
 
 func TestTemplateManifestCommandWiring(t *testing.T) {
-	c := ciTemplateManifestCmd()
+	c := Cmd()
 	for _, flag := range []string{"root", "classify", "list"} {
 		if c.Flags().Lookup(flag) == nil {
 			t.Fatalf("missing --%s flag", flag)
@@ -93,7 +93,7 @@ func TestTemplateManifestCopierConsistency(t *testing.T) {
 	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_skip_if_exists: []\n_exclude: []\n")
 
 	var out, errOut bytes.Buffer
-	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err == nil {
+	if err := Run(scaffold, "", "", &out, &errOut); err == nil {
 		t.Fatalf("expected failure: keep.txt is owned but unprotected by copier\nstdout: %s", out.String())
 	}
 	if !strings.Contains(errOut.String(), "keep.txt") {
@@ -107,7 +107,7 @@ func TestTemplateManifestCopierConsistency(t *testing.T) {
 	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_skip_if_exists:\n  - \"keep.txt\"\n")
 	out.Reset()
 	errOut.Reset()
-	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+	if err := Run(scaffold, "", "", &out, &errOut); err != nil {
 		t.Fatalf("should pass once keep.txt is protected: %v\nstderr: %s", err, errOut.String())
 	}
 
@@ -115,7 +115,7 @@ func TestTemplateManifestCopierConsistency(t *testing.T) {
 	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_exclude:\n  - \"keep.txt\"\n")
 	out.Reset()
 	errOut.Reset()
-	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+	if err := Run(scaffold, "", "", &out, &errOut); err != nil {
 		t.Fatalf("_exclude should also satisfy the check: %v\nstderr: %s", err, errOut.String())
 	}
 }
@@ -139,20 +139,20 @@ func TestTemplateClassTableInvariants(t *testing.T) {
 		if c.summary == "" {
 			t.Errorf("class %q has no summary — the manifest header documents each class", c.name)
 		}
-		switch c.upgrade {
-		case upgradeOverwrite, upgradeMerge, upgradeRestore:
+		switch c.Upgrade {
+		case UpgradeOverwrite, upgradeMerge, UpgradeRestore:
 		default:
-			t.Errorf("class %q has unknown upgrade action %q", c.name, c.upgrade)
+			t.Errorf("class %q has unknown upgrade action %q", c.name, c.Upgrade)
 		}
 		// The digest lock exists because an upgrade DISCARDS the instance's bytes.
 		// Locking a class the upgrade preserves would fail on every legitimate edit.
-		if c.digestLocked && c.upgrade != upgradeOverwrite {
+		if c.DigestLocked && c.Upgrade != UpgradeOverwrite {
 			t.Errorf("class %q is digestLocked but its upgrade action is %q — only overwritten classes may be locked",
-				c.name, c.upgrade)
+				c.name, c.Upgrade)
 		}
 		// Fencing copier off a file only makes sense when the instance owns it;
 		// a class the template overwrites has nothing to protect.
-		if c.copierFenced && c.upgrade == upgradeOverwrite {
+		if c.copierFenced && c.Upgrade == UpgradeOverwrite {
 			t.Errorf("class %q is copierFenced but overwritten on upgrade — the fence would be pointless", c.name)
 		}
 	}
@@ -185,7 +185,7 @@ func TestCopierFencingIsDrivenByTheTable(t *testing.T) {
 		writeTestFile(t, root, "copier.yml", "_skip_if_exists: []\n_exclude: []\n")
 
 		var out, errOut bytes.Buffer
-		if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err == nil {
+		if err := Run(scaffold, "", "", &out, &errOut); err == nil {
 			t.Errorf("class %q is copierFenced but an unprotected file passed the check\nstdout: %s",
 				class, out.String())
 		}
@@ -227,7 +227,7 @@ func TestCopierFencingReverseRejectsFencingAnUnownedFile(t *testing.T) {
 		t.Run(class, func(t *testing.T) {
 			scaffold, out, errOut := reverseFixture(t, class,
 				"_skip_if_exists:\n  - \"keep.txt\"\n_exclude: []\n")
-			err := runTemplateManifest(scaffold, "", "", out, errOut)
+			err := Run(scaffold, "", "", out, errOut)
 			if err == nil {
 				t.Fatalf("a %s file fenced by _skip_if_exists must fail\nstdout: %s", class, out.String())
 			}
@@ -241,7 +241,7 @@ func TestCopierFencingReverseRejectsFencingAnUnownedFile(t *testing.T) {
 func TestCopierFencingReverseAcceptsAnOwnedFile(t *testing.T) {
 	scaffold, out, errOut := reverseFixture(t, "owned",
 		"_skip_if_exists:\n  - \"keep.txt\"\n_exclude: []\n")
-	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+	if err := Run(scaffold, "", "", out, errOut); err != nil {
 		t.Fatalf("an owned file fenced by _skip_if_exists is the correct pairing: %v\nstderr: %s", err, errOut.String())
 	}
 }
@@ -251,7 +251,7 @@ func TestCopierFencingReverseAcceptsAnOwnedFile(t *testing.T) {
 func TestCopierFencingReverseIgnoresExclude(t *testing.T) {
 	scaffold, out, errOut := reverseFixture(t, "managed",
 		"_skip_if_exists: []\n_exclude:\n  - \"keep.txt\"\n")
-	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+	if err := Run(scaffold, "", "", out, errOut); err != nil {
 		t.Fatalf("_exclude must not be treated as an ownership claim: %v\nstderr: %s", err, errOut.String())
 	}
 }
@@ -261,7 +261,7 @@ func TestCopierFencingReverseIgnoresExclude(t *testing.T) {
 func TestCopierFencingReverseNotesUnmatchedRuleWithoutFailing(t *testing.T) {
 	scaffold, out, errOut := reverseFixture(t, "owned",
 		"_skip_if_exists:\n  - \"keep.txt\"\n  - \"never/shipped.txt\"\n_exclude: []\n")
-	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+	if err := Run(scaffold, "", "", out, errOut); err != nil {
 		t.Fatalf("an unmatched fence rule must not fail the gate: %v", err)
 	}
 	if !strings.Contains(errOut.String(), "never/shipped.txt") {

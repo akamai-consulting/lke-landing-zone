@@ -1,8 +1,8 @@
-package main
+package assertsuite
 
 // objenc_lane_test.go — the obj-encryption gate must be WIRED IN.
 //
-// THIS COUPLING TEST STAYS ON THIS SIDE because assertSuiteLanes does: the catalog
+// THIS COUPLING TEST STAYS ON THIS SIDE because Lanes does: the catalog
 // names ci_assert_suite.go as the core-owned required-assertion set, and ADR 0014's
 // corollary keeps it there. The gate itself moved to internal/objenc; the claim
 // that anything runs it is a fact about the battery.
@@ -19,15 +19,15 @@ import (
 // without which the CA-chain check silently does not run. The lane list is the one
 // place a new gate can be declared and never actually run.
 func TestObjEncryptionLaneIsRegisteredAndGating(t *testing.T) {
-	lanes := assertSuiteLanes("e2e")
-	var found *suiteLane
+	lanes := Lanes("e2e")
+	var found *Lane
 	for i := range lanes {
 		if lanes[i].Name == "obj-encryption" {
 			found = &lanes[i]
 		}
 	}
 	if found == nil {
-		t.Fatal("obj-encryption is not in assertSuiteLanes — nothing would ever run the gate")
+		t.Fatal("obj-encryption is not in Lanes — nothing would ever run the gate")
 	}
 	if !found.Gating {
 		t.Error("the lane must GATE: a report-only encryption check is a check nobody acts on")

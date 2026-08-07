@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
@@ -67,6 +68,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
@@ -102,6 +104,8 @@ var declarations = []func() extension.Extension{
 	harbor.Extension,
 	identityconfig.Extension,
 	reconciler.Extension,
+	assertsuite.Extension,
+	templatemanifest.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

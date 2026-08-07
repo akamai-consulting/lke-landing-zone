@@ -1,4 +1,4 @@
-package main
+package assertsuite
 
 // ci_assert_suite.go implements `llz ci assert-suite` — the e2e assert battery
 // itself, moved out of YAML.
@@ -52,8 +52,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// suiteLane is one parallel lane of the battery.
-type suiteLane struct {
+// Lane is one parallel lane of the battery.
+type Lane struct {
 	Name string
 	// Steps run IN ORDER inside the lane, stopping at the first failure. One step
 	// is one `llz ci …` invocation, given as its argv after "ci".
@@ -70,19 +70,19 @@ type suiteLane struct {
 	Why string
 }
 
-// assertSuiteLanes is the battery. ONE list — a lane here is both run and
+// Lanes is the battery. ONE list — a lane here is both run and
 // collected, so the "declared but never checked" hazard is structurally gone.
 //
 // region is threaded in rather than read from the environment at each call site
 // so the table stays a pure value the tests can build.
-func assertSuiteLanes(region string) []suiteLane {
+func Lanes(region string) []Lane {
 	regionArg := func(verb string) []string {
 		if region == "" {
 			return []string{verb}
 		}
 		return []string{verb, "--region", region}
 	}
-	return []suiteLane{
+	return []Lane{
 		{
 			Name: "loki", Gating: true,
 			// --region because the write PROOF has to resolve this deployment's chunks
@@ -205,7 +205,7 @@ func assertSuiteLanes(region string) []suiteLane {
 
 // laneResult is one lane's captured outcome.
 type laneResult struct {
-	Lane     suiteLane
+	Lane     Lane
 	ExitCode int
 	Output   string
 	Duration time.Duration
@@ -235,7 +235,7 @@ var runLaneFn = func(args []string) (string, int) {
 }
 
 // runLane executes a lane's steps in order, stopping at the first failure.
-func runLane(l suiteLane, now func() time.Time) laneResult {
+func runLane(l Lane, now func() time.Time) laneResult {
 	start := now()
 	res := laneResult{Lane: l}
 	var out strings.Builder
@@ -257,12 +257,12 @@ func runLane(l suiteLane, now func() time.Time) laneResult {
 
 // runAssertSuiteLanes runs every lane concurrently and returns results in the
 // lane table's order (deterministic output regardless of completion order).
-func runAssertSuiteLanes(lanes []suiteLane, now func() time.Time) []laneResult {
+func runAssertSuiteLanes(lanes []Lane, now func() time.Time) []laneResult {
 	results := make([]laneResult, len(lanes))
 	var wg sync.WaitGroup
 	for i, l := range lanes {
 		wg.Add(1)
-		go func(i int, l suiteLane) {
+		go func(i int, l Lane) {
 			defer wg.Done()
 			results[i] = runLane(l, now)
 		}(i, l)
@@ -289,15 +289,15 @@ func failedLaneNames(rs []laneResult) []string {
 // An unknown name is an ERROR, not a silent skip: a typo would otherwise quietly
 // shrink the battery, which is precisely the failure this file removed from the
 // YAML.
-func selectLanes(all []suiteLane, only []string) ([]suiteLane, error) {
+func selectLanes(all []Lane, only []string) ([]Lane, error) {
 	if len(only) == 0 {
 		return all, nil
 	}
-	byName := map[string]suiteLane{}
+	byName := map[string]Lane{}
 	for _, l := range all {
 		byName[l.Name] = l
 	}
-	var out []suiteLane
+	var out []Lane
 	var unknown []string
 	for _, n := range only {
 		l, ok := byName[n]
@@ -314,7 +314,7 @@ func selectLanes(all []suiteLane, only []string) ([]suiteLane, error) {
 	return out, nil
 }
 
-func laneNames(ls []suiteLane) []string {
+func laneNames(ls []Lane) []string {
 	out := make([]string, 0, len(ls))
 	for _, l := range ls {
 		out = append(out, l.Name)
@@ -322,7 +322,7 @@ func laneNames(ls []suiteLane) []string {
 	return out
 }
 
-func ciAssertSuiteCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var region, only string
 	var list bool
 	c := &cobra.Command{
@@ -343,7 +343,7 @@ func ciAssertSuiteCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertSuite(region, cigate.SplitCSVList(only), list)
+			return Run(region, cigate.SplitCSVList(only), list)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment/region passed to the lanes that need it (defaults to $REGION)")
@@ -352,8 +352,8 @@ func ciAssertSuiteCmd() *cobra.Command {
 	return c
 }
 
-func runCIAssertSuite(region string, only []string, list bool) error {
-	lanes, err := selectLanes(assertSuiteLanes(region), only)
+func Run(region string, only []string, list bool) error {
+	lanes, err := selectLanes(Lanes(region), only)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::%v\n", err)
 		return err
@@ -405,7 +405,7 @@ func runCIAssertSuite(region string, only []string, list bool) error {
 	return nil
 }
 
-func countGating(ls []suiteLane) int {
+func countGating(ls []Lane) int {
 	n := 0
 	for _, l := range ls {
 		if l.Gating {

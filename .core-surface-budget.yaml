@@ -393,6 +393,15 @@ categories:
 #        argv builders, shell quoting, the gh host, the "gh is not installed"
 #        diagnostic. Quote has five callers in main that never execute anything.
 #        Took scaffold-instance from 25 outbound to 21. NOT ENOUGH: see below.
+#   57th: assert-suite + template-manifest   14,909 -> 14,237 (-672 / 115 files)
+#        BOTH MEASURED CLOSURE 2, BOTH NOISE. 442 + 446 lines that never needed
+#        anything from package main, sitting there the whole campaign while four
+#        iterations went into sets that were NOT separable. The measurement is
+#        cheap and the intuition is unreliable IN BOTH DIRECTIONS -- scaffold
+#        looked movable and is not; these looked like command plumbing and were
+#        the two cleanest boundaries left.
+#        assert-suite is the runner that runs the other extensions, and the only
+#        member of the catalog for which `verified` is the honest state.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -405,7 +414,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 14909
+    budget: 14237
     exact: true
     include:
       - "tools/cmd/llz/*.go"

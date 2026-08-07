@@ -1,4 +1,4 @@
-package main
+package templatemanifest
 
 // ci_template_manifest.go implements `llz ci template-manifest` — the native
 // port of template-scripts/check-template-manifest.sh. It keeps
@@ -21,22 +21,22 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pathglob"
 )
 
-// upgradeAction is what `llz upgrade` does to a file of a given class once
+// UpgradeAction is what `llz upgrade` does to a file of a given class once
 // `copier update` has run. It is the manifest's operational meaning: the class
 // name is the label, this is the behaviour.
-type upgradeAction string
+type UpgradeAction string
 
 const (
-	// upgradeOverwrite re-copies the file from a clean render of the target
+	// UpgradeOverwrite re-copies the file from a clean render of the target
 	// template version, discarding whatever the instance had.
-	upgradeOverwrite upgradeAction = "overwrite"
+	UpgradeOverwrite UpgradeAction = "overwrite"
 	// upgradeMerge leaves copier's own 3-way merge result in place.
-	upgradeMerge upgradeAction = "merge"
-	// upgradeRestore puts the instance's pre-update bytes back.
-	upgradeRestore upgradeAction = "restore"
+	upgradeMerge UpgradeAction = "merge"
+	// UpgradeRestore puts the instance's pre-update bytes back.
+	UpgradeRestore UpgradeAction = "restore"
 )
 
-// templateClass is the single definition of what an update class MEANS: what
+// Class is the single definition of what an update class MEANS: what
 // `llz upgrade` does to a file in it, whether `copier update` must be fenced off
 // it, and whether its bytes are recorded in the digest lock.
 //
@@ -47,37 +47,37 @@ const (
 // manifest the one ownership authority and the lock a projection of it rather
 // than a second, separately-scoped system. A NEW class is one row here, not a
 // fourth mechanism.
-type templateClass struct {
+type Class struct {
 	name    string
-	upgrade upgradeAction
+	Upgrade UpgradeAction
 	// copierFenced: the class carries instance-authored content, so `copier
 	// update` must not re-render + 3-way-merge it. Enforced against copier.yml's
 	// _skip_if_exists/_exclude by checkCopierFencing.
 	copierFenced bool
-	// digestLocked: the template owns the bytes outright and an upgrade
+	// DigestLocked: the template owns the bytes outright and an upgrade
 	// overwrites them, so a local edit is silently lost — record a digest and
 	// fail CI on drift instead. Only meaningful for token-free files (a copier
 	// token makes the rendered bytes per-instance); see writeManagedLock.
-	digestLocked bool
+	DigestLocked bool
 	summary      string
 }
 
-var templateClasses = []templateClass{
-	{name: "managed", upgrade: upgradeOverwrite, digestLocked: true,
+var templateClasses = []Class{
+	{name: "managed", Upgrade: UpgradeOverwrite, DigestLocked: true,
 		summary: "template owns it outright — an upgrade overwrites it"},
-	{name: "merge", upgrade: upgradeMerge,
+	{name: "merge", Upgrade: upgradeMerge,
 		summary: "template owns the logic, the file carries fork-local tokens — 3-way-merged"},
-	{name: "owned", upgrade: upgradeRestore, copierFenced: true,
+	{name: "owned", Upgrade: UpgradeRestore, copierFenced: true,
 		summary: "the instance owns it — an upgrade never touches it"},
 }
 
-func lookupTemplateClass(name string) (templateClass, bool) {
+func LookupClass(name string) (Class, bool) {
 	for _, c := range templateClasses {
 		if c.name == name {
 			return c, true
 		}
 	}
-	return templateClass{}, false
+	return Class{}, false
 }
 
 // templateClassNames renders the class set for help and error text, so adding a
@@ -95,13 +95,13 @@ type templateManifestRule struct {
 	pattern string
 }
 
-type templateManifest struct {
-	root  string
+type Manifest struct {
+	Root  string
 	path  string
 	rules []templateManifestRule
 }
 
-func ciTemplateManifestCmd() *cobra.Command {
+func Cmd() *cobra.Command {
 	var root, classifyPath, listClass string
 	c := &cobra.Command{
 		Use:   "template-manifest",
@@ -112,7 +112,7 @@ func ciTemplateManifestCmd() *cobra.Command {
 			"template repo, else .template-manifest in the current directory.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runTemplateManifest(root, classifyPath, listClass, os.Stdout, os.Stderr)
+			return Run(root, classifyPath, listClass, os.Stdout, os.Stderr)
 		},
 	}
 	c.Flags().StringVar(&root, "root", "", "scaffold root containing .template-manifest (default: auto-detect instance-template/ or .)")
@@ -121,17 +121,17 @@ func ciTemplateManifestCmd() *cobra.Command {
 	return c
 }
 
-func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Writer) error {
+func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
 	if classifyPath != "" && listClass != "" {
 		return fmt.Errorf("template-manifest: use only one of --classify or --list")
 	}
-	m, err := loadTemplateManifest(root)
+	m, err := Load(root)
 	if err != nil {
 		return err
 	}
 
 	if classifyPath != "" {
-		cls := m.classify(classifyPath)
+		cls := m.Classify(classifyPath)
 		if cls == "" {
 			fmt.Fprintf(errOut, "%s: UNCLASSIFIED\n", classifyPath)
 			return fmt.Errorf("template-manifest: %s is unclassified", classifyPath)
@@ -140,7 +140,7 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 		return nil
 	}
 
-	files, err := scaffoldManifestFiles(m.root)
+	files, err := ScaffoldFiles(m.Root)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 			return fmt.Errorf("template-manifest: unknown class %q (%s)", listClass, templateClassNames())
 		}
 		for _, rel := range files {
-			if m.classify(rel) == listClass {
+			if m.Classify(rel) == listClass {
 				fmt.Fprintln(out, rel)
 			}
 		}
@@ -163,7 +163,7 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 	}
 	var unclassified []string
 	for _, rel := range files {
-		cls := m.classify(rel)
+		cls := m.Classify(rel)
 		if cls == "" {
 			unclassified = append(unclassified, rel)
 			continue
@@ -214,10 +214,10 @@ type copierProtect struct {
 // Only runs when copier.yml is found next to the scaffold root (the template
 // repo); in an instance (no copier.yml) it is a no-op, since there is nothing to
 // keep consistent there.
-func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) error {
-	copierPath := filepath.Join(filepath.Dir(m.root), "copier.yml")
+func (m Manifest) checkCopierFencing(files []string, errOut io.Writer) error {
+	copierPath := filepath.Join(filepath.Dir(m.Root), "copier.yml")
 	if !fileExists(copierPath) {
-		if alt := filepath.Join(filepath.Dir(m.root), "copier.yaml"); fileExists(alt) {
+		if alt := filepath.Join(filepath.Dir(m.Root), "copier.yaml"); fileExists(alt) {
 			copierPath = alt
 		} else {
 			return nil // instance context (or no copier config) — nothing to check
@@ -235,7 +235,7 @@ func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) e
 
 	var viol []string
 	for _, rel := range files {
-		c, ok := lookupTemplateClass(m.classify(rel))
+		c, ok := LookupClass(m.Classify(rel))
 		if !ok || !c.copierFenced {
 			continue
 		}
@@ -292,7 +292,7 @@ func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) e
 // the extension lock. Two fences can disagree. Making the containment
 // bidirectional means a fenced path that the manifest does not know about cannot
 // pass silently.
-func (m templateManifest) checkCopierFencingReverse(files []string, p copierProtect, copierPath string, errOut io.Writer) error {
+func (m Manifest) checkCopierFencingReverse(files []string, p copierProtect, copierPath string, errOut io.Writer) error {
 	var mislabelled []string
 	for _, rel := range files {
 		if p.AnswersFile != "" && rel == p.AnswersFile {
@@ -301,7 +301,7 @@ func (m templateManifest) checkCopierFencingReverse(files []string, p copierProt
 		if !pathglob.MatchAny(p.SkipIfExists, rel) {
 			continue
 		}
-		if c, ok := lookupTemplateClass(m.classify(rel)); ok && c.copierFenced {
+		if c, ok := LookupClass(m.Classify(rel)); ok && c.copierFenced {
 			continue
 		}
 		mislabelled = append(mislabelled, rel)
@@ -310,7 +310,7 @@ func (m templateManifest) checkCopierFencingReverse(files []string, p copierProt
 		fmt.Fprintf(errOut, "::error::%d scaffold file(s) are fenced by copier's _skip_if_exists in %s "+
 			"but are not a copier-fenced class in %s:\n", len(mislabelled), copierPath, m.path)
 		for _, rel := range mislabelled {
-			fmt.Fprintf(errOut, "  - %s (class %q)\n", rel, m.classify(rel))
+			fmt.Fprintf(errOut, "  - %s (class %q)\n", rel, m.Classify(rel))
 		}
 		fmt.Fprintf(errOut, "Copier will never update these, but %s says the template owns them — so they\n"+
 			"are pinned at whatever the instance first rendered and no upgrade reaches them.\n"+
@@ -349,7 +349,7 @@ func fencedClassNames() string {
 	return strings.Join(names, "|")
 }
 
-func loadTemplateManifest(root string) (templateManifest, error) {
+func Load(root string) (Manifest, error) {
 	if root == "" {
 		switch {
 		case fileExists(filepath.FromSlash("instance-template/.template-manifest")):
@@ -357,7 +357,7 @@ func loadTemplateManifest(root string) (templateManifest, error) {
 		case fileExists(".template-manifest"):
 			root = "."
 		default:
-			return templateManifest{}, fmt.Errorf("template-manifest: .template-manifest not found (looked in instance-template/ and .)")
+			return Manifest{}, fmt.Errorf("template-manifest: .template-manifest not found (looked in instance-template/ and .)")
 		}
 	}
 	root = filepath.Clean(root)
@@ -368,11 +368,11 @@ func loadTemplateManifest(root string) (templateManifest, error) {
 
 	f, err := os.Open(manifestPath)
 	if err != nil {
-		return templateManifest{}, fmt.Errorf("template-manifest: read %s: %w", manifestPath, err)
+		return Manifest{}, fmt.Errorf("template-manifest: read %s: %w", manifestPath, err)
 	}
 	defer f.Close()
 
-	m := templateManifest{root: root, path: filepath.ToSlash(manifestPath)}
+	m := Manifest{Root: root, path: filepath.ToSlash(manifestPath)}
 	s := bufio.NewScanner(f)
 	lineNo := 0
 	for s.Scan() {
@@ -383,20 +383,20 @@ func loadTemplateManifest(root string) (templateManifest, error) {
 		}
 		parts := strings.Fields(line)
 		if len(parts) != 2 || !validTemplateClass(parts[0]) {
-			return templateManifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<%s>  <glob>`): %q", m.path, lineNo, templateClassNames(), line)
+			return Manifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<%s>  <glob>`): %q", m.path, lineNo, templateClassNames(), line)
 		}
 		m.rules = append(m.rules, templateManifestRule{class: parts[0], pattern: parts[1]})
 	}
 	if err := s.Err(); err != nil {
-		return templateManifest{}, fmt.Errorf("template-manifest: read %s: %w", m.path, err)
+		return Manifest{}, fmt.Errorf("template-manifest: read %s: %w", m.path, err)
 	}
 	if len(m.rules) == 0 {
-		return templateManifest{}, fmt.Errorf("template-manifest: %s defines no rules", m.path)
+		return Manifest{}, fmt.Errorf("template-manifest: %s defines no rules", m.path)
 	}
 	return m, nil
 }
 
-func (m templateManifest) classify(rel string) string {
+func (m Manifest) Classify(rel string) string {
 	rel = filepath.ToSlash(filepath.Clean(rel))
 	rel = strings.TrimPrefix(rel, "./")
 	var hit string
@@ -408,7 +408,7 @@ func (m templateManifest) classify(rel string) string {
 	return hit
 }
 
-func scaffoldManifestFiles(root string) ([]string, error) {
+func ScaffoldFiles(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -436,7 +436,7 @@ func scaffoldManifestFiles(root string) ([]string, error) {
 }
 
 func validTemplateClass(s string) bool {
-	_, ok := lookupTemplateClass(s)
+	_, ok := LookupClass(s)
 	return ok
 }
 

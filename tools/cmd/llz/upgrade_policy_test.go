@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
 
 func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
@@ -17,7 +19,7 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	gitInitRepo(t, dir, ".template-manifest", "owned.txt", ".copier-answers.yml", "managed.txt")
 	chdir(t, dir)
 
-	m, err := loadTemplateManifest(".")
+	m, err := templatemanifest.Load(".")
 	if err != nil {
 		t.Fatal(err)
 	}

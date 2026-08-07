@@ -14,6 +14,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
@@ -702,7 +703,7 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	//
 	// Degrade gracefully: a pre-manifest instance (or one whose manifest failed to
 	// parse) still upgrades exactly as it did before, just without class enforcement.
-	policy, policyErr := loadTemplateManifest("")
+	policy, policyErr := templatemanifest.Load("")
 	var owned upgradeSnapshot
 	if policyErr != nil {
 		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", color.Yellow("!"), policyErr)

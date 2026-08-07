@@ -1,4 +1,4 @@
-package main
+package templatemanifest
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ func TestLoadTemplateManifestLocatesTheBadRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := loadTemplateManifest(root)
+	_, err := Load(root)
 	if err == nil {
 		t.Fatal("a one-field rule must be rejected")
 	}
@@ -50,7 +50,7 @@ func TestReverseFencingExemptsTheCopierAnswersFile(t *testing.T) {
 		"_answers_file: .copier-answers.yml\n_skip_if_exists:\n  - \".copier-answers.yml\"\n_exclude: []\n")
 
 	var out, errOut bytes.Buffer
-	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+	if err := Run(scaffold, "", "", &out, &errOut); err != nil {
 		t.Fatalf("the answers tracker is copier's own file, not an ownership claim: %v\nstderr: %s",
 			err, errOut.String())
 	}

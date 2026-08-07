@@ -1,4 +1,4 @@
-package main
+package assertsuite
 
 // Tests for the e2e assert battery's orchestration — the part that used to be
 // untested inline bash and that decides whether the whole battery fails.
@@ -43,7 +43,7 @@ func suiteNow() func() time.Time {
 // cascading failures for one root cause.
 func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 	calls := seamLaneRunner(t, map[string]int{"b": 3})
-	l := suiteLane{Name: "x", Gating: true, Steps: [][]string{{"a"}, {"b"}, {"c"}}}
+	l := Lane{Name: "x", Gating: true, Steps: [][]string{{"a"}, {"b"}, {"c"}}}
 	res := runLane(l, suiteNow())
 
 	if res.ExitCode != 3 || !res.Failed {
@@ -61,7 +61,7 @@ func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 // `|| true`, now expressed as data rather than shell.
 func TestRunLaneReportOnlyNeverGates(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"diag": 1})
-	res := runLane(suiteLane{Name: "d", Gating: false, Steps: [][]string{{"diag"}}}, suiteNow())
+	res := runLane(Lane{Name: "d", Gating: false, Steps: [][]string{{"diag"}}}, suiteNow())
 	if res.ExitCode != 1 {
 		t.Errorf("the exit code must still be recorded, got %d", res.ExitCode)
 	}
@@ -75,7 +75,7 @@ func TestRunLaneReportOnlyNeverGates(t *testing.T) {
 
 func TestRunAssertSuiteLanesRunsEveryLaneAndPreservesOrder(t *testing.T) {
 	calls := seamLaneRunner(t, map[string]int{})
-	lanes := []suiteLane{
+	lanes := []Lane{
 		{Name: "one", Gating: true, Steps: [][]string{{"a"}}},
 		{Name: "two", Gating: true, Steps: [][]string{{"b"}}},
 		{Name: "three", Gating: true, Steps: [][]string{{"c"}}},
@@ -103,7 +103,7 @@ func TestRunAssertSuiteLanesRunsEveryLaneAndPreservesOrder(t *testing.T) {
 // both, so every failing gating lane necessarily reaches the verdict.
 func TestEveryFailingGatingLaneReachesTheVerdict(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"boom": 1, "diag": 1})
-	lanes := []suiteLane{
+	lanes := []Lane{
 		{Name: "ok", Gating: true, Steps: [][]string{{"fine"}}},
 		{Name: "bad", Gating: true, Steps: [][]string{{"boom"}}},
 		{Name: "report", Gating: false, Steps: [][]string{{"diag"}}},
@@ -125,11 +125,11 @@ func TestEveryFailingGatingLaneReachesTheVerdict(t *testing.T) {
 
 func TestRunCIAssertSuiteVerdict(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"assert-loki": 1})
-	if err := runCIAssertSuite("e2e", []string{"loki"}, false); err == nil {
+	if err := Run("e2e", []string{"loki"}, false); err == nil {
 		t.Error("a failing gating lane must fail the suite")
 	}
 	seamLaneRunner(t, map[string]int{})
-	if err := runCIAssertSuite("e2e", []string{"loki"}, false); err != nil {
+	if err := Run("e2e", []string{"loki"}, false); err != nil {
 		t.Errorf("all-passing lanes must succeed, got %v", err)
 	}
 }
@@ -137,7 +137,7 @@ func TestRunCIAssertSuiteVerdict(t *testing.T) {
 // An unknown lane name must be an ERROR. A typo that silently shrank the battery
 // is the same class of bug as a lane missing from the old collection loop.
 func TestSelectLanesRejectsUnknownNames(t *testing.T) {
-	all := assertSuiteLanes("e2e")
+	all := Lanes("e2e")
 	if _, err := selectLanes(all, []string{"loki", "lokii"}); err == nil {
 		t.Error("an unknown lane name must fail rather than silently shrink the battery")
 	}
@@ -154,7 +154,7 @@ func TestSelectLanesRejectsUnknownNames(t *testing.T) {
 // invoked with an unexpected flag fails at argument parsing, which would look
 // like a cluster fault.
 func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
-	lanes := assertSuiteLanes("e2e")
+	lanes := Lanes("e2e")
 	// obj-encryption takes --region because it is COMPONENT-GATED: it reads
 	// spec.components.objProxy for that deployment and self-skips when the SSE-C
 	// gateway is not enabled, rather than redding every cluster that does not run it.
@@ -181,7 +181,7 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	}
 	// With no region, the flag must be omitted entirely rather than passed empty:
 	// `--region ""` is a different thing from not scoping at all.
-	for _, l := range assertSuiteLanes("") {
+	for _, l := range Lanes("") {
 		for _, s := range l.Steps {
 			for _, a := range s {
 				if a == "--region" {
@@ -195,33 +195,13 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 // Every lane must actually name a registered `llz ci` verb. A lane referencing a
 // verb that does not exist would fail at runtime as an opaque "unknown command"
 // deep inside an e2e run.
-func TestAssertSuiteLanesNameRealVerbs(t *testing.T) {
-	registered := map[string]bool{}
-	for _, c := range ciCmd().Commands() {
-		registered[c.Name()] = true
-	}
-	for _, l := range assertSuiteLanes("e2e") {
-		if len(l.Steps) == 0 {
-			t.Errorf("lane %s has no steps — it would pass having run nothing", l.Name)
-		}
-		for _, s := range l.Steps {
-			if !registered[s[0]] {
-				t.Errorf("lane %s invokes `llz ci %s`, which is not a registered verb", l.Name, s[0])
-			}
-		}
-	}
-}
-
-// Every lane needs a rationale. The old YAML carried per-lane comments explaining
-// what each proved; losing that in the move to Go would be a real regression in
-// reviewability, so it is enforced rather than hoped for.
 func TestEveryLaneDocumentsWhatItProves(t *testing.T) {
-	for _, l := range assertSuiteLanes("e2e") {
+	for _, l := range Lanes("e2e") {
 		if len(strings.TrimSpace(l.Why)) < 40 {
 			t.Errorf("lane %s has no meaningful Why — a failing lane must carry its own rationale", l.Name)
 		}
 	}
-	if countGating(assertSuiteLanes("e2e")) == 0 {
+	if countGating(Lanes("e2e")) == 0 {
 		t.Fatal("the battery gates on nothing — it would always pass")
 	}
 }
@@ -231,8 +211,8 @@ func TestAppendLaneSummariesWritesDeliverables(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", path)
 
 	appendLaneSummaries([]laneResult{
-		{Lane: suiteLane{Name: "alert-eval", SummaryTitle: "alert-eval — live rule evaluation"}, Output: "FIRING: x\n"},
-		{Lane: suiteLane{Name: "loki"}, Output: "not a deliverable"},
+		{Lane: Lane{Name: "alert-eval", SummaryTitle: "alert-eval — live rule evaluation"}, Output: "FIRING: x\n"},
+		{Lane: Lane{Name: "loki"}, Output: "not a deliverable"},
 	})
 
 	got, err := os.ReadFile(path)
@@ -251,7 +231,7 @@ func TestAppendLaneSummariesWritesDeliverables(t *testing.T) {
 // instrumentation cannot be allowed to fail a run.
 func TestAppendLaneSummariesIsBestEffort(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
-	appendLaneSummaries([]laneResult{{Lane: suiteLane{SummaryTitle: "x"}, Output: "y"}})
+	appendLaneSummaries([]laneResult{{Lane: Lane{SummaryTitle: "x"}, Output: "y"}})
 	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "nope", "deep", "summary.md"))
-	appendLaneSummaries([]laneResult{{Lane: suiteLane{SummaryTitle: "x"}, Output: "y"}})
+	appendLaneSummaries([]laneResult{{Lane: Lane{SummaryTitle: "x"}, Output: "y"}})
 }

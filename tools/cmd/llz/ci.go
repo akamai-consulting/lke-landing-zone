@@ -26,12 +26,14 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
@@ -333,7 +335,7 @@ func ciCmd() *cobra.Command {
 	// rotate-db-admin resets the password in place with no overlap window, so the
 	// failure is a live endpoint that rejects the credential every consumer holds.
 	c.AddCommand(ciAssertDatabaseCmd())
-	c.AddCommand(ciAssertSuiteCmd())
+	c.AddCommand(assertsuite.Cmd())
 	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
 	// out of Loki. The metrics path has assert-scrape-targets; the log path had
 	// nothing, and shipped to a Service that never existed for its entire life —
@@ -415,7 +417,7 @@ func ciCmd() *cobra.Command {
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(ciCheckWorkflowShellsCmd())
 	// Scaffold update-class manifest gate (former template-scripts/check-template-manifest.sh).
-	c.AddCommand(ciTemplateManifestCmd())
+	c.AddCommand(templatemanifest.Cmd())
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
 	c.AddCommand(ciManagedFreshCmd())

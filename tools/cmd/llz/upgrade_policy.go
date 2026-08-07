@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
 
 const copierAnswersPath = ".copier-answers.yml"
@@ -21,7 +22,7 @@ type upgradeSnapshot struct {
 	files map[string]os.FileMode
 }
 
-func snapshotUpgradeOwned(m templateManifest) (upgradeSnapshot, error) {
+func snapshotUpgradeOwned(m templatemanifest.Manifest) (upgradeSnapshot, error) {
 	files, err := upgradeWorktreeFiles()
 	if err != nil {
 		return upgradeSnapshot{}, err
@@ -29,7 +30,7 @@ func snapshotUpgradeOwned(m templateManifest) (upgradeSnapshot, error) {
 	s := upgradeSnapshot{files: map[string]os.FileMode{}}
 	for _, rel := range files {
 		rel = filepath.ToSlash(rel)
-		if !upgradeProtectsOwned(m.classify(rel), rel) {
+		if !upgradeProtectsOwned(m.Classify(rel), rel) {
 			continue
 		}
 		info, err := os.Stat(filepath.FromSlash(rel))
@@ -75,11 +76,11 @@ func (s upgradeSnapshot) restore() error {
 }
 
 // upgradeProtectsOwned reports whether a file must be snapshotted before copier
-// runs and put back after. The class table is the authority (upgradeRestore);
+// runs and put back after. The class table is the authority (templatemanifest.UpgradeRestore);
 // the answers tracker is copier's own bookkeeping and is never restored.
 func upgradeProtectsOwned(class, rel string) bool {
-	c, ok := lookupTemplateClass(class)
-	return ok && c.upgrade == upgradeRestore && rel != copierAnswersPath
+	c, ok := templatemanifest.LookupClass(class)
+	return ok && c.Upgrade == templatemanifest.UpgradeRestore && rel != copierAnswersPath
 }
 
 func upgradeWorktreeFiles() ([]string, error) {
@@ -218,18 +219,18 @@ func copierRenderArgv(a *answers, ref, dst string) []string {
 }
 
 func overwriteManagedFromScaffold(cleanRoot string) (int, error) {
-	m, err := loadTemplateManifest(cleanRoot)
+	m, err := templatemanifest.Load(cleanRoot)
 	if err != nil {
 		return 0, err
 	}
-	files, err := scaffoldManifestFiles(cleanRoot)
+	files, err := templatemanifest.ScaffoldFiles(cleanRoot)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
 	for _, rel := range files {
-		c, ok := lookupTemplateClass(m.classify(rel))
-		if !ok || c.upgrade != upgradeOverwrite {
+		c, ok := templatemanifest.LookupClass(m.Classify(rel))
+		if !ok || c.Upgrade != templatemanifest.UpgradeOverwrite {
 			continue
 		}
 		src := filepath.Join(cleanRoot, filepath.FromSlash(rel))
