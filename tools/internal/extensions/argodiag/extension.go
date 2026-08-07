@@ -41,6 +41,38 @@ package argodiag
 // it has to answer is already clear: does a diagnostic attach to a STATE at all,
 // or to the FAILURE of one? `write-repo` took four cases and three refusals to get
 // right, and the refusals are what made the eventual word well-shaped.
+//
+// ── THE ANSWER CAME BACK, AND IT IS NO. ────────────────────────────────────────
+//
+// Both predicted cases shipped, and between them they killed the fifth kind rather
+// than earning it.
+//
+//   - `phase-timing` (case two) attaches to NO state. It records the boundaries
+//     BETWEEN states; its subject is the RUN, not the platform. So it and this
+//     command disagree about the one thing a binding encodes — where a thing sits
+//     in the lifecycle. A `Diagnostic` kind wide enough for both would have meant
+//     "produces operator-facing output and never fails", which is a property of the
+//     OUTPUT, not a position.
+//   - `doctor-probes` (case three) settled it. phase-timing named it as the
+//     tiebreaker and said what its verdict would mean: if it attaches to a state,
+//     "the family splits three ways and 'diagnostic' was never a kind — it was a
+//     description of a tone of voice." It attaches to `configured`, exactly as
+//     predicted, as a plain `assertion` alongside a `gate` — and it carries no
+//     Incomplete note at all.
+//
+// THREE COMMANDS THAT ALL "READ SOMETHING AND PRINT IT" LANDED IN THREE DIFFERENT
+// PLACES. That is the finding. Tone of voice is not a lifecycle position, and the
+// resemblance that made these look like one family was never structural.
+//
+// SO THIS BINDING STAYS WRONG, DELIBERATELY, and the note below now says so as a
+// settled disposition rather than a pending one. Nothing here has changed about
+// the objection — an assertion that cannot fail still contributes a constant
+// `true` — but the fix is not a fifth kind, and inventing one to tidy a single
+// mislabelled binding would put a word in the vocabulary that answers no question.
+// The precondition axis (Binding.Requires) went the other way at almost the same
+// time: three cases, agreeing on shape, and a declaration that was impossible
+// rather than merely ugly. The contrast is the clearest illustration in the
+// catalog of what the two-case bar is actually for.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
@@ -70,12 +102,15 @@ func Extension() extension.Extension {
 			Grants: []extension.Grant{extension.ClusterRead},
 		}},
 		Incomplete: []string{
-			"the binding kind is wrong: this is a DIAGNOSTIC, not an assertion. It always " +
-				"exits 0 by design and runs precisely when `converged` did NOT hold, so it " +
-				"contributes no evidence that any state holds. The model has no fifth kind " +
-				"for 'read a failing platform and print it for a human'. This is case one; " +
-				"`doctor-probes` and `phase-timing` are the same shape and are the cases the " +
-				"kind should be argued from.",
+			"the binding kind is wrong and will STAY wrong: this is a diagnostic, not an " +
+				"assertion. It always exits 0 by design and runs precisely when `converged` " +
+				"did NOT hold, so it contributes no evidence that any state holds. This was " +
+				"case one for a fifth binding kind; cases two and three (`phase-timing`, " +
+				"`doctor-probes`) have both shipped and REFUTED it — one attaches to no state, " +
+				"one attaches cleanly to `configured` with no note at all. Three commands that " +
+				"read and print landed in three different places, so 'diagnostic' describes a " +
+				"tone of voice rather than a lifecycle position. No fifth kind is coming; see " +
+				"the file header.",
 		},
 	}
 }

@@ -106,11 +106,24 @@ func listExtensions(out io.Writer, exts []extension.Extension, verbose bool) err
 // per-binding grants are deliberately NOT folded in here — they are what --verbose
 // exists for, because a union printed on one line is the exact misreading
 // (extension-scoped grants) the model was corrected to avoid.
+//
+// A PRECONDITION IS SHOWN, because dropping it would make this line wrong rather
+// than merely brief. `transition:seeded` and `transition:seeded<operating` are
+// different claims — the second says the action runs against a platform that is
+// already up — and this command's own help says it lists bindings. Collapsing two
+// distinct declarations onto one string is the banning-by-omission shape the whole
+// model exists to avoid, in the surface an operator actually reads. It is rendered
+// `<state` rather than the Binding.String() spelling because this column holds
+// several bindings side by side and has no room for six words; the arrow points
+// from the binding to what it needs.
 func bindingSummary(e extension.Extension) string {
 	seen := map[string]bool{}
 	var out []string
 	for _, b := range e.Bindings {
 		at := string(b.Kind) + ":" + string(b.State)
+		if b.Requires != "" {
+			at += "<" + string(b.Requires)
+		}
 		if !seen[at] {
 			seen[at] = true
 			out = append(out, at)

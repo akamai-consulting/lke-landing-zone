@@ -102,17 +102,66 @@ const (
 // binding their grants widen to the union, which is precisely the over-granting
 // that scoping grants per binding was introduced to prevent. Optional: a single
 // attachment needs no name, and two of the same kind:state do.
+// REQUIRES IS THE PRECONDITION AXIS, and it is the third word this model has
+// gained. State says what a binding ESTABLISHES; Requires says what must ALREADY
+// HOLD for it to run. Until now only the first was expressible, and three
+// extractions in a row shipped a declaration that was true about the first while
+// silently dropping the second.
+//
+// THE SHAPE IS A MUTATING ACTION WHOSE PRECONDITION IS A STATE RATHER THAN WHOSE
+// EFFECT IS THAT STATE. `wedge-gameday` refuses to start unless the cluster is
+// already Healthy; `rotate-admin` refuses to rotate an unseeded path;
+// `bao-breakglass` restores root access to a platform that is up. None of the
+// three moves the platform anywhere, and all three need it to be somewhere.
+//
+// WHY NOT A FIFTH BINDING KIND, which is the obvious reading and the one the
+// first two cases were nearly argued into. `wedge-gameday` wrote the refutation
+// while declaring itself: what these want "is not a new binding kind but a way to
+// say 'this is a CHECK, it must mutate to run, and it requires state X rather than
+// establishing it'. A fifth kind bolted on now would have answered the kind
+// question and left the state question exactly where it is." The kind was never
+// wrong — all three really are transitions, they really do mutate. The STATE was
+// carrying two meanings and could only ever express one.
+//
+// WHY NOT LET Transition REACH `operating` INSTEAD, the other obvious fix.
+// Because the restriction has content worth keeping: `operating` is a condition
+// that holds rather than a place you move to, and letting a transition target it
+// would let something claim to move the platform TO `operating`, which is the
+// exact thing the rule exists to prevent. Requires buys the accuracy without
+// spending the rule.
+//
+// IT ALSO RESOLVES A DISAGREEMENT BETWEEN THE TWO CEILING TABLES, which is the
+// sharpest evidence that the gap was real rather than cosmetic. grantStates puts
+// `operating` in the secret-custody row explicitly FOR rotation, while
+// bindableStates forbids a transition there — so a scheduled rotation was a
+// binding each table expected the other to be describing. `rotate-admin` ended up
+// at `seeded`, the one state both tables allow, which its own note called out as
+// the wrong home.
+//
+// THE GRANT CHECK RUNS AT BOTH STATES, never at Requires alone. Checking only the
+// precondition would have been the natural reading and is a quiet widening: a
+// binding could then ask at `operating` for something its declared State forbids.
+// Both is strictly tighter than what shipped before this field existed, and all
+// three cases pass it unchanged.
 type Binding struct {
-	Kind   BindingKind
-	Name   string
-	State  State
-	Grants []Grant
+	Kind     BindingKind
+	Name     string
+	State    State
+	Requires State
+	Grants   []Grant
 }
 
 func (b Binding) String() string {
 	s := string(b.Kind) + ":" + string(b.State)
 	if b.Name != "" {
 		s += "/" + b.Name
+	}
+	// Spelled out rather than punctuated. This string appears in every validation
+	// error, and a reader meeting `transition:seeded<operating` for the first time
+	// has to guess which side is the precondition; the two states are the whole
+	// point of the field and are worth six characters to keep unambiguous.
+	if b.Requires != "" {
+		s += " (requires " + string(b.Requires) + ")"
 	}
 	if len(b.Grants) > 0 {
 		s += "[" + grantList(b.Grants) + "]"

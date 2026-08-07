@@ -45,11 +45,20 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // `assert-secrets`, `assert-identity`, `assert-objstore`) all genuinely belong at
 // `converged`; this one is the first pushed there.
 //
-// STILL NOTHING INVENTED. The gap is now better characterised than it was one
-// extraction ago, which is the argument for waiting: what these six want is not a
-// new binding kind but a way to say "this is a CHECK, it must mutate to run, and it
-// requires state X rather than establishing it". A fifth kind bolted on now would
-// have answered the kind question and left the state question exactly where it is.
+// THE PRECONDITION IS NO LONGER LOST. `Requires: operating` is declared below, and
+// this paragraph used to end "STILL NOTHING INVENTED". What it asked for is what
+// was eventually built, almost verbatim: "not a new binding kind but a way to say
+// 'this is a CHECK, it must mutate to run, and it requires state X rather than
+// establishing it'. A fifth kind bolted on now would have answered the kind
+// question and left the state question exactly where it is." That warning is why
+// Requires is a field on Binding and not a fifth BindingKind.
+//
+// THIS CASE IS ALSO WHAT MADE THE OTHER TWO ARGUABLE. `rotate-admin` and
+// `bao-breakglass` had each fallen back to "the state whose credentials I restore",
+// resolved identically, and concluded the workaround was a stable convention rather
+// than a missing word. This one restores nothing, so it fell back to mere proximity
+// instead — which is how the convention turned out to be two conventions, and the
+// gap turned out to be real.
 //
 // OPT-IN, unlike almost everything else here. Deliberate fault injection against a
 // healthy cluster is not something an instance should get by default — it is a
@@ -60,9 +69,10 @@ func Extension() extension.Extension {
 		Short:  "break one ExternalSecret on purpose and prove the blast radius is contained",
 		Always: false,
 		Bindings: []extension.Binding{{
-			Kind:   extension.Transition,
-			State:  extension.Converged,
-			Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+			Kind:     extension.Transition,
+			State:    extension.Converged,
+			Requires: extension.Operating,
+			Grants:   []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
 		}},
 	}
 }

@@ -1078,11 +1078,26 @@ categories:
     # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
     # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
     #
+    # 1853 -> 1856, AND THE FIRST DELIBERATE GROWTH IN A LONG WHILE. Binding gained
+    # a Requires field (the precondition axis) and `llz extension list` renders it:
+    # three lines in bindingSummary. The code belongs in package main because that
+    # is the CLI rendering layer and the summary string is a presentation choice —
+    # it uses `<operating` rather than Binding.String()'s spelled-out form because
+    # the column holds several bindings side by side.
+    #
+    # Not rendering it was the alternative and it was wrong. `database-provisioner`
+    # holds two bindings at `transition:seeded`, one of which requires `operating`;
+    # without the field they collapsed to a single entry and the list silently
+    # showed one binding where there are two. A list command whose help says it
+    # shows bindings, quietly dropping the part that distinguishes two of them, is
+    # the banning-by-omission shape this whole model was built to prevent — in the
+    # one surface an operator actually reads.
+    #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1853
+    budget: 1856
     exact: true
     include:
       - "tools/cmd/llz/*.go"

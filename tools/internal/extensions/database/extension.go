@@ -96,10 +96,11 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.CloudRead, extension.SecretCustody},
 			},
 			{
-				Kind:   extension.Transition,
-				Name:   "rotate-admin",
-				State:  extension.Seeded,
-				Grants: []extension.Grant{extension.CloudMutate, extension.SecretCustody},
+				Kind:     extension.Transition,
+				Name:     "rotate-admin",
+				State:    extension.Seeded,
+				Requires: extension.Operating,
+				Grants:   []extension.Grant{extension.CloudMutate, extension.SecretCustody},
 			},
 			{
 				Kind:   extension.Assertion,
@@ -108,17 +109,15 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.CloudRead, extension.SecretRead},
 			},
 		},
-		Incomplete: []string{
-			"rotate-admin is bound at `seeded`, which is the one state BOTH tables allow. Its " +
-				"true home is `operating`: a scheduled rotation runs against a platform that " +
-				"is already up. bindableStates refuses a transition there (rightly, for a rule " +
-				"about REACHING a state — but this binding does not move the platform anywhere, " +
-				"it requires the platform to already be there), and grantStates then refuses " +
-				"secret-custody at `converged`, the obvious fallback. Note that grantStates' own " +
-				"comment says `operating` is in the custody row FOR rotation — the two tables " +
-				"disagree about this binding. Second case of the shape after wedge-gameday; what " +
-				"both want is a way to declare a PRECONDITION, which is a different axis from " +
-				"kind or state, and nothing was invented from two cases.",
-		},
+		// DISCHARGED. This note recorded the sharpest version of the precondition gap
+		// — that bindableStates and grantStates gave contradictory answers about this
+		// one binding, since the custody row lists `operating` explicitly FOR rotation
+		// while a transition may not attach there. `Requires: operating` now says what
+		// the note said, in the declaration rather than beside it, and the mutating
+		// grants are checked at BOTH states rather than at `seeded` alone.
+		//
+		// `seeded` is still the State and is still right: a rotation re-places
+		// credential material, which is what seeding means. What was missing was never
+		// the effect, it was the precondition.
 	}
 }
