@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
@@ -39,17 +40,11 @@ import (
 // would not.
 var InstallHooks func(dryRun, yes bool, dir string) error
 
-// Exec captures a command's stdout — git and gh, here.
-//
-// A SEAM RATHER THAN A COPY, and deliberately not a move. package main's
-// `execOutput` attaches *exec.ExitError.Stderr to the returned error, and that is
-// a scar: without it every `gh repo create` failure arrived as a bare "exit
-// status 1" with the diagnosis discarded. Copying eight lines of that logic here
-// would put a second implementation behind the same contract, which is the exact
-// drift its own comment warns about. Moving it instead would be a 64-site rename
-// across four files of comments and help strings — a separate change, and the one
-// this campaign should do next.
-var Exec func(name string, args ...string) ([]byte, error)
+// execOutput delegates to kubectlprobe.Exec through a CLOSURE, never by
+// assignment: an assignment snapshots whatever the seam pointed at when this
+// package initialised, which defeats a test that swaps it later. Eleven other
+// packages carry the identical three lines.
+func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
 // ── execution helpers ────────────────────────────────────────────────────────
 
@@ -283,7 +278,7 @@ var (
 // ghLogin returns the authenticated `gh` login, or "" if it can't be resolved.
 // Only used to make remediation text concrete ("chandraS/<name>"), never to gate.
 func ghLogin() string {
-	out, err := Exec("gh", "api", "user", "--jq", ".login")
+	out, err := execOutput("gh", "api", "user", "--jq", ".login")
 	if err != nil {
 		return ""
 	}
@@ -390,7 +385,7 @@ func pushInstanceRepo(dryRun, yes bool, dir string) (bool, error) {
 
 	// gh repo create --push needs at least one commit; copier git-inits but does
 	// not commit, so seed an initial commit if the tree has none.
-	if _, err := Exec("git", "-C", dir, "rev-parse", "HEAD"); err != nil {
+	if _, err := execOutput("git", "-C", dir, "rev-parse", "HEAD"); err != nil {
 		if err := proc.RunEcho(dryRun, "git", "-C", dir, "add", "-A"); err != nil {
 			return false, err
 		}
@@ -456,19 +451,19 @@ const bootstrapBranch = "main"
 // there is no history to rewrite and an instance deliberately living on another
 // branch (already pushed) is left alone.
 func ensureScaffoldBranch(dryRun, yes bool, dir string) error {
-	cur, err := Exec("git", "-C", dir, "symbolic-ref", "--short", "HEAD")
+	cur, err := execOutput("git", "-C", dir, "symbolic-ref", "--short", "HEAD")
 	branch := strings.TrimSpace(string(cur))
 	if err != nil || branch == "" || branch == bootstrapBranch {
 		return nil
 	}
-	if _, err := Exec("git", "-C", dir, "rev-parse", "--symbolic-full-name", "@{upstream}"); err == nil {
+	if _, err := execOutput("git", "-C", dir, "rev-parse", "--symbolic-full-name", "@{upstream}"); err == nil {
 		return nil
 	}
 	// `git branch -M` is --move --force: renaming onto an EXISTING main deletes
 	// that branch and everything only it pointed at, silently. A one-commit
 	// copier scaffold has no second branch, but pushInstanceRepo also runs over
 	// directories llz did not just create — so never clobber, just say so.
-	if _, err := Exec("git", "-C", dir, "show-ref", "--verify", "--quiet", "refs/heads/"+bootstrapBranch); err == nil {
+	if _, err := execOutput("git", "-C", dir, "show-ref", "--verify", "--quiet", "refs/heads/"+bootstrapBranch); err == nil {
 		fmt.Fprintf(os.Stderr, "%s scaffold is on %q but a %q branch already exists — leaving both alone.\n",
 			color.Yellow("!"), branch, bootstrapBranch)
 		fmt.Fprintf(os.Stderr, "  The platform-bootstrap Application tracks %s (apps_repo_revision), so push the scaffold there\n"+
@@ -503,7 +498,7 @@ func adoptExistingRepo(dryRun, yes bool, dir, repo string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s %s already exists on GitHub — %s.\n", color.Yellow("!"), repo, did)
 	sub := "add"
-	if _, err := Exec("git", "-C", dir, "remote", "get-url", "origin"); err == nil {
+	if _, err := execOutput("git", "-C", dir, "remote", "get-url", "origin"); err == nil {
 		sub = "set-url"
 	}
 	// ghcli.Host(), not the github.com literal: `gh repo create` resolves the host

@@ -59,7 +59,6 @@ func init() {
 	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
-	newinstance.Exec = func(n string, args ...string) ([]byte, error) { return execOutput(n, args...) }
 	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
 		return runHooksInstall(globalOpts{dryRun: dryRun, yes: yes}, dir)
 	}

@@ -13,16 +13,16 @@ import (
 // duration of a test, restoring the real implementation afterward.
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
-	orig, origProbe := execOutput, kubectlprobe.Exec
-	execOutput = fn
-	// Both extracted packages hold their OWN reference to this seam (wired in the
-	// respective init()s), so stubbing only execOutput leaves them shelling out for
-	// real. internal/configreadiness reads through the same closure, so reinstalling
-	// its Deps after the swap is enough.
+	// ONE SEAM NOW. execOutput is a closure delegating to kubectlprobe.Exec, so
+	// swapping the one underneath covers package main and every extracted package
+	// at once — this used to have to swap a pair and say why.
+	// internal/configreadiness captures its Deps by value, so it still needs
+	// reinstalling after the swap.
+	origProbe := kubectlprobe.Exec
 	kubectlprobe.Exec = fn
 	installConfigReadinessDeps()
 	t.Cleanup(func() {
-		execOutput, kubectlprobe.Exec = orig, origProbe
+		kubectlprobe.Exec = origProbe
 		installConfigReadinessDeps()
 	})
 }

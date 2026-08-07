@@ -1,78 +1,33 @@
 package main
 
-import (
-	"bytes"
-	"errors"
-	"fmt"
-	"os/exec"
+// exec.go — package main's three shell-out helpers, now delegating closures.
+//
+// THIS FILE USED TO HOLD THE IMPLEMENTATIONS, and an init() that overwrote
+// kubectlprobe.Exec with them at startup. That made package main the OWNER of a
+// seam eleven other packages delegate to, and it worked only while the llz binary
+// was the thing running: nothing else executes main's init, so every test in
+// every one of those packages got kubectlprobe's plainer default instead. The
+// stderr-attaching body now lives there as the default, and this file is what the
+// other eleven already look like.
+//
+// KEPT AS CLOSURES RATHER THAN DELETED. Rewriting ~47 call sites to say
+// kubectlprobe.Exec would be a large diff for no behaviour change, and — after
+// the prose damage a word-boundary rename shipped three moves ago — a large diff
+// across files that also mention these names in help strings is exactly the shape
+// worth not taking. Closures, never assignment: an assignment snapshots whatever
+// the seam pointed at when this package initialised, which is the swap-at-call-
+// time property every test here relies on.
 
+import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
-// This file holds the single seam through which llz shells out to external
-// tools (git, gh, kubectl, ssh-keyscan, …). The output-capturing and
-// tool-presence helpers route through these package-level function variables so
-// tests can stub the shell-out and exercise the surrounding parse/branch logic
-// without the real binaries. Genuinely interactive call sites (those that wire
-// os.Stdin/os.Stdout or pipe a secret over stdin) deliberately keep calling
-// os/exec directly — they are exercised by the e2e workflow, not unit tests.
+// execOutput runs name with args and returns its standard output. Stderr is
+// attached to the error on failure; see kubectlprobe.Exec for why.
+func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
-// init points internal/kubectlprobe at THIS seam, so there is one shell-out
-// implementation rather than two that drift. The probes classify kubectl failures
-// by reading stderr off *exec.ExitError, which only works because execOutput
-// wraps with %w — a second, plainer implementation in that package would silently
-// downgrade every genuine NotFound to probeUnknown.
-//
-// Tests must swap BOTH (withExecOutput does): reassigning execOutput alone leaves
-// the probes running against the real cluster, which is a hang, not a failure.
-func init() {
-	kubectlprobe.Exec = func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) }
-}
-
-// execOutput runs name with args and returns its standard output, exactly as
-// (*exec.Cmd).Output would (stderr is surfaced via *exec.ExitError on failure).
-var execOutput = func(name string, args ...string) ([]byte, error) {
-	out, err := exec.Command(name, args...).Output()
-	if err == nil {
-		return out, nil
-	}
-	// ATTACH STDERR TO THE ERROR. .Output() captures stdout only, and every tool
-	// this runs — kubectl, bao, tofu — writes its diagnosis to STDERR. So a failure
-	// arrived as a bare "exit status 1" with an empty message, and callers that
-	// dutifully appended the captured output appended nothing:
-	//
-	//   llz: patch llz-openbao/platform-openbao hostAliases: exit status 1:
-	//
-	// That is an e2e failure with its cause structurally discarded. Go already
-	// carries the text on ExitError.Stderr when Stderr is unset; it was simply never
-	// read. Wrapped with %w so errors.Is/As still work on the original.
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		if msg := bytes.TrimSpace(ee.Stderr); len(msg) > 0 {
-			return out, fmt.Errorf("%w: %s", err, msg)
-		}
-	}
-	return out, err
-}
-
-// execCombined runs name with args and returns their combined stdout+stderr as a
-// string, ignoring exit status. Diagnostics-only: on a failure path we want the
-// tool's own error text — "No resources found" (an empty namespace), a NotFound,
-// a describe's Events block — to surface, all of which execOutput (stdout-only,
-// error-gated) would swallow.
-var execCombined = func(name string, args ...string) string {
-	out, _ := exec.Command(name, args...).CombinedOutput()
-	return string(out)
-}
+// execCombined returns combined stdout+stderr as a string, ignoring exit status.
+func execCombined(name string, args ...string) string { return kubectlprobe.Combined(name, args...) }
 
 // execLookPath reports a binary's location on PATH.
-//
-// IT DELEGATES TO kubectlprobe.LookPathFn RATHER THAN OWNING A SECOND SEAM. When
-// `lookable` moved to kubectlprobe, package main briefly had two independently
-// swappable LookPath vars, and a test stubbing this one left kubectlprobe.Lookable
-// reading the real PATH — which passes or fails depending on what the developer
-// happens to have installed. One seam, reached through a delegating closure so a
-// swap of the underlying var is seen at call time.
-var execLookPath = func(file string) (string, error) {
-	return kubectlprobe.LookPathFn(file)
-}
+func execLookPath(file string) (string, error) { return kubectlprobe.LookPathFn(file) }

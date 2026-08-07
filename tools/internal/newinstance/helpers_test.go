@@ -3,18 +3,18 @@ package newinstance
 // helpers_test.go — the four helpers the moved tests reach for, written local and
 // minimal rather than copied.
 //
-// withExecOutput SWAPS BOTH SEAMS, and the first draft of this file swapped only
-// one. The comment there argued this package "never touches kubectlprobe — it
-// shells out to git and gh only". That is false, and four tests said so
-// immediately: `ghcli.OwnerKind` and `onboard.RepoStatus` reach the shell through
-// `kubectlprobe.Exec`, so a stub that misses it leaves them running real `gh api`
-// calls against the network. Same reason main's version swaps the pair.
+// withExecOutput SWAPS kubectlprobe.Exec, WHICH IS THE ONLY SEAM. It briefly was
+// not: this package took its own injected `Exec` var, and the first draft stubbed
+// that alone, arguing in a comment that the package "never touches kubectlprobe —
+// it shells out to git and gh only". Four tests said otherwise on the spot,
+// because `ghcli.OwnerKind` and `onboard.RepoStatus` reach the shell through
+// kubectlprobe.Exec. The injected var is gone now and there is one seam again,
+// which is the state that made the wrong comment impossible to write.
 
 import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
@@ -22,9 +22,9 @@ import (
 
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
-	prevExec, prevProbe := Exec, kubectlprobe.Exec
-	Exec, kubectlprobe.Exec = fn, fn
-	t.Cleanup(func() { Exec, kubectlprobe.Exec = prevExec, prevProbe })
+	prev := kubectlprobe.Exec
+	kubectlprobe.Exec = fn
+	t.Cleanup(func() { kubectlprobe.Exec = prev })
 }
 
 // TestMain installs the two seams package main installs. Without it the tests
@@ -36,10 +36,6 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 // wrapper. That wrapper exists so an operator sees why `gh repo create` failed;
 // no test here asserts on it, and a second copy of a scar is how the two drift.
 func TestMain(m *testing.M) {
-	real := func(name string, args ...string) ([]byte, error) {
-		return exec.Command(name, args...).Output()
-	}
-	Exec, kubectlprobe.Exec = real, real
 	InstallHooks = func(bool, bool, string) error { return nil }
 	os.Exit(m.Run())
 }

@@ -713,6 +713,27 @@ categories:
 #        a test asserting the exact remediation -- `gh repo create` fails three
 #        ways that look identical and have different fixes, and the operator
 #        hitting one has no instance yet to diagnose it with.
+#   80th: exec.go -> internal/kubectlprobe   6,523 -> 6,498 (-25 / 84 files)
+#        THE SMALLEST PAYDOWN OF THE CAMPAIGN, AND NOT WHY IT WAS DONE. The plan
+#        was exec.go -> internal/proc, a 64-site rename. Measuring first killed
+#        that: proc`s OWN PACKAGE DOC says it is deliberately separate from
+#        kubectlprobe because "kubectlprobe CAPTURES output ... this one hands
+#        stdout straight through". These three helpers capture. Wrong destination.
+#        THE RIGHT ONE ALREADY HELD THE SEAM, AND HELD IT BROKEN. kubectlprobe.Exec
+#        existed with a PLAIN .Output() default, and cmd/llz/exec.go had an init()
+#        overwriting it at startup with the stderr-attaching version. So the
+#        wrapper was present in the llz binary and absent everywhere else --
+#        including in every test of the ELEVEN packages that delegate to it.
+#        ErrText survived (it reads ee.Stderr off the *exec.ExitError itself);
+#        the MESSAGE did not, which is what a caller wrapping with %w prints.
+#        The body is now kubectlprobe`s default and the init() is gone.
+#        47 CALL SITES DID NOT MOVE, ON PURPOSE. exec.go is three delegating
+#        closures now -- the identical shape eleven internal packages already use.
+#        Rewriting the call sites would be a large diff for no behaviour change,
+#        across files that also name these helpers in help strings. After move 78`s
+#        prose damage that is the diff worth NOT taking.
+#        COVERAGE 71%% -> 77.6%%: the two defaults arrived untested, because in
+#        package main they were vars every test replaced with a stub. Pinned now.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -725,7 +746,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 6523
+    budget: 6498
     exact: true
     include:
       - "tools/cmd/llz/*.go"

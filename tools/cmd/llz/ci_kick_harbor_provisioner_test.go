@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // kickExecLog stubs execOutput/execCombined for the kick flow and records every
@@ -19,12 +21,12 @@ func kickExecLog(t *testing.T, handler func(args string) ([]byte, error)) *[]str
 		}
 		return handler(a)
 	})
-	prevCombined := execCombined
-	execCombined = func(name string, args ...string) string {
+	prevCombined := kubectlprobe.Combined
+	kubectlprobe.Combined = func(name string, args ...string) string {
 		calls = append(calls, strings.Join(args, " "))
 		return ""
 	}
-	t.Cleanup(func() { execCombined = prevCombined })
+	t.Cleanup(func() { kubectlprobe.Combined = prevCombined })
 	return &calls
 }
 

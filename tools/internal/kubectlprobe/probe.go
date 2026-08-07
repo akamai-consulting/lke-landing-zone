@@ -48,8 +48,10 @@ package kubectlprobe
 // so the one-off is gone.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,16 +59,53 @@ import (
 	"time"
 )
 
-// Exec is the shell-out seam, stdout-only, mirroring package main's execOutput —
-// which is what this was before the extraction. A package var rather than a Deps
+// Exec is THE shell-out seam, stdout-only — package main's execOutput is a
+// closure delegating here, not a rival copy. A package var rather than a Deps
 // field because every probe here is a FREE FUNCTION with ten callers, and two of
 // them are generic (List/ListOK); threading a receiver through generics buys
 // nothing when the only capability is "run kubectl and give me stdout".
 //
 // Hand it something that works: a nil Exec panics rather than returning an error,
 // and the probes below would report the panic as probeUnknown if it did not.
+//
+// IT ATTACHES STDERR TO THE ERROR, AND THAT USED TO LIVE IN PACKAGE MAIN. This
+// body was `execOutput` in cmd/llz/exec.go, and an init() there overwrote this
+// var with it at startup — so the wrapper was present in the llz binary and
+// absent everywhere else, including in every test of the eleven packages that
+// delegate here. ErrText survived that split because it reads ee.Stderr off the
+// *exec.ExitError itself; what did not survive is the MESSAGE, which is what a
+// caller wrapping with %w actually prints:
+//
+//	llz: patch llz-openbao/platform-openbao hostAliases: exit status 1:
+//
+// That is a failure with its cause structurally discarded. .Output() captures
+// stdout only, and every tool this runs — kubectl, gh, bao, tofu — writes its
+// diagnosis to stderr. Go carries the text on ExitError.Stderr when Stderr is
+// unset; it was simply never read. Wrapped with %w so errors.Is/As still work.
+// Without it a failure arrived as a bare "exit status 1" with an empty message,
+// and callers that dutifully appended the captured output appended nothing.
 var Exec = func(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	out, err := exec.Command(name, args...).Output()
+	if err == nil {
+		return out, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := bytes.TrimSpace(ee.Stderr); len(msg) > 0 {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return out, err
+}
+
+// Combined runs name with args and returns their combined stdout+stderr, ignoring
+// exit status. Diagnostics-only, and deliberately not error-gated: on a failure
+// path the tool's own text — "No resources found" for an empty namespace, a
+// NotFound, a describe's Events block — is the thing worth printing, and all of
+// it is what Exec (stdout-only, error-gated) discards.
+var Combined = func(name string, args ...string) string {
+	out, _ := exec.Command(name, args...).CombinedOutput()
+	return string(out)
 }
 
 // Verdict is what a kubectl probe learned, if anything.
