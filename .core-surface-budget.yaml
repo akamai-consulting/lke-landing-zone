@@ -596,6 +596,17 @@ categories:
 #        THREE test files this move held tests with DIFFERENT SUBJECTS -- the
 #        computation went to the new package while reportCIImageSkew,
 #        printNextSteps and repinPlanNote tests all went back to main.
+#   73rd: gh owner/404 helpers -> internal/ghcli   8,651 -> 8,630 (-21 / 86 files)
+#        NINTH ENABLER, and the smallest paydown yet -- taken purely for what it
+#        unblocks. ghNotFound (7 lines) and ghOwnerKind (10) had two callers each
+#        and both are about the gh CLI, which is what internal/ghcli is for. The
+#        OwnerKindFn SEAM moved with the function rather than staying in main:
+#        two swappable vars over one call is the second-seam bug already paid for
+#        twice in this campaign.
+#        RESULT: wizard.go + tokens.go together are now CLOSURE 5 -- execLookPath,
+#        execOutput (localisable) and globalOpts/gopts/main (noise, 3 fields).
+#        1,238 lines, cleanly cuttable. That pair was the "design task" two
+#        iterations ago.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -608,7 +619,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 8651
+    budget: 8630
     exact: true
     include:
       - "tools/cmd/llz/*.go"

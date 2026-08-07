@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -385,41 +383,14 @@ func printNextSteps(dir string, pushed bool) {
 	note("local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml")
 }
 
-// ghOwnerKindFn classifies the <owner> half of instance_repo on GitHub; seamed
-// for tests. instanceRepoExistsFn reports whether the instance repo itself is
+// The owner-kind seam moved to ghcli.OwnerKindFn with the function it wraps: two
+// swappable vars over one call is the second-seam bug this campaign has now paid
+// for twice. instanceRepoExistsFn reports whether the instance repo itself is
 // already there (an adopter who created it by hand after a failed --push).
 var (
-	ghOwnerKindFn        = ghOwnerKind
 	instanceRepoExistsFn = repoExists
 	ghLoginFn            = ghLogin
 )
-
-// ghOwnerKind classifies a GitHub account name: "User", "Organization", or ""
-// when GitHub definitively 404s it. A non-nil error means indeterminate (no `gh`
-// auth, offline, rate-limited) — callers must not treat that as "absent".
-// /users/<name> resolves orgs too, so one call answers both questions.
-func ghOwnerKind(owner string) (string, error) {
-	out, err := execOutput("gh", "api", "users/"+owner, "--jq", ".type")
-	if err != nil {
-		if ghNotFound(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// ghNotFound reports whether a `gh api` failure was a 404 rather than an auth,
-// network, or rate-limit problem — gh writes "gh: Not Found (HTTP 404)" to
-// stderr, which (*exec.Cmd).Output captures on the ExitError.
-func ghNotFound(err error) bool {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		s := string(ee.Stderr)
-		return strings.Contains(s, "HTTP 404") || strings.Contains(s, "Not Found")
-	}
-	return false
-}
 
 // ghLogin returns the authenticated `gh` login, or "" if it can't be resolved.
 // Only used to make remediation text concrete ("chandraS/<name>"), never to gate.
@@ -549,7 +520,7 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 	owner, _, hasOwner := strings.Cut(repo, "/")
 	var ownerKind string
 	if hasOwner && !g.dryRun {
-		kind, err := ghOwnerKindFn(owner)
+		kind, err := ghcli.OwnerKindFn(owner)
 		switch login := ghLoginFn(); {
 		case err != nil:
 			// Indeterminate (no gh auth, offline, rate limit) — don't block on a

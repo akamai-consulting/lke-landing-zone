@@ -14,9 +14,9 @@ import (
 // withGhOwnerKind stubs the instance_repo owner classifier.
 func withGhOwnerKind(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
-	orig := ghOwnerKindFn
-	t.Cleanup(func() { ghOwnerKindFn = orig })
-	ghOwnerKindFn = fn
+	orig := ghcli.OwnerKindFn
+	t.Cleanup(func() { ghcli.OwnerKindFn = orig })
+	ghcli.OwnerKindFn = fn
 }
 
 // withTemplateSourceStatus stubs the --org template-source preflight.
@@ -392,7 +392,7 @@ func TestPushInstanceRepoDryRunSkipsProbes(t *testing.T) {
 	}
 }
 
-// ghNotFound separates "GitHub says this account does not exist" from every other
+// ghcli.NotFound separates "GitHub says this account does not exist" from every other
 // gh failure — the distinction the preflight is gated on. Built from a real
 // ExitError so the stderr capture path is the one (*exec.Cmd).Output produces.
 func TestGhNotFound(t *testing.T) {
@@ -400,13 +400,13 @@ func TestGhNotFound(t *testing.T) {
 		_, err := exec.Command("sh", "-c", "echo '"+stderr+"' >&2; exit 1").Output()
 		return err
 	}
-	if !ghNotFound(notFound("gh: Not Found (HTTP 404)")) {
+	if !ghcli.NotFound(notFound("gh: Not Found (HTTP 404)")) {
 		t.Error("a 404 was not recognised as an absent account")
 	}
-	if ghNotFound(notFound("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable")) {
+	if ghcli.NotFound(notFound("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable")) {
 		t.Error("an auth failure was misread as an absent account")
 	}
-	if ghNotFound(errors.New("exec: \"gh\": executable file not found in $PATH")) {
+	if ghcli.NotFound(errors.New("exec: \"gh\": executable file not found in $PATH")) {
 		t.Error("a missing binary was misread as an absent account")
 	}
 }
@@ -418,12 +418,12 @@ func TestGhOwnerKind(t *testing.T) {
 		}
 		return []byte("Organization\n"), nil
 	})
-	if kind, err := ghOwnerKind("acme"); kind != "Organization" || err != nil {
-		t.Errorf("ghOwnerKind = (%q, %v), want (Organization, nil)", kind, err)
+	if kind, err := ghcli.OwnerKind("acme"); kind != "Organization" || err != nil {
+		t.Errorf("ghcli.OwnerKind = (%q, %v), want (Organization, nil)", kind, err)
 	}
 	// An indeterminate failure must surface as an error, not as "absent".
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("dial tcp: no route to host") })
-	if _, err := ghOwnerKind("acme"); err == nil {
+	if _, err := ghcli.OwnerKind("acme"); err == nil {
 		t.Error("a network failure was reported as a definitive classification")
 	}
 }

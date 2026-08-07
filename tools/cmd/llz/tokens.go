@@ -419,7 +419,7 @@ func repoStatus(repo string) (bool, error) {
 		return false, fmt.Errorf("the GitHub CLI is not on PATH: %w", err)
 	}
 	if _, err := execOutput("gh", "api", "repos/"+repo, "--silent"); err != nil {
-		if ghNotFound(err) {
+		if ghcli.NotFound(err) {
 			return false, nil
 		}
 		return false, err
@@ -468,7 +468,7 @@ func remediateMissingRepo(repo string) {
 	// Spelling comes first: a user owner they can log in as always exists, so an
 	// absent one is far more often a typo in instance_repo than an uncreated org.
 	if owner, _, ok := strings.Cut(repo, "/"); ok {
-		if kind, err := ghOwnerKindFn(owner); err == nil && kind == "" {
+		if kind, err := ghcli.OwnerKindFn(owner); err == nil && kind == "" {
 			fmt.Fprintf(os.Stderr, "  The OWNER %q does not exist either — check how it is spelled in .copier-answers.yml,\n", owner)
 			fmt.Fprintf(os.Stderr, "  or, if that org is simply not created yet: https://%s/organizations/new\n", ghcli.Host())
 		}
