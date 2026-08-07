@@ -4,10 +4,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 )
 
-// Tests that travelled with the resolve family but exercise runEnvAdd, which is
+// Tests that travelled with the resolve family but exercise envadd.Run, which is
 // scaffold.go's and stays in main. The naive puller tried to drag a PRODUCTION
 // function across the boundary to satisfy them — the guard against ciCmd/gopts/
 // globalOpts/main needs to cover production symbols too, not just main-only ones.
@@ -18,7 +19,7 @@ func TestRunEnvAddRefusesOutsideAnInstance(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	err := runEnvAdd(globalOpts{}, "lab", envdef.Opts{Region: "us-sea", ObjCluster: "us-sea-1"})
+	err := envadd.Run(false, "lab", envdef.Opts{Region: "us-sea", ObjCluster: "us-sea-1"})
 	if err == nil {
 		t.Fatal("expected `llz env add` to refuse outside an instance root")
 	}

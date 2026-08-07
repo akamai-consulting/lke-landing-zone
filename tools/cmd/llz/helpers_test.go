@@ -23,15 +23,6 @@ func TestContainsString(t *testing.T) {
 	}
 }
 
-func TestFirst3(t *testing.T) {
-	cases := map[string]string{"abcdef": "abc", "ab": "ab", "": "", "abc": "abc"}
-	for in, want := range cases {
-		if got := first3(in); got != want {
-			t.Errorf("first3(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestFirstNonEmpty(t *testing.T) {
 	if got := firstNonEmpty("", "", "x", "y"); got != "x" {
 		t.Errorf("firstNonEmpty = %q, want x", got)
@@ -71,12 +62,6 @@ func TestOrHelpers(t *testing.T) {
 	}
 	if !strings.HasPrefix(orNone(""), "(none") || orNone("x") != "x" {
 		t.Error("orNone wrong")
-	}
-}
-
-func TestQuote(t *testing.T) {
-	if got := quote("x"); got != `"x"` {
-		t.Errorf("quote = %q, want \"x\"", got)
 	}
 }
 

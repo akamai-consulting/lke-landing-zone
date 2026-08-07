@@ -661,6 +661,18 @@ categories:
 #        credential side. TWO independent cases is what the rule asks for, so the
 #        next person can argue the widening rather than guess it. Both are
 #        recorded under Incomplete, not acted on.
+#   77th: env-add -> internal/envadd   7,246 -> 7,017 (-229 / 84 files)
+#        This was scaffold.go, recorded here as BLOCKED for FOUR iterations --
+#        twice with an argument for why the block was correct. Both blockers
+#        dissolved without it being touched: runRender became internal/render
+#        (76) and envAddOpts became internal/envdef (69). One edge was left,
+#        syncPromoteWorkflow, and that one is INJECTED rather than moved because
+#        internal/promote s own guard refuses a write path and write-repo is not
+#        legal at `promoted`. Sixth overturned "blocked" call.
+#        COVERAGE DEBT: 13.7%. Most of what is left in this package is the
+#        placeholder-checklist REPORTING (groupFindings, printPlaceholderChecklist)
+#        and it was equally untested in package main. The writes it delegates to
+#        (envdef, render) are tested in their own packages.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -673,7 +685,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 7246
+    budget: 7017
     exact: true
     include:
       - "tools/cmd/llz/*.go"

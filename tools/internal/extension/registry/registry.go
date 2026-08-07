@@ -54,6 +54,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
@@ -146,6 +147,7 @@ var declarations = []func() extension.Extension{
 	templatecommit.Extension,
 	onboard.Extension,
 	render.Extension,
+	envadd.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

@@ -23,6 +23,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -50,6 +51,10 @@ func init() {
 	selfupgrade.Version = version
 	// copier anchors a scaffold to this binary's release when it has one.
 	copier.Version = version
+	// envadd regenerates promote.yml after adding an environment, but the WRITE
+	// stays here: internal/promote declares transition:promoted[read-repo] and its
+	// own guard refuses a write path, and write-repo is not legal at `promoted`.
+	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
 }
 
 // globalOpts holds the persistent flags shared by every subcommand. It's

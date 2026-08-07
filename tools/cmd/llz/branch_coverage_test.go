@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
@@ -354,7 +355,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// With a residual placeholder → it's listed.
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "apl-values", "lab", "issuer.yaml"), "email: REPLACE_PER_ENV\n")
-	out := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
+	out := captureStdout(t, func() { envadd.PrintPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out, "Placeholders still to fill") || !strings.Contains(out, "REPLACE_PER_ENV") {
 		t.Errorf("checklist did not flag the placeholder:\n%s", out)
 	}
@@ -362,7 +363,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// Clean overlay → the "nothing left" message.
 	dir2 := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir2, "apl-values", "lab", "issuer.yaml"), "email: ops@example.com\n")
-	out2 := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
+	out2 := captureStdout(t, func() { envadd.PrintPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out2, "no placeholders left") {
 		t.Errorf("clean overlay should report none left:\n%s", out2)
 	}
@@ -371,15 +372,15 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 // `llz env add`'s output used to print an unconditional "Still to fill … the
 // REPLACE_PER_ENV / REPLACE_ME placeholders" block and then, two lines later,
 // "✓ no placeholders left to fill" — so a clean scaffold sent the operator
-// hunting for placeholders that were not there. printPlaceholderChecklist is now
+// hunting for placeholders that were not there. envadd.PrintPlaceholderChecklist is now
 // the sole reporter; this pins that.
 func TestEnvAddNextSteps_DoesNotClaimPlaceholdersUnconditionally(t *testing.T) {
 	out := captureStdout(t, func() {
-		printEnvAddNextSteps("lab", "environments/lab.yaml", envdef.Opts{})
+		envadd.PrintNextSteps("lab", "environments/lab.yaml", envdef.Opts{})
 	})
 	for _, banned := range []string{"Still to fill", "REPLACE_PER_ENV", "REPLACE_ME"} {
 		if strings.Contains(out, banned) {
-			t.Errorf("printEnvAddNextSteps must leave placeholder reporting to the checklist, but printed %q:\n%s", banned, out)
+			t.Errorf("envadd.PrintNextSteps must leave placeholder reporting to the checklist, but printed %q:\n%s", banned, out)
 		}
 	}
 	if !strings.Contains(out, "scaffolded") {
@@ -394,7 +395,7 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
 	out := captureStdout(t, func() {
-		_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envdef.Opts{
+		_ = envadd.Run(true, "lab", envdef.Opts{
 			Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 		})
 	})
@@ -404,19 +405,19 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 }
 
 // cobra's MarkDeprecated already warns at parse time; a second warning printed
-// from runEnvAdd said the same thing twice AND split the summary banner in half.
+// from envadd.Run said the same thing twice AND split the summary banner in half.
 func TestEnvAdd_ClusterDomainWarnsExactlyOnce(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
 	var out, errOut string
 	errOut = captureStderr(t, func() {
 		out = captureStdout(t, func() {
-			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envdef.Opts{
+			_ = envadd.Run(true, "lab", envdef.Opts{
 				Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 			})
 		})
 	})
 	if n := strings.Count(errOut+out, "cluster-domain"); n > 0 {
-		t.Errorf("runEnvAdd must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
+		t.Errorf("envadd.Run must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
@@ -33,7 +34,7 @@ func brownfieldDeps() brownfield.Deps {
 		New:             func(org, ref, dir string) error { return runNew(gopts, org, ref, dir, false) },
 		ValidateEnvName: validate.EnvName,
 		EnvAdd: func(env string, spec brownfield.EnvSpec) error {
-			return runEnvAdd(gopts, env, envdef.Opts{
+			return envadd.Run(gopts.dryRun, env, envdef.Opts{
 				Region:          spec.Region,
 				ClusterDomain:   spec.ClusterDomain,
 				ObjCluster:      spec.ObjCluster,

@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/envadd=13 \
 	internal/render=62 \
 	internal/copier=68 \
 	internal/onboard=13 \

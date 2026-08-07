@@ -13,6 +13,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -814,7 +815,7 @@ func commitUpgrade(g globalOpts, oldRef, newRef string) error {
 }
 
 func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
-	return runEnvAdd(g, name, o)
+	return envadd.Run(g.dryRun, name, o)
 }
 
 func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {

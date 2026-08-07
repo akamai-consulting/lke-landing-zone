@@ -1,6 +1,6 @@
-package main
+package envadd
 
-// TestGroupFindings STAYED with groupFindings, which is in scaffold.go.
+// TestGroupFindings STAYED with GroupFindings, which is in scaffold.go.
 //
 // It travelled to internal/configreadiness inside readiness_test.go, but its
 // subject is the CLI's presentation layer: collapsing findings that share a token
@@ -22,7 +22,7 @@ func TestGroupFindings(t *testing.T) {
 		{File: "c.yaml", Line: 3, Token: "REPLACE_ME", Hint: "hand edit"},
 		{File: "d.yaml", Line: 4, Token: configreadiness.InstanceRepoPlaceholder, Hint: "hand edit"}, // same token, DIFFERENT remedy
 	}
-	got := groupFindings(in)
+	got := GroupFindings(in)
 	if len(got) != 3 {
 		t.Fatalf("got %d groups, want 3 (same token with a different remedy must not merge): %+v", len(got), got)
 	}
@@ -35,7 +35,7 @@ func TestGroupFindings(t *testing.T) {
 	if got[2].files != 1 {
 		t.Errorf("third group = %+v, want 1", got[2])
 	}
-	if groupFindings(nil) != nil {
+	if GroupFindings(nil) != nil {
 		t.Error("no findings should group to nothing")
 	}
 }
@@ -49,14 +49,14 @@ func TestGroupFindingsCountsFilesNotOccurrences(t *testing.T) {
 		{File: "a.yaml", Line: 9, Token: configreadiness.InstanceRepoPlaceholder, Hint: "h"}, // same file, second line
 		{File: "b.yaml", Line: 3, Token: configreadiness.InstanceRepoPlaceholder, Hint: "h"},
 	}
-	got := groupFindings(in)
+	got := GroupFindings(in)
 	if len(got) != 1 {
 		t.Fatalf("got %d groups, want 1: %+v", len(got), got)
 	}
 	if got[0].files != 2 {
 		t.Errorf("files = %d, want 2 (a.yaml and b.yaml — not 3 occurrences)", got[0].files)
 	}
-	if n := countFiles(in); n != 2 {
-		t.Errorf("countFiles = %d, want 2", n)
+	if n := CountFiles(in); n != 2 {
+		t.Errorf("CountFiles = %d, want 2", n)
 	}
 }
