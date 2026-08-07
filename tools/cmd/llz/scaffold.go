@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -174,7 +175,7 @@ func runEnvAdd(g globalOpts, name string, o envdef.Opts) error {
 	}
 	if !deferred {
 		fmt.Printf("\n%s %s\n", color.Bold("Reconciling the spec"), color.Dim("(`llz render "+envdef.OrElse(renderEnv, "(all)")+"`):"))
-		if err := runRender(g, renderEnv, false, false, false); err != nil {
+		if err := render.Run(g.dryRun, renderEnv, false, false, false); err != nil {
 			// The rejected field is not always in the env file — spec.teams (the
 			// copier openbao_team answer) lives in landingzone.yaml — so name both,
 			// and name the way OUT. Without that last line this state was a loop:

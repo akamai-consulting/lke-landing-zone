@@ -16,6 +16,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/spf13/cobra"
 
@@ -335,7 +336,7 @@ func stepRenderFresh(g globalOpts) error {
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil // no LandingZone spec — nothing renders here
 	}
-	if err := runRender(g, "", false, true, false); err != nil {
+	if err := render.Run(g.dryRun, "", false, true, false); err != nil {
 		return fmt.Errorf("committed render output is stale (`llz render` to refresh): %w", err)
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 )
 
 // tfvars.SetField rewrites EVERY matching `^<key> =` line, not just the first. That is
@@ -17,7 +18,7 @@ import (
 // a 30-line commented block). Assert it rather than trusting it.
 func TestTfrootExamples_NoDuplicateTopLevelKeys(t *testing.T) {
 	for _, root := range instancelayout.Roots {
-		base, err := tfrootExample(root)
+		base, err := render.TfrootExample(root)
 		if err != nil {
 			t.Errorf("%s: %v", root, err)
 			continue

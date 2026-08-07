@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"fmt"
@@ -162,14 +162,14 @@ spec:
 	}
 
 	// Freshly rendered → no drift.
-	if err := checkManifestDrift(lz, aplDir, []string{"prod"}); err != nil {
+	if err := CheckManifestDrift(lz, aplDir, []string{"prod"}); err != nil {
 		t.Fatalf("expected no drift after render; got %v", err)
 	}
 	// Tamper → drift detected.
 	if err := os.WriteFile(filepath.Join(aplDir, "prod", "manifest", "kustomization.yaml"), []byte("hand-edited\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkManifestDrift(lz, aplDir, []string{"prod"}); err == nil {
+	if err := CheckManifestDrift(lz, aplDir, []string{"prod"}); err == nil {
 		t.Error("expected drift error after tampering with the committed kustomization")
 	}
 }

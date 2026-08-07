@@ -645,6 +645,22 @@ categories:
 #        (tflint rejects an unpinned module source, Renovate cannot bump it,
 #        copier s llz_version validator refuses it), so it errors rather than
 #        returning "". That behaviour had no direct test; it has four now.
+#   76th: render -> internal/render   7,712 -> 7,246 (-466 / 85 files)
+#        THE HUB THAT WAS BLOCKING THREE OTHER FILES. runRender is why scaffold.go
+#        could not move, why `llz upgrade` could not, and why checks.go could not
+#        (via hooks.go -> runLint). All three were recorded here as BLOCKED.
+#        render.go itself measured CLOSURE 6, and its only real edges were:
+#          first3   ONE LINE, an alias for linode.RegionShort
+#          indent   FIVE LINES, already duplicated once in this repo
+#        NOBODY HAD MEASURED THE BLOCKER ITSELF. Fifth overturned "blocked" call.
+#        When file A is stuck on a symbol in file B, MEASURE FILE B.
+#
+#        SECOND CASE FOR write-repo@configured. render writes tfvars into the
+#        working tree at configuration time; the grant carries {scaffolded,
+#        upgraded} only. `onboard` opened this gap one move ago from the
+#        credential side. TWO independent cases is what the rule asks for, so the
+#        next person can argue the widening rather than guess it. Both are
+#        recorded under Incomplete, not acted on.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -657,7 +673,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 7712
+    budget: 7246
     exact: true
     include:
       - "tools/cmd/llz/*.go"

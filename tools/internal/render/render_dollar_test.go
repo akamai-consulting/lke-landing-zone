@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"strings"
@@ -18,11 +18,11 @@ import (
 // databases map keys (those are additionally caught by validate.EnvName, but the
 // writer must not depend on a validator three layers up to avoid corrupting data).
 func TestRenderTfvars_DollarInValuesIsLiteral(t *testing.T) {
-	base, err := tfrootExample("cluster")
+	base, err := TfrootExample("cluster")
 	if err != nil {
 		t.Fatalf("read embedded cluster tfvars.example: %v", err)
 	}
-	out := renderTfvars(base, clusterspec.ClusterTFVars(clusterspec.Cluster{
+	out := Tfvars(base, clusterspec.ClusterTFVars(clusterspec.Cluster{
 		ClusterLabel: "c", Region: "us-ord", K8sVersion: "v1.33",
 		NodePool: clusterspec.NodePool{Type: "g8-dedicated-8-4", Count: 3},
 		Tags:     []string{"cost$1center", "owner${team}", "plain"},

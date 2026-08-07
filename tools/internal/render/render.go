@@ -1,4 +1,4 @@
-package main
+package render
 
 // render.go reconciles the declarative LandingZone spec (landingzone.yaml +
 // environments/<env>.yaml, see internal/clusterspec) into the files the rest of
@@ -37,8 +37,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 
@@ -53,10 +51,10 @@ func tfrootTokens() (upstreamOrg, ref string) {
 	return "akamai-consulting", envdef.OrElse(resolveTemplateRef(), "main")
 }
 
-// tfrootExample reads a root's terraform.tfvars.example from the embedded tfroots
+// TfrootExample reads a root's terraform.tfvars.example from the embedded tfroots
 // package (it no longer ships in the instance) and substitutes the copier tokens,
 // so the base each <env>.tfvars renders from is token-free.
-func tfrootExample(root string) (string, error) {
+func TfrootExample(root string) (string, error) {
 	b, err := tfroots.TfvarsExample(root)
 	if err != nil {
 		return "", err
@@ -65,85 +63,19 @@ func tfrootExample(root string) (string, error) {
 	return tfroots.Substitute(string(b), org, ref), nil
 }
 
-// envVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
-// or an empty line for a dedicated VPC, so the apply-vpc workflow step can decide
-// whether — and which — shared VPC to apply before the cluster. It reads the spec
-// when present (the source of truth), falling back to the rendered
-// cluster/<env>.tfvars (vpc_network) for a pre-spec instance.
-func envVPCCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "vpc <deployment>",
-		Short: "print the shared VPC a deployment attaches to (spec.networks name); empty for a dedicated VPC",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			env := args[0]
-			if err := validate.EnvName(env); err != nil {
-				return err
-			}
-			// Spec is the source of truth; the committed tfvars can lag a spec edit.
-			if lz, present, err := clusterspec.Detected(); present {
-				if err != nil {
-					return err
-				}
-				e, ok := lz.Env(env)
-				if !ok {
-					return fmt.Errorf("no such deployment %q in the spec (run `llz env list`)", env)
-				}
-				fmt.Println(e.Cluster.Network.VPC)
-				return nil
-			}
-			tfDir, _, _ := instancelayout.Detect()
-			p := filepath.Join(tfDir, "cluster", env+".tfvars")
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return fmt.Errorf("read %s (for spec-driven instances run `llz render %s` first): %w", p, env, err)
-			}
-			fmt.Println(tfvars.Value(string(b), "vpc_network"))
-			return nil
-		},
-	}
-}
-
-func renderCmd() *cobra.Command {
-	var tfvarsOnly, check, diff bool
-	c := &cobra.Command{
-		Use:   "render [env]",
-		Short: "reconcile the LandingZone spec into <env>.tfvars (spec-driven instances)",
-		Long: "Reads the LandingZone spec (landingzone.yaml + environments/<env>.yaml) and\n" +
-			"renders each deployment's cluster definition into the three\n" +
-			"terraform-iac-bootstrap/*/<env>.tfvars files the terraform plan/apply consume.\n" +
-			"With no [env], renders every environment in the spec. --check validates the\n" +
-			"spec without writing; --diff previews what a render WOULD change (also\n" +
-			"writes nothing). A no-op contract: callers gate on the presence of a spec\n" +
-			"(CI does), so instances that have not adopted it are unaffected.",
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			env := ""
-			if len(args) == 1 {
-				env = args[0]
-			}
-			return runRender(gopts, env, tfvarsOnly, check, diff)
-		},
-	}
-	c.Flags().BoolVar(&tfvarsOnly, "tfvars-only", false, "render only the tfvars (skip the committed manifest kustomizations)")
-	c.Flags().BoolVar(&check, "check", false, "validate the spec and exit non-zero on any error; write nothing")
-	c.Flags().BoolVar(&diff, "diff", false, "preview which files a render would create/change (writes nothing)")
-	return c
-}
-
-// renderedPath / wouldRenderPath print one file-mutation line with a consistent
+// RenderedPath / WouldRenderPath print one file-mutation line with a consistent
 // colored verb — color.Green for done, color.Cyan for a dry-run plan — so the render/scaffold
 // output reads as a scannable action log. Both degrade to plain text off a TTY
 // (color.go).
-func renderedPath(prefix, path string) {
+func RenderedPath(prefix, path string) {
 	fmt.Printf("  %s  %s%s\n", color.Green("rendered"), prefix, path)
 }
 
-func wouldRenderPath(prefix, path string) {
+func WouldRenderPath(prefix, path string) {
 	fmt.Printf("  %s  %s%s\n", color.Cyan("would-render"), prefix, path)
 }
 
-func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
+func Run(dryRun bool, env string, tfvarsOnly, check, diff bool) error {
 	tfDir, aplDir, relPrefix := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
@@ -185,7 +117,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 
 	// --diff previews what a render would create/change, writing nothing.
 	if diff {
-		return runRenderDiff(lz, envs, tfDir, aplDir, tfvarsOnly)
+		return RunDiff(lz, envs, tfDir, aplDir, tfvarsOnly)
 	}
 
 	targets, err := renderTargets(lz, envs, tfDir, aplDir, tfvarsOnly)
@@ -222,7 +154,6 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	//   - the shared-VPC (spec.networks) and per-env tfvars;
 	//   - unless --tfvars-only, the committed apl-values artifacts.
 	// filepathRel is relative to the instance root for both tfDir and aplDir targets.
-	dryRun := g.dryRun
 	if err := writeTargets(targets, tfDir, relPrefix, dryRun); err != nil {
 		return err
 	}
@@ -230,7 +161,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	// fetched) shared dns tree — it rides as a kustomize patch in each env's manifest
 	// overlay (RenderManifestKustomization), emitted above.
 	if !dryRun {
-		untrackRenderedTfvars(relPrefix)
+		UntrackRenderedTfvars(relPrefix)
 	}
 	return nil
 }
@@ -241,7 +172,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 func writeTargets(targets map[string]string, tfDir, relPrefix string, dryRun bool) error {
 	for _, dst := range slices.Sorted(maps.Keys(targets)) {
 		if dryRun {
-			wouldRenderPath(relPrefix, filepathRel(tfDir, dst))
+			WouldRenderPath(relPrefix, filepathRel(tfDir, dst))
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -250,7 +181,7 @@ func writeTargets(targets map[string]string, tfDir, relPrefix string, dryRun boo
 		if err := os.WriteFile(dst, []byte(targets[dst]), 0o644); err != nil {
 			return err
 		}
-		renderedPath(relPrefix, filepathRel(tfDir, dst))
+		RenderedPath(relPrefix, filepathRel(tfDir, dst))
 	}
 	return nil
 }
@@ -279,11 +210,11 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 	// when none are declared, so instances that use only dedicated VPCs never touch
 	// the vpc root.
 	for _, name := range slices.Sorted(maps.Keys(lz.Spec.Networks)) {
-		base, err := tfrootExample("vpc")
+		base, err := TfrootExample("vpc")
 		if err != nil {
 			return nil, fmt.Errorf("read embedded vpc tfvars.example (spec.networks needs the vpc root): %w", err)
 		}
-		targets[filepath.Join(tfDir, "vpc", name+".tfvars")] = renderTfvars(base, clusterspec.NetworkTFVars(name, lz.Spec.Networks[name]))
+		targets[filepath.Join(tfDir, "vpc", name+".tfvars")] = Tfvars(base, clusterspec.NetworkTFVars(name, lz.Spec.Networks[name]))
 	}
 
 	for _, name := range envs {
@@ -297,11 +228,11 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			"databases":      clusterspec.DatabasesTFVars(lz.ObjLabelPrefix(), name, e.Cluster),
 		}
 		for _, root := range instancelayout.Roots {
-			base, err := tfrootExample(root)
+			base, err := TfrootExample(root)
 			if err != nil {
 				return nil, fmt.Errorf("render %s: read embedded %s tfvars.example: %w", name, root, err)
 			}
-			targets[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns[root])
+			targets[filepath.Join(tfDir, root, name+".tfvars")] = Tfvars(base, assigns[root])
 		}
 		if tfvarsOnly {
 			continue
@@ -317,7 +248,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 	return targets, nil
 }
 
-// untrackRenderedTfvars self-heals an instance that committed its per-env tfvars
+// UntrackRenderedTfvars self-heals an instance that committed its per-env tfvars
 // before they became gitignored build artifacts: it drops any tracked
 // <env>.tfvars from the git index so the operator can commit the removal. The
 // terraform-iac-bootstrap/.gitignore (shipped by the template) keeps newly
@@ -327,7 +258,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 // Skipped in two cases: the in-template dev layout (relPrefix != "", not a real
 // instance repo), and CI (GITHUB_ACTIONS) — there the render is ephemeral and the
 // migration is a local, committed action, so CI's index must stay pristine.
-func untrackRenderedTfvars(relPrefix string) {
+func UntrackRenderedTfvars(relPrefix string) {
 	if relPrefix != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
 		return
 	}
@@ -383,7 +314,7 @@ func resolveTemplateRef() string {
 	return strings.TrimSpace(a.Commit)
 }
 
-// resolveLLZImageTag returns the tag for the in-cluster llz image the shared
+// ResolveLLZImageTag returns the tag for the in-cluster llz image the shared
 // components run (reconciler / harbor-provisioner). The image NAME is a constant
 // (ghcr.io/akamai-consulting/llz — no forks), so only the tag varies; a carved app's
 // kustomize `images:` transformer overrides it. Priority mirrors resolveTemplateRef:
@@ -392,7 +323,7 @@ func resolveTemplateRef() string {
 //  2. .copier-answers.yml llz_version — a real instance pins to its release tag or
 //     the commit it was rendered from, mapped to a PUBLISHED tag by llzImageTagFor;
 //  3. "latest".
-func resolveLLZImageTag() string {
+func ResolveLLZImageTag() string {
 	if r := strings.TrimSpace(os.Getenv("LLZ_IMAGE_REF")); r != "" {
 		if i := strings.LastIndex(r, ":"); i >= 0 && !strings.Contains(r[i+1:], "/") {
 			return r[i+1:]
@@ -477,8 +408,8 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// The in-cluster llz image tag (reconciler / harbor-provisioner CronJob AND the
 	// clusterHealthWorkflow WorkflowTemplate) is the per-instance value a remote,
 	// token-free component can't bake — a carved app's images: transformer or the
-	// manifest overlay's JSON6902 patch sets it locally. See resolveLLZImageTag.
-	imageTag := resolveLLZImageTag()
+	// manifest overlay's JSON6902 patch sets it locally. See ResolveLLZImageTag.
+	imageTag := ResolveLLZImageTag()
 	// The revision this env's in-repo Argo CD content is pinned to — shared by the
 	// platform-bootstrap Application, the carved component Apps, and the env-revision
 	// marker. (The instance-custom ApplicationSet deliberately does NOT use it — the
@@ -624,13 +555,13 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	return out
 }
 
-// checkManifestDrift verifies every env's committed apl-values artifacts match what
+// CheckManifestDrift verifies every env's committed apl-values artifacts match what
 // its components render — the readiness guard so a spec edit can't silently diverge
 // from the committed (Argo-synced) tree. Reports all drifted files at once. Scoped
 // deliberately to the COMMITTED targets: `llz ready` scans the (gitignored) rendered
 // tfvars separately, and they need not exist yet when it runs. `llz render --check`
 // checks the full renderTargets set instead.
-func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []string) error {
+func CheckManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []string) error {
 	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
@@ -647,7 +578,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 
 // reportDrift compares a render target set against the tree on disk and reports
 // every drifted file at once — the shared body of `llz render --check` and
-// checkManifestDrift. A target whose content differs is always drift; a target that
+// CheckManifestDrift. A target whose content differs is always drift; a target that
 // is ABSENT is drift only when mustExist says so, which is how the committed
 // apl-values (absent == drift) are separated from the gitignored build artifacts
 // under terraform-iac-bootstrap (absent == simply not rendered yet).
@@ -679,14 +610,14 @@ func reportDrift(targets map[string]string, mustExist func(path string) bool) er
 // applyAssigns sets each `key = value` in content, replacing an existing
 // assignment line (tfvars.SetField) or appending the key when it is absent — so a
 // field the example commented out (e.g. obj_key_rotation_days) is still honored.
-// renderTfvars applies the spec assignments onto a root's terraform.tfvars.example
+// Tfvars applies the spec assignments onto a root's terraform.tfvars.example
 // and returns the canonically-formatted result. Formatting matters because the
 // field setter replaces a value in place without re-aligning the `=` columns
 // `tofu fmt` expects — so an unformatted render fails the `tofu fmt -check` in
 // `llz lint` (the instance pre-commit hook). Both the write path and the
 // `render --check`/`--diff` path go through here, so committed and re-rendered
 // tfvars stay byte-identical (no false drift).
-func renderTfvars(base string, assigns []clusterspec.Assign) string {
+func Tfvars(base string, assigns []clusterspec.Assign) string {
 	return fmtHCL(applyAssigns(base, assigns))
 }
 
@@ -735,12 +666,12 @@ func filepathRel(tfDir, dst string) string {
 	return dst
 }
 
-// runRenderDiff prints, per target file, whether a render would create or change
+// RunDiff prints, per target file, whether a render would create or change
 // it (with a compact line diff), writing nothing. It previews the SAME renderTargets
 // set the write path writes and --check compares, so the preview cannot drift from
 // what a render actually does: the generated TF roots, the shared-VPC tfvars, each
 // env's tfvars, and — unless tfvarsOnly — the committed apl-values artifacts.
-func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) error {
+func RunDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) error {
 	want, err := renderTargets(lz, envs, tfDir, aplDir, tfvarsOnly)
 	if err != nil {
 		return err

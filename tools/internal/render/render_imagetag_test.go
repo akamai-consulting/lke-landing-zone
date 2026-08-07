@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"io"
@@ -90,15 +90,15 @@ func TestLLZImageTagForWarnsOnlyWhenUnmappable(t *testing.T) {
 func TestResolveLLZImageTagPrefersEnv(t *testing.T) {
 	const sha = "13e8941a8fc04a8096c90695f7005626b4384b78"
 	t.Setenv("LLZ_IMAGE_REF", "ghcr.io/akamai-consulting/llz:sha-"+sha)
-	if got, want := resolveLLZImageTag(), "sha-"+sha; got != want {
-		t.Errorf("resolveLLZImageTag() = %q, want %q", got, want)
+	if got, want := ResolveLLZImageTag(), "sha-"+sha; got != want {
+		t.Errorf("ResolveLLZImageTag() = %q, want %q", got, want)
 	}
 }
 
 // A registry reference carrying a port must not be mistaken for a tag separator.
 func TestResolveLLZImageTagEnvWithoutTag(t *testing.T) {
 	t.Setenv("LLZ_IMAGE_REF", "registry.example.com:5000/llz")
-	if got, want := resolveLLZImageTag(), "registry.example.com:5000/llz"; got != want {
-		t.Errorf("resolveLLZImageTag() = %q, want %q", got, want)
+	if got, want := ResolveLLZImageTag(), "registry.example.com:5000/llz"; got != want {
+		t.Errorf("ResolveLLZImageTag() = %q, want %q", got, want)
 	}
 }

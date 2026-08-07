@@ -1,4 +1,4 @@
-package main
+package render
 
 // Golden-file test for `llz render`.
 //
@@ -41,14 +41,10 @@ import (
 	"crypto/sha256"
 	"flag"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/render_golden.txt from the current render")
@@ -98,7 +94,7 @@ var hclRunOfSpaces = regexp.MustCompile(`(\S) {2,}`)
 
 // normalizeRendered makes a rendered artifact comparable across machines.
 //
-// renderTargets pipes HCL through `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with
+// RenderTargets pipes HCL through `tofu fmt` BEST-EFFORT (go:fmtHCL): with
 // the binary present the `=` signs AND trailing comments are column-aligned,
 // without it they are not. A golden captured where tofu is installed therefore
 // fails where it is not — which is how this first landed: color.Green locally, color.Red on
@@ -130,8 +126,8 @@ func serializeRender(targets map[string]string, instRoot string) string {
 	for _, p := range paths {
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, instRoot), "/")
 		if specDerived(p) {
-			// dealign before comparing. renderTargets pipes HCL through
-			// `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with the binary present
+			// dealign before comparing. RenderTargets pipes HCL through
+			// `tofu fmt` BEST-EFFORT (go:fmtHCL): with the binary present
 			// the `=` signs are column-aligned, without it they are not. A golden
 			// captured on a machine that has tofu therefore fails on one that does
 			// not — which is exactly how this first landed, color.Green locally and color.Red
@@ -150,72 +146,8 @@ func serializeRender(targets map[string]string, instRoot string) string {
 	return b.String()
 }
 
-func TestRenderGolden(t *testing.T) {
-	// Pin the copier token that tfrootTokens() resolves; otherwise the render
-	// depends on a .copier-answers.yml in whatever cwd the test runs from.
-	t.Setenv("LLZ_TEMPLATE_REF", "v0.0.0-golden")
-
-	const instRoot = "/inst"
-	tfDir := filepath.Join(instRoot, "terraform-iac-bootstrap")
-	aplDir := filepath.Join(instRoot, "apl-values")
-
-	lz, err := clusterspec.Decode([]byte(goldenSpec))
-	if err != nil {
-		t.Fatalf("decode goldenSpec: %v", err)
-	}
-	// tfvarsOnly=false so the apl-values artifacts render too — those are the
-	// committed, Argo-synced half of the output and the half `llz render --check`
-	// drift-guards in an instance.
-	targets, err := renderTargets(lz, []string{"prod", "staging"}, tfDir, aplDir, false)
-	if err != nil {
-		t.Fatalf("renderTargets: %v", err)
-	}
-	got := serializeRender(targets, instRoot)
-
-	path := filepath.Join("testdata", "render_golden.txt")
-	if *updateGolden {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("wrote %s (%d bytes) — REVIEW THE DIFF before committing", path, len(got))
-		return
-	}
-
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read golden: %v (regenerate with: go test ./cmd/llz -run TestRenderGolden -update)", err)
-	}
-	if string(want) == got {
-		return
-	}
-
-	// Report the first differing line rather than dumping both files: a 50KB
-	// diff in test output is not read, and an unread failure message is the same
-	// problem as an unread golden.
-	gl, wl := strings.Split(got, "\n"), strings.Split(string(want), "\n")
-	for i := 0; i < len(gl) || i < len(wl); i++ {
-		var g, w string
-		if i < len(gl) {
-			g = gl[i]
-		}
-		if i < len(wl) {
-			w = wl[i]
-		}
-		if g != w {
-			t.Fatalf("render output changed at line %d\n  golden: %q\n  actual: %q\n\n"+
-				"If this change is intended, regenerate and REVIEW the diff:\n"+
-				"  go test ./cmd/llz -run TestRenderGolden -update\n"+
-				"(%d golden lines, %d actual)", i+1, w, g, len(wl), len(gl))
-		}
-	}
-	t.Fatalf("render output differs in length only: golden %d lines, actual %d", len(wl), len(gl))
-}
-
 // The golden is only meaningful if the serialization it compares actually
-// distinguishes a changed render. This asserts the two halves of that: a changed
+// distinguishes a changed  This asserts the two halves of that: a changed
 // spec-derived VALUE shows up (full content), and a changed static file shows up
 // too (via its hash), so neither half can drift silently.
 func TestRenderGoldenSerializationDiscriminates(t *testing.T) {

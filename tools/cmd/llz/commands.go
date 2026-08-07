@@ -21,6 +21,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
@@ -684,7 +685,7 @@ func renderAfterUpgrade(g globalOpts) error {
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil
 	}
-	if err := runRender(g, "", false, false, false); err != nil {
+	if err := render.Run(g.dryRun, "", false, false, false); err != nil {
 		return fmt.Errorf("the copier update applied cleanly, but re-rendering the spec failed — the scaffold is "+
 			"at the new ref while the committed apl-values still reference the OLD one, which is what ArgoCD would "+
 			"sync. Fix the problem below and run `llz render` before committing:\n%w", err)

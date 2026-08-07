@@ -14,6 +14,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 )
 
 func init() { installEnvTopologyDeps() }
@@ -34,7 +35,7 @@ func installEnvTopologyDeps() {
 		},
 		// `llz env set` writes the declarative source and then re-renders; this is
 		// the second half of every mutation the extension performs.
-		Render:      func(env string) error { return runRender(gopts, env, false, false, false) },
+		Render:      func(env string) error { return render.Run(gopts.dryRun, env, false, false, false) },
 		DryRun:      gopts.dryRun,
 		PromoteDeps: promoteDeps,
 	})

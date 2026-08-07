@@ -8,6 +8,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 )
 
 // writeSpecInstance lays a minimal spec-driven instance into the current dir: a
@@ -45,6 +46,8 @@ spec:
 
 // #2: readTopology / promotionRanks read the SPEC, so role/peer/next stay correct
 // even when no tfvars exist (a spec edit that wasn't rendered).
+// #2: readTopology / promotionRanks read the SPEC, so role/peer/next stay correct
+// even when no tfvars exist (a spec edit that wasn't rendered).
 func TestReadTopologyFromSpec(t *testing.T) {
 	chdirTempDir(t)
 	writeSpecInstance(t, map[string]string{
@@ -79,6 +82,8 @@ func TestReadTopologyFromSpec(t *testing.T) {
 
 // #5: render --diff reports new files for an un-rendered env, and a no-op once the
 // committed apl-values match.
+// #5: render --diff reports new files for an un-rendered env, and a no-op once the
+// committed apl-values match.
 func TestRenderDiff(t *testing.T) {
 	chdirTempDir(t)
 	writeSpecInstance(t, map[string]string{"lab": clusterDef("lab", "")})
@@ -94,28 +99,13 @@ func TestRenderDiff(t *testing.T) {
 	}
 	var rerr error
 	out := captureStdout(t, func() {
-		rerr = runRenderDiff(lz, []string{"lab"}, "terraform-iac-bootstrap", "apl-values", false)
+		rerr = render.RunDiff(lz, []string{"lab"}, "terraform-iac-bootstrap", "apl-values", false)
 	})
 	if rerr != nil {
-		t.Fatalf("runRenderDiff: %v", rerr)
+		t.Fatalf("render.RunDiff: %v", rerr)
 	}
 	if !strings.Contains(out, "+ new") || !strings.Contains(out, "would change") {
 		t.Errorf("diff should report new files:\n%s", out)
-	}
-}
-
-func TestLineDiff(t *testing.T) {
-	// Localized change → shows the -/+ pair with context, no truncation note.
-	d := lineDiff("a\nb\nc\n", "a\nB\nc\n")
-	if !strings.Contains(d, "- b") || !strings.Contains(d, "+ B") {
-		t.Errorf("lineDiff missing the change:\n%s", d)
-	}
-	if strings.Contains(d, "more changes") {
-		t.Errorf("small diff should not truncate:\n%s", d)
-	}
-	// New file (old empty) → all additions.
-	if d := lineDiff("", "x\ny\n"); !strings.Contains(d, "+ x") || !strings.Contains(d, "+ y") {
-		t.Errorf("new-file diff wrong:\n%s", d)
 	}
 }
 

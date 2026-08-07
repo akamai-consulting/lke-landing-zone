@@ -13,6 +13,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 )
 
 func init() { installConfigReadinessDeps() }
@@ -22,6 +23,6 @@ func installConfigReadinessDeps() {
 		Exec:               func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		CloudToken:         linode.TokenFromEnv,
 		LoadSpec:           func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
-		CheckManifestDrift: checkManifestDrift,
+		CheckManifestDrift: render.CheckManifestDrift,
 	})
 }

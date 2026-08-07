@@ -13,6 +13,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
@@ -88,7 +89,7 @@ func runAppToggle(env, app string, enable bool) error {
 	}
 	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", color.Green(done), app, env, path, value)
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
-	return runRender(gopts, env, false, false, false)
+	return render.Run(gopts.dryRun, env, false, false, false)
 }
 
 // findComponent returns the component registry entry for an exact name.

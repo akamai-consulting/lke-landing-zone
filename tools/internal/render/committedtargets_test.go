@@ -1,6 +1,10 @@
-package main
+package render
 
-// STAYED: committedTargets is in render.go — the render path, not the topology
+// FOLLOWED ITS SUBJECT: this header used to read "STAYED: committedTargets is in
+// render.go" — an accurate note about a boundary that has since moved. render.go
+// is internal/render now and the test came with it.
+//
+// committedTargets is the render path, not the topology
 // reader. Another passenger on env_set_test.go.
 
 import (

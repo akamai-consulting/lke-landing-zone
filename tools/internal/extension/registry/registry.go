@@ -79,6 +79,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
@@ -144,6 +145,7 @@ var declarations = []func() extension.Extension{
 	selfupgrade.Extension,
 	templatecommit.Extension,
 	onboard.Extension,
+	render.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

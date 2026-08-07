@@ -22,6 +22,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
@@ -47,7 +48,7 @@ func brownfieldDeps() brownfield.Deps {
 			return yamledit.EditSpecFile(path, mutate, parse)
 		},
 		SetSpecPath:            yamledit.SetSpecPath,
-		Render:                 func(env string) error { return runRender(gopts, env, false, false, false) },
+		Render:                 func(env string) error { return render.Run(gopts.dryRun, env, false, false, false) },
 		KubectlOut:             kubectlprobe.Out,
 		Confirm:                func() bool { return gopts.yes },
 		DefaultAplChartVersion: clusterspec.BaselineAplChartVersion,
