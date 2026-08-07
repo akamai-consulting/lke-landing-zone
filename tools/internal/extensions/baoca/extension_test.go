@@ -1,7 +1,6 @@
 package baoca
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
@@ -43,8 +42,12 @@ func TestStaysAClusterOnlyExchange(t *testing.T) {
 		t.Error("a cloud grant appeared — this is a cluster-only exchange, and that is what " +
 			"made it separable from openbao-lifecycle's other eight files")
 	}
-	inc := strings.ToLower(strings.Join(Extension().Incomplete, " "))
-	if !strings.Contains(inc, "openbao-lifecycle") {
-		t.Error("the note no longer names the row this is a slice of")
+	// The Incomplete check that used to sit here is gone with the note. It asserted
+	// the note still named the openbao-lifecycle row; the rest of that row has since
+	// been extracted across four other packages, so the note was deleted rather than
+	// maintained. What survives above is the claim that still bites: cluster-only.
+	if len(Extension().Incomplete) != 0 {
+		t.Errorf("Incomplete came back (%v) — if a slice really left, say which and why",
+			Extension().Incomplete)
 	}
 }

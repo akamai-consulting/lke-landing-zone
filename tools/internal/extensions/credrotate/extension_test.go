@@ -47,15 +47,16 @@ func TestBothDeclareMintAndCustody(t *testing.T) {
 	}
 }
 
-// Both are partial, and both say so. The rotation table is the third wall.
-func TestPartialsStayMarked(t *testing.T) {
+// BOTH ROWS ARE WHOLE NOW, so this runs the other way. It used to assert each
+// note stayed non-empty and kept naming "the rotation table" — the wall that held
+// the mint and in-cluster paths in package main. That wall came down and the paths
+// followed: rotate-incluster-pat, mint-bootstrap-objkeys and temp-objkey are this
+// package, rotate-broad-pat went to assertsecrets. A note reappearing means a path
+// left again, and that should be argued rather than typed.
+func TestNoPathsAreOutstanding(t *testing.T) {
 	for _, e := range []extension.Extension{PATExtension(), ObjKeyExtension()} {
-		inc := strings.ToLower(strings.Join(e.Incomplete, " "))
-		if inc == "" {
-			t.Fatalf("%s: Incomplete emptied — its mint/in-cluster paths are still in package main", e.Name)
-		}
-		if !strings.Contains(inc, "rotation table") {
-			t.Errorf("%s: the note no longer names the wall that kept the rest back", e.Name)
+		if inc := strings.Join(e.Incomplete, " "); inc != "" {
+			t.Errorf("%s: Incomplete came back (%q) — name the path that left and why", e.Name, inc)
 		}
 	}
 }

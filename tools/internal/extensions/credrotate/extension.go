@@ -38,6 +38,15 @@ package credrotate
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
+// BOTH INCOMPLETE NOTES ARE GONE, AND BOTH PREDICTED THEIR OWN END. They recorded
+// four paths as "still in package main — but the wall is GONE ... ordinary
+// extractions from here, not blocked ones", and that is how it went:
+// rotate-incluster-pat, mint-bootstrap-objkeys and temp-objkey are this package;
+// rotate-broad-pat went to assertsecrets with the lane that drives it.
+//
+// Worth keeping the shape in mind: a note that says WHY something is blocked ages
+// badly, because the reason expires before anyone re-reads the note. Four of the
+// six notes making that claim across the catalog were stale when re-measured.
 // PATExtension is the `credential-pat` declaration.
 //
 //	transition:seeded[cloud-mutate, secret-custody]
@@ -62,13 +71,6 @@ func PATExtension() extension.Extension {
 			State:  extension.Seeded,
 			Grants: []extension.Grant{extension.CloudMutate, extension.SecretCustody},
 		}},
-		Incomplete: []string{
-			"the in-cluster PAT path (ci_incluster_pat.go, closure 10) and the broad-PAT drill " +
-				"(ci_rotate_broad_pat.go, closure 4) are still in package main — but the wall they " +
-				"sat behind is GONE. Both reached ci_rotate_linode_creds.go's rotation table and " +
-				"linode_token.go's in-cluster token layer, which are now this package. They are " +
-				"ordinary extractions from here, not blocked ones.",
-		},
 	}
 }
 
@@ -92,11 +94,5 @@ func ObjKeyExtension() extension.Extension {
 			State:  extension.Seeded,
 			Grants: []extension.Grant{extension.CloudMutate, extension.SecretCustody},
 		}},
-		Incomplete: []string{
-			"the mint path (ci_mint_objkeys.go, closure 6), the temp-key path (ci_temp_objkey.go, " +
-				"closure 5) and the obj-cluster resolver are still in package main — but the wall " +
-				"is GONE: the rotation table they reached is now this package. Ordinary " +
-				"extractions from here.",
-		},
 	}
 }

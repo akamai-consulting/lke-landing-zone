@@ -40,6 +40,11 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // prevents is a seeder that treats an unreachable OpenBao as an empty one and
 // overwrites a live credential — which is why this package's two capability
 // defaults ERROR rather than doing nothing.
+// THE INCOMPLETE NOTE IS GONE. It listed ten files "still in package main" and
+// measured the set at "20 outbound against ~25 inbound, which is six boundaries
+// rather than one". The six boundaries were taken one at a time: baolifecycle,
+// identityconfig, openbao, baoca, harbor and healthsla. Nothing it named remains
+// in package main, and no single move ever had to carry the whole row.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "openbao-seed",
@@ -50,13 +55,5 @@ func Extension() extension.Extension {
 			State:  extension.Seeded,
 			Grants: []extension.Grant{extension.ReadRepo, extension.ClusterRead, extension.SecretCustody},
 		}},
-		Incomplete: []string{
-			"this is the SEEDING third of the catalog's openbao-lifecycle row. The other " +
-				"ten files — init, unseal/ensure-ready, breakglass, regen-root, the peer CA, " +
-				"configure and the login paths — are still in package main. They are entangled " +
-				"with ci_harbor, ci_health_sla, ci_converge, secret_apply, verify and " +
-				"ci_keycloak_configure; the set measures 20 outbound against ~25 inbound, which " +
-				"is six boundaries rather than one.",
-		},
 	}
 }

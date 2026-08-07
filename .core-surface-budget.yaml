@@ -913,6 +913,28 @@ categories:
 #        TWO FLOORS DOWN: lint 45->37 and template-commit 92->84, the same
 #        dilution every batch has had -- untested cobra wiring joining a tested
 #        capability. Both files were equally untested in package main.
+#   89th: stale notes re-measured, tf-apply/import declared   2,033 -> 1,700 (-333)
+#        THE POINT WAS THE NOTES, NOT THE LINES. Six Incomplete notes across the
+#        catalog made a falsifiable claim -- "X is still in package main". FOUR
+#        WERE STALE: baoca and baoseed each listed eight-to-ten openbao-lifecycle
+#        files that have since gone to baolifecycle/identityconfig/openbao/harbor/
+#        healthsla; credrotate named four paths that are now here or in
+#        assertsecrets; bootstrapcluster`s PinnedTemplateRef seam had become a var
+#        the package self-installed, which is dead indirection, and collapsed to a
+#        direct answers.PinnedTemplateRef() call.
+#        A NOTE THAT SAYS WHY SOMETHING IS BLOCKED AGES BADLY -- the reason expires
+#        before anyone re-reads the note. Every one of the four PREDICTED its own
+#        end ("the wall they sat behind is GONE ... ordinary extractions") and none
+#        was deleted when the prediction came true. Four pinning tests FLIPPED:
+#        they used to fail if a note was emptied, and now fail if one reappears
+#        unargued. Partial markers 20 -> 16.
+#        TWO BINDINGS ARGUED, NOT ASSUMED. tf-apply and tf-import sat in main long
+#        after plan/output/destroy left because tofu-driver declared only
+#        ASSERTIONS at `provisioned` and an apply is a TRANSITION. Both now hold
+#        transition:provisioned[cloud-mutate]. `import` holds cloud-mutate despite
+#        sounding read-only: it writes TERRAFORM STATE, which lives in a remote
+#        object-storage backend. The extension`s own test refused the new rows by
+#        construction (`default: unexpected binding`) until each was argued into it.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -925,7 +947,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 2033
+    budget: 1700
     exact: true
     include:
       - "tools/cmd/llz/*.go"

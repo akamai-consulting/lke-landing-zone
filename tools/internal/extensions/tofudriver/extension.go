@@ -35,10 +35,22 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 // No ceiling change: cloud-mutate is legal at `destroyed` — that row exists for
 // exactly this — and cloud-read is unrestricted.
+// TWO ROWS ADDED WHEN apply/import FINALLY MOVED, and they are why those two sat
+// in package main long after plan/output/destroy left: this extension declared
+// only ASSERTIONS at `provisioned`, and an apply is a TRANSITION. Moving them
+// without arguing a binding would have put a cloud write behind a `cloud-read`
+// declaration.
+//
+// `import` holds cloud-mutate and not cloud-read, which is worth stating because
+// the verb sounds read-only. It writes TERRAFORM STATE, and this instance's state
+// lives in a remote object-storage backend — so importing mutates something in the
+// cloud even though it creates no Linode resource.
+//
+// No ceiling change either way: cloud-mutate is legal at `provisioned`.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "tofu-driver",
-		Short:  "plan, read and destroy the Terraform roots — the thin verbs over internal/terraform",
+		Short:  "plan, apply, import, read and destroy the Terraform roots — the thin verbs over internal/terraform",
 		Always: true,
 		Bindings: []extension.Binding{
 			{
@@ -52,6 +64,18 @@ func Extension() extension.Extension {
 				Name:   "output",
 				State:  extension.Provisioned,
 				Grants: []extension.Grant{extension.CloudRead},
+			},
+			{
+				Kind:   extension.Transition,
+				Name:   "apply",
+				State:  extension.Provisioned,
+				Grants: []extension.Grant{extension.CloudMutate},
+			},
+			{
+				Kind:   extension.Transition,
+				Name:   "import",
+				State:  extension.Provisioned,
+				Grants: []extension.Grant{extension.CloudMutate},
 			},
 			{
 				Kind:   extension.Transition,

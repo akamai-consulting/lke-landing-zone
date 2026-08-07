@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -134,7 +135,7 @@ func RunBootstrapCluster(f BootstrapFlags) error {
 		clusterID:        firstNonEmpty(f.ClusterID, os.Getenv("LKE_CLUSTER_ID")),
 		instanceRepo:     f.InstanceRepo,
 		upstreamOrg:      firstNonEmpty(f.UpstreamOrg, "akamai-consulting"),
-		templateRef:      firstNonEmpty(f.TemplateRef, PinnedTemplateRef(), "main"),
+		templateRef:      firstNonEmpty(f.TemplateRef, answers.PinnedTemplateRef(), "main"),
 		appsRepoRevision: f.AppsRepoRevision,
 		// A PRIVATE fork keeping its first-party OCI charts/images private needs the
 		// GHCR repo + pull secrets in the argocd namespace (empty token = public path,

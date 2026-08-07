@@ -21,7 +21,7 @@ func TestExtensionDeclarationValidates(t *testing.T) {
 // the two verbs a reviewer is MOST likely to assume are safe, and a grant line
 // saying otherwise would either be ignored or would teach them to ignore grant
 // lines. If plan ever starts applying, that is not a grant change — it is a bug.
-func TestOnlyDestroyMutates(t *testing.T) {
+func TestEachVerbDeclaresWhatItDoes(t *testing.T) {
 	for _, b := range Extension().Bindings {
 		mutates := false
 		for _, g := range b.Grants {
@@ -37,6 +37,18 @@ func TestOnlyDestroyMutates(t *testing.T) {
 			}
 			if b.Kind != extension.Assertion || b.State != extension.Provisioned {
 				t.Errorf("%s: binding = %s, want assertion:provisioned", b.Name, b)
+			}
+		case "apply", "import":
+			// THE NAME OF THIS TEST USED TO BE TestOnlyDestroyMutates, and it was true
+			// while apply/import sat in package main. It is not any more: an apply is
+			// the transition that REACHES `provisioned`, and declaring it read-only
+			// would be the lie the `plan` case above exists to prevent.
+			if !mutates {
+				t.Errorf("%s dropped its mutating grant — apply creates the substrate, and "+
+					"import writes Terraform state to a remote object-storage backend", b.Name)
+			}
+			if b.Kind != extension.Transition || b.State != extension.Provisioned {
+				t.Errorf("%s: binding = %s, want transition:provisioned", b.Name, b)
 			}
 		case "destroy":
 			if !mutates {

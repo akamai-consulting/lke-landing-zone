@@ -34,6 +34,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // extraction reads one. Both are cluster operations end to end: this extension
 // never speaks to OpenBao's API at all, which is why it is separable from the rest
 // of its row and the rest of its row is not.
+// THE INCOMPLETE NOTE IS GONE, AND IT WAS RIGHT ABOUT THE STRATEGY. It said
+// "eight files remain in package main: init, ensure-ready/unseal, breakglass,
+// regen-root, configure and the login paths ... take the next boundary that
+// exists rather than the row". That is exactly what happened: the openbao
+// lifecycle row was sliced across FIVE extensions rather than forced into one —
+// baolifecycle (init, ensure-ready, breakglass, regen-root), identityconfig
+// (configure), openbao (login), baoseed (seeding) and this one (the CA pair).
+// Nothing it named is in package main any more.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "openbao-peer-ca",
@@ -44,12 +52,5 @@ func Extension() extension.Extension {
 			State:  extension.Provisioned,
 			Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
 		}},
-		Incomplete: []string{
-			"this is the CA slice of the catalog's openbao-lifecycle row, and the second " +
-				"slice taken (openbao-seed was the first). Eight files remain in package main: " +
-				"init, ensure-ready/unseal, breakglass, regen-root, configure and the login " +
-				"paths. They are entangled with ci_harbor, ci_health_sla, ci_converge and " +
-				"verify; take the next boundary that exists rather than the row.",
-		},
 	}
 }

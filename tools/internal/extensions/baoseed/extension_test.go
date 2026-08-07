@@ -30,15 +30,15 @@ func TestDeclaresCustody(t *testing.T) {
 	}
 }
 
-// The partial is recorded. Ten of thirteen files in the catalog's row are still in
-// package main, and nothing else says so.
-func TestPartialStaysMarked(t *testing.T) {
-	inc := strings.ToLower(strings.Join(Extension().Incomplete, " "))
-	if inc == "" {
-		t.Fatal("Incomplete emptied — this is one third of the openbao-lifecycle row")
-	}
-	if !strings.Contains(inc, "openbao-lifecycle") {
-		t.Error("the note no longer names the row this is part of")
+// THE ROW IS WHOLE NOW, so this guard runs the other way. It used to assert the
+// note stayed non-empty and kept naming openbao-lifecycle, because ten of that
+// row's files were still in package main. They were extracted one boundary at a
+// time — baolifecycle, identityconfig, openbao, baoca, harbor, healthsla — so the
+// note was deleted. A note reappearing here means a slice left again, and that
+// should be argued rather than typed.
+func TestNoSliceIsOutstanding(t *testing.T) {
+	if inc := strings.Join(Extension().Incomplete, " "); inc != "" {
+		t.Errorf("Incomplete came back (%q) — name the slice that left and why", inc)
 	}
 }
 
