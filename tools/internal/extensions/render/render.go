@@ -30,10 +30,10 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"

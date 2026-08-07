@@ -18,11 +18,26 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 )
 
 // Client targets one regional OpenBao cluster.
+// BaoStore is the read/write surface a caller needs from this client, and the
+// seam a test replaces. IT CAME FROM internal/extensions/credrotate, which
+// declared it because the rotator was the first thing to want it -- and which
+// meant every other caller reached through a rotation package for a two-method
+// interface over the client sitting right here.
+type BaoStore interface {
+	Get(ctx context.Context, path, key string) (string, bool, error)
+	Write(ctx context.Context, path string, data map[string]string) error
+}
+
 type Client struct {
 	addr      string
 	token     string
@@ -535,4 +550,188 @@ func DualWrite(ctx context.Context, primary, secondary *Client, path string, dat
 func respBody(resp *http.Response) string {
 	b, _ := io.ReadAll(resp.Body)
 	return strings.TrimSpace(string(b))
+}
+
+// ExecArgv builds the kubectl-exec argv for the in-pod `bao` CLI, which reaches
+// OpenBao over its loopback listener. It came across from the extension's cli.go
+// because it is the same wire layer by another transport -- everything it needs
+// (baoread.Namespace, baoread.LoopbackEnv) is already shared substrate, and
+// health-sla imported the whole OpenBao capability for this one argv builder.
+func ExecArgv(pod, token string, args []string) []string {
+	argv := []string{"-n", baoread.Namespace, "exec", "-i", "-c", "openbao", pod, "--", "env"}
+	argv = append(argv, baoread.LoopbackEnv()...)
+	// Both names, same reason as the address above. The chart does not set
+	// BAO_TOKEN today, so VAULT_TOKEN alone happens to work — but it works by
+	// luck, and the shadowing rule is the same one that broke the address.
+	argv = append(argv, "BAO_TOKEN="+token, "VAULT_TOKEN="+token, "bao")
+	return append(argv, args...)
+}
+
+// ── ADDRESSING A DEPLOYMENT'S OpenBao ────────────────────────────────────────
+//
+// NewClientFor and ClientForward came across with the rest of the client. They
+// were the last thing holding `database` to the OpenBao extension, and the only
+// reason they had stayed behind is that ClientForward reads envtopology.RoleActive
+// -- which was itself an extension until the same sweep moved the HA topology
+// model down here. Two packages each waiting on the other to become substrate is
+// the shape this campaign keeps finding: a set that measures badly is usually not
+// entangled with the code it names, it is waiting on a layer nobody has separated.
+
+// Client builds a client for an HA role from the OPENBAO_* env. Pure
+// (env → client, no side effects); the auto port-forward default lives in
+// ClientForward, which callers use.
+func NewClientFor(role string) (*Client, error) {
+	var addr, token string
+	switch role {
+	case envtopology.RoleActive:
+		addr, token = os.Getenv("OPENBAO_ADDR_ACTIVE"), firstNonEmpty(os.Getenv("OPENBAO_TOKEN_ACTIVE"), os.Getenv("OPENBAO_TOKEN"))
+	case envtopology.RoleStandby:
+		addr, token = os.Getenv("OPENBAO_ADDR_STANDBY"), firstNonEmpty(os.Getenv("OPENBAO_TOKEN_STANDBY"), os.Getenv("OPENBAO_TOKEN"))
+	default:
+		return nil, fmt.Errorf("role must be 'active' or 'standby'; got %q", role)
+	}
+	if addr == "" {
+		return nil, fmt.Errorf("OPENBAO_ADDR_%s is not set", strings.ToUpper(role))
+	}
+	if token == "" {
+		return nil, fmt.Errorf("OPENBAO_TOKEN_%s (or OPENBAO_TOKEN) is not set — mint a team-scoped token with `eval \"$(llz openbao login --team <name>)\"`", strings.ToUpper(role))
+	}
+	return New(addr, token, os.Getenv("OPENBAO_NAMESPACE"), 30*time.Second), nil
+}
+
+// ClientForward is Client plus the auto port-forward default. It
+// returns a cleanup func the caller MUST defer (a no-op unless a port-forward was
+// opened). When OPENBAO_ADDR_<role> is set it delegates to Client
+// verbatim. Otherwise — only for the active role of a standalone deployment — it
+// opens a port-forward and builds an insecure (loopback) client. A standby, or an
+// active with a standby configured (an HA pair the operator addresses
+// explicitly), keeps the plain env behavior and its "not set" error.
+func ClientForward(role string) (*Client, func(), error) {
+	noop := func() {}
+	// An explicitly set address always wins — CI, HA, or a deliberate override.
+	if os.Getenv("OPENBAO_ADDR_"+strings.ToUpper(role)) != "" {
+		c, err := NewClientFor(role)
+		return c, noop, err
+	}
+	// Auto-forward only the active cluster of a standalone deployment; anything
+	// else keeps Client's explicit-addressing contract (and error text).
+	if role != envtopology.RoleActive || StandbyConfigured() {
+		c, err := NewClientFor(role)
+		return c, noop, err
+	}
+	// The port-forward supplies the address, never the token. Accept
+	// OPENBAO_ROOT_TOKEN too: `llz openbao regen-root` → export it → seed is the
+	// documented operator flow, so it should work with no extra env — but a
+	// team-scoped token (`llz openbao login --team`) is preferred for day-2
+	// reads/writes, so warn when only the root token is present.
+	token := firstNonEmpty(os.Getenv("OPENBAO_TOKEN_ACTIVE"), os.Getenv("OPENBAO_TOKEN"))
+	if token == "" {
+		if rt := os.Getenv("OPENBAO_ROOT_TOKEN"); rt != "" {
+			WarnRootToken()
+			token = rt
+		}
+	}
+	if token == "" {
+		return nil, noop, fmt.Errorf("no OpenBao token in env: set OPENBAO_TOKEN from `eval \"$(llz openbao login --team <name>)\"` (team-scoped, preferred) or export OPENBAO_ROOT_TOKEN — auto port-forward supplies the address but not the token")
+	}
+	addr, cleanup, err := PortForwardFn()
+	if err != nil {
+		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", baoread.Namespace, baoread.RootPod, err)
+	}
+	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", baoread.Namespace, baoread.RootPod, addr)
+	c := NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), HTTPClientLoopback(30*time.Second))
+	return c, cleanup, nil
+}
+
+// StandbyConfigured reports whether a standby cluster is addressable — i.e. this
+// is an HA pair, not a standalone deployment.
+func StandbyConfigured() bool { return os.Getenv("OPENBAO_ADDR_STANDBY") != "" }
+
+// WarnRootToken nudges an operator who supplied the OpenBao root token toward the
+// team-scoped `llz openbao login` path. Root still works — this is a warning, not
+// a block — but day-2 secret access should use a short-lived, attributed,
+// least-privilege team token instead. Written to stderr so it never pollutes the
+// value `get` prints to stdout, and suppressed when OPENBAO_ALLOW_ROOT is set (an
+// escape hatch for genuine root-only automation that has no team identity).
+func WarnRootToken() {
+	if os.Getenv("OPENBAO_ALLOW_ROOT") != "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "⚠ using the OpenBao ROOT token — prefer a team-scoped token for day-2 secret access:")
+	fmt.Fprintln(os.Stderr, "    eval \"$(llz openbao login --team <name>)\"   # short-lived, attributed, least-privilege")
+	fmt.Fprintln(os.Stderr, "  (set OPENBAO_ALLOW_ROOT=1 to silence this for root-only automation)")
+}
+
+// portForward runs `kubectl port-forward` to OpenBao pod-0 on a
+// kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
+// warm up, and returns the https base URL and a kill/reap teardown.
+func portForward() (string, func(), error) {
+	// Forward to the LOOPBACK listener (8210), not the mTLS network listener
+	// (8200). port-forward is established inside the pod's network namespace, so
+	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
+	// `llz openbao get/set` from a laptop that holds no client certificate.
+	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+baoread.RootPod, ":"+baoread.LoopbackPort)
+	// Surface kubectl's own stderr live: without this the common failure modes
+	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
+	// swallowed and the operator only sees an opaque establish timeout. kubectl
+	// writes "Forwarding from…"/"Handling connection…" to stdout, so stderr
+	// carries errors alone — no normal-path noise.
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("kubectl port-forward: %w", err)
+	}
+	stop := func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
+
+	localPort, err := portfwd.ReadForwardPortTimeout(stdout, portfwd.ForwardEstablishTimeout)
+	if err != nil {
+		stop()
+		return "", nil, err
+	}
+	// Keep draining stdout so kubectl's per-connection log lines can't fill the
+	// pipe buffer and block its writer (same rationale as withPrometheus).
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
+
+	base := "https://127.0.0.1:" + localPort
+	if err := warmUp(base); err != nil {
+		stop()
+		return "", nil, err
+	}
+	return base, stop, nil
+}
+
+// PortForwardFn is the seam a test replaces to avoid a real kubectl port-forward.
+var PortForwardFn = portForward
+
+// firstNonEmpty is a MINIMAL LOCAL COPY, not an import. It is four lines, several
+// packages in this tree keep their own, and reaching for a shared one would drag a
+// dependency across a layer to save nothing.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// warmUp blocks (bounded) until the tunnel answers, so the first real KV
+// call doesn't race the port-forward coming up. Any HTTP response — even a
+// sealed/standby non-2xx from /v1/sys/seal-status — proves the tunnel is up.
+func warmUp(base string) error {
+	client := HTTPClientLoopback(5 * time.Second)
+	var lastErr error
+	for i := 0; i < 15; i++ {
+		resp, err := client.Get(base + "/v1/sys/seal-status")
+		if err == nil {
+			resp.Body.Close()
+			return nil
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("port-forward tunnel never became ready: %w", lastErr)
 }

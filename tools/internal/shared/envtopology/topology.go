@@ -65,7 +65,11 @@ func hclStringField(body, field string) (string, bool) {
 // including unrelated standalone ones. PeerOf enforces what it needs, where the
 // answer would otherwise be a guess.
 func ReadTopology(tfDir string) ([]Deployment, error) {
-	if lz, present, err := caps.LoadSpec(); present {
+	// clusterspec.Detected() DIRECTLY, not through a seam. package main installed
+	// this field as exactly `clusterspec.Detected()` and nothing else ever did --
+	// a one-implementation seam that made the model package look like it needed
+	// wiring it did not need, and was half of why this file could not leave.
+	if lz, present, err := clusterspec.Detected(); present {
 		if err != nil {
 			return nil, err
 		}
@@ -217,30 +221,8 @@ func ValidateHAFlags(role, group string) error {
 	return validate.HATopology(role, group, "--ha-role", "--ha-group")
 }
 
-// writeHAResolution emits role=/peer= to $GITHUB_OUTPUT for one Deployment
-// (peer empty for a standalone) and prints a human line. Split from ResolveCmd
-// so the output logic is unit-testable without an on-disk instance layout.
-func writeHAResolution(deps []Deployment, name string) error {
-	d, ok := FindDeployment(deps, name)
-	if !ok {
-		return fmt.Errorf("no such Deployment %q (run `llz env list`)", name)
-	}
-	// Empty peer is expected for a standalone or a half-added pair; an ambiguous
-	// group is not — this value drives which cluster CI pairs with.
-	peer, _, err := PeerOf(deps, name)
-	if err != nil {
-		return err
-	}
-	shown := peer
-	if shown == "" {
-		shown = "<none>"
-	}
-	fmt.Printf("Resolved %s: role=%s peer=%s\n", name, d.HARole, shown)
-	return caps.Summary("GITHUB_OUTPUT", "role="+d.HARole, "peer="+peer)
-}
-
-// haFilter narrows a Deployment-name list per the `llz env list` flags.
-func haFilter(deps []Deployment, haOnly bool, role string) []string {
+// HAFilter narrows a Deployment-name list per the `llz env list` flags.
+func HAFilter(deps []Deployment, haOnly bool, role string) []string {
 	switch {
 	case role != "":
 		return byRole(deps, role)
@@ -254,4 +236,61 @@ func haFilter(deps []Deployment, haOnly bool, role string) []string {
 		sort.Strings(names)
 		return names
 	}
+}
+
+// ListDeployments returns the sorted Deployment names from BOTH sources: the
+// committed <tfDir>/cluster/*.tfvars (one per Deployment that owns a Linode
+// cluster) AND the LandingZone spec's environments (the environments/<env>.yaml set)
+// when a landingzone.yaml is present. The union (dedup by name) means a
+// spec-driven Deployment whose transient tfvars are rendered at build time still
+// shows up in the CI matrix. The template's own
+// terraform.tfvars[.example] and any non-conforming basename are skipped — the
+// latter with a stderr warning, so a stray file can never inject a poisoned value
+// into a CI matrix. Pure (takes tfDir; the spec is read from the sibling
+// instance root) so it is unit-testable against a temp dir.
+func ListDeployments(tfDir string) ([]string, error) {
+	set := map[string]struct{}{}
+
+	matches, err := filepath.Glob(filepath.Join(tfDir, "cluster", "*.tfvars"))
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range matches {
+		name := strings.TrimSuffix(filepath.Base(p), ".tfvars")
+		// `terraform.tfvars` (a non-suffixed local override) and
+		// `terraform.tfvars.example` (the template) are never deployments.
+		if name == "terraform" || name == "terraform.example" {
+			continue
+		}
+		if err := validate.EnvName(name); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping %s — %v\n", p, err)
+			continue
+		}
+		set[name] = struct{}{}
+	}
+
+	// Union the LandingZone spec's environments. The spec lives at the instance
+	// root (the parent of terraform-iac-bootstrap), so it is found in both the
+	// instance and template-checkout layouts.
+	specRoot := filepath.Dir(tfDir)
+	if clusterspec.InstancePresent(specRoot) {
+		if lz, lerr := clusterspec.LoadInstance(specRoot); lerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read LandingZone spec at %s — %v\n", specRoot, lerr)
+		} else {
+			for _, name := range lz.EnvNames() {
+				if err := validate.EnvName(name); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: skipping spec env %q — %v\n", name, err)
+					continue
+				}
+				set[name] = struct{}{}
+			}
+		}
+	}
+
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names, nil
 }

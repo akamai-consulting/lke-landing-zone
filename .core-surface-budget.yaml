@@ -1078,6 +1078,36 @@ categories:
     # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
     # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
     #
+    # IN-DEGREE SWEEP, ROUND TWO (no core-surface change). 90 -> 66 extension ->
+    # extension edges, by splitting the four biggest hubs. The COVERAGE FLOORS MOVED
+    # WITH THE CODE and three of them went DOWN, which needs saying plainly rather
+    # than being left to look like a regression:
+    #
+    #   internal/extensions/instanceresolve   87 -> 95   (0 lib lines left; 100% now)
+    #   internal/extensions/envtopology       31 ->  8
+    #   internal/extensions/openbao           58 -> 32
+    #   internal/shared/instanceresolve             87   (measured 89.6)
+    #   internal/shared/envtopology                 67   (measured 69.9)
+    #   internal/shared/openbao                     76   (measured 79.0)
+    #   internal/shared/portfwd                     90   (40 -> 93.3, timeout path)
+    #
+    # THE COVERAGE DID NOT DROP, IT RELOCATED. Each of those three extensions was
+    # mostly library, the library was mostly what was tested, and both went to
+    # internal/shared together -- so the shared floors above are where the same
+    # tests now count. What is left behind in envtopology and openbao is cobra verb
+    # plumbing, which is genuinely less covered and always was; it had been hidden
+    # inside a package average carried by the library sitting next to it. Lowering
+    # those two is the number stopping being flattering, not the tests getting worse.
+    #
+    # This is the OPPOSITE case to the selfupgrade entry below, where a floor also
+    # fell after a move and the right answer was to write tests rather than lower
+    # it. The difference is where the uncovered code came from: there, well-covered
+    # code left and the REMAINDER had cheap untested functions worth covering
+    # (verifyChecksum, walkUpgradeFiles, both at 0%). Here the remainder is 2,600
+    # lines of command wiring. instanceresolve is the case that proves the rule
+    # rather than breaking it -- its floor went UP, because what remained was a bare
+    # declaration with no test at all, and a declaration is cheap to check.
+    #
     # 1853 -> 1856, AND THE FIRST DELIBERATE GROWTH IN A LONG WHILE. Binding gained
     # a Requires field (the precondition axis) and `llz extension list` renders it:
     # three lines in bindingSummary. The code belongs in package main because that

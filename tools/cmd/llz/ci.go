@@ -48,7 +48,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mutate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
@@ -240,7 +240,7 @@ func ciCmd() *cobra.Command {
 	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
 	// BREAK-GLASS / forward-looking: deliberately callerless today.
-	c.AddCommand(openbao.OpenBaoLoginCmd())
+	c.AddCommand(openbaoext.OpenBaoLoginCmd())
 	// Copier render-time slimming: prune docs/ to the operator set + reference
 	// the rest at the template repo. (The former strip-comments verb is gone:
 	// the vendored llz-*.yml bodies ship verbatim so an instance copy matches
@@ -340,7 +340,7 @@ func ciCmd() *cobra.Command {
 	// fail the step. One tested list now drives both, and it ships with the binary
 	// rather than with each instance's vendored workflow.
 	// ── Tier-3 credential-lifecycle gates ────────────────────────────────────
-	// assert-rotation-health gates the age of every credential reconcilelanes.CredPaths declares:
+	// assert-rotation-health gates the age of every credential credpaths.CredPaths declares:
 	// a declared credential publishing NO series is invisible on the single pane
 	// AND unalertable, because a rule over an absent series never evaluates.
 	// assert-harbor-roundtrip USES a minted robot rather than trusting it was

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // fakeEnvWriter records each GitHub environment-secret publish.
@@ -23,7 +24,7 @@ func (f *fakeEnvWriter) write(name, env, value string) error {
 	return nil
 }
 
-func broadDeps(lc LinodeAPI, bao BaoStore, w envSecretWriter, now time.Time) broadPATDeps {
+func broadDeps(lc LinodeAPI, bao openbao.BaoStore, w envSecretWriter, now time.Time) broadPATDeps {
 	return broadPATDeps{lc: lc, bao: bao, writeSecret: w, now: func() time.Time { return now }}
 }
 

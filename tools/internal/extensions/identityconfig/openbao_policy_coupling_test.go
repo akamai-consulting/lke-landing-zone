@@ -3,7 +3,7 @@ package identityconfig
 // openbao_policy_coupling_test.go — the lane's credential table against the policy
 // that grants it.
 //
-// THIS TEST SPANS THE EXTRACTION BOUNDARY, deliberately. reconcilelanes.CredPaths
+// THIS TEST SPANS THE EXTRACTION BOUNDARY, deliberately. credpaths.CredPaths
 // is what the openbao-gauges lane samples; policyReconcilerRead is the OpenBao
 // policy `llz ci openbao-configure` writes, and it stayed in package main with the
 // rest of bootstrap. One ungranted path is a 403, and the sampler treats any
@@ -18,24 +18,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 )
 
-// Every reconcilelanes.CredPaths entry must have a matching metadata-read grant in
+// Every credpaths.CredPaths entry must have a matching metadata-read grant in
 // policyReconcilerRead. A missing grant is a 403, and SampleOpenBao treats any
 // non-404 failure as fatal — so one ungranted path silently takes down the seal
 // gauge and every OTHER credential's age with it, which is the opposite of what
 // widening the coverage was for.
 func TestCredPathsAreGrantedInReconcilerPolicy(t *testing.T) {
-	for _, cp := range reconcilelanes.CredPaths {
+	for _, cp := range credpaths.CredPaths {
 		meta := strings.Replace(cp.Path, "secret/", "secret/metadata/", 1)
 		if !strings.Contains(policyReconcilerRead, `path "`+meta+`"`) {
-			t.Errorf("reconcilelanes.CredPaths has %s but policyReconcilerRead grants no read on %q — the sampler will 403 and fail the whole lane", cp.Path, meta)
+			t.Errorf("credpaths.CredPaths has %s but policyReconcilerRead grants no read on %q — the sampler will 403 and fail the whole lane", cp.Path, meta)
 		}
 		switch cp.Class {
-		case reconcilelanes.CredClassAutomated, reconcilelanes.CredClassGenerateOnce, reconcilelanes.CredClassTracksSource, reconcilelanes.CredClassStatic, reconcilelanes.CredClassOnDemand:
+		case credpaths.CredClassAutomated, credpaths.CredClassGenerateOnce, credpaths.CredClassTracksSource, credpaths.CredClassStatic, credpaths.CredClassOnDemand:
 		default:
-			t.Errorf("reconcilelanes.CredPaths entry %s has unknown class %q; the alert rules match on the known set", cp.Cred, cp.Class)
+			t.Errorf("credpaths.CredPaths entry %s has unknown class %q; the alert rules match on the known set", cp.Cred, cp.Class)
 		}
 	}
 }

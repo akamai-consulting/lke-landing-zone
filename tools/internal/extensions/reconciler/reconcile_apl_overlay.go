@@ -16,11 +16,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/apl/overlay"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghgitdata"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 )

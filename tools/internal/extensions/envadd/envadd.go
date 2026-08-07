@@ -22,11 +22,11 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 

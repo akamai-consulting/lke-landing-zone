@@ -7,10 +7,10 @@ package healthsla
 // cluster.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"github.com/spf13/cobra"
 )
 

@@ -2,7 +2,7 @@
 
 Status: **Proposed** — implemented but NOT validated on a live cluster.
 Date: 2026-07-28
-Supersedes the "in-cluster posture" rationale in `tools/internal/extensions/openbao/openbao.go`
+Supersedes the "in-cluster posture" rationale in `tools/internal/shared/openbao/openbao.go`
 (`HTTPClientInsecure`) and the `OPENBAO_SKIP_VERIFY` comments across the workload manifests.
 
 <!-- toc -->

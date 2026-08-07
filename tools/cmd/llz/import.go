@@ -14,13 +14,13 @@ package main
 // the catalog got wrong.
 
 import (
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
@@ -48,7 +48,7 @@ func brownfieldDeps() brownfield.Deps {
 				SubnetCIDR:      spec.SubnetCIDR,
 			})
 		},
-		EnvSpecFile: envtopology.SpecFile,
+		EnvSpecFile: envtopoext.SpecFile,
 		EditSpec: func(path string, mutate func(*yamlv3.Node) error, parse func([]byte) error) error {
 			return yamledit.EditSpecFile(path, mutate, parse)
 		},

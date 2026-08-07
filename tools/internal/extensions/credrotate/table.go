@@ -27,6 +27,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 const (
@@ -46,12 +47,6 @@ type LinodeAPI interface {
 	CreateObjectStorageKeyBuckets(ctx context.Context, label, cluster string, buckets []string, permissions string) (map[string]any, error)
 	DeleteObjectStorageKey(ctx context.Context, id uint64) error
 	Verify(ctx context.Context) error
-}
-
-// BaoStore is the OpenBao surface the rotator needs (seamed for tests).
-type BaoStore interface {
-	Get(ctx context.Context, path, key string) (string, bool, error)
-	Write(ctx context.Context, path string, data map[string]string) error
 }
 
 var (
@@ -239,7 +234,7 @@ func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 
 	// OpenBao login is deferred until at least one credential is due, so a no-op
 	// run (nothing due) does not require OpenBao to be reachable.
-	var bao BaoStore
+	var bao openbao.BaoStore
 	ensureBao := func() error {
 		if bao != nil {
 			return nil
@@ -282,7 +277,7 @@ func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 // rotateOne mints, verifies, writes, and drains a single credential. The order
 // is load-bearing: nothing old is revoked until the new credential is verified
 // (PAT) and written to OpenBao.
-func rotateOne(ctx context.Context, lc LinodeAPI, bao BaoStore, e CredEntry, now time.Time, keepNewest int) error {
+func rotateOne(ctx context.Context, lc LinodeAPI, bao openbao.BaoStore, e CredEntry, now time.Time, keepNewest int) error {
 	var fields map[string]string
 	switch e.Kind {
 	case CredKindPAT:
@@ -353,7 +348,7 @@ func DrainOld(ctx context.Context, lc LinodeAPI, e CredEntry, keepNewest int) {
 // openLinodeRotatorBaoStore logs in to OpenBao via Kubernetes auth (the
 // linode-rotator role) using the pod's ServiceAccount token, trusting the
 // mounted openbao CA, and returns a write-capable client.
-func openLinodeRotatorBaoStore(ctx context.Context) (BaoStore, error) {
+func openLinodeRotatorBaoStore(ctx context.Context) (openbao.BaoStore, error) {
 	return OpenBaoStore(ctx, "linode-rotator")
 }
 
@@ -368,11 +363,11 @@ func openLinodeRotatorBaoStore(ctx context.Context) (BaoStore, error) {
 // The default is inert rather than real, for the reason internal/credrotate's
 // SetSecret is: a default that actually logged in would make an un-installed
 // caller reach a live OpenBao.
-var OpenBaoStore = func(ctx context.Context, role string) (BaoStore, error) {
+var OpenBaoStore = func(ctx context.Context, role string) (openbao.BaoStore, error) {
 	return nil, fmt.Errorf("credrotate: OpenBaoStore not installed")
 }
 
 // InstallBaoStore wires the in-cluster login main owns.
-func InstallBaoStore(open func(ctx context.Context, role string) (BaoStore, error)) {
+func InstallBaoStore(open func(ctx context.Context, role string) (openbao.BaoStore, error)) {
 	OpenBaoStore = open
 }

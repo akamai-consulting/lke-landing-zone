@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // helpers_test.go — fixtures the moved tests need.

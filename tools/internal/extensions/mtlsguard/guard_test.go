@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"gopkg.in/yaml.v3"
 )
 

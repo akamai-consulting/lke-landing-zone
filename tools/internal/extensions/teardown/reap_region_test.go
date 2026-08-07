@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 )
 
 // stubAccountRegions points accountRegions' client at a fake listing.

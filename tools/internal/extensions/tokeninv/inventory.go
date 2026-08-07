@@ -25,11 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 )
 
 // tokenState is the coarse verdict the reconciler turns into llz_token_audit_ok:
@@ -165,12 +164,12 @@ type SecretTarget struct {
 var GHSecretTargets = []SecretTarget{
 	// ── the state backend (ADR 0009) ──────────────────────────────────────────
 	// Operator-dispatchable via secret-rotation.yml scope=tf-state-key.
-	{"TF_STATE_ACCESS_KEY", reconcilelanes.CredClassOnDemand, CredExpectPresent},
-	{"TF_STATE_SECRET_KEY", reconcilelanes.CredClassOnDemand, CredExpectPresent},
+	{"TF_STATE_ACCESS_KEY", credpaths.CredClassOnDemand, CredExpectPresent},
+	{"TF_STATE_SECRET_KEY", credpaths.CredClassOnDemand, CredExpectPresent},
 	// Was `static` — correctly, while re-encrypting every state file had no
 	// automation. scope=state-passphrase is that automation, so the age is now
 	// ACTIONABLE and belongs on the 90d SLA rather than the yearly nudge.
-	{"TF_STATE_ENCRYPTION_PASSPHRASE", reconcilelanes.CredClassOnDemand, CredExpectPresent},
+	{"TF_STATE_ENCRYPTION_PASSPHRASE", credpaths.CredClassOnDemand, CredExpectPresent},
 
 	// ── OpenBao's own escrow ─────────────────────────────────────────────────
 	//
@@ -202,23 +201,23 @@ var GHSecretTargets = []SecretTarget{
 	// compromise reads every other credential in the platform. `static`: rotating
 	// it means a seal rewrap of the whole store, which nothing here implements —
 	// so the yearly nudge is the honest signal, not a 90d SLA nobody can meet.
-	{"OPENBAO_SEAL_KEY", reconcilelanes.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_SEAL_KEY", credpaths.CredClassStatic, CredExpectPresent},
 	// The 3-of-5 recovery quorum that authorizes `operator generate-root`. Losing
 	// these means break-glass is impossible — which is exactly why an ABSENT one
 	// has to be visible (see llz_credential_configured): the failure surfaces on
 	// the day you need it and not before.
-	{"OPENBAO_RECOVERY_KEY_1", reconcilelanes.CredClassStatic, CredExpectPresent},
-	{"OPENBAO_RECOVERY_KEY_2", reconcilelanes.CredClassStatic, CredExpectPresent},
-	{"OPENBAO_RECOVERY_KEY_3", reconcilelanes.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_1", credpaths.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_2", credpaths.CredClassStatic, CredExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_3", credpaths.CredClassStatic, CredExpectPresent},
 	// Expected ABSENT — see credExpectAbsent. `on-demand` because there IS a
 	// rotation path (`bao-breakglass --action rotate`); the age matters only in
 	// the state this credential is not supposed to be in.
-	{"OPENBAO_ROOT_TOKEN", reconcilelanes.CredClassOnDemand, CredExpectAbsent},
+	{"OPENBAO_ROOT_TOKEN", credpaths.CredClassOnDemand, CredExpectAbsent},
 
 	// ── Harbor robots: the standby channel ───────────────────────────────────
 	//
 	// secret/harbor/robot and secret/harbor/pull-robot are already age-tracked in
-	// OpenBao (reconcilelanes.CredPaths, `static`). These are the SECOND copy — published to
+	// OpenBao (credpaths.CredPaths, `static`). These are the SECOND copy — published to
 	// GitHub by the provisioner so a rebuilt or standby cluster can adopt the
 	// existing robots instead of minting new ones (ci_harbor.go's EXISTING_*
 	// path). A second copy is a second thing that ages, and nothing was watching
@@ -226,8 +225,8 @@ var GHSecretTargets = []SecretTarget{
 	// channel holding a dead credential, and the OpenBao age would look fine.
 	// OPTIONAL, not present — see credExpectOptional. On a standby peer these are
 	// published by the ACTIVE peer's provisioner and are absent until it has run.
-	{"HARBOR_PASSWORD", reconcilelanes.CredClassStatic, CredExpectOptional},
-	{"HARBOR_PULL_PASSWORD", reconcilelanes.CredClassStatic, CredExpectOptional},
+	{"HARBOR_PASSWORD", credpaths.CredClassStatic, CredExpectOptional},
+	{"HARBOR_PULL_PASSWORD", credpaths.CredClassStatic, CredExpectOptional},
 }
 
 // The class is the SAME vocabulary the OpenBao age sampler uses

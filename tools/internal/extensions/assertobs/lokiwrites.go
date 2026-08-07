@@ -32,6 +32,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
@@ -233,7 +234,7 @@ var lokiFlushIngester = func(p lokiPod) error {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	local, err := ReadForwardPortTimeout(stdout, ForwardEstablishTimeout)
+	local, err := portfwd.ReadForwardPortTimeout(stdout, portfwd.ForwardEstablishTimeout)
 	if err != nil {
 		return err
 	}

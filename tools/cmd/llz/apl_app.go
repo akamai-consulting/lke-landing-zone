@@ -11,7 +11,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -69,7 +70,7 @@ func runAppToggle(env, app string, enable bool) error {
 		return fmt.Errorf("%q is a required component and cannot be disabled (the cluster would not converge)", app)
 	}
 
-	envFile, err := envtopology.SpecFile(env)
+	envFile, err := envtopoext.SpecFile(env)
 	if err != nil {
 		return err
 	}

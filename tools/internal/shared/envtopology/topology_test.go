@@ -1,8 +1,6 @@
 package envtopology
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,35 +17,6 @@ func haInstance(t *testing.T, clusters map[string][2]string) string {
 	}
 	writeCluster(t, dir, files)
 	return dir
-}
-
-func TestWriteHAResolution(t *testing.T) {
-	deps := []Deployment{
-		{"east", RoleActive, "g1"},
-		{"west", RoleStandby, "g1"},
-		{"solo", roleStandalone, ""},
-	}
-	for _, tc := range []struct {
-		name, wantRole, wantPeer string
-	}{
-		{"east", "active", "west"},
-		{"west", "standby", "east"},
-		{"solo", "standalone", ""}, // standalone → peer empty, not an error
-	} {
-		out := filepath.Join(t.TempDir(), "output")
-		t.Setenv("GITHUB_OUTPUT", out)
-		if err := writeHAResolution(deps, tc.name); err != nil {
-			t.Fatalf("writeHAResolution(%s): %v", tc.name, err)
-		}
-		b, _ := os.ReadFile(out)
-		got := string(b)
-		if !strings.Contains(got, "role="+tc.wantRole) || !strings.Contains(got, "peer="+tc.wantPeer+"\n") {
-			t.Errorf("%s → GITHUB_OUTPUT %q, want role=%s peer=%q", tc.name, got, tc.wantRole, tc.wantPeer)
-		}
-	}
-	if err := writeHAResolution(deps, "nope"); err == nil {
-		t.Error("unknown Deployment must error")
-	}
 }
 
 func TestReadTopologyAndHelpers(t *testing.T) {

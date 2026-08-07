@@ -272,7 +272,7 @@ var plaintextAllowed = map[string]plaintextRule{
 	},
 
 	// ── ours, out of this guard's scope by construction ──────────────────────
-	"tools/internal/extensions/openbao/openbao.go:HTTPClientLoopback": {
+	"tools/internal/shared/openbao/openbao.go:HTTPClientLoopback": {
 		owner: "inherent",
 		reason: "re-keyed from HTTPClientInsecure, which #360 renamed. The unverified transport now " +
 			"reaches ONLY loopback: the `kubectl port-forward` tunnel to 127.0.0.1 that `llz openbao " +

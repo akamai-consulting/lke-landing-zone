@@ -9,11 +9,13 @@ package openbao
 import (
 	"context"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 )
 
 func init() {
-	credrotate.InstallBaoStore(func(ctx context.Context, role string) (credrotate.BaoStore, error) {
-		return OpenInClusterStore(ctx, role)
+	credrotate.InstallBaoStore(func(ctx context.Context, role string) (openbao.BaoStore, error) {
+		return openbao.OpenInClusterStore(ctx, role)
 	})
 }

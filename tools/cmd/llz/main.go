@@ -18,17 +18,18 @@ import (
 	"fmt"
 	"os"
 
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
@@ -134,10 +135,10 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&cliopts.Global.Yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
-		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), clusterspec.ComponentsCmd(),
+		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), envtopoext.SpecCmd(), envtopoext.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), onboard.SecretsCmd(), onboard.TokensCmd(), render.RenderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), lint.HooksCmd(), lint.PrecommitCmd(),
-		teardown.ReapCmd(), openbao.OpenbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
+		teardown.ReapCmd(), openbaoext.OpenbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
 
@@ -327,7 +328,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.SubnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
 	f.IntVar(&o.PromotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.DryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, clusterspec.EnvShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), render.EnvVPCCmd())
+	env.AddCommand(add, clusterspec.EnvShowCmd(), envtopoext.SetCmd(), envtopoext.EditCmd(), envtopoext.ListCmd(), envtopoext.RoleCmd(), envtopoext.PeerCmd(), envtopoext.ResolveCmd(), envNextCmd(), envPipelineCmd(), render.EnvVPCCmd())
 	return env
 }
 

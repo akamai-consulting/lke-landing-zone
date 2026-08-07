@@ -24,6 +24,29 @@ package instanceresolve
 // resolvers have to agree about which namespace a string is in, and the only way
 // two of them can disagree is if they are apart.
 
+// ── THE CODE MOVED OUT; THIS DECLARATION DID NOT. ────────────────────────────
+//
+// This package was imported by SIX peers -- envadd, newinstance, onboard,
+// reachability, render, teardown -- which is the highest in-degree in the catalog
+// after openbao, and it owned NOT ONE COBRA COMMAND. An extension with six
+// importers and no verb is not a capability that other capabilities happen to
+// want; it is a library with a declaration stapled to it, and the four questions
+// above say so themselves: "every scaffold and render path has to answer [them]
+// before it can do anything." That is the definition of substrate.
+//
+// So the four resolvers live at internal/shared/instanceresolve now, and the six
+// edges are gone. The package name did not change, so not one call site needed
+// editing beyond its import path -- which is itself evidence about the split: a
+// move that requires no renaming is a move along a seam that was already there.
+//
+// WHAT STAYS HERE IS THE DECLARATION, and deleting it was the tempting
+// alternative. It would have been wrong in this model's most specific way. The
+// assertion is TRUE -- something does contribute evidence at `scaffolded` that
+// this instance's inputs resolve -- and a shared package cannot declare, because
+// declaring is what makes an extension. Dropping the declaration on the grounds
+// that its code moved would have removed the record while leaving the behaviour,
+// which is banning-by-omission pointed at the catalog instead of at the model.
+
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
 // Extension is the `instance-resolve` declaration.

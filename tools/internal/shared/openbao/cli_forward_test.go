@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 )
 
 // clearOpenbaoEnv blanks every OPENBAO_* var ClientForward reads so a test
@@ -35,7 +35,7 @@ func seamForward(t *testing.T, addr string, err error) *bool {
 
 func TestOpenbaoClientForward_ExplicitAddrWins(t *testing.T) {
 	clearOpenbaoEnv(t)
-	t.Setenv("OPENBAO_ADDR_ACTIVE", "https://bao.example:8200")
+	t.Setenv("OPENBAO_ADDR_ACTIVE", "https://example:8200")
 	t.Setenv("OPENBAO_TOKEN", "s.token")
 	called := seamForward(t, "https://127.0.0.1:1", nil)
 

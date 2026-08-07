@@ -24,9 +24,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 )
 
 const (
@@ -73,7 +73,7 @@ func portForwardKeycloak() (string, func(), error) {
 		return "", nil, fmt.Errorf("kubectl port-forward: %w", err)
 	}
 	stop := func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
-	localPort, err := assertobs.ReadForwardPortTimeout(stdout, assertobs.ForwardEstablishTimeout)
+	localPort, err := portfwd.ReadForwardPortTimeout(stdout, portfwd.ForwardEstablishTimeout)
 	if err != nil {
 		stop()
 		return "", nil, err

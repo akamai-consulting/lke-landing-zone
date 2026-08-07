@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/promwire"
 )
 
 func TestExpectedRotationCredsComesFromCredPaths(t *testing.T) {
 	got := expectedRotationCreds()
-	if len(got) != len(reconcilelanes.CredPaths) {
-		t.Fatalf("expected one entry per reconcilelanes.CredPaths row, got %d vs %d", len(got), len(reconcilelanes.CredPaths))
+	if len(got) != len(credpaths.CredPaths) {
+		t.Fatalf("expected one entry per credpaths.CredPaths row, got %d vs %d", len(got), len(credpaths.CredPaths))
 	}
 	// Derived from the DECLARATION. If this ever started from the metrics, the
 	// gate would be asking Prometheus which credentials exist and then checking
@@ -27,21 +27,21 @@ func TestExpectedRotationCredsComesFromCredPaths(t *testing.T) {
 	for _, e := range got {
 		byCred[e.Cred] = e.Class
 	}
-	for _, cp := range reconcilelanes.CredPaths {
+	for _, cp := range credpaths.CredPaths {
 		if byCred[cp.Cred] != cp.Class {
-			t.Errorf("reconcilelanes.CredPaths declares %s as %q; expected set has %q", cp.Cred, cp.Class, byCred[cp.Cred])
+			t.Errorf("credpaths.CredPaths declares %s as %q; expected set has %q", cp.Cred, cp.Class, byCred[cp.Cred])
 		}
 	}
 }
 
 func TestSlaForClass(t *testing.T) {
-	if slaForClass(reconcilelanes.CredClassAutomated) != rotationSLAAlertableDays {
+	if slaForClass(credpaths.CredClassAutomated) != rotationSLAAlertableDays {
 		t.Error("automated must carry the 90d SLA")
 	}
-	if slaForClass(reconcilelanes.CredClassOnDemand) != rotationSLAAlertableDays {
+	if slaForClass(credpaths.CredClassOnDemand) != rotationSLAAlertableDays {
 		t.Error("on-demand shares the 90d SLA — the age is actionable, someone can dispatch the workflow")
 	}
-	for _, c := range []string{reconcilelanes.CredClassGenerateOnce, reconcilelanes.CredClassTracksSource, reconcilelanes.CredClassStatic} {
+	for _, c := range []string{credpaths.CredClassGenerateOnce, credpaths.CredClassTracksSource, credpaths.CredClassStatic} {
 		if slaForClass(c) != rotationSLAInfoDays {
 			t.Errorf("%s must carry the yearly info threshold, not the 90d SLA", c)
 		}
@@ -50,11 +50,11 @@ func TestSlaForClass(t *testing.T) {
 
 func TestEvalRotationHealth(t *testing.T) {
 	expected := []expectedCred{
-		{"linode-incluster-pat", reconcilelanes.CredClassAutomated, false},
-		{"db-admin", reconcilelanes.CredClassOnDemand, false},
-		{"grafana-admin", reconcilelanes.CredClassGenerateOnce, false},
-		{"missing-automated", reconcilelanes.CredClassAutomated, false},
-		{"unseeded-static", reconcilelanes.CredClassStatic, false},
+		{"linode-incluster-pat", credpaths.CredClassAutomated, false},
+		{"db-admin", credpaths.CredClassOnDemand, false},
+		{"grafana-admin", credpaths.CredClassGenerateOnce, false},
+		{"missing-automated", credpaths.CredClassAutomated, false},
+		{"unseeded-static", credpaths.CredClassStatic, false},
 	}
 	ages := map[string]float64{
 		"linode-incluster-pat": 30,
@@ -104,8 +104,8 @@ func TestEvalRotationHealth(t *testing.T) {
 // have passed the first half and silently dropped the SLA.
 func TestEvalRotationHealthOptionalPathAbsentIsNotAFinding(t *testing.T) {
 	expected := []expectedCred{
-		{"linode-cloud-firewall", reconcilelanes.CredClassOnDemand, true},
-		{"required-on-demand", reconcilelanes.CredClassOnDemand, false},
+		{"linode-cloud-firewall", credpaths.CredClassOnDemand, true},
+		{"required-on-demand", credpaths.CredClassOnDemand, false},
 	}
 	vs := evalRotationHealth(expected, map[string]float64{}, false)
 	by := map[string]credVerdict{}
@@ -126,12 +126,12 @@ func TestEvalRotationHealthOptionalPathAbsentIsNotAFinding(t *testing.T) {
 	}
 }
 
-// The opt-in exemption must be spelled in reconcilelanes.CredPaths, not hardcoded in the gate:
+// The opt-in exemption must be spelled in credpaths.CredPaths, not hardcoded in the gate:
 // the sampler and the gate read the same table, and a second list would be the
 // split contract docs/e2e-gates.md is about.
 func TestCredPathsMarksTheOptInFirewallTokenOptional(t *testing.T) {
 	var seen bool
-	for _, cp := range reconcilelanes.CredPaths {
+	for _, cp := range credpaths.CredPaths {
 		if cp.Cred != "linode-cloud-firewall" {
 			if cp.Optional {
 				t.Errorf("%s is marked optional; every other declared path is seeded on every deployment", cp.Cred)
@@ -142,17 +142,17 @@ func TestCredPathsMarksTheOptInFirewallTokenOptional(t *testing.T) {
 		if !cp.Optional {
 			t.Error("linode-cloud-firewall is the documented OPT-IN least-privilege token — it must be optional")
 		}
-		if cp.Class != reconcilelanes.CredClassOnDemand {
+		if cp.Class != credpaths.CredClassOnDemand {
 			t.Errorf("linode-cloud-firewall class = %s, want on-demand — demoting it drops the 90d SLA the docs promise", cp.Class)
 		}
 	}
 	if !seen {
-		t.Fatal("linode-cloud-firewall is no longer in reconcilelanes.CredPaths")
+		t.Fatal("linode-cloud-firewall is no longer in credpaths.CredPaths")
 	}
 }
 
 func TestEvalRotationHealthStrictGatesInfoClasses(t *testing.T) {
-	expected := []expectedCred{{"grafana-admin", reconcilelanes.CredClassGenerateOnce, false}}
+	expected := []expectedCred{{"grafana-admin", credpaths.CredClassGenerateOnce, false}}
 	ages := map[string]float64{"grafana-admin": 400}
 	if v := evalRotationHealth(expected, ages, true)[0]; v.FailWhy == "" {
 		t.Error("--strict must gate the 365d info threshold too")
@@ -245,16 +245,16 @@ func TestRotationSLAsMatchThePrometheusRules(t *testing.T) {
 	}
 }
 
-// Every class reconcilelanes.CredPaths uses must be one this gate knows how to judge; an
+// Every class credpaths.CredPaths uses must be one this gate knows how to judge; an
 // unknown class would silently fall through to the info threshold.
 func TestEveryCredPathClassIsKnown(t *testing.T) {
 	known := map[string]bool{
-		reconcilelanes.CredClassAutomated: true, reconcilelanes.CredClassOnDemand: true,
-		reconcilelanes.CredClassGenerateOnce: true, reconcilelanes.CredClassTracksSource: true, reconcilelanes.CredClassStatic: true,
+		credpaths.CredClassAutomated: true, credpaths.CredClassOnDemand: true,
+		credpaths.CredClassGenerateOnce: true, credpaths.CredClassTracksSource: true, credpaths.CredClassStatic: true,
 	}
-	for _, cp := range reconcilelanes.CredPaths {
+	for _, cp := range credpaths.CredPaths {
 		if !known[cp.Class] {
-			t.Errorf("reconcilelanes.CredPaths entry %s carries class %q, which this gate does not know — "+
+			t.Errorf("credpaths.CredPaths entry %s carries class %q, which this gate does not know — "+
 				"it would silently be judged against the yearly threshold", cp.Cred, cp.Class)
 		}
 	}

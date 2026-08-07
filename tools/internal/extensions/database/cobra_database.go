@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func Init() {
@@ -104,7 +104,7 @@ func AssertDatabaseCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "assert-database",
 		Short: "fail unless every declared Managed Postgres accepts its seeded admin credential",
-		Long: "Connects to each Managed Postgres declared under " + reconcilelanes.DBAdminRoot + " and completes\n" +
+		Long: "Connects to each Managed Postgres declared under " + credpaths.DBAdminRoot + " and completes\n" +
 			"the TLS + authentication handshake with the seeded admin credential. No query is\n" +
 			"issued — reaching ReadyForQuery is the whole answer.\n\n" +
 			"db-declared and db-summary report what the spec asks for; seed-db-admin writes\n" +

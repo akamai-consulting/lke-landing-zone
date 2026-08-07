@@ -33,8 +33,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )

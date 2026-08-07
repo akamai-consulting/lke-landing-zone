@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 )
 
 // a fixed "now" so expiry math is deterministic.
@@ -379,8 +379,8 @@ func TestSecretScopeForRegion(t *testing.T) {
 // rather than in production.
 func TestGHSecretTargetClassesAreKnown(t *testing.T) {
 	known := map[string]bool{
-		reconcilelanes.CredClassAutomated: true, reconcilelanes.CredClassOnDemand: true, reconcilelanes.CredClassGenerateOnce: true,
-		reconcilelanes.CredClassTracksSource: true, reconcilelanes.CredClassStatic: true,
+		credpaths.CredClassAutomated: true, credpaths.CredClassOnDemand: true, credpaths.CredClassGenerateOnce: true,
+		credpaths.CredClassTracksSource: true, credpaths.CredClassStatic: true,
 	}
 	for _, tgt := range GHSecretTargets {
 		if !known[tgt.Class] {

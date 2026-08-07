@@ -31,9 +31,9 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // kc wraps the shared Keycloak client so this package can hang its own smoke

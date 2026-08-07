@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func strconvI(n int64) string { return strconv.FormatInt(n, 10) }
@@ -167,11 +169,11 @@ func (b *stubBao) Write(_ context.Context, path string, d map[string]string) err
 	return nil
 }
 
-func withRotatorStubs(t *testing.T, lc LinodeAPI, bao BaoStore, now time.Time) {
+func withRotatorStubs(t *testing.T, lc LinodeAPI, bao openbao.BaoStore, now time.Time) {
 	t.Helper()
 	ol, ob, on := NewLinodeClient, NewBaoStore, Now
 	NewLinodeClient = func(string) LinodeAPI { return lc }
-	NewBaoStore = func(context.Context) (BaoStore, error) { return bao, nil }
+	NewBaoStore = func(context.Context) (openbao.BaoStore, error) { return bao, nil }
 	Now = func() time.Time { return now }
 	t.Cleanup(func() { NewLinodeClient, NewBaoStore, Now = ol, ob, on })
 }

@@ -87,7 +87,9 @@ var baoWrappers = []baoWrapper{
 	},
 }
 
-func baoClient(srv *httptest.Server) *Client { return New(srv.URL, "t", "", 5*time.Second) }
+func baoClient(srv *httptest.Server) *Client {
+	return New(srv.URL, "t", "", 5*time.Second)
+}
 
 func TestWrapperSuccessBoundaryIs2xx(t *testing.T) {
 	edges := []struct {
