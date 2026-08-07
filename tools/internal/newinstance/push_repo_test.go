@@ -1,4 +1,4 @@
-package main
+package newinstance
 
 import (
 	"errors"
@@ -68,7 +68,7 @@ func TestPushInstanceRepoMissingOwner(t *testing.T) {
 	t.Cleanup(func() { ghLoginFn = orig })
 	ghLoginFn = func() string { return "chandraS" }
 
-	pushed, err := pushInstanceRepo(globalOpts{yes: true}, dir)
+	pushed, err := pushInstanceRepo(false, true, dir)
 	if err == nil {
 		t.Fatal("expected an error when the instance_repo owner does not exist")
 	}
@@ -130,7 +130,7 @@ func TestPushInstanceRepoForeignUserOwner(t *testing.T) {
 	t.Cleanup(func() { ghLoginFn = orig })
 
 	ghLoginFn = func() string { return "me" }
-	_, err := pushInstanceRepo(globalOpts{yes: true}, dir)
+	_, err := pushInstanceRepo(false, true, dir)
 	if err == nil {
 		t.Fatal("expected an error for a repo owned by another user")
 	}
@@ -148,12 +148,12 @@ func TestPushInstanceRepoForeignUserOwner(t *testing.T) {
 	// Your OWN account is the normal case — case-insensitively, since GitHub
 	// logins are.
 	ghLoginFn = func() string { return "SomeOne-Else" }
-	if _, err := pushInstanceRepo(globalOpts{}, dir); err != nil {
+	if _, err := pushInstanceRepo(false, false, dir); err != nil {
 		t.Errorf("blocked a repo under the caller's own account: %v", err)
 	}
 	// An unresolvable login proves nothing — do not claim the owner is foreign.
 	ghLoginFn = func() string { return "" }
-	if _, err := pushInstanceRepo(globalOpts{}, dir); err != nil {
+	if _, err := pushInstanceRepo(false, false, dir); err != nil {
 		t.Errorf("claimed a foreign owner without knowing the login: %v", err)
 	}
 }
@@ -283,7 +283,7 @@ func TestPushInstanceRepoIndeterminateOwnerStillCreates(t *testing.T) {
 	var pushed bool
 	var err error
 	// --yes withheld: runGated prints the plan instead of reaching GitHub.
-	out := captureStderr(t, func() { pushed, err = pushInstanceRepo(globalOpts{}, dir) })
+	out := captureStderr(t, func() { pushed, err = pushInstanceRepo(false, false, dir) })
 	if err != nil {
 		t.Fatalf("indeterminate owner must not fail the push: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestPushInstanceRepoAdoptsExistingRepo(t *testing.T) {
 	withInstanceRepoExists(t, func(repo string) bool { return repo == "acme/inst" })
 
 	var err error
-	out := captureStderr(t, func() { _, err = pushInstanceRepo(globalOpts{}, dir) })
+	out := captureStderr(t, func() { _, err = pushInstanceRepo(false, false, dir) })
 	if err != nil {
 		t.Fatalf("adopting an existing repo failed: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestPushInstanceRepoAdoptsExistingRepo(t *testing.T) {
 func TestAdoptExistingRepoAnnouncesWhatItDoes(t *testing.T) {
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no origin") })
 	out := captureStderr(t, func() {
-		_ = adoptExistingRepo(globalOpts{dryRun: true}, "d", "acme/inst")
+		_ = adoptExistingRepo(true, false, "d", "acme/inst")
 	})
 	if !strings.Contains(out, "would wire it") {
 		t.Errorf("dry-run announced a real push:\n%s", out)
@@ -351,7 +351,7 @@ func TestAdoptExistingRepoHonorsGHHost(t *testing.T) {
 	t.Setenv("GH_HOST", "ghe.example.com")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no origin yet") })
 	out := captureStderr(t, func() {
-		if err := adoptExistingRepo(globalOpts{}, "my-instance", "acme/inst"); err != nil {
+		if err := adoptExistingRepo(false, false, "my-instance", "acme/inst"); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -365,7 +365,7 @@ func TestAdoptExistingRepoResetsOrigin(t *testing.T) {
 	dir := t.TempDir()
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("git@github.com:old/repo.git\n"), nil })
 	out := captureStderr(t, func() {
-		if err := adoptExistingRepo(globalOpts{}, dir, "acme/inst"); err != nil {
+		if err := adoptExistingRepo(false, false, dir, "acme/inst"); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -384,7 +384,7 @@ func TestPushInstanceRepoDryRunSkipsProbes(t *testing.T) {
 	})
 
 	var err error
-	out := captureStderr(t, func() { _, err = pushInstanceRepo(globalOpts{dryRun: true}, dir) })
+	out := captureStderr(t, func() { _, err = pushInstanceRepo(true, false, dir) })
 	if err != nil {
 		t.Fatalf("dry-run push: %v", err)
 	}
@@ -463,7 +463,7 @@ func currentBranch(t *testing.T, dir string) string {
 func TestEnsureScaffoldBranchRenamesMaster(t *testing.T) {
 	dir := gitScaffold(t, "master")
 	out := captureStderr(t, func() {
-		if err := ensureScaffoldBranch(globalOpts{}, dir); err != nil {
+		if err := ensureScaffoldBranch(false, false, dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -480,7 +480,7 @@ func TestEnsureScaffoldBranchRenamesMaster(t *testing.T) {
 func TestEnsureScaffoldBranchDryRunSaysWould(t *testing.T) {
 	dir := gitScaffold(t, "master")
 	out := captureStderr(t, func() {
-		if err := ensureScaffoldBranch(globalOpts{dryRun: true}, dir); err != nil {
+		if err := ensureScaffoldBranch(true, false, dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -496,7 +496,7 @@ func TestEnsureScaffoldBranchDryRunSaysWould(t *testing.T) {
 func TestEnsureScaffoldBranchLeavesMainAlone(t *testing.T) {
 	dir := gitScaffold(t, "main")
 	out := captureStderr(t, func() {
-		if err := ensureScaffoldBranch(globalOpts{}, dir); err != nil {
+		if err := ensureScaffoldBranch(false, false, dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -519,7 +519,7 @@ func TestEnsureScaffoldBranchLeavesPushedBranchAlone(t *testing.T) {
 			t.Fatalf("git %v: %v\n%s", argv, err, out)
 		}
 	}
-	if err := ensureScaffoldBranch(globalOpts{}, dir); err != nil {
+	if err := ensureScaffoldBranch(false, false, dir); err != nil {
 		t.Fatal(err)
 	}
 	if got := currentBranch(t, dir); got != "release" {
@@ -539,7 +539,7 @@ func TestEnsureScaffoldBranchRefusesToClobberMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStderr(t, func() {
-		if err := ensureScaffoldBranch(globalOpts{}, dir); err != nil {
+		if err := ensureScaffoldBranch(false, false, dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -562,7 +562,7 @@ func TestEnsureScaffoldBranchDetachedHead(t *testing.T) {
 		t.Fatalf("detach: %v\n%s", err, out)
 	}
 	out := captureStderr(t, func() {
-		if err := ensureScaffoldBranch(globalOpts{}, dir); err != nil {
+		if err := ensureScaffoldBranch(false, false, dir); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -575,7 +575,7 @@ func TestEnsureScaffoldBranchDetachedHead(t *testing.T) {
 func TestPushInstanceRepoPlaceholderRepo(t *testing.T) {
 	dir := scaffoldDir(t, "your-org/your-instance-repo")
 	out := captureStderr(t, func() {
-		if pushed, err := pushInstanceRepo(globalOpts{yes: true}, dir); err != nil || pushed {
+		if pushed, err := pushInstanceRepo(false, true, dir); err != nil || pushed {
 			t.Fatalf("placeholder = (%v, %v), want (false, nil)", pushed, err)
 		}
 	})

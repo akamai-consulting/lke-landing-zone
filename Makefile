@@ -122,6 +122,7 @@ COVERAGE_MINS := \
 	internal/envadd=13 \
 	internal/render=62 \
 	internal/upgrade=51 \
+	internal/newinstance=79 \
 	internal/copier=68 \
 	internal/onboard=13 \
 	internal/templatecommit=92 \

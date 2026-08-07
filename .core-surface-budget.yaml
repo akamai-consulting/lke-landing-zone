@@ -696,6 +696,23 @@ categories:
 #        equally untested in package main. What the tests do cover is the part
 #        with a wrong answer: the conflict scan, the answer-map regression
 #        compare, and the image-skew warning`s silence cases.
+#   79th: new -> internal/newinstance   6,800 -> 6,523 (-277 / 84 files)
+#        `llz new`, and commands.go is now only dispatchers. THE SHARED LAYER CAME
+#        OUT AS AN EXPORT, NOT A COPY: runGated had callers on both sides of the
+#        split -- three in the repo-creation path that moved, one in cmdBuild that
+#        stayed -- and it is the only thing standing between --dry-run and a real
+#        `gh repo create`. Two copies of that refusal is one too many.
+#        TWO SEAMS INSTEAD OF TWO MOVES. runHooksInstall lives in hooks.go, which
+#        needs runLint from checks.go, which needs gitOutput back from hooks.go --
+#        a cycle between two cobra-heavy files, for one best-effort call. execOutput
+#        is worse: moving it is a 64-site rename across four files of comments and
+#        help strings, which after the 78th move`s prose damage is its own change.
+#        Both are injected by main. exec.go (78 lines, closure 1) is the enabler
+#        the NEXT iteration should take.
+#        COVERAGE FLOOR 79%. High because most of this package is error text with
+#        a test asserting the exact remediation -- `gh repo create` fails three
+#        ways that look identical and have different fixes, and the operator
+#        hitting one has no instance yet to diagnose it with.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -708,7 +725,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 6800
+    budget: 6523
     exact: true
     include:
       - "tools/cmd/llz/*.go"

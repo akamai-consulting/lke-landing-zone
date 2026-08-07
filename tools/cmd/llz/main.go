@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
@@ -58,6 +59,10 @@ func init() {
 	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
+	newinstance.Exec = func(n string, args ...string) ([]byte, error) { return execOutput(n, args...) }
+	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
+		return runHooksInstall(globalOpts{dryRun: dryRun, yes: yes}, dir)
+	}
 }
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
@@ -192,7 +197,7 @@ func newCmd() *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return runNew(gopts, org, ref, dir, push)
+			return newinstance.Run(gopts.dryRun, gopts.yes, org, ref, dir, push)
 		},
 	}
 	c.Flags().StringVar(&org, "org", templateid.DefaultOrg, "template org to scaffold from")

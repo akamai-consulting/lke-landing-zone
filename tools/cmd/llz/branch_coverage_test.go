@@ -11,6 +11,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
 
@@ -18,6 +19,16 @@ import (
 
 // captureStderr mirrors captureStdout for the os.Stderr path (the remediation /
 // warning printers write there).
+// withGhOwnerKind stubs the instance_repo owner classifier. A local copy: the
+// other one went to internal/newinstance with the repo-creation tests, and what
+// is left here tests onboard.RemediateMissingRepo, which is neither package's.
+func withGhOwnerKind(t *testing.T, fn func(string) (string, error)) {
+	t.Helper()
+	orig := ghcli.OwnerKindFn
+	t.Cleanup(func() { ghcli.OwnerKindFn = orig })
+	ghcli.OwnerKindFn = fn
+}
+
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stderr
