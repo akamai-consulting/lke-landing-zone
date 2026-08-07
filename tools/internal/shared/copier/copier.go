@@ -17,9 +17,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
@@ -40,16 +40,19 @@ func ResolveRef(ref string) string {
 	if ref != "" {
 		return ref
 	}
-	if _, _, _, ok := selfupgrade.Semver(Version); ok {
-		return selfupgrade.NormalizeLLZTag(Version)
+	if _, _, _, ok := llzver.Semver(Version); ok {
+		return llzver.NormalizeLLZTag(Version)
 	}
 	return ""
 }
 
 // LatestReleaseFn resolves the newest published vX.Y.Z release of a template repo;
-// seamed for tests. It reuses self-update's release picker, which drops drafts /
-// pre-releases and ignores the llz/v* CLI tag track (selfupgrade.LatestLLZTag).
-var LatestReleaseFn = selfupgrade.LatestRelease
+// seamed for tests. The picker drops drafts / pre-releases and ignores the llz/v*
+// CLI tag track (llzver.LatestLLZTag). It USED TO READ selfupgrade.LatestRelease —
+// this package importing an extension to borrow it was one of four such
+// inversions; the version vocabulary now lives in shared/llzver, where both
+// callers reach it without either layer depending on the other.
+var LatestReleaseFn = llzver.LatestRelease
 
 // Ref resolves the concrete ref to scaffold/pin to. It falls back from a
 // dev build (no anchor Version) to the latest published vX.Y.Z release of repo, so

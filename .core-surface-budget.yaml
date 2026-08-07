@@ -1055,6 +1055,29 @@ categories:
     # earlier entries in that stretch are approximate and were left rather than
     # invented. Read `llz ci core-surface --verbose | wc -l` for the real count.
 
+    # LAYERING (no core-surface change; this budget stayed at 1853). internal/shared
+    # is substrate and internal/extensions is capability, and the arrow is supposed
+    # to point one way only. It had already inverted FOUR times -- shared/answers
+    # reaching up for promote.TemplateRefFromStamp, shared/ghcli for
+    # configreadiness.SecretIsEnvScoped, shared/copier for four selfupgrade version
+    # helpers, shared/ghgitdata for credrotate.InClusterToken. Every one arrived the
+    # same way: a genuinely general helper was written inside whichever extension
+    # needed it FIRST, and the second caller imported the extension rather than
+    # moving the helper. Nobody chose to invert the layering; they chose not to move
+    # a function. Three were moved down (a new shared/llzver holds the version
+    # vocabulary); the fourth was policy, not substrate, so ghcli now takes the
+    # answer as a parameter from a caller that already knew it.
+    # internal/shared/llzver=95 and the selfupgrade floor 49 -> 56 are here rather
+    # than as Makefile comments because untestable-loc COUNTS MAKEFILE COMMENT
+    # LINES. llzver arrived at 68% because LatestRelease shells out to `gh` and read
+    # as untestable; it is not -- kubectlprobe.Exec is a swappable seam and every
+    # decision is made on the returned bytes, so it went to 96.5%. selfupgrade FELL
+    # to 44.3% without one line of it getting worse: the version helpers were among
+    # its best-covered code and they left. Lowering that floor would have been the
+    # wrong read of the number -- it described a package that no longer exists -- so
+    # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
+    # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
+    #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked

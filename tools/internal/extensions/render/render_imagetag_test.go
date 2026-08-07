@@ -27,7 +27,7 @@ func TestLLZImageTagFor(t *testing.T) {
 		// No published tag matches these, so :latest is the only pullable answer.
 		{"branch name falls back", "main", "latest"},
 		{"abbreviated sha falls back", "13e8941", "latest"},
-		{"bare selfupgrade.Semver without v falls back", "0.0.28", "latest"},
+		{"bare llzver.Semver without v falls back", "0.0.28", "latest"},
 		{"empty falls back", "", "latest"},
 		{"uppercase sha is not the published form", "13E8941A8FC04A8096C90695F7005626B4384B78", "latest"},
 		{"41 hex chars is not a sha", sha + "a", "latest"},

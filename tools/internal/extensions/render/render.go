@@ -343,7 +343,7 @@ func ResolveLLZImageTag() string {
 // build-images.yml pushes :latest and :sha-<40-hex> on every main push, and
 // llz-release.yml retags that commit's sha- image as :vX.Y.Z when a release is
 // promoted. llz_version is NOT one of those forms — it is a raw commit sha or a
-// selfupgrade.Semver tag — so returning it verbatim rendered an image reference that does not
+// llzver.Semver tag — so returning it verbatim rendered an image reference that does not
 // resolve (ghcr.io/…/llz:<sha> and :v0.0.28 both 404), pinning the reconciler,
 // harbor-provisioner and broad-pat-rotator to an ImagePullBackOff. release-e2e
 // masked it by exporting $LLZ_IMAGE_REF, which short-circuits above.

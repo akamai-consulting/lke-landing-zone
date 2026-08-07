@@ -102,21 +102,6 @@ func resolveCaller(d Deps, workflowsDir string) (promoCaller, error) {
 	}, nil
 }
 
-// templateRefFromStamp reads the template_ref out of .template-version (best
-// effort; "" if absent/malformed).
-// TemplateRefFromStamp reads the template ref recorded in the version stamp.
-func TemplateRefFromStamp() string {
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		return ""
-	}
-	m := regexp.MustCompile(`"template_ref"\s*:\s*"([^"]+)"`).FindSubmatch(b)
-	if m == nil {
-		return ""
-	}
-	return string(m[1])
-}
-
 // renderPromoteWorkflow renders the full promote.yml body for the ordered stages.
 // Pure (no I/O) so it unit-tests against a fixed caller + stage list. Caller
 // guarantees len(stages) >= 2.

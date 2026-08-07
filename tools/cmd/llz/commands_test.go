@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
@@ -47,7 +48,7 @@ func TestResolveScaffoldRef(t *testing.T) {
 		t.Errorf("explicit branch = %q, want some-branch", got)
 	}
 	// Empty ref falls back to the binary version. In tests `version` is "dev"
-	// (not selfupgrade.Semver), so it resolves to "" — the signal for copier.Ref to look up
+	// (not llzver.Semver), so it resolves to "" — the signal for copier.Ref to look up
 	// the latest published release instead of floating on main.
 	if got := copier.ResolveRef(""); got != "" {
 		t.Errorf("dev-build sentinel = %q, want \"\"", got)
@@ -66,7 +67,7 @@ func TestScaffoldRef(t *testing.T) {
 	// Dev build (version=="dev" in tests) → empty sentinel → resolve latest release.
 	copier.LatestReleaseFn = func(repo string) (string, error) {
 		if repo != "org/repo" {
-			t.Errorf("selfupgrade.LatestRelease called with %q, want org/repo", repo)
+			t.Errorf("llzver.LatestRelease called with %q, want org/repo", repo)
 		}
 		return "v9.9.9", nil
 	}
@@ -96,7 +97,7 @@ func TestBuildArgv(t *testing.T) {
 
 func TestSecretAndVariableArgv(t *testing.T) {
 	// The value must NEVER appear in argv — it is piped via stdin.
-	got := ghcli.SecretSetArgv("lab", "LINODE_API_TOKEN")
+	got := ghcli.SecretSetArgv("lab", "LINODE_API_TOKEN", configreadiness.SecretIsEnvScoped("LINODE_API_TOKEN"))
 	want := []string{"gh", "secret", "set", "LINODE_API_TOKEN", "--env", "infra-lab"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ghcli.SecretSetArgv\n got: %v\nwant: %v", got, want)

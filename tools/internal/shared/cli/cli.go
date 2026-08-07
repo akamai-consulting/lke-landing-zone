@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // EnvInt reads an int64 env var, falling back to def when unset/invalid.
@@ -67,6 +68,26 @@ func AsUint64(v any) (uint64, bool) {
 func AsString(v any) string {
 	if s, ok := v.(string); ok {
 		return s
+	}
+	return ""
+}
+
+// InClusterToken resolves a credential from an env var, else a mounted file,
+// else "". IT CAME DOWN FROM internal/extensions/credrotate, where it was written
+// for the Linode token and where being a shared package's dependency made
+// internal/shared/ghgitdata import an extension. Nothing in it is a rotation
+// concern: it is the env-then-file lookup every in-cluster credential uses, which
+// is why ghgitdata reached across a layer for it in the first place.
+// InClusterToken is the shared secrets-before-apps token resolver: the named env
+// var first (CronJob/CI compatibility), else the optional Secret volume mounted at
+// file (kubelet-refreshed on rotate), else "" (not yet synced). Backs both the
+// linode and apl-values-repo resolvers.
+func InClusterToken(envVar, file string) string {
+	if t := os.Getenv(envVar); t != "" {
+		return t
+	}
+	if b, err := os.ReadFile(file); err == nil {
+		return strings.TrimSpace(string(b))
 	}
 	return ""
 }

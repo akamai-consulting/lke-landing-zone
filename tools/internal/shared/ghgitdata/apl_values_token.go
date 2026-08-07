@@ -1,6 +1,6 @@
 package ghgitdata
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 
 // In-cluster apl-values-repo token resolution (secrets-before-apps Phase 2),
 // mirroring linode_token.go. The llz-reconciler Deployment runs at sync-wave 0 —
@@ -20,7 +20,7 @@ var AplValuesTokenFile = "/var/run/secrets/llz/apl-values-repo-token/token"
 // InClusterAplValuesToken resolves the apl-overlay push token:
 // APL_VALUES_REPO_TOKEN env (tests/CI), else the optional Secret volume, else ""
 // (not yet synced — the apl-overlay pass no-ops until it appears). Shares the
-// linode resolver's lazy env-then-file logic (credrotate.InClusterToken).
+// linode resolver's lazy env-then-file logic (cli.InClusterToken).
 func InClusterAplValuesToken() string {
-	return credrotate.InClusterToken("APL_VALUES_REPO_TOKEN", AplValuesTokenFile)
+	return cli.InClusterToken("APL_VALUES_REPO_TOKEN", AplValuesTokenFile)
 }

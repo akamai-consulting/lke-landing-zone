@@ -48,10 +48,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -97,7 +97,7 @@ type upgradeTestOpts struct {
 
 // PreviousReleaseTag picks the release an adopter would most plausibly be
 // upgrading FROM: the highest bare vX.Y.Z tag that is not on the commit under
-// test. It delegates the "highest release" rule to selfupgrade.LatestLLZTag — the SAME rule
+// test. It delegates the "highest release" rule to llzver.LatestLLZTag — the SAME rule
 // `llz self-update` and `llz new` apply — so the gate scaffolds onto exactly the
 // release an adopter would have installed, rather than a second opinion about
 // what "latest" means that could drift from the one that ships.
@@ -113,11 +113,11 @@ func PreviousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 			candidates = append(candidates, t)
 		}
 	}
-	return selfupgrade.LatestLLZTag(candidates)
+	return llzver.LatestLLZTag(candidates)
 }
 
-// releaseTagRe keeps ONLY a full release tag. selfupgrade.LatestLLZTag cannot do this on its
-// own: selfupgrade.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
+// releaseTagRe keeps ONLY a full release tag. llzver.LatestLLZTag cannot do this on its
+// own: llzver.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
 // callers hand it a list the GitHub releases API already filtered by isDraft /
 // isPrerelease. This gate reads `git tag`, where that metadata does not exist —
 // and the release convention here is to cut a PRE-RELEASE first, so `v0.0.41-rc1`

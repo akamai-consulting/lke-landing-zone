@@ -382,7 +382,7 @@ func PushSecrets(o Opts, env string) error {
 	}
 	var items []item
 	for _, k := range SortedKeys(secrets) {
-		items = append(items, item{ghcli.SecretSetArgv(env, k), secrets[k]})
+		items = append(items, item{ghcli.SecretSetArgv(env, k, configreadiness.SecretIsEnvScoped(k)), secrets[k]})
 	}
 	for _, k := range SortedKeys(vars) {
 		items = append(items, item{ghcli.VariableSetArgv(k), vars[k]})
