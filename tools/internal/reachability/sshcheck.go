@@ -1,4 +1,4 @@
-package main
+package reachability
 
 // sshcheck.go implements `llz doctor --ssh-host`: verify port-22 reachability and
 // (optionally) that a committed known_hosts still matches the host's live SSH keys.
@@ -16,10 +16,10 @@ import (
 	"time"
 )
 
-// checkSSHHost reports port reachability + (if knownHostsFile != "") whether the
+// CheckSSHHost reports port reachability + (if knownHostsFile != "") whether the
 // committed known_hosts matches the live keys. Returns an error if the host is
 // unreachable or the committed keys are stale.
-func checkSSHHost(host, port, knownHostsFile string) error {
+func CheckSSHHost(host, port, knownHostsFile string) error {
 	if port == "" {
 		port = "22"
 	}

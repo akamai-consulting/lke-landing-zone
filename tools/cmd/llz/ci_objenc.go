@@ -20,6 +20,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
@@ -44,7 +45,7 @@ var objencDeps = func() objenc.Deps {
 			}
 		},
 		KVPut:       func(path string, fields map[string]string) error { return baoread.KVPut(path, fields) },
-		KubectlOut:  kubectlOut,
+		KubectlOut:  kubectlprobe.Out,
 		SecretField: kube.SecretField,
 		MaskGHALines: func(vals ...string) {
 			for _, v := range vals {

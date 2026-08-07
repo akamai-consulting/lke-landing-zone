@@ -33,6 +33,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 )
@@ -215,7 +216,7 @@ func unknownDeploymentErr(tfDir, env string) error {
 // unreachable or not-yet-created repo — in which case callers must not draw any
 // conclusion from the absence of an answer.
 func buildBranch() (repo, branch string, ok bool) {
-	if !lookable("gh") {
+	if !kubectlprobe.Lookable("gh") {
 		return "", "", false
 	}
 	repo, err := resolveInstanceRepo("", false)

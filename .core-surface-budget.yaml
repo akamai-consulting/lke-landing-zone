@@ -516,6 +516,19 @@ categories:
 #        The seam PROVED ITSELF: TestKeycloakIssuerForLogin failed the moment it
 #        was introduced, which is the path confirming it really did depend on
 #        that lookup rather than on anything local.
+#   67th: reachability -> internal/reachability   10,291 -> 10,001 (-290 / 92 files)
+#        verify + status-preflight + sshcheck, ~420 lines, 6 outbound together.
+#        THE ENABLER WAS A THREE-LINE FUNCTION IN THE WRONG FILE: kubectlOut,
+#        four callers across three packages, lived in verify.go -- a file about
+#        the `llz verify` COMMAND, which is not what a kubectl exec helper is
+#        about. Now kubectlprobe.Out, with lookable as kubectlprobe.Lookable.
+#        THAT MOVE BRIEFLY CREATED A SECOND SEAM. lookable reads
+#        kubectlprobe.LookPathFn while package main kept its own swappable
+#        execLookPath; a test stubbing one left the other reading the REAL PATH,
+#        which passes or fails on what the developer happens to have installed --
+#        the exact failure a preflight exists to catch. main s now delegates.
+#        Fifth time a copied with*() helper dragged its old package s wiring
+#        (installConfigReadinessDeps). A minimal local version, every time.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -528,7 +541,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 10291
+    budget: 10001
     exact: true
     include:
       - "tools/cmd/llz/*.go"

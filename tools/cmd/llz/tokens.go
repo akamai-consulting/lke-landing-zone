@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -455,7 +456,7 @@ func repoStatus(repo string) (bool, error) {
 // doctor's own tooling table is where that belongs, and `llz tokens` fails on it
 // soon enough.
 func requireInstanceRepo(instanceRepo string) error {
-	if !lookable("gh") {
+	if !kubectlprobe.Lookable("gh") {
 		return nil
 	}
 	found, err := repoStatus(instanceRepo)

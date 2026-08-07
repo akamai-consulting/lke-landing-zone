@@ -119,6 +119,7 @@ COVERAGE_MINS := \
 	internal/releasepublish=70 \
 	internal/statepassphrase=78 \
 	internal/ghsecret=55 \
+	internal/reachability=34 \
 	internal/firewall=66 \
 	internal/instanceresolve=87 \
 	internal/meshegress=51 \

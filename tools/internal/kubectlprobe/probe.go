@@ -295,3 +295,27 @@ func EffectiveKubeconfig() string {
 	}
 	return ""
 }
+
+// Out is Exec with the binary fixed to kubectl and the bytes stringified.
+//
+// Three lines with four callers across three packages, and it lived in
+// cmd/llz/verify.go — a file about the `llz verify` command, which is not what a
+// kubectl-shaped exec helper is about. It is here so those callers cannot drift
+// about whether the error or the output wins.
+func Out(args ...string) (string, error) {
+	out, err := Exec("kubectl", args...)
+	return string(out), err
+}
+
+// Lookable reports whether a binary is on PATH.
+//
+// It goes through LookPathFn rather than exec.LookPath directly so a test can
+// answer for a tool the developer's machine happens to have installed — which is
+// the whole failure mode a preflight check has: it passes on the laptop that
+// wrote it.
+var LookPathFn = exec.LookPath
+
+func Lookable(bin string) bool {
+	_, err := LookPathFn(bin)
+	return err == nil
+}

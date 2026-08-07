@@ -1,24 +1,24 @@
-package main
+package reachability
 
 import (
-	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 func TestStatusPreflightNoContext(t *testing.T) {
 	// A laptop that has never fetched a kubeconfig — the state every adopter is in
 	// right after the build, since the cluster was created by GitHub Actions.
-	origLook, origOut := execLookPath, execOutput
-	t.Cleanup(func() { execLookPath, execOutput = origLook, origOut })
-	execLookPath = func(string) (string, error) { return "/usr/bin/kubectl", nil }
-	execOutput = func(_ string, args ...string) ([]byte, error) {
+	origLook, origOut := kubectlprobe.LookPathFn, kubectlprobe.Exec
+	t.Cleanup(func() { kubectlprobe.LookPathFn, kubectlprobe.Exec = origLook, origOut })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/kubectl", nil }
+	kubectlprobe.Exec = func(_ string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("error: current-context is not set")
 	}
 
-	err := statusPreflight("lab")
+	err := StatusPreflight("lab")
 	if err == nil {
 		t.Fatal("expected a refusal with no kubectl context")
 	}
@@ -30,13 +30,13 @@ func TestStatusPreflightNoContext(t *testing.T) {
 }
 
 func TestStatusPreflightUnreachableClusterKeepsKubectlsDiagnosis(t *testing.T) {
-	origLook, origOut, origReach := execLookPath, execOutput, clusterReachable
-	t.Cleanup(func() { execLookPath, execOutput, clusterReachable = origLook, origOut, origReach })
-	execLookPath = func(string) (string, error) { return "/usr/bin/kubectl", nil }
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("lke123-ctx"), nil }
+	origLook, origOut, origReach := kubectlprobe.LookPathFn, kubectlprobe.Exec, clusterReachable
+	t.Cleanup(func() { kubectlprobe.LookPathFn, kubectlprobe.Exec, clusterReachable = origLook, origOut, origReach })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/kubectl", nil }
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) { return []byte("lke123-ctx"), nil }
 	clusterReachable = func() (string, bool) { return "dial tcp: i/o timeout", false }
 
-	err := statusPreflight("lab")
+	err := StatusPreflight("lab")
 	if err == nil {
 		t.Fatal("expected a refusal when the cluster is unreachable")
 	}
@@ -48,39 +48,14 @@ func TestStatusPreflightUnreachableClusterKeepsKubectlsDiagnosis(t *testing.T) {
 }
 
 func TestStatusPreflightPasses(t *testing.T) {
-	origLook, origOut, origReach := execLookPath, execOutput, clusterReachable
-	t.Cleanup(func() { execLookPath, execOutput, clusterReachable = origLook, origOut, origReach })
-	execLookPath = func(string) (string, error) { return "/usr/bin/kubectl", nil }
-	execOutput = func(_ string, _ ...string) ([]byte, error) { return []byte("lke123-ctx"), nil }
+	origLook, origOut, origReach := kubectlprobe.LookPathFn, kubectlprobe.Exec, clusterReachable
+	t.Cleanup(func() { kubectlprobe.LookPathFn, kubectlprobe.Exec, clusterReachable = origLook, origOut, origReach })
+	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/kubectl", nil }
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) { return []byte("lke123-ctx"), nil }
 	clusterReachable = func() (string, bool) { return "", true }
 
-	if err := statusPreflight("lab"); err != nil {
+	if err := StatusPreflight("lab"); err != nil {
 		t.Fatalf("a reachable cluster must pass: %v", err)
-	}
-}
-
-func TestCmdStatusKeepsTheRootTokenNagWithoutClusterAccess(t *testing.T) {
-	// `llz status` promises to flag a lingering OPENBAO_ROOT_TOKEN on EVERY run.
-	// That check reads GitHub, not the cluster — so gating it behind cluster
-	// reachability would silence it for exactly the operator who has no
-	// kubeconfig, which is most of them right after the build that printed it.
-	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
-	dir := chdirTempDir(t)
-	mustWrite(t, filepath.Join(dir, ".copier-answers.yml"), "instance_repo: acme/inst\n")
-	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
-		if name == "gh" {
-			return []byte(`{"secrets":[{"name":"OPENBAO_ROOT_TOKEN"}]}`), nil
-		}
-		return nil, errors.New("The connection to the server was refused")
-	})
-
-	var err error
-	out := captureStdout(t, func() { err = cmdStatus([]string{"lab"}, globalOpts{}, false, 0) })
-	if err == nil {
-		t.Fatal("unreachable cluster must still fail the command")
-	}
-	if !strings.Contains(out, "OPENBAO_ROOT_TOKEN is still set in infra-lab") {
-		t.Errorf("the standing root-token nag was lost:\n%s", out)
 	}
 }
 

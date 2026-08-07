@@ -25,6 +25,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 
@@ -533,7 +534,7 @@ func regenRootCmd() *cobra.Command {
 }
 
 func verifyCmd() *cobra.Command {
-	var o verifyOpts
+	var o reachability.VerifyOpts
 	c := &cobra.Command{
 		Use:   "verify",
 		Short: "post-bootstrap acceptance snapshot (SSH wiring, platform apps, ESO) — read-only",
@@ -543,9 +544,9 @@ func verifyCmd() *cobra.Command {
 			"pointed at the external HTTPS repo, OpenBao seal status, and the ESO store.\n" +
 			"It does not wait — re-run if a check is just mid-reconcile.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runVerify(gopts, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return reachability.RunVerify(gopts.dryRun, o) },
 	}
-	c.Flags().StringVar(&o.sshSourceHost, "ssh-source-host", "", "SSH source-of-truth host to check for (e.g. a self-hosted Git host); empty skips the SSH-source checks")
+	c.Flags().StringVar(&o.SSHSourceHost, "ssh-source-host", "", "SSH source-of-truth host to check for (e.g. a self-hosted Git host); empty skips the SSH-source checks")
 	return c
 }
 

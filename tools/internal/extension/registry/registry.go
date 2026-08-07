@@ -71,6 +71,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
@@ -130,6 +131,7 @@ var declarations = []func() extension.Extension{
 	instanceresolve.Extension,
 	firewall.Extension,
 	openbao.Extension,
+	reachability.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

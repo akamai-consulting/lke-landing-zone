@@ -27,9 +27,10 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 
 func withLookPath(t *testing.T, fn func(file string) (string, error)) {
 	t.Helper()
-	orig := execLookPath
-	execLookPath = fn
-	t.Cleanup(func() { execLookPath = orig })
+	// Stub the ONE seam: execLookPath delegates here, so swapping this covers both.
+	orig := kubectlprobe.LookPathFn
+	kubectlprobe.LookPathFn = fn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = orig })
 }
 
 func TestGitOut(t *testing.T) {
@@ -68,13 +69,13 @@ func TestGitOutputPassesDirFlag(t *testing.T) {
 func TestKubectlOut(t *testing.T) {
 	withExecOutput(t, func(name string, _ ...string) ([]byte, error) {
 		if name != "kubectl" {
-			t.Errorf("kubectlOut shelled out to %q, want kubectl", name)
+			t.Errorf("kubectlprobe.Out shelled out to %q, want kubectl", name)
 		}
 		return []byte("raw-output"), nil
 	})
-	got, err := kubectlOut("get", "pods")
+	got, err := kubectlprobe.Out("get", "pods")
 	if err != nil || got != "raw-output" {
-		t.Errorf("kubectlOut = (%q, %v), want (raw-output, nil)", got, err)
+		t.Errorf("kubectlprobe.Out = (%q, %v), want (raw-output, nil)", got, err)
 	}
 }
 
@@ -83,16 +84,16 @@ func TestHaveToolAndLookable(t *testing.T) {
 	if !haveTool("tflint") {
 		t.Error("haveTool(present) = false, want true")
 	}
-	if !lookable("gh") {
-		t.Error("lookable(present) = false, want true")
+	if !kubectlprobe.Lookable("gh") {
+		t.Error("kubectlprobe.Lookable(present) = false, want true")
 	}
 
 	withLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
 	if haveTool("tflint") {
 		t.Error("haveTool(absent) = true, want false")
 	}
-	if lookable("gh") {
-		t.Error("lookable(absent) = true, want false")
+	if kubectlprobe.Lookable("gh") {
+		t.Error("kubectlprobe.Lookable(absent) = true, want false")
 	}
 }
 

@@ -1,4 +1,4 @@
-package main
+package reachability
 
 import (
 	"encoding/base64"

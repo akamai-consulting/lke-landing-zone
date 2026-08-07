@@ -16,6 +16,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -118,7 +120,7 @@ func copierUpdateArgv(ref string) []string {
 // invoke breaks it. Warn rather than stay silent: "this would work" is the wrong
 // answer too.
 func requireCopier(g globalOpts, action string) error {
-	if lookable("copier") {
+	if kubectlprobe.Lookable("copier") {
 		return nil
 	}
 	if g.dryRun {
@@ -1066,7 +1068,7 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	// `llz status` promises on EVERY run. Gating it behind cluster reachability
 	// would silence it exactly for the operator who has no kubeconfig — which is
 	// most of them, right after the build that printed the token.
-	if err := statusPreflight(args[0]); err != nil {
+	if err := reachability.StatusPreflight(args[0]); err != nil {
 		warnIfRootTokenPresent(args[0])
 		return err
 	}
@@ -1095,7 +1097,7 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 // done. The one-time job-summary warning is easy to miss, so status re-checks it on
 // every run. Best-effort: skips silently without gh or a resolvable repo.
 func warnIfRootTokenPresent(env string) {
-	if !lookable("gh") {
+	if !kubectlprobe.Lookable("gh") {
 		return
 	}
 	repo, err := resolveInstanceRepo("", false)

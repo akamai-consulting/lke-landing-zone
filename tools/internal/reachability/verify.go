@@ -1,4 +1,4 @@
-package main
+package reachability
 
 // verify.go ports verify-lab-bootstrap.sh into `llz verify`: a read-only
 // snapshot of a freshly-bootstrapped apl-core cluster — the SSH-via-_rawValues
@@ -17,14 +17,15 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
-type verifyOpts struct {
-	sshSourceHost string // SSH source-of-truth host, if the GitOps repo is reached over SSH (e.g. a self-hosted Git host); empty skips the SSH-source checks
+type VerifyOpts struct {
+	SSHSourceHost string // SSH source-of-truth host, if the GitOps repo is reached over SSH (e.g. a self-hosted Git host); empty skips the SSH-source checks
 }
 
-func runVerify(g globalOpts, o verifyOpts) error {
-	if g.dryRun {
+func RunVerify(dryRun bool, o VerifyOpts) error {
+	if dryRun {
 		fmt.Println(color.Dim("→ (dry-run) read-only verification snapshot via kubectl (current context)"))
 		return nil
 	}
@@ -34,18 +35,18 @@ func runVerify(g globalOpts, o verifyOpts) error {
 	// 1-3. SSH source checks — only when the GitOps repo is reached over SSH
 	// (an SSH source host was provided via --ssh-source-host). Adopters using an
 	// HTTPS values-repo mirror have no SSH source, so these are skipped.
-	if o.sshSourceHost == "" {
+	if o.SSHSourceHost == "" {
 		v.section("1-3. SSH source checks skipped (no --ssh-source-host; HTTPS values-repo path)")
 	} else {
 		// 1. ArgoCD repository Secret for the SSH source.
 		v.section("1. ArgoCD repository Secret for SSH source")
-		secretsJSON, _ := kubectlOut("-n", "argocd", "get", "secret",
+		secretsJSON, _ := kubectlprobe.Out("-n", "argocd", "get", "secret",
 			"-l", "argocd.argoproj.io/secret-type=repository", "-o", "json")
-		name, hasKey, found := findSSHRepoSecret(secretsJSON, o.sshSourceHost)
+		name, hasKey, found := findSSHRepoSecret(secretsJSON, o.SSHSourceHost)
 		if !found {
-			v.fail("no repository Secret references " + o.sshSourceHost + " (_rawValues filtered or wrong path)")
+			v.fail("no repository Secret references " + o.SSHSourceHost + " (_rawValues filtered or wrong path)")
 		} else {
-			v.pass("repository Secret for " + o.sshSourceHost + " found: " + name)
+			v.pass("repository Secret for " + o.SSHSourceHost + " found: " + name)
 			if hasKey {
 				v.pass("Secret contains sshPrivateKey field")
 			} else {
@@ -54,21 +55,21 @@ func runVerify(g globalOpts, o verifyOpts) error {
 		}
 
 		// 2. known_hosts CM populated.
-		v.section("2. argocd-ssh-known-hosts-cm contains " + o.sshSourceHost)
-		kh, _ := kubectlOut("-n", "argocd", "get", "cm", "argocd-ssh-known-hosts-cm",
+		v.section("2. argocd-ssh-known-hosts-cm contains " + o.SSHSourceHost)
+		kh, _ := kubectlprobe.Out("-n", "argocd", "get", "cm", "argocd-ssh-known-hosts-cm",
 			"-o", "jsonpath={.data.ssh_known_hosts}")
 		switch {
 		case strings.TrimSpace(kh) == "":
 			v.fail("argocd-ssh-known-hosts-cm not found or empty")
-		case knownHostsHas(kh, o.sshSourceHost):
-			v.pass(o.sshSourceHost + " entry present in known_hosts")
+		case knownHostsHas(kh, o.SSHSourceHost):
+			v.pass(o.SSHSourceHost + " entry present in known_hosts")
 		default:
-			v.fail(o.sshSourceHost + " entry NOT in known_hosts — ArgoCD will reject the SSH handshake")
+			v.fail(o.SSHSourceHost + " entry NOT in known_hosts — ArgoCD will reject the SSH handshake")
 		}
 
 		// 3. argocd-repo-server can authenticate (no SSH errors in recent logs).
-		v.section("3. argocd-repo-server SSH handshake against " + o.sshSourceHost)
-		logs, _ := kubectlOut("-n", "argocd", "logs", "deployment/argocd-repo-server", "--tail=500")
+		v.section("3. argocd-repo-server SSH handshake against " + o.SSHSourceHost)
+		logs, _ := kubectlprobe.Out("-n", "argocd", "logs", "deployment/argocd-repo-server", "--tail=500")
 		if sshAuthError.MatchString(logs) {
 			v.fail("argocd-repo-server logs contain SSH auth errors (permission denied / host key verification failed)")
 		} else {
@@ -78,7 +79,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 
 	// 4. platform custom Applications Synced + Healthy.
 	v.section("4. platform custom Applications Synced + Healthy")
-	appsJSON, _ := kubectlOut("-n", "argocd", "get", "applications", "-o", "json")
+	appsJSON, _ := kubectlprobe.Out("-n", "argocd", "get", "applications", "-o", "json")
 	apps := selectPlatformApps(appsJSON)
 	if len(apps) == 0 {
 		v.fail("no platform-prefixed Applications found in argocd namespace")
@@ -96,7 +97,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 	//    (repoUrl, not otomi.git.repoUrl) — NOT a ConfigMap in apl-operator. Its .data
 	//    is base64, so decode.
 	v.section("5. apl-operator apl-git-config repoUrl")
-	repoURLB64, _ := kubectlOut("-n", "apl-secrets", "get", "secret", "apl-git-config", "-o", "jsonpath={.data.repoUrl}")
+	repoURLB64, _ := kubectlprobe.Out("-n", "apl-secrets", "get", "secret", "apl-git-config", "-o", "jsonpath={.data.repoUrl}")
 	repoURL := repoURLB64
 	if dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(repoURLB64)); err == nil {
 		repoURL = string(dec)
@@ -114,7 +115,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 
 	// 6. OpenBao seal status (informational).
 	v.section("6. OpenBao seal status (informational)")
-	pod, _ := kubectlOut("-n", baoread.Namespace, "get", "pod", "-l", "app.kubernetes.io/name=openbao",
+	pod, _ := kubectlprobe.Out("-n", baoread.Namespace, "get", "pod", "-l", "app.kubernetes.io/name=openbao",
 		"-o", "jsonpath={.items[0].metadata.name}")
 	if strings.TrimSpace(pod) == "" {
 		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", color.Dim("INFO"))
@@ -132,7 +133,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 
 	// 7. ESO ClusterSecretStore health.
 	v.section("7. ESO ClusterSecretStore for OpenBao")
-	css, _ := kubectlOut("get", "clustersecretstore", "openbao",
+	css, _ := kubectlprobe.Out("get", "clustersecretstore", "openbao",
 		"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
 	switch strings.TrimSpace(css) {
 	case "True":
@@ -161,11 +162,6 @@ type verifier struct{ passed, failed int }
 func (v *verifier) section(s string) { fmt.Printf("\n%s\n", color.Bold(s)) }
 func (v *verifier) pass(s string)    { fmt.Printf("  %s  %s\n", color.Green("PASS"), s); v.passed++ }
 func (v *verifier) fail(s string)    { fmt.Printf("  %s  %s\n", color.Red("FAIL"), s); v.failed++ }
-
-func kubectlOut(args ...string) (string, error) {
-	out, err := execOutput("kubectl", args...)
-	return string(out), err
-}
 
 // ── pure helpers (unit-tested) ───────────────────────────────────────────────
 

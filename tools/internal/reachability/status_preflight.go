@@ -1,4 +1,4 @@
-package main
+package reachability
 
 // status_preflight.go — turn "no cluster access" into instructions instead of a
 // wall of kubectl noise.
@@ -20,6 +20,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // clusterReachable probes the cluster kubectl currently points at with a short
@@ -34,10 +35,10 @@ var clusterReachable = func() (string, bool) {
 	return cigate.FirstLine(err.Error()), false
 }
 
-// statusPreflight fails with the fix when the current context cannot reach a
+// StatusPreflight fails with the fix when the current context cannot reach a
 // cluster, so `llz status` never runs its checks blind.
-func statusPreflight(env string) error {
-	if !lookable("kubectl") {
+func StatusPreflight(env string) error {
+	if !kubectlprobe.Lookable("kubectl") {
 		return fmt.Errorf("kubectl is not on PATH — `llz status` reads the cluster with it (`llz doctor` lists the tooling)")
 	}
 	if ctx := toolOut("kubectl", "config", "current-context"); ctx == "" {

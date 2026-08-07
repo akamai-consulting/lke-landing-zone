@@ -65,7 +65,14 @@ var execCombined = func(name string, args ...string) string {
 	return string(out)
 }
 
-// execLookPath reports a binary's location on PATH, like exec.LookPath.
+// execLookPath reports a binary's location on PATH.
+//
+// IT DELEGATES TO kubectlprobe.LookPathFn RATHER THAN OWNING A SECOND SEAM. When
+// `lookable` moved to kubectlprobe, package main briefly had two independently
+// swappable LookPath vars, and a test stubbing this one left kubectlprobe.Lookable
+// reading the real PATH — which passes or fails depending on what the developer
+// happens to have installed. One seam, reached through a delegating closure so a
+// swap of the underlying var is seen at call time.
 var execLookPath = func(file string) (string, error) {
-	return exec.LookPath(file)
+	return kubectlprobe.LookPathFn(file)
 }

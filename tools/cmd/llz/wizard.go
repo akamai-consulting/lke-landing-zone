@@ -20,6 +20,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -429,7 +431,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// `git push` published. It was the only tool in this flow that nothing checked
 	// — the list carries `jq` and `linode-cli`, which llz never invokes at all.
 	for _, t := range []string{"git", "copier", "gh", "kubectl", "helm", "bao", "jq", "linode-cli"} {
-		report(t, lookable(t))
+		report(t, kubectlprobe.Lookable(t))
 	}
 
 	fmt.Println("\n" + color.Bold("GitHub auth:"))
@@ -498,7 +500,7 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.
 	if sshHost != "" {
-		if err := checkSSHHost(sshHost, "22", knownHosts); err != nil {
+		if err := reachability.CheckSSHHost(sshHost, "22", knownHosts); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -529,13 +531,8 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	return errors.Join(errs...)
 }
 
-func lookable(bin string) bool {
-	_, err := execLookPath(bin)
-	return err == nil
-}
-
 func reportEither(a, b string) {
-	report(a+" or "+b, lookable(a) || lookable(b))
+	report(a+" or "+b, kubectlprobe.Lookable(a) || kubectlprobe.Lookable(b))
 }
 
 func report(name string, ok bool) {
