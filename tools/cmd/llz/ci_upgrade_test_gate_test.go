@@ -123,7 +123,7 @@ func TestPreviousReleaseTag(t *testing.T) {
 		}
 	})
 
-	// Delegated to latestLLZTag, so pre-releases and the retired llz/v* track are
+	// Delegated to selfupgrade.LatestLLZTag, so pre-releases and the retired llz/v* track are
 	// excluded by the same rule `llz self-update` and `llz new` apply.
 	t.Run("ignores pre-releases and the legacy tag track", func(t *testing.T) {
 		got, ok := previousReleaseTag([]string{"v0.0.39", "v0.0.41-rc1", "llz/v9.9.9"}, nil)

@@ -1,4 +1,4 @@
-package main
+package selfupgrade
 
 import (
 	"crypto/sha256"
@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 )
 
@@ -31,10 +32,10 @@ func assetName(goos, goarch string) string {
 	return fmt.Sprintf("llz-%s-%s", goos, goarch)
 }
 
-// normalizeLLZTag canonicalises a user-supplied --ref to the bare umbrella release
+// NormalizeLLZTag canonicalises a user-supplied --ref to the bare umbrella release
 // tag scheme `vX.Y.Z`. It accepts "1.2.3", "v1.2.3", or a legacy "llz/v1.2.3"; an
 // empty ref stays empty (the caller then resolves the latest tag).
-func normalizeLLZTag(ref string) string {
+func NormalizeLLZTag(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
@@ -44,10 +45,10 @@ func normalizeLLZTag(ref string) string {
 	return "v" + ref
 }
 
-// semver parses the numeric MAJOR.MINOR.PATCH out of a version or release tag,
+// Semver parses the numeric MAJOR.MINOR.PATCH out of a Version or release tag,
 // tolerating a leading "llz/" and/or "v" and any "-pre"/"+build" suffix. ok is
 // false when the core isn't three integers (e.g. "dev", "dev-<sha>").
-func semver(s string) (maj, min, patch int, ok bool) {
+func Semver(s string) (maj, min, patch int, ok bool) {
 	s = strings.TrimPrefix(s, "llz/")
 	s = strings.TrimPrefix(s, "v")
 	if i := strings.IndexAny(s, "-+"); i >= 0 {
@@ -71,8 +72,8 @@ func semver(s string) (maj, min, patch int, ok bool) {
 // semverLess reports whether a sorts before b. Unparseable versions sort lowest,
 // so a "dev" build is always considered older than any real release.
 func semverLess(a, b string) bool {
-	am, an, ap, aok := semver(a)
-	bm, bn, bp, bok := semver(b)
+	am, an, ap, aok := Semver(a)
+	bm, bn, bp, bok := Semver(b)
 	if aok != bok {
 		return !aok // unparseable (false) < parseable (true)
 	}
@@ -88,16 +89,16 @@ func semverLess(a, b string) bool {
 	return ap < bp
 }
 
-// latestLLZTag picks the highest-semver bare `vX.Y.Z` umbrella release tag from a
+// LatestLLZTag picks the highest-Semver bare `vX.Y.Z` umbrella release tag from a
 // release-tag list, ignoring any prefixed tag (the legacy llz/v* CLI tags and any
 // other track). ok is false when none match.
-func latestLLZTag(tags []string) (string, bool) {
+func LatestLLZTag(tags []string) (string, bool) {
 	best := ""
 	for _, t := range tags {
 		if strings.Contains(t, "/") || !strings.HasPrefix(t, "v") {
 			continue
 		}
-		if _, _, _, ok := semver(t); !ok {
+		if _, _, _, ok := Semver(t); !ok {
 			continue
 		}
 		if best == "" || semverLess(best, t) {
@@ -133,9 +134,9 @@ func releaseDownloadArgv(repo, tag, asset, dir string) []string {
 		"--pattern", asset, "--pattern", "SHA256SUMS", "--dir", dir, "--clobber"}
 }
 
-// updateRepo is the repo self-update pulls llz releases from: the upstream
+// UpdateRepo is the repo self-update pulls llz releases from: the upstream
 // template org (an instance's .copier-answers.yml answer, else the default).
-func updateRepo() string {
+func UpdateRepo() string {
 	org := templateid.DefaultOrg
 	if a, _ := answers.Read("."); a != nil && a.UpstreamOrg != "" {
 		org = a.UpstreamOrg
@@ -145,14 +146,14 @@ func updateRepo() string {
 
 // ── orchestration ────────────────────────────────────────────────────────────
 
-func runSelfUpdate(g globalOpts, repo, ref string) error {
+func RunSelfUpdate(dryRun bool, repo, ref string) error {
 	if repo == "" {
-		repo = updateRepo()
+		repo = UpdateRepo()
 	}
 
-	tag := normalizeLLZTag(ref)
+	tag := NormalizeLLZTag(ref)
 	if tag == "" {
-		latest, err := latestRelease(repo)
+		latest, err := LatestRelease(repo)
 		if err != nil {
 			return err
 		}
@@ -160,8 +161,8 @@ func runSelfUpdate(g globalOpts, repo, ref string) error {
 	}
 
 	// Skip the download when we're already on the target release. A "dev" build
-	// has no parseable version, so it always updates.
-	if _, _, _, ok := semver(version); ok && !semverLess(version, tag) && !semverLess(tag, version) {
+	// has no parseable Version, so it always updates.
+	if _, _, _, ok := Semver(Version); ok && !semverLess(Version, tag) && !semverLess(tag, Version) {
 		fmt.Printf("llz is already on %s — nothing to do.\n", tag)
 		return nil
 	}
@@ -172,8 +173,8 @@ func runSelfUpdate(g globalOpts, repo, ref string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "→ updating llz %s → %s (%s) at %s\n",
-		version, tag, asset, self)
-	if g.dryRun {
+		Version, tag, asset, self)
+	if dryRun {
 		return nil
 	}
 
@@ -183,7 +184,7 @@ func runSelfUpdate(g globalOpts, repo, ref string) error {
 	}
 	defer os.RemoveAll(dir)
 
-	if err := run(g, releaseDownloadArgv(repo, tag, asset, dir)...); err != nil {
+	if err := proc.RunEcho(dryRun, releaseDownloadArgv(repo, tag, asset, dir)...); err != nil {
 		return fmt.Errorf("download %s@%s: %w (is `gh` authenticated for %s?)", asset, tag, err, repo)
 	}
 
@@ -199,8 +200,8 @@ func runSelfUpdate(g globalOpts, repo, ref string) error {
 	return nil
 }
 
-// latestRelease resolves the newest bare `vX.Y.Z` release tag in repo via gh.
-func latestRelease(repo string) (string, error) {
+// LatestRelease resolves the newest bare `vX.Y.Z` release tag in repo via gh.
+func LatestRelease(repo string) (string, error) {
 	out, err := execOutput(releaseListArgv(repo)[0], releaseListArgv(repo)[1:]...)
 	if err != nil {
 		return "", fmt.Errorf("list releases for %s: %w (is `gh` authenticated?)", repo, err)
@@ -223,7 +224,7 @@ func latestRelease(repo string) (string, error) {
 		}
 		tags = append(tags, r.TagName)
 	}
-	tag, ok := latestLLZTag(tags)
+	tag, ok := LatestLLZTag(tags)
 	if !ok {
 		return "", fmt.Errorf("no full vX.Y.Z releases found in %s — pass --ref to target a tag explicitly", repo)
 	}

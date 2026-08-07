@@ -93,7 +93,7 @@ func TestResolveScaffoldRef(t *testing.T) {
 		t.Errorf("explicit branch = %q, want some-branch", got)
 	}
 	// Empty ref falls back to the binary version. In tests `version` is "dev"
-	// (not semver), so it resolves to "" — the signal for scaffoldRef to look up
+	// (not selfupgrade.Semver), so it resolves to "" — the signal for scaffoldRef to look up
 	// the latest published release instead of floating on main.
 	if got := resolveScaffoldRef(""); got != "" {
 		t.Errorf("dev-build sentinel = %q, want \"\"", got)
@@ -112,7 +112,7 @@ func TestScaffoldRef(t *testing.T) {
 	// Dev build (version=="dev" in tests) → empty sentinel → resolve latest release.
 	latestReleaseFn = func(repo string) (string, error) {
 		if repo != "org/repo" {
-			t.Errorf("latestRelease called with %q, want org/repo", repo)
+			t.Errorf("selfupgrade.LatestRelease called with %q, want org/repo", repo)
 		}
 		return "v9.9.9", nil
 	}

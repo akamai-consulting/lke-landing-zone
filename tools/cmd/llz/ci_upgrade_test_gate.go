@@ -50,6 +50,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -102,7 +103,7 @@ type upgradeTestOpts struct {
 
 // previousReleaseTag picks the release an adopter would most plausibly be
 // upgrading FROM: the highest bare vX.Y.Z tag that is not on the commit under
-// test. It delegates the "highest release" rule to latestLLZTag — the SAME rule
+// test. It delegates the "highest release" rule to selfupgrade.LatestLLZTag — the SAME rule
 // `llz self-update` and `llz new` apply — so the gate scaffolds onto exactly the
 // release an adopter would have installed, rather than a second opinion about
 // what "latest" means that could drift from the one that ships.
@@ -118,11 +119,11 @@ func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 			candidates = append(candidates, t)
 		}
 	}
-	return latestLLZTag(candidates)
+	return selfupgrade.LatestLLZTag(candidates)
 }
 
-// releaseTagRe keeps ONLY a full release tag. latestLLZTag cannot do this on its
-// own: semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
+// releaseTagRe keeps ONLY a full release tag. selfupgrade.LatestLLZTag cannot do this on its
+// own: selfupgrade.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
 // callers hand it a list the GitHub releases API already filtered by isDraft /
 // isPrerelease. This gate reads `git tag`, where that metadata does not exist —
 // and the release convention here is to cut a PRE-RELEASE first, so `v0.0.41-rc1`

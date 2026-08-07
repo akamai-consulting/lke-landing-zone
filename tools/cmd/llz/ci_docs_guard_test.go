@@ -130,7 +130,7 @@ func TestCheckDocCommands(t *testing.T) {
 		},
 		{
 			// PERSISTENT FLAG BEFORE THE SUBCOMMAND. This shape ships in our own
-			// docs (orphan-volume-cleanup.md: `llz --yes ci reap-volumes …`), and
+			// docs (orphan-volume-selfupgrade.Cleanup.md: `llz --yes ci reap-volumes …`), and
 			// an earlier parser stopped collecting words at the first flag — so
 			// the whole invocation resolved to no command and was skipped
 			// SILENTLY. Silent under-coverage in a guard is worse than no guard.

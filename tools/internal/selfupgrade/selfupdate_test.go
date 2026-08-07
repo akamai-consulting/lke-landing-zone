@@ -1,4 +1,4 @@
-package main
+package selfupgrade
 
 import (
 	"os"
@@ -23,24 +23,24 @@ func TestNormalizeLLZTag(t *testing.T) {
 		{"llz/v1.2.3", "v1.2.3"}, // legacy prefixed ref accepted, normalized to bare
 		{"  v0.0.38 ", "v0.0.38"},
 	} {
-		if got := normalizeLLZTag(tc.in); got != tc.want {
-			t.Errorf("normalizeLLZTag(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := NormalizeLLZTag(tc.in); got != tc.want {
+			t.Errorf("NormalizeLLZTag(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
 
 func TestSemverAndLess(t *testing.T) {
-	if _, _, _, ok := semver("dev"); ok {
-		t.Error("dev should not parse as semver")
+	if _, _, _, ok := Semver("dev"); ok {
+		t.Error("dev should not parse as Semver")
 	}
-	if _, _, _, ok := semver("dev-abc123"); ok {
-		t.Error("dev-<sha> should not parse as semver")
+	if _, _, _, ok := Semver("dev-abc123"); ok {
+		t.Error("dev-<sha> should not parse as Semver")
 	}
-	if m, n, p, ok := semver("llz/v1.2.3"); !ok || m != 1 || n != 2 || p != 3 {
-		t.Errorf("semver(llz/v1.2.3) = %d.%d.%d ok=%v", m, n, p, ok)
+	if m, n, p, ok := Semver("llz/v1.2.3"); !ok || m != 1 || n != 2 || p != 3 {
+		t.Errorf("Semver(llz/v1.2.3) = %d.%d.%d ok=%v", m, n, p, ok)
 	}
-	if m, _, _, ok := semver("v2.0.0-rc1"); !ok || m != 2 {
-		t.Errorf("semver pre-release core: m=%d ok=%v", m, ok)
+	if m, _, _, ok := Semver("v2.0.0-rc1"); !ok || m != 2 {
+		t.Errorf("Semver pre-release core: m=%d ok=%v", m, ok)
 	}
 
 	if !semverLess("v1.2.3", "v1.2.4") {
@@ -72,18 +72,18 @@ func TestLatestLLZTag(t *testing.T) {
 		"v.0.0.30", // real typo tag on the repo — unparseable, ignored
 		"vbroken",  // unparseable — ignored
 	}
-	got, ok := latestLLZTag(tags)
+	got, ok := LatestLLZTag(tags)
 	if !ok || got != "v0.0.10" {
-		t.Errorf("latestLLZTag = %q ok=%v, want v0.0.10", got, ok)
+		t.Errorf("LatestLLZTag = %q ok=%v, want v0.0.10", got, ok)
 	}
-	if _, ok := latestLLZTag([]string{"llz-pool/v0.0.1", "llz/v0.0.99"}); ok {
+	if _, ok := LatestLLZTag([]string{"llz-pool/v0.0.1", "llz/v0.0.99"}); ok {
 		t.Error("expected no bare vX.Y.Z tag")
 	}
 }
 
-// TestLatestLLZTagTieKeepsFirst pins the tie-break: semver() ignores a -pre/+build
+// TestLatestLLZTagTieKeepsFirst pins the tie-break: Semver() ignores a -pre/+build
 // tail, so two full releases can share one numeric core, and the picker replaces
-// `best` only on a STRICTLY greater version — keeping the FIRST of equals. gh
+// `best` only on a STRICTLY greater Version — keeping the FIRST of equals. gh
 // lists newest first, so that is the newer release.
 //
 // This is not a detail: three shell implementations mirror this picker
@@ -93,10 +93,10 @@ func TestLatestLLZTag(t *testing.T) {
 // here so the shells have something authoritative to agree with.
 func TestLatestLLZTagTieKeepsFirst(t *testing.T) {
 	// Newest-first, as `gh release list` returns them.
-	if got, _ := latestLLZTag([]string{"v1.2.3-hotfix", "v1.2.3"}); got != "v1.2.3-hotfix" {
+	if got, _ := LatestLLZTag([]string{"v1.2.3-hotfix", "v1.2.3"}); got != "v1.2.3-hotfix" {
 		t.Errorf("tie: got %q, want the first-listed v1.2.3-hotfix", got)
 	}
-	if got, _ := latestLLZTag([]string{"v1.2.3", "v1.2.3-hotfix"}); got != "v1.2.3" {
+	if got, _ := LatestLLZTag([]string{"v1.2.3", "v1.2.3-hotfix"}); got != "v1.2.3" {
 		t.Errorf("tie (reversed input): got %q, want the first-listed v1.2.3", got)
 	}
 }

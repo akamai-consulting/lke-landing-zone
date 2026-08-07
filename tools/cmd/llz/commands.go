@@ -21,6 +21,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -43,16 +44,16 @@ func resolveScaffoldRef(ref string) string {
 	if ref != "" {
 		return ref
 	}
-	if _, _, _, ok := semver(version); ok {
-		return normalizeLLZTag(version)
+	if _, _, _, ok := selfupgrade.Semver(version); ok {
+		return selfupgrade.NormalizeLLZTag(version)
 	}
 	return ""
 }
 
 // latestReleaseFn resolves the newest published vX.Y.Z release of a template repo;
 // seamed for tests. It reuses self-update's release picker, which drops drafts /
-// pre-releases and ignores the llz/v* CLI tag track (latestLLZTag).
-var latestReleaseFn = latestRelease
+// pre-releases and ignores the llz/v* CLI tag track (selfupgrade.LatestLLZTag).
+var latestReleaseFn = selfupgrade.LatestRelease
 
 // scaffoldRef resolves the concrete ref to scaffold/pin to. It falls back from a
 // dev build (no anchor version) to the latest published vX.Y.Z release of repo, so
@@ -165,15 +166,6 @@ func statusArgv() [][]string {
 
 // ── execution helpers ────────────────────────────────────────────────────────
 
-// run executes argv, streaming stdio. In dry-run it prints and returns.
-func run(g globalOpts, argv ...string) error {
-	fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
-	if g.dryRun {
-		return nil
-	}
-	return proc.Run(argv, "")
-}
-
 // runGated is run() for cloud-mutating commands: it refuses to execute without
 // --yes, printing the command instead so the operator can see exactly what would
 // reach Linode/GitHub.
@@ -187,7 +179,7 @@ func runGated(g globalOpts, argv ...string) error {
 		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
 		return nil
 	}
-	return run(g, argv...)
+	return proc.RunEcho(g.dryRun, argv...)
 }
 
 // ── commands ─────────────────────────────────────────────────────────────────
@@ -287,7 +279,7 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
 		dir, org, templateid.Name, ref)
 
-	if err := run(g, copierCopyArgv(org, ref, dir)...); err != nil {
+	if err := proc.RunEcho(g.dryRun, copierCopyArgv(org, ref, dir)...); err != nil {
 		return fmt.Errorf("copier copy: %w", err)
 	}
 
@@ -539,10 +531,10 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 	// gh repo create --push needs at least one commit; copier git-inits but does
 	// not commit, so seed an initial commit if the tree has none.
 	if _, err := execOutput("git", "-C", dir, "rev-parse", "HEAD"); err != nil {
-		if err := run(g, "git", "-C", dir, "add", "-A"); err != nil {
+		if err := proc.RunEcho(g.dryRun, "git", "-C", dir, "add", "-A"); err != nil {
 			return false, err
 		}
-		if err := run(g, "git", "-C", dir, "commit", "-q", "-m", "Initial instance scaffold (llz new)"); err != nil {
+		if err := proc.RunEcho(g.dryRun, "git", "-C", dir, "commit", "-q", "-m", "Initial instance scaffold (llz new)"); err != nil {
 			return false, err
 		}
 	}
@@ -633,7 +625,7 @@ func ensureScaffoldBranch(g globalOpts, dir string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s scaffold is on %q; %s to %q — the platform-bootstrap Application tracks %s (apps_repo_revision)\n",
 		color.Yellow("!"), branch, verb, bootstrapBranch, bootstrapBranch)
-	return run(g, "git", "-C", dir, "branch", "-M", bootstrapBranch)
+	return proc.RunEcho(g.dryRun, "git", "-C", dir, "branch", "-M", bootstrapBranch)
 }
 
 // adoptExistingRepo wires an instance_repo that ALREADY exists as `origin` and
@@ -684,9 +676,9 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
-	// to the latest tag but leave the recorded llz_version stale). updateRepo()
+	// to the latest tag but leave the recorded llz_version stale). selfupgrade.UpdateRepo()
 	// names the template this instance tracks (its .copier-answers upstream_org).
-	ref, err := scaffoldRef(ref, updateRepo())
+	ref, err := scaffoldRef(ref, selfupgrade.UpdateRepo())
 	if err != nil {
 		return err
 	}
@@ -699,20 +691,20 @@ func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	// Degrade gracefully: a pre-manifest instance (or one whose manifest failed to
 	// parse) still upgrades exactly as it did before, just without class enforcement.
 	policy, policyErr := templatemanifest.Load("")
-	var owned upgradeSnapshot
+	var owned selfupgrade.UpgradeSnapshot
 	if policyErr != nil {
 		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", color.Yellow("!"), policyErr)
 	} else {
-		if owned, err = snapshotUpgradeOwned(policy); err != nil {
+		if owned, err = selfupgrade.SnapshotUpgradeOwned(policy); err != nil {
 			return fmt.Errorf("snapshot owned files: %w", err)
 		}
-		defer owned.cleanup()
+		defer owned.Cleanup()
 	}
-	if err := run(g, copierUpdateArgv(ref)...); err != nil {
+	if err := proc.RunEcho(g.dryRun, copierUpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
 	if policyErr == nil {
-		if err := applyUpgradeManifestPolicy(g, ref, owned); err != nil {
+		if err := selfupgrade.ApplyManifestPolicy(g.dryRun, ref, owned); err != nil {
 			return fmt.Errorf("apply manifest policy: %w", err)
 		}
 	}
@@ -946,10 +938,10 @@ func commitUpgrade(g globalOpts, oldRef, newRef string) error {
 		from = "(initial)"
 	}
 	msg := fmt.Sprintf("chore(template): upgrade %s → %s\n\nApplied via `llz upgrade`.", from, newRef)
-	if err := run(g, "git", "add", "-A"); err != nil {
+	if err := proc.RunEcho(g.dryRun, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("git add: %w", err)
 	}
-	if err := run(g, "git", "commit", "-m", msg); err != nil {
+	if err := proc.RunEcho(g.dryRun, "git", "commit", "-m", msg); err != nil {
 		return fmt.Errorf("git commit: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "%s committed template upgrade %s → %s\n", color.Green("✓"), from, newRef)
@@ -1066,7 +1058,7 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	// Read-only kubectl checks against the cluster kubectl currently points at.
 	var firstErr error
 	for _, argv := range statusArgv() {
-		if err := run(g, argv...); err != nil && firstErr == nil {
+		if err := proc.RunEcho(g.dryRun, argv...); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

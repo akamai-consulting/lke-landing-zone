@@ -66,7 +66,7 @@ func runCIClearClusterSecrets(ghEnv string) error {
 		return fmt.Errorf("--env is required, e.g. infra-primary")
 	}
 	if os.Getenv("GH_TOKEN") == "" {
-		fmt.Printf("::warning::GH_TOKEN not set — skipping GH env-secret cleanup. Manually clear from %s: %s\n",
+		fmt.Printf("::warning::GH_TOKEN not set — skipping GH env-secret selfupgrade.Cleanup. Manually clear from %s: %s\n",
 			ghEnv, strings.Join(clusterScopedSecrets, " "))
 		return nil
 	}
@@ -80,6 +80,6 @@ func runCIClearClusterSecrets(ghEnv string) error {
 		}
 		fmt.Printf("Deleted GH env secret %s / %s\n", ghEnv, s)
 	}
-	fmt.Printf("OpenBao/Harbor GH env-secret cleanup complete for %s.\n", ghEnv)
+	fmt.Printf("OpenBao/Harbor GH env-secret selfupgrade.Cleanup complete for %s.\n", ghEnv)
 	return nil
 }

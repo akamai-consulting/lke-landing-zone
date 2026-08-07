@@ -1,4 +1,4 @@
-package main
+package selfupgrade
 
 import (
 	"fmt"
@@ -16,21 +16,21 @@ import (
 
 const copierAnswersPath = ".copier-answers.yml"
 
-// upgradeSnapshot protects operator-owned files from Copier's generic 3-way
+// UpgradeSnapshot protects operator-owned files from Copier's generic 3-way
 // merge. The manifest is the authority: owned files are restored after Copier
 // runs, while managed files are overwritten from a clean render of the target
-// template version.
-type upgradeSnapshot struct {
+// template Version.
+type UpgradeSnapshot struct {
 	dir   string
 	files map[string]os.FileMode
 }
 
-func snapshotUpgradeOwned(m templatemanifest.Manifest) (upgradeSnapshot, error) {
+func SnapshotUpgradeOwned(m templatemanifest.Manifest) (UpgradeSnapshot, error) {
 	files, err := upgradeWorktreeFiles()
 	if err != nil {
-		return upgradeSnapshot{}, err
+		return UpgradeSnapshot{}, err
 	}
-	s := upgradeSnapshot{files: map[string]os.FileMode{}}
+	s := UpgradeSnapshot{files: map[string]os.FileMode{}}
 	for _, rel := range files {
 		rel = filepath.ToSlash(rel)
 		if !upgradeProtectsOwned(m.Classify(rel), rel) {
@@ -43,25 +43,25 @@ func snapshotUpgradeOwned(m templatemanifest.Manifest) (upgradeSnapshot, error) 
 		if s.dir == "" {
 			dir, err := os.MkdirTemp("", "llz-upgrade-owned-*")
 			if err != nil {
-				return upgradeSnapshot{}, err
+				return UpgradeSnapshot{}, err
 			}
 			s.dir = dir
 		}
 		if err := copyUpgradeFile(filepath.FromSlash(rel), filepath.Join(s.dir, filepath.FromSlash(rel)), info.Mode().Perm()); err != nil {
-			return upgradeSnapshot{}, err
+			return UpgradeSnapshot{}, err
 		}
 		s.files[rel] = info.Mode().Perm()
 	}
 	return s, nil
 }
 
-func (s upgradeSnapshot) cleanup() {
+func (s UpgradeSnapshot) Cleanup() {
 	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)
 	}
 }
 
-func (s upgradeSnapshot) restore() error {
+func (s UpgradeSnapshot) restore() error {
 	if s.dir == "" {
 		return nil
 	}
@@ -157,8 +157,8 @@ func walkUpgradeFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func applyUpgradeManifestPolicy(g globalOpts, ref string, before upgradeSnapshot) error {
-	if g.dryRun {
+func ApplyManifestPolicy(dryRun bool, ref string, before UpgradeSnapshot) error {
+	if dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would restore %d owned file(s) after copier update\n", len(before.files))
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would overwrite managed files from a clean target-template render")
 		return nil
@@ -166,11 +166,11 @@ func applyUpgradeManifestPolicy(g globalOpts, ref string, before upgradeSnapshot
 	if err := before.restore(); err != nil {
 		return fmt.Errorf("restore owned files: %w", err)
 	}
-	cleanRoot, cleanup, err := renderUpgradeScaffold(ref)
+	cleanRoot, Cleanup, err := renderUpgradeScaffold(ref)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer Cleanup()
 	count, err := overwriteManagedFromScaffold(cleanRoot)
 	if err != nil {
 		return err
@@ -189,18 +189,18 @@ func renderUpgradeScaffold(ref string) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	cleanup := func() { _ = os.RemoveAll(tmp) }
+	Cleanup := func() { _ = os.RemoveAll(tmp) }
 	dst := filepath.Join(tmp, "scaffold")
 	argv := copierRenderArgv(a, ref, dst)
 	if err := proc.Run(argv, ""); err != nil {
-		cleanup()
+		Cleanup()
 		return "", nil, fmt.Errorf("render target scaffold for manifest policy: %w", err)
 	}
-	return dst, cleanup, nil
+	return dst, Cleanup, nil
 }
 
 func copierRenderArgv(a *answers.File, ref, dst string) []string {
-	source := "gh:" + updateRepo()
+	source := "gh:" + UpdateRepo()
 	upstreamOrg := templateid.DefaultOrg
 	instanceRepo := "your-org/your-instance-repo"
 	if a != nil {

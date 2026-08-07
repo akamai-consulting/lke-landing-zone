@@ -15,6 +15,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/spf13/cobra"
 
@@ -207,12 +208,12 @@ func stepFmtCheck(g globalOpts) error {
 			if len(paths) == 0 {
 				continue
 			}
-			if err := run(g, fmtCheckArgvPaths(tofu, paths)...); err != nil {
+			if err := proc.RunEcho(g.dryRun, fmtCheckArgvPaths(tofu, paths)...); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := run(g, fmtCheckArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, fmtCheckArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -225,7 +226,7 @@ func stepFmtFix(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, fmtArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, fmtArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -244,7 +245,7 @@ func stepTFLint(g globalOpts) error {
 		return err
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, tfLintArgv(tflint, d, config)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfLintArgv(tflint, d, config)...); err != nil {
 			return err
 		}
 	}
@@ -263,7 +264,7 @@ func stepActionsLint(g globalOpts) error {
 	if len(files) == 0 {
 		return nil
 	}
-	return run(g, actionsLintArgv(actionlint, files)...)
+	return proc.RunEcho(g.dryRun, actionsLintArgv(actionlint, files)...)
 }
 
 func stepGitleaks(g globalOpts) error {
@@ -271,7 +272,7 @@ func stepGitleaks(g globalOpts) error {
 	if !haveTool(gitleaks) {
 		return nil
 	}
-	return run(g, gitleaksArgv(gitleaks)...)
+	return proc.RunEcho(g.dryRun, gitleaksArgv(gitleaks)...)
 }
 
 // conflictMarkerLines scans text for git/copier merge-conflict markers and
@@ -568,10 +569,10 @@ func stepTFValidate(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, tfInitArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfInitArgv(terraform, d)...); err != nil {
 			return err
 		}
-		if err := run(g, tfValidateArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfValidateArgv(terraform, d)...); err != nil {
 			return err
 		}
 	}
@@ -584,7 +585,7 @@ func stepCheckov(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, checkovArgv(checkov, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, checkovArgv(checkov, d)...); err != nil {
 			return err
 		}
 	}

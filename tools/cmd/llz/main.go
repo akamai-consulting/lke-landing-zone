@@ -28,6 +28,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 
@@ -39,7 +40,13 @@ var version = "dev"
 
 // The reconciler package needs the same stamp and cannot read this one, so main
 // hands it over at init. One source, set once.
-func init() { reconciler.Version = version }
+func init() {
+	reconciler.Version = version
+	// Same one-source rule: selfupgrade decides whether an update is AVAILABLE, so
+	// a stale "dev" there would make every release look newer than the running
+	// binary, forever.
+	selfupgrade.Version = version
+}
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
 // populated from the root command's flags before any RunE runs.
@@ -588,7 +595,7 @@ func selfUpdateCmd() *cobra.Command {
 			"release SHA256SUMS, and atomically overwrites the running binary. Defaults to\n" +
 			"the latest vX.Y.Z release; --dry-run reports the target without installing.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runSelfUpdate(gopts, repo, ref) },
+		RunE: func(_ *cobra.Command, _ []string) error { return selfupgrade.RunSelfUpdate(gopts.dryRun, repo, ref) },
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release to install, e.g. v0.0.39 (default: latest)")
 	c.Flags().StringVar(&repo, "repo", "", "template repo to pull from (default: upstream_org/lke-landing-zone)")

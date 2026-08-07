@@ -569,6 +569,21 @@ categories:
 #        NOTE FOR THE NEXT PASS: scaffold.go is closure 4 and its remaining edges
 #        are runRender (render.go) and syncPromoteWorkflow (promote.go) -- the
 #        "blocked mass" label is looking less true with every enabler.
+#   71st: self-upgrade -> internal/selfupgrade (+ proc.RunEcho)
+#         9,348 -> 8,870 (-478 / 87 files)
+#        THE ENABLER WAS SEVEN LINES WITH 21 CALL SITES: `run` in commands.go --
+#        print the quoted argv, return early under --dry-run, else exec. A name so
+#        generic the closure scanner could not tell it from a method. Now
+#        proc.RunEcho, with the dry-run check travelling WITH the announcement.
+#
+#        AN EXTENSION S OWN GUARD REFUSED A MOVE, AND WAS RIGHT. syncPromoteWorkflow
+#        looked like a clean enabler (20 lines wrapping promote.PlanWorkflow), but
+#        internal/promote s TestPackageContainsNoWritePath rejected it: the package
+#        declares transition:promoted[read-repo] and the write was deliberately
+#        left in cmd/llz so that stays TRUE. Changing the declaration is not an
+#        option either -- write-repo s states are {scaffolded, upgraded}, so a
+#        promote-time repo write is INEXPRESSIBLE. Reverted. scaffold.go is
+#        therefore genuinely blocked, by two decisions that are both correct.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -581,7 +596,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 9348
+    budget: 8870
     exact: true
     include:
       - "tools/cmd/llz/*.go"

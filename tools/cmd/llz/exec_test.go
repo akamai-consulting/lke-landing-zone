@@ -6,6 +6,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 )
 
 // withExecOutput / withLookPath swap the package-level exec seam for the
@@ -101,7 +102,7 @@ func TestHaveToolAndLookable(t *testing.T) {
 func TestLatestRelease(t *testing.T) {
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) == 0 || args[0] != "release" {
-			t.Errorf("latestRelease shelled out to %q %v, want gh release ...", name, args)
+			t.Errorf("selfupgrade.LatestRelease shelled out to %q %v, want gh release ...", name, args)
 		}
 		// Bare vX.Y.Z full releases are the CLI track. Every tag ABOVE the expected
 		// winner is excluded for a different reason — v0.0.38 is a pre-release (an
@@ -115,16 +116,16 @@ func TestLatestRelease(t *testing.T) {
 			`{"tagName":"v0.0.39","isDraft":true,"isPrerelease":false},` +
 			`{"tagName":"llz/v0.0.40","isDraft":false,"isPrerelease":false}]`), nil
 	})
-	tag, err := latestRelease("akamai/lke-landing-zone")
+	tag, err := selfupgrade.LatestRelease("akamai/lke-landing-zone")
 	if err != nil || tag != "v0.0.37" {
-		t.Errorf("latestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
+		t.Errorf("selfupgrade.LatestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
 	}
 
 	// Only pre-releases/prefixed tags -> error (no full release to serve).
 	withExecOutput(t, func(string, ...string) ([]byte, error) {
 		return []byte(`[{"tagName":"v1.0.0","isDraft":false,"isPrerelease":true},{"tagName":"llz/v1.0.0","isDraft":false,"isPrerelease":false}]`), nil
 	})
-	if _, err := latestRelease("x"); err == nil {
-		t.Error("latestRelease(no full release) = nil, want error")
+	if _, err := selfupgrade.LatestRelease("x"); err == nil {
+		t.Error("selfupgrade.LatestRelease(no full release) = nil, want error")
 	}
 }
