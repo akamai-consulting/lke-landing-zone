@@ -673,6 +673,29 @@ categories:
 #        placeholder-checklist REPORTING (groupFindings, printPlaceholderChecklist)
 #        and it was equally untested in package main. The writes it delegates to
 #        (envdef, render) are tested in their own packages.
+#   78th: upgrade -> internal/upgrade   7,017 -> 6,800 (-217 / 84 files)
+#        commands.go split at last: `llz upgrade` out, `llz new` and ~145 lines of
+#        dispatchers left. The answer-map helpers came with it -- answerRegressions,
+#        currentAnswerMap and readAnswerMap sat in ci_upgrade_test_gate.go, a file
+#        about a CI gate, and only the first two have a caller there. The third did
+#        not, and stayed unexported.
+#        FILE COUNT UNCHANGED AT 84: this move deleted no file. commands.go lost
+#        ~270 lines and remains, which is the shape of every split-a-big-file move
+#        and the reason the "/ N files" annotation says less than the line count.
+#        A GATE THAT CAUGHT A REAL REGRESSION IN A PRIOR COMMIT: while tracing the
+#        upgrade callers, `grep -rn 'upgrade\.' cmd/llz` surfaced NINE occurrences
+#        of `selfupgrade.Cleanup` inside COMMENTS AND HELP STRINGS in ci.go,
+#        ci_clear_secrets.go, ci_teardown.go and ci_docs_guard_test.go -- prose
+#        corrupted by the 75th move's rename of `cleanup`. There is no
+#        `func Cleanup` in internal/selfupgrade, so `go build` was always clean and
+#        one of the strings was USER-FACING help text. Restored here. The rename
+#        was word-boundary correct (`cleanups` survived); word boundaries do not
+#        distinguish code from prose, and only a string-literal diff does.
+#        COVERAGE FLOOR 51%. The uncovered half is printSummary and the
+#        commit/render orchestration in Run -- print-and-shell-out code that was
+#        equally untested in package main. What the tests do cover is the part
+#        with a wrong answer: the conflict scan, the answer-map regression
+#        compare, and the image-skew warning`s silence cases.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -685,7 +708,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 7017
+    budget: 6800
     exact: true
     include:
       - "tools/cmd/llz/*.go"

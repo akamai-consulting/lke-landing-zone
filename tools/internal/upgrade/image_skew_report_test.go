@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 import (
 	"os"
@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// The image-skew REPORT test, which stays in main: reportCIImageSkew is
-// commands.go's. The computation it reports on is templatecommit's and its tests
-// went there. Two subjects, one old file.
+// The image-skew REPORT test. reportCIImageSkew came here with `llz upgrade`;
+// the computation it reports on is templatecommit's and its tests went there.
+// Two subjects, one old file — this is the half that reports.
 
 // TestReportCIImageSkew pins the WARNING, which is the entire deliverable of the
 // `llz upgrade` half: the command cannot fix these (they are GitHub repo
@@ -71,11 +71,3 @@ func TestReportCIImageSkew(t *testing.T) {
 		}
 	})
 }
-
-// TestPrintNextSteps guards the post-scaffold list, which is the quickstart an
-// adopter actually reads — it is on their screen when the doc is not. It had
-// drifted from docs/quickstart.md in both directions the drift can go: a step
-// the doc gained (#405's `git push`) and a step the doc dropped (the deprecated
-// `llz validate --env`). Neither gate that watches the other copy can see this
-// one — docs-guard reads Markdown, and these are Go string literals — so the
-// assertions live here.

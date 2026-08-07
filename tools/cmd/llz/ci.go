@@ -64,7 +64,7 @@ func ciCmd() *cobra.Command {
 	installAssertReconcilerDeps()
 	c := &cobra.Command{
 		Use:   "ci",
-		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident selfupgrade.Cleanup)",
+		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
 		Long: "Plumbing subcommands the project's GitHub Actions workflows call in place of\n" +
 			"the former instance-scripts/*.sh CI steps. The terraform ones (tf-import,\n" +
 			"tf-apply) expect to run inside a job (a terraform working directory,\n" +
@@ -783,7 +783,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 		if fatal {
 			return false, fmt.Errorf("import %s: %w", addr, runErr)
 		}
-		fmt.Printf("WARNING: import of %s timed out or failed — skipping (post-destroy API selfupgrade.Cleanup will delete it)\n", addr)
+		fmt.Printf("WARNING: import of %s timed out or failed — skipping (post-destroy API cleanup will delete it)\n", addr)
 		return false, nil
 	}
 	return true, nil
@@ -945,7 +945,7 @@ func runTeed(name string, args ...string) (string, int, error) {
 	return buf.String(), -1, err
 }
 
-// ── orphan-resource sweeps (ports of selfupgrade.Cleanup-orphan-{volumes,nodebalancers}.sh) ──
+// ── orphan-resource sweeps (ports of cleanup-orphan-{volumes,nodebalancers}.sh) ──
 // Both reuse the orphan-identity heuristics + list/delete primitives in
 // internal/linode (the same ones `llz reap` drives); this is just the
 // CI-scoped orchestration. Dry-run by default; deletes only with --yes.
@@ -957,7 +957,7 @@ func ciReapVolumesCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "reap-volumes",
 		Short: "delete orphaned pvc-* Block Storage Volumes (--yes to delete)",
-		Long: "Native port of selfupgrade.Cleanup-orphan-volumes.sh. Deletes unattached CSI Volumes\n" +
+		Long: "Native port of cleanup-orphan-volumes.sh. Deletes unattached CSI Volumes\n" +
 			"(linode_id null) scoped by --volume-ids and/or --region, with an\n" +
 			"optional --env so RELABELED volumes (<env>-<ns>-<pvc>) are swept too — without\n" +
 			"it only the CSI default pvc-* labels match and every renamed volume leaks.\n" +
@@ -996,7 +996,7 @@ func ciReapNodeBalancersCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "reap-nodebalancers",
 		Short: "delete orphaned NodeBalancers (--cluster-id for the CI-scoped sweep; --yes to delete)",
-		Long: "Native port of selfupgrade.Cleanup-orphan-nodebalancers.sh. With --cluster-id it deletes\n" +
+		Long: "Native port of cleanup-orphan-nodebalancers.sh. With --cluster-id it deletes\n" +
 			"only NodeBalancers carrying that cluster's CCM tag (lke<id>) — the\n" +
 			"co-located-peer-safe mode the destroy path uses. Without it, an account-wide\n" +
 			"orphan sweep (CCM tag points to a gone cluster, or CCM-identified with 0\n" +

@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 import (
 	"os"
@@ -21,7 +21,7 @@ func writeInstanceFile(t *testing.T, dir, rel, body string) {
 	}
 }
 
-// newRenderableInstance builds the smallest tree renderAfterUpgrade will act on:
+// newRenderableInstance builds the smallest tree renderAfter will act on:
 // copier answers pinned to `pin`, the tfvars example each root renders from, and
 // one authored env.
 func newRenderableInstance(t *testing.T, pin string) string {
@@ -49,8 +49,8 @@ func TestRenderAfterUpgradeRepinsAplValues(t *testing.T) {
 	dir := newRenderableInstance(t, "v0.4.0")
 	t.Chdir(dir)
 
-	if err := renderAfterUpgrade(globalOpts{}); err != nil {
-		t.Fatalf("renderAfterUpgrade: %v", err)
+	if err := renderAfter(false); err != nil {
+		t.Fatalf("renderAfter: %v", err)
 	}
 
 	b, err := os.ReadFile(filepath.Join(dir, "apl-values", "lab", "manifest", "kustomization.yaml"))
@@ -74,7 +74,7 @@ func TestRenderAfterUpgradeSkipsPreSpecInstance(t *testing.T) {
 	writeInstanceFile(t, dir, ".copier-answers.yml", "llz_version: v0.4.0\n")
 	t.Chdir(dir)
 
-	if err := renderAfterUpgrade(globalOpts{}); err != nil {
+	if err := renderAfter(false); err != nil {
 		t.Fatalf("a pre-spec instance should render nothing and pass, got %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestRenderAfterUpgradeExplainsAHalfUpgradedTree(t *testing.T) {
 		"name: lab\ncluster:\n  region: \"\"\n  network: {}\n")
 	t.Chdir(dir)
 
-	err := renderAfterUpgrade(globalOpts{})
+	err := renderAfter(false)
 	if err == nil {
 		t.Fatal("an invalid spec should fail the post-upgrade render")
 	}

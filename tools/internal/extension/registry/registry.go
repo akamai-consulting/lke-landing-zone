@@ -90,6 +90,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
@@ -147,6 +148,7 @@ var declarations = []func() extension.Extension{
 	templatecommit.Extension,
 	onboard.Extension,
 	render.Extension,
+	upgrade.Extension,
 	envadd.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,

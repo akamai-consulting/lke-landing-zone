@@ -121,6 +121,7 @@ COVERAGE_MINS := \
 	internal/ghsecret=55 \
 	internal/envadd=13 \
 	internal/render=62 \
+	internal/upgrade=51 \
 	internal/copier=68 \
 	internal/onboard=13 \
 	internal/templatecommit=92 \

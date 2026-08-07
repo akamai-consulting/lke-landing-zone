@@ -34,6 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -55,6 +56,8 @@ func init() {
 	// stays here: internal/promote declares transition:promoted[read-repo] and its
 	// own guard refuses a write path, and write-repo is not legal at `promoted`.
 	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
+	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
+	upgrade.SustainDeps = sustainDeps
 }
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
@@ -337,7 +340,7 @@ func upgradeCmd() *cobra.Command {
 			"a one-view summary of the churn, and — with --commit — records it as a single\n" +
 			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runUpgrade(gopts, ref, commit, noRender) },
+		RunE: func(_ *cobra.Command, _ []string) error { return upgrade.Run(gopts.dryRun, ref, commit, noRender) },
 	}
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to update + re-pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&commit, "commit", false, "stage + record the upgrade as one labeled git commit")

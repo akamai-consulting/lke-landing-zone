@@ -46,13 +46,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -61,13 +61,6 @@ import (
 var probeUpgradeAnswers = map[string]string{
 	"instance_repo": "probe-org/probe-instance",
 	"openbao_team":  "probe-team",
-}
-
-// upgradeVolatileAnswers are the keys an upgrade is SUPPOSED to rewrite: the
-// provenance copier maintains and the version pin the upgrade exists to move.
-// Everything else must survive untouched.
-var upgradeVolatileAnswers = map[string]bool{
-	"_commit": true, "_src_path": true, "llz_version": true,
 }
 
 func ciUpgradeTestCmd() *cobra.Command {
@@ -134,30 +127,6 @@ func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 // pre-releases, so nobody is ever upgrading FROM one.
 var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// answerRegressions lists every answer the upgrade changed that it had no
-// business changing. Pure so the comparison — not the copier run — is what the
-// unit tests exercise.
-//
-// A DISAPPEARED key counts: copier dropping an answer is the same loss as
-// rewriting it, and the value it renders next is the template default either way.
-func answerRegressions(before, after map[string]string) []string {
-	var out []string
-	for k, was := range before {
-		if upgradeVolatileAnswers[k] {
-			continue
-		}
-		now, ok := after[k]
-		switch {
-		case !ok:
-			out = append(out, fmt.Sprintf("%s: %q → (dropped)", k, was))
-		case now != was:
-			out = append(out, fmt.Sprintf("%s: %q → %q", k, was, now))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // copierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
 // copier.CopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
 // gate must point copier at a local path so it works offline, on a branch, and
@@ -189,37 +158,6 @@ var runCopier = func(dir string, argv []string) ([]byte, error) {
 	cmd.Dir = dir
 	cmd.Stdin = nil // == /dev/null
 	return cmd.CombinedOutput()
-}
-
-// currentAnswerMap is the working directory instance's answers, or nil when
-// there is no readable answers file. nil is the pre-copier / not-an-instance
-// case, and answerRegressions over a nil `before` reports nothing — an upgrade
-// cannot be said to have lost an answer that was never recorded.
-func currentAnswerMap() map[string]string {
-	m, err := readAnswerMap(".copier-answers.yml")
-	if err != nil {
-		return nil
-	}
-	return m
-}
-
-// readAnswerMap loads a .copier-answers.yml as a flat string map. Non-scalar
-// values are rendered with %v; the answers this template asks are all scalars,
-// and a structural change there should show up as a diff rather than a panic.
-func readAnswerMap(path string) (map[string]string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(raw))
-	for k, v := range raw {
-		out[k] = fmt.Sprintf("%v", v)
-	}
-	return out, nil
 }
 
 // mergeConflictArtifacts walks the built instance for the two ways a botched
@@ -335,7 +273,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		return fmt.Errorf("scaffold at %s failed:\n%s", from, indentedTail(string(out), 20))
 	}
 	answersPath := filepath.Join(inst, ".copier-answers.yml")
-	before, err := readAnswerMap(answersPath)
+	before, err := upgrade.ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read scaffolded answers: %w", err)
 	}
@@ -380,11 +318,11 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		return upgradeTestFailure(failures)
 	}
 
-	after, err := readAnswerMap(answersPath)
+	after, err := upgrade.ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read upgraded answers: %w", err)
 	}
-	if regressions := answerRegressions(before, after); len(regressions) > 0 {
+	if regressions := upgrade.AnswerRegressions(before, after); len(regressions) > 0 {
 		failures = append(failures, "answers-preserved: the upgrade rewrote answers it does not own:\n      "+
 			strings.Join(regressions, "\n      ")+
 			"\n    copier falls back to the template DEFAULT for an answer it cannot keep — including\n"+
@@ -392,7 +330,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			"    and every `gh` target, so this silently repoints the instance at a repo that does\n"+
 			"    not exist, exit 0.")
 	} else {
-		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(upgradeVolatileAnswers))
+		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(upgrade.VolatileAnswers))
 	}
 
 	if got := after["llz_version"]; got != to {

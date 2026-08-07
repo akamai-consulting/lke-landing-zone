@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 import (
 	"os"
@@ -48,14 +48,14 @@ func TestUpgradeConflictFiles(t *testing.T) {
 	git("commit", "-qm", "base")
 
 	// Clean tree → nothing flagged.
-	if bad := upgradeConflictFiles(); len(bad) != 0 {
+	if bad := conflictFiles(); len(bad) != 0 {
 		t.Errorf("clean tree flagged %v", bad)
 	}
 
 	// A tracked file modified with a marker (unstaged) + a new untracked one — both caught.
 	os.WriteFile("clean.yaml", []byte("a: 1\n<<<<<<< HEAD\nb: 2\n"), 0o644)
 	os.WriteFile("added.yaml", []byte(">>>>>>> theirs\n"), 0o644)
-	bad := upgradeConflictFiles()
+	bad := conflictFiles()
 	if len(bad) != 2 || bad[0] != "added.yaml" || bad[1] != "clean.yaml" {
 		t.Errorf("got %v, want [added.yaml clean.yaml]", bad)
 	}

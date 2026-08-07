@@ -85,7 +85,7 @@ func ciTeardownForceDeleteCmd() *cobra.Command {
 			"(firewall_label tfvars var, NOT a reconstructed \"<cluster>-nodes\" guess:\n" +
 			"hardcoding that ignored var.firewall_label and leaked the firewall every\n" +
 			"teardown). Delete failures warn rather than fail — this is always()-path\n" +
-			"selfupgrade.Cleanup and the orphan reaper backstops it. Dry-run by default; --yes to\n" +
+			"cleanup and the orphan reaper backstops it. Dry-run by default; --yes to\n" +
 			"delete. Reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
