@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"os"
@@ -21,7 +21,7 @@ func TestLKEAdminRotateWritesTheStepSummary(t *testing.T) {
 	t.Setenv("REGION", "us-ord")
 
 	var runErr error
-	out := captureStdout(t, func() { runErr = runCredentialsLKEAdminRotate(&rotatorOpts{apply: true}, "4242") })
+	out := captureStdout(t, func() { runErr = RunLKEAdminRotate(&Opts{Apply: true}, "4242") })
 	if runErr != nil {
 		t.Fatalf("apply: %v", runErr)
 	}

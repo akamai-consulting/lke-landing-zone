@@ -40,6 +40,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
@@ -89,6 +90,8 @@ var declarations = []func() extension.Extension{
 	configreadiness.Extension,
 	converge.Extension,
 	credcoverage.Extension,
+	credrotate.PATExtension,
+	credrotate.ObjKeyExtension,
 	envtopology.Extension,
 	docsguard.Extension,
 	doctor.Extension,

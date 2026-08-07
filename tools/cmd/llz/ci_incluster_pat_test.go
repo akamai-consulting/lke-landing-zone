@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -36,7 +37,7 @@ func oidcServer(t *testing.T) {
 }
 
 // patMintStub wraps stubLinode to record the mint arguments (label/scopes) and
-// serve as BOTH client seams: newPATRotatorClient (mint + drain) and
+// serve as BOTH client seams: credrotate.NewPATClient (mint + drain) and
 // linodeRotatorClient (the verify probe on the freshly-minted token).
 type patMintStub struct {
 	stubLinode
@@ -51,11 +52,11 @@ func (s *patMintStub) CreateProfileToken(ctx context.Context, label, scopes, exp
 
 func withInclusterPATStubs(t *testing.T, s *patMintStub, now time.Time) {
 	t.Helper()
-	op, ol, on := newPATRotatorClient, linodeRotatorClient, rotatorNow
-	newPATRotatorClient = func(string) patAPI { return s }
+	op, ol, on := credrotate.NewPATClient, linodeRotatorClient, rotatorNow
+	credrotate.NewPATClient = func(string) credrotate.PATAPI { return s }
 	linodeRotatorClient = func(string) rotatorLinodeAPI { return s }
 	rotatorNow = func() time.Time { return now }
-	t.Cleanup(func() { newPATRotatorClient, linodeRotatorClient, rotatorNow = op, ol, on })
+	t.Cleanup(func() { credrotate.NewPATClient, linodeRotatorClient, rotatorNow = op, ol, on })
 }
 
 // stubInclusterBaoExec fakes the in-pod bao CLI: `kv get` answers the

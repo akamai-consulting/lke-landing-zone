@@ -19,7 +19,7 @@ There is exactly **one** human-facing credential per LKE-Enterprise cluster: the
 Linode-issued **cluster-admin** kubeconfig (`lke-admin-token`), fetched via the
 Linode API or Terraform state
 ([`fetch.go:9`](../../tools/internal/clusteraccess/fetch.go),
-[`credentials_lkeadmin.go:45`](../../tools/cmd/llz/credentials_lkeadmin.go)) and
+[`lkeadmin.go`](../../tools/internal/credrotate/lkeadmin.go)) and
 shared by every SRE and every CI job
 ([`lke-admin-rotation.md:13`](../runbooks/lke-admin-rotation.md),
 [`prom_query.go:8`](../../tools/internal/assertobs/promquery.go)). It is

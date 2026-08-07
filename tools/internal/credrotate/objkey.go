@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // credentials_objkey.go implements `llz credentials obj-key create|revoke-old`
 // — the 120-day SLA for the Terraform-state bucket access pair
@@ -24,82 +24,12 @@ import (
 	"log/slog"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/spf13/cobra"
 )
 
-func credentialsObjKeyCmd(o *rotatorOpts) *cobra.Command {
-	c := &cobra.Command{
-		Use:   "obj-key",
-		Short: "rotate the TF-state Object Storage key pair (120-day SLA): create + revoke-old",
-	}
-	c.AddCommand(credentialsObjKeyCreateCmd(o), credentialsObjKeyRevokeOldCmd(o))
-	return c
-}
-
-func credentialsObjKeyCreateCmd(o *rotatorOpts) *cobra.Command {
-	var label, cluster, bucket, permissions, ghaAccessName, ghaSecretName, ghaDeployments string
-	c := &cobra.Command{
-		Use:   "create",
-		Short: "mint a new bucket-scoped OBJ key pair (JSON record on stdout)",
-		Long: "Issues a new bucket-scoped Linode Object Storage key, printing the new id +\n" +
-			"access_key + secret_key as one JSON record on stdout. With --gha-*-secret-name it\n" +
-			"ALSO writes both halves into those GitHub secrets for every infra-<deployment>\n" +
-			"environment (--gha-deployments) — the env-scoped copies the workflows read. The\n" +
-			"secret half is shown exactly once by the Linode API. Dry-run unless --apply.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			token, apply, err := o.resolve()
-			if err != nil {
-				return err
-			}
-			return runCredentialsObjKeyCreate(context.Background(), newObjKeyRotatorClient(token), apply, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName, strings.Fields(ghaDeployments))
-		},
-	}
-	defaultPermissions := os.Getenv("OBJ_BUCKET_PERMISSIONS")
-	if defaultPermissions == "" {
-		defaultPermissions = "read_write"
-	}
-	f := c.Flags()
-	f.StringVar(&label, "label", os.Getenv("OBJ_LABEL"), "label for the new OBJ key — also the revoke-old drain target (env OBJ_LABEL)")
-	f.StringVar(&cluster, "bucket-cluster", os.Getenv("OBJ_BUCKET_CLUSTER"), "Linode object-storage cluster id, e.g. us-ord-10 (env OBJ_BUCKET_CLUSTER)")
-	f.StringVar(&bucket, "bucket-name", os.Getenv("OBJ_BUCKET_NAME"), "bucket name to scope the key to (env OBJ_BUCKET_NAME)")
-	f.StringVar(&permissions, "bucket-permissions", defaultPermissions, "read_only, read_write, or none (env OBJ_BUCKET_PERMISSIONS)")
-	f.StringVar(&ghaAccessName, "gha-access-key-secret-name", os.Getenv("GHA_ACCESS_KEY_SECRET_NAME"), "GitHub secret for the access-key half, written per infra-<deployment> env (env GHA_ACCESS_KEY_SECRET_NAME)")
-	f.StringVar(&ghaSecretName, "gha-secret-key-secret-name", os.Getenv("GHA_SECRET_KEY_SECRET_NAME"), "GitHub secret for the secret-key half, written per infra-<deployment> env (env GHA_SECRET_KEY_SECRET_NAME)")
-	f.StringVar(&ghaDeployments, "gha-deployments", os.Getenv("GHA_SECRET_DEPLOYMENTS"), "space-separated deployment names whose infra-<name> env gets the new secrets (env GHA_SECRET_DEPLOYMENTS; empty = repo-level)")
-	return c
-}
-
-func credentialsObjKeyRevokeOldCmd(o *rotatorOpts) *cobra.Command {
-	var label string
-	var keepNewest int64
-	c := &cobra.Command{
-		Use:   "revoke-old",
-		Short: "daily reaper: keep the N newest same-labeled OBJ keys by id, revoke the rest",
-		Long: "Lists every OBJ key matching the label, keeps the N most recent by id (Linode\n" +
-			"IDs are monotonically increasing per account, so highest id == newest), and\n" +
-			"revokes the rest. keep-newest=2 gives ~30-day overlap with monthly rotation.\n" +
-			"Dry-run unless --apply.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			token, apply, err := o.resolve()
-			if err != nil {
-				return err
-			}
-			return runCredentialsObjKeyRevokeOld(context.Background(), newObjKeyRotatorClient(token), apply, label, keepNewest)
-		},
-	}
-	f := c.Flags()
-	f.StringVar(&label, "label", os.Getenv("OBJ_LABEL"), "label to drain — same label `obj-key create` uses (env OBJ_LABEL)")
-	f.Int64Var(&keepNewest, "keep-newest", cli.EnvInt("OBJ_KEEP_NEWEST", 2), "how many most-recent same-labeled keys to keep (env OBJ_KEEP_NEWEST)")
-	return c
-}
-
-func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply bool, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName string, ghaDeployments []string) error {
+func RunObjKeyCreate(ctx context.Context, client ObjKeyAPI, apply bool, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName string, ghaDeployments []string) error {
 	slog.Info("creating OBJ key", "label", label, "cluster", cluster, "bucket", bucket, "permissions", permissions)
 
 	if !apply {
@@ -141,12 +71,12 @@ func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply boo
 	// OLD secret) and fails to auth — the safe failure, since the previous key is
 	// still live (drained separately, daily) so a retry succeeds.
 	if ghaSecretName != "" {
-		if err := writeRotatedSecret(ghaSecretName, secretKey, ghaDeployments); err != nil {
+		if err := WriteRotatedSecret(ghaSecretName, secretKey, ghaDeployments); err != nil {
 			return err
 		}
 	}
 	if ghaAccessName != "" {
-		if err := writeRotatedSecret(ghaAccessName, accessKey, ghaDeployments); err != nil {
+		if err := WriteRotatedSecret(ghaAccessName, accessKey, ghaDeployments); err != nil {
 			return err
 		}
 	}
@@ -169,7 +99,7 @@ func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply boo
 	})
 }
 
-func runCredentialsObjKeyRevokeOld(ctx context.Context, client objKeyAPI, apply bool, label string, keepNewest int64) error {
+func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label string, keepNewest int64) error {
 	if keepNewest < 1 {
 		return fmt.Errorf("keep_newest=%d must be >= 1 — refusing to revoke the live key", keepNewest)
 	}

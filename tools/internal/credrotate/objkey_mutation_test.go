@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"bytes"
@@ -40,7 +40,7 @@ func TestCredentialsObjKeyCreateClaimsTheGHAWriteOnlyWhenItHappens(t *testing.T)
 		calls := withGHSetSecret(t, nil)
 		client := &fakeRotatorClient{createResp: objKeyCreateResp()}
 		captureFirewallOutput(t, func() {
-			if err := runCredentialsObjKeyCreate(context.Background(), client, true,
+			if err := RunObjKeyCreate(context.Background(), client, true,
 				"lbl", "us-ord-10", "bkt", "read_write", "", "", []string{"primary"}); err != nil {
 				t.Fatal(err)
 			}
@@ -58,7 +58,7 @@ func TestCredentialsObjKeyCreateClaimsTheGHAWriteOnlyWhenItHappens(t *testing.T)
 		calls := withGHSetSecret(t, nil)
 		client := &fakeRotatorClient{createResp: objKeyCreateResp()}
 		captureFirewallOutput(t, func() {
-			if err := runCredentialsObjKeyCreate(context.Background(), client, true,
+			if err := RunObjKeyCreate(context.Background(), client, true,
 				"lbl", "us-ord-10", "bkt", "read_write", "", "OBJ_SECRET", []string{"primary"}); err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +76,7 @@ func TestCredentialsObjKeyCreateClaimsTheGHAWriteOnlyWhenItHappens(t *testing.T)
 		calls := withGHSetSecret(t, nil)
 		client := &fakeRotatorClient{createResp: objKeyCreateResp()}
 		captureFirewallOutput(t, func() {
-			if err := runCredentialsObjKeyCreate(context.Background(), client, true,
+			if err := RunObjKeyCreate(context.Background(), client, true,
 				"lbl", "us-ord-10", "bkt", "read_write", "OBJ_ACCESS", "", []string{"primary"}); err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +100,7 @@ func TestCredentialsObjKeyRevokeOldAcceptsKeepNewestOne(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), client, true, "lbl", 1)
+		err = RunObjKeyRevokeOld(context.Background(), client, true, "lbl", 1)
 	})
 	if err != nil {
 		t.Fatalf("keep_newest=1 must be accepted (it keeps the live key): %v", err)

@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"context"
@@ -48,12 +48,12 @@ func TestLKEAdminRotateGuardrails(t *testing.T) {
 	// Missing token / missing cluster id fail before any API call.
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("ROTATION_APPLY", "")
-	err := runCredentialsLKEAdminRotate(&rotatorOpts{}, "123")
+	err := RunLKEAdminRotate(&Opts{}, "123")
 	if err == nil || !strings.Contains(err.Error(), "Linode PAT is required") {
 		t.Errorf("no token: err = %v, want PAT-required", err)
 	}
 	t.Setenv("LINODE_TOKEN", "tok")
-	err = runCredentialsLKEAdminRotate(&rotatorOpts{}, "")
+	err = RunLKEAdminRotate(&Opts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "cluster ID is required") {
 		t.Errorf("no cluster: err = %v, want cluster-required", err)
 	}
@@ -61,7 +61,7 @@ func TestLKEAdminRotateGuardrails(t *testing.T) {
 	// Standard LKE (no +lke suffix) is hard-refused — even on a dry-run.
 	fake := &fakeLKEAdmin{k8sVersion: "v1.33.1"}
 	withLKEAdmin(t, fake)
-	err = runCredentialsLKEAdminRotate(&rotatorOpts{apply: true}, "123")
+	err = RunLKEAdminRotate(&Opts{Apply: true}, "123")
 	if err == nil || !strings.Contains(err.Error(), "not LKE-Enterprise") {
 		t.Errorf("standard LKE: err = %v, want enterprise refusal", err)
 	}
@@ -71,7 +71,7 @@ func TestLKEAdminRotateGuardrails(t *testing.T) {
 
 	// A version lookup error surfaces.
 	withLKEAdmin(t, &fakeLKEAdmin{versionErr: errors.New("boom")})
-	if err := runCredentialsLKEAdminRotate(&rotatorOpts{}, "123"); err == nil {
+	if err := RunLKEAdminRotate(&Opts{}, "123"); err == nil {
 		t.Error("version lookup error must surface")
 	}
 }
@@ -81,7 +81,7 @@ func TestLKEAdminRotateDryRunAndApply(t *testing.T) {
 	fake := &fakeLKEAdmin{k8sVersion: "v1.31.9+lke7"}
 	withLKEAdmin(t, fake)
 	out := captureStdout(t, func() {
-		if err := runCredentialsLKEAdminRotate(&rotatorOpts{}, "123"); err != nil {
+		if err := RunLKEAdminRotate(&Opts{}, "123"); err != nil {
 			t.Errorf("dry-run: %v", err)
 		}
 	})
@@ -96,7 +96,7 @@ func TestLKEAdminRotateDryRunAndApply(t *testing.T) {
 	fake = &fakeLKEAdmin{k8sVersion: "v1.31.9+lke7"}
 	withLKEAdmin(t, fake)
 	out = captureStdout(t, func() {
-		if err := runCredentialsLKEAdminRotate(&rotatorOpts{apply: true}, "123"); err != nil {
+		if err := RunLKEAdminRotate(&Opts{Apply: true}, "123"); err != nil {
 			t.Errorf("apply: %v", err)
 		}
 	})

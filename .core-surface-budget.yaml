@@ -252,12 +252,21 @@ categories:
     #                       credential rows share a SECOND framework
     #                       (credentials.go's rotator client + the rotation
     #                       table), which is the actual next wall.
+    #   21,082 / 130 files  credential-pat + credential-objkey, on the
+    #                       internal/credrotate framework. -375, and the SECOND
+    #                       WALL down. The measurement proves it: credentials_pat
+    #                       was unmeasurable in place and is closure TWO once the
+    #                       framework moved. FIRST PACKAGE TO DECLARE TWO
+    #                       EXTENSIONS — they share a framework, not a lifecycle.
+    #                       A THIRD wall remains: the rotation table in
+    #                       ci_rotate_linode_creds.go, 18 symbols with callers in
+    #                       eight other files.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 21457
+    budget: 21082
     exact: true
     include:
       - "tools/cmd/llz/*.go"

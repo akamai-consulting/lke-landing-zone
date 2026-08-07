@@ -1,9 +1,9 @@
-package main
+package credrotate
 
 // Tests for `llz credentials` (credentials.go / credentials_pat.go /
 // credentials_objkey.go) — the rotation logic folded in from the former
 // linode-pat-rotator / linode-obj-key-rotator binaries. Fake clients stand in
-// for the Linode API via the newPATRotatorClient / newObjKeyRotatorClient
+// for the Linode API via the NewPATClient / NewObjKeyClient
 // seams; stdout JSON + ::add-mask:: stderr behavior are the action-facing
 // contract under test.
 
@@ -17,7 +17,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
-// fakeRotatorClient implements both patAPI and objKeyAPI.
+// fakeRotatorClient implements both PATAPI and ObjKeyAPI.
 type fakeRotatorClient struct {
 	createResp map[string]any
 	createErr  error
@@ -74,29 +74,29 @@ func decodeRecord(t *testing.T, stdout string) map[string]any {
 	return rec
 }
 
-// ── rotatorOpts ───────────────────────────────────────────────────────────────
+// ── Opts ───────────────────────────────────────────────────────────────
 
 func TestRotatorOptsResolve(t *testing.T) {
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("ROTATION_APPLY", "")
 
-	if _, _, err := (&rotatorOpts{}).resolve(); err == nil || !strings.Contains(err.Error(), "Linode PAT is required") {
+	if _, _, err := (&Opts{}).Resolve(); err == nil || !strings.Contains(err.Error(), "Linode PAT is required") {
 		t.Fatalf("want missing-token error, got %v", err)
 	}
 
 	t.Setenv("LINODE_TOKEN", "env-token")
-	tok, apply, err := (&rotatorOpts{}).resolve()
+	tok, apply, err := (&Opts{}).Resolve()
 	if err != nil || tok != "env-token" || apply {
 		t.Fatalf("env defaults: got (%q, %v, %v)", tok, apply, err)
 	}
 
 	t.Setenv("ROTATION_APPLY", "true")
-	if _, apply, _ = (&rotatorOpts{}).resolve(); !apply {
+	if _, apply, _ = (&Opts{}).Resolve(); !apply {
 		t.Fatal("ROTATION_APPLY=true should arm")
 	}
 
 	// Flags override env.
-	tok, apply, err = (&rotatorOpts{token: "flag-token", apply: true}).resolve()
+	tok, apply, err = (&Opts{Token: "flag-token", Apply: true}).Resolve()
 	if err != nil || tok != "flag-token" || !apply {
 		t.Fatalf("flag overrides: got (%q, %v, %v)", tok, apply, err)
 	}
@@ -106,7 +106,7 @@ func TestRotatorOptsResolve(t *testing.T) {
 
 func TestCredentialsPATCreateValidation(t *testing.T) {
 	for _, days := range []int64{91, 0, -3} {
-		if err := runCredentialsPATCreate(context.Background(), &fakeRotatorClient{}, true, "l", "s", days, "", nil); err == nil {
+		if err := RunPATCreate(context.Background(), &fakeRotatorClient{}, true, "l", "s", days, "", nil); err == nil {
 			t.Errorf("validity-days=%d: want error, got nil", days)
 		}
 	}
@@ -116,7 +116,7 @@ func TestCredentialsPATCreateDryRun(t *testing.T) {
 	client := &fakeRotatorClient{}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90, "", nil)
+		err = RunPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90, "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestCredentialsPATCreateApply(t *testing.T) {
 	}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), client, true, "lbl", "scopes:read", 30, "", nil)
+		err = RunPATCreate(context.Background(), client, true, "lbl", "scopes:read", 30, "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestCredentialsPATCreateBadResponses(t *testing.T) {
 		client := &fakeRotatorClient{createResp: tc.resp, createErr: tc.err}
 		var err error
 		captureFirewallOutput(t, func() {
-			err = runCredentialsPATCreate(context.Background(), client, true, "l", "s", 30, "", nil)
+			err = RunPATCreate(context.Background(), client, true, "l", "s", 30, "", nil)
 		})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
@@ -194,7 +194,7 @@ func patListEntry(id int, label, created string) map[string]any {
 }
 
 func TestCredentialsPATRevokeOldGraceValidation(t *testing.T) {
-	if err := runCredentialsPATRevokeOld(context.Background(), &fakeRotatorClient{}, true, "l", -1); err == nil {
+	if err := RunPATRevokeOld(context.Background(), &fakeRotatorClient{}, true, "l", -1); err == nil {
 		t.Fatal("grace-days=-1: want error")
 	}
 }
@@ -203,7 +203,7 @@ func TestCredentialsPATRevokeOldNoMatches(t *testing.T) {
 	client := &fakeRotatorClient{listResp: []map[string]any{patListEntry(1, "other", "2020-01-01T00:00:00")}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestCredentialsPATRevokeOldDrains(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestCredentialsPATRevokeOldDryRunDeletesNothing(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, false, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, false, "lbl", 7)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestCredentialsPATRevokeOldErrors(t *testing.T) {
 	client := &fakeRotatorClient{listErr: fmt.Errorf("list boom")}
 	var err error
 	captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err == nil || !strings.Contains(err.Error(), "list boom") {
 		t.Fatalf("want list error, got %v", err)
@@ -285,7 +285,7 @@ func TestCredentialsPATRevokeOldErrors(t *testing.T) {
 		deleteErr: fmt.Errorf("delete boom"),
 	}
 	captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err == nil || !strings.Contains(err.Error(), "delete boom") {
 		t.Fatalf("want delete error, got %v", err)
@@ -298,7 +298,7 @@ func TestCredentialsObjKeyCreateDryRun(t *testing.T) {
 	client := &fakeRotatorClient{}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyCreate(context.Background(), client, false, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
+		err = RunObjKeyCreate(context.Background(), client, false, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestCredentialsObjKeyCreateApply(t *testing.T) {
 	}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyCreate(context.Background(), client, true, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
+		err = RunObjKeyCreate(context.Background(), client, true, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestCredentialsObjKeyCreateBadResponses(t *testing.T) {
 		client := &fakeRotatorClient{createResp: tc.resp, createErr: tc.err}
 		var err error
 		captureFirewallOutput(t, func() {
-			err = runCredentialsObjKeyCreate(context.Background(), client, true, "l", "c", "b", "read_write", "", "", nil)
+			err = RunObjKeyCreate(context.Background(), client, true, "l", "c", "b", "read_write", "", "", nil)
 		})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
@@ -373,7 +373,7 @@ func objKeyListEntry(id int, label string) map[string]any {
 
 func TestCredentialsObjKeyRevokeOldKeepValidation(t *testing.T) {
 	for _, keep := range []int64{0, -1} {
-		if err := runCredentialsObjKeyRevokeOld(context.Background(), &fakeRotatorClient{}, true, "l", keep); err == nil {
+		if err := RunObjKeyRevokeOld(context.Background(), &fakeRotatorClient{}, true, "l", keep); err == nil {
 			t.Errorf("keep-newest=%d: want error, got nil", keep)
 		}
 	}
@@ -383,7 +383,7 @@ func TestCredentialsObjKeyRevokeOldNoMatches(t *testing.T) {
 	client := &fakeRotatorClient{listResp: []map[string]any{objKeyListEntry(5, "other")}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
+		err = RunObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -403,7 +403,7 @@ func TestCredentialsObjKeyRevokeOldKeepsNewestN(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
+		err = RunObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +424,7 @@ func TestCredentialsObjKeyRevokeOldKeepLargerThanSet(t *testing.T) {
 	client := &fakeRotatorClient{listResp: []map[string]any{objKeyListEntry(1, "lbl")}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), client, false, "lbl", 5)
+		err = RunObjKeyRevokeOld(context.Background(), client, false, "lbl", 5)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ func TestCredentialsObjKeyRevokeOldKeepLargerThanSet(t *testing.T) {
 func TestCredentialsObjKeyRevokeOldErrors(t *testing.T) {
 	var err error
 	captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), &fakeRotatorClient{listErr: fmt.Errorf("list boom")}, true, "lbl", 2)
+		err = RunObjKeyRevokeOld(context.Background(), &fakeRotatorClient{listErr: fmt.Errorf("list boom")}, true, "lbl", 2)
 	})
 	if err == nil || !strings.Contains(err.Error(), "list boom") {
 		t.Fatalf("want list error, got %v", err)
@@ -452,7 +452,7 @@ func TestCredentialsObjKeyRevokeOldErrors(t *testing.T) {
 		deleteErr: fmt.Errorf("delete boom"),
 	}
 	captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
+		err = RunObjKeyRevokeOld(context.Background(), client, true, "lbl", 2)
 	})
 	if err == nil || !strings.Contains(err.Error(), "delete boom") {
 		t.Fatalf("want delete error, got %v", err)
@@ -461,86 +461,20 @@ func TestCredentialsObjKeyRevokeOldErrors(t *testing.T) {
 
 // ── cobra wiring (flags + env defaults reach the run funcs) ───────────────────
 
-func TestCredentialsCommandWiring(t *testing.T) {
-	t.Setenv("LINODE_TOKEN", "tkn")
-	t.Setenv("ROTATION_APPLY", "")
-	t.Setenv("PAT_LABEL", "")
-	t.Setenv("PAT_SCOPES", "")
-	t.Setenv("PAT_VALIDITY_DAYS", "")
-	t.Setenv("PAT_GRACE_DAYS", "")
-	t.Setenv("OBJ_LABEL", "")
-	t.Setenv("OBJ_BUCKET_CLUSTER", "")
-	t.Setenv("OBJ_BUCKET_NAME", "")
-	t.Setenv("OBJ_BUCKET_PERMISSIONS", "")
-	t.Setenv("OBJ_KEEP_NEWEST", "")
-
-	origPAT, origObj := newPATRotatorClient, newObjKeyRotatorClient
-	defer func() { newPATRotatorClient, newObjKeyRotatorClient = origPAT, origObj }()
-	fake := &fakeRotatorClient{createResp: map[string]any{
-		"id": json.Number("1"), "token": "t", "access_key": "a", "secret_key": "s",
-	}}
-	var gotToken string
-	newPATRotatorClient = func(token string) patAPI { gotToken = token; return fake }
-	newObjKeyRotatorClient = func(token string) objKeyAPI { gotToken = token; return fake }
-
-	run := func(args ...string) string {
-		t.Helper()
-		c := credentialsCmd()
-		c.SetArgs(args)
-		var err error
-		stdout, _ := captureFirewallOutput(t, func() { err = c.Execute() })
-		if err != nil {
-			t.Fatalf("llz credentials %s: %v", strings.Join(args, " "), err)
-		}
-		return stdout
-	}
-
-	rec := decodeRecord(t, run("pat", "create", "--label", "L", "--scopes", "S", "--validity-days", "30", "--apply"))
-	if rec["dry_run"] != false || fake.createdLabel != "L" || fake.createdScopes != "S" || gotToken != "tkn" {
-		t.Errorf("pat create wiring: rec=%v label=%q scopes=%q token=%q", rec, fake.createdLabel, fake.createdScopes, gotToken)
-	}
-
-	fake.listResp = nil
-	rec = decodeRecord(t, run("pat", "revoke-old", "--label", "L", "--grace-days", "9"))
-	if rec["grace_days"] != float64(9) || rec["dry_run"] != true {
-		t.Errorf("pat revoke-old wiring: %v", rec)
-	}
-
-	rec = decodeRecord(t, run("obj-key", "create", "--label", "L", "--bucket-cluster", "C", "--bucket-name", "B"))
-	if rec["bucket_permissions"] != "read_write" || rec["dry_run"] != true {
-		t.Errorf("obj-key create wiring: %v", rec)
-	}
-
-	rec = decodeRecord(t, run("obj-key", "revoke-old", "--label", "L", "--keep-newest", "3"))
-	if rec["keep_newest"] != float64(3) {
-		t.Errorf("obj-key revoke-old wiring: %v", rec)
-	}
-
-	// Env-var defaults (the composite action sets these instead of flags).
-	t.Setenv("OBJ_LABEL", "envL")
-	t.Setenv("OBJ_BUCKET_CLUSTER", "envC")
-	t.Setenv("OBJ_BUCKET_NAME", "envB")
-	t.Setenv("OBJ_BUCKET_PERMISSIONS", "read_only")
-	rec = decodeRecord(t, run("obj-key", "create"))
-	if rec["label"] != "envL" || rec["bucket_cluster"] != "envC" || rec["bucket_name"] != "envB" || rec["bucket_permissions"] != "read_only" {
-		t.Errorf("obj-key env defaults: %v", rec)
-	}
-}
-
 func TestWriteRotatedSecret(t *testing.T) {
 	type call struct{ name, env, val string }
 	var got []call
-	orig := ghSetSecretFn
-	ghSetSecretFn = func(name, ghEnv, value string) error {
+	orig := SetSecret
+	SetSecret = func(name, ghEnv, value string) error {
 		got = append(got, call{name, ghEnv, value})
 		return nil
 	}
-	defer func() { ghSetSecretFn = orig }()
+	defer func() { SetSecret = orig }()
 
 	// Writes the value into infra-<deployment> for EACH deployment.
 	got = nil
-	if err := writeRotatedSecret("LINODE_API_TOKEN", "tok", []string{"lab", "prod"}); err != nil {
-		t.Fatalf("writeRotatedSecret: %v", err)
+	if err := WriteRotatedSecret("LINODE_API_TOKEN", "tok", []string{"lab", "prod"}); err != nil {
+		t.Fatalf("WriteRotatedSecret: %v", err)
 	}
 	want := []call{{"LINODE_API_TOKEN", "infra-lab", "tok"}, {"LINODE_API_TOKEN", "infra-prod", "tok"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -549,21 +483,21 @@ func TestWriteRotatedSecret(t *testing.T) {
 
 	// No deployments → a single repo-level write (ghEnv "").
 	got = nil
-	if err := writeRotatedSecret("LINODE_API_TOKEN", "tok", nil); err != nil {
-		t.Fatalf("writeRotatedSecret repo: %v", err)
+	if err := WriteRotatedSecret("LINODE_API_TOKEN", "tok", nil); err != nil {
+		t.Fatalf("WriteRotatedSecret repo: %v", err)
 	}
 	if len(got) != 1 || got[0].env != "" {
 		t.Errorf("repo-level write = %v, want one call with empty env", got)
 	}
 
 	// A per-env failure is wrapped with the env for context, and stops the loop.
-	ghSetSecretFn = func(_, ghEnv, _ string) error {
+	SetSecret = func(_, ghEnv, _ string) error {
 		if ghEnv == "infra-prod" {
 			return fmt.Errorf("boom")
 		}
 		return nil
 	}
-	err := writeRotatedSecret("X", "v", []string{"lab", "prod", "stg"})
+	err := WriteRotatedSecret("X", "v", []string{"lab", "prod", "stg"})
 	if err == nil || !strings.Contains(err.Error(), "infra-prod") {
 		t.Errorf("want error naming infra-prod, got %v", err)
 	}

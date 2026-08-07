@@ -174,10 +174,10 @@ This is the group the current `check|tool` ceiling makes **structurally illegal*
 | `openbao-lifecycle` | 2,185 | 13 | ✔ | ✘ | init/configure/CA/breakglass/seal-key/login. The largest `→ seeded` block; holds root material. |
 | `keycloak-provisioner` | 803 | 3 | ✘ | ✘ | `ci_keycloak_configure` 328, `users` 284, `gateway_alias` 191. Textbook optional-capability-that-seeds. |
 | `database-provisioner` | 770 | 4 | ✘ | ✘ | `ci_rotate_dbadmin` 282, `pg_probe` 229, `ci_seed_dbadmin` 140, `ci_db_report` 119. |
-| `credential-pat` | 630 | 4 | ✔ | ✘ | `credentials_pat` 201, `ci_rotate_broad_pat` 196, `ci_incluster_pat` 178, `ci_seed_broad_pat` 55. Also binds an `operating` invariant (age). |
+| `credential-pat` | 630 | 4 | ✔ | ✘ | ~~`credentials_pat` 201~~, `ci_rotate_broad_pat` 196, `ci_incluster_pat` 178, `ci_seed_broad_pat` 55. **✅ Partially extracted** — the rotator moved; the in-cluster and broad-PAT paths sit behind the rotation table. See [What the credential family cost](#what-the-credential-family-cost--three-walls-not-one).
 | `openbao-seed` | 611 | 4 | ✔ | ✘ | `ci_bao_seed` 279, `ci_seed_special` 236, `bao_seed_all` 71, `secret_apply` 25. |
 | `harbor-provisioner` | 551 | 4 | ✘ | ✘ | `ci_harbor_provisioner` 265, `ci_harbor` 191, kick 94. |
-| `credential-objkey` | 474 | 4 | ✘ | ✘ | `credentials_objkey` 196, `ci_temp_objkey` 106, `ci_mint_objkeys` 87, `objcluster_resolve` 85. |
+| `credential-objkey` | 474 | 4 | ✘ | ✘ | ~~`credentials_objkey` 196~~, `ci_temp_objkey` 106, `ci_mint_objkeys` 87, `objcluster_resolve` 85. **✅ Partially extracted** — same wall. See [What the credential family cost](#what-the-credential-family-cost--three-walls-not-one).
 | `credential-linode` | 462 | 4 | ✔ | ✘ | `ci_rotate_linode_creds` 271, `credentials_lkeadmin` 99, `credentials` 74, `linode_token` 18. |
 | `credential-state-passphrase` | 199 | 1 | ✔ | ✘ | Tofu state encryption key rollover. **✅ Extracted — the only `credential-*` row not blocked behind OpenBao.** See [What `credential-state-passphrase` could not say](#what-credential-state-passphrase-could-not-say--a-state-the-grant-table-refuses). |
 | `forge-env-seed` | 189 | 3 | ✔ | ✘ | `gh_secrets_native` 63, `ci_github_oidc` 63, `ci_clear_secrets` 63. Should route through `internal/forge`. |
@@ -324,9 +324,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `dev-mutation-testing` extracted | 22,153 | 140 | −230 — the first extension that is not about the platform |
 | `release-publish` extracted | 21,841 | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
 | `credential-state-passphrase` extracted | 21,542 | 136 | −299 — the first credential row, and a state the grant table refuses |
-| `internal/baoread` extracted | **21,457** | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
+| `internal/baoread` extracted | 21,457 | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
+| `credential-pat` + `credential-objkey` | **21,082** | 130 | −375 — the second wall down, and the first package to declare two extensions |
 
-**Net −25,725 (54.5%) across forty extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −26,100 (55.3%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2239,6 +2240,46 @@ half right. The rotator framework is the real next move for that family.
 about the read classifier, three driving `runCIBaoSeed` and the objkey mint paths. The file was named
 for the **dependency the tests share**, not the code they test — the most plausible-looking of the four
 patterns so far, and wrong for the identical reason: nothing in the name points at a subject.
+
+### What the credential family cost — three walls, not one
+
+`credential-pat` and `credential-objkey` are the forty-first and forty-second extensions, and getting
+to them took three separate infrastructure extractions.
+
+```
+credential-pat     transition:seeded[cloud-mutate, secret-custody]
+credential-objkey  transition:seeded[cloud-mutate, secret-custody]
+```
+
+| wall | what it was |
+|---|---|
+| 1 | `internal/baoread` — the family read OpenBao through package `main`'s fail-closed classifier |
+| 2 | `internal/credrotate` — they also shared `credentials.go`'s rotator framework: the dry-run arming rule, the GitHub-secret fan-out, the narrow Linode API slices |
+| 3 | **still standing** — `ci_rotate_linode_creds.go`'s rotation table and `linode_token.go`'s in-cluster token layer, 18 symbols with callers across eight other files |
+
+**The measurement proves the second wall was real.** After `baoread`, `credentials_pat.go` was still
+unmeasurable in place. Once the framework moved it reported a closure of **two**. That is what a wall
+coming down looks like, and it is why the previous iteration's prediction ("extract baoread and the
+credential rows unblock") was only half right.
+
+**First package to declare TWO extensions**, which no earlier extraction has needed. They are separate
+catalog rows, separate credentials, separate Linode APIs, and independently enable-able — but Go
+cannot put a shared type in two packages, so the framework decides where the rotators *live*. The
+registry takes functions rather than packages, so it does not decide what they *declare*. A test pins
+the separation: an instance with no object storage has no reason to rotate an OBJ key, and collapsing
+them would tie two independent lifecycles to one switch.
+
+**`seeded` is the honest state here, and the contrast with `credential-state-passphrase` is the
+point.** That one had to be *pushed* to `seeded` because `grantStates` refuses `secret-custody` at
+`configured` — and the row was right to refuse, because a locally-generated passphrase has no issuer.
+These two are **issued by Linode**: they cannot exist before there is an account to issue them, which
+is exactly what `seeded` means. The same table that forced one binding fits the other two without
+argument, which is the best evidence yet that the table encodes something real.
+
+**The dry-run rule is why this is one framework rather than three copies.** A rotator that is not armed
+must say so and change nothing; `--apply` **or** `ROTATION_APPLY=true` arms it. Three subcommands
+re-implementing that would be three chances to default the wrong way, on code whose failure mode is
+deleting a live credential.
 
 ## The cost of the interesting half
 

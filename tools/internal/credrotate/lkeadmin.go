@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // credentials_lkeadmin.go implements `llz credentials lke-admin rotate` — the
 // former standalone secret-rotation binary, folded into llz the same way the
@@ -37,11 +37,10 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 // lkeAdminAPI is the slice of the Linode client the rotation uses, seamed for
-// tests like patAPI/objKeyAPI.
+// tests like PATAPI/ObjKeyAPI.
 type lkeAdminAPI interface {
 	ClusterK8sVersion(ctx context.Context, clusterID uint64) (string, error)
 	DeleteKubeconfig(ctx context.Context, clusterID uint64) error
@@ -49,39 +48,12 @@ type lkeAdminAPI interface {
 
 var newLKEAdminClient = func(token string) lkeAdminAPI { return linode.NewClient(token, 30*time.Second) }
 
-func credentialsLKEAdminCmd(o *rotatorOpts) *cobra.Command {
-	c := &cobra.Command{
-		Use:   "lke-admin",
-		Short: "rotate lke-admin-token on LKE-Enterprise via the delete-kubeconfig API",
-	}
-	var clusterID string
-	rotate := &cobra.Command{
-		Use:   "rotate",
-		Short: "invalidate + regenerate lke-admin-token (refuses non-Enterprise clusters)",
-		Long: "The former standalone secret-rotation binary. Rotates lke-admin-token by\n" +
-			"calling the Linode delete-kubeconfig API — the only sanctioned LKE-Enterprise\n" +
-			"rotation. Hard-refuses a cluster whose k8s_version lacks the \"+lke\" suffix\n" +
-			"and never deletes the Secret directly (it would not be regenerated). Prints\n" +
-			"one JSON rotation record on stdout. Dry-run unless --apply\n" +
-			"(ROTATION_APPLY=true). Reads LINODE_TOKEN, LKE_CLUSTER_ID, REGION.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCredentialsLKEAdminRotate(o, firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID")))
-		},
-	}
-	rotate.Flags().StringVar(&clusterID, "lke-cluster-id", "", "numeric LKE cluster id (default: env LKE_CLUSTER_ID)")
-	c.AddCommand(rotate)
-	return c
-}
-
-// isEnterprise reports whether a k8s_version is LKE-Enterprise — those carry a
-// "+lke" suffix, e.g. v1.31.9+lke7.
 func isEnterprise(k8sVersion string) bool {
 	return strings.Contains(k8sVersion, "+lke")
 }
 
-func runCredentialsLKEAdminRotate(o *rotatorOpts, clusterIDArg string) error {
-	token, apply, err := o.resolve()
+func RunLKEAdminRotate(o *Opts, clusterIDArg string) error {
+	token, apply, err := o.Resolve()
 	if err != nil {
 		return err
 	}

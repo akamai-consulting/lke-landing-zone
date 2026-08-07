@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // Boundary/arithmetic tests for credentials_pat.go — the PAT lifecycle numbers
 // that decide whether a minted token expires when we think it does and whether
@@ -8,7 +8,7 @@ package main
 // arithmetic itself, because every case used round numbers or year-2099
 // timestamps that survive a sign flip.
 //
-// runCredentialsPATCreate/RevokeOld read time.Now() directly (no clock seam), so
+// RunPATCreate/RevokeOld read time.Now() directly (no clock seam), so
 // these tests bracket the real clock instead of freezing it: capture now before
 // and after the call and assert the computed timestamp lands inside the window.
 
@@ -59,7 +59,7 @@ func TestCredentialsPATCreateAcceptsOneDayValidity(t *testing.T) {
 	client := &fakeRotatorClient{createResp: map[string]any{"id": json.Number("7"), "token": "tok"}}
 	var err error
 	captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), client, true, "lbl", "s", 1, "", nil)
+		err = RunPATCreate(context.Background(), client, true, "lbl", "s", 1, "", nil)
 	})
 	if err != nil {
 		t.Fatalf("validity-days=1 must be accepted, got %v", err)
@@ -77,7 +77,7 @@ func TestCredentialsPATCreateExpiryIsNowPlusValidityDays(t *testing.T) {
 		var err error
 		before := time.Now().Unix()
 		captureFirewallOutput(t, func() {
-			err = runCredentialsPATCreate(context.Background(), client, true, "lbl", "s", days, "", nil)
+			err = RunPATCreate(context.Background(), client, true, "lbl", "s", days, "", nil)
 		})
 		after := time.Now().Unix()
 		if err != nil {
@@ -100,7 +100,7 @@ func TestCredentialsPATCreateDryRunExpiryPlanned(t *testing.T) {
 	var err error
 	before := time.Now().Unix()
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), &fakeRotatorClient{}, false, "lbl", "s", 90, "", nil)
+		err = RunPATCreate(context.Background(), &fakeRotatorClient{}, false, "lbl", "s", 90, "", nil)
 	})
 	after := time.Now().Unix()
 	if err != nil {
@@ -130,7 +130,7 @@ func TestCredentialsPATRevokeOldAcceptsZeroGrace(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 0)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 0)
 	})
 	if err != nil {
 		t.Fatalf("grace-days=0 must be accepted, got %v", err)
@@ -153,7 +153,7 @@ func TestCredentialsPATRevokeOldCutoffIsNowMinusGraceDays(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestCredentialsPATRevokeOldCutoffBoundaryIsExclusive(t *testing.T) {
 		}}
 		var err error
 		stdout, _ := captureFirewallOutput(t, func() {
-			err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 0)
+			err = RunPATRevokeOld(context.Background(), client, true, "lbl", 0)
 		})
 		if time.Now().Unix() != now {
 			continue // the clock rolled into the next second mid-call; retry
@@ -223,7 +223,7 @@ func TestCredentialsPATRevokeOldTieKeepsFirstListed(t *testing.T) {
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
-		err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+		err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestCredentialsPATRevokeOldGraceLogAgeDays(t *testing.T) {
 	var err error
 	recs := captureSlog(t, func() {
 		captureFirewallOutput(t, func() {
-			err = runCredentialsPATRevokeOld(context.Background(), client, true, "lbl", 7)
+			err = RunPATRevokeOld(context.Background(), client, true, "lbl", 7)
 		})
 	})
 	if err != nil {

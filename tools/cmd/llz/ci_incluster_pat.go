@@ -52,6 +52,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
@@ -96,7 +97,7 @@ func inclusterPATLabel(prefix, region string) string {
 // token and confirms the NEW token authenticates (GET /v4/profile) before the
 // caller writes it anywhere. A token that fails verification is left for the
 // drain (it can never be the newest verified sibling).
-func mintVerifiedInclusterPAT(ctx context.Context, mint patAPI, prefix, region string) (id uint64, token string, err error) {
+func mintVerifiedInclusterPAT(ctx context.Context, mint credrotate.PATAPI, prefix, region string) (id uint64, token string, err error) {
 	expiry := linode.FmtLinodeTS(rotatorNow().Unix() + inclusterPATValidityDays*linode.DaySecs)
 	resp, err := mint.CreateProfileToken(ctx, inclusterPATLabel(prefix, region), inclusterPATScopes, expiry)
 	if err != nil {
@@ -161,7 +162,7 @@ func runCIMintBootstrapPAT(region string) error {
 		fmt.Println("secret/linode/api-token already seeded — skipping mint (rotation owns it).")
 		return nil
 	}
-	id, token, err := mintVerifiedInclusterPAT(context.Background(), newPATRotatorClient(minting), prefix, region)
+	id, token, err := mintVerifiedInclusterPAT(context.Background(), credrotate.NewPATClient(minting), prefix, region)
 	if err != nil {
 		return err
 	}
@@ -226,7 +227,7 @@ func runCIRotateInclusterPAT() error {
 	}
 
 	ctx := context.Background()
-	client := newPATRotatorClient(minting)
+	client := credrotate.NewPATClient(minting)
 	id, token, err := mintVerifiedInclusterPAT(ctx, client, prefix, region)
 	if err != nil {
 		return err
@@ -248,7 +249,7 @@ func runCIRotateInclusterPAT() error {
 	// keeps the token just written; consumers re-sync via ESO well inside the
 	// grace window. Drain failure is non-fatal by design of the monthly cadence
 	// (the next run retries) — but surface it, or leaked tokens hide forever.
-	if err := runCredentialsPATRevokeOld(ctx, client, true, inclusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
+	if err := credrotate.RunPATRevokeOld(ctx, client, true, inclusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", inclusterPATLabel(prefix, region), err)
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", inclusterPATLabel(prefix, region), err))
