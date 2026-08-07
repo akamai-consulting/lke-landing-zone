@@ -62,6 +62,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
@@ -100,6 +101,7 @@ var declarations = []func() extension.Extension{
 	baolifecycle.Extension,
 	harbor.Extension,
 	identityconfig.Extension,
+	reconciler.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

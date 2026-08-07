@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
@@ -104,7 +105,7 @@ func ciCmd() *cobra.Command {
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
 	// bootstrap-cloud-firewall is the manual/recovery fallback; the cidrFirewall
 	// component's CronJob (discover-firewall-config) is the steady-state owner.
-	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
+	c.AddCommand(ciBootstrapCloudFirewallCmd(), reconciler.DiscoverFirewallCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	// fetch-kubeconfig (the Linode-API variant) is BREAK-GLASS and deliberately
 	// callerless: the workflows use fetch-kubeconfig-state, which reads the TF
@@ -193,14 +194,14 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(assertplatform.InstanceCustomCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
-	c.AddCommand(ciRelabelVolumesCmd())
+	c.AddCommand(reconciler.RelabelVolumesCmd())
 	// Linode Volume tag-heal backstop for Volumes born without the StorageClass's
 	// lke<id> ownership tag (also runnable in-cluster by the volume-tags reconciler).
-	c.AddCommand(ciReconcileVolumeTagsCmd())
+	c.AddCommand(reconciler.ReconcileVolumeTagsCmd())
 	// The e2e GATE for the same invariant the two lanes above maintain: asserts
 	// against the Linode API that every PV-backed Volume is encrypted at rest AND
 	// carries its lke<id> ownership tag. Fails closed, including on an empty cluster.
-	c.AddCommand(ciAssertVolumeEncryptionCmd())
+	c.AddCommand(reconciler.AssertVolumeEncryptionCmd())
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.

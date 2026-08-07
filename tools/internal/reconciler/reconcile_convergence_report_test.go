@@ -1,9 +1,9 @@
-package main
+package reconciler
 
 // TestConvergenceReport stayed with its subject.
 //
 // It travelled to internal/converge inside ci_health_incluster_test.go, but
-// convergenceReport is the RECONCILER's classifier in reconcile_convergence.go —
+// ConvergenceReport is the RECONCILER's classifier in reconcile_convergence.go —
 // converge only consumes it, through a seam that returns a verdict.
 
 import (
@@ -12,12 +12,12 @@ import (
 	"testing"
 )
 
-// convergenceReport is the kubectl-free classifier the health-incluster verb shares
+// ConvergenceReport is the kubectl-free classifier the health-incluster verb shares
 // with the reconciler gauge. Reuses convergenceServer/convApp from
 // reconcile_convergence_test.go.
 func TestConvergenceReport(t *testing.T) {
 	// Converged.
-	r, crd, err := convergenceReport(context.Background(),
+	r, crd, err := ConvergenceReport(context.Background(),
 		convergenceServer(t, []map[string]any{convApp("a", "Synced", "Healthy", true)}, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestConvergenceReport(t *testing.T) {
 	}
 
 	// Hard-failed (a Degraded app dominates).
-	r, _, _ = convergenceReport(context.Background(),
+	r, _, _ = ConvergenceReport(context.Background(),
 		convergenceServer(t, []map[string]any{
 			convApp("a", "Synced", "Healthy", true),
 			convApp("b", "OutOfSync", "Degraded", true),
@@ -43,12 +43,12 @@ func TestConvergenceReport(t *testing.T) {
 	}
 
 	// CRD absent (404) → crdPresent false, no error (pre-bootstrap).
-	if _, crd, err := convergenceReport(context.Background(), convergenceServer(t, nil, http.StatusNotFound)); err != nil || crd {
+	if _, crd, err := ConvergenceReport(context.Background(), convergenceServer(t, nil, http.StatusNotFound)); err != nil || crd {
 		t.Errorf("404 should be crdPresent=false, no error; got crd=%v err=%v", crd, err)
 	}
 
 	// API error (500) → surfaced as an error (apiserver-unreachable class).
-	if _, _, err := convergenceReport(context.Background(), convergenceServer(t, nil, http.StatusInternalServerError)); err == nil {
+	if _, _, err := ConvergenceReport(context.Background(), convergenceServer(t, nil, http.StatusInternalServerError)); err == nil {
 		t.Error("a 500 should surface an error")
 	}
 }

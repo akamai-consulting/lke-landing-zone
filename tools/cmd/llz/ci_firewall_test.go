@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 )
 
@@ -223,8 +224,8 @@ func TestRunCIBootstrapCloudFirewallHappyPathWithClusterID(t *testing.T) {
 		t.Fatalf("kubectl calls = %d (%v), want 5", len(*calls), *calls)
 	}
 	// Final call rolls the Deployment so it picks up the patched ConfigMap.
-	if last := (*calls)[4].args; last != "rollout restart deployment "+firewallDeploymentName+" -n kube-system" {
-		t.Errorf("call 5 argv = %q, want rollout restart of %s", last, firewallDeploymentName)
+	if last := (*calls)[4].args; last != "rollout restart deployment "+reconciler.FirewallDeploymentName+" -n kube-system" {
+		t.Errorf("call 5 argv = %q, want rollout restart of %s", last, reconciler.FirewallDeploymentName)
 	}
 
 	// 1. Secret apply: manifest over stdin, token off argv.
@@ -249,12 +250,12 @@ func TestRunCIBootstrapCloudFirewallHappyPathWithClusterID(t *testing.T) {
 	}
 	cm := unmarshalManifest(t, (*calls)[1].stdin)
 	cmMeta := cm["metadata"].(map[string]any)
-	if cm["kind"] != "ConfigMap" || cmMeta["name"] != firewallConfigMapName || cmMeta["namespace"] != "kube-system" {
-		t.Errorf("configmap manifest = %v, want kube-system/%s ConfigMap", cm, firewallConfigMapName)
+	if cm["kind"] != "ConfigMap" || cmMeta["name"] != reconciler.FirewallConfigMapName || cmMeta["namespace"] != "kube-system" {
+		t.Errorf("configmap manifest = %v, want kube-system/%s ConfigMap", cm, reconciler.FirewallConfigMapName)
 	}
 
 	// 3+4. Merge patches for LINODE_FIREWALL_ID then LKE_CLUSTER_ID.
-	wantPatchArgv := "patch configmap " + firewallConfigMapName + " -n kube-system --type merge --patch "
+	wantPatchArgv := "patch configmap " + reconciler.FirewallConfigMapName + " -n kube-system --type merge --patch "
 	for i, want := range []string{`{"data":{"LINODE_FIREWALL_ID":"12345"}}`, `{"data":{"LKE_CLUSTER_ID":"67890"}}`} {
 		c := (*calls)[2+i]
 		if c.args != wantPatchArgv+want {
@@ -266,8 +267,8 @@ func TestRunCIBootstrapCloudFirewallHappyPathWithClusterID(t *testing.T) {
 	}
 
 	for _, line := range []string{
-		"Set LINODE_FIREWALL_ID=12345 in " + firewallConfigMapName,
-		"Set LKE_CLUSTER_ID=67890 in " + firewallConfigMapName,
+		"Set LINODE_FIREWALL_ID=12345 in " + reconciler.FirewallConfigMapName,
+		"Set LKE_CLUSTER_ID=67890 in " + reconciler.FirewallConfigMapName,
 	} {
 		if !strings.Contains(stdout, line) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout, line)
@@ -294,7 +295,7 @@ func TestRunCIBootstrapCloudFirewallPatchesVPCCIDR(t *testing.T) {
 	if len(*calls) != 6 {
 		t.Fatalf("kubectl calls = %d (%v), want 6 (incl. VPC_CIDR patch + rollout)", len(*calls), *calls)
 	}
-	wantPatch := "patch configmap " + firewallConfigMapName + " -n kube-system --type merge --patch "
+	wantPatch := "patch configmap " + reconciler.FirewallConfigMapName + " -n kube-system --type merge --patch "
 	for i, want := range []string{
 		`{"data":{"LINODE_FIREWALL_ID":"12345"}}`,
 		`{"data":{"VPC_CIDR":"10.0.0.0/13"}}`,
@@ -393,7 +394,7 @@ func TestRunCIBootstrapCloudFirewallKubectlFailurePropagates(t *testing.T) {
 		{
 			name:      "configmap patch fails",
 			failOn:    func(args []string) bool { return args[0] == "patch" },
-			wantErr:   "patch LINODE_FIREWALL_ID into " + firewallConfigMapName,
+			wantErr:   "patch LINODE_FIREWALL_ID into " + reconciler.FirewallConfigMapName,
 			wantCalls: 3,
 		},
 	}

@@ -312,10 +312,10 @@ func TestLanesFromDeploymentArgs(t *testing.T) {
 // outcome: a coupling guard that silently stops finding its subject is worse than
 // one that breaks loudly.
 func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
-	const reconcileGo = "../../cmd/llz/reconcile.go"
+	const reconcileGo = "../reconciler/reconcile.go"
 	src, err := os.ReadFile(reconcileGo)
 	if err != nil {
-		t.Fatalf("reading %s: %v — if reconciler-runtime was extracted, this path moves with it", reconcileGo, err)
+		t.Fatalf("reading %s: %v — this is a CROSS-PACKAGE source scan; go test caches a pass for an unchanged package even after the file it reads has moved, so run -count=1 after any extraction", reconcileGo, err)
 	}
 	body := string(src)
 

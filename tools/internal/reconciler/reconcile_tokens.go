@@ -1,4 +1,4 @@
-package main
+package reconciler
 
 // reconcile_tokens.go is the READER half of the credential single-pane-of-glass
 // (writer: ci_token_inventory.go). External CI tokens can only be measured by a job

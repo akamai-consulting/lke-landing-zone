@@ -25,7 +25,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
 - **Phase 0 (merged, #150).** The observe-only foundation:
   [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
   Prometheus text-exposition registry — gauges + counters) and the
-  [`llz reconcile`](../../tools/cmd/llz/reconcile.go) command (serves
+  [`llz reconcile`](../../tools/internal/reconciler/reconcile.go) command (serves
   `:8080/metrics` and `:8081/healthz` on SEPARATE listeners — metrics is mTLS,
   healthz is plaintext because the kubelet probing it cannot present a client
   certificate; see ADR 0010 — SIGTERM-graceful), plus the deployable
@@ -37,7 +37,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   over raw HTTP, no client-go; borrows only the transport so a long-lived stream
   isn't guillotined by the client's 30s timeout, ctx governs its lifetime).
 - **Phase 2 (merged, #152).** The reconciler **manager**
-  ([`reconcile_manager.go`](../../tools/cmd/llz/reconcile_manager.go)) — runs N
+  ([`reconcile_manager.go`](../../tools/internal/reconciler/reconcile_manager.go)) — runs N
   named reconcilers with a uniform per-reconciler metric set
   (`llz_reconcile_{runs_total,errors_total,up,last_success_timestamp_seconds,last_duration_seconds}{reconciler}`).
   The observe sampler is now one such reconciler; the two **timed reconcilers** —
@@ -45,7 +45,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   CronJobs as bounded-resync loops calling the same `ci`-verb logic, **off by
   default**.
 - **Watch reconcilers (#153).** The manager gains an **event-triggered**
-  loop ([`runWatchReconcilerLoop`](../../tools/cmd/llz/reconcile_manager.go)): a
+  loop ([`runWatchReconcilerLoop`](../../tools/internal/reconciler/reconcile_manager.go)): a
   reconciler with a `watch` closure runs level-based on each watch event (via
   `Client.Watch`), plus a resync floor, re-establishing the stream on close. The
   first watch reconciler — **argo-resync-nudger**
@@ -54,7 +54,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
   stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
 - **Leader election (#154).** A minimal `coordination.k8s.io` Lease elector
-  ([`reconcile_leader.go`](../../tools/cmd/llz/reconcile_leader.go)) over the
+  ([`reconcile_leader.go`](../../tools/internal/reconciler/reconcile_leader.go)) over the
   hand-rolled kube client — acquire/renew/take-over/step-down, no client-go
   leaderelection. The observe sampler (read-only) runs on every replica; the
   **driving** reconcilers are gated to no-op unless this replica holds the lease,
@@ -72,7 +72,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
     once vs the script's per-volume GET). Retires the 103-line embedded-shell blob
     from the `untestable-budget` once the CronJob switches to the new verb.
 - **Convergence gauge (this branch).** The observe reconciler now also publishes
-  `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/cmd/llz/reconcile_convergence.go)):
+  `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/internal/reconciler/reconcile_convergence.go)):
   it lists Argo CD Applications and classifies each through the **same tested
   predicate `llz ci health` uses** (`internal/health.ParseArgoApp` +
   `ClassifyArgoApp`), publishing the 0/1/2 verdict (+ failed/pending app counts).
@@ -82,7 +82,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   It **observes** — drives nothing (contract-clean).
 - **Health gauges (this branch).** The observe reconciler also publishes the
   readiness signals the daily `scheduled-checks` jobs port-forward for
-  ([`reconcile_health.go`](../../tools/cmd/llz/reconcile_health.go)), all over the
+  ([`reconcile_health.go`](../../tools/internal/reconciler/reconcile_health.go)), all over the
   Kubernetes API (no OpenBao wiring): `llz_eso_store_ready` (the openbao
   ClusterSecretStore, via the shared `ClassifyReady` predicate),
   `llz_certificates_{total,not_ready}` (cert-manager Certificates, same predicate),

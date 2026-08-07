@@ -32,7 +32,7 @@ runs **daily, per region** (matrix). Per run it:
 4. **Closes the ACL dance** — deletes the kubeconfig and revokes the runner ACL.
 
 The in-cluster `llz-reconciler` already reads that ConfigMap every 60s
-([`reconcile_tokens.go`](../../tools/cmd/llz/reconcile_tokens.go)) and re-exposes it as
+([`reconcile_tokens.go`](../../tools/internal/reconciler/reconcile_tokens.go)) and re-exposes it as
 `llz_token_expiry_timestamp_seconds{provider,token}` etc., so Prometheus + Alertmanager
 already carry the *alerting*. The out-of-cluster job is only the **writer** (step 2) plus
 a **CI gate** (step 3).

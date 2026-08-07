@@ -34,25 +34,10 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
 )
-
-// firewallConfigMapName is the controller's config ConfigMap (kube-system). It
-// MUST match the chart's fullname-derived name (release llz-linode-cidr-firewall
-// → <fullname>-config), which is what the Deployment's env reads, so the dynamic
-// LINODE_FIREWALL_ID / LKE_CLUSTER_ID we patch here land in the ConfigMap the
-// controller actually consumes. The controller + chart live in the private
-// lke-landing-zone-internal repo; these llz subcommands are the integration hook
-// that bootstraps and health-checks it. The Application ignoreDifferences those
-// two keys so selfHeal keeps our patch (the chart renders them empty placeholders).
-const firewallConfigMapName = "llz-linode-cidr-firewall-config"
-
-// firewallDeploymentName is the controller Deployment (chart fullname). After
-// patching the ConfigMap we roll it: env injected via configMapKeyRef is read
-// once at pod creation, so a Deployment ArgoCD already created from the empty
-// placeholders would crashloop on the stale values until restarted.
-const firewallDeploymentName = "llz-linode-cidr-firewall"
 
 // firewallKubectlFn runs kubectl with args, piping stdin (a rendered manifest /
 // patchless empty string) to it and streaming output. KUBECONFIG reaches
@@ -205,7 +190,7 @@ func runCIBootstrapCloudFirewall() error {
 	// here under a different SSA field manager survive selfHeal (Argo does not
 	// own them).
 	if err := firewallKubectlFn(firewallConfigMapManifest(), "apply", "-f", "-"); err != nil {
-		return fmt.Errorf("apply kube-system/%s ConfigMap: %w", firewallConfigMapName, err)
+		return fmt.Errorf("apply kube-system/%s ConfigMap: %w", reconciler.FirewallConfigMapName, err)
 	}
 
 	if err := patchFirewallConfig("LINODE_FIREWALL_ID", firewallID); err != nil {
@@ -236,8 +221,8 @@ func runCIBootstrapCloudFirewall() error {
 	// placeholders picks up the values just patched in (configMapKeyRef env is
 	// read once at pod creation). A "not found" is benign — ArgoCD has not synced
 	// the Deployment yet, so it will start fresh from the already-patched ConfigMap.
-	if err := firewallKubectlFn("", "rollout", "restart", "deployment", firewallDeploymentName, "-n", "kube-system"); err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::could not roll %s after patching its ConfigMap (likely not created by ArgoCD yet; it will start from the patched values): %v\n", firewallDeploymentName, err)
+	if err := firewallKubectlFn("", "rollout", "restart", "deployment", reconciler.FirewallDeploymentName, "-n", "kube-system"); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::could not roll %s after patching its ConfigMap (likely not created by ArgoCD yet; it will start from the patched values): %v\n", reconciler.FirewallDeploymentName, err)
 	}
 	return nil
 }
@@ -265,7 +250,7 @@ func firewallConfigMapManifest() string {
 	b, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]string{"name": firewallConfigMapName, "namespace": "kube-system"},
+		"metadata":   map[string]string{"name": reconciler.FirewallConfigMapName, "namespace": "kube-system"},
 	})
 	return string(b)
 }
@@ -279,10 +264,10 @@ func firewallConfigPatch(key, value string) string {
 // patchFirewallConfig merge-patches one data key into the controller ConfigMap
 // and logs it, mirroring the script's per-key `kubectl patch` + echo.
 func patchFirewallConfig(key, value string) error {
-	if err := firewallKubectlFn("", "patch", "configmap", firewallConfigMapName,
+	if err := firewallKubectlFn("", "patch", "configmap", reconciler.FirewallConfigMapName,
 		"-n", "kube-system", "--type", "merge", "--patch", firewallConfigPatch(key, value)); err != nil {
-		return fmt.Errorf("patch %s into %s: %w", key, firewallConfigMapName, err)
+		return fmt.Errorf("patch %s into %s: %w", key, reconciler.FirewallConfigMapName, err)
 	}
-	fmt.Printf("Set %s=%s in %s\n", key, value, firewallConfigMapName)
+	fmt.Printf("Set %s=%s in %s\n", key, value, reconciler.FirewallConfigMapName)
 	return nil
 }

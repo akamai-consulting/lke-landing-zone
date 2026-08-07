@@ -19,7 +19,7 @@
 // They stay OFF by default: the CronJobs remain the owners until a reconciler
 // proves out per-env (the design's "keep the CronJob until one color.Green e2e cycle"),
 // so enabling one is an opt-in flag + the same env/secrets its CronJob had.
-package main
+package reconciler
 
 import (
 	"context"

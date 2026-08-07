@@ -9,7 +9,7 @@
 // classification as a gauge so day-2 convergence is continuously observable,
 // Alertmanager-routable, and not only visible when a workflow runs. It OBSERVES —
 // it drives nothing (convergence-contract-clean; anti-pattern #4 is the opposite).
-package main
+package reconciler
 
 import (
 	"context"
@@ -61,7 +61,7 @@ func setConvergenceCounts(reg *metrics.Registry, failed, pending, observed int) 
 		"count of Argo Applications successfully parsed and classified this sample", nil, float64(observed))
 }
 
-// convergenceReport classifies Argo CD Application health into the convergence
+// ConvergenceReport classifies Argo CD Application health into the convergence
 // verdict over internal/kube (no kubectl) — the SHARED core of the observe
 // reconciler's gauge (sampleConvergence) and the `llz ci health-incluster`
 // exit-code verb. Argo Application status is the canonical convergence signal (the
@@ -69,7 +69,7 @@ func setConvergenceCounts(reg *metrics.Registry, failed, pending, observed int) 
 // unit-tested health.ClassifyArgoApp predicate `llz ci health` uses. crdPresent is
 // false when the Application CRD is not yet registered — pre-bootstrap, which is
 // in-progress (not converged).
-func convergenceReport(ctx context.Context, client nodeGetter) (health.Report, bool, error) {
+func ConvergenceReport(ctx context.Context, client nodeGetter) (health.Report, bool, error) {
 	s, err := convergenceSample(ctx, client)
 	return s.report, s.crdPresent, err
 }
@@ -84,7 +84,7 @@ type convergenceSampleResult struct {
 	unparsed   int // Applications the API returned that we could not read
 }
 
-// convergenceSample is convergenceReport with the corpus accounted for.
+// convergenceSample is ConvergenceReport with the corpus accounted for.
 //
 // health.Report.Verdict() treats an EMPTY report as Converged, which is correct
 // for `llz ci health` — there the report accumulates many independent checks, and

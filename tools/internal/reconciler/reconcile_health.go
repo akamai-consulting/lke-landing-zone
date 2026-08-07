@@ -10,7 +10,7 @@
 // fails its readiness probe — which needs no OpenBao wiring; the precise
 // /v1/sys/seal-status probe and the OpenBao-authenticated credential-age gauges are
 // a follow-up that adds the OpenBao egress/auth once.
-package main
+package reconciler
 
 import (
 	"context"

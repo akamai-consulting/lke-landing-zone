@@ -9,12 +9,15 @@ package main
 // Lease parser. When `reconciler-runtime` is extracted, those two are the
 // interface it has to keep.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+)
 
 func installAssertReconcilerDeps() {
 	assertreconciler.Install(assertreconciler.Deps{
 		Exec:                  execOutput,
 		ExecCombined:          execCombined,
-		FirewallConfigMapName: firewallConfigMapName,
+		FirewallConfigMapName: reconciler.FirewallConfigMapName,
 	})
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 )
 
@@ -43,8 +44,8 @@ func installConvergeDeps(g globalOpts) {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		},
 		BaoLoopbackEnv:         baoread.LoopbackEnv,
-		FirewallDeploymentName: firewallDeploymentName,
-		FirewallConfigMapName:  firewallConfigMapName,
+		FirewallDeploymentName: reconciler.FirewallDeploymentName,
+		FirewallConfigMapName:  reconciler.FirewallConfigMapName,
 		// The in-cluster client is built HERE, not in converge: it is the
 		// reconciler's kube client and its nodeGetter interface, and a converge
 		// package that imported either would depend on the reconciler's client
@@ -54,7 +55,7 @@ func installConvergeDeps(g globalOpts) {
 			if err != nil {
 				return health.Report{}, false, err
 			}
-			return convergenceReport(ctx, client)
+			return reconciler.ConvergenceReport(ctx, client)
 		},
 	})
 }

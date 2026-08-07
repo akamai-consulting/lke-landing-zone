@@ -6,7 +6,7 @@
 // (gh_gitdata_native.go) to overlay.Repo, and reads the obj credential from
 // OpenBao. It runs on the slim distroless image (no git binary), so every git
 // operation is the git-data API, never exec("git"). Leader-gated by the caller.
-package main
+package reconciler
 
 import (
 	"context"

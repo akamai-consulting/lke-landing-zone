@@ -24,12 +24,17 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
 var version = "dev"
+
+// The reconciler package needs the same stamp and cannot read this one, so main
+// hands it over at init. One source, set once.
+func init() { reconciler.Version = version }
 
 const (
 	templateName       = "lke-landing-zone"
@@ -73,7 +78,7 @@ func newRootCmd() *cobra.Command {
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), componentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
-		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
+		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconciler.Cmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
 

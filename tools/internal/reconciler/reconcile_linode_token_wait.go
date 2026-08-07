@@ -1,4 +1,4 @@
-package main
+package reconciler
 
 // reconcile_linode_token_wait.go closes the first-boot gap between a
 // linode-dependent reconciler lane's TRIGGERS and its PRECONDITION.

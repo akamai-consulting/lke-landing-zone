@@ -371,6 +371,22 @@ categories:
 #        this shape: ghsecret before harbor, baoread before baolifecycle, this
 #        before reconciler-runtime -- which drops from 11 outbound to 7, and three
 #        of the seven are its own lanes in ci_volumes.go/ci_discover_firewall.go.
+#   55th: reconciler-runtime -> internal/reconciler   16,641 -> 14,937 (-1,704 / 117 files)
+#        THE LARGEST SINGLE MOVE IN THE CAMPAIGN, and the only DAEMON in the tree.
+#        11 files, 2,758 production lines that never terminate on purpose.
+#        FIRST DEPARTURE FROM THE FLAG-SETS-GO-BACK RULE, argued in cmds.go:
+#        reconcileOpts has 25 fields, 20 of them a --reconcile-<lane> bool paired
+#        with a resync interval. That struct IS the runtime configuration surface;
+#        exporting all 25 so main could set them trades a private struct for a
+#        public one and buys nothing.
+#        The seed-roots guard went inert A SECOND TIME -- the first repair walked
+#        ".." and cmd/llz's parent is cmd/, not tools/. It passed anyway because
+#        seed roots still happened to be in cmd/llz. Now "../..". A relative walk
+#        root is the same class of bug as the ReadDir(".") it replaced.
+#        NEW TRAP: a source-scanning test in an UNCHANGED package (assertreconciler
+#        reads reconcile.go) keeps returning a CACHED PASS after the file it reads
+#        has moved. `go test ./...` was green; `-count=1` was not. Run -count=1
+#        after every extraction.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -383,7 +399,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 16641
+    budget: 14937
     exact: true
     include:
       - "tools/cmd/llz/*.go"

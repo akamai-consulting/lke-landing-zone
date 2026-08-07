@@ -12,7 +12,7 @@
 // it. It is intentionally simple — a few-second lag on failover is fine because
 // the driving reconcilers are idempotent and level-based, so a brief gap or a
 // one-off double-run on takeover is harmless.
-package main
+package reconciler
 
 import (
 	"context"

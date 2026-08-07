@@ -24,6 +24,12 @@ import (
 // A guard scoped to a DIRECTORY follows the file it is written in, not the code
 // it guards. Walking tools/ costs a few milliseconds and cannot be hollowed out
 // by the next extraction.
+//
+// THE ROOT IS "../.." AND THAT IS NOT A DETAIL. The first repair of this guard
+// wrote ".." — the parent of cmd/llz is cmd/, not tools/ — and it passed anyway,
+// because seed roots still happened to be declared in cmd/llz itself. The very
+// next extraction moved them out and the seen==0 check fired again. A relative
+// walk root is the same class of bug as the ReadDir(".") it replaced.
 
 // The denylist guard above derives the protected set from the platform POLICIES,
 // which leaves a blind spot: a namespace that code WRITES but no policy names is
@@ -38,7 +44,7 @@ func TestSeedTargetsAreReservedNamespaces(t *testing.T) {
 	// `const x = "secret/<ns>/…"` — the shape every seed/sample root uses.
 	re := regexp.MustCompile(`(?m)^const [A-Za-z]+ = "secret/([a-z0-9-]+)/`)
 	seen := 0
-	walkErr := filepath.Walk("..", func(name string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk("../..", func(name string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

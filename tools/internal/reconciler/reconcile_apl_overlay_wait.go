@@ -1,4 +1,4 @@
-package main
+package reconciler
 
 // reconcile_apl_overlay_wait.go closes the first-boot gap between the apl-overlay
 // lane's only TRIGGER (its 300s resync floor) and its PRECONDITION (the obj

@@ -1,4 +1,4 @@
-package main
+package reconciler
 
 import (
 	"context"
@@ -232,9 +232,9 @@ func TestSampleConvergenceUnparsedAppsAreUnknownNotHealthy(t *testing.T) {
 
 // The gate reads the same report: an empty corpus must not exit 0.
 func TestHealthInClusterGateRejectsEmptyCorpus(t *testing.T) {
-	r, crdPresent, err := convergenceReport(context.Background(), convergenceServer(t, nil, 0))
+	r, crdPresent, err := ConvergenceReport(context.Background(), convergenceServer(t, nil, 0))
 	if err != nil {
-		t.Fatalf("convergenceReport: %v", err)
+		t.Fatalf("ConvergenceReport: %v", err)
 	}
 	if got := converge.ConvergenceExit(r, crdPresent, true); got != 2 {
 		t.Errorf("health-incluster on zero Applications: exit %d, want 2 (in-progress)", got)

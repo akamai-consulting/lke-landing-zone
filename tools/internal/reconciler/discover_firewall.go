@@ -1,4 +1,4 @@
-package main
+package reconciler
 
 // ci_discover_firewall.go implements `llz ci discover-firewall-config` — the
 // IN-CLUSTER replacement for the `bootstrap-cloud-firewall` CI seed. Runs on
@@ -39,7 +39,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 // kubeAPI is the slice of internal/kube the discover flow uses; seamed so tests
@@ -115,27 +114,10 @@ func resolveFirewallInputs(ctx context.Context, client firewallDiscoverer, linod
 	return firewallID, clusterID, vpcCIDR, nil
 }
 
-func ciDiscoverFirewallConfigCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "discover-firewall-config",
-		Short: "self-discover the firewall-controller config from this pod's node and reconcile the ConfigMap",
-		Long: "In-cluster replacement for the bootstrap-cloud-firewall CI seed. Resolves the\n" +
-			"node-pool firewall ID, LKE cluster ID and VPC subnet CIDR from this pod's own\n" +
-			"node via the Linode API (providerID → instance → attached firewall / VPC\n" +
-			"interface), reconciles them into the " + firewallConfigMapName + " ConfigMap,\n" +
-			"and rolls the controller Deployment only when a value changed.\n\n" +
-			"Env: NODE_NAME (downward API), LINODE_TOKEN (ESO-synced rotating token).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIDiscoverFirewallConfig(context.Background())
-		},
-	}
-}
-
 const (
-	firewallConfigMapPath  = "/api/v1/namespaces/kube-system/configmaps/" + firewallConfigMapName
+	firewallConfigMapPath  = "/api/v1/namespaces/kube-system/configmaps/" + FirewallConfigMapName
 	firewallConfigMapsPath = "/api/v1/namespaces/kube-system/configmaps"
-	firewallDeploymentPath = "/apis/apps/v1/namespaces/kube-system/deployments/" + firewallDeploymentName
+	firewallDeploymentPath = "/apis/apps/v1/namespaces/kube-system/deployments/" + FirewallDeploymentName
 )
 
 func runCIDiscoverFirewallConfig(ctx context.Context) error {
@@ -192,9 +174,9 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 		if _, err := k.CreateJSON(ctx, firewallConfigMapsPath, map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]string{"name": firewallConfigMapName, "namespace": "kube-system"},
+			"metadata":   map[string]string{"name": FirewallConfigMapName, "namespace": "kube-system"},
 		}); err != nil {
-			return fmt.Errorf("create %s: %w", firewallConfigMapName, err)
+			return fmt.Errorf("create %s: %w", FirewallConfigMapName, err)
 		}
 		cm = map[string]any{}
 	}
@@ -209,7 +191,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 
 	changes := firewallConfigChanges(existing, firewallID, clusterID, vpcCIDR)
 	if len(changes) == 0 {
-		fmt.Printf("%s already up to date (LINODE_FIREWALL_ID=%s) — nothing to do\n", firewallConfigMapName, firewallID)
+		fmt.Printf("%s already up to date (LINODE_FIREWALL_ID=%s) — nothing to do\n", FirewallConfigMapName, firewallID)
 		return nil
 	}
 	if err := k.MergePatch(ctx, firewallConfigMapPath, map[string]any{"data": changes}); err != nil {
@@ -221,7 +203,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		fmt.Printf("Set %s=%s in %s\n", key, changes[key], firewallConfigMapName)
+		fmt.Printf("Set %s=%s in %s\n", key, changes[key], FirewallConfigMapName)
 	}
 
 	// ── Roll the controller so configMapKeyRef env re-reads the new values ───
@@ -232,7 +214,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 		return err
 	}
 	if status == 404 {
-		fmt.Printf("Deployment %s not present — skipping restart (it will start from the patched ConfigMap)\n", firewallDeploymentName)
+		fmt.Printf("Deployment %s not present — skipping restart (it will start from the patched ConfigMap)\n", FirewallDeploymentName)
 		return nil
 	}
 
@@ -257,7 +239,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 			"(%s). The firewall-controller chart's Argo Application is likely reverting "+
 			"data.LINODE_FIREWALL_ID/LKE_CLUSTER_ID/VPC_CIDR (missing ignoreDifferences on those keys). "+
 			"Re-patched the values but skipping the restart to avoid a roll loop — fix the Application's "+
-			"ignoreDifferences.\n", firewallConfigMapName, desiredFP)
+			"ignoreDifferences.\n", FirewallConfigMapName, desiredFP)
 		return nil
 	}
 
@@ -272,9 +254,9 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 			"annotations": map[string]string{"kubectl.kubernetes.io/restartedAt": restartedAt},
 		}}},
 	}); err != nil {
-		return fmt.Errorf("restart %s after config change: %w", firewallDeploymentName, err)
+		return fmt.Errorf("restart %s after config change: %w", FirewallDeploymentName, err)
 	}
-	fmt.Printf("Rolled deployment %s (config changed to %s)\n", firewallDeploymentName, desiredFP)
+	fmt.Printf("Rolled deployment %s (config changed to %s)\n", FirewallDeploymentName, desiredFP)
 	return nil
 }
 
