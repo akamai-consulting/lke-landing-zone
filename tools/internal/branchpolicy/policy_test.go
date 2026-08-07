@@ -1,4 +1,4 @@
-package main
+package branchpolicy
 
 import (
 	"encoding/json"

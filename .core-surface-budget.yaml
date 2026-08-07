@@ -529,6 +529,18 @@ categories:
 #        the exact failure a preflight exists to catch. main s now delegates.
 #        Fifth time a copied with*() helper dragged its old package s wiring
 #        (installConfigReadinessDeps). A minimal local version, every time.
+#   68th: proc.Run + branch-policy   10,001 -> 9,830 (-171 / 91 files)
+#        UNDER 10,000, from 47,182.
+#        SIXTH ENABLER, SAME SHAPE AS THE LAST TWO: execArgv was TEN LINES with
+#        EIGHT callers, living in commands.go -- a 1,100-line file about the llz
+#        subcommands. A process runner is not a subcommand. Now internal/proc.Run.
+#        It is deliberately NOT in kubectlprobe: that package captures output so a
+#        check can classify it, this one hands stdout/stderr/stdin straight
+#        through because its callers run copier, gh, tofu and git for a human who
+#        needs to see -- and sometimes answer -- them.
+#        branch-policy is the second shipping case behind cloud-mutate@configured:
+#        GitHub is configured before Linode is provisioned, and resolving an input
+#        can mean CREATING one.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -541,7 +553,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 10001
+    budget: 9830
     exact: true
     include:
       - "tools/cmd/llz/*.go"

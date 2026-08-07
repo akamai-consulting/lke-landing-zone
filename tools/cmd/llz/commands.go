@@ -17,6 +17,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -167,7 +168,7 @@ func run(g globalOpts, argv ...string) error {
 	if g.dryRun {
 		return nil
 	}
-	return execArgv(argv, "")
+	return proc.Run(argv, "")
 }
 
 // runGated is run() for cloud-mutating commands: it refuses to execute without
@@ -184,19 +185,6 @@ func runGated(g globalOpts, argv ...string) error {
 		return nil
 	}
 	return run(g, argv...)
-}
-
-// execArgv runs argv with an optional stdin string (used to pipe secret values
-// into `gh secret set` without putting them in the process arguments).
-func execArgv(argv []string, stdin string) error {
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	} else {
-		cmd.Stdin = os.Stdin
-	}
-	return cmd.Run()
 }
 
 // ── commands ─────────────────────────────────────────────────────────────────
@@ -1127,7 +1115,7 @@ func sustainDeps() sustain.Deps {
 			return &sustain.Answers{Commit: a.Commit, SrcPath: a.SrcPath, Version: a.Version}, nil
 		},
 		Exec:    execOutput,
-		Run:     execArgv,
+		Run:     proc.Run,
 		Confirm: func() bool { return gopts.yes },
 	}
 }

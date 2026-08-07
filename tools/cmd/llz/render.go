@@ -32,6 +32,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -341,7 +342,7 @@ func untrackRenderedTfvars(relPrefix string) {
 	if len(tracked) == 0 {
 		return
 	}
-	if err := execArgv(append([]string{"git", "rm", "--cached", "-q", "--"}, tracked...), ""); err != nil {
+	if err := proc.Run(append([]string{"git", "rm", "--cached", "-q", "--"}, tracked...), ""); err != nil {
 		return // best-effort: no git, not a repo, etc.
 	}
 	fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored tfvars (rendered from the spec) — commit the removal:\n  %s\n",

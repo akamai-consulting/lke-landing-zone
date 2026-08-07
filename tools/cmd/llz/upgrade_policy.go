@@ -9,6 +9,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 )
 
@@ -190,7 +191,7 @@ func renderUpgradeScaffold(ref string) (string, func(), error) {
 	cleanup := func() { _ = os.RemoveAll(tmp) }
 	dst := filepath.Join(tmp, "scaffold")
 	argv := copierRenderArgv(a, ref, dst)
-	if err := execArgv(argv, ""); err != nil {
+	if err := proc.Run(argv, ""); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("render target scaffold for manifest policy: %w", err)
 	}

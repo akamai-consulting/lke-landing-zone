@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
@@ -21,6 +22,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -391,7 +393,7 @@ func pushSecrets(g globalOpts, env string) error {
 	}
 
 	if g.dryRun {
-		_ = lockInfraEnvBranchPolicy("", env) // prints the plan, changes nothing
+		_ = branchpolicy.Lock(gopts.dryRun, "", env) // prints the plan, changes nothing
 		return nil
 	}
 	if !g.yes {
@@ -400,19 +402,19 @@ func pushSecrets(g globalOpts, env string) error {
 		return nil
 	}
 	// Create + lock infra-<env> BEFORE pushing — `gh secret set --env` 404s if the
-	// environment doesn't exist yet, and lockInfraEnvBranchPolicy is what creates
+	// environment doesn't exist yet, and branchpolicy.Lock is what creates
 	// it. The lock is also the secret-injection boundary (main-only).
-	protErr := lockInfraEnvBranchPolicy("", env)
-	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
+	protErr := branchpolicy.Lock(gopts.dryRun, "", env)
+	if protErr != nil && !errors.Is(protErr, branchpolicy.ErrUnsupported) {
 		return protErr
 	}
 	for _, it := range items {
-		if err := execArgv(it.argv, it.val); err != nil {
+		if err := proc.Run(it.argv, it.val); err != nil {
 			return fmt.Errorf("%s: %w", it.argv[2], err) // argv[2] = the name
 		}
 	}
-	if errors.Is(protErr, errEnvProtectionUnsupported) {
-		warnEnvProtectionUnsupported("", env)
+	if errors.Is(protErr, branchpolicy.ErrUnsupported) {
+		branchpolicy.WarnUnsupported("", env)
 	}
 	return nil
 }

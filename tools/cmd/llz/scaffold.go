@@ -25,6 +25,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
@@ -268,10 +269,10 @@ func commitFiles(paths []string, msg string) bool {
 	if len(paths) == 0 {
 		return false
 	}
-	if err := execArgv(append([]string{"git", "add", "--"}, paths...), ""); err != nil {
+	if err := proc.Run(append([]string{"git", "add", "--"}, paths...), ""); err != nil {
 		return false
 	}
-	return execArgv([]string{"git", "commit", "-q", "--no-verify", "-m", msg}, "") == nil
+	return proc.Run([]string{"git", "commit", "-q", "--no-verify", "-m", msg}, "") == nil
 }
 
 func printEnvAddNextSteps(name, envFile string, o envAddOpts) {

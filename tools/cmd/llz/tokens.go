@@ -24,11 +24,13 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
@@ -623,7 +625,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(it.argv))
 	}
 	if g.dryRun {
-		_ = lockInfraEnvBranchPolicy(repo, env) // prints the plan only
+		_ = branchpolicy.Lock(gopts.dryRun, repo, env) // prints the plan only
 		return nil
 	}
 	if !g.yes {
@@ -632,24 +634,24 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	}
 	// Create + lock the infra-<env> environment BEFORE pushing secrets into it.
 	// `gh secret set --env infra-<env>` fetches that environment's public key and
-	// 404s if the environment doesn't exist yet; lockInfraEnvBranchPolicy is what
+	// 404s if the environment doesn't exist yet; branchpolicy.Lock is what
 	// creates it (PUT .../environments/infra-<env>), so it must run first — not
 	// after the push loop. It also restricts secret injection to ref=main (the
 	// real boundary that stops a feature-branch dispatch from exfiltrating the
 	// OpenBao unseal keys).
-	protErr := lockInfraEnvBranchPolicy(repo, env)
-	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
+	protErr := branchpolicy.Lock(gopts.dryRun, repo, env)
+	if protErr != nil && !errors.Is(protErr, branchpolicy.ErrUnsupported) {
 		return protErr
 	}
 	for _, it := range items {
-		if err := execArgv(it.argv, it.val); err != nil {
+		if err := proc.Run(it.argv, it.val); err != nil {
 			return fmt.Errorf("%s: %w", it.argv[3], err)
 		}
 	}
 	// The env was created + seeded; if its branch policy couldn't be applied
 	// (plan without environment protection), remind the operator at the END.
-	if errors.Is(protErr, errEnvProtectionUnsupported) {
-		warnEnvProtectionUnsupported(repo, env)
+	if errors.Is(protErr, branchpolicy.ErrUnsupported) {
+		branchpolicy.WarnUnsupported(repo, env)
 	}
 	return nil
 }
@@ -701,12 +703,12 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		return nil
 	}
 	for _, argv := range items {
-		if err := execArgv(argv, ""); err != nil {
+		if err := proc.Run(argv, ""); err != nil {
 			return fmt.Errorf("set %s on %s: %w", argv[3], tr, err)
 		}
 	}
 	if dispArgv != nil {
-		if err := execArgv(dispArgv, dispatch); err != nil {
+		if err := proc.Run(dispArgv, dispatch); err != nil {
 			return fmt.Errorf("set E2E_DISPATCH_TOKEN on %s: %w", tr, err)
 		}
 	}

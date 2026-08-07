@@ -1,4 +1,4 @@
-package main
+package branchpolicy
 
 // branchpolicy.go ports instance-scripts/ci/set-infra-env-branch-policy.sh into
 // llz. The wizard used to shell out to that script by relative path — but a
@@ -23,20 +23,21 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 )
 
-// errEnvProtectionUnsupported signals the infra-<env> environment was created (so
+// ErrUnsupported signals the infra-<env> environment was created (so
 // secrets can be pushed) but its main-only branch policy could NOT be applied
 // because the repo's plan doesn't include environment protection rules — private
 // repos need GitHub Pro/Team/Enterprise. Callers treat it as non-fatal and warn
 // the operator to lock it by hand. The branch policy is a defense-in-depth
 // boundary, not a prerequisite for the cluster to bootstrap.
-var errEnvProtectionUnsupported = errors.New("environment branch protection unsupported on this plan")
+var ErrUnsupported = errors.New("environment branch protection unsupported on this plan")
 
-// lockInfraEnvBranchPolicy restricts the infra-<env> GitHub Environment to
+// Lock restricts the infra-<env> GitHub Environment to
 // deployments from `main` only. Idempotent: skips an env that already has a
 // custom `main` policy. Respects --dry-run (prints, changes nothing).
-func lockInfraEnvBranchPolicy(repo, env string) error {
+func Lock(dryRun bool, repo, env string) error {
 	const branch = "main"
 	if repo == "" {
 		repo = instanceRepoFromAnswers()
@@ -47,7 +48,7 @@ func lockInfraEnvBranchPolicy(repo, env string) error {
 	envName := "infra-" + env
 
 	fmt.Fprintf(os.Stderr, "→ lock %s/environments/%s to ref=%s only\n", repo, envName, branch)
-	if gopts.dryRun {
+	if dryRun {
 		return nil
 	}
 
@@ -57,7 +58,7 @@ func lockInfraEnvBranchPolicy(repo, env string) error {
 	//    --env` needs the environment to exist, so this must succeed.
 	envJSON, err := ghAPIOut("repos/" + repo + "/environments/" + envName)
 	if err != nil {
-		if err := execArgv([]string{"gh", "api", "-X", "PUT",
+		if err := proc.Run([]string{"gh", "api", "-X", "PUT",
 			"repos/" + repo + "/environments/" + envName}, ""); err != nil {
 			return fmt.Errorf("create environment %s: %w", envName, err)
 		}
@@ -72,7 +73,7 @@ func lockInfraEnvBranchPolicy(repo, env string) error {
 	}
 
 	// 2. Already locked to a custom `main` policy? Skip.
-	if policyKind(envCfg) == "custom" && hasMainBranchRule(repo, envName, branch) {
+	if policyKind(envCfg) == "custom" && HasMainBranchRule(repo, envName, branch) {
 		fmt.Fprintf(os.Stderr, "  ✓ %s already restricted to %s — skipping\n", envName, branch)
 		return nil
 	}
@@ -104,7 +105,7 @@ func lockInfraEnvBranchPolicy(repo, env string) error {
 	}
 	if out, err := ghAPIBody("PUT", "repos/"+repo+"/environments/"+envName, payload); err != nil {
 		if isPlanLimitErr(out) {
-			return errEnvProtectionUnsupported // env exists; caller warns + continues
+			return ErrUnsupported // env exists; caller warns + continues
 		}
 		return fmt.Errorf("set policy mode on %s: %s", envName, strings.TrimSpace(out))
 	}
@@ -118,7 +119,7 @@ func lockInfraEnvBranchPolicy(repo, env string) error {
 		case strings.Contains(s, "already exists") || strings.Contains(s, "already been taken"):
 			fmt.Fprintf(os.Stderr, "  ✓ %s rule on %s already exists (race-tolerated)\n", branch, envName)
 		case isPlanLimitErr(s):
-			return errEnvProtectionUnsupported
+			return ErrUnsupported
 		default:
 			return fmt.Errorf("add %s rule on %s: %s", branch, envName, strings.TrimSpace(s))
 		}
@@ -147,10 +148,10 @@ func isPlanLimitErr(out string) bool {
 		(strings.Contains(l, "protection rule") && strings.Contains(l, "plan"))
 }
 
-// warnEnvProtectionUnsupported tells the operator the infra-<env> environment was
+// WarnUnsupported tells the operator the infra-<env> environment was
 // created + seeded but could NOT be locked to `main`, and how to do it by hand
 // once the plan allows. Printed at the END of the run so it isn't buried.
-func warnEnvProtectionUnsupported(repo, env string) {
+func WarnUnsupported(repo, env string) {
 	if repo == "" {
 		repo = instanceRepoFromAnswers()
 	}
@@ -179,9 +180,9 @@ func policyKind(envCfg map[string]any) string {
 	return "none"
 }
 
-// hasMainBranchRule reports whether the env's custom branch policies include a
+// HasMainBranchRule reports whether the env's custom branch policies include a
 // rule named `branch`.
-func hasMainBranchRule(repo, envName, branch string) bool {
+func HasMainBranchRule(repo, envName, branch string) bool {
 	out, err := ghAPIOut("repos/" + repo + "/environments/" + envName + "/Deployment-branch-policies")
 	if err != nil {
 		return false
