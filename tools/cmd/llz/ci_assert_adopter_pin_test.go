@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 )
 
 const (
@@ -74,7 +76,7 @@ func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 	if err == nil {
 		t.Fatal("gate passed an instance that would run a floating, main-tracking image")
 	}
-	for _, want := range []string{"would not pin", "ci-tofu:" + ciTofuTag, "llz render --check"} {
+	for _, want := range []string{"would not pin", "ci-tofu:" + versionpins.CITofuTag, "llz render --check"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message missing %q:\n%v", want, err)
 		}

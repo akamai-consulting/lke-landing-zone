@@ -1,4 +1,4 @@
-package main
+package templatecommit
 
 // template_commit.go resolves an instance's template pin to the COMMIT it names.
 //
@@ -12,7 +12,7 @@ package main
 // `llz ci assert-image-fresh` had a tag on one side and a sha on the other, so it
 // warned and passed. That skip is not a corner case: it is the DEFAULT shape of a
 // freshly scaffolded instance, because `llz tokens` computed TF_IMAGE as
-// `ci-tofu:<ciTofuTag>` — a tag build-images.yml republishes on EVERY push to main
+// `ci-tofu:<versionpins.CITofuTag>` — a tag build-images.yml republishes on EVERY push to main
 // — while copier pinned the tree at the latest release. The two diverge the moment
 // the next commit lands on main, and the instance's very first pipeline run fails
 // on `llz render --check`: the image's newer llz renders manifests the release's
@@ -37,6 +37,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
@@ -57,16 +58,16 @@ import (
 // proxy stopped taking effect and the test went from 10s (blocked, as intended)
 // to 0.5s (real round-trip).
 var (
-	githubAPIBase = "https://api.github.com"
+	GithubAPIBase = "https://api.github.com"
 	ghcrBase      = "https://ghcr.io"
 )
 
-// httpAskTimeout bounds every "can I ask?" request in this file. These run in
+// HTTPAskTimeout bounds every "can I ask?" request in this file. These run in
 // preflights whose whole point is to fail fast, so an unreachable endpoint has to
 // degrade to "could not ask" in seconds rather than stall a pipeline's first job.
-const httpAskTimeout = 10 * time.Second
+const HTTPAskTimeout = 10 * time.Second
 
-// resolveTemplateCommit returns the full commit sha that ref names in the template
+// Resolve returns the full commit sha that ref names in the template
 // repo, and whether the question could be ANSWERED at all.
 //
 // The two failure modes must not be conflated (same reasoning as ghFileSHA in
@@ -82,17 +83,17 @@ const httpAskTimeout = 10 * time.Second
 // timeout — so a hung api.github.com would have stalled that step until the job's
 // own timeout-minutes, turning a check that used to be purely local into a way to
 // burn fifteen minutes. A bounded http.Client cannot do that. `gh` is still used,
-// but only for the strictly LOCAL job of producing a credential (see githubToken).
+// but only for the strictly LOCAL job of producing a credential (see GithubToken).
 //
 // Package var so tests substitute the whole round-trip.
-var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
+var Resolve = func(repo, ref string) (sha string, ok bool) {
 	if repo == "" || ref == "" {
 		return "", false
 	}
 	// PathEscape, not raw: a ref may legally contain characters a URL path treats
 	// specially. Tags do not in practice, but --template-ref accepts a branch, and
 	// `feat/x` unescaped would address a different endpoint shape entirely.
-	u := githubAPIBase + "/repos/" + repo + "/commits/" + url.PathEscape(ref)
+	u := GithubAPIBase + "/repos/" + repo + "/commits/" + url.PathEscape(ref)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", false
@@ -103,10 +104,10 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 	// per-IP limit that shared CI egress makes real, and is REQUIRED for a private
 	// fork. This is the path that matters for an already-scaffolded instance, whose
 	// vendored workflow predates the GH_TOKEN the preflight step now sets.
-	if t := githubToken(); t != "" {
+	if t := GithubToken(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
-	resp, err := (&http.Client{Timeout: httpAskTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: HTTPAskTimeout}).Do(req)
 	if err != nil {
 		return "", false
 	}
@@ -123,7 +124,7 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 	return r.SHA, true
 }
 
-// githubToken is a credential FOR github.com, or "" for anonymous.
+// GithubToken is a credential FOR github.com, or "" for anonymous.
 //
 // `gh auth token` reads the local config/keyring and makes NO network call, so
 // leaning on it here does not reintroduce the unbounded shell-out this file
@@ -131,9 +132,9 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 // otherwise cost: an operator working against a PRIVATE template fork, who is
 // authenticated to gh but has no token in their environment.
 //
-// HOST-SCOPED, and that is a security property, not tidiness. githubAPIBase is
+// HOST-SCOPED, and that is a security property, not tidiness. GithubAPIBase is
 // api.github.com — the template repo is a github.com repo in every path here
-// (instanceTemplateRepo only accepts an owner/repo slug and otherwise falls back
+// (InstanceTemplateRepo only accepts an owner/repo slug and otherwise falls back
 // to the first-party default). But GH_HOST points the ambient environment at a
 // different forge in the GHES e2e lane and in any GHE-hosted instance, and there:
 //
@@ -145,7 +146,7 @@ var resolveTemplateCommit = func(repo, ref string) (sha string, ok bool) {
 // credential to a third party that can only reject it. So the env token is used
 // only when the environment is actually pointed at github.com, and `gh` is asked
 // for the github.com token by name.
-func githubToken() string {
+func GithubToken() string {
 	if envIsGitHubDotCom() {
 		if t := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); t != "" {
 			return t
@@ -189,10 +190,10 @@ func envIsGitHubDotCom() bool {
 // harmful here: `repos//home/me/template/commits/v1` is a request that can only 404.
 var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-// instanceTemplateRepo is the template repo this instance was scaffolded from,
+// InstanceTemplateRepo is the template repo this instance was scaffolded from,
 // read from copier's `_src_path`. Falls back to the first-party template so a
 // pre-copier or hand-assembled instance still resolves.
-func instanceTemplateRepo() string {
+func InstanceTemplateRepo() string {
 	if a, _ := answers.Read("."); a != nil {
 		if r := sustain.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
 			return r
@@ -213,15 +214,15 @@ func pinnedImageTag(repo, ref string) (string, bool) {
 	if len(ref) == 40 && hexSHARe.MatchString(ref) {
 		return "sha-" + ref, true
 	}
-	sha, ok := resolveTemplateCommit(repo, ref)
+	sha, ok := Resolve(repo, ref)
 	if !ok {
 		return "", false
 	}
 	return "sha-" + sha, true
 }
 
-// ciImageRef assembles a ci image reference for the template org.
-func ciImageRef(org, image, tag string) string {
+// CIImageRef assembles a ci image reference for the template org.
+func CIImageRef(org, image, tag string) string {
 	return fmt.Sprintf("ghcr.io/%s/%s:%s", strings.ToLower(org), image, tag)
 }
 
@@ -229,8 +230,8 @@ func ciImageRef(org, image, tag string) string {
 // run, plus whether that pin is IMMUTABLE (pinned=true) or the floating fallback.
 //
 // WHY NOT THE VERSION TAG, which is what this computed until an adopter's first
-// pipeline run failed on it. ciTofuTag is the OpenTofu version (`1.12.5`) and
-// ciKubernetesTag the kubectl one, and build-images.yml republishes BOTH on every
+// pipeline run failed on it. versionpins.CITofuTag is the OpenTofu version (`1.12.5`) and
+// versionpins.CIKubernetesTag the kubectl one, and build-images.yml republishes BOTH on every
 // push to main — they are `:latest` wearing a version number. An instance scaffolded
 // at a release therefore got a tree rendered by the release's llz and an image
 // running main's, guaranteed to diverge the moment the next commit landed. It did:
@@ -262,7 +263,7 @@ func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pi
 	return ciImageVarsForTag(tag, ref)
 }
 
-// computeCIImageVarsForCommit is computeCIImageVars for a caller that has ALREADY
+// ComputeImageVarsForCommit is computeCIImageVars for a caller that has ALREADY
 // resolved the pin — it skips the round-trip rather than repeating it.
 //
 // Not an optimisation. `llz ci assert-adopter-pin` resolves the tag as its own
@@ -270,28 +271,28 @@ func computeCIImageVars(templateRepo, ref string) (tfImage, kubeImage string, pi
 // independently, a blip between the two produced "`llz tokens` would not pin …
 // could not resolve", a hard gate failure blaming the pin computation for a
 // transient network error. One resolution, one verdict.
-func computeCIImageVarsForCommit(commit, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
+func ComputeImageVarsForCommit(commit, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
 	return ciImageVarsForTag("sha-"+commit, ref)
 }
 
 // floatingImageVars is the fallback pair: the version tags that track main.
 func floatingImageVars(why string) (string, string, bool, string) {
-	return ciImageRef(templateid.DefaultOrg, "ci-tofu", ciTofuTag),
-		ciImageRef(templateid.DefaultOrg, "ci-kubernetes", ciKubernetesTag),
+	return CIImageRef(templateid.DefaultOrg, "ci-tofu", versionpins.CITofuTag),
+		CIImageRef(templateid.DefaultOrg, "ci-kubernetes", versionpins.CIKubernetesTag),
 		false, why
 }
 
 // ciImageVarsForTag builds the pinned pair for an image tag and verifies both are
 // pullable, falling back to the floating tags if either is definitively absent.
 func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool, reason string) {
-	tf := ciImageRef(templateid.DefaultOrg, "ci-tofu", tag)
-	kube := ciImageRef(templateid.DefaultOrg, "ci-kubernetes", tag)
+	tf := CIImageRef(templateid.DefaultOrg, "ci-tofu", tag)
+	kube := CIImageRef(templateid.DefaultOrg, "ci-kubernetes", tag)
 	for _, im := range []string{tf, kube} {
 		// asked=false (registry unreachable) must NOT downgrade the pin: an offline
 		// operator would then silently get the floating tag, which is the exact
 		// mis-configuration this function exists to stop producing. Only a definite
 		// "not there" falls back.
-		if published, asked := imagePublished(im); asked && !published {
+		if published, asked := ImagePublished(im); asked && !published {
 			return floatingImageVars(fmt.Sprintf("%s was never published — the commit %s names predates build-images.yml "+
 				"running on every main push (#102), or that build failed", im, ref))
 		}
@@ -299,15 +300,15 @@ func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool,
 	return tf, kube, true, ""
 }
 
-// computeAndReportImageVars fills the ci image variables the caller still needs and
+// ComputeAndReportImageVars fills the ci image variables the caller still needs and
 // explains a fallback if there was one. Split out of `llz tokens` so the fill/report
 // decision is unit-testable rather than buried in a 200-line interactive wizard.
 //
 // Writes ONLY the variables asked for: an operator's existing TF_IMAGE is theirs,
 // and this command's contract is to skip what is already configreadiness.Satisfied.
-func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
+func ComputeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 	ref := answers.PinnedTemplateRef()
-	tfImage, kubeImage, pinned, why := computeCIImageVars(instanceTemplateRepo(), ref)
+	tfImage, kubeImage, pinned, why := computeCIImageVars(InstanceTemplateRepo(), ref)
 	if needTF {
 		vars["TF_IMAGE"] = tfImage
 	}
@@ -327,14 +328,14 @@ func computeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 		"      pin %q. The first pipeline run will say so (`llz ci assert-image-fresh`) rather\n"+
 		"      than fail obscurely later. Upgrading to a release whose ci images were published\n"+
 		"      is the durable fix.\n",
-		color.Yellow("!"), why, ciTofuTag, ciKubernetesTag, ref)
+		color.Yellow("!"), why, versionpins.CITofuTag, versionpins.CIKubernetesTag, ref)
 }
 
-// ciImageSkew is one ci image variable whose recorded value no longer names the
+// ImageSkew is one ci image variable whose recorded value no longer names the
 // commit the instance's template pin resolves to.
-type ciImageSkew struct{ Name, Have, Want string }
+type ImageSkew struct{ Name, Have, Want string }
 
-// staleCIImageVars reports which of TF_IMAGE / KUBE_IMAGE name a commit other
+// StaleCIImageVars reports which of TF_IMAGE / KUBE_IMAGE name a commit other
 // than ref's, given a lookup for whatever the instance currently records.
 //
 // WHY THIS EXISTS. Until #407 the ci image vars were floating version tags, so
@@ -359,12 +360,12 @@ type ciImageSkew struct{ Name, Have, Want string }
 //     re-pin onto them would make a correctly pinned instance worse. (An
 //     unreachable REGISTRY is not this case: ciImageVarsForTag deliberately
 //     keeps the pin when it could not ask, so the skew is still reported.)
-func staleCIImageVars(ref string, recorded func(string) string) []ciImageSkew {
+func StaleCIImageVars(ref string, recorded func(string) string) []ImageSkew {
 	if ref = strings.TrimSpace(ref); ref == "" {
 		return nil
 	}
 	// Read what is recorded BEFORE resolving anything. A fresh instance has neither
-	// variable set — filling those is computeAndReportImageVars' job, not this
+	// variable set — filling those is ComputeAndReportImageVars' job, not this
 	// one's — and computeCIImageVars below costs up to five network requests, which
 	// `llz upgrade` should not spend to discover there was nothing to compare.
 	have := make([]string, len(ciImageVars))
@@ -377,40 +378,40 @@ func staleCIImageVars(ref string, recorded func(string) string) []ciImageSkew {
 	if empty {
 		return nil
 	}
-	tfImage, kubeImage, pinned, _ := computeCIImageVars(instanceTemplateRepo(), ref)
+	tfImage, kubeImage, pinned, _ := computeCIImageVars(InstanceTemplateRepo(), ref)
 	if !pinned {
 		return nil
 	}
 	want := [...]string{tfImage, kubeImage}
-	var out []ciImageSkew
+	var out []ImageSkew
 	for i, w := range ciImageVars {
-		if have[i] == "" || have[i] == want[i] || !llzComputedImageRef(have[i], w.image) {
+		if have[i] == "" || have[i] == want[i] || !ComputedImageRef(have[i], w.image) {
 			continue
 		}
-		out = append(out, ciImageSkew{Name: w.name, Have: have[i], Want: want[i]})
+		out = append(out, ImageSkew{Name: w.name, Have: have[i], Want: want[i]})
 	}
 	return out
 }
 
 // ciImageVars pairs each ci image variable with the GHCR repository it names.
-// Order is load-bearing: staleCIImageVars indexes computeCIImageVars' (tf, kube)
+// Order is load-bearing: StaleCIImageVars indexes computeCIImageVars' (tf, kube)
 // return against it.
 var ciImageVars = [...]struct{ name, image string }{
 	{"TF_IMAGE", "ci-tofu"},
 	{"KUBE_IMAGE", "ci-kubernetes"},
 }
 
-// llzComputedImageRef reports whether ref is one LLZ itself produces for image —
+// ComputedImageRef reports whether ref is one LLZ itself produces for image —
 // the template org's GHCR repository, carrying any tag. It is the test for "this
 // value is ours to re-pin"; another registry, org, or image belongs to the
 // operator. templateid.DefaultOrg (not the instance's upstream_org) because that is
 // where ciImageVarsForTag/floatingImageVars build every reference they hand out.
-func llzComputedImageRef(ref, image string) bool {
-	prefix := ciImageRef(templateid.DefaultOrg, image, "")
+func ComputedImageRef(ref, image string) bool {
+	prefix := CIImageRef(templateid.DefaultOrg, image, "")
 	return strings.HasPrefix(ref, prefix) && len(ref) > len(prefix)
 }
 
-// imagePublished reports whether an image reference resolves in the registry, and
+// ImagePublished reports whether an image reference resolves in the registry, and
 // whether the registry could be ASKED at all. The two are not the same and callers
 // must not conflate them (see computeCIImageVars).
 //
@@ -422,13 +423,13 @@ func llzComputedImageRef(ref, image string) bool {
 // the same question over plain HTTP.
 //
 // Package var so tests substitute the round-trip.
-var imagePublished = func(image string) (published, asked bool) {
+var ImagePublished = func(image string) (published, asked bool) {
 	// ghcr.io/<owner>/<name>:<tag>
 	rest, tag, found := strings.Cut(strings.TrimPrefix(image, "ghcr.io/"), ":")
 	if !found || rest == "" || tag == "" {
 		return false, false
 	}
-	client := &http.Client{Timeout: httpAskTimeout}
+	client := &http.Client{Timeout: HTTPAskTimeout}
 
 	var tok struct {
 		Token string `json:"token"`

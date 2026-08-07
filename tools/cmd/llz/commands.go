@@ -22,6 +22,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -904,7 +905,7 @@ func printUpgradeSummary(oldRef, newRef string) {
 // next and the two must read as the same instruction.
 var reportCIImageSkew = func(ref string) {
 	local := readEnvFile(".llz/vars.env")
-	skew := staleCIImageVars(ref, func(k string) string { return local[k] })
+	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
 	if len(skew) == 0 {
 		return
 	}

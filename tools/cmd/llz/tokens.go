@@ -32,21 +32,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
-)
-
-// CI image tags published by build-images.yml; TF_IMAGE/KUBE_IMAGE derive from
-// these + the template org.
-// A THIRD restatement of the image pin, beyond the two the Dockerfile header
-// names (build-images.yml's matrix and lint.yml's fallback). It was still on
-// 1.9.8 after both of those moved, which would have scaffolded new instances
-// onto a HashiCorp Terraform image while every caller invoked `tofu`.
-const (
-	ciTofuTag       = "1.12.5"
-	ciKubernetesTag = "1.31.0"
 )
 
 func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) error {
@@ -82,7 +72,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	instSt := configreadiness.FetchLiveState(instanceRepo, deployEnv)
 	var tmplSt configreadiness.LiveState
 	if admin {
-		tmplSt = configreadiness.FetchLiveState(templateRepo(), "")
+		tmplSt = configreadiness.FetchLiveState(templateid.Repo(), "")
 	}
 	if n := configreadiness.PrepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
@@ -95,9 +85,9 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// "nothing to do", and their re-pin has no route that works: the fill at the
 	// bottom of this function skips anything already set, by design.
 	//
-	// A fresh instance costs nothing here — staleCIImageVars returns before its
+	// A fresh instance costs nothing here — templatecommit.StaleCIImageVars returns before its
 	// network round-trips when neither variable is recorded yet.
-	repin := staleCIImageVars(answers.PinnedTemplateRef(), func(k string) string {
+	repin := templatecommit.StaleCIImageVars(answers.PinnedTemplateRef(), func(k string) string {
 		return firstNonEmpty(vars[k], instSt.Value(k))
 	})
 	for _, s := range repin {
@@ -255,7 +245,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// unpinned when they are already set to something the operator chose.
 	needTF, needKube := !have("TF_IMAGE", false), !have("KUBE_IMAGE", false)
 	if needTF || needKube {
-		computeAndReportImageVars(vars, needTF, needKube)
+		templatecommit.ComputeAndReportImageVars(vars, needTF, needKube)
 	}
 
 	// ── Optional secrets ─────────────────────────────────────────────────────
@@ -374,7 +364,7 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	instSt := configreadiness.FetchLiveState(instanceRepo, env)
 	var tmplSt configreadiness.LiveState
 	if admin {
-		tmplSt = configreadiness.FetchLiveState(templateRepo(), "")
+		tmplSt = configreadiness.FetchLiveState(templateid.Repo(), "")
 	}
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
 	// Actively probe validity, not just presence — a set-but-dead token is the
@@ -495,11 +485,9 @@ func remediateMissingRepo(repo string) {
 	fmt.Fprintln(os.Stderr, "  …or re-scaffold with push next time: `llz new <name> --push --yes`.")
 }
 
-func templateRepo() string { return templateid.DefaultOrg + "/" + templateid.Name }
-
 func adminBanner(admin bool) string {
 	if admin {
-		return " [ADMIN: + " + templateRepo() + " e2e harness]"
+		return " [ADMIN: + " + templateid.Repo() + " e2e harness]"
 	}
 	return ""
 }
@@ -514,7 +502,7 @@ func repoSlug(repo string) string {
 // repinPlanNote is the dry-run tail that keeps a repin-only run from reporting
 // "0 missing REQUIRED item(s)" and nothing else — which reads as "no work" for
 // precisely the run that has some.
-func repinPlanNote(repin []ciImageSkew) string {
+func repinPlanNote(repin []templatecommit.ImageSkew) string {
 	if len(repin) == 0 {
 		return ""
 	}
@@ -647,7 +635,7 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 // configureTemplateHarness sets the template repo's e2e vars + E2E_DISPATCH_TOKEN
 // (skipping anything already set).
 func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st configreadiness.LiveState) error {
-	tr := templateRepo()
+	tr := templateid.Repo()
 	fmt.Printf("\n%s e2e harness on %s\n", color.Bold("[admin]"), tr)
 	want := map[string]string{
 		"E2E_INSTANCE_REPO": instanceRepo,

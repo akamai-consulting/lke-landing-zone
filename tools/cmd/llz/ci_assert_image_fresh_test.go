@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/spf13/cobra"
 )
 
@@ -12,9 +13,9 @@ import (
 // a real request to api.github.com, which is both slow and a hermeticity break.
 func stubTemplateCommit(t *testing.T, fn func(repo, ref string) (string, bool)) {
 	t.Helper()
-	prev := resolveTemplateCommit
-	t.Cleanup(func() { resolveTemplateCommit = prev })
-	resolveTemplateCommit = fn
+	prev := templatecommit.Resolve
+	t.Cleanup(func() { templatecommit.Resolve = prev })
+	templatecommit.Resolve = fn
 }
 
 func TestRunAssertImageFresh(t *testing.T) {

@@ -584,6 +584,18 @@ categories:
 #        option either -- write-repo s states are {scaffolded, upgraded}, so a
 #        promote-time repo write is INEXPRESSIBLE. Reverted. scaffold.go is
 #        therefore genuinely blocked, by two decisions that are both correct.
+#   72nd: template-commit -> internal/templatecommit   8,870 -> 8,651 (-219 / 86 files)
+#        Closure 7 -> 4 after two enablers, both FACTS IN THE WRONG FILE:
+#          templateRepo   one line, six callers  -> templateid.Repo()
+#          ciTofuTag/ciKubernetesTag, three      -> versionpins.CI*Tag
+#        The second has a SCAR: ciTofuTag was still 1.9.8 after build-images.yml
+#        and lint.yml had both moved, which would have scaffolded instances onto a
+#        HashiCorp Terraform image while every caller invoked `tofu`. That is the
+#        drift internal/versionpins exists to catch, so the value it catches drift
+#        IN should not sit in a file about GitHub tokens.
+#        THREE test files this move held tests with DIFFERENT SUBJECTS -- the
+#        computation went to the new package while reportCIImageSkew,
+#        printNextSteps and repinPlanNote tests all went back to main.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -596,7 +608,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 8870
+    budget: 8651
     exact: true
     include:
       - "tools/cmd/llz/*.go"

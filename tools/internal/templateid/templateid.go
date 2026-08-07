@@ -21,5 +21,10 @@ const Name = "lke-landing-zone"
 // different org records it in .copier-answers.yml.
 const DefaultOrg = "akamai-consulting"
 
+// Repo is the template's own owner/name. Six files in package main built this
+// string, and one of them built ExampleRepo from the same two halves — the shape
+// that lets two callers disagree about one fact.
+func Repo() string { return DefaultOrg + "/" + Name }
+
 // ExampleRepo is the owner/name the admin fallback resolves to.
 func ExampleRepo() string { return DefaultOrg + "/" + Name + "-example" }

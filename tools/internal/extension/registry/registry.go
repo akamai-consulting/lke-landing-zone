@@ -83,6 +83,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
@@ -140,6 +141,7 @@ var declarations = []func() extension.Extension{
 	envdef.Extension,
 	buildpreflight.Extension,
 	selfupgrade.Extension,
+	templatecommit.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

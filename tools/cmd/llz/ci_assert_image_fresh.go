@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
 	"github.com/spf13/cobra"
 )
 
@@ -63,7 +64,7 @@ func ciAssertImageFreshCmd() *cobra.Command {
 					return err
 				}
 			}
-			return runAssertImageFresh(version, firstNonEmpty(templateRef, answers.PinnedTemplateRef()), instanceTemplateRepo())
+			return runAssertImageFresh(version, firstNonEmpty(templateRef, answers.PinnedTemplateRef()), templatecommit.InstanceTemplateRepo())
 		},
 	}
 	c.Flags().StringVar(&templateRef, "template-ref", "", "override the ref compared against the baked llz build (default: the instance's pin)")
@@ -91,7 +92,7 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	// as commits. See template_commit.go.
 	pinCommit := templateRef
 	if isDevBuild(bakedVersion) && !hexSHARe.MatchString(templateRef) {
-		sha, ok := resolveTemplateCommit(templateRepo, templateRef)
+		sha, ok := templatecommit.Resolve(templateRepo, templateRef)
 		if !ok {
 			fmt.Fprintf(os.Stderr, "::warning::assert-image-fresh: template-ref %q is not a SHA and could not be resolved to one — cannot compare against baked dev build %q; skipping.\n", templateRef, strings.TrimSpace(bakedVersion))
 			return nil

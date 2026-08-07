@@ -1,4 +1,4 @@
-package main
+package templatecommit
 
 import (
 	"errors"
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 )
 
 func TestPinnedImageTag(t *testing.T) {
@@ -68,9 +69,9 @@ func TestPinnedImageTag(t *testing.T) {
 // ghcr.io.
 func stubImagePublished(t *testing.T, fn func(image string) (bool, bool)) {
 	t.Helper()
-	prev := imagePublished
-	t.Cleanup(func() { imagePublished = prev })
-	imagePublished = fn
+	prev := ImagePublished
+	t.Cleanup(func() { ImagePublished = prev })
+	ImagePublished = fn
 }
 
 func TestComputeCIImageVars(t *testing.T) {
@@ -161,10 +162,10 @@ func assertFloating(t *testing.T, tf, kube string, pinned bool, why string) {
 	if why == "" {
 		t.Error("reason is empty, but the caller has to be able to explain the fallback")
 	}
-	if want := "ghcr.io/akamai-consulting/ci-tofu:" + ciTofuTag; tf != want {
+	if want := "ghcr.io/akamai-consulting/ci-tofu:" + versionpins.CITofuTag; tf != want {
 		t.Errorf("TF_IMAGE = %q, want %q", tf, want)
 	}
-	if want := "ghcr.io/akamai-consulting/ci-kubernetes:" + ciKubernetesTag; kube != want {
+	if want := "ghcr.io/akamai-consulting/ci-kubernetes:" + versionpins.CIKubernetesTag; kube != want {
 		t.Errorf("KUBE_IMAGE = %q, want %q", kube, want)
 	}
 }
@@ -174,8 +175,8 @@ func assertFloating(t *testing.T, tf, kube string, pinned bool, why string) {
 // not ask", never "not there" — the latter downgrades a pin on no evidence.
 func TestImagePublished(t *testing.T) {
 	for _, bad := range []string{"", "ghcr.io/acme/ci-tofu", "ghcr.io/:tag", "ghcr.io/acme/ci-tofu:"} {
-		if published, asked := imagePublished(bad); published || asked {
-			t.Errorf("imagePublished(%q) = %v,%v; want false,false", bad, published, asked)
+		if published, asked := ImagePublished(bad); published || asked {
+			t.Errorf("ImagePublished(%q) = %v,%v; want false,false", bad, published, asked)
 		}
 	}
 }
@@ -191,8 +192,8 @@ func tagOf(ref string) string {
 func TestCIImageRef(t *testing.T) {
 	// The org is lower-cased: GHCR paths are case-sensitive and `templateid.DefaultOrg`
 	// is the human-cased GitHub org.
-	if got := ciImageRef("Akamai-Consulting", "ci-tofu", "sha-abc"); got != "ghcr.io/akamai-consulting/ci-tofu:sha-abc" {
-		t.Errorf("ciImageRef = %q", got)
+	if got := CIImageRef("Akamai-Consulting", "ci-tofu", "sha-abc"); got != "ghcr.io/akamai-consulting/ci-tofu:sha-abc" {
+		t.Errorf("CIImageRef = %q", got)
 	}
 }
 
@@ -201,8 +202,8 @@ func TestInstanceTemplateRepo(t *testing.T) {
 		writeInstanceDir(t, map[string]string{
 			".copier-answers.yml": "_src_path: gh:acme/lke-landing-zone\n_commit: v0.0.39\n",
 		})
-		if got := instanceTemplateRepo(); got != "acme/lke-landing-zone" {
-			t.Errorf("instanceTemplateRepo = %q", got)
+		if got := InstanceTemplateRepo(); got != "acme/lke-landing-zone" {
+			t.Errorf("InstanceTemplateRepo = %q", got)
 		}
 	})
 	// A local-path _src_path (`copier copy ../template`) normalizes to something with
@@ -212,14 +213,14 @@ func TestInstanceTemplateRepo(t *testing.T) {
 		writeInstanceDir(t, map[string]string{
 			".copier-answers.yml": "_src_path: /home/me/template\n_commit: v0.0.39\n",
 		})
-		if got := instanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
-			t.Errorf("instanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
+		if got := InstanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
+			t.Errorf("InstanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
 		}
 	})
 	t.Run("falls back outside an instance", func(t *testing.T) {
 		writeInstanceDir(t, nil)
-		if got := instanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
-			t.Errorf("instanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
+		if got := InstanceTemplateRepo(); got != sustain.DefaultTemplateRepo {
+			t.Errorf("InstanceTemplateRepo = %q, want %q", got, sustain.DefaultTemplateRepo)
 		}
 	})
 }
@@ -238,7 +239,7 @@ func writeInstanceDir(t *testing.T, files map[string]string) {
 
 // ── The two network legs, against a real server ──────────────────────────────
 //
-// These exercise resolveTemplateCommit and imagePublished END TO END rather than
+// These exercise Resolve and ImagePublished END TO END rather than
 // stubbing them out: URL shape, headers, status handling, body decoding. Every
 // other test in this file replaces the round-trip, so without these the
 // round-trip itself has no coverage — and it is where the mistakes live (the GHCR
@@ -249,9 +250,9 @@ func serveGitHub(t *testing.T, h http.HandlerFunc) {
 	t.Helper()
 	s := httptest.NewServer(h)
 	t.Cleanup(s.Close)
-	prev := githubAPIBase
-	t.Cleanup(func() { githubAPIBase = prev })
-	githubAPIBase = s.URL
+	prev := GithubAPIBase
+	t.Cleanup(func() { GithubAPIBase = prev })
+	GithubAPIBase = s.URL
 	// No ambient credential: these assert the anonymous shape unless a case says
 	// otherwise, and a developer's real GH_TOKEN must not leak into the assertions.
 	t.Setenv("GH_TOKEN", "")
@@ -268,9 +269,9 @@ func TestResolveTemplateCommitOverHTTP(t *testing.T) {
 			gotPath, gotAccept, gotAuth = r.URL.Path, r.Header.Get("Accept"), r.Header.Get("Authorization")
 			fmt.Fprintf(w, `{"sha":%q}`, sha)
 		})
-		got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39")
+		got, ok := Resolve("acme/tmpl", "v0.0.39")
 		if !ok || got != sha {
-			t.Fatalf("resolveTemplateCommit = %q,%v", got, ok)
+			t.Fatalf("Resolve = %q,%v", got, ok)
 		}
 		if want := "/repos/acme/tmpl/commits/v0.0.39"; gotPath != want {
 			t.Errorf("path = %q, want %q", gotPath, want)
@@ -290,7 +291,7 @@ func TestResolveTemplateCommitOverHTTP(t *testing.T) {
 			fmt.Fprintf(w, `{"sha":%q}`, sha)
 		})
 		t.Setenv("GH_TOKEN", "s3cret")
-		if _, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39"); !ok {
+		if _, ok := Resolve("acme/tmpl", "v0.0.39"); !ok {
 			t.Fatal("resolve failed")
 		}
 		if gotAuth != "Bearer s3cret" {
@@ -305,7 +306,7 @@ func TestResolveTemplateCommitOverHTTP(t *testing.T) {
 			gotRaw = r.URL.EscapedPath()
 			fmt.Fprintf(w, `{"sha":%q}`, sha)
 		})
-		if _, ok := resolveTemplateCommit("acme/tmpl", "feat/x"); !ok {
+		if _, ok := Resolve("acme/tmpl", "feat/x"); !ok {
 			t.Fatal("resolve failed")
 		}
 		if !strings.Contains(gotRaw, "feat%2Fx") {
@@ -329,18 +330,18 @@ func TestResolveTemplateCommitOverHTTP(t *testing.T) {
 	} {
 		t.Run("degrades on "+tc.name, func(t *testing.T) {
 			serveGitHub(t, tc.h)
-			if got, ok := resolveTemplateCommit("acme/tmpl", "v0.0.39"); ok || got != "" {
-				t.Fatalf("resolveTemplateCommit = %q,%v; want \"\",false", got, ok)
+			if got, ok := Resolve("acme/tmpl", "v0.0.39"); ok || got != "" {
+				t.Fatalf("Resolve = %q,%v; want \"\",false", got, ok)
 			}
 		})
 	}
 
 	t.Run("an empty repo or ref asks nothing", func(t *testing.T) {
 		serveGitHub(t, func(http.ResponseWriter, *http.Request) { t.Error("request made for an empty repo/ref") })
-		if _, ok := resolveTemplateCommit("", "v1"); ok {
+		if _, ok := Resolve("", "v1"); ok {
 			t.Error("empty repo resolved")
 		}
-		if _, ok := resolveTemplateCommit("o/r", ""); ok {
+		if _, ok := Resolve("o/r", ""); ok {
 			t.Error("empty ref resolved")
 		}
 	})
@@ -369,9 +370,9 @@ func TestImagePublishedOverHTTP(t *testing.T) {
 
 	t.Run("a published multi-arch image", func(t *testing.T) {
 		seen := serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-		published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc")
+		published, asked := ImagePublished("ghcr.io/acme/ci-tofu:sha-abc")
 		if !published || !asked {
-			t.Fatalf("imagePublished = %v,%v; want true,true", published, asked)
+			t.Fatalf("ImagePublished = %v,%v; want true,true", published, asked)
 		}
 		if len(*seen) != 2 {
 			t.Fatalf("made %d request(s), want 2 (token then manifest)", len(*seen))
@@ -403,9 +404,9 @@ func TestImagePublishedOverHTTP(t *testing.T) {
 
 	t.Run("404 is a definite no", func(t *testing.T) {
 		serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
-		published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc")
+		published, asked := ImagePublished("ghcr.io/acme/ci-tofu:sha-abc")
 		if published || !asked {
-			t.Fatalf("imagePublished = %v,%v; want false,true — a 404 IS an answer", published, asked)
+			t.Fatalf("ImagePublished = %v,%v; want false,true — a 404 IS an answer", published, asked)
 		}
 	})
 
@@ -414,8 +415,8 @@ func TestImagePublishedOverHTTP(t *testing.T) {
 	for _, code := range []int{401, 403, 500, 502} {
 		t.Run(fmt.Sprintf("%d is not an answer", code), func(t *testing.T) {
 			serveGHCR(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) })
-			if published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
-				t.Fatalf("imagePublished = %v,%v; want false,false", published, asked)
+			if published, asked := ImagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
+				t.Fatalf("ImagePublished = %v,%v; want false,false", published, asked)
 			}
 		})
 	}
@@ -426,8 +427,8 @@ func TestImagePublishedOverHTTP(t *testing.T) {
 		prev := ghcrBase
 		t.Cleanup(func() { ghcrBase = prev })
 		ghcrBase = s.URL
-		if published, asked := imagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
-			t.Fatalf("imagePublished = %v,%v; want false,false", published, asked)
+		if published, asked := ImagePublished("ghcr.io/acme/ci-tofu:sha-abc"); published || asked {
+			t.Fatalf("ImagePublished = %v,%v; want false,false", published, asked)
 		}
 	})
 }
@@ -449,7 +450,7 @@ func TestComputeAndReportImageVars(t *testing.T) {
 	// contract in the one place it silently matters.
 	t.Run("fills only the requested variables", func(t *testing.T) {
 		vars := setup(t)
-		computeAndReportImageVars(vars, false, true)
+		ComputeAndReportImageVars(vars, false, true)
 		if _, ok := vars["TF_IMAGE"]; ok {
 			t.Error("TF_IMAGE written when it was not requested")
 		}
@@ -460,7 +461,7 @@ func TestComputeAndReportImageVars(t *testing.T) {
 
 	t.Run("fills both when both are requested", func(t *testing.T) {
 		vars := setup(t)
-		computeAndReportImageVars(vars, true, true)
+		ComputeAndReportImageVars(vars, true, true)
 		if want := "ghcr.io/akamai-consulting/ci-tofu:sha-" + sha; vars["TF_IMAGE"] != want {
 			t.Errorf("TF_IMAGE = %q, want %q", vars["TF_IMAGE"], want)
 		}
@@ -473,14 +474,14 @@ func TestComputeAndReportImageVars(t *testing.T) {
 		vars := setup(t)
 		var gotRepo, gotRef string
 		stubTemplateCommit(t, func(repo, ref string) (string, bool) { gotRepo, gotRef = repo, ref; return sha, true })
-		computeAndReportImageVars(vars, true, true)
+		ComputeAndReportImageVars(vars, true, true)
 		if gotRepo != "acme/tmpl" || gotRef != "v0.0.39" {
 			t.Errorf("resolved (%q,%q), want the answers file's repo + pin", gotRepo, gotRef)
 		}
 	})
 }
 
-// githubToken feeds an Authorization header on requests to api.github.com, so it
+// GithubToken feeds an Authorization header on requests to api.github.com, so it
 // must only ever return a github.com credential. GH_HOST points the ambient
 // environment at another forge in the GHES e2e lane and in any GHE-hosted
 // instance, where GH_TOKEN holds an APPLIANCE token and a bare `gh auth token`
@@ -495,8 +496,8 @@ func TestGithubTokenIsHostScoped(t *testing.T) {
 			t.Error("shelled out to gh when the environment already had a github.com token")
 			return nil, nil
 		})
-		if got := githubToken(); got != "dotcom" {
-			t.Errorf("githubToken = %q, want the env token", got)
+		if got := GithubToken(); got != "dotcom" {
+			t.Errorf("GithubToken = %q, want the env token", got)
 		}
 	})
 
@@ -509,7 +510,7 @@ func TestGithubTokenIsHostScoped(t *testing.T) {
 		t.Setenv("GITHUB_SERVER_URL", "https://ghes.corp.example")
 		t.Setenv("GH_TOKEN", "appliance-token")
 		withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("dotcom-from-gh"), nil })
-		if got := githubToken(); got == "appliance-token" {
+		if got := GithubToken(); got == "appliance-token" {
 			t.Fatal("returned the APPLIANCE token for a request to api.github.com")
 		}
 	})
@@ -521,10 +522,10 @@ func TestGithubTokenIsHostScoped(t *testing.T) {
 		withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
 			return []byte("dotcom-from-gh\n"), nil
 		})
-		if got := githubToken(); got == "appliance-token" {
+		if got := GithubToken(); got == "appliance-token" {
 			t.Fatal("returned the APPLIANCE token for a request to api.github.com")
 		} else if got != "dotcom-from-gh" {
-			t.Errorf("githubToken = %q, want the github.com token from gh", got)
+			t.Errorf("GithubToken = %q, want the github.com token from gh", got)
 		}
 	})
 
@@ -540,7 +541,7 @@ func TestGithubTokenIsHostScoped(t *testing.T) {
 			gotArgs = args
 			return []byte("tok"), nil
 		})
-		githubToken()
+		GithubToken()
 		if !strings.Contains(strings.Join(gotArgs, " "), "--hostname github.com") {
 			t.Errorf("gh args = %v, want an explicit --hostname github.com", gotArgs)
 		}
@@ -552,8 +553,8 @@ func TestGithubTokenIsHostScoped(t *testing.T) {
 		t.Setenv("GH_TOKEN", "")
 		t.Setenv("GITHUB_TOKEN", "")
 		withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("not logged in") })
-		if got := githubToken(); got != "" {
-			t.Errorf("githubToken = %q, want empty", got)
+		if got := GithubToken(); got != "" {
+			t.Errorf("GithubToken = %q, want empty", got)
 		}
 	})
 }
