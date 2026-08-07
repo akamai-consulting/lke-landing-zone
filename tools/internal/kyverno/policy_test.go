@@ -331,7 +331,7 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 // manifestDir is where the shipped policy manifests live, relative to this
 // package. They stay in cmd/llz because ci_bootstrap_cluster.go embeds three of
 // them and //go:embed cannot reach outside its own package directory.
-const manifestDir = "../../cmd/llz/manifests"
+const manifestDir = "../bootstrapcluster/manifests"
 
 func TestPolicyName(t *testing.T) {
 	for manifest, want := range map[string]string{

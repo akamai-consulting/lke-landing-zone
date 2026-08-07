@@ -436,6 +436,20 @@ categories:
 #        "fixed" without the other.
 #        Also took scaffold from 21 outbound to 19. Still blocked; still not a
 #        boundary problem.
+#   61st: loadSpec -> clusterspec, bootstrap-cluster -> internal/bootstrapcluster
+#         12,721 -> 11,756 (-965 / 107 files)
+#        THE LAST BIG CLEAN SET, and it looked entangled for the whole campaign.
+#        Measured ALONE ci_bootstrap_cluster.go is 15 outbound -- and EIGHT of the
+#        fifteen are its own manifests sibling. With the sibling and
+#        ci_prepare_apl_upgrade.go it is 6; after loadSpec moved, 5.
+#        THE MIRROR OF THE FIRST TRAP: a per-file closure UNDERSTATES a set by
+#        hiding shared helpers and OVERSTATES it by counting a sibling as a
+#        foreign dependency. Check where the edges POINT.
+#        loadSpec was 8 lines of adapter with ELEVEN callers, all of which had to
+#        agree about the "spec present?" rule. It is clusterspec.Detected now.
+#        The manifests/ dir travelled with its embedder, which moved a constraint
+#        internal/kyverno had DOCUMENTED rather than solving it -- and kyverno's
+#        own TestManifestsStayWithTheEmbeddingPackage is what caught the move.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -448,7 +462,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 12721
+    budget: 11756
     exact: true
     include:
       - "tools/cmd/llz/*.go"

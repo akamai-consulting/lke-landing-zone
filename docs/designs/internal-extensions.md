@@ -2047,7 +2047,7 @@ and retries rather than failing the converge. `IsWebhookRace` is exported for ex
 **Two constraints shaped the move, and neither was about the declaration.**
 
 `//go:embed` **pins data to its package directory.** The policy manifests could not follow this
-package: `ci_bootstrap_cluster.go` embeds three files from `tools/cmd/llz/manifests`, and Go's embed
+package: `ci_bootstrap_cluster.go` embeds three files from `tools/internal/bootstrapcluster/manifests`, and Go's embed
 cannot reach outside the embedding package's own directory. Moving only the `kyverno-*` subset would
 split one directory of related policy assets across two packages for the convenience of one test. So
 the manifests stayed, and the test reaches back through a named `manifestDir` const with a test that

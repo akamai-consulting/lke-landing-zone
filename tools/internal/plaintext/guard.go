@@ -107,7 +107,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"sidecar upgrades the hop to mTLS. Registered separately because the guard keys on file " +
 			"path, and a reviewer reading the manifest should find the reasoning here too",
 	},
-	"tools/cmd/llz/ci_bootstrap_cluster.go:http://git-server.git-server.svc.cluster.local": {
+	"tools/internal/bootstrapcluster/bootstrap_cluster.go:http://git-server.git-server.svc.cluster.local": {
 		owner: "llz",
 		reason: "aplGiteaInClusterURL — apl-core's in-cluster Gitea values repo, used to re-seed a " +
 			"missing apl-values branch. NOT mesh-upgraded: giteaSourceFromCloneCmd injects the Gitea " +

@@ -21,7 +21,7 @@ func installEnvTopologyDeps() {
 		Exec:     func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		ExecArgv: execArgv,
 		Summary:  ghaout.Append,
-		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
+		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 		// Narrowed to the one field, as internal/promote's is.
 		InstanceRepo: func() string {
 			a, _ := readAnswers(".")

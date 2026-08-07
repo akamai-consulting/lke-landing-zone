@@ -12,7 +12,7 @@ import (
 
 // writeSpecInstance lays a minimal spec-driven instance into the current dir: a
 // landingzone.yaml + one environments/<env>.yaml per (name, body) pair. Only the
-// spec YAMLs are needed — loadSpec/readTopology read those, not the tfvars.
+// spec YAMLs are needed — clusterspec.Detected/readTopology read those, not the tfvars.
 func writeSpecInstance(t *testing.T, envs map[string]string) {
 	t.Helper()
 	writeFileMkdir(t, "landingzone.yaml", `apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -88,9 +88,9 @@ func TestRenderDiff(t *testing.T) {
 	writeFileMkdir(t, "terraform-iac-bootstrap/object-storage/terraform.tfvars.example", "obj_cluster = \"x\"\n")
 	writeFileMkdir(t, filepath.Join("apl-values", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 
-	lz, present, err := loadSpec()
+	lz, present, err := clusterspec.Detected()
 	if !present || err != nil {
-		t.Fatalf("loadSpec present=%v err=%v", present, err)
+		t.Fatalf("clusterspec.Detected present=%v err=%v", present, err)
 	}
 	var rerr error
 	out := captureStdout(t, func() {

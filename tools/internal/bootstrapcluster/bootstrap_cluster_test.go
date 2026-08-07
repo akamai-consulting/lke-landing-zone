@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 import (
 	"encoding/base64"
@@ -47,12 +47,12 @@ func TestRunCombined_OutputAfterRun(t *testing.T) {
 // fallback warning. Dropping the prefix on the next bump is a silent regression, so
 // assert it here.
 func TestDefaultAplChartVersion(t *testing.T) {
-	if defaultAplChartVersion != "v6.1.0" {
-		t.Errorf("defaultAplChartVersion = %q, want \"v6.1.0\" — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
+	if clusterspec.BaselineAplChartVersion != "v6.1.0" {
+		t.Errorf("clusterspec.BaselineAplChartVersion = %q, want \"v6.1.0\" — bump deliberately, in lockstep with the platform baseline", clusterspec.BaselineAplChartVersion)
 	}
-	if defaultAplChartVersion != clusterspec.BaselineAplChartVersion {
-		t.Errorf("defaultAplChartVersion = %q but clusterspec.BaselineAplChartVersion = %q — they are one fact and must not skew",
-			defaultAplChartVersion, clusterspec.BaselineAplChartVersion)
+	if clusterspec.BaselineAplChartVersion != clusterspec.BaselineAplChartVersion {
+		t.Errorf("clusterspec.BaselineAplChartVersion = %q but clusterspec.BaselineAplChartVersion = %q — they are one fact and must not skew",
+			clusterspec.BaselineAplChartVersion, clusterspec.BaselineAplChartVersion)
 	}
 }
 

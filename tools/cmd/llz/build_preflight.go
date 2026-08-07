@@ -167,7 +167,7 @@ func warnUnpublishedEdits(specRoot, aplDir, env string) {
 // that as "no deployment <env>" would blame the argument for a broken file — the
 // same wrong-diagnosis-from-a-failed-lookup mistake ghFileSHA made.
 func knownLocally(tfDir, env string) (bool, error) {
-	if _, _, err := loadSpec(); err != nil {
+	if _, _, err := clusterspec.Detected(); err != nil {
 		return false, fmt.Errorf("the LandingZone spec does not load, so the deployment set is unknown: %w\n"+
 			"  fix it (`llz doctor --env %s` reports the details), then re-run", err, env)
 	}

@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 // ci_bootstrap_cluster_manifests.go holds the manifest builders for `llz ci
 // bootstrap-cluster` — the Go map literals server-side-applied in place of the

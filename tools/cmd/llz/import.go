@@ -18,6 +18,7 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
@@ -46,7 +47,7 @@ func brownfieldDeps() brownfield.Deps {
 		Render:                 func(env string) error { return runRender(gopts, env, false, false, false) },
 		KubectlOut:             kubectlOut,
 		Confirm:                func() bool { return gopts.yes },
-		DefaultAplChartVersion: defaultAplChartVersion,
+		DefaultAplChartVersion: clusterspec.BaselineAplChartVersion,
 		DefaultTemplateOrg:     defaultTemplateOrg,
 	}
 }
@@ -125,7 +126,7 @@ func importInitCmd() *cobra.Command {
 			"from the report (region, node pool, domain, object storage, components),\n" +
 			"renders, and writes MIGRATION-TODO.md listing what a scan can't carry over\n" +
 			"(secret values, PV/database data, IDP, Gitea→Git, Tekton→Argo, workload\n" +
-			"redeploy). Renders the migration TARGET versions: apl-core " + defaultAplChartVersion + ", and\n" +
+			"redeploy). Renders the migration TARGET versions: apl-core " + clusterspec.BaselineAplChartVersion + ", and\n" +
 			"leaves k8s_version at the template default (set a valid +lke version by hand).",
 		Example: "  llz import init --report import-report.yaml --dir ./gsap-llz --env prod",
 		Args:    cobra.NoArgs,

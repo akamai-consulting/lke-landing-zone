@@ -62,7 +62,7 @@ func envShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := args[0]
-			lz, present, err := loadSpec()
+			lz, present, err := clusterspec.Detected()
 			if !present {
 				return fmt.Errorf("no LandingZone spec found — `llz env show` needs a spec (run `llz env add %s` first)", env)
 			}

@@ -76,7 +76,7 @@ func envVPCCmd() *cobra.Command {
 				return err
 			}
 			// Spec is the source of truth; the committed tfvars can lag a spec edit.
-			if lz, present, err := loadSpec(); present {
+			if lz, present, err := clusterspec.Detected(); present {
 				if err != nil {
 					return err
 				}

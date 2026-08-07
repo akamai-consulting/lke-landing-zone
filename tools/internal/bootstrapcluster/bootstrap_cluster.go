@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 // ci_bootstrap_cluster.go implements `llz ci bootstrap-cluster` for a Linode
 // MANAGED App Platform cluster (linode_lke_cluster.apl_enabled=true). Terraform
@@ -35,7 +35,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -55,16 +54,11 @@ var vapPVCDenyCloneYAML []byte
 //go:embed manifests/vap-pvc-deny-untaggable-clone-binding.yaml
 var vapPVCDenyCloneBindingYAML []byte
 
-// defaultAplChartVersion is the apl-core baseline this LLZ release tracks. On a
-// managed cluster Linode owns the apl-core version, so bootstrap does not consume
-// it; it survives as the baseline other tooling asserts against
-// (ci_assert_apl_version.go, ci_apl_schema.go).
-//
-// It is an ALIAS, not a literal. It and clusterspec.BaselineAplChartVersion were
-// two independent "6.0.0" strings for the same fact, with nothing saying they had
-// to move together — the same one-fact-two-records shape that let instance pins
-// skew. Bump the clusterspec constant; this follows.
-const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
+// The apl-core baseline THE ALIAS IS GONE. `defaultAplChartVersion` was
+// `= clusterspec.BaselineAplChartVersion`, a second name for one fact, kept
+// because package main could not reach the constant conveniently. Callers now say
+// `clusterspec.BaselineAplChartVersion` and there is one name again — which is
+// what the alias's own comment had been asking for.
 
 // The secrets-only placeholder set moved to internal/manifestguard.
 //
@@ -74,16 +68,16 @@ const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
 // so the set is defined once, next to the check, and the producer imports it. Two
 // copies is exactly the drift this constant exists to prevent.
 
-// bootstrapFlags are the raw CLI inputs (identity via flags, secrets via env).
-type bootstrapFlags struct {
-	kubeconfig       string
-	env              string
-	clusterID        string
-	appsRepoRevision string
-	instanceRepo     string
-	upstreamOrg      string
-	templateRef      string
-	dryRun           bool
+// BootstrapFlags are the raw CLI inputs (identity via flags, secrets via env).
+type BootstrapFlags struct {
+	Kubeconfig       string
+	Env              string
+	ClusterID        string
+	AppsRepoRevision string
+	InstanceRepo     string
+	UpstreamOrg      string
+	TemplateRef      string
+	DryRun           bool
 }
 
 // bootstrapClusterOpts is the resolved config the bridge apply consumes. Managed
@@ -123,55 +117,25 @@ type bootstrapDeps struct {
 	sleep   func(time.Duration)
 }
 
-func ciBootstrapClusterCmd() *cobra.Command {
-	var f bootstrapFlags
-	c := &cobra.Command{
-		Use:   "bootstrap-cluster",
-		Short: "layer LLZ's Argo bridge onto a Linode MANAGED App Platform cluster (apl_enabled)",
-		Long: "Layers LLZ's extras onto a Linode-managed apl-core (apl_enabled=true).\n" +
-			"Linode owns the apl-core install + the lke<id>.akamai-apl.net domain/DNS/cert,\n" +
-			"so this command does NOT install apl-core. It waits for the managed ArgoCD to\n" +
-			"be able to admit Applications, then server-side-applies the Argo bridge (the\n" +
-			"platform-bootstrap AppProject + Application + the llz-secret-store Application),\n" +
-			"the named non-default block-storage-retain StorageClass the OpenBao PVC\n" +
-			"references, and the llz-openbao namespace. Idempotent (server-side apply), so CI\n" +
-			"re-runs it every apply. Reads the kubeconfig from --kubeconfig (or\n" +
-			"KUBECONFIG_RAW), and the optional private-fork GHCR creds from\n" +
-			"GHCR_USERNAME / GHCR_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runBootstrapCluster(f) },
-	}
-	fl := c.Flags()
-	fl.StringVar(&f.kubeconfig, "kubeconfig", "", "path to the cluster kubeconfig (from the fetch-kubeconfig action); falls back to $KUBECONFIG_RAW")
-	fl.StringVar(&f.env, "env", "", "apl-values environment subdir, e.g. primary (required)")
-	fl.StringVar(&f.clusterID, "cluster-id", "", "numeric LKE cluster id (the `cluster` workspace's cluster_id output); rendered into block-storage-retain's lke<id> volumeTag. Falls back to $LKE_CLUSTER_ID. Required — a StorageClass without it provisions un-reapable Volumes")
-	fl.StringVar(&f.appsRepoRevision, "apps-repo-revision", "", "bootstrap Application targetRevision (default: spec, then main)")
-	fl.StringVar(&f.instanceRepo, "instance-repo", "", "owner/name of the instance repo (bootstrap App source) (required)")
-	fl.StringVar(&f.upstreamOrg, "upstream-org", "akamai-consulting", "template repo org (llz-secret-store App source + AppProject sourceRepos)")
-	fl.StringVar(&f.templateRef, "template-ref", "", "template repo ref for the llz-secret-store Application (default: the instance's pin, then main)")
-	fl.BoolVar(&f.dryRun, "dry-run", false, "print the intended actions without touching the cluster")
-	return c
-}
-
-// runBootstrapCluster is the single (managed App Platform) bootstrap path. LLZ
+// RunBootstrapCluster is the single (managed App Platform) bootstrap path. LLZ
 // only LAYERS its extras onto the Linode-managed apl-core via the Argo bridge; it
 // needs none of the self-install secrets — no value rendering, no otomi.git seed,
 // no Linode-DNS token — only the repo/env/ref identity the bridge points at.
-func runBootstrapCluster(f bootstrapFlags) error {
-	if f.env == "" {
+func RunBootstrapCluster(f BootstrapFlags) error {
+	if f.Env == "" {
 		return fmt.Errorf("--env is required (the apl-values subdir, e.g. primary)")
 	}
-	if f.instanceRepo == "" {
+	if f.InstanceRepo == "" {
 		return fmt.Errorf("--instance-repo is required (owner/name of the instance repo the bootstrap Application syncs from)")
 	}
 
 	o := bootstrapClusterOpts{
-		env:              f.env,
-		clusterID:        firstNonEmpty(f.clusterID, os.Getenv("LKE_CLUSTER_ID")),
-		instanceRepo:     f.instanceRepo,
-		upstreamOrg:      firstNonEmpty(f.upstreamOrg, "akamai-consulting"),
-		templateRef:      firstNonEmpty(f.templateRef, pinnedTemplateRef(), "main"),
-		appsRepoRevision: f.appsRepoRevision,
+		env:              f.Env,
+		clusterID:        firstNonEmpty(f.ClusterID, os.Getenv("LKE_CLUSTER_ID")),
+		instanceRepo:     f.InstanceRepo,
+		upstreamOrg:      firstNonEmpty(f.UpstreamOrg, "akamai-consulting"),
+		templateRef:      firstNonEmpty(f.TemplateRef, PinnedTemplateRef(), "main"),
+		appsRepoRevision: f.AppsRepoRevision,
 		// A PRIVATE fork keeping its first-party OCI charts/images private needs the
 		// GHCR repo + pull secrets in the argocd namespace (empty token = public path,
 		// skipped). Without these the layered extras ComparisonError / ImagePullBackOff
@@ -185,7 +149,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 	}
 	// apps-repo-revision + managedApps come from the spec (Defaults() populates
 	// managedApps to the LLZ set on managed).
-	if lz, present, err := loadSpec(); present && err == nil {
+	if lz, present, err := clusterspec.Detected(); present && err == nil {
 		if e, ok := lz.Env(o.env); ok {
 			if o.appsRepoRevision == "" {
 				o.appsRepoRevision = e.Cluster.Bootstrap.AppsRepoRevision
@@ -197,21 +161,21 @@ func runBootstrapCluster(f bootstrapFlags) error {
 	}
 	o.appsRepoRevision = firstNonEmpty(o.appsRepoRevision, "main")
 
-	kubeconfigPath, cleanup, err := resolveKubeconfig(f.kubeconfig)
+	kubeconfigPath, cleanup, err := ResolveKubeconfig(f.Kubeconfig)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	if f.dryRun {
+	if f.DryRun {
 		return dryRunBootstrap(o, kubeconfigPath)
 	}
-	return bootstrapCluster(o, newBootstrapDeps(kubeconfigPath))
+	return bootstrapCluster(o, NewBootstrapDeps(kubeconfigPath))
 }
 
-// newBootstrapDeps wires the kubectl/apply/clock seams the bridge apply drives,
+// NewBootstrapDeps wires the kubectl/apply/clock seams the bridge apply drives,
 // all pointed at the resolved kubeconfig.
-func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
+func NewBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 	return bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
@@ -324,7 +288,7 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// managed apl-core upgrade rolls, so LLZ has no upgrade hook to hang this on —
 	// assert it eagerly, every apply, while we already hold a kubeconfig. Idempotent,
 	// and self-retiring: 6.1.x's own chart sets the same annotation.
-	prepareAplUpgradeBestEffort(d)
+	PrepareAplUpgradeBestEffort(d)
 
 	// Point the managed apl-core at LLZ's github values branch (BYO Git) and enable the
 	// default apps (harbor/loki/grafana/kyverno) so apl-core INSTALLS them and LLZ's
@@ -446,7 +410,7 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	return nil
 }
 
-// resolveKubeconfig returns a filesystem path the KUBECONFIG env can point at,
+// ResolveKubeconfig returns a filesystem path the KUBECONFIG env can point at,
 // in priority order: an explicit --kubeconfig file (if non-empty); the EFFECTIVE
 // kubeconfig — $KUBECONFIG if it points at a NON-EMPTY file, else kubectl's default
 // ~/.kube/config (reusing ci diagnose-argocd's effectiveKubeconfig); else
@@ -457,7 +421,7 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 // often an EMPTY placeholder file. Using $KUBECONFIG blindly made kubectl read an
 // empty config and every read returned empty (the e2e bootstrap failure). Only the
 // tempfile path needs cleanup; the rest are no-ops.
-func resolveKubeconfig(path string) (string, func(), error) {
+func ResolveKubeconfig(path string) (string, func(), error) {
 	noop := func() {}
 	// 1. Explicit --kubeconfig (non-empty file) → override the child env with it.
 	if path != "" {

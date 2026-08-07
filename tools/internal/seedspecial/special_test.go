@@ -327,7 +327,7 @@ spec:
 // it is named here rather than left to be rediscovered — if the manifest moves,
 // this fails loudly, which is the behaviour that was wanted.
 func TestKyvernoScopeMatchesPolicy(t *testing.T) {
-	raw, err := os.ReadFile("../../cmd/llz/manifests/kyverno-pvc-encrypted-storage-class.yaml")
+	raw, err := os.ReadFile("../bootstrapcluster/manifests/kyverno-pvc-encrypted-storage-class.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

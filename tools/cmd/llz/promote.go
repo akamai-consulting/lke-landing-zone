@@ -25,7 +25,7 @@ func promoteDeps() promote.Deps {
 	return promote.Deps{
 		Layout:          instancelayout.Detect,
 		ListDeployments: envtopology.ListDeployments,
-		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
+		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 		// Narrowed to the one field the extension reads. Handing over the whole
 		// `answers` struct would put package main's copier-answers model on the
 		// other side of the boundary to answer a one-line question.

@@ -9,13 +9,16 @@ package main
 // "where is the spec" is exactly the drift .template-manifest and docsguard's
 // keep-set both exist to prevent.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/doctor"
+)
 
 func init() { installDoctorDeps() }
 
 func installDoctorDeps() {
 	doctor.Install(doctor.Deps{
-		LoadSpec: loadSpec,
+		LoadSpec: clusterspec.Detected,
 		InstanceRepo: func() string {
 			a, _ := readAnswers(".")
 			if a == nil {

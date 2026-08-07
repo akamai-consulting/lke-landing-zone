@@ -617,7 +617,7 @@ func runValidate(g globalOpts) error {
 	// The spec is config-as-code, so the code gate validates it first when present
 	// (this is where `llz validate` users look for "is my spec valid?"). Same check
 	// as `llz render --check`, run before the TF roots.
-	if lz, present, err := loadSpec(); present {
+	if lz, present, err := clusterspec.Detected(); present {
 		if err != nil {
 			return err
 		}

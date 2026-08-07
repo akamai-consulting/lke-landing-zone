@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 // Gap-closing tests for ci_bootstrap_cluster.go surfaced by mutation testing.
 // The existing suite drives the managed bridge down its happy path, where every

@@ -224,7 +224,7 @@ spec:
 // group after the current env was authored, or "" when the pair is complete or no
 // spec loads. Used by `llz env add` to defer the render of a half-authored pair.
 func haGroupMissingRole(group string) string {
-	lz, present, err := loadSpec()
+	lz, present, err := clusterspec.Detected()
 	if !present || err != nil {
 		return ""
 	}

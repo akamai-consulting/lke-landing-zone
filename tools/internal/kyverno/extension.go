@@ -10,13 +10,20 @@ package kyverno
 // TWO CONSTRAINTS SHAPED THE MOVE, AND NEITHER WAS ABOUT THE DECLARATION.
 //
 // `//go:embed` PINS DATA TO ITS PACKAGE DIRECTORY. The policy manifests could not
-// follow this package: ci_bootstrap_cluster.go embeds three files from
-// tools/cmd/llz/manifests, and Go's embed cannot reach outside the embedding
-// package's own directory. Moving only the kyverno-* subset would split one
-// directory of related policy assets across two packages for the convenience of
-// one test. So the manifests stayed and the test reaches back through a named
-// const. Same family of constraint as internal/keycloak, where the language
-// decided the order of the work rather than the design did.
+// follow this package: the embedder takes three files from its own directory, and
+// Go's embed cannot reach outside it. Moving only the kyverno-* subset would split
+// one directory of related policy assets across two packages for the convenience
+// of one test. So the manifests stay with the embedder and this test reaches them
+// through a named const. Same family of constraint as internal/keycloak, where the
+// language decided the order of the work rather than the design did.
+//
+// THE EMBEDDER HAS SINCE MOVED, and the const moved with it: the manifests were in
+// tools/cmd/llz/manifests and are now in tools/internal/bootstrapcluster/manifests,
+// because `bootstrap-cluster` was extracted. The constraint is unchanged — the
+// assets still live beside whoever embeds them, and this package still cannot own
+// them. What DID change is that they are no longer stranded in `package main`.
+// TestManifestsStayWithTheEmbeddingPackage is what caught the move; it is doing
+// exactly the job it was written for.
 //
 // `warn` WAS COPIED, NOT EXPORTED. It is a two-line ::warning:: printer that
 // happened to live in this file and is used by two other package main files.

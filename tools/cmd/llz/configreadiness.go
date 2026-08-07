@@ -20,7 +20,7 @@ func installConfigReadinessDeps() {
 	configreadiness.Install(configreadiness.Deps{
 		Exec:               func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		CloudToken:         ciToken,
-		LoadSpec:           func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
+		LoadSpec:           func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 		CheckManifestDrift: checkManifestDrift,
 	})
 }

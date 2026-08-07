@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 import (
 	"strings"
@@ -14,11 +14,11 @@ import (
 // A typo here is invisible until a managed upgrade fails to sync months later, so
 // pin the literal rather than re-deriving it from the constants under test.
 func TestAplSyncOptionsMatchUpstream(t *testing.T) {
-	if got := aplSyncOptionsKey + "=" + aplSyncOptionsValue; got != "argocd.argoproj.io/sync-options=Force=true,Replace=true" {
+	if got := AplSyncOptionsKey + "=" + AplSyncOptionsValue; got != "argocd.argoproj.io/sync-options=Force=true,Replace=true" {
 		t.Errorf("annotation = %q, want apl-core 6.1.0's documented prerequisite", got)
 	}
-	if aplOperatorNamespace != "apl-operator" || aplOperatorDeployment != "apl-operator" {
-		t.Errorf("target = %s/%s, want apl-operator/apl-operator", aplOperatorNamespace, aplOperatorDeployment)
+	if AplOperatorNamespace != "apl-operator" || AplOperatorDeployment != "apl-operator" {
+		t.Errorf("target = %s/%s, want apl-operator/apl-operator", AplOperatorNamespace, AplOperatorDeployment)
 	}
 }
 
@@ -32,9 +32,9 @@ func TestPrepareAplUpgrade_AnnotatesWithOverwrite(t *testing.T) {
 		cmds = append(cmds, line)
 		return "deployment.apps/apl-operator", true
 	}}
-	applied, err := prepareAplUpgrade(d)
+	applied, err := PrepareAplUpgrade(d)
 	if err != nil || !applied {
-		t.Fatalf("prepareAplUpgrade() = %v, %v; want applied, nil", applied, err)
+		t.Fatalf("PrepareAplUpgrade() = %v, %v; want applied, nil", applied, err)
 	}
 	joined := strings.Join(cmds, "\n")
 	for _, want := range []string{
@@ -59,7 +59,7 @@ func TestPrepareAplUpgrade_AbsentDeploymentIsNotAnError(t *testing.T) {
 		}
 		return `Error from server (NotFound): deployments.apps "apl-operator" not found`, false
 	}}
-	applied, err := prepareAplUpgrade(d)
+	applied, err := PrepareAplUpgrade(d)
 	if err != nil {
 		t.Fatalf("an absent Deployment must not be an error, got: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestPrepareAplUpgrade_AnnotateFailureIsAnError(t *testing.T) {
 		}
 		return "deployment.apps/apl-operator", true
 	}}
-	if _, err := prepareAplUpgrade(d); err == nil {
+	if _, err := PrepareAplUpgrade(d); err == nil {
 		t.Fatal("a failed annotate must surface as an error")
 	} else if !strings.Contains(err.Error(), "Forbidden") {
 		t.Errorf("error should carry kubectl's reason, got: %v", err)

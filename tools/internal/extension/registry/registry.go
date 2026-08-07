@@ -36,6 +36,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/bootstrapcluster"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
@@ -112,6 +113,7 @@ var declarations = []func() extension.Extension{
 	versionpins.Extension,
 	mtlsguard.Extension,
 	seedspecial.Extension,
+	bootstrapcluster.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

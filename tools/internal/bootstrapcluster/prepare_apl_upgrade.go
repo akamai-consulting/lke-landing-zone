@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 // ci_prepare_apl_upgrade.go implements `llz ci prepare-apl-upgrade` — the one
 // cluster-side action apl-core's 6.1.0 release notes list as a HARD prerequisite
@@ -32,61 +32,19 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/spf13/cobra"
 )
 
 // The apl-operator Deployment coordinates + the annotation upstream requires.
 // Split out as constants so the test asserts the exact upstream contract rather
 // than a re-spelling of it.
 const (
-	aplOperatorDeployment = "apl-operator"
-	aplOperatorNamespace  = "apl-operator"
-	aplSyncOptionsKey     = "argocd.argoproj.io/sync-options"
-	aplSyncOptionsValue   = "Force=true,Replace=true"
+	AplOperatorDeployment = "apl-operator"
+	AplOperatorNamespace  = "apl-operator"
+	AplSyncOptionsKey     = "argocd.argoproj.io/sync-options"
+	AplSyncOptionsValue   = "Force=true,Replace=true"
 )
 
-func ciPrepareAplUpgradeCmd() *cobra.Command {
-	var kubeconfig string
-	c := &cobra.Command{
-		Use:   "prepare-apl-upgrade",
-		Short: "annotate apl-operator so the apl-core 6.0.x → 6.1.x upgrade can sync",
-		Long: "Applies apl-core 6.1.0's documented pre-upgrade prerequisite: the\n" +
-			aplSyncOptionsKey + "=" + aplSyncOptionsValue + " annotation on the\n" +
-			aplOperatorNamespace + "/" + aplOperatorDeployment + " Deployment.\n\n" +
-			"6.1.0 ships this annotation in its own chart, but that value only exists\n" +
-			"AFTER the upgrade has synced — and the sync is what needs it. Annotating\n" +
-			"beforehand turns that sync into a Replace instead of a failing apply.\n\n" +
-			"On the managed App Platform Linode owns when the upgrade rolls, so run this\n" +
-			"ahead of time (bootstrap-cluster also runs it on every apply). Idempotent;\n" +
-			"a no-op once the cluster is on 6.1.x.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			path, cleanup, err := resolveKubeconfig(kubeconfig)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-			d := newBootstrapDeps(path)
-			applied, err := prepareAplUpgrade(d)
-			if err != nil {
-				return err
-			}
-			if !applied {
-				fmt.Printf("no %s/%s Deployment on this cluster — nothing to prepare.\n",
-					aplOperatorNamespace, aplOperatorDeployment)
-				return nil
-			}
-			fmt.Printf("%s/%s annotated %s=%s — the apl-core 6.1.x upgrade can now sync.\n",
-				aplOperatorNamespace, aplOperatorDeployment, aplSyncOptionsKey, aplSyncOptionsValue)
-			return nil
-		},
-	}
-	c.Flags().StringVar(&kubeconfig, "kubeconfig", "", "path to the kubeconfig (default: KUBECONFIG_RAW / ambient)")
-	return c
-}
-
-// prepareAplUpgrade annotates the apl-operator Deployment with the sync-options
+// PrepareAplUpgrade annotates the apl-operator Deployment with the sync-options
 // apl-core 6.1.0 requires before its upgrade syncs.
 //
 // applied=false, err=nil is the ABSENT case: no apl-operator Deployment (a cluster
@@ -96,32 +54,32 @@ func ciPrepareAplUpgradeCmd() *cobra.Command {
 //
 // --overwrite is required: without it kubectl refuses when the key already exists,
 // so the second bootstrap of any cluster would error on an unchanged annotation.
-func prepareAplUpgrade(d bootstrapDeps) (applied bool, err error) {
-	if _, ok := d.kubectl("-n", aplOperatorNamespace, "get", "deployment", aplOperatorDeployment,
+func PrepareAplUpgrade(d bootstrapDeps) (applied bool, err error) {
+	if _, ok := d.kubectl("-n", AplOperatorNamespace, "get", "deployment", AplOperatorDeployment,
 		"-o", "name"); !ok {
 		return false, nil
 	}
-	out, ok := d.kubectl("-n", aplOperatorNamespace, "annotate", "--overwrite",
-		"deployment", aplOperatorDeployment, aplSyncOptionsKey+"="+aplSyncOptionsValue)
+	out, ok := d.kubectl("-n", AplOperatorNamespace, "annotate", "--overwrite",
+		"deployment", AplOperatorDeployment, AplSyncOptionsKey+"="+AplSyncOptionsValue)
 	if !ok {
 		return false, fmt.Errorf("annotate %s/%s with %s: %s",
-			aplOperatorNamespace, aplOperatorDeployment, aplSyncOptionsKey, strings.TrimSpace(out))
+			AplOperatorNamespace, AplOperatorDeployment, AplSyncOptionsKey, strings.TrimSpace(out))
 	}
 	return true, nil
 }
 
-// prepareAplUpgradeBestEffort is the bootstrap-cluster call site: it warns instead
+// PrepareAplUpgradeBestEffort is the bootstrap-cluster call site: it warns instead
 // of aborting. Missing the annotation degrades a FUTURE managed upgrade; it does
 // not affect the bridge this bootstrap is placing, so it must not fail the apply.
-func prepareAplUpgradeBestEffort(d bootstrapDeps) {
-	applied, err := prepareAplUpgrade(d)
+func PrepareAplUpgradeBestEffort(d bootstrapDeps) {
+	applied, err := PrepareAplUpgrade(d)
 	switch {
 	case err != nil:
 		warn(fmt.Sprintf("could not annotate %s/%s with %s=%s (%v) — apl-core's 6.1.x upgrade may fail to sync until it is applied by hand (llz ci prepare-apl-upgrade).",
-			aplOperatorNamespace, aplOperatorDeployment, aplSyncOptionsKey, aplSyncOptionsValue, err))
+			AplOperatorNamespace, AplOperatorDeployment, AplSyncOptionsKey, AplSyncOptionsValue, err))
 	case applied:
 		fmt.Fprintf(os.Stderr, "→ %s/%s annotated %s=%s (apl-core 6.1.x upgrade prerequisite).\n",
-			aplOperatorNamespace, aplOperatorDeployment, aplSyncOptionsKey, aplSyncOptionsValue)
+			AplOperatorNamespace, AplOperatorDeployment, AplSyncOptionsKey, AplSyncOptionsValue)
 	}
 }
 

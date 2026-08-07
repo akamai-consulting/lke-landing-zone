@@ -1,4 +1,4 @@
-package main
+package bootstrapcluster
 
 // Deadline coverage for the managed-bootstrap wait loops.
 //

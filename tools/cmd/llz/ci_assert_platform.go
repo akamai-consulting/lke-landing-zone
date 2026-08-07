@@ -21,6 +21,6 @@ func installAssertPlatformDeps() {
 	assertplatform.Install(assertplatform.Deps{
 		ExecCombined: execCombined,
 		Exec:         execOutput,
-		LoadSpec:     func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
+		LoadSpec:     func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
 	})
 }
