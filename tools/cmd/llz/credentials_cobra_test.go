@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 )
 
 func TestCredentialsCommandWiring(t *testing.T) {

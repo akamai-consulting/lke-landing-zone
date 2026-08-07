@@ -7,7 +7,7 @@ promotion.
 [apl-core-v6-migration.md](apl-core-v6-migration.md) (the 5.x → 6.x predecessor),
 [apl-overlay-obj-native.md](apl-overlay-obj-native.md),
 [../adr/0005-managed-app-platform.md](../adr/0005-managed-app-platform.md),
-`tools/internal/clusterspec/aplversion.go`,
+`tools/internal/shared/clusterspec/aplversion.go`,
 `tools/cmd/llz/ci_prepare_apl_upgrade.go`.
 
 ## Why

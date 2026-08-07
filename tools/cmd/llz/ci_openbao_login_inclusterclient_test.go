@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 )
 
 func TestOpenBaoLoginRequiresClientIdentity(t *testing.T) {

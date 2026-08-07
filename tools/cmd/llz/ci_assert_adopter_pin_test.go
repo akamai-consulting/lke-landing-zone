@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/versionpins"
 )
 
 const (

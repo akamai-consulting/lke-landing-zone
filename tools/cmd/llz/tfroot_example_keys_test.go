@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 )
 
 // tfvars.SetField rewrites EVERY matching `^<key> =` line, not just the first. That is

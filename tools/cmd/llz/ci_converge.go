@@ -23,13 +23,13 @@ package main
 import (
 	"context"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )
 
 // installConvergeDeps hands converge the capabilities it declares. Called once

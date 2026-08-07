@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 )
 
 // Helpers the moved tests use, copied across the boundary.

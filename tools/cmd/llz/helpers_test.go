@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
 
 func TestContainsString(t *testing.T) {

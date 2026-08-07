@@ -39,8 +39,8 @@ until that gate opens (§Open questions).
 [cross-org-reuse-pattern.md](cross-org-reuse-pattern.md),
 [instance-slimming.md](instance-slimming.md), [../secrets.md](../secrets.md),
 [../adr/0003-vendor-actions-and-bodies-into-instances.md](../adr/0003-vendor-actions-and-bodies-into-instances.md),
-`tools/internal/validate/validate.go`, `tools/cmd/llz/gh_secrets_native.go`,
-`tools/internal/identityconfig/openbao_configure.go`, `tools/internal/clusterspec/kustomize.go`.
+`tools/internal/shared/validate/validate.go`, `tools/cmd/llz/gh_secrets_native.go`,
+`tools/internal/extensions/identityconfig/openbao_configure.go`, `tools/internal/shared/clusterspec/kustomize.go`.
 
 > This is a design PR (no code). It exists because the obvious version of the change
 > — "add a `forge` switch and branch on it" — walks into three non-obvious realities
@@ -83,7 +83,7 @@ validates. There are zero behavioral branches on the value. The docstrings compo
 it — the `Forge` const block says the flavors *"mirror copier.yml's forge_flavor
 choices and forge.Flavor() in internal/forge"*, and `Instance` says it *"mirrors
 copier.yml's questions (upstream_org, instance_repo, forge_flavor, llz_version)"*.
-`copier.yml` has no `forge_flavor` key. `tools/internal/forge` does not exist. ADR
+`copier.yml` has no `forge_flavor` key. `tools/internal/shared/forge` does not exist. ADR
 0003 cites *"PR #16 — `internal/forge` + `forge_flavor`"* as a related track; that
 PR is unmerged. **A spec that accepts `forge: gitlab` and silently ignores it is
 worse than one that rejects it**, and it is what an adopter meets first.
@@ -127,7 +127,7 @@ Two live bugs fall out of the same survey, worth fixing regardless of this desig
 
 - One config axis — `spec.instance.forge` + a host — that drives API base, OIDC
   issuer/audience/claim-map, git credential convention, and Argo repoURLs.
-- A real `tools/internal/forge` package, with capability interfaces rather than one
+- A real `tools/internal/shared/forge` package, with capability interfaces rather than one
   fat `Forge`, so a forge that *cannot* do something says so at compile time.
 - Token minting and rotation per forge, honest about the fact that **GitHub's floor
   is one permanent secret and GitLab's is zero** (§The rotation asymmetry).
@@ -264,7 +264,7 @@ the GitLab implementation to be as bad as the GitHub one, which is exactly backw
 
 ## Proposed design
 
-### `tools/internal/forge` — capability interfaces, not one fat `Forge`
+### `tools/internal/shared/forge` — capability interfaces, not one fat `Forge`
 
 Small interfaces, composed; capability probed by type assertion. A forge that cannot
 rotate does not implement `TokenRotator`, and the compiler says so.

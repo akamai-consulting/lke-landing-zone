@@ -3,7 +3,7 @@ package main
 // ci_assert_network.go — the capability wiring for the `assert-network`
 // extension (internal/assertnetwork).
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertnetwork"
 
 func init() { installAssertNetworkDeps() }
 

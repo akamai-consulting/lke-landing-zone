@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 )
 
 // The lock covers every digest-locked class in the manifest, wherever it lives.

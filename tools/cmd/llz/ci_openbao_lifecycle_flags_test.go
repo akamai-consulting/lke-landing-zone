@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
 	"github.com/spf13/cobra"
 )
 

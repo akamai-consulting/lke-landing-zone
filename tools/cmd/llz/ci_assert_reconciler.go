@@ -10,8 +10,8 @@ package main
 // interface it has to keep.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
 )
 
 func installAssertReconcilerDeps() {

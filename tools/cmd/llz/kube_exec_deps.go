@@ -6,7 +6,7 @@ package main
 // testable without a cluster; this keeps the ONE shell-out implementation in
 // package main rather than letting two drift.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 
 // A DELEGATING CLOSURE, NOT `kube.Exec = execOutput`.
 //

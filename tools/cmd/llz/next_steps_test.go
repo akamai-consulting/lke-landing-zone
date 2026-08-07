@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 )
 
 // printNextSteps is commands.go's; its test travelled with image_repin_test.go

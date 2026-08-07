@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 )
 
 // A NUL anywhere means "binary, skip it" — including at offset 0, which is where

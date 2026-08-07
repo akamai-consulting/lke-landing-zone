@@ -1501,8 +1501,8 @@ assert-identity  assertion:verified   "certificates" [cluster-read]
 **The constraint.** The Keycloak admin client is a struct with methods, and three separate places
 extend it: the login smoke test, the `configure` verb, and `llz users add`. Go will not let a package
 define a method on a type it does not own, so there was no way to move *one* of those three into
-`tools/internal/assertidentity` and leave the other two in package `main` — the type has to live
-somewhere both sides can reach before either can move. `tools/internal/keycloak` came out first, as
+`tools/internal/extensions/assertidentity` and leave the other two in package `main` — the type has to live
+somewhere both sides can reach before either can move. `tools/internal/shared/keycloak` came out first, as
 the thirteenth shared package, and only then could this extension be extracted at all.
 
 That is a different kind of forcing function from the twelve shared packages before it. Those came
@@ -2047,7 +2047,7 @@ and retries rather than failing the converge. `IsWebhookRace` is exported for ex
 **Two constraints shaped the move, and neither was about the declaration.**
 
 `//go:embed` **pins data to its package directory.** The policy manifests could not follow this
-package: `ci_bootstrap_cluster.go` embeds three files from `tools/internal/bootstrapcluster/manifests`, and Go's embed
+package: `ci_bootstrap_cluster.go` embeds three files from `tools/internal/extensions/bootstrapcluster/manifests`, and Go's embed
 cannot reach outside the embedding package's own directory. Moving only the `kyverno-*` subset would
 split one directory of related policy assets across two packages for the convenience of one test. So
 the manifests stayed, and the test reaches back through a named `manifestDir` const with a test that

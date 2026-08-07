@@ -6,7 +6,7 @@
 
 Both the roots' `*.tf` and the per-environment `*.tfvars` are **generated** by
 `llz render` and gitignored (see `.gitignore` here). The `*.tf` come from the
-`tfroots` package embedded in the `llz` binary (`tools/internal/tfroots`); the
+`tfroots` package embedded in the `llz` binary (`tools/internal/shared/tfroots`); the
 `*.tfvars` are rendered from the LandingZone spec, which is the source of truth:
 
 ```

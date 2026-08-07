@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )

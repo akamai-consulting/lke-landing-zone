@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
 )
 
 // ci_openbao_lifecycle_test.go — the flag-set tests that came back with the

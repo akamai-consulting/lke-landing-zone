@@ -23,10 +23,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 )
 
 // base64Auth builds the docker-config auth field. A swapped order or separator

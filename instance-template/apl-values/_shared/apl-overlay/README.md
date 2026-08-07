@@ -2,7 +2,7 @@
 
 **These files are `llz render` output — do not hand-edit.** They are regenerated
 from the spec (and the render functions in
-`tools/internal/clusterspec/overlay.go`) on every `llz render`, and
+`tools/internal/shared/clusterspec/overlay.go`) on every `llz render`, and
 `llz render --check` fails if they drift. Edit the spec (or the render code), not
 these files.
 

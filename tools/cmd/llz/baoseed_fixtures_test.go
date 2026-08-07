@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
 
 func withGHASummaryFile(t *testing.T) string {

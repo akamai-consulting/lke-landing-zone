@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 )
 
 func TestCheckArgvBuilders(t *testing.T) {

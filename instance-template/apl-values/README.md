@@ -47,7 +47,7 @@ components:
 ```
 
 Argo CD's repo-server fetches them transitively when it builds this repo's App.
-See `tools/internal/clusterspec/kustomize.go` (`RemoteBase`, `sharedManifestRef`).
+See `tools/internal/shared/clusterspec/kustomize.go` (`RemoteBase`, `sharedManifestRef`).
 
 ## An environment is a thin overlay, generated — never hand-cloned
 

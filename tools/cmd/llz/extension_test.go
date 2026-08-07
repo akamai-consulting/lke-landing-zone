@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 func sampleExtensions() []extension.Extension {

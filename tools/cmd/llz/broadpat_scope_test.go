@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 )
 
 // parseScopes maps "resource:access" scope strings to an access level

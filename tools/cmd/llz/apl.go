@@ -5,9 +5,9 @@ package main
 // is "an extension owns its own command", not "every constructor leaves".
 //
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/spf13/cobra"
 )
 

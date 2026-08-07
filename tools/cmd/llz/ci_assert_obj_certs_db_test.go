@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
 
 // ── assert-obj-roundtrip ─────────────────────────────────────────────────────

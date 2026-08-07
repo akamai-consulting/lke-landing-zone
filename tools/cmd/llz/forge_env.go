@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 )
 
 // forgeFromEnv resolves the instance forge for CI-side llz commands, defaulting

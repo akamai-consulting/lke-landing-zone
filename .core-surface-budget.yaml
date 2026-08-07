@@ -3,7 +3,7 @@
 # WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
 # WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
 # WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
-#                                            tools/internal/budget/remedy.go
+#                                            tools/internal/extensions/budget/remedy.go
 #
 # This file is the operational half of that: the number, and the rule for
 # changing it. The argument lives in the ADR and is not repeated here.
@@ -54,14 +54,14 @@ categories:
     #                       gate went red until someone did.
     #   46,716 / 234 files  the guard-budgets EXTRACTION. The budget engine, the
     #                       counters, the remedies and their tests are now
-    #                       tools/internal/budget; the two commands are a flag set
+    #                       tools/internal/extensions/budget; the two commands are a flag set
     #                       each. -466, and the FIRST paydown.
     #   46,797 / 235 files  `llz extension list`. +81, spent deliberately: the
     #                       declaration model was validated with no way to look at
     #                       it, and a ratchet that could only be paid into would be
     #                       a freeze rather than a budget.
     #   46,106 / 235 files  guard-docs, the second extension. docs-guard and the
-    #                       TOC renderer are tools/internal/docsguard; the two
+    #                       TOC renderer are tools/internal/extensions/docsguard; the two
     #                       commands are a flag set and a file write. -691, the
     #                       largest single move so far.
     #   45,763 / 234 files  posture-at-rest, the first extension that is not a
@@ -819,6 +819,22 @@ categories:
 #        per-package number simply cannot see tests living in another package.
 #        The rest is the same dilution as the 82nd: untested flag wiring joining a
 #        tested capability. No test was deleted in either batch.
+#   85th: tools/internal split into extensions/ + shared/   3,657 -> 3,657 (0)
+#        Pure relocation: 74 packages that declare an Extension() to
+#        internal/extensions/, 39 to internal/shared/. 1,243 import lines.
+#        BOTH STAY UNDER internal/, which is the whole point -- it is compiler-
+#        enforced, tools/ is one module, and this repo is the public upstream.
+#        Hoisting to tools/extensions/ would have made 113 packages public API.
+#        FIVE CLASSES OF PATH BROKE AND ONLY ONE WAS AN IMPORT: path-keyed
+#        registries (plaintext, atrest), segment-joined filepath.Join("tools",
+#        "internal",...) that a literal rewrite cannot see, relative escapes now
+#        one level short, package-identity constants in boundary_test.go, and 106
+#        Makefile COVERAGE_MINS keys including one NESTED (extension/registry)
+#        that a single-segment pattern missed.
+#        THREE THINGS DELIBERATELY NOT BUMPED, each a real bug if it had been:
+#        tfroots/roots/*.tf (embedded Terraform, relative to the RENDERED
+#        instance), clusterspec+render kustomize refs (EMITTED, not read), and
+#        deliverdocs` ../../../etc/passwd traversal fixture.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N

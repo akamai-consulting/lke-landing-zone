@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 )
 
 func TestGlobalFlagsAreParsedBeforeRunE(t *testing.T) {

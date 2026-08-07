@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
 
 // Helpers the moved tests use, copied across the new package boundary.

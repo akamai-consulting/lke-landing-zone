@@ -10,7 +10,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 )
 
 // stubBaoSeedKV stubs baoread.ExecFn for bao-seed runs: `kv get` of presentPath/

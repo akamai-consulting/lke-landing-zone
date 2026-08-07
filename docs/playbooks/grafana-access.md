@@ -58,7 +58,7 @@ These users live in Grafana's local SQLite DB — they survive pod restarts but 
 The two data sources today are Prometheus and Loki, both configured declaratively in [`grafana-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml). For a new data source:
 
 1. Add a block under `grafana.datasources['datasources.yaml'].datasources` in `grafana-values.yaml`. Use the existing entries as a template.
-2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/identityconfig/openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.
+2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/identityconfig/openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.
 3. PR + ArgoCD sync — the change applies on the next reconciliation.
 
 Do not add data sources via the Grafana UI for production — they live only in the SQLite DB and disappear on reinstall.

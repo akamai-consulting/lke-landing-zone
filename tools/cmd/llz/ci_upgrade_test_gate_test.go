@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
 )
 
 // TestCopierUpdateArgvIsNonInteractive is the unit-speed twin of the gate's

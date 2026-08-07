@@ -10,21 +10,21 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfbin"
 )
 
 // checks.go ports the instance-local checks that used to live in the template's

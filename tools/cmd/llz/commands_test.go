@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 )
 
 func TestCopierCopyArgv(t *testing.T) {

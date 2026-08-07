@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 )
 

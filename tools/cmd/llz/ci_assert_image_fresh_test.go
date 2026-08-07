@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/spf13/cobra"
 )
 

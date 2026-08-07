@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 )
 
 // gitInitRepo makes dir a git repo and commits every path in `add` (relative to

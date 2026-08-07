@@ -10,10 +10,10 @@ package main
 // swaps both — stubbing one leaves the other shelling out to a real `gh`.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 func init() { installConfigReadinessDeps() }

@@ -19,7 +19,7 @@ package main
 // time property every test here relies on.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 // execOutput runs name with args and returns its standard output. Stderr is

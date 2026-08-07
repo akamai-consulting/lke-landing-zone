@@ -9,7 +9,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
 )
 
 func TestExtractOpenbaoCAWiring(t *testing.T) {

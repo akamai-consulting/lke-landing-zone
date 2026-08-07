@@ -2,7 +2,7 @@
 
 **Applies to:** OpenBao on every regional cluster (`<release>-openbao-0/1/2` in the `llz-openbao` namespace). No external Ingress — access is via `llz openbao …` (which port-forwards for you) or `kubectl exec` into the pod.
 
-**Related:** [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md) (the per-person login — start there), [`docs/secrets.md`](../secrets.md) (architecture + dual-write), [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial bootstrap + break-glass), [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/identityconfig/openbao_configure.go) (auth methods + policies definition).
+**Related:** [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md) (the per-person login — start there), [`docs/secrets.md`](../secrets.md) (architecture + dual-write), [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial bootstrap + break-glass), [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/identityconfig/openbao_configure.go) (auth methods + policies definition).
 
 ---
 
@@ -145,7 +145,7 @@ Anything. Use root sparingly:
 
 - `bao policy list`, `bao policy read <name>`, `bao policy write <name> -` — inspect/edit policies
 - `bao kv put|get|delete secret/...` — read/write KV directly (prefer `llz openbao set` for dual-region writes — it enforces atomicity)
-- `bao auth enable <method>` — only ever needed during cluster bring-up; if you're enabling new auth methods on a live cluster, update [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/identityconfig/openbao_configure.go) too so the next bootstrap reproduces the state.
+- `bao auth enable <method>` — only ever needed during cluster bring-up; if you're enabling new auth methods on a live cluster, update [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/identityconfig/openbao_configure.go) too so the next bootstrap reproduces the state.
 
 ---
 
@@ -164,7 +164,7 @@ Use Kubernetes auth for any in-cluster workload that needs read access to OpenBa
     POLICY
     ```
 
-    Also add the policy + paths to [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/identityconfig/openbao_configure.go) (so the next bootstrap reproduces it) and to the ExternalSecret-path validation used by the lint job (so it covers any new ExternalSecret refs).
+    Also add the policy + paths to [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/identityconfig/openbao_configure.go) (so the next bootstrap reproduces it) and to the ExternalSecret-path validation used by the lint job (so it covers any new ExternalSecret refs).
 
 2. **Bind the role to a ServiceAccount**:
 
@@ -188,4 +188,4 @@ The pod authenticates with its projected SA token; OpenBao validates against the
 | Delete a policy | `llz openbao exec -- policy delete <policy-name>` (remove all bindings first) |
 | Drop a Kubernetes-auth role | `llz openbao exec -- delete auth/kubernetes/role/<role>` |
 
-After any deletion, remove the corresponding policy + binding from [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/identityconfig/openbao_configure.go) so a future bootstrap doesn't re-create the principal.
+After any deletion, remove the corresponding policy + binding from [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/identityconfig/openbao_configure.go) so a future bootstrap doesn't re-create the principal.

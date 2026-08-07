@@ -9,7 +9,7 @@ for this change (see Lab-validation).
 
 **Relates to:** [apl-core-v6-migration.md](apl-core-v6-migration.md),
 [blast-radius-decomposition.md](blast-radius-decomposition.md),
-`tools/internal/clusterspec/values.go` (the default),
+`tools/internal/shared/clusterspec/values.go` (the default),
 `instance-template/apl-values/values.yaml` (the `otomi.git` block),
 `.github/workflows/release-e2e.yml` (the retired `e2e-apps` mirror).
 
@@ -64,7 +64,7 @@ apl-core writing to `main` at all.
 - Overridable per env via `spec.cluster.bootstrap.aplValues.revision`.
 
 The change is one line of intent in
-[values.go](../../tools/internal/clusterspec/values.go)
+[values.go](../../tools/internal/shared/clusterspec/values.go)
 (`Bootstrap.AplValuesBranch` → `apl-<env>`); `otomi.git.branch` is written *only* by
 `llz render` into the committed `values.yaml` — it is not a Terraform variable and no
 bootstrap resource consumes it — so there is no other wiring to touch.
@@ -72,7 +72,7 @@ bootstrap resource consumes it — so there is no other wiring to touch.
 **The override is guarded.** Changing the default is not enough: an operator could set
 `aplValues.revision: main` (or point `appsRepoRevision` at the apl-owned branch) and
 walk straight back into the wedge. `Validate` (in
-[validate.go](../../tools/internal/clusterspec/validate.go), so it gates every `llz
+[validate.go](../../tools/internal/shared/clusterspec/validate.go), so it gates every `llz
 render`) fails the spec whenever the two branches resolve — after defaults — to the
 same ref. The defaults (`apl-<env>` vs `main`) never collide; the guard exists for the
 override that reintroduces the collision. Both defaults live on `Bootstrap`

@@ -1,0 +1,249 @@
+package chartguard
+
+// ci_chart_pin_guard.go implements `llz ci chart-pin-guard` — the companion to
+// chart-version-guard. Where that guard asserts a changed chart bumps its
+// Chart.yaml version (so publish-charts.yml actually pushes it), THIS guard
+// asserts every place that PINS a first-party llz-* chart to a version pins the
+// version that actually exists on disk (and therefore, post-publish, in the
+// registry).
+//
+// Why it exists: a chart Chart.yaml version bump that is not mirrored into the
+// Argo CD Application's `targetRevision` (live apl-values tree) or the
+// llz-argo-bootstrap-apps component `version:` leaves Argo pulling a tag the
+// registry never received. On a cold bootstrap that is silent and fatal: the
+// pinned `llz-cluster-foundation:0.1.0` 404s, the support-plane app never syncs,
+// the llz-openbao namespace is never created, and the OpenBao bootstrap workflow
+// times out on `namespaces "llz-openbao" not found` with no hint at the cause.
+// This guard turns that drift into a color.Red PR instead of a dead cluster.
+//
+// The extraction + comparison logic is pure and unit-tested; the filesystem is
+// reached only by the walk in RunE.
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
+)
+
+// chartPinScanRoots are the repo subtrees scanned for first-party chart pins:
+// the platform-bootstrap Applications, the live per-env Argo Application
+// manifests, and the app-of-apps generator's component list. All pin chart
+// versions that must track kubernetes-charts/.
+//
+// platform-apl was MISSING here, and it holds the repo's first-party pins
+// (manifest/applications/cluster-foundation.yaml, components/openbao/openbao.yaml).
+// The guard reported "2 first-party chart pin(s) match" and read as full
+// coverage while pins could drift from their Chart.yaml unwatched — a pin the
+// registry never received 404s at Argo sync time, which is the exact failure
+// this guard exists to prevent.
+var chartPinScanRoots = []string{"platform-apl", "instance-template", "kubernetes-charts"}
+
+// chartPinRe matches a `chart: <name>` line, capturing its indent and name. The
+// SemVer sibling — `targetRevision:` or `version:`, the two keys Argo
+// Applications and llz-argo-bootstrap-apps components respectively use — is not
+// matched by a regex of its own: extractChartPins hands the indent to
+// siblingValue, which scans the source block in BOTH directions. A regex would
+// have to pick a direction, and picking forward is exactly the bug the
+// bidirectional scan fixed (a block writing targetRevision above chart yielded
+// no pin at all). Quotes are stripped by siblingValue.
+var chartPinRe = regexp.MustCompile(`^(\s*)chart:\s*(\S+)\s*$`)
+
+// chartPin is a single first-party chart version pin found in a manifest.
+type chartPin struct {
+	Chart   string
+	Version string
+	Line    int // 1-based line number of the `chart:` line
+}
+
+// pinMismatch is a pin whose version disagrees with the on-disk Chart.yaml.
+type pinMismatch struct {
+	File  string
+	Pin   chartPin
+	WantV string // the local Chart.yaml version the pin should match
+}
+
+func RunPinGuard(root string) error {
+	local, err := loadLocalChartVersions(root)
+	if err != nil {
+		return fmt.Errorf("reading kubernetes-charts versions: %w", err)
+	}
+
+	byFile := map[string][]chartPin{}
+	for _, sub := range chartPinScanRoots {
+		// walkManifests is the shared walk: it skips an absent subtree, skips Helm
+		// templates/ (which hold Go-templated `chart: {{ ... }}` values, not literal
+		// pins), and matches both YAML extensions. Walked one root at a time so a
+		// failure still names the root it was scanning.
+		if _, walkErr := guardwalk.Walk([]string{filepath.Join(root, sub)}, func(path string, b []byte) error {
+			if pins := extractChartPins(string(b)); len(pins) > 0 {
+				rel, _ := filepath.Rel(root, path)
+				byFile[filepath.ToSlash(rel)] = pins
+			}
+			return nil
+		}); walkErr != nil {
+			return fmt.Errorf("scanning %s: %w", sub, walkErr)
+		}
+	}
+
+	checked, mismatches := countFirstPartyPins(byFile, local), checkChartPins(byFile, local)
+	for _, m := range mismatches {
+		fmt.Fprintf(os.Stderr,
+			"::error file=%s,line=%d::%s is pinned to %s but kubernetes-charts/%s/Chart.yaml is %s — "+
+				"update the pin to %s (a pin the registry never received 404s at Argo sync time)\n",
+			m.File, m.Pin.Line, m.Pin.Chart, m.Pin.Version, m.Pin.Chart, m.WantV, m.WantV)
+	}
+	if len(mismatches) > 0 {
+		return fmt.Errorf("chart-pin-guard: %d first-party chart pin(s) drifted from kubernetes-charts/", len(mismatches))
+	}
+	// Zero verified pins means this vouched for nothing. The scan skips a root
+	// that is absent (statErr → continue), so a moved/unrendered tree yields no
+	// files, no pins, and — before this — a clean pass claiming the pins matched.
+	// Assert on `checked` rather than on files read: it is the quantity the guard
+	// actually reasons about, and it catches the empty-tree case too.
+	if checked == 0 {
+		return fmt.Errorf("chart-pin-guard: verified 0 first-party chart pins under %s — refusing to pass having compared nothing. "+
+			"Either the scan roots moved, or the first-party pins were removed", strings.Join(chartPinScanRoots, ", "))
+	}
+	fmt.Printf("chart-pin-guard: %d first-party chart pin(s) match their Chart.yaml version.\n", checked)
+	return nil
+}
+
+// extractChartPins returns every first-party chart version pin in a manifest.
+// It pairs each `chart: <name>` line with the nearest following
+// `targetRevision:`/`version:` line at the SAME indentation (its source-block
+// sibling), stopping at the end of that block. Charts pinned by a `path:` (Argo
+// git sources) carry no chart name here and are naturally skipped.
+func extractChartPins(content string) []chartPin {
+	lines := strings.Split(content, "\n")
+	var pins []chartPin
+	for i, line := range lines {
+		m := chartPinRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		indent, name := m[1], strings.Trim(m[2], `"'`)
+		// Search BOTH directions for the version sibling. This used to scan forward
+		// only and break at the first same-indent key whatever it was, so a source
+		// block that writes `targetRevision:` ABOVE `chart:` yielded no pin at all —
+		// silently exempting that chart from drift checking. chart-publish-check
+		// reads the same YAML with a bidirectional scan, so the two guards disagreed
+		// about which pins even exist.
+		if v := SiblingValue(lines, i, indent, "targetRevision"); v != "" {
+			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
+		} else if v := SiblingValue(lines, i, indent, "version"); v != "" {
+			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
+		}
+	}
+	return pins
+}
+
+// loadLocalChartVersions maps each first-party chart's name to its Chart.yaml
+// version by reading kubernetes-charts/<dir>/Chart.yaml. Keyed on the chart's
+// declared `name:` (the value pins reference), not the directory.
+func loadLocalChartVersions(root string) (map[string]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "kubernetes-charts"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		raw := readFileOrEmpty(filepath.Join(root, "kubernetes-charts", e.Name(), "Chart.yaml"))
+		if raw == "" {
+			continue
+		}
+		name, ver := ChartName(raw), ChartVersion(raw)
+		if name != "" && ver != "" {
+			out[name] = ver
+		}
+	}
+	return out, nil
+}
+
+// ChartName extracts the top-level `name:` value from Chart.yaml content, or ""
+// when absent. Mirrors ChartVersion (ci_chart_guard.go): only a column-0 key
+// matches, so nested `name:` fields are not picked up.
+func ChartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
+
+// countFirstPartyPins counts the pins across all files that reference a chart
+// present in local — the denominator for the success message (third-party pins
+// are not "checked" by this guard).
+func countFirstPartyPins(byFile map[string][]chartPin, local map[string]string) int {
+	n := 0
+	for _, pins := range byFile {
+		for _, pin := range pins {
+			if _, ok := local[pin.Chart]; ok {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// checkChartPins is the pure comparison core: given pins (per file) and the
+// local chart→version map, it returns the mismatches. Pins for charts absent
+// from local (upstream/third-party) are skipped. Sorted for stable output.
+func checkChartPins(byFile map[string][]chartPin, local map[string]string) []pinMismatch {
+	var out []pinMismatch
+	files := make([]string, 0, len(byFile))
+	for f := range byFile {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		for _, pin := range byFile[f] {
+			want, ok := local[pin.Chart]
+			if !ok || pin.Version == want {
+				continue
+			}
+			out = append(out, pinMismatch{File: f, Pin: pin, WantV: want})
+		}
+	}
+	return out
+}
+
+// SiblingValue reads a key from the same YAML block as line idx — scanning both
+// directions and stopping at a dedent.
+//
+// EXPORTED because `llz ci chart-publish-check` asks the same question about the
+// same files and stayed in package main (it is release-publish's territory, not
+// this extension's). Two scanners disagreeing about what "the same block" means is
+// how a pin gets read from the wrong chart.
+// siblingValue returns the value of `<indent>key: <value>` in the contiguous block
+// around idx at exactly the given indentation, scanning both directions and
+// stopping at the first line that dedents below indent.
+func SiblingValue(lines []string, idx int, indent, key string) string {
+	want := len(indent)
+	prefix := indent + key + ":"
+	scan := func(step int) string {
+		for j := idx + step; j >= 0 && j < len(lines); j += step {
+			ln := lines[j]
+			if strings.TrimSpace(ln) == "" {
+				continue // blank lines don't break a block
+			}
+			if LeadingIndent(ln) < want {
+				return "" // dedented out of the source block
+			}
+			if LeadingIndent(ln) == want && strings.HasPrefix(ln, prefix) {
+				return strings.Trim(strings.TrimSpace(strings.TrimPrefix(ln, prefix)), `"'`)
+			}
+		}
+		return ""
+	}
+	if v := scan(-1); v != "" {
+		return v
+	}
+	return scan(1)
+}
+
+// leadingIndent counts the leading spaces/tabs of a line.
+func LeadingIndent(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " \t"))
+}

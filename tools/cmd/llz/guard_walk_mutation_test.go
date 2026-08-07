@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
 // gwFinding is a guard finding with a THIRD field outside the sort key, so a

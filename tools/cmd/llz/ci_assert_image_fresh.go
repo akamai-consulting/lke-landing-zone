@@ -28,9 +28,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/spf13/cobra"
 )
 

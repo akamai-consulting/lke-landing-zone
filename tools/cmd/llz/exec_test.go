@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 // withExecOutput / withLookPath swap the package-level exec seam for the

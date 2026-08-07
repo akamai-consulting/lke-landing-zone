@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
 )
 
 // Tests that travelled with the resolve family but exercise envadd.Run, which is

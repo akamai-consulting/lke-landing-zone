@@ -3,23 +3,23 @@ package main
 import (
 	"fmt"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 )
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────

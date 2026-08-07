@@ -9,13 +9,13 @@ package main
 // reach this extension's copy too.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 )
 
 func init() { installEnvTopologyDeps() }

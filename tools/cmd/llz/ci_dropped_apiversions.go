@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
 
 func ciDroppedAPIVersionsCmd() *cobra.Command {

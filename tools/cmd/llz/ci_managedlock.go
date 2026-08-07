@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 )
 
 // lockableScaffoldFiles answers sustain's LockableScaffoldFiles: the scaffold root

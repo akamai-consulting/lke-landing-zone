@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 )
 
 // Provenance is DERIVED, never stamped to disk: with no .copier-answers.yml the

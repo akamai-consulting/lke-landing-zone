@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 )
 
 func TestRunCIBaoSeedSealKeyDryRunAndWiring(t *testing.T) {

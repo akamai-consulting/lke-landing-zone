@@ -6,9 +6,9 @@ package main
 import (
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
 func init() { installAssertSecretsDeps() }

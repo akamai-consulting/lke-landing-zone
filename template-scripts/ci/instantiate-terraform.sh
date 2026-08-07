@@ -3,7 +3,7 @@
 # template repo can validate them without published module tags or remote state.
 #
 # The instance roots' *.tf now live in the embedded tfroots package
-# (tools/internal/tfroots/roots/<root>) — `llz render` generates them into an instance
+# (tools/internal/shared/tfroots/roots/<root>) — `llz render` generates them into an instance
 # on the fly (the instance commits ZERO Terraform code). They reference the reusable
 # modules by their PUBLISHED git:: ref (e.g.
 #   source = "git::ssh://…//terraform-modules/llz-cluster?ref=v0.0.39")
@@ -35,10 +35,10 @@ mkdir -p "$BUILD"
 
 # Mirror the embedded roots at the SAME depth (<build>/terraform-iac-bootstrap/<root>)
 # so the rewritten ../../../terraform-modules path resolves to the repo-root modules
-# from each root. The roots' *.tf come from the embed (tools/internal/tfroots/roots/),
+# from each root. The roots' *.tf come from the embed (tools/internal/shared/tfroots/roots/),
 # not instance-template/ (where only the .gitignore + provider locks remain now).
 mkdir -p "$BUILD/terraform-iac-bootstrap"
-cp -R tools/internal/tfroots/roots/. "$BUILD/terraform-iac-bootstrap/"
+cp -R tools/internal/shared/tfroots/roots/. "$BUILD/terraform-iac-bootstrap/"
 REL="../../../terraform-modules"
 
 find "$BUILD/terraform-iac-bootstrap" -name '*.tf' -print0 | while IFS= read -r -d '' f; do

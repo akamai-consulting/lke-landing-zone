@@ -16,7 +16,7 @@
 > defeats every empty-string fallback in the stack and surfaces as a 401 on both
 > push and pull — it has cost a full debugging cycle before.
 
-**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci harbor-provisioner` ([`tools/internal/harbor/harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/harbor/harbor_provisioner.go), canonical robot creation — the in-cluster harbor-robot-provisioner CronJob).
+**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci harbor-provisioner` ([`tools/internal/extensions/harbor/harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/harbor/harbor_provisioner.go), canonical robot creation — the in-cluster harbor-robot-provisioner CronJob).
 
 ---
 
@@ -82,7 +82,7 @@ Note this reads a **platform** path, which the ESO store's platform allowlist al
 
 ## Machine account — system robot (CI / in-cluster)
 
-Two robots already exist (the CI robot, `pull-<project>`) — both created by the in-cluster `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`, [`tools/internal/harbor/harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/harbor/harbor_provisioner.go)) once Harbor is up. The CronJob owns their whole lifecycle — see [Rotation](#rotation). To add a new robot, run the same shape of API call by hand or extend that command.
+Two robots already exist (the CI robot, `pull-<project>`) — both created by the in-cluster `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`, [`tools/internal/extensions/harbor/harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/harbor/harbor_provisioner.go)) once Harbor is up. The CronJob owns their whole lifecycle — see [Rotation](#rotation). To add a new robot, run the same shape of API call by hand or extend that command.
 
 ### Adding a new robot by hand
 
