@@ -171,14 +171,14 @@ func ErrReadUnknown(path, field, action string) error {
 // ── the seams package main installs ────────────────────────────────────────
 //
 // TWO CAPABILITIES AND ONE PARSER, and that split is why this package could come
-// out at all. bao_read.go reached four package main symbols — baoExecFn,
-// rootOpenbaoPod, parseBaoPodStatus and transientExecMarkers — and only the first
+// out at all. bao_read.go reached four package main symbols — ExecFn,
+// RootPod, ParsePodStatus and transientExecMarkers — and only the first
 // is a capability. The three-clause rule takes the rest apart:
 //
-//   - `rootOpenbaoPod` is a CONST STRING with six callers in main. Which pod holds
+//   - `RootPod` is a CONST STRING with six callers in main. Which pod holds
 //     root is not this package's business, so the installer bakes it into Exec and
 //     the signature here carries only the token and the argv.
-//   - `parseBaoPodStatus` has FOUR other callers in main: shared machinery, not
+//   - `ParsePodStatus` has FOUR other callers in main: shared machinery, not
 //     this package's. PodStatusUnsealed is a seam over it — the package asks "is
 //     the pod answering and unsealed?" and does not know how that is decided.
 //   - `TransientMarkers` is DATA, and it moved HERE rather than being injected. It

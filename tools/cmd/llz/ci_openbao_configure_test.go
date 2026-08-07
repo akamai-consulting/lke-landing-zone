@@ -391,7 +391,7 @@ func TestAuditFileDeviceActive(t *testing.T) {
 	}
 }
 
-// configureStub returns a baoExecFn stub with per-command behavior overrides.
+// configureStub returns a baoread.ExecFn stub with per-command behavior overrides.
 func configureStub(t *testing.T, calls *[]string, override func(cmd string) (string, string, error, bool)) func(pod, token, stdin string, args ...string) (string, string, error) {
 	t.Helper()
 	return func(pod, token, stdin string, args ...string) (string, string, error) {

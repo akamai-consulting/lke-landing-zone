@@ -7,6 +7,7 @@ package main
 // cluster.
 
 import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
@@ -19,7 +20,7 @@ func healthSLADeps() healthsla.Deps {
 	return healthsla.Deps{
 		Summary: appendGHAFile,
 		BaoExec: func(pod, addr, token string, args ...string) (string, string, error) {
-			return baoExecFn(pod, addr, token, args...)
+			return baoread.ExecFn(pod, addr, token, args...)
 		},
 		Exec:        execOutput,
 		Reachable:   kubectlprobe.Reachable,

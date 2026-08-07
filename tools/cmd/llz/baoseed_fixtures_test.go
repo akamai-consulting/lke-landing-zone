@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 )
 
 func withGHASummaryFile(t *testing.T) string {
@@ -22,8 +24,8 @@ func withGHASummaryFile(t *testing.T) string {
 func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string {
 	t.Helper()
 	var puts [][]string
-	prev := baoExecFn
-	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
+	prev := baoread.ExecFn
+	baoread.ExecFn = func(_, _, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.HasPrefix(joined, "kv get"):
@@ -40,7 +42,7 @@ func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string 
 		}
 		return "", "unexpected: " + joined, errors.New("unexpected")
 	}
-	t.Cleanup(func() { baoExecFn = prev })
+	t.Cleanup(func() { baoread.ExecFn = prev })
 	return &puts
 }
 func lastArg(args []string) string {

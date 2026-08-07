@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 )
@@ -117,7 +118,7 @@ func runVerify(g globalOpts, o verifyOpts) error {
 	if strings.TrimSpace(pod) == "" {
 		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", color.Dim("INFO"))
 	} else {
-		st, _, _ := baoExec(strings.TrimSpace(pod), "", "", "status", "-format=json")
+		st, _, _ := baoread.ExecPod(strings.TrimSpace(pod), "", "", "status", "-format=json")
 		sealed, _ := parseBaoStatus(st)
 		if strings.TrimSpace(st) == "" {
 			fmt.Printf("  %s  could not determine seal status (pod may be initialising)\n", color.Dim("INFO"))

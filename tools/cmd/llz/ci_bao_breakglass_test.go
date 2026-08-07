@@ -246,7 +246,7 @@ func TestRunCIBaoBreakglassDryRun(t *testing.T) {
 	}
 }
 
-// quorumRegenExec returns a fake baoExecFn that drives the full generate-root
+// quorumRegenExec returns a fake baoread.ExecFn that drives the full generate-root
 // quorum flow (dead lookup → cancel/init/3 keys → decode) and mints `newRoot`.
 // `revoke` handling + call-order are recorded via the closures.
 func quorumRegenExec(t *testing.T, newRoot string, onRevoke func(token string), onRegenInit func()) func(string, string, string, ...string) (string, string, error) {

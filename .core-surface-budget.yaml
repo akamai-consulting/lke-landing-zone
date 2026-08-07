@@ -312,7 +312,15 @@ categories:
     #                       the way — helpers that had already been orphaned TWICE
     #                       by the code they were typed next to.
     #
-    # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
+    #   47th: openbao exec layer  -> internal/baoread   19,006 -> 18,870 (-136 / 141 files)
+#        SMALL ON PURPOSE. ci_openbao.go is 287 lines and the hub every remaining
+#        OpenBao file reaches for, but half of it was NOT the exec layer: a cobra
+#        command and appendGHAFile, which has 25 callers of which exactly one is an
+#        OpenBao one. Moving that would have made every caller import OpenBao to
+#        write a step output, so it came straight back. The paydown is the retry
+#        wrapper, the pod-status parse, the loopback addressing and baoExec — which
+#        is what unblocks breakglass, init, configure and ensure-ready.
+# THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
     # files" annotation, and it was being decremented by hand rather than measured.
@@ -324,7 +332,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 19006
+    budget: 18870
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -1,42 +1,38 @@
-package main
+package baoread
 
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
-// withBaoExec swaps the baoExecFn seam for the test's duration.
+// withBaoExec swaps the ExecFn seam for the test's duration.
 func withBaoExec(t *testing.T, fn func(pod, token, stdin string, args ...string) (string, string, error)) {
 	t.Helper()
-	orig := baoExecFn
-	baoExecFn = fn
-	t.Cleanup(func() { baoExecFn = orig })
+	orig := ExecFn
+	ExecFn = fn
+	t.Cleanup(func() { ExecFn = orig })
 }
 
 // withBaoSleep makes poll waits instantaneous while counting them.
 func withBaoSleep(t *testing.T) *int {
 	t.Helper()
-	orig := baoSleep
+	orig := Sleep
 	n := new(int)
-	baoSleep = func(time.Duration) { *n++ }
-	t.Cleanup(func() { baoSleep = orig })
+	Sleep = func(time.Duration) { *n++ }
+	t.Cleanup(func() { Sleep = orig })
 	return n
 }
 
 // withBaoExecRaw swaps the raw (pre-retry) exec seam so the retry wrapper
-// itself can be exercised; the live baoExecFn (= baoExecResilient) stays wired.
+// itself can be exercised; the live ExecFn (= execResilient) stays wired.
 func withBaoExecRaw(t *testing.T, fn func(pod, token, stdin string, args ...string) (string, string, error)) {
 	t.Helper()
-	orig := baoExecRawFn
-	baoExecRawFn = fn
-	t.Cleanup(func() { baoExecRawFn = orig })
+	orig := ExecRaw
+	ExecRaw = fn
+	t.Cleanup(func() { ExecRaw = orig })
 }
 
 func TestIsTransientExecErr(t *testing.T) {
@@ -76,9 +72,9 @@ func TestBaoExecResilientRetriesTransient(t *testing.T) {
 		}
 		return `{"root_token":"s.x"}`, "", nil
 	})
-	out, _, err := baoExecResilient("platform-openbao-0", "", "", "operator", "init")
+	out, _, err := execResilient("platform-openbao-0", "", "", "operator", "init")
 	if err != nil {
-		t.Fatalf("baoExecResilient returned err after transient retries: %v", err)
+		t.Fatalf("execResilient returned err after transient retries: %v", err)
 	}
 	if calls != 3 {
 		t.Errorf("raw exec called %d times, want 3 (2 transient + 1 success)", calls)
@@ -95,7 +91,7 @@ func TestBaoExecResilientNoRetryOnRealError(t *testing.T) {
 		calls++
 		return "", "Error: Vault is already initialized", errors.New("exit 2")
 	})
-	if _, _, err := baoExecResilient("platform-openbao-0", "", ""); err == nil {
+	if _, _, err := execResilient("platform-openbao-0", "", ""); err == nil {
 		t.Fatal("expected the genuine bao error to propagate")
 	}
 	if calls != 1 {
@@ -113,7 +109,7 @@ func TestBaoExecResilientGivesUpAfterBudget(t *testing.T) {
 		calls++
 		return "", "No agent available", errors.New("exit 1")
 	})
-	if _, _, err := baoExecResilient("platform-openbao-0", "", ""); err == nil {
+	if _, _, err := execResilient("platform-openbao-0", "", ""); err == nil {
 		t.Fatal("expected the error to surface once the retry budget is spent")
 	}
 	if calls != baoExecRetries {
@@ -136,9 +132,9 @@ func TestParseBaoPodStatus(t *testing.T) {
 		{"error: unable to connect", false, false, true},
 	}
 	for _, c := range cases {
-		st, ok := parseBaoPodStatus(c.in)
+		st, ok := ParsePodStatus(c.in)
 		if ok != c.ok || st.Initialized != c.initialized || st.Sealed != c.sealed {
-			t.Errorf("parseBaoPodStatus(%q) = (%+v, %v), want init=%v sealed=%v ok=%v",
+			t.Errorf("ParsePodStatus(%q) = (%+v, %v), want init=%v sealed=%v ok=%v",
 				c.in, st, ok, c.initialized, c.sealed, c.ok)
 		}
 	}
@@ -146,76 +142,24 @@ func TestParseBaoPodStatus(t *testing.T) {
 
 func TestAggregateBaoStatus(t *testing.T) {
 	cases := []struct {
-		states      []baoPodStatus
+		states      []PodStatus
 		initialized bool
 		sealed      bool
 	}{
 		// Healthy steady state.
-		{[]baoPodStatus{{true, false}, {true, false}, {true, false}}, true, false},
+		{[]PodStatus{{true, false}, {true, false}, {true, false}}, true, false},
 		// Partial seal MUST read as sealed (quorum risk).
-		{[]baoPodStatus{{true, false}, {true, true}, {true, false}}, true, true},
+		{[]PodStatus{{true, false}, {true, true}, {true, false}}, true, true},
 		// Fresh cluster.
-		{[]baoPodStatus{{false, true}, {false, true}, {false, true}}, false, true},
+		{[]PodStatus{{false, true}, {false, true}, {false, true}}, false, true},
 		// One pod knows it's initialized → cluster-wide flag.
-		{[]baoPodStatus{{false, true}, {true, true}, {false, true}}, true, true},
+		{[]PodStatus{{false, true}, {true, true}, {false, true}}, true, true},
 	}
 	for i, c := range cases {
-		gotInit, gotSealed := aggregateBaoStatus(c.states)
+		gotInit, gotSealed := AggregateStatus(c.states)
 		if gotInit != c.initialized || gotSealed != c.sealed {
 			t.Errorf("case %d: aggregate = (%v, %v), want (%v, %v)", i, gotInit, gotSealed, c.initialized, c.sealed)
 		}
-	}
-}
-
-func TestRunCIBaoStatusWritesOutputs(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "output")
-	t.Setenv("GITHUB_OUTPUT", out)
-	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
-		if args[0] != "status" {
-			t.Errorf("unexpected bao args %v", args)
-		}
-		switch pod {
-		case "platform-openbao-0":
-			return `{"initialized":true,"sealed":false}`, "", nil
-		case "platform-openbao-1":
-			// Sealed pods exit non-zero but still print JSON.
-			return `{"initialized":true,"sealed":true}`, "", errors.New("exit status 2")
-		default:
-			// Unreachable pod: no JSON at all.
-			return "", "connection refused", errors.New("exit status 1")
-		}
-	})
-	if err := runCIBaoStatus(); err != nil {
-		t.Fatalf("runCIBaoStatus: %v", err)
-	}
-	b, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatalf("read GITHUB_OUTPUT: %v", err)
-	}
-	if got := string(b); got != "initialized=true\nsealed=true\n" {
-		t.Errorf("GITHUB_OUTPUT = %q, want initialized=true + sealed=true", got)
-	}
-}
-
-func TestAppendGHAFileNoEnvIsNoop(t *testing.T) {
-	t.Setenv("GITHUB_OUTPUT", "")
-	if err := appendGHAFile("GITHUB_OUTPUT", "k=v"); err != nil {
-		t.Errorf("appendGHAFile with unset env = %v, want nil", err)
-	}
-}
-
-func TestAppendGHAFileAppends(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "env")
-	t.Setenv("GITHUB_ENV", f)
-	if err := appendGHAFile("GITHUB_ENV", "A=1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendGHAFile("GITHUB_ENV", "B=2", "C=3"); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(f)
-	if got := string(b); got != "A=1\nB=2\nC=3\n" {
-		t.Errorf("GITHUB_ENV = %q, want three appended lines", got)
 	}
 }
 
@@ -223,12 +167,12 @@ func TestRecoveryKeysFromEnv(t *testing.T) {
 	t.Setenv("RECOVERY_K1", "k1")
 	t.Setenv("RECOVERY_K2", "k2")
 	t.Setenv("RECOVERY_K3", "k3")
-	keys, err := recoveryKeysFromEnv()
+	keys, err := RecoveryKeysFromEnv()
 	if err != nil || len(keys) != 3 || keys[2] != "k3" {
-		t.Fatalf("recoveryKeysFromEnv = (%v, %v), want 3 keys", keys, err)
+		t.Fatalf("RecoveryKeysFromEnv = (%v, %v), want 3 keys", keys, err)
 	}
 	t.Setenv("RECOVERY_K2", "")
-	if _, err := recoveryKeysFromEnv(); err == nil || !strings.Contains(err.Error(), "RECOVERY_K2") {
+	if _, err := RecoveryKeysFromEnv(); err == nil || !strings.Contains(err.Error(), "RECOVERY_K2") {
 		t.Errorf("missing RECOVERY_K2 → err = %v, want named error", err)
 	}
 }
@@ -243,7 +187,7 @@ func TestWaitForBaoState(t *testing.T) {
 		}
 		return "", "", errors.New("not up yet")
 	})
-	ok := waitForBaoState("platform-openbao-1", 300*time.Second, 5*time.Second, func(st baoPodStatus) bool {
+	ok := WaitForState("platform-openbao-1", 300*time.Second, 5*time.Second, func(st PodStatus) bool {
 		return st.Initialized
 	})
 	if !ok || probes != 3 || *sleeps != 2 {
@@ -256,7 +200,7 @@ func TestWaitForBaoStateTimesOut(t *testing.T) {
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return `{"initialized":false,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	if waitForBaoState("platform-openbao-2", 20*time.Second, 5*time.Second, func(st baoPodStatus) bool { return st.Initialized }) {
+	if WaitForState("platform-openbao-2", 20*time.Second, 5*time.Second, func(st PodStatus) bool { return st.Initialized }) {
 		t.Fatal("want timeout, got success")
 	}
 	// 20s budget / 5s interval → probes at 0,5,10,15,20s then give up: 4 sleeps
@@ -279,7 +223,7 @@ func TestWaitForAutoUnsealHappyPath(t *testing.T) {
 		up := followerProbes[pod] >= 2
 		return fmt.Sprintf(`{"initialized":%t,"sealed":%t}`, up, !up), "", errors.New("exit status 2")
 	})
-	if err := waitForAutoUnseal(180*time.Second, 300*time.Second); err != nil {
+	if err := WaitForAutoUnseal(180*time.Second, 300*time.Second); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -290,7 +234,7 @@ func TestWaitForAutoUnsealLeaderTimeout(t *testing.T) {
 	reads := 0
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
 		// Leader never auto-unseals (e.g. missing/wrong static seal key). The read
-		// cap keeps that from being literally forever: waitForBaoState spends its
+		// cap keeps that from being literally forever: WaitForState spends its
 		// budget by accumulating the interval, so a collapsed interval would poll
 		// without end — the cap turns that into the failed assertion below.
 		reads++
@@ -299,7 +243,7 @@ func TestWaitForAutoUnsealLeaderTimeout(t *testing.T) {
 		}
 		return `{"initialized":true,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	err := waitForAutoUnseal(10*time.Second, 10*time.Second)
+	err := WaitForAutoUnseal(10*time.Second, 10*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "leader") {
 		t.Errorf("err = %v, want leader timeout", err)
 	}
@@ -325,7 +269,7 @@ func TestWaitForAutoUnsealFollowerTimeoutDumpsLogs(t *testing.T) {
 		}
 		return `{"initialized":false,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	err := waitForAutoUnseal(10*time.Second, 10*time.Second)
+	err := WaitForAutoUnseal(10*time.Second, 10*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "platform-openbao-1") {
 		t.Errorf("err = %v, want follower-1 timeout", err)
 	}
@@ -337,49 +281,3 @@ func TestWaitForAutoUnsealFollowerTimeoutDumpsLogs(t *testing.T) {
 // TestCIBaoCommandWiring executes every `llz ci bao-*` cobra command end to
 // end (flag parsing → RunE) under --dry-run with the exec/gh seams stubbed,
 // pinning the Use strings and required-flag errors the workflows depend on.
-func TestCIBaoCommandWiring(t *testing.T) {
-	t.Setenv("RECOVERY_K1", "k1")
-	t.Setenv("RECOVERY_K2", "k2")
-	t.Setenv("RECOVERY_K3", "k3")
-	t.Setenv("OPENBAO_ROOT_TOKEN", "s.root")
-	t.Setenv("GITHUB_OUTPUT", "")
-	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
-		return `{"initialized":true,"sealed":false}`, "", nil
-	})
-	withGHSetSecret(t, nil)
-	origOpts := gopts
-	gopts = globalOpts{dryRun: true}
-	t.Cleanup(func() { gopts = origOpts })
-
-	cases := []struct {
-		cmd  func() *cobra.Command
-		use  string
-		args []string
-	}{
-		{ciBaoStatusCmd, "bao-status", nil},
-		{ciBaoInitCmd, "bao-init", []string{"--region", "primary"}},
-		{ciBaoRegenRootCmd, "bao-regen-root", []string{"--region", "primary"}},
-		{ciBaoConfigureCmd, "bao-configure", []string{"--region", "primary"}},
-	}
-	for _, c := range cases {
-		cmd := c.cmd()
-		if cmd.Use != c.use {
-			t.Errorf("Use = %q, want %q", cmd.Use, c.use)
-		}
-		cmd.SetArgs(c.args)
-		cmd.SilenceUsage = true
-		if err := cmd.Execute(); err != nil {
-			t.Errorf("%s %v: %v", c.use, c.args, err)
-		}
-	}
-
-	// The region-taking commands refuse to run without --region.
-	for _, mk := range []func() *cobra.Command{ciBaoInitCmd, ciBaoRegenRootCmd, ciBaoConfigureCmd} {
-		cmd := mk()
-		cmd.SetArgs(nil)
-		cmd.SilenceUsage, cmd.SilenceErrors = true, true
-		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--region") {
-			t.Errorf("%s without --region: err = %v, want required-flag error", cmd.Use, err)
-		}
-	}
-}

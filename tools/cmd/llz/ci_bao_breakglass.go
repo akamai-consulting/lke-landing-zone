@@ -43,6 +43,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/spf13/cobra"
 )
 
@@ -163,7 +164,7 @@ func breakglassRevokeCurrent(region string) {
 		fmt.Printf("No OPENBAO_ROOT_TOKEN stored on infra-%s — nothing to revoke.\n", region)
 		return
 	}
-	if _, _, err := baoExecFn(openbaoPodNames[0], token, "", "token", "revoke", "-self"); err != nil {
+	if _, _, err := baoread.ExecFn(baoread.PodNames[0], token, "", "token", "revoke", "-self"); err != nil {
 		fmt.Println("::warning::token revoke -self failed — the stored token may already be dead. Continuing.")
 		return
 	}

@@ -10,7 +10,6 @@ package main
 // echoed, never on argv, never on disk).
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +18,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
@@ -44,7 +44,7 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 	}
 
 	// Sanity: reachable + unsealed.
-	statusOut, _, err := baoExec(pod, "", "", "status", "-format=json")
+	statusOut, _, err := baoread.ExecPod(pod, "", "", "status", "-format=json")
 	if err != nil {
 		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", openbaoNS, pod)
 	}
@@ -55,8 +55,8 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 	fmt.Printf("OpenBao unsealed. Unseal threshold: %d.\n", threshold)
 
 	// Clean slate, then init.
-	_, _, _ = baoExec(pod, "", "", "operator", "generate-root", "-cancel")
-	initOut, _, err := baoExec(pod, "", "", "operator", "generate-root", "-init", "-format=json")
+	_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
+	initOut, _, err := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-init", "-format=json")
 	if err != nil {
 		return fmt.Errorf("initialize generate-root: %w", err)
 	}
@@ -82,11 +82,11 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 			progress--
 			continue
 		}
-		out, errOut, err := baoExec(pod, "", key+"\n",
+		out, errOut, err := baoread.ExecPod(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		key = ""
 		if err != nil {
-			_, _, _ = baoExec(pod, "", "", "operator", "generate-root", "-cancel")
+			_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
 			return fmt.Errorf("generate-root rejected key #%d: %s\n"+
 				"  (wrong/duplicate key, or keys from a different OpenBao init — compare cluster_id)",
 				progress, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -102,10 +102,10 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 	}
 
 	// Decode (local op against the OTP) inside the pod for binary parity.
-	decodeOut, _, _ := baoExec(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
+	decodeOut, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
 	newRoot := parseTokenField(decodeOut)
 	if newRoot == "" { // older bao prints a bare token
-		bare, _, _ := baoExec(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
+		bare, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
 		newRoot = strings.TrimSpace(bare)
 	}
 	if newRoot == "" {
@@ -113,7 +113,7 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 	}
 
 	// Verify it actually works and is root.
-	lookupOut, _, err := baoExec(pod, newRoot, "", "token", "lookup", "-format=json")
+	lookupOut, _, err := baoread.ExecPod(pod, newRoot, "", "token", "lookup", "-format=json")
 	if err != nil {
 		emitRecoveryToken(newRoot, "self-lookup failed")
 		return fmt.Errorf("new root token failed self-lookup")
@@ -171,7 +171,7 @@ func updateRootGHASecret(region, newRoot string, o regenRootOpts) error {
 // falling back to platform-openbao-0.
 func findLeaderPod() string {
 	for _, cand := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		out, _, err := baoExec(cand, "", "", "status", "-format=json")
+		out, _, err := baoread.ExecPod(cand, "", "", "status", "-format=json")
 		if err == nil && parseIsSelf(out) {
 			return cand
 		}
@@ -179,30 +179,6 @@ func findLeaderPod() string {
 	return "platform-openbao-0"
 }
 
-// baoExec runs `bao <args>` inside the openbao container of pod via kubectl exec.
-// token (if non-empty) sets the bao token; stdin (if non-empty) is piped in.
-func baoExec(pod, token, stdin string, args ...string) (stdout, stderr string, err error) {
-	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
-	// Loopback listener + CA verification — the network listener now requires a
-	// client certificate this in-pod caller does not have. See baoLoopbackEnv,
-	// which also explains why the BAO_* names (not just VAULT_*) are required.
-	argv = append(argv, baoLoopbackEnv()...)
-	if token != "" {
-		argv = append(argv, "BAO_TOKEN="+token, "VAULT_TOKEN="+token)
-	}
-	argv = append(argv, "bao")
-	argv = append(argv, args...)
-	cmd := exec.Command("kubectl", argv...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	var o, e bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &o, &e
-	err = cmd.Run()
-	return o.String(), e.String(), err
-}
-
-// readSecretLine reads one line from the terminal without echoing it.
 func readSecretLine() (string, error) {
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	return strings.TrimRight(string(b), "\r\n"), err

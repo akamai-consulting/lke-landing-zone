@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"gopkg.in/yaml.v3"
 )
 
@@ -153,11 +154,11 @@ func TestOpenBaoInPodClientsCarryAClientCertificate(t *testing.T) {
 	}
 	// llz's exec paths do NOT go through the PodSpec, so they may (and must) point
 	// themselves at the cert-free loopback listener explicitly.
-	if !contains(baoLoopbackEnv(), "BAO_ADDR="+openbaoLoopbackAddr) {
-		t.Errorf("baoLoopbackEnv() does not export BAO_ADDR=%s: %v\n"+
+	if !contains(baoread.LoopbackEnv(), "BAO_ADDR="+baoread.LoopbackAddr) {
+		t.Errorf("baoread.LoopbackEnv() does not export BAO_ADDR=%s: %v\n"+
 			"OpenBao prefers a present BAO_* over its VAULT_* alias unconditionally (api/env.go), so a\n"+
 			"VAULT_ADDR-only argv is silently overridden by the container's BAO_ADDR of :8200.",
-			openbaoLoopbackAddr, baoLoopbackEnv())
+			baoread.LoopbackAddr, baoread.LoopbackEnv())
 	}
 }
 
@@ -167,17 +168,17 @@ func TestOpenBaoInPodClientsCarryAClientCertificate(t *testing.T) {
 // Pin the premise so the guards get revisited deliberately, not silently.
 func TestOpenBaoLoopbackListenerIsLoopbackOnly(t *testing.T) {
 	raw := rawOpenBaoValues(t)
-	re := regexp.MustCompile(`address\s*=\s*"([^"]*:` + openbaoLoopbackPort + `)"`)
+	re := regexp.MustCompile(`address\s*=\s*"([^"]*:` + baoread.LoopbackPort + `)"`)
 	m := re.FindStringSubmatch(raw)
 	if m == nil {
 		t.Fatalf("no listener bound to port %s found in %s — the loopback listener the probes and\n"+
-			"llz depend on has moved or been removed.", openbaoLoopbackPort, openbaoChartValues)
+			"llz depend on has moved or been removed.", baoread.LoopbackPort, openbaoChartValues)
 	}
 	if !strings.HasPrefix(m[1], "127.0.0.1:") {
 		t.Errorf("listener on port %s binds %q, not 127.0.0.1.\n"+
 			"If that is deliberate, revisit TestOpenBaoProbesAreExecNotHTTPGet: a pod-network bind makes\n"+
 			"an httpGet probe reachable again — but it also re-exposes a certificate-free API port,\n"+
-			"which is what ADR 0010 removed.", openbaoLoopbackPort, m[1])
+			"which is what ADR 0010 removed.", baoread.LoopbackPort, m[1])
 	}
 }
 

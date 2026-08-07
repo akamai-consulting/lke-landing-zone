@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
@@ -805,7 +806,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 		}
 		return nil
 	}
-	pod := openbaoPodNames[0]
+	pod := baoread.PodNames[0]
 
 	// Token preflight. The sha256 is safe (irreversible) and cross-checks
 	// against the sha256 `llz openbao regen-root` printed when it wrote the
@@ -820,7 +821,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// baoExec keeps stdout/stderr separate and pins -c openbao, so kubectl's
 	// "Defaulted container" warning cannot poison the JSON (the bash needed
 	// mktemp redirection for this).
-	lookupOut, lookupErr, err := baoExecFn(pod, token, "", "token", "lookup", "-format=json")
+	lookupOut, lookupErr, err := baoread.ExecFn(pod, token, "", "token", "lookup", "-format=json")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::OPENBAO_ROOT_TOKEN on %s is invalid (token lookup failed). Likely revoked by a prior bootstrap run or OpenBao was re-initialized. Regenerate root via 'bao operator generate-root' (quorum required) and re-seed the infra-%s environment secret.\n", region, region)
 		for _, l := range strings.Split(strings.TrimSpace(firstNonEmpty(lookupErr, lookupOut)), "\n") {
@@ -835,7 +836,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	fmt.Printf("OPENBAO_ROOT_TOKEN preflight on %s OK — proceeding.\n", region)
 
 	for _, step := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
-		out, errOut, err := baoExecFn(pod, token, step.stdin, step.args...)
+		out, errOut, err := baoread.ExecFn(pod, token, step.stdin, step.args...)
 		if err != nil {
 			if step.fatal {
 				return fmt.Errorf("%s: %s", step.desc, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -848,7 +849,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 		fmt.Printf("%s: done\n", step.desc)
 	}
 
-	auditOut, _, _ := baoExecFn(pod, token, "", "audit", "list")
+	auditOut, _, _ := baoread.ExecFn(pod, token, "", "audit", "list")
 	if auditFileDeviceActive(auditOut) {
 		fmt.Println("audit device file/ active (declared in chart values).")
 	} else {

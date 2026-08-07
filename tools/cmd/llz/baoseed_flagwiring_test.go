@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// stubBaoSeedKV stubs baoExecFn for bao-seed runs: `kv get` of presentPath/
+// stubBaoSeedKV stubs baoread.ExecFn for bao-seed runs: `kv get` of presentPath/
 // presentField returns presentValue; every `kv put` is recorded.
 func TestBaoSeedCmdFlagWiring(t *testing.T) {
 	c := ciBaoSeedCmd()

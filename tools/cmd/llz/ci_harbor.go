@@ -41,12 +41,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/spf13/cobra"
 )
 
 // baoKVPutFn writes one KV path through the in-pod bao CLI — the same kubectl
 // exec passthrough as `llz openbao exec kv put …` (which replaced the
-// bao-exec.sh the script shelled), run in-process via the baoExecFn seam. The
+// bao-exec.sh the script shelled), run in-process via the baoread.ExecFn seam. The
 // field values appear only on the kubectl exec argv that passthrough already
 // exposes, never on any other local process argv. Seamed for tests.
 var baoKVPutFn = func(path string, fields map[string]string) error {
@@ -63,7 +64,7 @@ var baoKVPutFn = func(path string, fields map[string]string) error {
 	for _, k := range keys {
 		args = append(args, k+"="+fields[k])
 	}
-	out, errOut, err := baoExecFn(rootOpenbaoPod, token, "", args...)
+	out, errOut, err := baoread.ExecFn(rootOpenbaoPod, token, "", args...)
 	if err != nil {
 		return fmt.Errorf("bao kv put %s: %s", path, strings.TrimSpace(firstNonEmpty(errOut, out)))
 	}

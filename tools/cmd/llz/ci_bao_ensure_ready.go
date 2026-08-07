@@ -35,6 +35,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/spf13/cobra"
 )
 
@@ -79,14 +80,14 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 
 	// 1. Probe all pods — the same aggregation `bao-status` emits (a partial seal
 	//    reads as sealed so the re-unseal branch fires).
-	states := make([]baoPodStatus, 0, len(openbaoPodNames))
-	for _, pod := range openbaoPodNames {
-		out, _, _ := baoExecFn(pod, "", "", "status", "-format=json")
-		st, _ := parseBaoPodStatus(out)
+	states := make([]baoread.PodStatus, 0, len(baoread.PodNames))
+	for _, pod := range baoread.PodNames {
+		out, _, _ := baoread.ExecFn(pod, "", "", "status", "-format=json")
+		st, _ := baoread.ParsePodStatus(out)
 		fmt.Printf("  %s: initialized=%t sealed=%t\n", pod, st.Initialized, st.Sealed)
 		states = append(states, st)
 	}
-	initialized, sealedAny := aggregateBaoStatus(states)
+	initialized, sealedAny := baoread.AggregateStatus(states)
 	fmt.Printf("cluster: initialized=%t sealed=%t\n", initialized, sealedAny)
 
 	switch {
@@ -105,14 +106,14 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		if err := runCIBaoInit(g, region); err != nil {
 			return err
 		}
-		if err := waitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
+		if err := baoread.WaitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
 			return err
 		}
 	case sealedAny:
 		// Branch B — initialized but (partially) sealed after a restart. Under
 		// static seal the pod self-unseals once it's back up; wait for that rather
 		// than submitting keys (there are none).
-		if err := waitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
+		if err := baoread.WaitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
 			return err
 		}
 	}
@@ -133,7 +134,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 	//    reported available=false, silently skipped configure + every seed, and died
 	//    ~20 minutes later at the converge gate complaining about unconverged apps
 	//    rather than about a root token. Regenerate whenever we have either input.
-	_, haveQuorum := recoveryKeysFromEnv()
+	_, haveQuorum := baoread.RecoveryKeysFromEnv()
 	if initialized && (os.Getenv("OPENBAO_ROOT_TOKEN") != "" || haveQuorum == nil) {
 		if err := runCIBaoRegenRoot(g, region); err != nil {
 			return err

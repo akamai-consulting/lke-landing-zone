@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
@@ -40,7 +41,7 @@ func installConvergeDeps(g globalOpts) {
 		StripOversizedCRDLastApplied: func() []string {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		},
-		BaoLoopbackEnv:         baoLoopbackEnv,
+		BaoLoopbackEnv:         baoread.LoopbackEnv,
 		FirewallDeploymentName: firewallDeploymentName,
 		FirewallConfigMapName:  firewallConfigMapName,
 		// The in-cluster client is built HERE, not in converge: it is the

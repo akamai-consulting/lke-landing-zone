@@ -82,7 +82,7 @@ func (p *pollRecorder) wantEveryPollAt(t *testing.T, interval time.Duration, cou
 }
 
 // wantEverySleepAt is wantEveryPollAt for the loops that take a plain
-// func(time.Duration) sleep seam rather than aplGateDeps (waitForBaoState).
+// func(time.Duration) sleep seam rather than aplGateDeps (baoread.WaitForState).
 func wantEverySleepAt(t *testing.T, slept []time.Duration, interval time.Duration, count int) {
 	t.Helper()
 	for i, d := range slept {

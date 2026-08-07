@@ -86,8 +86,8 @@ func runCIBaoInit(g globalOpts, region string) error {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would run `bao operator init` and persist recovery keys to infra-"+region)
 		return nil
 	}
-	pod := openbaoPodNames[0]
-	initOut, errOut, err := baoExecFn(pod, "", "",
+	pod := baoread.PodNames[0]
+	initOut, errOut, err := baoread.ExecFn(pod, "", "",
 		"operator", "init", "-recovery-shares=5", "-recovery-threshold=3", "-format=json")
 	if err != nil {
 		return fmt.Errorf("operator init on %s: %s", pod, strings.TrimSpace(firstNonEmpty(errOut, initOut)))
@@ -193,14 +193,14 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would validate $OPENBAO_ROOT_TOKEN and regenerate via quorum if revoked")
 		return nil
 	}
-	pod := openbaoPodNames[0]
+	pod := baoread.PodNames[0]
 
 	// The generate-root flow requires an unsealed leader; if the cluster is
 	// still sealed surface that explicitly instead of a confusing API error
 	// halfway through. (The bash needed a jq-`//`-operator workaround here;
 	// the typed parse sidesteps it.)
-	statusOut, _, _ := baoExecFn(pod, "", "", "status", "-format=json")
-	st, ok := parseBaoPodStatus(statusOut)
+	statusOut, _, _ := baoread.ExecFn(pod, "", "", "status", "-format=json")
+	st, ok := baoread.ParsePodStatus(statusOut)
 	if !ok || st.Sealed {
 		state := "true"
 		if !ok {
@@ -222,7 +222,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	// distinction ("unknown" vs sealed); this one now does too, and stops rather
 	// than guessing, because both wrong guesses here are expensive.
 	if token := os.Getenv("OPENBAO_ROOT_TOKEN"); token != "" {
-		_, stderr, err := baoExecFn(pod, token, "", "token", "lookup")
+		_, stderr, err := baoread.ExecFn(pod, token, "", "token", "lookup")
 		switch {
 		case err == nil:
 			fmt.Println("Root token is valid — skipping regeneration.")
@@ -241,15 +241,15 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 		fmt.Println("No OPENBAO_ROOT_TOKEN set — regenerating via quorum.")
 	}
 
-	keys, err := recoveryKeysFromEnv()
+	keys, err := baoread.RecoveryKeysFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::Cannot regenerate — OPENBAO_RECOVERY_KEY_{1,2,3} env secrets not set on infra-%s.\n", region)
 		return err
 	}
 
 	// Cancel any in-progress attempt (idempotent), then start fresh.
-	_, _, _ = baoExecFn(pod, "", "", "operator", "generate-root", "-cancel")
-	initOut, errOut, err := baoExecFn(pod, "", "", "operator", "generate-root", "-init", "-format=json")
+	_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
+	initOut, errOut, err := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-init", "-format=json")
 	if err != nil {
 		return fmt.Errorf("generate-root -init: %s", strings.TrimSpace(firstNonEmpty(errOut, initOut)))
 	}
@@ -263,7 +263,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	// encoded_token. Keys ride stdin (`-`), not argv.
 	var encoded string
 	for i, key := range keys {
-		out, errOut, err := baoExecFn(pod, "", key+"\n",
+		out, errOut, err := baoread.ExecFn(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		if err != nil {
 			return fmt.Errorf("generate-root rejected key %d/3: %s", i+1, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -278,10 +278,10 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	}
 
 	// Decode the encoded token using the OTP (in-pod, like regenroot.go).
-	decodeOut, _, _ := baoExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
+	decodeOut, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
 	newRoot := parseTokenField(decodeOut)
 	if newRoot == "" { // older bao prints a bare token
-		bare, _, _ := baoExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
+		bare, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
 		newRoot = strings.TrimSpace(bare)
 	}
 	if newRoot == "" {

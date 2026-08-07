@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
@@ -118,7 +119,7 @@ func portForwardOpenbao() (string, func(), error) {
 	// (8200). port-forward is established inside the pod's network namespace, so
 	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
 	// `llz openbao get/set` from a laptop that holds no client certificate.
-	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":"+openbaoLoopbackPort)
+	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":"+baoread.LoopbackPort)
 	// Surface kubectl's own stderr live: without this the common failure modes
 	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
 	// swallowed and the operator only sees an opaque establish timeout. kubectl
@@ -286,63 +287,9 @@ const rootOpenbaoPod = "platform-openbao-0"
 
 // ── in-pod `bao` CLI: the loopback listener ──────────────────────────────────
 
-// OpenBao serves TWO listeners (llz-openbao-platform values.yaml):
-//
-//	[::]:8200        pod network — mTLS, client certificate REQUIRED
-//	127.0.0.1:8210   loopback    — TLS, no client certificate
-//
-// Everything that drives OpenBao by exec-ing into the pod (`bao operator init`,
-// unseal/status, generate-root, the `llz ci health` probes) must target the
-// loopback listener: those callers run as the `bao` binary inside the container
-// and hold no client identity. Pointing them at 8200 fails the handshake.
-//
-// `kubectl port-forward` also reaches 8210 — forwarding is set up inside the
-// pod's network namespace, so a 127.0.0.1-bound listener is reachable. That is
-// what keeps the operator paths (`llz openbao get/set`, `llz openbao login`)
-// working without issuing client certs to laptops.
-const (
-	openbaoLoopbackPort = "8210"
-	openbaoLoopbackAddr = "https://127.0.0.1:" + openbaoLoopbackPort
-	// Mounted from the openbao-tls Secret. The serving cert carries a 127.0.0.1
-	// SAN (templates/openbao-tls-cert.yaml), so in-pod callers VERIFY the server
-	// rather than running VAULT_SKIP_VERIFY=true as they used to.
-	openbaoPodCACert = "/openbao/tls/ca.crt"
-)
-
-// baoLoopbackEnv is the env every in-pod `bao` invocation shares. Pure, so the
-// address/CA pairing is asserted once in tests instead of being restated (and
-// drifting) at each of the four call sites that used to inline it.
-//
-// MUST set the BAO_* names, not just the VAULT_* aliases. OpenBao's env lookup
-// prefers a PRESENT BAO_* variable over its VAULT_* alias unconditionally —
-// api/env.go: "If the BAO_ version is present but set to the empty string, still
-// prefer that over the VAULT_ prefixed version." The OpenBao chart hardcodes
-// BAO_ADDR=https://127.0.0.1:8200 into the container, so exporting VAULT_ADDR
-// alone was silently shadowed: every command below reached the mTLS listener
-// without a client certificate and died on the handshake —
-//
-//	Get "https://127.0.0.1:8200/v1/sys/seal-status":
-//	http2: client conn could not be established
-//
-// — which is how a bootstrap failure caused by ADR 0010 read as a probe bug.
-// The chart now repoints BAO_ADDR at :8210 as well; both sides are set so
-// neither depends on the other being right.
-//
-// The VAULT_* aliases stay for an older `bao` (or a `vault` binary) that does
-// not know the BAO_ names. They are inert whenever the BAO_* names are honoured.
-func baoLoopbackEnv() []string {
-	return []string{
-		"BAO_ADDR=" + openbaoLoopbackAddr, "BAO_CACERT=" + openbaoPodCACert,
-		"VAULT_ADDR=" + openbaoLoopbackAddr, "VAULT_CACERT=" + openbaoPodCACert,
-	}
-}
-
-// baoExecArgv builds the kubectl argv that runs `bao <args>` inside the openbao
-// container of pod with the standard env (token included). Pure, so the argv
-// shape + token placement are unit-tested.
 func baoExecArgv(pod, token string, args []string) []string {
 	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
-	argv = append(argv, baoLoopbackEnv()...)
+	argv = append(argv, baoread.LoopbackEnv()...)
 	// Both names, same reason as the address above. The chart does not set
 	// BAO_TOKEN today, so VAULT_TOKEN alone happens to work — but it works by
 	// luck, and the shadowing rule is the same one that broke the address.

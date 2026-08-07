@@ -108,7 +108,7 @@ func TestRunCIBaoEnsureReadyReseal(t *testing.T) {
 		switch {
 		case args[0] == "status":
 			// The first sweep (aggregate probe over 3 pods) still sees the pods
-			// sealed; by the time waitForAutoUnseal polls they've self-unsealed.
+			// sealed; by the time baoread.WaitForAutoUnseal polls they've self-unsealed.
 			probes++
 			return statusJSON(true, probes <= 3), "", nil
 		}

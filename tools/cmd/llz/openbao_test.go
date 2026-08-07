@@ -15,7 +15,7 @@ func TestBaoExecArgv(t *testing.T) {
 	// The BAO_* names must come through, not only the VAULT_* aliases: the chart
 	// puts BAO_ADDR=…:8200 in the container, and OpenBao prefers a present BAO_*
 	// over VAULT_* unconditionally, so a VAULT_ADDR-only argv is silently
-	// overridden back onto the mTLS listener. See baoLoopbackEnv.
+	// overridden back onto the mTLS listener. See baoread.LoopbackEnv.
 	want := []string{
 		"-n", "llz-openbao", "exec", "-i", "-c", "openbao", "platform-openbao-0", "--",
 		"env",

@@ -1,4 +1,4 @@
-package main
+package baoread
 
 // Mutation-test gap closure for ci_openbao.go: the retry backoff schedule (the
 // budget that decides whether a cold konnectivity warmup fails the whole OpenBao
@@ -58,7 +58,7 @@ func TestDumpBaoDiagnosticsLogBranch(t *testing.T) {
 			}
 			return []byte("panic: static seal key mismatch\n"), nil
 		})
-		out := captureStdout(t, func() { dumpBaoDiagnostics("platform-openbao-0", true) })
+		out := captureStdout(t, func() { DumpDiagnostics("platform-openbao-0", true) })
 		if !strings.Contains(out, "panic: static seal key mismatch") {
 			t.Errorf("the fetched container log must be printed:\n%s", out)
 		}
@@ -71,7 +71,7 @@ func TestDumpBaoDiagnosticsLogBranch(t *testing.T) {
 		withExecOutput(t, func(string, ...string) ([]byte, error) {
 			return nil, errors.New("pod not found")
 		})
-		out := captureStdout(t, func() { dumpBaoDiagnostics("platform-openbao-0", true) })
+		out := captureStdout(t, func() { DumpDiagnostics("platform-openbao-0", true) })
 		if !strings.Contains(out, "could not fetch logs: pod not found") {
 			t.Errorf("a failed fetch must say why:\n%s", out)
 		}
