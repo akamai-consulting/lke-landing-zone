@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 import (
 	"errors"
@@ -30,17 +30,17 @@ func withGHSetSecret(t *testing.T, fail func(name string) error) *[]string {
 const initJSON = `{"recovery_keys_b64":["uk1","uk2","uk3","uk4","uk5"],"root_token":"s.root"}`
 
 func TestParseBaoInit(t *testing.T) {
-	r, err := parseBaoInit(initJSON)
+	r, err := ParseInit(initJSON)
 	if err != nil || r.RootToken != "s.root" || len(r.RecoveryKeysB64) != 5 {
-		t.Fatalf("parseBaoInit = (%+v, %v), want full payload", r, err)
+		t.Fatalf("ParseInit = (%+v, %v), want full payload", r, err)
 	}
 	for _, bad := range []string{
 		"", "not json",
 		`{"recovery_keys_b64":["a","b"],"root_token":"s.x"}`, // too few shares
 		`{"recovery_keys_b64":["a","b","c","d","e"]}`,        // no root
 	} {
-		if _, err := parseBaoInit(bad); err == nil {
-			t.Errorf("parseBaoInit(%q) = nil error, want failure", bad)
+		if _, err := ParseInit(bad); err == nil {
+			t.Errorf("ParseInit(%q) = nil error, want failure", bad)
 		}
 	}
 }
@@ -59,7 +59,7 @@ func TestRunCIBaoInit(t *testing.T) {
 	})
 	ghCalls := withGHSetSecret(t, nil)
 
-	if err := runCIBaoInit(globalOpts{}, "primary"); err != nil {
+	if err := RunInit(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,7 +97,7 @@ func TestRunCIBaoInitSummaryBeforeGHFailure(t *testing.T) {
 	})
 	withGHSetSecret(t, func(string) error { return errors.New("403 secrets: write denied") })
 
-	if err := runCIBaoInit(globalOpts{}, "primary"); err == nil {
+	if err := RunInit(false, "primary"); err == nil {
 		t.Fatal("want error when gh secret set fails")
 	}
 	// The one-shot init payload must already be in the summary regardless.
@@ -108,13 +108,13 @@ func TestRunCIBaoInitSummaryBeforeGHFailure(t *testing.T) {
 }
 
 func TestRunCIBaoInitRequiresRegionAndInitSuccess(t *testing.T) {
-	if err := runCIBaoInit(globalOpts{}, ""); err == nil {
+	if err := RunInit(false, ""); err == nil {
 		t.Error("missing --region accepted")
 	}
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return "", "Error initializing: Vault is already initialized", errors.New("exit status 2")
 	})
-	err := runCIBaoInit(globalOpts{}, "primary")
+	err := RunInit(false, "primary")
 	if err == nil || !strings.Contains(err.Error(), "already initialized") {
 		t.Errorf("err = %v, want operator-init failure with stderr", err)
 	}
@@ -136,7 +136,7 @@ func TestRunCIBaoRegenRootValidTokenSkips(t *testing.T) {
 		return "", "", nil
 	})
 	ghCalls := withGHSetSecret(t, nil)
-	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err != nil {
+	if err := RunRegenRootCI(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 	if len(*ghCalls) != 0 {
@@ -148,7 +148,7 @@ func TestRunCIBaoRegenRootSealedLeaderFails(t *testing.T) {
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return `{"initialized":true,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "not unsealed") {
+	if err := RunRegenRootCI(false, "primary"); err == nil || !strings.Contains(err.Error(), "not unsealed") {
 		t.Errorf("err = %v, want sealed-leader refusal", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestRunCIBaoRegenRootFullQuorumFlow(t *testing.T) {
 	})
 	ghCalls := withGHSetSecret(t, nil)
 
-	if err := runCIBaoRegenRoot(globalOpts{}, "secondary"); err != nil {
+	if err := RunRegenRootCI(false, "secondary"); err != nil {
 		t.Fatal(err)
 	}
 	if !cancelled || keysSubmitted != 3 {
@@ -230,7 +230,7 @@ func TestRunCIBaoRegenRootInconclusiveLookupDoesNotRegenerate(t *testing.T) {
 	})
 	secrets := withGHSetSecret(t, nil)
 
-	err := runCIBaoRegenRoot(globalOpts{}, "primary")
+	err := RunRegenRootCI(false, "primary")
 	if err == nil || !strings.Contains(err.Error(), "inconclusive") {
 		t.Fatalf("err = %v, want an inconclusive-validation failure", err)
 	}
@@ -265,7 +265,7 @@ func TestRunCIBaoRegenRootQuorumWithoutToken(t *testing.T) {
 		return "", "", nil
 	})
 	withGHSetSecret(t, nil)
-	err := runCIBaoRegenRoot(globalOpts{}, "primary")
+	err := RunRegenRootCI(false, "primary")
 	if err == nil || !strings.Contains(err.Error(), "encoded_token") {
 		t.Errorf("err = %v, want missing-encoded_token failure", err)
 	}
@@ -282,7 +282,7 @@ func TestRunCIBaoRegenRootMissingKeys(t *testing.T) {
 		}
 		return "", "permission denied", errors.New("exit status 2")
 	})
-	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "RECOVERY_K1") {
+	if err := RunRegenRootCI(false, "primary"); err == nil || !strings.Contains(err.Error(), "RECOVERY_K1") {
 		t.Errorf("err = %v, want missing-keys error", err)
 	}
 }

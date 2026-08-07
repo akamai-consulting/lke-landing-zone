@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 
@@ -42,7 +43,7 @@ func teardownDeps() teardown.Deps {
 			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 			return cigate.RunCombined(cmd)
 		},
-		Summary: appendGHAFile,
+		Summary: ghaout.Append,
 		TFBin:   tfbin.Bin,
 		Confirm: func() bool { return gopts.yes },
 	}

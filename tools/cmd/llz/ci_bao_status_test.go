@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/spf13/cobra"
 )
 
@@ -49,18 +50,18 @@ func TestRunCIBaoStatusWritesOutputs(t *testing.T) {
 
 func TestAppendGHAFileNoEnvIsNoop(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", "")
-	if err := appendGHAFile("GITHUB_OUTPUT", "k=v"); err != nil {
-		t.Errorf("appendGHAFile with unset env = %v, want nil", err)
+	if err := ghaout.Append("GITHUB_OUTPUT", "k=v"); err != nil {
+		t.Errorf("ghaout.Append with unset env = %v, want nil", err)
 	}
 }
 
 func TestAppendGHAFileAppends(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", f)
-	if err := appendGHAFile("GITHUB_ENV", "A=1"); err != nil {
+	if err := ghaout.Append("GITHUB_ENV", "A=1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendGHAFile("GITHUB_ENV", "B=2", "C=3"); err != nil {
+	if err := ghaout.Append("GITHUB_ENV", "B=2", "C=3"); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(f)

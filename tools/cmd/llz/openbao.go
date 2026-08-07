@@ -105,9 +105,9 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 	}
 	addr, cleanup, err := portForwardOpenbaoFn()
 	if err != nil {
-		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", openbaoNS, rootOpenbaoPod, err)
+		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", baoread.Namespace, rootOpenbaoPod, err)
 	}
-	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", openbaoNS, rootOpenbaoPod, addr)
+	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", baoread.Namespace, rootOpenbaoPod, addr)
 	c := openbao.NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), openbao.HTTPClientLoopback(30*time.Second))
 	return c, cleanup, nil
 }
@@ -120,7 +120,7 @@ func portForwardOpenbao() (string, func(), error) {
 	// (8200). port-forward is established inside the pod's network namespace, so
 	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
 	// `llz openbao get/set` from a laptop that holds no client certificate.
-	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":"+baoread.LoopbackPort)
+	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+rootOpenbaoPod, ":"+baoread.LoopbackPort)
 	// Surface kubectl's own stderr live: without this the common failure modes
 	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
 	// swallowed and the operator only sees an opaque establish timeout. kubectl
@@ -282,7 +282,7 @@ const rootOpenbaoPod = "platform-openbao-0"
 // ── in-pod `bao` CLI: the loopback listener ──────────────────────────────────
 
 func baoExecArgv(pod, token string, args []string) []string {
-	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
+	argv := []string{"-n", baoread.Namespace, "exec", "-i", "-c", "openbao", pod, "--", "env"}
 	argv = append(argv, baoread.LoopbackEnv()...)
 	// Both names, same reason as the address above. The chart does not set
 	// BAO_TOKEN today, so VAULT_TOKEN alone happens to work — but it works by

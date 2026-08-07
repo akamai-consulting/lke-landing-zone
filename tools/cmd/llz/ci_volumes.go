@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 )
 
@@ -35,7 +36,7 @@ func ciVolumeDeps() volumes.Deps {
 	return volumes.Deps{
 		Token:   credrotate.InClusterLinodeToken(),
 		Kubectl: func(args ...string) ([]byte, error) { return execOutput("kubectl", args...) },
-		Summary: func(lines ...string) error { return appendGHAFile("GITHUB_STEP_SUMMARY", lines...) },
+		Summary: func(lines ...string) error { return ghaout.Append("GITHUB_STEP_SUMMARY", lines...) },
 	}
 }
 

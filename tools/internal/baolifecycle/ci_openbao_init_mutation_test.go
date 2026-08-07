@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 import (
 	"errors"
@@ -12,7 +12,7 @@ import (
 // be diagnosable from the message alone: it reports WHICH half arrived. Getting
 // the root-token half backwards sends the operator hunting the wrong failure.
 func TestParseBaoInitErrorReportsWhichHalfArrived(t *testing.T) {
-	_, err := parseBaoInit(`{"recovery_keys_b64":["a","b"],"root_token":"s.x"}`)
+	_, err := ParseInit(`{"recovery_keys_b64":["a","b"],"root_token":"s.x"}`)
 	if err == nil {
 		t.Fatal("two shares is an incomplete payload")
 	}
@@ -20,7 +20,7 @@ func TestParseBaoInitErrorReportsWhichHalfArrived(t *testing.T) {
 		t.Errorf("message should report root=true with 2 shares, got %v", err)
 	}
 
-	_, err = parseBaoInit(`{"recovery_keys_b64":["a","b","c","d","e"]}`)
+	_, err = ParseInit(`{"recovery_keys_b64":["a","b","c","d","e"]}`)
 	if err == nil {
 		t.Fatal("a missing root token is an incomplete payload")
 	}
@@ -66,7 +66,7 @@ func TestBaoRegenRootFailsWhenTheGitHubSecretWriteFails(t *testing.T) {
 	calls := withGHSetSecret(t, func(string) error { return errors.New("403: PAT lacks Environments admin") })
 
 	var err error
-	out := captureStdout(t, func() { err = runCIBaoRegenRoot(globalOpts{}, "secondary") })
+	out := captureStdout(t, func() { err = RunRegenRootCI(false, "secondary") })
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("err = %v, want the GitHub-secret write failure surfaced", err)
 	}

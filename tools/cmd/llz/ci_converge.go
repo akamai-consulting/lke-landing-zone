@@ -25,6 +25,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
@@ -36,7 +37,7 @@ func installConvergeDeps(g globalOpts) {
 	converge.Install(converge.Deps{
 		Exec:         execOutput,
 		ExecCombined: execCombined,
-		Summary:      appendGHAFile,
+		Summary:      ghaout.Append,
 		DryRun:       g.dryRun,
 		StripOversizedCRDLastApplied: func() []string {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))

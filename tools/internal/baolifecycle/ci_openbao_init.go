@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 // ci_openbao_init.go — `llz ci bao-init` and `llz ci bao-regen-root`, the
 // credential-lifecycle half of the openbao CI family (see ci_openbao.go):
@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
-	"github.com/spf13/cobra"
 )
 
 type baoInitResult struct {
@@ -25,10 +25,10 @@ type baoInitResult struct {
 	RecoveryKeysB64 []string `json:"recovery_keys_b64"`
 }
 
-// parseBaoInit validates the init payload: a root token plus at least the 5
+// ParseInit validates the init payload: a root token plus at least the 5
 // recovery shares requested. Anything less means init half-failed and nothing
 // below may proceed (the shares are generated exactly once).
-func parseBaoInit(s string) (baoInitResult, error) {
+func ParseInit(s string) (baoInitResult, error) {
 	var r baoInitResult
 	if err := json.Unmarshal([]byte(s), &r); err != nil {
 		return r, fmt.Errorf("operator init returned unparseable JSON: %w", err)
@@ -39,34 +39,11 @@ func parseBaoInit(s string) (baoInitResult, error) {
 	return r, nil
 }
 
-func ciBaoInitCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "bao-init",
-		Short: "first-time `bao operator init`: mask, persist recovery keys + root, write job summary",
-		Long: "Native port of init-cluster.sh (bootstrap-openbao.yml Branch A). Runs\n" +
-			"`bao operator init -recovery-shares=5 -recovery-threshold=3` on pod-0. Under\n" +
-			"the chart's `seal \"static\"` auto-unseal the pods unseal themselves at boot,\n" +
-			"so init yields RECOVERY shares (for generate-root/rekey quorum), not unseal\n" +
-			"keys. Masks all six values, writes the full init payload to\n" +
-			"$GITHUB_STEP_SUMMARY FIRST (the shares are generated exactly once and cannot\n" +
-			"be recovered — capturing them must not be gated on gh/network success),\n" +
-			"exports OPENBAO_ROOT_TOKEN + RECOVERY_K1-3 to $GITHUB_ENV for the downstream\n" +
-			"steps, and persists recovery keys 1-3 plus the root token as infra-<region>\n" +
-			"environment secrets. Emits did_init=true. Requires GH_TOKEN/GH_REPO (the\n" +
-			"secrets-write PAT).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoInit(gopts, region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment receives the secrets (required)")
-	return c
-}
-
-func runCIBaoInit(g globalOpts, region string) error {
+func RunInit(dryRun bool, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would run `bao operator init` and persist recovery keys to infra-"+region)
 		return nil
 	}
@@ -76,7 +53,7 @@ func runCIBaoInit(g globalOpts, region string) error {
 	if err != nil {
 		return fmt.Errorf("operator init on %s: %s", pod, strings.TrimSpace(firstNonEmpty(errOut, initOut)))
 	}
-	res, err := parseBaoInit(initOut)
+	res, err := ParseInit(initOut)
 	if err != nil {
 		return err
 	}
@@ -88,7 +65,7 @@ func runCIBaoInit(g globalOpts, region string) error {
 	}
 
 	// Job summary first — before any step that can fail (see Long help).
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		"## OpenBao Initialized — Save These Keys Now",
 		"",
 		"**OPERATOR ACTION REQUIRED:**",
@@ -105,7 +82,7 @@ func runCIBaoInit(g globalOpts, region string) error {
 		return err
 	}
 
-	if err := appendGHAFile("GITHUB_ENV",
+	if err := ghaout.Append("GITHUB_ENV",
 		"OPENBAO_ROOT_TOKEN="+res.RootToken,
 		"RECOVERY_K1="+res.RecoveryKeysB64[0],
 		"RECOVERY_K2="+res.RecoveryKeysB64[1],
@@ -142,38 +119,16 @@ func runCIBaoInit(g globalOpts, region string) error {
 	}
 
 	fmt.Printf("OpenBao initialized; recovery keys 1-3 + root token persisted to %s.\n", ghEnv)
-	return appendGHAFile("GITHUB_OUTPUT", "did_init=true")
+	return ghaout.Append("GITHUB_OUTPUT", "did_init=true")
 }
 
 // ── bao-regen-root ────────────────────────────────────────────────────────────
 
-func ciBaoRegenRootCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "bao-regen-root",
-		Short: "regenerate the root token via quorum if the loaded one is revoked",
-		Long: "Native port of regenerate-root-if-revoked.sh. The end-of-run \"Revoke root\n" +
-			"token\" step revokes the in-workflow token but can't update the GH secret,\n" +
-			"so the next run loads a dead value. This validates $OPENBAO_ROOT_TOKEN via\n" +
-			"`bao token lookup` and exits 0 if it works; otherwise it runs the\n" +
-			"`bao operator generate-root` quorum flow with RECOVERY_K1/2/3 (keys piped\n" +
-			"over stdin, never argv — under auto-unseal generate-root is authorized by\n" +
-			"the recovery keys, not unseal keys), masks the new token, exports it to\n" +
-			"$GITHUB_ENV for the downstream steps, and writes it back to the\n" +
-			"infra-<region> OPENBAO_ROOT_TOKEN environment secret. Interactive operator\n" +
-			"twin: `llz openbao regen-root`.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoRegenRoot(gopts, region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment holds OPENBAO_ROOT_TOKEN (required)")
-	return c
-}
-
-func runCIBaoRegenRoot(g globalOpts, region string) error {
+func RunRegenRootCI(dryRun bool, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would validate $OPENBAO_ROOT_TOKEN and regenerate via quorum if revoked")
 		return nil
 	}
@@ -277,7 +232,7 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	// os.Setenv mirror lets the in-process `bao-ensure-ready` availability gate
 	// read the REGENERATED token (not the stale one it loaded) via os.Getenv;
 	// a standalone step gets it from the $GITHUB_ENV injection.
-	if err := appendGHAFile("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+newRoot); err != nil {
+	if err := ghaout.Append("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+newRoot); err != nil {
 		return err
 	}
 	os.Setenv("OPENBAO_ROOT_TOKEN", newRoot)

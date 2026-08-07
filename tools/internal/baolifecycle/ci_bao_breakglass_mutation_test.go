@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 import (
 	"errors"
@@ -25,7 +25,7 @@ func TestBreakglassRevokeCurrentReportsRevokeOutcome(t *testing.T) {
 		}
 		return "", "", nil
 	})
-	out := captureStdout(t, func() { breakglassRevokeCurrent("primary") })
+	out := captureStdout(t, func() { BreakglassRevokeCurrent("primary") })
 	if !strings.Contains(out, "Current root token revoked.") {
 		t.Errorf("a successful revoke must be reported as revoked, got %q", out)
 	}
@@ -36,7 +36,7 @@ func TestBreakglassRevokeCurrentReportsRevokeOutcome(t *testing.T) {
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return "", "permission denied", errors.New("exit status 2")
 	})
-	out = captureStdout(t, func() { breakglassRevokeCurrent("primary") })
+	out = captureStdout(t, func() { BreakglassRevokeCurrent("primary") })
 	if !strings.Contains(out, "::warning::token revoke -self failed") {
 		t.Errorf("a failed revoke must warn, got %q", out)
 	}
@@ -62,8 +62,8 @@ func TestBreakglassDeleteStoredReportsTheDeleteHonestly(t *testing.T) {
 		}
 		t.Cleanup(func() { ghsecret.DeleteFn = orig })
 		out := captureStdout(t, func() {
-			if err := breakglassDeleteStored("primary"); err != nil {
-				t.Fatalf("breakglassDeleteStored: %v", err)
+			if err := BreakglassDeleteStored("primary"); err != nil {
+				t.Fatalf("BreakglassDeleteStored: %v", err)
 			}
 		})
 		b, _ := os.ReadFile(sum)
@@ -101,11 +101,11 @@ func TestBreakglassDeleteStoredReportsTheDeleteHonestly(t *testing.T) {
 // fallback for a missing $GITHUB_ACTOR, never the normal answer.
 func TestBreakglassActorLineUsesTheDispatchingActor(t *testing.T) {
 	t.Setenv("GITHUB_ACTOR", "octocat")
-	if got := breakglassActorLine(); got != "Dispatched by **@octocat**." {
+	if got := BreakglassActorLine(); got != "Dispatched by **@octocat**." {
 		t.Errorf("actor line = %q, want the real actor", got)
 	}
 	t.Setenv("GITHUB_ACTOR", "")
-	if got := breakglassActorLine(); got != "Dispatched by **@unknown**." {
+	if got := BreakglassActorLine(); got != "Dispatched by **@unknown**." {
 		t.Errorf("actor line = %q, want the unknown fallback", got)
 	}
 }
@@ -115,7 +115,7 @@ func TestBreakglassActorLineUsesTheDispatchingActor(t *testing.T) {
 // bits, not down.
 func TestParseRecipientRSAPubKeyNamesTheActualBitLength(t *testing.T) {
 	small, _ := rsaPubB64(t, 1024)
-	_, err := parseRecipientRSAPubKey(small)
+	_, err := ParseRecipientRSAPubKey(small)
 	if err == nil {
 		t.Fatal("a 1024-bit key must be rejected")
 	}

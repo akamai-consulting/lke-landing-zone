@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 )
 
 // tfvarsValue returns the first `key = "value"` assignment in tfvars content
@@ -141,7 +142,7 @@ func runCIResolveHarborURL(region string) error {
 	}
 
 	fmt.Printf("HARBOR_URL unset — derived harbor.<domainSuffix> = %s\n", derived)
-	return appendGHAFile("GITHUB_ENV", "HARBOR_URL="+derived)
+	return ghaout.Append("GITHUB_ENV", "HARBOR_URL="+derived)
 }
 
 // ── audit-pvc-storageclass ────────────────────────────────────────────────────
@@ -315,5 +316,5 @@ func runCIAuditPVCStorageClass() error {
 		"3. Reapply via Argo sync — by now block-storage-retain is the default and the",
 		"   migrated values set `cluster.defaultStorageClass` explicitly, so the new PVC",
 		"   lands encrypted whether or not Kyverno covers its namespace.")
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
 }

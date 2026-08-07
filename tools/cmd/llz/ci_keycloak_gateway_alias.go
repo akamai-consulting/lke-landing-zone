@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/spf13/cobra"
@@ -82,7 +83,7 @@ func runPinKeycloakGatewayAlias(region string) error {
 	}
 	fmt.Printf("→ %s/%s (ClusterIP %s) will serve %s inside the OpenBao pods\n", gatewayNamespace, svc, ip, host)
 
-	current, ok := statefulSetHostAliasIP(openbaoNS, openbaoStatefulSet, host)
+	current, ok := statefulSetHostAliasIP(baoread.Namespace, openbaoStatefulSet, host)
 	if !ok {
 		return nil // warned already; the pod wait below owns this failure
 	}
@@ -98,7 +99,7 @@ func runPinKeycloakGatewayAlias(region string) error {
 	if err := patchWithWebhookRetry(patch); err != nil {
 		return err
 	}
-	fmt.Printf("pinned %s -> %s on %s/%s.\n", host, ip, openbaoNS, openbaoStatefulSet)
+	fmt.Printf("pinned %s -> %s on %s/%s.\n", host, ip, baoread.Namespace, openbaoStatefulSet)
 	return nil
 }
 
@@ -284,18 +285,18 @@ func statefulSetHostAliasIP(ns, name, host string) (ip string, ok bool) {
 func patchWithWebhookRetry(patch string) error {
 	deadline := keycloakPinNow().Add(keycloakPinWebhookBudget)
 	for attempt := 1; ; attempt++ {
-		out, err := execOutput("kubectl", "-n", openbaoNS, "patch", "statefulset", openbaoStatefulSet,
+		out, err := execOutput("kubectl", "-n", baoread.Namespace, "patch", "statefulset", openbaoStatefulSet,
 			"--type=strategic", "-p", patch)
 		if err == nil {
 			return nil
 		}
 		text := strings.TrimSpace(string(out)) + " " + err.Error()
 		if !kyverno.IsWebhookRace(text) {
-			return fmt.Errorf("patch %s/%s hostAliases: %w: %s", openbaoNS, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("patch %s/%s hostAliases: %w: %s", baoread.Namespace, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
 		}
 		if !keycloakPinNow().Before(deadline) {
 			return fmt.Errorf("patch %s/%s hostAliases: Kyverno's admission webhook was still unreachable after %s: %w: %s",
-				openbaoNS, openbaoStatefulSet, keycloakPinWebhookBudget, err, strings.TrimSpace(string(out)))
+				baoread.Namespace, openbaoStatefulSet, keycloakPinWebhookBudget, err, strings.TrimSpace(string(out)))
 		}
 		fmt.Printf("keycloak-pin: Kyverno's admission webhook is not serving yet (attempt %d) — retrying in %s\n",
 			attempt, keycloakPinWebhookInterval)

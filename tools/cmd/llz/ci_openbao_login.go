@@ -43,6 +43,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
@@ -128,7 +129,7 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 		return err
 	}
 	baoseed.MaskGHALines(token)
-	if err := appendGHAFile("GITHUB_ENV", exportVar+"="+token); err != nil {
+	if err := ghaout.Append("GITHUB_ENV", exportVar+"="+token); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "openbao-login: method=%s role=%s → %s exported to $GITHUB_ENV (masked)\n", method, role, exportVar)

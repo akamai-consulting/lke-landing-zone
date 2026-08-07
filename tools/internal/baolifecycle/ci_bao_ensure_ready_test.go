@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 import (
 	"fmt"
@@ -31,7 +31,7 @@ func statusJSON(initialized, sealed bool) string {
 }
 
 // clearBaoEnv zeroes the key/token env vars via t.Setenv so a test starts clean
-// AND so the os.Setenv writes runCIBaoInit makes mid-test are restored on
+// AND so the os.Setenv writes RunInit makes mid-test are restored on
 // cleanup (no leak into sibling tests).
 func clearBaoEnv(t *testing.T) {
 	t.Helper()
@@ -66,8 +66,8 @@ func TestRunCIBaoEnsureReadyFirstInit(t *testing.T) {
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
 
-	if err := runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second); err != nil {
-		t.Fatalf("runCIBaoEnsureReady (first init): %v", err)
+	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("RunEnsureReady (first init): %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=true") {
 		t.Errorf("GITHUB_OUTPUT = %q, want available=true", got)
@@ -89,7 +89,7 @@ func TestRunCIBaoEnsureReadyFirstInitNeedsGHToken(t *testing.T) {
 	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
 		return statusJSON(false, true), "", nil // uninitialized
 	})
-	err := runCIBaoEnsureReady(globalOpts{}, "primary", time.Second, time.Second)
+	err := RunEnsureReady(false, "primary", time.Second, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
 		t.Errorf("err = %v, want a GH_TOKEN-required error on uninitialized cluster", err)
 	}
@@ -114,8 +114,8 @@ func TestRunCIBaoEnsureReadyReseal(t *testing.T) {
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
-	if err := runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second); err != nil {
-		t.Fatalf("runCIBaoEnsureReady (reseal): %v", err)
+	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("RunEnsureReady (reseal): %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=false") {
 		t.Errorf("GITHUB_OUTPUT = %q, want available=false (no root token)", got)
@@ -149,8 +149,8 @@ func TestRunCIBaoEnsureReadyReconfigureValidToken(t *testing.T) {
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
-	if err := runCIBaoEnsureReady(globalOpts{}, "primary", time.Second, time.Second); err != nil {
-		t.Fatalf("runCIBaoEnsureReady (reconfigure): %v", err)
+	if err := RunEnsureReady(false, "primary", time.Second, time.Second); err != nil {
+		t.Fatalf("RunEnsureReady (reconfigure): %v", err)
 	}
 	if sawInit || sawUnseal {
 		t.Errorf("initialized+unsealed must not init (%v) or unseal (%v)", sawInit, sawUnseal)
@@ -163,32 +163,6 @@ func TestRunCIBaoEnsureReadyReconfigureValidToken(t *testing.T) {
 	}
 }
 
-func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
-	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
-		t.Error("dry-run must not exec")
-		return "", "", nil
-	})
-	if err := runCIBaoEnsureReady(globalOpts{dryRun: true}, "primary", time.Second, time.Second); err != nil {
-		t.Fatalf("dry-run: %v", err)
-	}
-	if err := runCIBaoEnsureReady(globalOpts{}, "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
-		t.Errorf("missing region = %v, want --region error", err)
-	}
-	if c := ciBaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {
-		t.Errorf("Use = %q, want bao-ensure-ready", c.Use)
-	}
-}
-
-// TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken covers the state
-// the tooling itself creates and used to wedge on.
-//
-// Bootstrap tells the operator to delete OPENBAO_ROOT_TOKEN once the run is done
-// (and `llz status` nags until they do), so every RE-RUN of bootstrap-openbao
-// arrives with no token. The regen gate used to require a NON-EMPTY token, which
-// made runCIBaoRegenRoot's own "No OPENBAO_ROOT_TOKEN set — regenerating via
-// quorum" branch unreachable: the run reported available=false, silently skipped
-// configure and every seed, and failed ~20 minutes later at the converge gate
-// blaming unconverged apps. With the recovery quorum present, regenerate.
 func TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken(t *testing.T) {
 	clearBaoEnv(t)
 	t.Setenv("RECOVERY_K1", "k1")
@@ -219,7 +193,7 @@ func TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken(t *testing.T)
 
 	// The decode + GitHub write are past the point this test is about; it only has
 	// to prove the quorum path is ENTERED, which the old gate made impossible.
-	_ = runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second)
+	_ = RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second)
 
 	if !genRootInit {
 		t.Fatal("no root token + a full recovery quorum must regenerate, not skip to available=false")
@@ -243,7 +217,7 @@ func TestRunCIBaoEnsureReadyStillSkipsWithNeitherTokenNorQuorum(t *testing.T) {
 		}
 		return "", "unexpected " + strings.Join(args, " "), fmt.Errorf("unexpected")
 	})
-	if err := runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second); err != nil {
+	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
 		t.Fatalf("no token and no quorum must skip, not fail: %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=false") {

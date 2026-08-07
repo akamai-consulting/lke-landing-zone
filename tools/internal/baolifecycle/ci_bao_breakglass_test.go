@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 import (
 	"crypto/ecdsa"
@@ -37,24 +37,24 @@ func rsaPubB64(t *testing.T, bits int) (string, *rsa.PrivateKey) {
 
 func TestParseRecipientRSAPubKey(t *testing.T) {
 	good, _ := rsaPubB64(t, 2048)
-	if _, err := parseRecipientRSAPubKey(good); err != nil {
+	if _, err := ParseRecipientRSAPubKey(good); err != nil {
 		t.Fatalf("valid 2048-bit key rejected: %v", err)
 	}
 	// Whitespace/newlines are tolerated (operators sometimes leave a trailing \n).
-	if _, err := parseRecipientRSAPubKey("  " + good + "\n"); err != nil {
+	if _, err := ParseRecipientRSAPubKey("  " + good + "\n"); err != nil {
 		t.Errorf("surrounding whitespace should be tolerated: %v", err)
 	}
 
 	// A pasted PRIVATE key is the classic footgun — reject it by name.
 	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-	if _, err := parseRecipientRSAPubKey(base64.StdEncoding.EncodeToString(privPEM)); err == nil || !strings.Contains(err.Error(), "PRIVATE key") {
+	if _, err := ParseRecipientRSAPubKey(base64.StdEncoding.EncodeToString(privPEM)); err == nil || !strings.Contains(err.Error(), "PRIVATE key") {
 		t.Errorf("private key = %v, want PRIVATE-key rejection", err)
 	}
 
 	// Too-small RSA key.
 	small, _ := rsaPubB64(t, 1024)
-	if _, err := parseRecipientRSAPubKey(small); err == nil || !strings.Contains(err.Error(), "2048") {
+	if _, err := ParseRecipientRSAPubKey(small); err == nil || !strings.Contains(err.Error(), "2048") {
 		t.Errorf("1024-bit key = %v, want >= 2048-bit rejection", err)
 	}
 
@@ -62,15 +62,15 @@ func TestParseRecipientRSAPubKey(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	ecDER, _ := x509.MarshalPKIXPublicKey(&ec.PublicKey)
 	ecPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: ecDER})
-	if _, err := parseRecipientRSAPubKey(base64.StdEncoding.EncodeToString(ecPEM)); err == nil || !strings.Contains(err.Error(), "not RSA") {
+	if _, err := ParseRecipientRSAPubKey(base64.StdEncoding.EncodeToString(ecPEM)); err == nil || !strings.Contains(err.Error(), "not RSA") {
 		t.Errorf("EC key = %v, want not-RSA rejection", err)
 	}
 
 	// Not base64, and base64 of non-PEM garbage.
-	if _, err := parseRecipientRSAPubKey("!!!not base64!!!"); err == nil {
+	if _, err := ParseRecipientRSAPubKey("!!!not base64!!!"); err == nil {
 		t.Error("invalid base64 should error")
 	}
-	if _, err := parseRecipientRSAPubKey(base64.StdEncoding.EncodeToString([]byte("hello"))); err == nil {
+	if _, err := ParseRecipientRSAPubKey(base64.StdEncoding.EncodeToString([]byte("hello"))); err == nil {
 		t.Error("base64 of non-PEM should error")
 	}
 }
@@ -80,7 +80,7 @@ func TestParseRecipientRSAPubKey(t *testing.T) {
 // openssl decrypt recipe.
 func TestBreakglassEncryptRoundTrip(t *testing.T) {
 	b64, priv := rsaPubB64(t, 2048)
-	pub, err := parseRecipientRSAPubKey(b64)
+	pub, err := ParseRecipientRSAPubKey(b64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,17 +125,17 @@ func TestBreakglassEncryptRoundTrip(t *testing.T) {
 }
 
 func TestRunCIBaoBreakglassBadInputs(t *testing.T) {
-	if err := runCIBaoBreakglass(globalOpts{}, "", "generate", "x"); err == nil {
+	if err := RunBreakglass(false, "", "generate", "x"); err == nil {
 		t.Error("empty region should error")
 	}
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "bogus", ""); err == nil || !strings.Contains(err.Error(), "unknown action") {
+	if err := RunBreakglass(false, "primary", "bogus", ""); err == nil || !strings.Contains(err.Error(), "unknown action") {
 		t.Errorf("bogus action = %v, want unknown-action error", err)
 	}
 	// generate/rotate without a recipient key must fail before touching the cluster.
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "generate", ""); err == nil || !strings.Contains(err.Error(), "recipient-pubkey-b64 is required") {
+	if err := RunBreakglass(false, "primary", "generate", ""); err == nil || !strings.Contains(err.Error(), "recipient-pubkey-b64 is required") {
 		t.Errorf("generate w/o key = %v, want required-key error", err)
 	}
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "rotate", ""); err == nil || !strings.Contains(err.Error(), "recipient-pubkey-b64 is required") {
+	if err := RunBreakglass(false, "primary", "rotate", ""); err == nil || !strings.Contains(err.Error(), "recipient-pubkey-b64 is required") {
 		t.Errorf("rotate w/o key = %v, want required-key error", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestRunCIBaoBreakglassRevoke(t *testing.T) {
 	}
 	t.Cleanup(func() { ghsecret.DeleteFn = origDel })
 
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "revoke", ""); err != nil {
+	if err := RunBreakglass(false, "primary", "revoke", ""); err != nil {
 		t.Fatal(err)
 	}
 	if !revoked {
@@ -193,7 +193,7 @@ func TestRunCIBaoBreakglassRevokeNoTokenDeleteFails(t *testing.T) {
 	ghsecret.DeleteFn = func(string, string) error { return errors.New("404") }
 	t.Cleanup(func() { ghsecret.DeleteFn = origDel })
 
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "revoke", ""); err != nil {
+	if err := RunBreakglass(false, "primary", "revoke", ""); err != nil {
 		t.Errorf("revoke should be best-effort, got %v", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestRunCIBaoBreakglassGenerateSkipPath(t *testing.T) {
 	// A regeneration would call gh secret set; assert it does NOT here.
 	ghCalls := withGHSetSecret(t, nil)
 
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "generate", b64); err != nil {
+	if err := RunBreakglass(false, "primary", "generate", b64); err != nil {
 		t.Fatal(err)
 	}
 	if len(*ghCalls) != 0 {
@@ -243,7 +243,7 @@ func TestRunCIBaoBreakglassDryRun(t *testing.T) {
 		t.Error("dry-run must not touch the cluster")
 		return "", "", nil
 	})
-	if err := runCIBaoBreakglass(globalOpts{dryRun: true}, "primary", "generate", b64); err != nil {
+	if err := RunBreakglass(true, "primary", "generate", b64); err != nil {
 		t.Errorf("dry-run generate = %v, want nil", err)
 	}
 }
@@ -321,7 +321,7 @@ func TestRunCIBaoBreakglassGenerateRegenPath(t *testing.T) {
 	withBaoExec(t, quorumRegenExec(t, "s.newroot", nil, nil))
 	withGHSetSecret(t, nil)
 
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "generate", b64); err != nil {
+	if err := RunBreakglass(false, "primary", "generate", b64); err != nil {
 		t.Fatal(err)
 	}
 	if got := decryptDelivered(t, tmp, priv); got != "s.newroot" {
@@ -347,7 +347,7 @@ func TestRunCIBaoBreakglassRotate(t *testing.T) {
 	))
 	withGHSetSecret(t, nil)
 
-	if err := runCIBaoBreakglass(globalOpts{}, "primary", "rotate", b64); err != nil {
+	if err := RunBreakglass(false, "primary", "rotate", b64); err != nil {
 		t.Fatal(err)
 	}
 	if revokeAt == 0 || regenInitAt == 0 || revokeAt > regenInitAt {
@@ -381,7 +381,7 @@ func TestRunCIBaoBreakglassRotateRefusesRedelivery(t *testing.T) {
 	})
 	withGHSetSecret(t, nil)
 
-	err := runCIBaoBreakglass(globalOpts{}, "primary", "rotate", b64)
+	err := RunBreakglass(false, "primary", "rotate", b64)
 	if err == nil {
 		t.Fatal("rotate must FAIL when the token is unchanged (revoke did not take), not redeliver it")
 	}

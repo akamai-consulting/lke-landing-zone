@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/spf13/cobra"
 )
 
@@ -13,7 +13,7 @@ import (
 //
 // These came back OUT of internal/baoread during the exec-layer extraction. The
 // exec layer is what everything reaches for; a cobra command and a
-// GITHUB_OUTPUT append are not part of it. appendGHAFile in particular has 25
+// GITHUB_OUTPUT append are not part of it. ghaout.Append in particular has 25
 // callers across the command tree and only one of them was ever an OpenBao one —
 // moving it into an OpenBao package would have made every other caller import
 // OpenBao to write a step output.
@@ -45,41 +45,7 @@ func runCIBaoStatus() error {
 	}
 	initialized, sealedAny := baoread.AggregateStatus(states)
 	fmt.Printf("initialized=%t\nsealed=%t\n", initialized, sealedAny)
-	return appendGHAFile("GITHUB_OUTPUT",
+	return ghaout.Append("GITHUB_OUTPUT",
 		fmt.Sprintf("initialized=%t", initialized),
 		fmt.Sprintf("sealed=%t", sealedAny))
 }
-
-// appendGHAFile appends lines to the GitHub Actions command file named by
-// envVar (GITHUB_OUTPUT / GITHUB_ENV / GITHUB_STEP_SUMMARY). Outside Actions
-// the variable is unset and the write is skipped, keeping the commands
-// runnable from a workstation.
-// appendGHAFile appends lines to the GitHub Actions command file named by
-// envVar (GITHUB_OUTPUT / GITHUB_ENV / GITHUB_STEP_SUMMARY). Outside Actions
-// the variable is unset and the write is skipped, keeping the commands
-// runnable from a workstation.
-func appendGHAFile(envVar string, lines ...string) error {
-	path := os.Getenv(envVar)
-	if path == "" {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open $%s: %w", envVar, err)
-	}
-	for _, l := range lines {
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			f.Close()
-			return fmt.Errorf("write $%s: %w", envVar, err)
-		}
-	}
-	return f.Close()
-}
-
-// ── recovery keys ─────────────────────────────────────────────────────────────
-
-// baoread.RecoveryKeysFromEnv reads the 3 quorum recovery keys from RECOVERY_K1/2/3.
-// Under the chart's `seal "static"` auto-unseal, `operator init` yields recovery
-// shares (not unseal keys): the seal mechanism unseals every pod at boot, so
-// there is no submit-keys-to-unseal step. The recovery keys exist only to
-// authorize the `operator generate-root` quorum that bao-regen-root runs.

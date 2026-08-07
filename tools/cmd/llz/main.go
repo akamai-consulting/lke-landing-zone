@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
@@ -498,7 +499,7 @@ func openbaoLoginCmd() *cobra.Command {
 }
 
 func regenRootCmd() *cobra.Command {
-	var o regenRootOpts
+	var o baolifecycle.RegenRootOpts
 	c := &cobra.Command{
 		Use:   "regen-root <region>",
 		Short: "quorum-regenerate root — needs you to HOLD 3 recovery keys (else use break-glass)",
@@ -517,10 +518,10 @@ func regenRootCmd() *cobra.Command {
 			"<region> names the infra-<region> GitHub environment for --update-gha-secret.\n" +
 			"Run after a bootstrap revokes root.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, a []string) error { return runRegenRoot(gopts, a[0], o) },
+		RunE: func(_ *cobra.Command, a []string) error { return baolifecycle.RunRegenRoot(gopts.dryRun, a[0], o) },
 	}
-	c.Flags().BoolVar(&o.updateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
-	c.Flags().StringVar(&o.repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
+	c.Flags().BoolVar(&o.UpdateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
+	c.Flags().StringVar(&o.Repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
 	return c
 }
 

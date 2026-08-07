@@ -5,6 +5,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
@@ -14,7 +15,7 @@ func installAssertObsDeps() {
 	assertobs.Install(assertobs.Deps{
 		Exec:       func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		KubectlOut: kubectlOut,
-		Summary:    appendGHAFile,
+		Summary:    ghaout.Append,
 		ObjEncDeps: func() objenc.Deps { return objencDeps() },
 	})
 }

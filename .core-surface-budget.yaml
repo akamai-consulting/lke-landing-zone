@@ -327,6 +327,14 @@ categories:
 #        and credrotate_deps.go consumed it, and commands.go/openbao.go/
 #        ci_clear_secrets.go pointed the other way. Settling it first is what took
 #        that family from 11 outbound to 8, all noise.
+#   49th: openbao-lifecycle  -> internal/baolifecycle   18,851 -> 18,245 (-606 / 138 files)
+#        THE ROW THAT RESISTED FOUR ITERATIONS. init + regen-root + break-glass +
+#        ensure-ready, 1,013 lines. It could not move until the exec layer (47th)
+#        and the gh-secret writers (48th) moved first: with both settled it
+#        measures 8 outbound, all noise; before them every probe came back 16-17.
+#        A set that measures badly is usually not entangled with the code it names
+#        -- it is waiting on a layer underneath that nobody has separated yet.
+#        Bonus: every lane took a globalOpts and read ONE field. They take a bool.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -339,7 +347,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 18851
+    budget: 18245
     exact: true
     include:
       - "tools/cmd/llz/*.go"

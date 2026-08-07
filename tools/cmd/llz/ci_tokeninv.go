@@ -8,6 +8,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +20,7 @@ import (
 func tokenInvDepsFor() tokeninv.Deps {
 	return tokeninv.Deps{
 		CloudToken: ciToken,
-		Summary:    appendGHAFile,
+		Summary:    ghaout.Append,
 	}
 }
 

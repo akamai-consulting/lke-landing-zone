@@ -1,12 +1,12 @@
-package main
+package baolifecycle
 
 // ci_bao_ensure_ready.go implements `llz ci bao-ensure-ready` — the single
 // command that collapses bootstrap-openbao.yml's seal/token-lifecycle steps
 // (status probe → first-init OR wait-for-auto-unseal → root-token load/regen →
 // availability gate) into one place. It COMPOSES the existing, individually-
 // tested bao-* run functions rather than reimplementing them, so the init
-// payload is still produced exactly once by runCIBaoInit and the quorum regen
-// path is still runCIBaoRegenRoot's. The workflow shrinks from ~8 conditional
+// payload is still produced exactly once by RunInit and the quorum regen
+// path is still RunRegenRootCI's. The workflow shrinks from ~8 conditional
 // steps to one and the branch selection becomes unit-testable Go.
 //
 // CONVERGENCE CONTRACT — same detect → choose-a-path → re-verify shape the
@@ -25,7 +25,7 @@ package main
 // Emits available=<bool> to $GITHUB_OUTPUT (the gate every downstream
 // configure/seed step keys on) and re-exports the effective OPENBAO_ROOT_TOKEN
 // to $GITHUB_ENV for those steps. The keys/token handoff between the composed
-// steps rides the PROCESS env — runCIBaoInit / runCIBaoRegenRoot os.Setenv what
+// steps rides the PROCESS env — RunInit / RunRegenRootCI os.Setenv what
 // they also append to $GITHUB_ENV — so the in-process regen-after-init and the
 // availability check below see the values the inline steps used to receive via
 // GitHub Actions' between-step $GITHUB_ENV injection.
@@ -36,45 +36,15 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
-	"github.com/spf13/cobra"
 )
 
-func ciBaoEnsureReadyCmd() *cobra.Command {
-	var region string
-	var leaderTimeout, joinTimeout int
-	c := &cobra.Command{
-		Use:   "bao-ensure-ready",
-		Short: "probe OpenBao and drive it to unsealed + a usable root token (init/wait/regen)",
-		Long: "Orchestrates the OpenBao seal/token lifecycle bootstrap-openbao.yml used to\n" +
-			"run as eight separate steps: probe all pods, then — on an uninitialized\n" +
-			"cluster — run `bao operator init` and wait for every pod to auto-unseal\n" +
-			"from the static seal key (leader first, then the retry_join'd followers);\n" +
-			"on an initialized-but-sealed cluster wait for the pod(s) to self-unseal\n" +
-			"after a restart; and on an initialized cluster validate the loaded root\n" +
-			"token and regenerate it via quorum if a prior run revoked it. Composes the\n" +
-			"same bao-init / bao-regen-root logic the individual commands run. Writes\n" +
-			"available=<bool> to $GITHUB_OUTPUT (the gate downstream configure/seed steps\n" +
-			"check) and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV. Reads\n" +
-			"RECOVERY_K1/2/3 + OPENBAO_ROOT_TOKEN (infra-<region> secrets) and\n" +
-			"GH_TOKEN/GH_REPO (first-init persistence).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIBaoEnsureReady(gopts, region,
-				time.Duration(leaderTimeout)*time.Second, time.Duration(joinTimeout)*time.Second)
-		},
-	}
-	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment holds the keys/token (required)")
-	c.Flags().IntVar(&leaderTimeout, "leader-timeout", 180, "seconds to wait for pod-0 to report unsealed (first-init)")
-	c.Flags().IntVar(&joinTimeout, "join-timeout", 300, "seconds to wait for each follower to reach initialized=true (first-init)")
-	return c
-}
-
-func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout time.Duration) error {
+func RunEnsureReady(dryRun bool, region string, leaderTimeout, joinTimeout time.Duration) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would probe OpenBao and init/wait-for-auto-unseal/regen-root as needed")
 		return nil
 	}
@@ -104,7 +74,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		// $GITHUB_ENV AND the process env (for the in-process regen path + the
 		// availability gate). Under static seal each pod then unseals itself at
 		// boot once retry_join has joined it — wait for that convergence.
-		if err := runCIBaoInit(g, region); err != nil {
+		if err := RunInit(dryRun, region); err != nil {
 			return err
 		}
 		if err := baoread.WaitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
@@ -126,7 +96,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 	//    re-exporting the fresh token to $GITHUB_ENV and the process env.
 	//
 	//    The recovery-quorum half was unreachable until this condition included it.
-	//    runCIBaoRegenRoot has an explicit "No OPENBAO_ROOT_TOKEN set — regenerating
+	//    RunRegenRootCI has an explicit "No OPENBAO_ROOT_TOKEN set — regenerating
 	//    via quorum" branch, and the workflow passes RECOVERY_K1/2/3 in for exactly
 	//    that — but gating on a NON-EMPTY token meant it never ran. The state it was
 	//    written for is the one the tooling itself creates: bootstrap tells the
@@ -137,29 +107,29 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 	//    rather than about a root token. Regenerate whenever we have either input.
 	_, haveQuorum := baoread.RecoveryKeysFromEnv()
 	if initialized && (os.Getenv("OPENBAO_ROOT_TOKEN") != "" || haveQuorum == nil) {
-		if err := runCIBaoRegenRoot(g, region); err != nil {
+		if err := RunRegenRootCI(dryRun, region); err != nil {
 			return err
 		}
 	}
 
-	// 3. Availability gate + re-export. runCIBaoInit / runCIBaoRegenRoot already
+	// 3. Availability gate + re-export. RunInit / RunRegenRootCI already
 	//    wrote a minted/regenerated token to $GITHUB_ENV; this also covers the
 	//    third case — a loaded token that validated WITHOUT regeneration — so
 	//    downstream steps (separate processes) always find OPENBAO_ROOT_TOKEN.
 	token := os.Getenv("OPENBAO_ROOT_TOKEN")
 	if token == "" {
 		fmt.Println("Root token unavailable — configure and seed steps will be skipped.")
-		if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+		if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 			"Root token unavailable — configure and seed steps were skipped.",
 			fmt.Sprintf("To re-configure: set OPENBAO_ROOT_TOKEN as an infra-%s environment secret and re-run,", region),
 			"or ensure OPENBAO_RECOVERY_KEY_{1,2,3} are set so the workflow can regenerate it."); err != nil {
 			return err
 		}
-		return appendGHAFile("GITHUB_OUTPUT", "available=false")
+		return ghaout.Append("GITHUB_OUTPUT", "available=false")
 	}
 	ghsecret.Mask(token)
-	if err := appendGHAFile("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+token); err != nil {
+	if err := ghaout.Append("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+token); err != nil {
 		return err
 	}
-	return appendGHAFile("GITHUB_OUTPUT", "available=true")
+	return ghaout.Append("GITHUB_OUTPUT", "available=true")
 }

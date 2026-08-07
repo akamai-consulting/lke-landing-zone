@@ -11,6 +11,7 @@ package main
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 )
 
 func init() { installEnvTopologyDeps() }
@@ -19,7 +20,7 @@ func installEnvTopologyDeps() {
 	envtopology.Install(envtopology.Deps{
 		Exec:     func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		ExecArgv: execArgv,
-		Summary:  appendGHAFile,
+		Summary:  ghaout.Append,
 		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return loadSpec() },
 		// Narrowed to the one field, as internal/promote's is.
 		InstanceRepo: func() string {

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
@@ -234,7 +235,7 @@ func runOpenbaoLogin(o openbaoLoginOpts) error {
 	// the id_token for a team-scoped OpenBao token via the `keycloak` mount.
 	addr, cleanup, err := portForwardOpenbaoFn()
 	if err != nil {
-		return fmt.Errorf("port-forward to %s/%s: %w", openbaoNS, rootOpenbaoPod, err)
+		return fmt.Errorf("port-forward to %s/%s: %w", baoread.Namespace, rootOpenbaoPod, err)
 	}
 	defer cleanup()
 	token, err := openbao.OIDCLogin(context.Background(), openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", o.team, idToken)

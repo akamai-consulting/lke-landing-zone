@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
@@ -113,13 +114,13 @@ func runVerify(g globalOpts, o verifyOpts) error {
 
 	// 6. OpenBao seal status (informational).
 	v.section("6. OpenBao seal status (informational)")
-	pod, _ := kubectlOut("-n", openbaoNS, "get", "pod", "-l", "app.kubernetes.io/name=openbao",
+	pod, _ := kubectlOut("-n", baoread.Namespace, "get", "pod", "-l", "app.kubernetes.io/name=openbao",
 		"-o", "jsonpath={.items[0].metadata.name}")
 	if strings.TrimSpace(pod) == "" {
 		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", color.Dim("INFO"))
 	} else {
 		st, _, _ := baoread.ExecPod(strings.TrimSpace(pod), "", "", "status", "-format=json")
-		sealed, _ := parseBaoStatus(st)
+		sealed, _ := baolifecycle.ParseStatus(st)
 		if strings.TrimSpace(st) == "" {
 			fmt.Printf("  %s  could not determine seal status (pod may be initialising)\n", color.Dim("INFO"))
 		} else if sealed {

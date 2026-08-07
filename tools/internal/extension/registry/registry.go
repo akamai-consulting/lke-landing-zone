@@ -33,6 +33,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
@@ -94,6 +95,7 @@ var declarations = []func() extension.Extension{
 	converge.Extension,
 	baoca.Extension,
 	baoseed.Extension,
+	baolifecycle.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,

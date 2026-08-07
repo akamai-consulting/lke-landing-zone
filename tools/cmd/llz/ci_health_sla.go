@@ -8,6 +8,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ import (
 // fixture that no-ops would make the package's own summary assertions vacuous.
 func healthSLADeps() healthsla.Deps {
 	return healthsla.Deps{
-		Summary: appendGHAFile,
+		Summary: ghaout.Append,
 		BaoExec: func(pod, addr, token string, args ...string) (string, string, error) {
 			return baoread.ExecFn(pod, addr, token, args...)
 		},

@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 // ci_bao_breakglass.go implements `llz ci bao-breakglass` — the operator
 // front-end to the OpenBao recovery quorum, driven by the break-glass workflow
@@ -44,37 +44,11 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
-	"github.com/spf13/cobra"
 )
 
-func ciBaoBreakglassCmd() *cobra.Command {
-	var region, action, pubkeyB64 string
-	c := &cobra.Command{
-		Use:   "bao-breakglass",
-		Short: "operator break-glass: generate/rotate/revoke an OpenBao root token from the recovery quorum",
-		Long: "Operator front-end to the OpenBao recovery quorum, driven by\n" +
-			"llz-breakglass-openbao.yml. --action selects one of:\n" +
-			"  generate  regenerate a root token via `bao-regen-root` and return it\n" +
-			"            RSA-OAEP-encrypted to --recipient-pubkey-b64.\n" +
-			"  rotate    revoke the current root token first (so no untracked live root\n" +
-			"            lingers), then regenerate + return a fresh one.\n" +
-			"  revoke    revoke the current root token and delete the\n" +
-			"            infra-<region>::OPENBAO_ROOT_TOKEN environment secret.\n" +
-			"The token is never printed in the clear; only ciphertext leaves the job\n" +
-			"(a base64 file at $RUNNER_TEMP/root-token.b64 + a job-summary block).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIBaoBreakglass(gopts, region, action, pubkeyB64)
-		},
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment whose infra-<region> Environment holds the recovery quorum + OPENBAO_ROOT_TOKEN (required)")
-	c.Flags().StringVar(&action, "action", "", "generate | rotate | revoke (required)")
-	c.Flags().StringVar(&pubkeyB64, "recipient-pubkey-b64", "", "base64 of the operator RSA public-key PEM; required for generate/rotate, ignored for revoke")
-	return c
-}
-
-func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
+func RunBreakglass(dryRun bool, region, action, pubkeyB64 string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -92,12 +66,12 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 			return fmt.Errorf("--recipient-pubkey-b64 is required for action=%s (base64 of your RSA public-key PEM, >= 2048-bit)", action)
 		}
 		var err error
-		if recipient, err = parseRecipientRSAPubKey(pubkeyB64); err != nil {
+		if recipient, err = ParseRecipientRSAPubKey(pubkeyB64); err != nil {
 			return err
 		}
 	}
 
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would %s the infra-%s root token via the recovery quorum\n", action, region)
 		return nil
 	}
@@ -112,12 +86,12 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 	// anti-pattern bao-regen-root guards against. Revoking first makes the
 	// subsequent lookup a definite "revoked", so regen takes cleanly.
 	if action == "revoke" || action == "rotate" {
-		breakglassRevokeCurrent(region)
+		BreakglassRevokeCurrent(region)
 	}
 
 	// ── revoke: delete the stored secret so no live root lingers in GitHub ──────
 	if action == "revoke" {
-		return breakglassDeleteStored(region)
+		return BreakglassDeleteStored(region)
 	}
 
 	// ── generate / rotate: regenerate a root token via the recovery quorum ──────
@@ -126,7 +100,7 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 	// regenerates via the quorum — updating this process's env, $GITHUB_ENV, and
 	// infra-<region>::OPENBAO_ROOT_TOKEN. If the loaded token is somehow still
 	// valid it skips regeneration and leaves that value in place.
-	if err := runCIBaoRegenRoot(g, region); err != nil {
+	if err := RunRegenRootCI(dryRun, region); err != nil {
 		return err
 	}
 
@@ -155,11 +129,11 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 	return breakglassEncryptAndDeliver(region, action, recipient, token)
 }
 
-// breakglassRevokeCurrent revokes whatever OPENBAO_ROOT_TOKEN currently holds
+// BreakglassRevokeCurrent revokes whatever OPENBAO_ROOT_TOKEN currently holds
 // (the infra-<region> stored value). Best-effort: an empty or already-dead token
 // is a warning, never fatal — an already-revoked stored token is the normal
 // steady state, and revoke must still proceed to delete the secret.
-func breakglassRevokeCurrent(region string) {
+func BreakglassRevokeCurrent(region string) {
 	token := os.Getenv("OPENBAO_ROOT_TOKEN")
 	if token == "" {
 		fmt.Printf("No OPENBAO_ROOT_TOKEN stored on infra-%s — nothing to revoke.\n", region)
@@ -172,10 +146,10 @@ func breakglassRevokeCurrent(region string) {
 	fmt.Println("Current root token revoked.")
 }
 
-// breakglassDeleteStored deletes infra-<region>::OPENBAO_ROOT_TOKEN so no live
+// BreakglassDeleteStored deletes infra-<region>::OPENBAO_ROOT_TOKEN so no live
 // root lingers in GitHub. Best-effort delete (already-absent / lacking scope is a
 // warning), then a job-summary line.
-func breakglassDeleteStored(region string) error {
+func BreakglassDeleteStored(region string) error {
 	ghEnv := "infra-" + region
 	deleted := true
 	if err := ghsecret.DeleteFn("OPENBAO_ROOT_TOKEN", ghEnv); err != nil {
@@ -189,18 +163,18 @@ func breakglassDeleteStored(region string) error {
 	if !deleted {
 		outcome = fmt.Sprintf("Current root token revoked. ⚠️ Could NOT delete `%s::OPENBAO_ROOT_TOKEN` — verify it is gone manually (see the warning above).", ghEnv)
 	}
-	return appendGHAFile("GITHUB_STEP_SUMMARY",
+	return ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## OpenBao break-glass — revoke (%s)", region),
 		"",
-		breakglassActorLine(),
+		BreakglassActorLine(),
 		"",
 		outcome,
 	)
 }
 
-// breakglassActorLine records the dispatching GitHub actor in the job summary, so
+// BreakglassActorLine records the dispatching GitHub actor in the job summary, so
 // the audit trail (WHO invoked break-glass) sits next to the delivered ciphertext.
-func breakglassActorLine() string {
+func BreakglassActorLine() string {
 	actor := os.Getenv("GITHUB_ACTOR")
 	if actor == "" {
 		actor = "unknown"
@@ -231,10 +205,10 @@ func breakglassEncryptAndDeliver(region, action string, recipient *rsa.PublicKey
 	}
 	fmt.Printf("Encrypted root token written to %s (ciphertext only — useless without your offline private key).\n", outPath)
 
-	return appendGHAFile("GITHUB_STEP_SUMMARY",
+	return ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## OpenBao break-glass root token — %s (%s)", region, action),
 		"",
-		breakglassActorLine(),
+		BreakglassActorLine(),
 		"",
 		"Encrypted to your RSA public key (RSA-OAEP / SHA-256). Decrypt locally with your OFFLINE private key:",
 		"",
@@ -252,10 +226,10 @@ func breakglassEncryptAndDeliver(region, action string, recipient *rsa.PublicKey
 	)
 }
 
-// parseRecipientRSAPubKey decodes base64(PEM) into an RSA public key, rejecting a
+// ParseRecipientRSAPubKey decodes base64(PEM) into an RSA public key, rejecting a
 // pasted private key, a non-PEM/non-RSA key, and anything under 2048-bit. The
 // input matches the docs: `base64 < bg-pub.pem | tr -d '\n'`.
-func parseRecipientRSAPubKey(b64 string) (*rsa.PublicKey, error) {
+func ParseRecipientRSAPubKey(b64 string) (*rsa.PublicKey, error) {
 	der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil {
 		return nil, fmt.Errorf("--recipient-pubkey-b64 is not valid base64: %w", err)

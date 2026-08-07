@@ -12,9 +12,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
@@ -829,7 +831,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 		}
 		return fmt.Errorf("root-token preflight failed on %s", region)
 	}
-	if !policiesIncludeRoot(lookupOut) {
+	if !baolifecycle.PoliciesIncludeRoot(lookupOut) {
 		fmt.Fprintf(os.Stderr, "::error::OPENBAO_ROOT_TOKEN on %s is a valid token but not root. Configure steps require root. Re-seed the infra-%s environment secret with an actual root token.\n", region, region)
 		return fmt.Errorf("root-token preflight failed on %s: token is not root", region)
 	}
@@ -854,7 +856,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 		fmt.Println("audit device file/ active (declared in chart values).")
 	} else {
 		fmt.Fprintln(os.Stderr, "::warning::audit device file/ NOT active. Check pod logs for HCL parse errors and the llz-openbao-platform chart's audit block.")
-		if err := appendGHAFile("GITHUB_ENV", "BOOTSTRAP_ERRORS=true"); err != nil {
+		if err := ghaout.Append("GITHUB_ENV", "BOOTSTRAP_ERRORS=true"); err != nil {
 			return err
 		}
 	}

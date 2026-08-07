@@ -42,6 +42,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
@@ -99,7 +100,7 @@ func ciSeedStandbyHarborRobotsCmd() *cobra.Command {
 func seedStandbyHarborRobots(registryHost string) error {
 	robot, secret := os.Getenv("EXISTING_ROBOT"), os.Getenv("EXISTING_SECRET")
 	if robot == "" || secret == "" {
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
+		return ghaout.Append("GITHUB_STEP_SUMMARY",
 			"HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet published — the active peer's harbor-robot-provisioner CronJob sets them once Harbor is up.",
 			"Re-run this workflow after the active peer's provisioner has run.")
 	}
@@ -112,7 +113,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 
 	pullRobot, pullSecret := os.Getenv("EXISTING_PULL_ROBOT"), os.Getenv("EXISTING_PULL_SECRET")
 	if pullRobot == "" || pullSecret == "" {
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
+		return ghaout.Append("GITHUB_STEP_SUMMARY",
 			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not published — re-run after the active peer's provisioner has run.")
 	}
 	ghsecret.Mask(pullSecret)
@@ -258,7 +259,7 @@ func (h *harborAPI) createRobot(payload harborRobotPayload) (name, secret string
 		return "", "", false, fmt.Errorf("harbor robot %s creation failed: %w", payload.Name, err)
 	}
 	if status == http.StatusConflict {
-		return "", "", false, appendGHAFile("GITHUB_STEP_SUMMARY",
+		return "", "", false, ghaout.Append("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("Harbor robot \"%s\" already exists — credentials unchanged.", payload.Name),
 			"To rotate: delete the robot in Harbor UI; the provisioner CronJob recreates it next tick.")
 	}

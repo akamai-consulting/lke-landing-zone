@@ -1,4 +1,4 @@
-package main
+package baolifecycle
 
 // regenroot.go ports regenerate-openbao-root.sh into `llz openbao regen-root`:
 // the standard `bao operator generate-root` quorum flow (3-of-5 unseal-key
@@ -19,26 +19,25 @@ import (
 	"golang.org/x/term"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
 
-const openbaoNS = "llz-openbao"
-
-type regenRootOpts struct {
-	updateGHA bool
-	repo      string
+type RegenRootOpts struct {
+	UpdateGHA bool
+	Repo      string
 }
 
-func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
+func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	if region == "" {
 		return fmt.Errorf("usage: llz openbao regen-root <region> [--update-gha-secret] [--repo owner/repo]")
 	}
 	pod := findLeaderPod()
-	ctx, _ := execOutput("kubectl", "config", "current-context")
+	ctx, _ := kubectlprobe.Exec("kubectl", "config", "current-context")
 	fmt.Printf("kubectl context: %s\n", strings.TrimSpace(string(ctx)))
-	fmt.Printf("Target pod:      %s/%s (active raft leader)\n", openbaoNS, pod)
+	fmt.Printf("Target pod:      %s/%s (active raft leader)\n", baoread.Namespace, pod)
 	fmt.Printf("Region (for GHA env name only): %s\n\n", region)
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would run the bao generate-root quorum flow against the leader pod")
 		return nil
 	}
@@ -46,9 +45,9 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 	// Sanity: reachable + unsealed.
 	statusOut, _, err := baoread.ExecPod(pod, "", "", "status", "-format=json")
 	if err != nil {
-		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", openbaoNS, pod)
+		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", baoread.Namespace, pod)
 	}
-	sealed, threshold := parseBaoStatus(statusOut)
+	sealed, threshold := ParseStatus(statusOut)
 	if sealed {
 		return fmt.Errorf("%s is sealed — unseal it first, then re-run", pod)
 	}
@@ -118,13 +117,13 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 		emitRecoveryToken(newRoot, "self-lookup failed")
 		return fmt.Errorf("new root token failed self-lookup")
 	}
-	if !policiesIncludeRoot(lookupOut) {
+	if !PoliciesIncludeRoot(lookupOut) {
 		emitRecoveryToken(newRoot, "token verified but not root")
 		return fmt.Errorf("new token is valid but not root")
 	}
 	fmt.Println("New token verified: policies include root.")
 
-	if !o.updateGHA {
+	if !o.UpdateGHA {
 		fmt.Printf("\n===================================================================\n")
 		fmt.Printf("NEW ROOT TOKEN (save now — not stored anywhere):\n  %s\n", newRoot)
 		fmt.Printf("===================================================================\n")
@@ -136,14 +135,14 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 
 // updateRootGHASecret writes OPENBAO_ROOT_TOKEN to infra-<region> and verifies
 // the env-level write actually landed (gh can silently fall back to repo-level).
-func updateRootGHASecret(region, newRoot string, o regenRootOpts) error {
+func updateRootGHASecret(region, newRoot string, o RegenRootOpts) error {
 	if _, err := execLookPath("gh"); err != nil {
 		emitRecoveryToken(newRoot, "gh CLI not installed")
 		return fmt.Errorf("gh not installed but --update-gha-secret was requested")
 	}
 	repoArgs := []string{}
-	if o.repo != "" {
-		repoArgs = []string{"--repo", o.repo}
+	if o.Repo != "" {
+		repoArgs = []string{"--repo", o.Repo}
 	}
 
 	set := exec.Command("gh", append([]string{"secret", "set", "OPENBAO_ROOT_TOKEN", "--env", "infra-" + region}, repoArgs...)...)
@@ -192,7 +191,7 @@ func emitRecoveryToken(token, reason string) {
 
 // ── pure parse helpers (unit-tested) ─────────────────────────────────────────
 
-func parseBaoStatus(s string) (sealed bool, threshold int) {
+func ParseStatus(s string) (sealed bool, threshold int) {
 	var v struct {
 		Sealed bool `json:"sealed"`
 		T      int  `json:"t"`
@@ -237,7 +236,7 @@ func parseTokenField(s string) string {
 	return v.Token
 }
 
-func policiesIncludeRoot(lookupJSON string) bool {
+func PoliciesIncludeRoot(lookupJSON string) bool {
 	var v struct {
 		Data struct {
 			Policies []string `json:"policies"`
