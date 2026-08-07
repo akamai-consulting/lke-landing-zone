@@ -45,8 +45,18 @@ func TestClusterAccessIsATransitionAtProvisioned(t *testing.T) {
 // dropping cluster-write would hide the lease ConfigMap that makes that race
 // survivable; dropping secret-custody would hide a cluster-admin kubeconfig landing
 // on disk, which is the one credential per cluster a human can actually use.
-func TestClusterAccessGrantsAreExactlyTheThreeItHolds(t *testing.T) {
+func TestClusterAccessGrantsAreExactlyTheFourItHolds(t *testing.T) {
+	// FOUR NOW, NOT THREE, AND THE FOURTH WAS ALWAYS TRUE. cloud-read was added
+	// when a source-scanning invariant noticed this package holds an Exec seam and
+	// declared no read grant at all. It runs `tofu output -json` and `tofu state
+	// list` to find the cluster it is fetching access for, and that state lives in
+	// a remote object-storage backend — so the read is a cloud read.
+	//
+	// This is NOT the over-granting the check below guards against: cloud-mutate
+	// does not imply cloud-read in this model (eight other extensions declare both
+	// explicitly), so the grant was missing rather than redundant.
 	want := map[extension.Grant]bool{
+		extension.CloudRead:     true,
 		extension.CloudMutate:   true,
 		extension.ClusterWrite:  true,
 		extension.SecretCustody: true,

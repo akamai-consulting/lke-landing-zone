@@ -986,6 +986,32 @@ categories:
 #        The uniformity is still the useful finding: 14 identical Exec signatures,
 #        5 identical LoadSpec, one Summary variant. A grant->handle resolver has
 #        six handles to produce, not eighteen bespoke structs.
+#   92nd: the first ENFORCED grant invariant   1,700 -> 1,700 (0 lines)
+#        THE deps-ABI, APPROACHED FROM THE CHEAP END. The full resolver is a large
+#        refactor whose value is "you cannot use a capability you did not declare".
+#        One class of that is checkable today without touching a single assembler:
+#        a package holding an `Exec` seam is shelling out and reading the result,
+#        so its declaration must carry SOME read grant.
+#        IT FOUND ONE IMMEDIATELY. clusteraccess held an Exec seam and declared
+#        only cloud-mutate/cluster-write/secret-custody. It runs `tofu output
+#        -json` and `tofu state list` against a REMOTE object-storage backend --
+#        a cloud read nobody had written down. cloud-mutate does not imply
+#        cloud-read here: grants are explicit and eight extensions declare both.
+#        The extension`s own guard refused the fix ("a transition that asks for
+#        more than it uses is the over-granting the model exists to make visible")
+#        until it was argued in -- the right refusal, wrong conclusion, and the
+#        argument is now recorded in the test.
+#        DELIBERATELY NOT a seam->specific-grant map. `Exec` runs kubectl, gh, git
+#        and tofu depending on caller, so demanding cluster-read would be wrong for
+#        the gh-only packages. "Some read grant" is the strongest claim the
+#        evidence supports; a check that overreaches gets weakened, not satisfied.
+#        A HYPOTHESIS DIED ON THE WAY: `Confirm` (--yes) looked like it should
+#        become a declarable property, since teardown records it as "what the model
+#        has no word for". Measured: 12 extensions gate on it, 24 mutate WITHOUT
+#        it, 8 gate without mutating. It tracks OPERATOR-invoked mutation, not
+#        mutation -- `llz ci` verbs run inside a workflow that is itself the
+#        authorization. So it stays caller-supplied, and a resolver produces
+#        capability handles only. That is the right split, not a wart.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N

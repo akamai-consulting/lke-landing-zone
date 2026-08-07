@@ -53,6 +53,13 @@ func Extension() extension.Extension {
 			Kind:  extension.Transition,
 			State: extension.Provisioned,
 			Grants: []extension.Grant{
+				// cloud-read is NOT implied by cloud-mutate — the model keeps grants
+				// explicit, and eight other extensions declare both. This one reads
+				// Terraform state (`tofu output -json`, `state list`) to find the
+				// cluster it is fetching access for, and that state lives in a remote
+				// object-storage backend. The read was undeclared until the Exec-seam
+				// invariant below went in and named it.
+				extension.CloudRead,
 				extension.CloudMutate,
 				extension.ClusterWrite,
 				extension.SecretCustody,
