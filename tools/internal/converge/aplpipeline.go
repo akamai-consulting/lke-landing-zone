@@ -54,7 +54,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
-	"github.com/spf13/cobra"
 )
 
 // aplWaitStage is one (existence-poll → condition-wait) step.
@@ -95,23 +94,6 @@ func aplPipelineStages() []aplWaitStage {
 		{"Kyverno admission-controller", "kyverno", "deployment/kyverno-admission-controller", "Available", 300 * time.Second, "3m"},
 		{"cert-manager CRD", "", "crd/certificates.cert-manager.io", "Established", 300 * time.Second, "3m"},
 		{"cert-manager webhook", "cert-manager", "deployment/cert-manager-webhook", "Available", 300 * time.Second, "3m"},
-	}
-}
-
-func WaitAplPipelineCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "wait-apl-pipeline",
-		Short: "block until apl-operator's helmfile brings argocd/kyverno/cert-manager up (terraform local-exec body)",
-		Long: "Native port of null_resource.apl_pipeline_ready's local-exec heredoc. Writes\n" +
-			"KUBECONFIG_RAW to a tempfile, then for each platform prerequisite polls until\n" +
-			"the resource EXISTS (kubectl wait errors immediately on NotFound) and waits\n" +
-			"for its real-readiness condition: Argo CD application-controller\n" +
-			"(readyReplicas), the Kyverno admission controller (Available), and the\n" +
-			"cert-manager webhook (Available). FAILS LOUD on any timeout (convergence\n" +
-			"contract — no soft-fail), dumping apl-operator pods + logs when a resource\n" +
-			"never appears. Reads KUBECONFIG_RAW.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIWaitAplPipeline() },
 	}
 }
 

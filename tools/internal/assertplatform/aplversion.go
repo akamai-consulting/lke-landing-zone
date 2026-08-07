@@ -30,7 +30,6 @@ import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/spf13/cobra"
 )
 
 // MinSupportedAplChartVersion is the oldest apl-core chart the landing zone still
@@ -53,24 +52,6 @@ import (
 // this gate would not refuse. That test now lives here, since this is the side
 // that owns the floor.
 const MinSupportedAplChartVersion = "6.0.0"
-
-func AplVersionCmd() *cobra.Command {
-	var env string
-	c := &cobra.Command{
-		Use:   "assert-apl-version",
-		Short: "fail fast when the spec pins an apl-core chart version the landing zone no longer supports",
-		Long: "Resolves the apl-core chart version exactly as `llz ci bootstrap-cluster` does\n" +
-			"(spec.cluster.bootstrap.aplChartVersion for the deployment, else the baked\n" +
-			"default) and fails when it is older than " + MinSupportedAplChartVersion + ".\n\n" +
-			"Run as a front-loaded preflight so an unsupported pin fails in seconds rather\n" +
-			"than wedging apl-operator (missing apl-sops-secrets) and leaving the cluster\n" +
-			"with no external-secrets operator — both ~2h into the bootstrap.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return assertAplVersion(env) },
-	}
-	c.Flags().StringVar(&env, "env", "", "deployment whose spec pin to check (e.g. prod); empty checks the baked default only")
-	return c
-}
 
 // resolveAplChartVersion mirrors runBootstrapCluster's resolution: the deployment's
 // spec pin when present, else the baked default. A missing spec/deployment is not an

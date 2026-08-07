@@ -1,16 +1,6 @@
 package reconciler
 
-import (
-	"context"
-	"time"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
-	"github.com/spf13/cobra"
-)
-
-// cmds.go — the five cobra constructors, AND THEY STAYED HERE.
+// cobra_cmds.go — the five cobra constructors, AND THEY STAYED HERE.
 //
 // Every previous extraction in this campaign sent flag sets back to package main
 // on the rule that a flag set is not a capability. This one does not, and the
@@ -30,6 +20,19 @@ import (
 // assert-volume-encryption) are the one-shot forms of reconcilers this package
 // runs continuously, and the two spellings should not drift apart.
 
+import (
+	"context"
+	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
+	"github.com/spf13/cobra"
+)
+
+// The file this was split from held NOTHING ELSE, so its header came with the
+// commands rather than being left behind on an empty file.
+
 func DiscoverFirewallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "discover-firewall-config",
@@ -46,7 +49,6 @@ func DiscoverFirewallCmd() *cobra.Command {
 		},
 	}
 }
-
 func Cmd() *cobra.Command {
 	var o reconcileFlags
 	c := &cobra.Command{
@@ -155,7 +157,6 @@ func Cmd() *cobra.Command {
 	f.IntVar(&o.aplOverlayInterval, "apl-overlay-interval", 300, "seconds between apl-overlay git-sync passes")
 	return c
 }
-
 func AssertVolumeEncryptionCmd() *cobra.Command {
 	var scName string
 	c := &cobra.Command{
@@ -189,7 +190,6 @@ func AssertVolumeEncryptionCmd() *cobra.Command {
 		"StorageClass whose volumeTags parameter defines the required tag set")
 	return c
 }
-
 func ReconcileVolumeTagsCmd() *cobra.Command {
 	var scName string
 	c := &cobra.Command{
@@ -213,7 +213,6 @@ func ReconcileVolumeTagsCmd() *cobra.Command {
 	c.Flags().StringVar(&scName, "storage-class", volumes.DefaultTagsSC, "StorageClass whose volumeTags parameter defines the desired tag set")
 	return c
 }
-
 func RelabelVolumesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "relabel-volumes",

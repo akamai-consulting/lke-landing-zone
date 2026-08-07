@@ -49,7 +49,6 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 
@@ -124,25 +123,6 @@ type wdInversion struct {
 	file, workload, secret, esFile string
 	workloadWave, esWave           int
 	workloadApp, esApp             string
-}
-
-func DependencyGuardCmd() *cobra.Command {
-	var root string
-	cmd := &cobra.Command{
-		Use:   "wave-dependency-guard",
-		Short: "fail when a workload syncs at or before the ExternalSecret that provides a Secret it hard-depends on",
-		Long: "Static guard for the #163 wedge class: Argo sync waves gate on per-resource\n" +
-			"health, so a Deployment/StatefulSet/DaemonSet that hard-references (non-optional)\n" +
-			"a Secret produced by an ExternalSecret at a LATER sync-wave can never go Healthy\n" +
-			"— it blocks its wave forever and starves every later-wave ExternalSecret in the\n" +
-			"platform-bootstrap sync. The workload's wave must be strictly greater than the\n" +
-			"ExternalSecret's. Mark the reference optional: true to opt out (the pod then\n" +
-			"starts without the Secret).",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIWaveDependencyGuard(root) },
-	}
-	cmd.Flags().StringVar(&root, "root", ".", "repo root (template or instance layout)")
-	return cmd
 }
 
 func runCIWaveDependencyGuard(root string) error {

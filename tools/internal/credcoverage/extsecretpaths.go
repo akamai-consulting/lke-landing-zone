@@ -33,8 +33,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/guardwalk"
@@ -635,24 +633,4 @@ func checkESRefreshIntervals(root string, w io.Writer) int {
 		fmt.Fprintf(w, "  ok: every platform ExternalSecret/PushSecret bounds refreshInterval ≤ %s (or one-shot 0)\n", esMaxRefreshInterval)
 	}
 	return errors
-}
-
-func ExternalSecretPathsCmd() *cobra.Command {
-	var root string
-	c := &cobra.Command{
-		Use:   "externalsecret-paths",
-		Short: "cross-validate ExternalSecret remoteRefs against OpenBao seeding + policy coverage",
-		Long: "Native port of the former template-scripts/linting-and-validation/\n" +
-			"validate-externalsecret-paths.py (the Makefile's externalsecret-paths-check,\n" +
-			"run after render-charts). Validates every ExternalSecret remoteRef.key/\n" +
-			"property in apl-values/ + $RENDER_DIR against the bootstrap-workflow and\n" +
-			"ci_harbor.go seeding, then asserts the bao-configure platform-ci policy\n" +
-			"covers every consumed and seeded KV v2 path.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIExternalSecretPaths(root, os.Stdout)
-		},
-	}
-	c.Flags().StringVar(&root, "root", ".", "repo root to validate")
-	return c
 }
