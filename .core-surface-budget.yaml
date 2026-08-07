@@ -366,6 +366,11 @@ categories:
 #        Also cost: a directory-scoped test guard (TestSeedTargetsAreReserved-
 #        Namespaces, os.ReadDir(".")) went INERT when its file moved, and only its
 #        own seen==0 check caught it. It walks tools/ now.
+#   54th: GitHub git-data API -> internal/ghgitdata   16,886 -> 16,641 (-245 / 128 files)
+#        Closure 3, of which one was real (redactSecret). The THIRD free-enabler of
+#        this shape: ghsecret before harbor, baoread before baolifecycle, this
+#        before reconciler-runtime -- which drops from 11 outbound to 7, and three
+#        of the seven are its own lanes in ci_volumes.go/ci_discover_firewall.go.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -378,7 +383,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 16886
+    budget: 16641
     exact: true
     include:
       - "tools/cmd/llz/*.go"

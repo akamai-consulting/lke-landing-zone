@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghgitdata"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 )
 
@@ -36,9 +37,9 @@ func TestReconcileAplOverlay_MisconfigErrors(t *testing.T) {
 func TestReconcileAplOverlay_MissingTokenIsNoOp(t *testing.T) {
 	setAplOverlayEnv(t)
 	t.Setenv("APL_VALUES_REPO_TOKEN", "") // env empty → falls through to the mounted file
-	orig := aplValuesRepoTokenFile
-	aplValuesRepoTokenFile = "/nonexistent/llz-apl-values-token" // mounted file absent too
-	t.Cleanup(func() { aplValuesRepoTokenFile = orig })
+	orig := ghgitdata.AplValuesTokenFile
+	ghgitdata.AplValuesTokenFile = "/nonexistent/llz-apl-values-token" // mounted file absent too
+	t.Cleanup(func() { ghgitdata.AplValuesTokenFile = orig })
 	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
 		t.Errorf("unsynced token must be a no-op, got: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package ghgitdata
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func TestGHOverlayCommitNativeStopsAtMaxAttempts(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	_, changed, err := ghOverlayCommitNative(context.Background(), srv.Client(), "tok",
+	_, changed, err := OverlayCommit(context.Background(), srv.Client(), "tok",
 		"acme/platform", "values", map[string]string{"a.yaml": "x"}, "overlay", 2)
 	if err == nil {
 		t.Fatal("a ref that never fast-forwards must exhaust the attempts and error")

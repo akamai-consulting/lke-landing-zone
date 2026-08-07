@@ -1,4 +1,4 @@
-package main
+package ghgitdata
 
 import (
 	"context"
@@ -52,7 +52,7 @@ func TestGHReadFileNative(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	got, found, err := ghReadFileNative(context.Background(), srv.Client(), "tok", "acme/platform", "values", "present.yaml")
+	got, found, err := ReadFile(context.Background(), srv.Client(), "tok", "acme/platform", "values", "present.yaml")
 	if err != nil || !found {
 		t.Fatalf("read present: found=%v err=%v", found, err)
 	}
@@ -60,7 +60,7 @@ func TestGHReadFileNative(t *testing.T) {
 		t.Errorf("content = %q, want %q", got, raw)
 	}
 
-	_, found, err = ghReadFileNative(context.Background(), srv.Client(), "tok", "acme/platform", "values", "missing.yaml")
+	_, found, err = ReadFile(context.Background(), srv.Client(), "tok", "acme/platform", "values", "missing.yaml")
 	if err != nil {
 		t.Fatalf("read missing: err = %v", err)
 	}
@@ -87,7 +87,7 @@ func TestGHGetBranchHeadNative(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	commit, tree, err := ghGetBranchHeadNative(context.Background(), srv.Client(), "tok", "acme/platform", "values")
+	commit, tree, err := BranchHead(context.Background(), srv.Client(), "tok", "acme/platform", "values")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +103,9 @@ func TestGHGetBranchHeadNativeRefNotFound(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	_, _, err := ghGetBranchHeadNative(context.Background(), srv.Client(), "tok", "acme/platform", "nope")
-	if !errors.Is(err, errGHRefNotFound) {
-		t.Errorf("err = %v, want errGHRefNotFound", err)
+	_, _, err := BranchHead(context.Background(), srv.Client(), "tok", "acme/platform", "nope")
+	if !errors.Is(err, ErrRefNotFound) {
+		t.Errorf("err = %v, want ErrRefNotFound", err)
 	}
 }
 
@@ -212,7 +212,7 @@ func TestGHOverlayCommitNativeHappyPath(t *testing.T) {
 		"z-last.yaml":  "zzz",
 		"a-first.yaml": "aaa",
 	}
-	sha, changed, err := ghOverlayCommitNative(context.Background(), srv.Client(), "tok", "acme/platform", "values", files, "overlay", 4)
+	sha, changed, err := OverlayCommit(context.Background(), srv.Client(), "tok", "acme/platform", "values", files, "overlay", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestGHOverlayCommitNativeNoOp(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	sha, changed, err := ghOverlayCommitNative(context.Background(), srv.Client(), "tok", "acme/platform", "values", map[string]string{"a.yaml": "x"}, "overlay", 4)
+	sha, changed, err := OverlayCommit(context.Background(), srv.Client(), "tok", "acme/platform", "values", map[string]string{"a.yaml": "x"}, "overlay", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestGHOverlayCommitNativeFFRetry(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	sha, changed, err := ghOverlayCommitNative(context.Background(), srv.Client(), "tok", "acme/platform", "values", map[string]string{"a.yaml": "x"}, "overlay", 4)
+	sha, changed, err := OverlayCommit(context.Background(), srv.Client(), "tok", "acme/platform", "values", map[string]string{"a.yaml": "x"}, "overlay", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,8 +282,8 @@ func TestGHOverlayCommitNativeRefNotFound(t *testing.T) {
 	t.Cleanup(srv.Close)
 	setGHAPIBase(t, srv.URL)
 
-	_, _, err := ghOverlayCommitNative(context.Background(), srv.Client(), "tok", "acme/platform", "nope", map[string]string{"a.yaml": "x"}, "overlay", 4)
-	if !errors.Is(err, errGHRefNotFound) {
-		t.Errorf("err = %v, want errGHRefNotFound propagated", err)
+	_, _, err := OverlayCommit(context.Background(), srv.Client(), "tok", "acme/platform", "nope", map[string]string{"a.yaml": "x"}, "overlay", 4)
+	if !errors.Is(err, ErrRefNotFound) {
+		t.Errorf("err = %v, want ErrRefNotFound propagated", err)
 	}
 }

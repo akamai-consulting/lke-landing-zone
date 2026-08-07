@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghgitdata"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -138,9 +139,9 @@ func TestAplOverlayPreconditionUnmetCases(t *testing.T) {
 	t.Run("repo token not synced", func(t *testing.T) {
 		setAplOverlayEnv(t)
 		t.Setenv("APL_VALUES_REPO_TOKEN", "") // env empty → falls through to the mounted file
-		orig := aplValuesRepoTokenFile
-		aplValuesRepoTokenFile = "/nonexistent/llz-apl-values-token" // mounted file absent too
-		t.Cleanup(func() { aplValuesRepoTokenFile = orig })
+		orig := ghgitdata.AplValuesTokenFile
+		ghgitdata.AplValuesTokenFile = "/nonexistent/llz-apl-values-token" // mounted file absent too
+		t.Cleanup(func() { ghgitdata.AplValuesTokenFile = orig })
 		seeded := withObjCredSeams(t, nil)
 		seeded.Store(true)
 		if aplOverlayPreconditionMet(context.Background()) {

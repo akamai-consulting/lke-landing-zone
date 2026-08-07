@@ -18,6 +18,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/overlay"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghgitdata"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
@@ -69,7 +70,7 @@ func aplOverlayConfigFromEnv() (aplOverlayConfig, error) {
 		// Lazy, env-first then optional Secret volume — NOT a hard env ref (the pod
 		// starts at wave 0, before the OpenBao store serves the token). Empty is a
 		// transient not-yet-synced state the caller no-ops on, not a misconfig.
-		token:        inclusterAplValuesRepoToken(),
+		token:        ghgitdata.InClusterAplValuesToken(),
 		env:          os.Getenv("REGION"),
 		sourceBranch: cigate.EnvOr("APL_VALUES_SOURCE_BRANCH", "main"),
 		targetBranch: os.Getenv("APL_VALUES_BRANCH"),
@@ -123,12 +124,12 @@ type ghOverlayRepo struct {
 }
 
 func (r ghOverlayRepo) ReadFile(ctx context.Context, branch, path string) (string, bool, error) {
-	return ghReadFileNative(ctx, r.client, r.token, r.repo, branch, path)
+	return ghgitdata.ReadFile(ctx, r.client, r.token, r.repo, branch, path)
 }
 
 func (r ghOverlayRepo) OverlayCommit(ctx context.Context, branch string, files map[string]string, message string, maxAttempts int) (string, bool, error) {
-	sha, changed, err := ghOverlayCommitNative(ctx, r.client, r.token, r.repo, branch, files, message, maxAttempts)
-	if errors.Is(err, errGHRefNotFound) {
+	sha, changed, err := ghgitdata.OverlayCommit(ctx, r.client, r.token, r.repo, branch, files, message, maxAttempts)
+	if errors.Is(err, ghgitdata.ErrRefNotFound) {
 		return sha, changed, overlay.ErrRefNotFound
 	}
 	return sha, changed, err

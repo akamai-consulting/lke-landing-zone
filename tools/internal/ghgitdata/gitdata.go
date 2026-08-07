@@ -1,4 +1,4 @@
-package main
+package ghgitdata
 
 // gh_gitdata_native.go — a pure net/http client for GitHub's "git data" REST
 // API (blobs/trees/commits/refs) plus the Contents API for reads. Used by the
@@ -7,7 +7,7 @@ package main
 // shell out to `git`. Everything here is stdlib (net/http + encoding/*), the
 // same seam-driven style as gh_secrets_native.go.
 //
-// The load-bearing primitive is ghOverlayCommitNative: it builds a tree with a
+// The load-bearing primitive is OverlayCommit: it builds a tree with a
 // base_tree so unlisted files are PRESERVED (an overlay, not a replace), then
 // fast-forwards the branch ref. If the ref moved under it (apl-operator pushed
 // concurrently) the ref PATCH 422s and it re-reads head + rebuilds — an
@@ -34,14 +34,14 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
-// errGHRefNotFound is returned (wrapped) when a branch ref 404s, so a caller can
+// ErrRefNotFound is returned (wrapped) when a branch ref 404s, so a caller can
 // tell "the branch does not exist" apart from any other failure with errors.Is.
-var errGHRefNotFound = errors.New("github ref not found")
+var ErrRefNotFound = errors.New("github ref not found")
 
-// ghAuthHeaders sets the standard GitHub REST auth + versioning headers on req
+// authHeaders sets the standard GitHub REST auth + versioning headers on req
 // (Bearer token, JSON accept, pinned API version) — the same header set the other
 // native GitHub callers use inline.
-func ghAuthHeaders(req *http.Request, token string) {
+func authHeaders(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -56,11 +56,11 @@ type ghTreeEntry struct {
 	SHA  string `json:"sha"`
 }
 
-// ghReadFileNative reads a single file from a ref via the Contents API. Returns
+// ReadFile reads a single file from a ref via the Contents API. Returns
 // found=false (no error) on 404 so a missing overlay file is a normal outcome.
 // The Contents API base64-encodes the body (with embedded newlines), which we
 // strip before decoding.
-func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref, path string) (content string, found bool, err error) {
+func ReadFile(ctx context.Context, client *http.Client, token, repo, ref, path string) (content string, found bool, err error) {
 	u := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s",
 		ghsecret.APIBase, repo, path, url.QueryEscape(ref))
 	var body struct {
@@ -85,10 +85,10 @@ func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref
 	return string(raw), true, nil
 }
 
-// ghGetBranchHeadNative resolves a branch to its head commit sha and that
+// BranchHead resolves a branch to its head commit sha and that
 // commit's tree sha (two hops: git/ref/heads/<b> then git/commits/<sha>). A 404
-// on the ref returns errGHRefNotFound so a missing branch is distinguishable.
-func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo, branch string) (commitSHA, treeSHA string, err error) {
+// on the ref returns ErrRefNotFound so a missing branch is distinguishable.
+func BranchHead(ctx context.Context, client *http.Client, token, repo, branch string) (commitSHA, treeSHA string, err error) {
 	refURL := fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", ghsecret.APIBase, repo, branch)
 	var ref struct {
 		Object struct {
@@ -100,7 +100,7 @@ func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo
 		return "", "", err
 	}
 	if notFound {
-		return "", "", fmt.Errorf("branch %q: %w", branch, errGHRefNotFound)
+		return "", "", fmt.Errorf("branch %q: %w", branch, ErrRefNotFound)
 	}
 	commitSHA = ref.Object.SHA
 	if commitSHA == "" {
@@ -174,7 +174,7 @@ func ghUpdateRefNative(ctx context.Context, client *http.Client, token, repo, br
 	if err != nil {
 		return false, err
 	}
-	ghAuthHeaders(req, token)
+	authHeaders(req, token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -192,15 +192,15 @@ func ghUpdateRefNative(ctx context.Context, client *http.Client, token, repo, br
 	return false, ghCheck2xx(resp, token, "update ref heads/"+branch)
 }
 
-// ghOverlayCommitNative overlays files onto branch as one commit, preserving
+// OverlayCommit overlays files onto branch as one commit, preserving
 // every other file (base_tree semantics). It's an optimistic-concurrency loop:
 // read head, build blobs+tree+commit, then fast-forward the ref; if a concurrent
 // push moved the ref (422), re-read and rebuild, up to maxAttempts times.
 //
 // Returns changed=false, newSHA="" when the overlay is already in place (the new
-// tree equals head's tree — nothing to commit). errGHRefNotFound propagates
+// tree equals head's tree — nothing to commit). ErrRefNotFound propagates
 // as-is when the branch does not exist.
-func ghOverlayCommitNative(ctx context.Context, client *http.Client, token, repo, branch string, files map[string]string, message string, maxAttempts int) (newSHA string, changed bool, err error) {
+func OverlayCommit(ctx context.Context, client *http.Client, token, repo, branch string, files map[string]string, message string, maxAttempts int) (newSHA string, changed bool, err error) {
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
@@ -212,9 +212,9 @@ func ghOverlayCommitNative(ctx context.Context, client *http.Client, token, repo
 	sort.Strings(paths)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		headCommit, headTree, err := ghGetBranchHeadNative(ctx, client, token, repo, branch)
+		headCommit, headTree, err := BranchHead(ctx, client, token, repo, branch)
 		if err != nil {
-			return "", false, err // includes errGHRefNotFound
+			return "", false, err // includes ErrRefNotFound
 		}
 
 		entries := make([]ghTreeEntry, 0, len(paths))
@@ -267,7 +267,7 @@ func ghPostForSHA(ctx context.Context, client *http.Client, token, u string, bod
 	if err != nil {
 		return "", err
 	}
-	ghAuthHeaders(req, token)
+	authHeaders(req, token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -298,7 +298,7 @@ func ghGetJSON(ctx context.Context, client *http.Client, token, u, what string, 
 	if err != nil {
 		return false, err
 	}
-	ghAuthHeaders(req, token)
+	authHeaders(req, token)
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
@@ -324,4 +324,20 @@ func ghCheck2xx(resp *http.Response, token, what string) error {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("%s: HTTP %d: %s", what, resp.StatusCode, redactSecret(string(b), token))
+}
+
+// redactSecret strips a token out of text before it reaches an error message.
+//
+// Copied from cmd/llz rather than shared, and this is the ONE copy in the campaign
+// that is not about avoiding an import. A redaction helper is the last thing that
+// should live behind a package boundary where a caller might reasonably reach for
+// a similarly-named neighbour: cmd/llz also has `redactSecrets` (plural, a slice),
+// and the two differ by an `s`. Every error path in this package goes through this
+// one, four lines away from the call sites, where a reader can see it.
+func redactSecret(s, secret string) string {
+	s = strings.TrimSpace(s)
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "***")
 }

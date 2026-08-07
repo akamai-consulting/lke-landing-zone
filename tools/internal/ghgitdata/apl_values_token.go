@@ -1,4 +1,4 @@
-package main
+package ghgitdata
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 
@@ -13,14 +13,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 // resolves the token lazily per pass: env first (tests/CI), then the mounted file,
 // which kubelet refreshes (~1m) on Secret create/rotate.
 
-// aplValuesRepoTokenFile is where the Deployment mounts the optional
+// AplValuesTokenFile is where the Deployment mounts the optional
 // apl-values-repo-token Secret volume. Package var so tests can point it at a fixture.
-var aplValuesRepoTokenFile = "/var/run/secrets/llz/apl-values-repo-token/token"
+var AplValuesTokenFile = "/var/run/secrets/llz/apl-values-repo-token/token"
 
-// inclusterAplValuesRepoToken resolves the apl-overlay push token:
+// InClusterAplValuesToken resolves the apl-overlay push token:
 // APL_VALUES_REPO_TOKEN env (tests/CI), else the optional Secret volume, else ""
 // (not yet synced — the apl-overlay pass no-ops until it appears). Shares the
 // linode resolver's lazy env-then-file logic (credrotate.InClusterToken).
-func inclusterAplValuesRepoToken() string {
-	return credrotate.InClusterToken("APL_VALUES_REPO_TOKEN", aplValuesRepoTokenFile)
+func InClusterAplValuesToken() string {
+	return credrotate.InClusterToken("APL_VALUES_REPO_TOKEN", AplValuesTokenFile)
 }

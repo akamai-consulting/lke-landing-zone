@@ -6,7 +6,7 @@ package main
 // zero-coverage functions, and most of them should stay that way: they are the
 // production halves of test seams (openHarborProvisionerBaoStore is one line
 // delegating to openbao.OpenInClusterStore; ghOverlayRepo.ReadFile delegates to
-// ghReadFileNative), thin exec wrappers (runTF builds a cmd, wires stdio, runs
+// ghgitdata.ReadFile), thin exec wrappers (runTF builds a cmd, wires stdio, runs
 // it), env readers (rotationInputsFromEnv is a struct literal of twelve
 // os.Getenv calls), or cobra entrypoints whose decision logic is already
 // extracted and tested. Covering those asserts wiring, not behaviour, and the
