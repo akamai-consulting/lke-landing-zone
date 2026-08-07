@@ -519,6 +519,14 @@ func RunDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		}
 	}
 
+	// The spec-answerable half of the CI preflights doctor used to leave to the
+	// build — see doctor_build_preflights.go. Only inside an instance: outside one
+	// there is no spec to check, and a bare `llz doctor` is a tooling check. The
+	// image-pin half needs the REPO's variables, so it runs in cmdDoctorE2E below.
+	if clusterspec.InstancePresent(filepath.Dir(tfDir)) {
+		errs = append(errs, checkSpecPreflights(env)...)
+	}
+
 	// e2e readiness — .llz/*.env merged with the live repo config. Needs a repo:
 	// the flag, an instance's .copier-answers.yml, or --admin (the example repo).
 	if repo == "" && !admin {

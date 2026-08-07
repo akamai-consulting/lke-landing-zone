@@ -30,6 +30,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 // dbAdminSeedRoot is the KV v2 prefix each cluster's admin credential lands under.
@@ -158,7 +159,7 @@ func RunSeedDBAdmin(region string) error {
 		}
 	}
 
-	return appendGHAFile("GITHUB_STEP_SUMMARY", dbAdminSummary(region, seeded, updated, unchanged)...)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", dbAdminSummary(region, seeded, updated, unchanged)...)
 }
 
 // parseDBConnections decodes the `connections` output blob. An absent output

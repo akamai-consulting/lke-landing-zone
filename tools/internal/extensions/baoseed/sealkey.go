@@ -28,6 +28,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
@@ -166,7 +167,7 @@ func resolveSealKey(region string) ([]byte, error) {
 
 	// Offline-backup banner first — the key is generated exactly once. (It is NOT
 	// printed here; the operator retrieves it from the infra-<region> secret.)
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		"## OpenBao static auto-unseal key generated — Back It Up Now",
 		"",
 		"**OPERATOR ACTION REQUIRED:**",

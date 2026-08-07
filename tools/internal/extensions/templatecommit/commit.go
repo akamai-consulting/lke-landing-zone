@@ -474,3 +474,15 @@ var ImagePublished = func(image string) (published, asked bool) {
 		return false, false
 	}
 }
+
+// CIImageVarNames are the workflow variables that must name the pinned template
+// commit. Exported as NAMES rather than the table: the doctor preflight only
+// needs to ask "is any of these recorded?", and handing out a struct with
+// unexported fields to answer that would be the worse trade.
+func CIImageVarNames() []string {
+	out := make([]string, 0, len(ciImageVars))
+	for _, w := range ciImageVars {
+		out = append(out, w.name)
+	}
+	return out
+}

@@ -38,6 +38,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 // statePassphraseRoots are the Terraform roots whose state is encrypted. Kept
@@ -237,7 +239,7 @@ func reportRollover(results []rootRollover, apply bool) error {
 
 	if !apply {
 		fmt.Println("\nDry run — nothing was re-keyed. Re-run with --apply inside the rotation window.")
-		return appendGHAFile("GITHUB_STEP_SUMMARY", append([]string{"### State-passphrase rollover (dry run)", ""}, lines...)...)
+		return ghaout.Append("GITHUB_STEP_SUMMARY", append([]string{"### State-passphrase rollover (dry run)", ""}, lines...)...)
 	}
 
 	summary := append([]string{"### State-passphrase rollover", ""}, lines...)
@@ -246,12 +248,12 @@ func reportRollover(results []rootRollover, apply bool) error {
 			"**DO NOT delete `TF_STATE_ENCRYPTION_PASSPHRASE_OLD`.** "+
 				fmt.Sprintf("%d root(s) did not verify; the old passphrase is the only thing that can still read them. ", failed)+
 				"Fix the failure and re-run — the rollover is idempotent.")
-		_ = appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+		_ = ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
 		return fmt.Errorf("state-passphrase rollover incomplete: %d of %d root(s) failed — old passphrase MUST be retained", failed, verified+failed)
 	}
 	summary = append(summary, "",
 		fmt.Sprintf("All %d present root(s) verified with the new passphrase alone (%d skipped). ", verified, skipped)+
 			"`TF_STATE_ENCRYPTION_PASSPHRASE_OLD` can now be deleted and "+
 			"`TF_STATE_ENCRYPTION_KEY_NAME_OLD` cleared.")
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
 }

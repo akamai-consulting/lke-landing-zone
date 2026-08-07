@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -106,7 +107,7 @@ func RunLKEAdminRotate(o *Opts, clusterIDArg string) error {
 	if err != nil {
 		return err
 	}
-	return appendGHAFile("GITHUB_STEP_SUMMARY",
+	return ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("### Rotation record — %s", os.Getenv("REGION")),
 		"```json",
 		string(recordJSON),

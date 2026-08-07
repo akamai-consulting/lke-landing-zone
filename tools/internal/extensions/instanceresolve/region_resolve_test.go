@@ -23,11 +23,11 @@ func (f fakeRegions) ListRegions(context.Context) ([]map[string]any, error) {
 	return out, nil
 }
 
-func stubRegions(t *testing.T, l regionLister) {
+func stubRegions(t *testing.T, l RegionLister) {
 	t.Helper()
 	orig := RegionClient
 	t.Cleanup(func() { RegionClient = orig })
-	RegionClient = func() regionLister { return l }
+	RegionClient = func() RegionLister { return l }
 }
 
 func TestCheckRegionAcceptsARealRegion(t *testing.T) {

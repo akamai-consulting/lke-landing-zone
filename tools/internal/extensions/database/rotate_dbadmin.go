@@ -70,6 +70,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -136,11 +137,11 @@ func RunRotateDBAdmin(region string, apply, rotateNow bool, afterDays int) error
 	}
 	if len(due) == 0 {
 		fmt.Printf("rotate-db-admin: nothing due (threshold %dd).\n", afterDays)
-		return appendGHAFile("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, nil)...)
+		return ghaout.Append("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, nil)...)
 	}
 	if !apply {
 		fmt.Printf("rotate-db-admin: %d credential(s) due — NOT rotating (--apply not set).\n", len(due))
-		return appendGHAFile("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, nil)...)
+		return ghaout.Append("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, nil)...)
 	}
 
 	token := os.Getenv("LINODE_TOKEN")
@@ -162,7 +163,7 @@ func RunRotateDBAdmin(region string, apply, rotateNow bool, afterDays int) error
 		fmt.Printf("%s: rotated; %s updated.\n", t.name, t.path)
 	}
 
-	return appendGHAFile("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, rotated)...)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, rotated)...)
 }
 
 // rotateOneDBAdmin resets one cluster's admin password and persists it.

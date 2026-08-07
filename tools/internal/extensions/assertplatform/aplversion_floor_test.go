@@ -18,7 +18,7 @@ import (
 // this release targets. Nothing in 6.1.0 made the landing zone 6.1-only, so a
 // 6.0.0 instance must still pass the preflight and merely warn about drift.
 func TestMinSupportedAplChartVersionIsNotTheBaseline(t *testing.T) {
-	if err := aplVersionSupported("6.0.0", "prod"); err != nil {
+	if err := AplVersionSupported("6.0.0", "prod"); err != nil {
 		t.Errorf("6.0.0 must remain SUPPORTED (floor %s) — the 6.1.0 bump raises the target, not the floor: %v",
 			MinSupportedAplChartVersion, err)
 	}

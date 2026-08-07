@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 // dbDeclaredAssignRe matches the `databases = …` assignment in a rendered tfvars.
@@ -35,7 +36,7 @@ func RunDBDeclared(region string) error {
 		// (or predates it) — that is "none declared", not a failure. Anything that
 		// genuinely matters fails later, loudly, in terraform itself.
 		fmt.Printf("db-declared: %s not present — no database clusters declared for %s.\n", path, region)
-		return appendGHAFile("GITHUB_OUTPUT", "declared=false")
+		return ghaout.Append("GITHUB_OUTPUT", "declared=false")
 	}
 	declared := dbDeclaredAssignRe.Match(body)
 	if declared {
@@ -43,7 +44,7 @@ func RunDBDeclared(region string) error {
 	} else {
 		fmt.Printf("db-declared: %s declares no database clusters for %s — skipping the admin seed.\n", path, region)
 	}
-	return appendGHAFile("GITHUB_OUTPUT", fmt.Sprintf("declared=%t", declared))
+	return ghaout.Append("GITHUB_OUTPUT", fmt.Sprintf("declared=%t", declared))
 }
 
 func RunDBSummary(region, phase string) error {
@@ -52,7 +53,7 @@ func RunDBSummary(region, phase string) error {
 	}
 	switch phase {
 	case "destroy-plan":
-		return appendGHAFile("GITHUB_STEP_SUMMARY", dbDestroyWarning()...)
+		return ghaout.Append("GITHUB_STEP_SUMMARY", dbDestroyWarning()...)
 	case "apply":
 		raw, err := tofudriver.OutputRunFn()
 		if err != nil {
@@ -64,7 +65,7 @@ func RunDBSummary(region, phase string) error {
 		if err != nil {
 			return err
 		}
-		return appendGHAFile("GITHUB_STEP_SUMMARY", dbApplySummary(region, labels)...)
+		return ghaout.Append("GITHUB_STEP_SUMMARY", dbApplySummary(region, labels)...)
 	default:
 		return fmt.Errorf("--phase must be apply or destroy-plan, got %q", phase)
 	}

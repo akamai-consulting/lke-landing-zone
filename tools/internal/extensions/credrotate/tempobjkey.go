@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -71,7 +72,7 @@ func RunTempObjkeyCreate(region, endpoint, bucketsCSV string) error {
 	}
 	maskGHA(secret)
 	fmt.Printf("temp drain key llz-drain-%s minted (id=%d, %d bucket(s)).\n", region, id, len(buckets))
-	return appendGHAFile("GITHUB_ENV",
+	return ghaout.Append("GITHUB_ENV",
 		"TEMP_OBJKEY_ID="+strconv.FormatUint(id, 10),
 		"TEMP_OBJKEY_ACCESS="+access,
 		"TEMP_OBJKEY_SECRET="+secret)

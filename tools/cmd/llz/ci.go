@@ -129,7 +129,7 @@ func ciCmd() *cobra.Command {
 	// converge tail is event-paced instead of waiting out the */5 schedule.
 	c.AddCommand(harbor.HarborProvisionerCmd(), harbor.SeedStandbyHarborRobotsCmd(), assertsecrets.KickHarborProvisionerCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
-	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
+	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd(), ciBuildFailureSummaryCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
 	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)

@@ -51,6 +51,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 
@@ -156,7 +157,7 @@ func RunMintBootstrapPAT(region string) error {
 		return fmt.Errorf("seed secret/linode/api-token: %w", err)
 	}
 	fmt.Printf("Minted in-cluster PAT %s (id=%d) and seeded secret/linode/api-token.\n", InClusterPATLabel(prefix, region), id)
-	return appendGHAFile("GITHUB_STEP_SUMMARY",
+	return ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("Minted in-cluster PAT `%s` (id=`%d`) and seeded `secret/linode/api-token`.", InClusterPATLabel(prefix, region), id))
 }
 
@@ -169,7 +170,7 @@ func RunRotateInClusterPAT() error {
 	if err != nil {
 		return err
 	}
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## In-cluster Linode PAT rotation — %s", region), ""); err != nil {
 		return err
 	}
@@ -183,7 +184,7 @@ func RunRotateInClusterPAT() error {
 	// accumulate orphan tokens on every monthly run.
 	if !kubectlprobe.Exists("-n", baoread.Namespace, "get", "pod", baoread.RootPod) {
 		fmt.Fprintf(os.Stderr, "::warning::%s not found on %s — skipping in-cluster PAT rotation\n", baoread.RootPod, region)
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
+		return ghaout.Append("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("> Skipped: OpenBao pod not found on `%s`.", region))
 	}
 
@@ -201,7 +202,7 @@ func RunRotateInClusterPAT() error {
 		return err
 	}
 	fmt.Printf("Wrote secret/linode/api-token to %s OpenBao (new_pat_id=%d).\n", region, id)
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("> Wrote `secret/linode/api-token` (new_pat_id=`%d`, label `%s`) via secret-propagator GitHub-OIDC role.",
 			id, InClusterPATLabel(prefix, region))); err != nil {
 		return err
@@ -212,7 +213,7 @@ func RunRotateInClusterPAT() error {
 	// (the next run retries) — but surface it, or leaked tokens hide forever.
 	if err := RunPATRevokeOld(ctx, client, true, InClusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", InClusterPATLabel(prefix, region), err)
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
+		return ghaout.Append("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", InClusterPATLabel(prefix, region), err))
 	}
 	return nil

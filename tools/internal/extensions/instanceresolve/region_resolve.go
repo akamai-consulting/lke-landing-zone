@@ -27,15 +27,15 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
-// regionLister is the slice of the Linode client this needs — a seam so tests
+// RegionLister is the slice of the Linode client this needs — a seam so tests
 // never touch the network.
-type regionLister interface {
+type RegionLister interface {
 	ListRegions(ctx context.Context) ([]map[string]any, error)
 }
 
 // RegionClient returns a live client, or nil when no token is configured.
 // Package var so tests substitute a fake.
-var RegionClient = func() regionLister {
+var RegionClient = func() RegionLister {
 	tok := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
 	if tok == "" {
 		return nil
@@ -43,18 +43,27 @@ var RegionClient = func() regionLister {
 	return linode.NewClient(tok, 20*time.Second)
 }
 
-// accountRegions returns the account's region ids, sorted. ok is false when the
+// AccountRegions returns the account's region ids, sorted. ok is false when the
 // answer is unknown (no token, API error, empty list) — which is NOT the same as
 // "the region does not exist", and callers must not treat it as one.
-func accountRegions() (ids []string, ok bool) {
+//
+// An unknown answer is ANNOUNCED (reportSkippedAccountCheck), not swallowed. The
+// quickstart tells the operator to export LINODE_TOKEN precisely so this check
+// runs, and describes it as the difference between a 30-second error and a
+// 20-minute apply failure. Staying silent meant an expired or mis-scoped PAT —
+// the most likely first-run credential state — produced a run indistinguishable
+// from a validated one.
+func AccountRegions() (ids []string, ok bool) {
 	c := RegionClient()
 	if c == nil {
+		reportSkippedAccountCheck("--region", nil)
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	all, err := c.ListRegions(ctx)
 	if err != nil || len(all) == 0 {
+		reportSkippedAccountCheck("--region", firstNonNilErr(err, errEmptyAccountListing))
 		return nil, false
 	}
 	for _, m := range all {
@@ -69,7 +78,7 @@ func accountRegions() (ids []string, ok bool) {
 // CheckRegion rejects a --region the account does not have, listing the regions
 // that look like what was asked for. nil whenever the answer is unknown.
 func CheckRegion(region string) error {
-	ids, ok := accountRegions()
+	ids, ok := AccountRegions()
 	if !ok {
 		return nil
 	}
@@ -79,7 +88,7 @@ func CheckRegion(region string) error {
 		}
 	}
 	msg := fmt.Sprintf("--region %q is not a Linode region.", region)
-	if near := nearbyRegions(region, ids); len(near) > 0 {
+	if near := NearbyRegions(region, ids); len(near) > 0 {
 		msg += fmt.Sprintf("\n  Did you mean: %s", strings.Join(near, ", "))
 	}
 	// The swap the quickstart's own one-liner invites: the OBJ cluster id landed
@@ -114,10 +123,10 @@ func IsOBJClusterID(region string, ids []string) bool {
 	return false
 }
 
-// nearbyRegions returns the account regions that share a prefix with what was
+// NearbyRegions returns the account regions that share a prefix with what was
 // asked for (at most three) — enough to fix a typo without printing the whole
 // global region list.
-func nearbyRegions(region string, ids []string) []string {
+func NearbyRegions(region string, ids []string) []string {
 	prefix := region
 	if i := strings.Index(region, "-"); i > 0 {
 		prefix = region[:i]

@@ -1012,6 +1012,25 @@ categories:
 #        mutation -- `llz ci` verbs run inside a workflow that is itself the
 #        authorization. So it stays caller-supplied, and a resolver produces
 #        capability handles only. That is the right split, not a wart.
+#   93rd: merge origin/main   1,700 -> 1,885 (+185)
+#        NOT A REGRESSION -- main`s first-run audit (#416) landed real new code in
+#        package main while this branch was relocating everything under it. Nine
+#        conflicts, and every one was main fixing a file this branch had moved.
+#        THE FIXES MERGED, NOT THE LOCATIONS. Each was applied at the new home:
+#        resolveDeploymentScope (the deployment-name-as-Linode-region bug that made
+#        the Volume census read 0, so a destroy could go green having leaked every
+#        Volume) went to configreadiness and is now called by BOTH `ci preflight`
+#        and `ci assert-no-orphans`; checkReapRegion`s guard, the objkey drain,
+#        checkpointEnvFiles, the dispatch watcher and the reordered manual-actions
+#        list all landed with their capabilities.
+#        +185 IS MAIN`S NEW CODE, not drift: build_watch.go (97) serves cmdBuild,
+#        which is composition and stays; ci_build_failure_summary.go (90) is a NEW
+#        undeclared verb and wants the same treatment the last three got -- an
+#        owner argued, then a move. Recorded rather than done, because a
+#        declaration decision does not belong in a merge commit.
+#        ~20 of main`s symbols had to be repointed at their new homes
+#        (appendGHAFile -> ghaout.Append, execArgv -> proc.Run, probeTokenValidities
+#        -> doctor.ProbeTokenValidities, lookable -> kubectlprobe.Lookable, ...).
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1024,7 +1043,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1700
+    budget: 1885
     exact: true
     include:
       - "tools/cmd/llz/*.go"

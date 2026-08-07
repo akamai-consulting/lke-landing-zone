@@ -53,10 +53,10 @@ import (
 // that owns the floor.
 const MinSupportedAplChartVersion = "6.0.0"
 
-// resolveAplChartVersion mirrors runBootstrapCluster's resolution: the deployment's
+// ResolveAplChartVersion mirrors runBootstrapCluster's resolution: the deployment's
 // spec pin when present, else the baked default. A missing spec/deployment is not an
 // error here — it simply means the default applies.
-func resolveAplChartVersion(env string) (string, error) {
+func ResolveAplChartVersion(env string) (string, error) {
 	pinned := ""
 	lz, present, err := deps.LoadSpec()
 	if err != nil {
@@ -71,22 +71,22 @@ func resolveAplChartVersion(env string) (string, error) {
 }
 
 func assertAplVersion(env string) error {
-	v, err := resolveAplChartVersion(env)
+	v, err := ResolveAplChartVersion(env)
 	if err != nil {
 		return err
 	}
-	if err := aplVersionSupported(v, env); err != nil {
+	if err := AplVersionSupported(v, env); err != nil {
 		return err
 	}
 	fmt.Printf("apl-core chart version %s (deployment %q) is supported (>= %s).\n", v, env, MinSupportedAplChartVersion)
 	return nil
 }
 
-// aplVersionSupported is the pure predicate behind the preflight: nil when v is a
+// AplVersionSupported is the pure predicate behind the preflight: nil when v is a
 // semver >= MinSupportedAplChartVersion, else an error explaining exactly what
 // breaks and how to fix it. Split out from assertAplVersion so it is testable
 // without a spec on disk.
-func aplVersionSupported(v, env string) error {
+func AplVersionSupported(v, env string) error {
 	if _, _, _, ok := clusterspec.AplSemver(v); !ok {
 		return fmt.Errorf("apl-core chart version %q (deployment %q) is not a semver — set spec.cluster.bootstrap.aplChartVersion to a released apl-core chart (>= %s)",
 			v, env, MinSupportedAplChartVersion)

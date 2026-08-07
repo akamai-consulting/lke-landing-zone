@@ -112,8 +112,13 @@ func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label
 	// Linode IDs increase monotonically per account — sort same-labeled keys by
 	// id descending so the newest is index 0.
 	var ids []uint64
+	legacyN := 0
 	for _, k := range keys {
-		if s, _ := k["label"].(string); s != label {
+		s, _ := k["label"].(string)
+		if s == legacyRotationLabels[rotationKindTFStateKey] {
+			legacyN++
+		}
+		if s != label {
 			continue
 		}
 		id, ok := cli.AsUint64(k["id"])
@@ -123,6 +128,11 @@ func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
+	// Report-only, and only when the drain is NOT already pointed at the legacy
+	// label (an operator cleaning up by hand does not need to be told about it).
+	if label != legacyRotationLabels[rotationKindTFStateKey] {
+		reportLegacyRotationLabels(rotationKindTFStateKey, legacyN)
+	}
 
 	now := time.Now().Unix()
 	if len(ids) == 0 {

@@ -126,6 +126,11 @@ git push
 # 6. Provision credentials → readiness gate → build, in ONE command (§4)
 llz up lab --yes
 
+#    It prints the run URL + a `gh run watch` line: the build takes ~40 minutes and
+#    runs in GitHub Actions, so that link is the only view you have of it. If it goes
+#    red, docs/runbooks/first-build-failed.md covers what exists at each stage, what
+#    is safe to re-run, and what to sweep — re-dispatching is almost always right.
+
 # 7. AFTER the build, do the manual steps the bootstrap can't (§4). Each value
 #    comes from a DIFFERENT place — see the escrow table in §4:
 #    • recovery keys 4 & 5 + the root token — printed in the job summary, shown once
@@ -605,7 +610,15 @@ llz up lab --yes        # tokens → doctor → build   (--dry-run previews the 
 
 It stops at the first failure, so a missing token or unfilled placeholder is
 caught before the expensive apply. (Run the three commands individually whenever
-you want to inspect each gate — see the collapsible below.)
+you want to inspect each gate — see the collapsible below.) On dispatch it prints
+the **run URL** and a `gh run watch` command — the build runs in GitHub Actions and
+takes ~40 minutes, so that is your only view of it.
+
+> **It went red?** [`runbooks/first-build-failed.md`](runbooks/first-build-failed.md)
+> — which stage failed, what exists now, whether a re-dispatch is safe (it almost
+> always is: Terraform state is authoritative and every stage is idempotent), and
+> how to sweep what a failed cycle stranded. The failing job also writes a recovery
+> summary to the run's Summary tab.
 
 > **`llz up` is interactive — run it at a terminal, not in CI.** `--yes` authorizes
 > the *cloud-mutating* steps; it does **not** make the run unattended. The first
@@ -901,6 +914,7 @@ versioned charts + external actions*.
 - [ ] Recovery keys 4 & 5 + root token (job summary) **and** the static seal key (`kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'` — it is never printed) saved offline; `OPENBAO_ROOT_TOKEN` deleted
 - [ ] `LINODE_DNS_TOKEN` set — `llz ci bootstrap-cluster` renders it into apl-core's DNS values; the ClusterIssuers then sync via Argo CD (no dedicated command)
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)
+- [ ] Know where to go if a build fails: [runbooks/first-build-failed.md](runbooks/first-build-failed.md)
 
 ## See also
 
@@ -908,6 +922,7 @@ versioned charts + external actions*.
 - [Adopter guide](adopter-guide.md) — the same path with full rationale
 - [Delivery methodology](delivery-methodology.md) — the phases this checklist walks, and how LLZ supports each
 - [Linode account request checklist](infosec/linode-account-request-checklist.md) — account + InfoSec approval
+- [The first build failed](runbooks/first-build-failed.md) — recovery, re-run safety, and sweeping leftovers
 - [OpenBao bootstrap runbook](runbooks/bootstrap-openbao.md) — full secret inventory + recovery modes
 - [Secrets operations guide](secrets.md) — dual-write rotation, CI read path, failover
 - [Operator onboarding](playbooks/operator-onboarding.md) — day-2 operations
