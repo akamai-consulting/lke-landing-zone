@@ -10,13 +10,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
 func init() {
 	// Delegating closures, never direct assignment: each target is itself a test
 	// seam, and capturing its value at init would freeze whatever it pointed at.
 	baoseed.Install(
-		func(manifest string) error { return kubectlApplyFn(manifest) },
+		func(manifest string) error { return kube.Apply(manifest) },
 		func(name, env, value string) error { return ghSetSecretFn(name, env, value) },
 	)
 }

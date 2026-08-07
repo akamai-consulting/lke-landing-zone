@@ -37,6 +37,13 @@ RETRY := template-scripts/ci/with-retry.sh
 # package as "its tests are elsewhere" before reading it as "it is untested" — and
 # say which in the comment, as here.
 #
+# internal/kube WENT DOWN, 88 -> 86, for a narrower reason than sustain's: the
+# generic Secret helpers moved in from cmd/llz, and Apply's DEFAULT is a five-line
+# `kubectl apply -f -` shell-out that cannot be unit-tested — it is the seam, not
+# the seamed. SecretManifest gained a test in the same commit (it was 0%); what
+# remains uncovered is the exec wrapper itself. Dilution by untestable-by-nature
+# code, not by untested logic.
+#
 # internal/sustain WENT DOWN, 84 -> 55, and that is the documented exception rather
 # than a ratchet failure. The managed-fresh guard moved INTO that package while its
 # tests stayed in package main: they assert which files the .template-manifest class
@@ -66,7 +73,7 @@ COVERAGE_MINS := \
 	internal/extension/registry=100 \
 	internal/harborauth=57 \
 	internal/health=95 \
-	internal/kube=88 \
+	internal/kube=86 \
 	internal/linode=80 \
 	internal/metrics=95 \
 	internal/guardkit=100 \
@@ -113,6 +120,7 @@ COVERAGE_MINS := \
 	internal/statepassphrase=78 \
 	internal/baoread=58 \
 	internal/baoseed=88 \
+	internal/baoca=84 \
 	internal/credrotate=73 \
 	internal/database=69
 

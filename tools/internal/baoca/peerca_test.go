@@ -1,4 +1,4 @@
-package main
+package baoca
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
 func TestRunCIExtractOpenbaoCAPresent(t *testing.T) {
@@ -17,7 +19,7 @@ func TestRunCIExtractOpenbaoCAPresent(t *testing.T) {
 		}
 		return []byte("Y2VydA==\n"), nil // base64 of the public ca.crt
 	})
-	if err := runCIExtractOpenbaoCA(false); err != nil {
+	if err := RunExtractCA(false); err != nil {
 		t.Fatalf("extract (present): %v", err)
 	}
 	b, _ := os.ReadFile(out)
@@ -42,7 +44,7 @@ func TestRunCIExtractOpenbaoCAAbsent(t *testing.T) {
 			withExecOutput(t, func(string, ...string) ([]byte, error) {
 				return nil, errors.New("NotFound") // openbao-tls absent
 			})
-			err := runCIExtractOpenbaoCA(tc.required)
+			err := RunExtractCA(tc.required)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr=%v", err, tc.wantErr)
 			}
@@ -54,32 +56,21 @@ func TestRunCIExtractOpenbaoCAAbsent(t *testing.T) {
 	}
 }
 
-func TestExtractOpenbaoCAWiring(t *testing.T) {
-	c := ciExtractOpenbaoCACmd()
-	if c.Use != "extract-openbao-ca" {
-		t.Errorf("Use = %q, want extract-openbao-ca", c.Use)
-	}
-	if c.Flags().Lookup("required") == nil {
-		t.Error("missing --required flag")
-	}
-}
-
-// withKubectlApply swaps the kubectlApplyFn seam, capturing the applied manifest.
 func withKubectlApply(t *testing.T) *string {
 	t.Helper()
 	var applied string
-	prev := kubectlApplyFn
-	kubectlApplyFn = func(manifest string) error { applied = manifest; return nil }
-	t.Cleanup(func() { kubectlApplyFn = prev })
+	prev := kube.Apply
+	kube.Apply = func(manifest string) error { applied = manifest; return nil }
+	t.Cleanup(func() { kube.Apply = prev })
 	return &applied
 }
 
 func TestRunCIProvisionPeerCA(t *testing.T) {
 	// "Y2VydA==" is base64 of "cert"; the applied Secret must carry that same
-	// base64 under data."ca.crt" (genericSecretManifest re-encodes the decoded PEM).
+	// base64 under data."ca.crt" (kube.SecretManifest re-encodes the decoded PEM).
 	t.Setenv("CA_B64", "Y2VydA==")
 	applied := withKubectlApply(t)
-	if err := runCIProvisionPeerCA(globalOpts{}); err != nil {
+	if err := RunProvisionPeerCA(false); err != nil {
 		t.Fatalf("provision-peer-ca: %v", err)
 	}
 	if !strings.Contains(*applied, "name: openbao-peer-tls") ||
@@ -93,7 +84,7 @@ func TestRunCIProvisionPeerCAGuards(t *testing.T) {
 	t.Run("empty CA_B64 refuses", func(t *testing.T) {
 		t.Setenv("CA_B64", "")
 		applied := withKubectlApply(t)
-		if err := runCIProvisionPeerCA(globalOpts{}); err == nil {
+		if err := RunProvisionPeerCA(false); err == nil {
 			t.Error("empty CA_B64 must error (refuse to provision an empty ca.crt)")
 		}
 		if *applied != "" {
@@ -103,7 +94,7 @@ func TestRunCIProvisionPeerCAGuards(t *testing.T) {
 	t.Run("invalid base64 errors", func(t *testing.T) {
 		t.Setenv("CA_B64", "!!not base64!!")
 		applied := withKubectlApply(t)
-		if err := runCIProvisionPeerCA(globalOpts{}); err == nil {
+		if err := RunProvisionPeerCA(false); err == nil {
 			t.Error("invalid base64 must error")
 		}
 		if *applied != "" {
@@ -113,7 +104,7 @@ func TestRunCIProvisionPeerCAGuards(t *testing.T) {
 	t.Run("dry-run applies nothing", func(t *testing.T) {
 		t.Setenv("CA_B64", "Y2VydA==")
 		applied := withKubectlApply(t)
-		if err := runCIProvisionPeerCA(globalOpts{dryRun: true}); err != nil {
+		if err := RunProvisionPeerCA(true); err != nil {
 			t.Fatal(err)
 		}
 		if *applied != "" {

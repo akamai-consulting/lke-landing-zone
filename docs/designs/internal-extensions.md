@@ -331,9 +331,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | wall 4, half down | 20,492 | 122 | −99 — the OIDC layer and two mis-placed Secret probes; the set fell 16 → 12 |
 | wall 4 done (for credentials) | 20,269 | 120 | −223 — two write seams, and the last two credential files followed |
 | `database-provisioner` + `assert-database` | 19,436 | 144 | −833 — the pairing the model predicted, and a binding both tables refuse |
-| `openbao-seed` | **19,074** | 142 | −362 — one boundary out of the six the largest row actually contains |
+| `openbao-seed` | 19,074 | 142 | −362 — one boundary out of the six the largest row actually contains |
+| `openbao-peer-ca` | **19,006** | 141 | −68 — the second slice of that row, and helpers orphaned twice |
 
-**Net −28,108 (59.6%) across forty-four extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −28,176 (59.7%) across forty-five extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2518,6 +2519,43 @@ system; **this one makes it pass against nothing at all** — and only the asser
 **And a fixture that was vacuous in the other direction.** The shared bao stub returned `nil` from
 `KVPut` while its exec fake refused every `kv put`, so `TestRunCIBaoSeedAllAbortsOnPutFailure` passed
 without the abort path ever running. Both now route through one fake.
+
+### What `openbao-peer-ca` took — the next boundary that exists
+
+Second slice of the `openbao-lifecycle` row, **−68 lines**, and the smallest paydown since the
+`posture-plaintext` measurement fix. **The boundary is the product here, not the lines.**
+
+```
+openbao-peer-ca  transition:provisioned[cluster-read, cluster-write]
+```
+
+`ci_openbao_ca.go`'s entire inbound surface is its own two cobra constructors — the only part of that
+row with a clean edge, which is why it went next rather than the biggest remaining file.
+
+**`provisioned` rather than `seeded`, and the distinction is one this model keeps rewarding.** What
+crosses here is a **CA certificate** — public material letting two OpenBao halves authenticate each
+other. Nothing mints, holds or places a secret, so `secret-custody` would be a false claim and
+`seeded` ("credentials and secret material are in place") would be the wrong moment. Peer trust is
+substrate: it belongs with the cluster coming up, before anything has a credential to seed. A test
+pins the absence of both secret grants.
+
+**Two verbs, one extension.** `extract-openbao-ca` reads the standby's CA; `provision-peer-ca` writes
+the peer's into `openbao-peer-tls`. They are two halves of one exchange across an HA pair, and an
+instance doing one without the other has a cluster that trusts nobody. Same reasoning that kept
+`database-provisioner` and `assert-database` together — and the opposite of `credential-pat`/`objkey`.
+
+**And the helpers that had been orphaned twice.** `kubectlApplyFn` and `genericSecretManifest` started
+in `ci_seed_approle.go`, beside a seeder later deleted; they were rescued into `secret_apply.go`
+because they are provider-agnostic; and they are now in `internal/kube`, because rendering and
+applying a Kubernetes Secret is what that package is for. **Twice they were left behind by the code
+they happened to be typed next to** — the same filename-as-subject failure this campaign has found
+stranding tests seven times, this time stranding production helpers.
+
+`SecretManifest` arrived at **0% coverage** — its tests were the peer-CA verb's and went with the
+caller — so it gained one here rather than a lowered floor. What `internal/kube`'s floor did drop for
+(88 → 86) is narrower: `Apply`'s default is a five-line `kubectl apply -f -` shell-out that cannot be
+unit-tested. It is the seam, not the seamed. **Dilution by untestable-by-nature code, not by untested
+logic**, and the Makefile says so where the number lives.
 
 ## The cost of the interesting half
 

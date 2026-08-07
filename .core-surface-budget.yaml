@@ -303,6 +303,14 @@ categories:
     #                       because four earlier walls had already turned
     #                       baoKVPutFn into baoread.KVPut and openbaoNS into
     #                       baoread.Namespace.
+    #   19,006 / 141 files  openbao-peer-ca — the CA slice of the same row, and
+    #                       the SECOND slice taken. -68, the smallest paydown
+    #                       since posture-plaintext's measurement fix, and the
+    #                       point is the boundary rather than the lines: two verbs
+    #                       whose entire inbound surface is their own cobra
+    #                       constructors. secret_apply.go went to internal/kube on
+    #                       the way — helpers that had already been orphaned TWICE
+    #                       by the code they were typed next to.
     #
     # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
@@ -316,7 +324,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 19074
+    budget: 19006
     exact: true
     include:
       - "tools/cmd/llz/*.go"
