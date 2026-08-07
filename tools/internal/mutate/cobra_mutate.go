@@ -1,6 +1,6 @@
-package main
+package mutate
 
-// ci_mutate.go — the `llz ci mutate` flag set.
+// cobra_mutate.go — the `llz ci mutate` flag set.
 //
 // The run is tools/internal/mutate, which declares the extension. Ninety-seven
 // lines of RunE moved with it: the closure held the control run, the gremlins
@@ -10,11 +10,9 @@ package main
 
 import (
 	"github.com/spf13/cobra"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
 )
 
-func ciMutateCmd() *cobra.Command {
+func MutateCmd() *cobra.Command {
 	var pkg, baselinePath, outPath string
 	var coefficient int
 	var integration bool
@@ -30,7 +28,7 @@ func ciMutateCmd() *cobra.Command {
 			"not the absolute score (equivalent mutants cap that below 100% by construction).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return mutate.Run(mutate.Opts{
+			return Run(Opts{
 				Pkg: pkg, BaselinePath: baselinePath, OutPath: outPath,
 				Coefficient: coefficient, Integration: integration,
 				Out: cmd.OutOrStdout(),

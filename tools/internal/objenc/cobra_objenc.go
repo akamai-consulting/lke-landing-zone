@@ -1,9 +1,9 @@
-package main
+package objenc
 
-// ci_objenc.go — the object-storage encryption verbs, reduced to flag sets.
+// cobra_objenc.go — the object-storage encryption verbs, reduced to flag sets.
 //
 // Everything they do is `obj-encryption` and lives in tools/internal/objenc. What
-// stays here is objencDeps(): the OpenBao KV pair that IS the custody, a kubectl
+// stays here is ObjencDeps(): the OpenBao KV pair that IS the custody, a kubectl
 // read, a Secret decoder, and the log mask.
 //
 // THE KV PAIR IS THE POINT. Linode Object Storage implements exactly one
@@ -21,27 +21,26 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
-// objencDeps is a VAR, not a func, so a test can swap the whole capability set —
+// ObjencDeps is a VAR, not a func, so a test can swap the whole capability set —
 // the same seam pattern package main already uses for its kubectl and Linode
 // clients. `llz ci readiness` drives objenc's registry-CA check, and its tests
 // used to stub a package-level objEncKubectl that is now a Deps field.
-var objencDeps = func() objenc.Deps {
-	return objenc.Deps{
-		KVGet: func(path, field string) (string, objenc.KVVerdict) {
+var ObjencDeps = func() Deps {
+	return Deps{
+		KVGet: func(path, field string) (string, KVVerdict) {
 			v, verdict := baoread.KVGetFieldOK(path, field)
 			// The three-valued answer is load-bearing: only a definite ABSENT may
 			// be read as "not seeded". An unknown treated as absent would mint a
 			// SECOND SSE-C key and every object under the first becomes unreadable.
 			switch verdict {
 			case baoread.Found:
-				return v, objenc.KVFound
+				return v, KVFound
 			case baoread.Absent:
-				return v, objenc.KVAbsent
+				return v, KVAbsent
 			default:
-				return v, objenc.KVUnknown
+				return v, KVUnknown
 			}
 		},
 		KVPut:       func(path string, fields map[string]string) error { return baoread.KVPut(path, fields) },
@@ -55,7 +54,7 @@ var objencDeps = func() objenc.Deps {
 	}
 }
 
-func ciAssertObjEncryptionCmd() *cobra.Command {
+func AssertObjEncryptionCmd() *cobra.Command {
 	var endpoint, bucket, harborBucket, region string
 	var sample int
 	c := &cobra.Command{
@@ -74,7 +73,7 @@ func ciAssertObjEncryptionCmd() *cobra.Command {
 			"writing pure plaintext.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return objenc.RunAssertEncryption(objencDeps(), endpoint, bucket, harborBucket, region, sample)
+			return RunAssertEncryption(ObjencDeps(), endpoint, bucket, harborBucket, region, sample)
 		},
 	}
 	c.Flags().StringVar(&endpoint, "endpoint", "", "endpoint host override (default: derived from the env's cluster.objectStorage.cluster)")
@@ -85,8 +84,8 @@ func ciAssertObjEncryptionCmd() *cobra.Command {
 	return c
 }
 
-func objProxyCmd() *cobra.Command {
-	var o objenc.ProxyOpts
+func ObjProxyCmd() *cobra.Command {
+	var o ProxyOpts
 	c := &cobra.Command{
 		Use:   "obj-proxy",
 		Short: "S3 gateway that adds SSE-C encryption to Linode Object Storage writes",
@@ -103,7 +102,7 @@ func objProxyCmd() *cobra.Command {
 			"written under a lost key is unrecoverable by anyone. Escrow --key-file with\n" +
 			"the same discipline as the OpenBao seal key.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return objenc.RunProxy(cmd.Context(), o) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return RunProxy(cmd.Context(), o) },
 	}
 	f := c.Flags()
 	f.StringVar(&o.Listen, "listen", ":8443", "HTTPS listen address for S3 clients")
@@ -121,14 +120,14 @@ func objProxyCmd() *cobra.Command {
 	return c
 }
 
-func ciSeedSSECKeyCmd() *cobra.Command {
+func SeedSSECKeyCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "seed-ssec-key",
 		Short: "generate and seed the obj-proxy SSE-C key when the objProxy component is enabled",
 		Long: "Bootstrap seed for the object-storage encryption key.\n\n" +
 			"No-ops unless spec.components.objProxy is enabled for --region. When enabled,\n" +
-			"generates a 32-byte AES-256 key and writes it to " + objenc.SSECKVPath + " (key=),\n" +
+			"generates a 32-byte AES-256 key and writes it to " + SSECKVPath + " (key=),\n" +
 			"where the proxy's ExternalSecret reads it.\n\n" +
 			"STRICTLY ADDITIVE. An existing key is never overwritten: Linode discards\n" +
 			"SSE-C keys on receipt and they are per-object, so replacing this value does\n" +
@@ -138,7 +137,7 @@ func ciSeedSSECKeyCmd() *cobra.Command {
 			"with the same discipline as OPENBAO_SEAL_KEY.\n" +
 			"Env: OPENBAO_* (root-token bootstrap posture).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return objenc.RunSeedSSECKey(objencDeps(), region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunSeedSSECKey(ObjencDeps(), region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose objProxy toggle gates the seed (required)")
 	return c

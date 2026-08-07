@@ -1,10 +1,9 @@
-package main
+package bootstrapcluster
 
 import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/bootstrapcluster"
 	"github.com/spf13/cobra"
 )
 
@@ -12,11 +11,11 @@ import (
 // template ref reads the copier answers file, which lives in the blocked scaffold
 // mass. Installed here as a delegating closure, never by assignment — a direct
 // assignment would snapshot pinnedTemplateRef before any test could swap it.
-func init() {
-	bootstrapcluster.PinnedTemplateRef = func() string { return answers.PinnedTemplateRef() }
+func Init() {
+	PinnedTemplateRef = func() string { return answers.PinnedTemplateRef() }
 }
 
-// ci_bootstrap_cluster_cmd.go — the flag sets for `llz ci bootstrap-cluster` and
+// cobra_bootstrap_cluster.go — the flag sets for `llz ci bootstrap-cluster` and
 // `llz ci prepare-apl-upgrade`. The lanes are internal/bootstrapcluster.
 //
 // BootstrapFlags is EXPORTED and threaded as a parameter, unlike
@@ -24,8 +23,8 @@ func init() {
 // one caller, and every one of them is a genuine command-line input a human or a
 // workflow supplies — that is a parameter, not a configuration surface.
 
-func ciBootstrapClusterCmd() *cobra.Command {
-	var f bootstrapcluster.BootstrapFlags
+func BootstrapClusterCmd() *cobra.Command {
+	var f BootstrapFlags
 	c := &cobra.Command{
 		Use:   "bootstrap-cluster",
 		Short: "layer LLZ's Argo bridge onto a Linode MANAGED App Platform cluster (apl_enabled)",
@@ -40,7 +39,7 @@ func ciBootstrapClusterCmd() *cobra.Command {
 			"KUBECONFIG_RAW), and the optional private-fork GHCR creds from\n" +
 			"GHCR_USERNAME / GHCR_TOKEN.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return bootstrapcluster.RunBootstrapCluster(f) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunBootstrapCluster(f) },
 	}
 	fl := c.Flags()
 	fl.StringVar(&f.Kubeconfig, "kubeconfig", "", "path to the cluster kubeconfig (from the fetch-kubeconfig action); falls back to $KUBECONFIG_RAW")
@@ -54,14 +53,14 @@ func ciBootstrapClusterCmd() *cobra.Command {
 	return c
 }
 
-func ciPrepareAplUpgradeCmd() *cobra.Command {
+func PrepareAplUpgradeCmd() *cobra.Command {
 	var kubeconfig string
 	c := &cobra.Command{
 		Use:   "prepare-apl-upgrade",
 		Short: "annotate apl-operator so the apl-core 6.0.x → 6.1.x upgrade can sync",
 		Long: "Applies apl-core 6.1.0's documented pre-upgrade prerequisite: the\n" +
-			bootstrapcluster.AplSyncOptionsKey + "=" + bootstrapcluster.AplSyncOptionsValue + " annotation on the\n" +
-			bootstrapcluster.AplOperatorNamespace + "/" + bootstrapcluster.AplOperatorDeployment + " Deployment.\n\n" +
+			AplSyncOptionsKey + "=" + AplSyncOptionsValue + " annotation on the\n" +
+			AplOperatorNamespace + "/" + AplOperatorDeployment + " Deployment.\n\n" +
 			"6.1.0 ships this annotation in its own chart, but that value only exists\n" +
 			"AFTER the upgrade has synced — and the sync is what needs it. Annotating\n" +
 			"beforehand turns that sync into a Replace instead of a failing apply.\n\n" +
@@ -70,23 +69,23 @@ func ciPrepareAplUpgradeCmd() *cobra.Command {
 			"a no-op once the cluster is on 6.1.x.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			path, cleanup, err := bootstrapcluster.ResolveKubeconfig(kubeconfig)
+			path, cleanup, err := ResolveKubeconfig(kubeconfig)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			d := bootstrapcluster.NewBootstrapDeps(path)
-			applied, err := bootstrapcluster.PrepareAplUpgrade(d)
+			d := NewBootstrapDeps(path)
+			applied, err := PrepareAplUpgrade(d)
 			if err != nil {
 				return err
 			}
 			if !applied {
 				fmt.Printf("no %s/%s Deployment on this cluster — nothing to prepare.\n",
-					bootstrapcluster.AplOperatorNamespace, bootstrapcluster.AplOperatorDeployment)
+					AplOperatorNamespace, AplOperatorDeployment)
 				return nil
 			}
 			fmt.Printf("%s/%s annotated %s=%s — the apl-core 6.1.x upgrade can now sync.\n",
-				bootstrapcluster.AplOperatorNamespace, bootstrapcluster.AplOperatorDeployment, bootstrapcluster.AplSyncOptionsKey, bootstrapcluster.AplSyncOptionsValue)
+				AplOperatorNamespace, AplOperatorDeployment, AplSyncOptionsKey, AplSyncOptionsValue)
 			return nil
 		},
 	}

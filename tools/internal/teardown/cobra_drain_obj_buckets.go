@@ -1,21 +1,20 @@
-package main
+package teardown
 
 import (
 	"os"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/spf13/cobra"
 )
 
-// ci_drain_obj_buckets_cmd.go — the flag set for `llz ci drain-obj-buckets`.
+// cobra_drain_obj_buckets.go — the flag set for `llz ci drain-obj-buckets`.
 //
 // It came back out for the ordinary reason and one specific one: the command is
 // DESTRUCTIVE and gated on the GLOBAL --yes, which is package main's confirm
 // plumbing. A lane that deletes log chunks and registry blobs should read that
 // gate where the gate lives, not carry a copy of it.
 
-func ciDrainObjBucketsCmd() *cobra.Command {
+func DrainObjBucketsCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "drain-obj-buckets",
@@ -31,7 +30,7 @@ func ciDrainObjBucketsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return teardown.RunDrainObjBuckets(region, cliopts.Global.Yes)
+			return RunDrainObjBuckets(region, cliopts.Global.Yes)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose buckets to empty")

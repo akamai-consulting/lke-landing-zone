@@ -1,30 +1,29 @@
-package main
+package identityconfig
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/spf13/cobra"
 )
 
-// identity_cmds.go — the cobra wiring for the five identity-plane lanes. The
+// cobra_identity_cmds.go — the cobra wiring for the five identity-plane lanes. The
 // lanes themselves are internal/identityconfig.
 //
-// `usersAddCmd` is the one lane in this campaign that reads TWO fields off
+// `UsersAddCmd` is the one lane in this campaign that reads TWO fields off
 // globalOpts, not one: `dryRun` and `yes`. It is the only extracted command that
 // creates a human user, and it is print-what-you-would-do unless BOTH are
 // satisfied — so the pair travels as two bools rather than a struct, and package
 // main stays the only thing that knows globalOpts exists.
 
-func ciKeycloakConfigureCmd() *cobra.Command {
+func KeycloakConfigureCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "keycloak-configure",
 		Short: "ensure the Keycloak device-flow client for team-scoped OpenBao login (spec.teams)",
 		Long: "Realm half of the team-scoped-credentials turnkey path (bao-configure owns\n" +
 			"the OpenBao half). Port-forwards to the Keycloak pod, authenticates with the\n" +
-			"in-cluster " + identityconfig.AdminSecret + " admin creds, then idempotently ensures a\n" +
-			"single PUBLIC device-flow OIDC client (" + identityconfig.DeviceClientID + ") carrying the default `openid`\n" +
+			"in-cluster " + AdminSecret + " admin creds, then idempotently ensures a\n" +
+			"single PUBLIC device-flow OIDC client (" + DeviceClientID + ") carrying the default `openid`\n" +
 			"scope. The per-team groups + `groups` claim are apl-core's job (the native\n" +
 			"team-<name> group/role from the teamConfig `llz render` emits), so this does\n" +
 			"NOT create groups or mappers. Best-effort: any Keycloak failure WARNS (and\n" +
@@ -32,14 +31,14 @@ func ciKeycloakConfigureCmd() *cobra.Command {
 			"bootstrap path. No-op when spec.teams is empty.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return identityconfig.RunKeycloakConfigure(cliopts.Global.DryRun, region)
+			return RunKeycloakConfigure(cliopts.Global.DryRun, region)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing messages (required)")
 	return c
 }
 
-func ciPinKeycloakGatewayAliasCmd() *cobra.Command {
+func PinKeycloakGatewayAliasCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "pin-keycloak-gateway-alias",
@@ -51,13 +50,13 @@ func ciPinKeycloakGatewayAliasCmd() *cobra.Command {
 			"Idempotent: re-running with an unchanged ClusterIP makes no write, so it does\n" +
 			"not churn the StatefulSet or restart OpenBao.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return identityconfig.RunPinGatewayAlias(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunPinGatewayAlias(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment name (resolves the Keycloak issuer/domain)")
 	return c
 }
 
-func ciBaoConfigureCmd() *cobra.Command {
+func BaoConfigureCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-configure",
@@ -70,17 +69,17 @@ func ciBaoConfigureCmd() *cobra.Command {
 			"Idempotent: enables tolerate already-enabled, writes upsert.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return identityconfig.RunBaoConfigure(cliopts.Global.DryRun, region)
+			return RunBaoConfigure(cliopts.Global.DryRun, region)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing error messages (required)")
 	return c
 }
 
-// aplUserCmd is `llz apl user` — the sole home of APL user management, reached as
+// AplUserCmd is `llz apl user` — the sole home of APL user management, reached as
 // a leaf of the `apl` front door (aplCmd). Formerly the top-level `llz users`;
 // retired there per ADR 0013 Appendix B (users → apl user).
-func aplUserCmd() *cobra.Command {
+func AplUserCmd() *cobra.Command {
 	s := &cobra.Command{
 		Use:   "user",
 		Short: "onboard & manage App Platform (Keycloak) users",
@@ -92,12 +91,12 @@ func aplUserCmd() *cobra.Command {
 			"cluster (the ambient bootstrap kubeconfig) but no external DNS. Distinct\n" +
 			"from `llz secrets` (GitHub secrets) and `llz openbao` (OpenBao KV).",
 	}
-	s.AddCommand(usersAddCmd())
+	s.AddCommand(UsersAddCmd())
 	return s
 }
 
-func usersAddCmd() *cobra.Command {
-	var o identityconfig.UserAddOpts
+func UsersAddCmd() *cobra.Command {
+	var o UserAddOpts
 	c := &cobra.Command{
 		Use:   "add --email <addr> (--team <name>... | --admin) [--invite] [--yes]",
 		Short: "create an APL user in Keycloak and grant team/admin access (--yes)",
@@ -124,7 +123,7 @@ func usersAddCmd() *cobra.Command {
 			"it runs only with --yes; without it (or with --dry-run) the plan is printed.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return identityconfig.RunUserAdd(cliopts.Global.DryRun, cliopts.Global.Yes, o)
+			return RunUserAdd(cliopts.Global.DryRun, cliopts.Global.Yes, o)
 		},
 	}
 	f := c.Flags()

@@ -1,14 +1,13 @@
-package main
+package baolifecycle
 
 import (
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/spf13/cobra"
 )
 
-// ci_openbao_lifecycle.go — the cobra wiring for the four OpenBao lifecycle
+// cobra_openbao_lifecycle.go — the cobra wiring for the four OpenBao lifecycle
 // lanes. The lanes themselves are internal/baolifecycle.
 //
 // These came back out for the usual reason: a flag set is not a capability. What
@@ -17,7 +16,7 @@ import (
 // takes a bool and package main is the only thing that knows globalOpts exists.
 // Four functions had been carrying a three-field struct to use a third of it.
 
-func ciBaoEnsureReadyCmd() *cobra.Command {
+func BaoEnsureReadyCmd() *cobra.Command {
 	var region string
 	var leaderTimeout, joinTimeout int
 	c := &cobra.Command{
@@ -37,7 +36,7 @@ func ciBaoEnsureReadyCmd() *cobra.Command {
 			"GH_TOKEN/GH_REPO (first-init persistence).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return baolifecycle.RunEnsureReady(cliopts.Global.DryRun, region,
+			return RunEnsureReady(cliopts.Global.DryRun, region,
 				time.Duration(leaderTimeout)*time.Second, time.Duration(joinTimeout)*time.Second)
 		},
 	}
@@ -47,7 +46,7 @@ func ciBaoEnsureReadyCmd() *cobra.Command {
 	return c
 }
 
-func ciBaoInitCmd() *cobra.Command {
+func BaoInitCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-init",
@@ -64,13 +63,13 @@ func ciBaoInitCmd() *cobra.Command {
 			"environment secrets. Emits did_init=true. Requires GH_TOKEN/GH_REPO (the\n" +
 			"secrets-write PAT).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baolifecycle.RunInit(cliopts.Global.DryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunInit(cliopts.Global.DryRun, region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment receives the secrets (required)")
 	return c
 }
 
-func ciBaoRegenRootCmd() *cobra.Command {
+func BaoRegenRootCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-regen-root",
@@ -87,14 +86,14 @@ func ciBaoRegenRootCmd() *cobra.Command {
 			"twin: `llz openbao regen-root`.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return baolifecycle.RunRegenRootCI(cliopts.Global.DryRun, region)
+			return RunRegenRootCI(cliopts.Global.DryRun, region)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment holds OPENBAO_ROOT_TOKEN (required)")
 	return c
 }
 
-func ciBaoBreakglassCmd() *cobra.Command {
+func BaoBreakglassCmd() *cobra.Command {
 	var region, action, pubkeyB64 string
 	c := &cobra.Command{
 		Use:   "bao-breakglass",
@@ -111,7 +110,7 @@ func ciBaoBreakglassCmd() *cobra.Command {
 			"(a base64 file at $RUNNER_TEMP/root-token.b64 + a job-summary block).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return baolifecycle.RunBreakglass(cliopts.Global.DryRun, region, action, pubkeyB64)
+			return RunBreakglass(cliopts.Global.DryRun, region, action, pubkeyB64)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment whose infra-<region> Environment holds the recovery quorum + OPENBAO_ROOT_TOKEN (required)")

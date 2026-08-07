@@ -1,4 +1,4 @@
-package main
+package baoseed
 
 // ci_seed_broad_pat.go implements `llz ci seed-broad-pat --region <env>` — the
 // bootstrap seed for the in-cluster broad-PAT rotator's minting credential.
@@ -27,17 +27,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // broadPATRotatorComponent is the spec.components key that gates the seed.
 const broadPATRotatorComponent = "broadPatRotator"
 
-// broadPATSeedEnabled reports whether the broad-PAT rotator is enabled for region
+// BroadPATSeedEnabled reports whether the broad-PAT rotator is enabled for region
 // in the loaded spec — the gate that keeps the account-wide broad PAT out of every
 // cluster that does not own the rotation. A missing env is not enabled.
-func broadPATSeedEnabled(lz *clusterspec.LandingZone, region string) bool {
+func BroadPATSeedEnabled(lz *clusterspec.LandingZone, region string) bool {
 	e, ok := lz.Env(region)
 	if !ok {
 		return false
@@ -45,7 +44,7 @@ func broadPATSeedEnabled(lz *clusterspec.LandingZone, region string) bool {
 	return clusterspec.ComponentEnabled(e.Components, broadPATRotatorComponent)
 }
 
-func ciSeedBroadPATCmd() *cobra.Command {
+func SeedBroadPATCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "seed-broad-pat",
@@ -58,13 +57,13 @@ func ciSeedBroadPATCmd() *cobra.Command {
 			"--skip-if-present token so a later rotation-minted value is never clobbered.\n" +
 			"Env: LINODE_API_TOKEN, OPENBAO_* (root-token bootstrap posture).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCISeedBroadPAT(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunCISeedBroadPAT(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose broadPatRotator toggle gates the seed (required)")
 	return c
 }
 
-func runCISeedBroadPAT(region string) error {
+func RunCISeedBroadPAT(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -72,7 +71,7 @@ func runCISeedBroadPAT(region string) error {
 	if err != nil {
 		return fmt.Errorf("seed-broad-pat: load spec: %w", err)
 	}
-	if !broadPATSeedEnabled(lz, region) {
+	if !BroadPATSeedEnabled(lz, region) {
 		fmt.Printf("broadPatRotator not enabled for %s — skipping secret/linode/broad-pat seed (the broad PAT stays out of this cluster).\n", region)
 		return nil
 	}
@@ -82,7 +81,7 @@ func runCISeedBroadPAT(region string) error {
 	// Delegate the actual OpenBao write to the generic seed primitive so the
 	// skip-if-present guard, ::add-mask::, and error handling stay identical to
 	// every other bootstrap seed.
-	return baoseed.RunSeed(baoseed.Opts{
+	return RunSeed(Opts{
 		Path:          "secret/linode/broad-pat",
 		FieldSpecs:    []string{"token=env:LINODE_API_TOKEN", "rotated_at=literal:0"},
 		SkipIfPresent: "token",

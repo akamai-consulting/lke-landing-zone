@@ -1,6 +1,6 @@
-package main
+package assertregistry
 
-// ci_assert_harbor_roundtrip.go — the cobra surface for the `assert-registry`
+// cobra_assert_harbor_roundtrip.go — the cobra surface for the `assert-registry`
 // extension (internal/assertregistry).
 //
 // THERE IS NO Deps WIRING HERE, and this is the only extension of seventeen that
@@ -11,12 +11,11 @@ package main
 import (
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 	"github.com/spf13/cobra"
 )
 
-func ciAssertHarborRoundTripCmd() *cobra.Command {
+func AssertHarborRoundTripCmd() *cobra.Command {
 	var secretNS, secretName, repo, registry string
 	var settle, interval int
 	c := &cobra.Command{
@@ -38,14 +37,14 @@ func ciAssertHarborRoundTripCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return assertregistry.Run(secretNS, secretName, registry, repo,
+			return Run(secretNS, secretName, registry, repo,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&secretNS, "secret-namespace", harborauth.RobotSecretNS, "namespace of the robot credential Secret")
 	c.Flags().StringVar(&secretName, "secret-name", harborauth.RobotSecretName, "name of the robot credential Secret")
 	c.Flags().StringVar(&registry, "registry", "", "registry host override (default: the Secret's registry_host)")
-	c.Flags().StringVar(&repo, "repo", assertregistry.ProbeRepo, "repository the pull+push scope is requested against")
+	c.Flags().StringVar(&repo, "repo", ProbeRepo, "repository the pull+push scope is requested against")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
 	return c

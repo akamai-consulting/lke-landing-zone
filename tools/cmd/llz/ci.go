@@ -27,10 +27,15 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/bootstrapcluster"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartpublish"
@@ -43,28 +48,36 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/database"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harbor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/workflowshells"
@@ -100,15 +113,15 @@ func ciCmd() *cobra.Command {
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
 		baoread.BaoStatusCmd(),
-		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
-		ciBaoBreakglassCmd(),
-		ciExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), ciProvisionPeerCACmd(),
+		baolifecycle.BaoInitCmd(), baolifecycle.BaoRegenRootCmd(), identityconfig.BaoConfigureCmd(), baolifecycle.BaoEnsureReadyCmd(),
+		baolifecycle.BaoBreakglassCmd(),
+		baoca.ExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), baoca.ProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
-		ciKeycloakConfigureCmd(),
+		identityconfig.KeycloakConfigureCmd(),
 		assertidentity.TeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
+	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())
@@ -121,7 +134,7 @@ func ciCmd() *cobra.Command {
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
 	// llz-secret-rotation.yml; rotate-incluster-pat replaced propagate-pat —
 	// the broad PAT is CI/Terraform-only and no longer pushed into clusters).
-	c.AddCommand(ciRotationPlanCmd(), credrotate.RotateInclusterPATCmd())
+	c.AddCommand(tokeninv.RotationPlanCmd(), credrotate.RotateInclusterPATCmd())
 	// Harbor API steps (formerly inline curl in llz-bootstrap-openbao.yml).
 	// Harbor: the active-path provisioning (project + robots + OpenBao seed +
 	// repo-secret publication + smoke) runs IN-CLUSTER via harbor-provisioner
@@ -164,13 +177,13 @@ func ciCmd() *cobra.Command {
 	// credentials_probe.go.)
 	// Credential single-pane-of-glass writer: measure CI-token expiry and emit the
 	// ConfigMap the in-cluster reconciler re-exposes as metrics (llz-scheduled-checks.yml).
-	c.AddCommand(ciTokenInventoryCmd())
+	c.AddCommand(tokeninv.TokenInventoryCmd())
 	// Mutation testing that validates its own harness before reporting a score
 	// (every gremlins failure mode so far surfaced as a flattering 100%).
-	c.AddCommand(ciMutateCmd())
+	c.AddCommand(mutate.MutateCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
-	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
-		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
+	c.AddCommand(healthsla.HealthLKEAdminRotationCmd(), healthsla.HealthLokiObjkeyRotationCmd(),
+		healthsla.HealthOpenbaoCmd(), healthsla.HealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
 	// Apply-time failure diagnostics (llz-terraform.yml). (The former
 	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
@@ -187,11 +200,11 @@ func ciCmd() *cobra.Command {
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
-	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
+	c.AddCommand(baoseed.BaoSeedCmd(), baoseed.BaoSeedAllCmd(), baoseed.BaoSeedSealKeyCmd(),
 		seedspecial.ResolveHarborURLCmd(), seedspecial.AuditPVCStorageClassCmd(),
 		// Must run BEFORE the OpenBao pods are waited on: it patches the
 		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
-		ciPinKeycloakGatewayAliasCmd())
+		identityconfig.PinKeycloakGatewayAliasCmd())
 	// Object-storage key lifecycle, one owner end to end: mint-bootstrap-objkeys
 	// mints the FIRST Loki/Harbor keys at bootstrap and seeds OpenBao (replacing
 	// the TF-minted keys + LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub relay +
@@ -206,18 +219,18 @@ func ciCmd() *cobra.Command {
 	// mint-verify-swap — Linode offers only an in-place credential RESET on the
 	// fixed `akmadmin` user — so it is --apply-gated and refreshes TF state after,
 	// or seed-db-admin would reconcile the rotation away. See ci_rotate_dbadmin.go.
-	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd(), ciRotateDBAdminCmd())
+	c.AddCommand(database.SeedDBAdminCmd(), database.DBDeclaredCmd(), database.DBSummaryCmd(), database.RotateDBAdminCmd())
 	// State-encryption key rollover (ADR 0007 (state encryption) / ADR 0009). Dispatch-only.
-	c.AddCommand(ciRotateStatePassphraseCmd())
+	c.AddCommand(statepassphrase.RotateStatePassphraseCmd())
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.
 	c.AddCommand(credrotate.RotateBroadPATCmd())
 	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
-	c.AddCommand(ciSeedBroadPATCmd())
-	c.AddCommand(ciSeedSSECKeyCmd())
-	c.AddCommand(ciAssertObjEncryptionCmd())
+	c.AddCommand(baoseed.SeedBroadPATCmd())
+	c.AddCommand(objenc.SeedSSECKeyCmd())
+	c.AddCommand(objenc.AssertObjEncryptionCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
 	c.AddCommand(assertsecrets.BroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed
@@ -243,7 +256,7 @@ func ciCmd() *cobra.Command {
 	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
 	// BREAK-GLASS / forward-looking: deliberately callerless today.
-	c.AddCommand(ciOpenBaoLoginCmd())
+	c.AddCommand(openbao.OpenBaoLoginCmd())
 	// Copier render-time slimming: prune docs/ to the operator set + reference
 	// the rest at the template repo. (The former strip-comments verb is gone:
 	// the vendored llz-*.yml bodies ship verbatim so an instance copy matches
@@ -258,7 +271,7 @@ func ciCmd() *cobra.Command {
 	// Day-2 gate: scaffold at the previous release and `copier update` to HEAD.
 	// instance-test.sh covers `copier copy` and stops there, so the upgrade path —
 	// same answers, same _tasks, plus a 3-way merge — was run by nobody.
-	c.AddCommand(ciUpgradeTestCmd())
+	c.AddCommand(upgrade.UpgradeTestCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(credcoverage.ExternalSecretPathsCmd())
@@ -349,7 +362,7 @@ func ciCmd() *cobra.Command {
 	// assert-harbor-roundtrip USES a minted robot rather than trusting it was
 	// created — the truncation regression left every credential valid and every
 	// push and pull 401ing on a malformed host.
-	c.AddCommand(assertsecrets.RotationHealthCmd(), ciAssertHarborRoundTripCmd())
+	c.AddCommand(assertsecrets.RotationHealthCmd(), assertregistry.AssertHarborRoundTripCmd())
 	// ── Delivery/health gates found in the post-review functional pass ───────
 	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
 	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks
@@ -365,7 +378,7 @@ func ciCmd() *cobra.Command {
 	// assert-database proves the seeded admin credential is still ACCEPTED.
 	// rotate-db-admin resets the password in place with no overlap window, so the
 	// failure is a live endpoint that rejects the credential every consumer holds.
-	c.AddCommand(ciAssertDatabaseCmd())
+	c.AddCommand(database.AssertDatabaseCmd())
 	c.AddCommand(assertsuite.Cmd())
 	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
 	// out of Loki. The metrics path has assert-scrape-targets; the log path had
@@ -429,13 +442,13 @@ func ciCmd() *cobra.Command {
 	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
 	// separately runnable (bootstrap-cluster calls them in-process), and
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
-	c.AddCommand(ciBootstrapClusterCmd(), converge.WaitAplPipelineCmd(), kyverno.ApplyKyvernoPolicyCmd(),
+	c.AddCommand(bootstrapcluster.BootstrapClusterCmd(), converge.WaitAplPipelineCmd(), kyverno.ApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ghsecret.ClearClusterSecretsCmd())
 	// apl-core 6.1.0's pre-upgrade prerequisite (the apl-operator sync-options
 	// annotation). bootstrap-cluster runs it on every apply; it stays separately
 	// runnable so an operator can assert it on a cluster ahead of a managed upgrade
 	// without re-running a bootstrap.
-	c.AddCommand(ciPrepareAplUpgradeCmd())
+	c.AddCommand(bootstrapcluster.PrepareAplUpgradeCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

@@ -1,6 +1,6 @@
-package main
+package healthsla
 
-// ci_health_sla.go — the cobra surface for the `health-sla` extension
+// cobra_health_sla.go — the cobra surface for the `health-sla` extension
 // (internal/healthsla). The checks themselves, their SLA ladders and their
 // summary rendering live in the package; what stays here is flag parsing and the
 // Deps wiring, which is the only part that has to know how THIS binary reaches a
@@ -9,17 +9,16 @@ package main
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
 
-// healthSLADeps hands the extension the capabilities it declares. Every field is
+// HealthSLADeps hands the extension the capabilities it declares. Every field is
 // a real implementation: a nil func here panics rather than failing, and a
 // fixture that no-ops would make the package's own summary assertions vacuous.
-func healthSLADeps() healthsla.Deps {
-	return healthsla.Deps{
+func HealthSLADeps() Deps {
+	return Deps{
 		Summary: ghaout.Append,
 		BaoExec: func(pod, addr, token string, args ...string) (string, string, error) {
 			return baoread.ExecFn(pod, addr, token, args...)
@@ -31,7 +30,7 @@ func healthSLADeps() healthsla.Deps {
 	}
 }
 
-func ciHealthLKEAdminRotationCmd() *cobra.Command {
+func HealthLKEAdminRotationCmd() *cobra.Command {
 	var warnDays, criticalDays int
 	c := &cobra.Command{
 		Use:   "health-lke-admin-rotation",
@@ -42,7 +41,7 @@ func ciHealthLKEAdminRotationCmd() *cobra.Command {
 			"unreachable (a torn-down cluster, or a stale kubeconfig in TF state).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return healthsla.RunLKEAdminRotation(healthSLADeps(), warnDays, criticalDays)
+			return RunLKEAdminRotation(HealthSLADeps(), warnDays, criticalDays)
 		},
 	}
 	c.Flags().IntVar(&warnDays, "warn-days", 35, "warn when the newest token is older than this many days")
@@ -50,7 +49,7 @@ func ciHealthLKEAdminRotationCmd() *cobra.Command {
 	return c
 }
 
-func ciHealthLokiObjkeyRotationCmd() *cobra.Command {
+func HealthLokiObjkeyRotationCmd() *cobra.Command {
 	var warnDays, criticalDays int
 	c := &cobra.Command{
 		Use:   "health-loki-objkey-rotation",
@@ -61,7 +60,7 @@ func ciHealthLokiObjkeyRotationCmd() *cobra.Command {
 			"--warn-days. Reads OPENBAO_ROOT_TOKEN; a missing secret/token is a non-fatal warn.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return healthsla.RunLokiObjkeyRotation(healthSLADeps(), warnDays, criticalDays)
+			return RunLokiObjkeyRotation(HealthSLADeps(), warnDays, criticalDays)
 		},
 	}
 	c.Flags().IntVar(&warnDays, "warn-days", 105, "warn when the key is older than this many days")
@@ -69,7 +68,7 @@ func ciHealthLokiObjkeyRotationCmd() *cobra.Command {
 	return c
 }
 
-func ciHealthOpenbaoCmd() *cobra.Command {
+func HealthOpenbaoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "health-openbao",
 		Short: "report OpenBao seal state + ESO readiness to the step summary (warn-only)",
@@ -78,11 +77,11 @@ func ciHealthOpenbaoCmd() *cobra.Command {
 			"ClusterSecretStore + every ExternalSecret's Ready condition, emitting warnings\n" +
 			"and a step summary. Warning-only — never fails the job.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return healthsla.RunOpenbao(healthSLADeps()) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunOpenbao(HealthSLADeps()) },
 	}
 }
 
-func ciHealthCertManagerCmd() *cobra.Command {
+func HealthCertManagerCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "health-certmanager",
 		Short: "report every Certificate's Ready condition to the step summary (warn-only)",
@@ -90,6 +89,6 @@ func ciHealthCertManagerCmd() *cobra.Command {
 			"cert-manager Certificate's Ready condition, emitting warnings and a step\n" +
 			"summary. Warning-only — never fails the job.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return healthsla.RunCertManager(healthSLADeps()) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunCertManager(HealthSLADeps()) },
 	}
 }

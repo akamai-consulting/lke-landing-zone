@@ -1,6 +1,6 @@
-package main
+package database
 
-// ci_database.go — the `llz ci` database flag sets, and the Deps wiring.
+// cobra_database.go — the `llz ci` database flag sets, and the Deps wiring.
 //
 // The rotation, seeding, probing and assertion are tools/internal/database. What
 // stays here is the cobra wiring and the ONE capability package main owns: how to
@@ -11,21 +11,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/database"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
 )
 
-func init() {
+func Init() {
 	// A delegating closure, not a direct assignment: openbao.ClientForward is itself
-	// reachable through seams a test may swap, and capturing its value at init
+	// reachable through seams a test may swap, and capturing its value at Init
 	// would freeze whatever it pointed at. That bug has cost this campaign twice.
-	database.InstallOpenBaoForward(func(role string) (*openbao.Client, func(), error) {
+	InstallOpenBaoForward(func(role string) (*openbao.Client, func(), error) {
 		return openbao.ClientForward(role)
 	})
 }
 
-func ciRotateDBAdminCmd() *cobra.Command {
+func RotateDBAdminCmd() *cobra.Command {
 	var region string
 	var apply, rotateNow bool
 	var afterDays int
@@ -50,23 +49,23 @@ func ciRotateDBAdminCmd() *cobra.Command {
 			"OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return database.RunRotateDBAdmin(region, apply, rotateNow, afterDays)
+			return RunRotateDBAdmin(region, apply, rotateNow, afterDays)
 		},
 	}
 	c.Flags().BoolVar(&rotateNow, "rotate-now", false, "rotate every seeded cluster regardless of age (rotate-on-create; still requires --apply)")
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being rotated — labels the run summary (required)")
 	c.Flags().BoolVar(&apply, "apply", false, "arm the rotation; without it the command only reports what is due")
-	c.Flags().IntVar(&afterDays, "rotate-after-days", database.RotateAfterDays, "rotate a credential older than this many days")
+	c.Flags().IntVar(&afterDays, "rotate-after-days", RotateAfterDays, "rotate a credential older than this many days")
 	return c
 }
 
-func ciDBDeclaredCmd() *cobra.Command {
+func DBDeclaredCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "db-declared",
 		Short: "report whether a deployment declares any database clusters",
 		Long: "Writes `declared=true|false` to $GITHUB_OUTPUT so the bootstrap workflow can\n" +
-			"skip the databases terraform-init + admin seed on the majority of instances\n" +
+			"skip the databases terraform-Init + admin seed on the majority of instances\n" +
 			"that declare no databases — initializing that root unconditionally would put\n" +
 			"a new failure mode on the critical bootstrap path for no benefit.\n\n" +
 			"Reads the RENDERED terraform-iac-bootstrap/databases/<region>.tfvars. Reading\n" +
@@ -74,13 +73,13 @@ func ciDBDeclaredCmd() *cobra.Command {
 			"from spec.defaults.cluster (llz validate rejects it there), so the env's own\n" +
 			"tfvars is the whole truth.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return database.RunDBDeclared(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunDBDeclared(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) to check (required)")
 	return c
 }
 
-func ciDBSummaryCmd() *cobra.Command {
+func DBSummaryCmd() *cobra.Command {
 	var region, phase string
 	c := &cobra.Command{
 		Use:   "db-summary",
@@ -93,14 +92,14 @@ func ciDBSummaryCmd() *cobra.Command {
 			"--phase destroy-plan: the data-loss caution. Unlike a bucket, a destroyed\n" +
 			"Managed Postgres takes its data with it and Linode keeps no snapshot.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return database.RunDBSummary(region, phase) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunDBSummary(region, phase) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being reported (required)")
 	c.Flags().StringVar(&phase, "phase", "", "apply | destroy-plan (required)")
 	return c
 }
 
-func ciAssertDatabaseCmd() *cobra.Command {
+func AssertDatabaseCmd() *cobra.Command {
 	var settle, interval, timeout int
 	c := &cobra.Command{
 		Use:   "assert-database",
@@ -119,7 +118,7 @@ func ciAssertDatabaseCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return database.RunAssertDatabase(time.Duration(timeout)*time.Second,
+			return RunAssertDatabase(time.Duration(timeout)*time.Second,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
@@ -135,7 +134,7 @@ func ciAssertDatabaseCmd() *cobra.Command {
 // A half-populated record is its own failure and must not be probed: dialing
 // with an empty password would produce a "rejected" verdict that blames the
 // database for a seeding problem.
-func ciSeedDBAdminCmd() *cobra.Command {
+func SeedDBAdminCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "seed-db-admin",
@@ -155,7 +154,7 @@ func ciSeedDBAdminCmd() *cobra.Command {
 			"Run with the databases root as the working directory. Reads\n" +
 			"OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return database.RunSeedDBAdmin(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunSeedDBAdmin(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being seeded — labels the run summary (required)")
 	return c

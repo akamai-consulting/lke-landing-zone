@@ -1,6 +1,6 @@
-package main
+package baoseed
 
-// ci_baoseed.go — the three OpenBao seeder flag sets, and their Deps wiring.
+// cobra_baoseed.go — the three OpenBao seeder flag sets, and their Deps wiring.
 //
 // The seeders are tools/internal/baoseed. What stays here is the cobra wiring and
 // the three capabilities package main owns: applying a manifest, rendering the
@@ -9,22 +9,21 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
-func init() {
+func Init() {
 	// Delegating closures, never direct assignment: each target is itself a test
-	// seam, and capturing its value at init would freeze whatever it pointed at.
-	baoseed.Install(
+	// seam, and capturing its value at Init would freeze whatever it pointed at.
+	Install(
 		func(manifest string) error { return kube.Apply(manifest) },
 		func(name, env, value string) error { return ghsecret.SetFn(name, env, value) },
 	)
 }
 
-func ciBaoSeedSealKeyCmd() *cobra.Command {
+func BaoSeedSealKeyCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-seed-seal-key",
@@ -40,7 +39,7 @@ func ciBaoSeedSealKeyCmd() *cobra.Command {
 			"to infra-<region> for DR (requires GH_TOKEN/GH_REPO), and prints an offline-backup\n" +
 			"banner — losing this key loses the data.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoseed.RunSeedSealKey(cliopts.Global.DryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunSeedSealKey(cliopts.Global.DryRun, region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> environment backs up the key for DR (required)")
 	return c
@@ -51,8 +50,8 @@ func ciBaoSeedSealKeyCmd() *cobra.Command {
 // dryRun is a plain BOOL, not package main's globalOpts. A flag is not a
 // capability — the three-clause rule's second question — and taking the whole
 // struct would drag main's flag model across the boundary to read one bit.
-func ciBaoSeedCmd() *cobra.Command {
-	var o baoseed.Opts
+func BaoSeedCmd() *cobra.Command {
+	var o Opts
 	c := &cobra.Command{
 		Use:   "bao-seed",
 		Short: "seed one OpenBao KV path from env/random/K8s-Secret sources (generic seed step)",
@@ -68,7 +67,7 @@ func ciBaoSeedCmd() *cobra.Command {
 			"--on-missing-standby/--missing-note-standby override the mode/notes when\n" +
 			"HA_ROLE=standby. Reads OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoseed.RunSeed(o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunSeed(o) },
 	}
 	f := c.Flags()
 	f.StringVar(&o.Path, "path", "", "KV path to seed, e.g. secret/grafana/admin (required)")
@@ -84,7 +83,7 @@ func ciBaoSeedCmd() *cobra.Command {
 	return c
 }
 
-func ciBaoSeedAllCmd() *cobra.Command {
+func BaoSeedAllCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-seed-all",
@@ -103,7 +102,7 @@ func ciBaoSeedAllCmd() *cobra.Command {
 			"seeds. Reads OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN,\n" +
 			"LINODE_API_TOKEN, and HA_ROLE.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoseed.RunSeedAll(region) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunSeedAll(region) },
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> references fill the seed notes (required)")
 	return c

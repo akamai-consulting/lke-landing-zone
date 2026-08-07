@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 // ci_upgrade_test_gate.go implements `llz ci upgrade-test` — the day-2 twin of
 // template-scripts/ci/instance-test.sh.
@@ -52,7 +52,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -63,7 +62,7 @@ var probeUpgradeAnswers = map[string]string{
 	"openbao_team":  "probe-team",
 }
 
-func ciUpgradeTestCmd() *cobra.Command {
+func UpgradeTestCmd() *cobra.Command {
 	var from, to, template, dir string
 	var keep bool
 	c := &cobra.Command{
@@ -79,7 +78,7 @@ func ciUpgradeTestCmd() *cobra.Command {
 			"this is the `copier update` half.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runUpgradeTest(upgradeTestOpts{from: from, to: to, template: template, dir: dir, keep: keep})
+			return RunUpgradeTest(upgradeTestOpts{from: from, to: to, template: template, dir: dir, keep: keep})
 		},
 	}
 	f := c.Flags()
@@ -96,7 +95,7 @@ type upgradeTestOpts struct {
 	keep                    bool
 }
 
-// previousReleaseTag picks the release an adopter would most plausibly be
+// PreviousReleaseTag picks the release an adopter would most plausibly be
 // upgrading FROM: the highest bare vX.Y.Z tag that is not on the commit under
 // test. It delegates the "highest release" rule to selfupgrade.LatestLLZTag — the SAME rule
 // `llz self-update` and `llz new` apply — so the gate scaffolds onto exactly the
@@ -107,7 +106,7 @@ type upgradeTestOpts struct {
 // the commit this gate is checking, and "upgrade v0.0.40 → v0.0.40" is a no-op
 // that passes while testing nothing — the failure mode where a color.Green gate means
 // least, on the one run that matters most.
-func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) {
+func PreviousReleaseTag(tags []string, headTags map[string]bool) (string, bool) {
 	var candidates []string
 	for _, t := range tags {
 		if t = strings.TrimSpace(t); releaseTagRe.MatchString(t) && !headTags[t] {
@@ -127,7 +126,7 @@ func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 // pre-releases, so nobody is ever upgrading FROM one.
 var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// copierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
+// CopierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
 // copier.CopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
 // gate must point copier at a local path so it works offline, on a branch, and
 // in a fork. --defaults here is a harness choice — `llz new` legitimately
@@ -139,7 +138,7 @@ var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // have passed cleanly while `llz upgrade` was unusable in every unattended
 // context. That is the blind spot this whole file exists to remove; re-creating
 // it one level down would be the same mistake in a smaller box.
-func copierScaffoldArgv(template, ref, dest string, answers map[string]string) []string {
+func CopierScaffoldArgv(template, ref, dest string, answers map[string]string) []string {
 	a := []string{"copier", "copy", "--trust", "--defaults", "--vcs-ref", ref, "--data", "llz_version=" + ref}
 	for _, k := range onboard.SortedKeys(answers) {
 		a = append(a, "--data", k+"="+answers[k])
@@ -160,11 +159,11 @@ var runCopier = func(dir string, argv []string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-// mergeConflictArtifacts walks the built instance for the two ways a botched
+// MergeConflictArtifacts walks the built instance for the two ways a botched
 // 3-way merge shows up: markers left inside a file, and copier's .rej/.orig
 // siblings. `llz upgrade` gates on the markers already; the .rej files it does
 // not see, and they are how a merge reports it gave up on a hunk entirely.
-func mergeConflictArtifacts(root string) (markers, rejects []string, err error) {
+func MergeConflictArtifacts(root string) (markers, rejects []string, err error) {
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -194,7 +193,7 @@ func mergeConflictArtifacts(root string) (markers, rejects []string, err error) 
 	return markers, rejects, err
 }
 
-func runUpgradeTest(o upgradeTestOpts) error {
+func RunUpgradeTest(o upgradeTestOpts) error {
 	root := o.template
 	if root == "" {
 		out, err := gitOutput(".", "rev-parse", "--show-toplevel")
@@ -242,7 +241,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			headTags[t] = true
 		}
 		var ok bool
-		if from, ok = previousReleaseTag(strings.Split(tagsOut, "\n"), headTags); !ok {
+		if from, ok = PreviousReleaseTag(strings.Split(tagsOut, "\n"), headTags); !ok {
 			// A shallow clone has no tags. Skipping is right — this gate cannot
 			// invent a prior release, and failing would make every shallow checkout
 			// color.Red for a reason that is not about the change under test.
@@ -266,14 +265,14 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	}
 	inst := filepath.Join(build, "instance")
 
-	fmt.Printf("upgrade-test: %s → %s\n", from, shortRef(to))
+	fmt.Printf("upgrade-test: %s → %s\n", from, ShortRef(to))
 
 	// 1. Scaffold at the previous release.
-	if out, err := runCopier(build, copierScaffoldArgv(root, from, inst, probeUpgradeAnswers)); err != nil {
-		return fmt.Errorf("scaffold at %s failed:\n%s", from, indentedTail(string(out), 20))
+	if out, err := runCopier(build, CopierScaffoldArgv(root, from, inst, probeUpgradeAnswers)); err != nil {
+		return fmt.Errorf("scaffold at %s failed:\n%s", from, IndentedTail(string(out), 20))
 	}
 	answersPath := filepath.Join(inst, ".copier-answers.yml")
-	before, err := upgrade.ReadAnswerMap(answersPath)
+	before, err := ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read scaffolded answers: %w", err)
 	}
@@ -289,7 +288,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			"commit", "-q", "--no-verify", "-m", "scaffold at " + from},
 	} {
 		if out, err := runCopier(inst, argv); err != nil {
-			return fmt.Errorf("%s: %w\n%s", argv[1], err, indentedTail(string(out), 10))
+			return fmt.Errorf("%s: %w\n%s", argv[1], err, IndentedTail(string(out), 10))
 		}
 	}
 
@@ -297,7 +296,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	out, upErr := runCopier(inst, copier.UpdateArgv(to))
 	var failures []string
 	if upErr != nil {
-		detail := indentedTail(string(out), 25)
+		detail := IndentedTail(string(out), 25)
 		hint := ""
 		if strings.Contains(string(out), "prompt_toolkit") || strings.Contains(string(out), "Traceback") {
 			hint = "\n    This is copier PROMPTING. `copier update` re-asks every question unless it is\n" +
@@ -306,7 +305,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
 		failures = append(failures, fmt.Sprintf("update-is-noninteractive: `copier update` to %s failed:\n%s%s",
-			shortRef(to), detail, hint))
+			ShortRef(to), detail, hint))
 	} else {
 		fmt.Printf("  ✓ update-is-noninteractive — `copier update` ran with stdin closed\n")
 	}
@@ -315,14 +314,14 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	// update produced one. Reporting "answers were not preserved" about a tree the
 	// update never wrote would blame the wrong bug.
 	if upErr != nil {
-		return upgradeTestFailure(failures)
+		return UpgradeTestFailure(failures)
 	}
 
-	after, err := upgrade.ReadAnswerMap(answersPath)
+	after, err := ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read upgraded answers: %w", err)
 	}
-	if regressions := upgrade.AnswerRegressions(before, after); len(regressions) > 0 {
+	if regressions := AnswerRegressions(before, after); len(regressions) > 0 {
 		failures = append(failures, "answers-preserved: the upgrade rewrote answers it does not own:\n      "+
 			strings.Join(regressions, "\n      ")+
 			"\n    copier falls back to the template DEFAULT for an answer it cannot keep — including\n"+
@@ -330,17 +329,17 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			"    and every `gh` target, so this silently repoints the instance at a repo that does\n"+
 			"    not exist, exit 0.")
 	} else {
-		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(upgrade.VolatileAnswers))
+		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(VolatileAnswers))
 	}
 
 	if got := after["llz_version"]; got != to {
 		failures = append(failures, fmt.Sprintf("pin-advanced: llz_version is %q, want %q — the upgrade did not re-pin, so "+
 			"every rendered `?ref=` still resolves to the old release", got, to))
 	} else {
-		fmt.Printf("  ✓ pin-advanced — llz_version is now %s\n", shortRef(to))
+		fmt.Printf("  ✓ pin-advanced — llz_version is now %s\n", ShortRef(to))
 	}
 
-	markers, rejects, err := mergeConflictArtifacts(inst)
+	markers, rejects, err := MergeConflictArtifacts(inst)
 	if err != nil {
 		return fmt.Errorf("scan the upgraded instance: %w", err)
 	}
@@ -362,30 +361,30 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	}
 
 	if len(failures) == 0 {
-		fmt.Printf("upgrade-test: OK — an instance at %s upgrades to %s cleanly and unattended.\n", from, shortRef(to))
+		fmt.Printf("upgrade-test: OK — an instance at %s upgrades to %s cleanly and unattended.\n", from, ShortRef(to))
 		return nil
 	}
-	return upgradeTestFailure(failures)
+	return UpgradeTestFailure(failures)
 }
 
-func upgradeTestFailure(failures []string) error {
+func UpgradeTestFailure(failures []string) error {
 	for _, f := range failures {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", color.Red("✗"), f)
 	}
 	return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken", len(failures))
 }
 
-func shortRef(r string) string {
+func ShortRef(r string) string {
 	if len(r) == 40 && hexSHARe.MatchString(r) {
 		return r[:12]
 	}
 	return r
 }
 
-// indentedTail is the END of a copier failure, indented into this gate's report.
+// IndentedTail is the END of a copier failure, indented into this gate's report.
 // The tail, because a traceback's exception line and copier's own message are
 // last while the head is a wall of file-creation noise.
-func indentedTail(s string, n int) string {
+func IndentedTail(s string, n int) string {
 	t := cigate.TailLines(s, n)
 	if t == "" {
 		return "      (no output)"

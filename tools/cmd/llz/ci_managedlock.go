@@ -1,5 +1,10 @@
 package main
 
+// STAYS IN PACKAGE MAIN: it is handed sustainDeps(), one of the fifteen deps
+// assemblers that make up main's dependency-injection layer. A command that
+// needs main to assemble its capability's Deps cannot live on the other side of
+// that assembly.
+//
 // ci_managedlock.go — the `llz ci managed-fresh` flag set.
 //
 // The guard is tools/internal/sustain, which already owned template-sustain and

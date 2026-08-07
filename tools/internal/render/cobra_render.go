@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"fmt"
@@ -8,21 +8,20 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 )
 
-// render_cmd.go — the flag sets for `llz render` and `llz env vpc`. The renderer
+// cobra_render.go — the flag sets for `llz render` and `llz env vpc`. The renderer
 // is internal/render.
 
-// envVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
+// EnvVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
 // or an empty line for a dedicated VPC, so the apply-vpc workflow step can decide
 // whether — and which — shared VPC to apply before the cluster. It reads the spec
 // when present (the source of truth), falling back to the rendered
 // cluster/<env>.tfvars (vpc_network) for a pre-spec instance.
-func envVPCCmd() *cobra.Command {
+func EnvVPCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "vpc <deployment>",
 		Short: "print the shared VPC a deployment attaches to (spec.networks name); empty for a dedicated VPC",
@@ -55,7 +54,7 @@ func envVPCCmd() *cobra.Command {
 		},
 	}
 }
-func renderCmd() *cobra.Command {
+func RenderCmd() *cobra.Command {
 	var tfvarsOnly, check, diff bool
 	c := &cobra.Command{
 		Use:   "render [env]",
@@ -73,7 +72,7 @@ func renderCmd() *cobra.Command {
 			if len(args) == 1 {
 				env = args[0]
 			}
-			return render.Run(cliopts.Global.DryRun, env, tfvarsOnly, check, diff)
+			return Run(cliopts.Global.DryRun, env, tfvarsOnly, check, diff)
 		},
 	}
 	c.Flags().BoolVar(&tfvarsOnly, "tfvars-only", false, "render only the tfvars (skip the committed manifest kustomizations)")

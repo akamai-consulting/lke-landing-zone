@@ -1,15 +1,14 @@
-package main
+package openbao
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
 
-// ci_openbao_login_cmd.go — the flag set for `llz ci openbao-login`. The lane is
+// cobra_openbao_login.go — the flag set for `llz ci openbao-login`. The lane is
 // internal/openbao.
 
-func ciOpenBaoLoginCmd() *cobra.Command {
+func OpenBaoLoginCmd() *cobra.Command {
 	var method, role, addr, mount, saTokenFile, exportVar string
 	c := &cobra.Command{
 		Use:   "openbao-login",
@@ -31,7 +30,7 @@ func ciOpenBaoLoginCmd() *cobra.Command {
 			"`kubectl port-forward … :8210` (the loopback listener) instead.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return openbao.RunCILogin(cliopts.Global.DryRun, method, role, addr, mount, saTokenFile, exportVar)
+			return RunCILogin(cliopts.Global.DryRun, method, role, addr, mount, saTokenFile, exportVar)
 		},
 	}
 	c.Flags().StringVar(&method, "method", "kubernetes", "auth method: kubernetes (ServiceAccount, default) | oidc (GitHub OIDC)")

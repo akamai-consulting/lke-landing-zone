@@ -23,7 +23,7 @@ func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
 	if err := baolifecycle.RunEnsureReady(false, "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Errorf("missing region = %v, want --region error", err)
 	}
-	if c := ciBaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {
+	if c := baolifecycle.BaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {
 		t.Errorf("Use = %q, want bao-ensure-ready", c.Use)
 	}
 }

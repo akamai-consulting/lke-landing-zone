@@ -1,30 +1,29 @@
-package main
+package statepassphrase
 
-// ci_statepassphrase.go — the `llz ci rotate-state-passphrase` flag set, and the
+// cobra_statepassphrase.go — the `llz ci rotate-state-passphrase` flag set, and the
 // Deps wiring for tools/internal/statepassphrase.
 
 import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/statepassphrase"
 )
 
-func init() {
-	statepassphrase.Install(statepassphrase.Deps{
+func Init() {
+	Install(Deps{
 		Exec:        execOutput,
 		GHJSONPaged: buildpreflight.GHAPIJSONPaged,
 	})
 }
 
-func ciRotateStatePassphraseCmd() *cobra.Command {
+func RotateStatePassphraseCmd() *cobra.Command {
 	var apply bool
 	var rootsDir string
 	c := &cobra.Command{
 		Use:   "rotate-state-passphrase",
 		Short: "re-key every Terraform root's state onto the new encryption passphrase",
 		Long: "Rollover half of state-encryption key rotation. Requires a rotation window:\n" +
-			"TF_ENCRYPTION must already carry BOTH key providers (terraform-init emits the\n" +
+			"TF_ENCRYPTION must already carry BOTH key providers (terraform-Init emits the\n" +
 			"encrypted fallback when TF_STATE_ENCRYPTION_PASSPHRASE_OLD is set), and\n" +
 			"the new passphrase reaches it via TF_STATE_ENCRYPTION_PASSPHRASE.\n\n" +
 			"Per root: `tofu state pull | tofu state push -` re-encrypts under the new\n" +
@@ -36,7 +35,7 @@ func ciRotateStatePassphraseCmd() *cobra.Command {
 			"partial run is resumed by re-running.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return statepassphrase.RunRotate(apply, rootsDir)
+			return RunRotate(apply, rootsDir)
 		},
 	}
 	c.Flags().BoolVar(&apply, "apply", false, "perform the rollover (default: report what would be re-keyed)")

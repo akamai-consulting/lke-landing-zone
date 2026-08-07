@@ -1,6 +1,6 @@
-package main
+package baoca
 
-// ci_baoca.go — the `llz ci extract-openbao-ca` and `provision-peer-ca` flag sets.
+// cobra_baoca.go — the `llz ci extract-openbao-ca` and `provision-peer-ca` flag sets.
 //
 // The verbs are tools/internal/baoca. This is the CA slice of the catalog's
 // openbao-lifecycle row, taken on its own because it is the one part of that row
@@ -9,11 +9,10 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoca"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cliopts"
 )
 
-func ciExtractOpenbaoCACmd() *cobra.Command {
+func ExtractOpenbaoCACmd() *cobra.Command {
 	var required bool
 	c := &cobra.Command{
 		Use:   "extract-openbao-ca",
@@ -29,13 +28,13 @@ func ciExtractOpenbaoCACmd() *cobra.Command {
 			"non-fatal twin); --required makes the absence an error + exit 1 (the\n" +
 			"reprovision-ca job).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoca.RunExtractCA(required) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunExtractCA(required) },
 	}
 	c.Flags().BoolVar(&required, "required", false, "fail (exit 1) when openbao-tls is absent instead of warning + exit 0")
 	return c
 }
 
-func ciProvisionPeerCACmd() *cobra.Command {
+func ProvisionPeerCACmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "provision-peer-ca",
 		Short: "create the openbao-peer-tls Secret in the active peer cluster from $CA_B64",
@@ -48,7 +47,7 @@ func ciProvisionPeerCACmd() *cobra.Command {
 			"(the runner's kubeconfig already points there). Establishes cross-cluster\n" +
 			"trust so standby operations can run with VAULT_SKIP_VERIFY=false.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return baoca.RunProvisionPeerCA(cliopts.Global.DryRun) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunProvisionPeerCA(cliopts.Global.DryRun) },
 	}
 	return c
 }

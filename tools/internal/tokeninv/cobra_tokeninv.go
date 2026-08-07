@@ -1,6 +1,6 @@
-package main
+package tokeninv
 
-// ci_tokeninv.go — the cobra surface for the `token-inventory` extension
+// cobra_tokeninv.go — the cobra surface for the `token-inventory` extension
 // (internal/tokeninv). The probes, the expiry policy, the capability scars and
 // the rotation decision table live in the package; what stays here is flag
 // parsing and the Deps wiring.
@@ -10,22 +10,21 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tokeninv"
 	"github.com/spf13/cobra"
 )
 
-// tokenInvDepsFor hands the extension the capabilities it declares. Both fields
+// TokenInvDepsFor hands the extension the capabilities it declares. Both fields
 // are real implementations — a fixture that no-ops Summary would make the
 // rotation plan's assertions vacuous, since its entire output IS the summary
 // plus the job-gating outputs.
-func tokenInvDepsFor() tokeninv.Deps {
-	return tokeninv.Deps{
+func TokenInvDepsFor() Deps {
+	return Deps{
 		CloudToken: linode.TokenFromEnv,
 		Summary:    ghaout.Append,
 	}
 }
 
-func ciTokenInventoryCmd() *cobra.Command {
+func TokenInventoryCmd() *cobra.Command {
 	var namespace, name string
 	var maxDays, warnDays int
 	c := &cobra.Command{
@@ -40,7 +39,7 @@ func ciTokenInventoryCmd() *cobra.Command {
 			"as llz_token_expiry_timestamp_seconds so Prometheus alerts before expiry.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out, err := tokeninv.RunInventory(cmd.Context(), tokenInvDepsFor(), namespace, name, maxDays, warnDays)
+			out, err := RunInventory(cmd.Context(), TokenInvDepsFor(), namespace, name, maxDays, warnDays)
 			if err != nil {
 				return err
 			}
@@ -56,7 +55,7 @@ func ciTokenInventoryCmd() *cobra.Command {
 	return c
 }
 
-func ciValidateTokensCmd() *cobra.Command {
+func ValidateTokensCmd() *cobra.Command {
 	var failOnInvalid bool
 	c := &cobra.Command{
 		Use:   "validate-tokens",
@@ -69,13 +68,13 @@ func ciValidateTokensCmd() *cobra.Command {
 			"scoped for the job it exists for?) — an under-scoped PAT authenticates perfectly\n" +
 			"and still 403s on the operation.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return tokeninv.RunValidate(failOnInvalid) },
+		RunE: func(_ *cobra.Command, _ []string) error { return RunValidate(failOnInvalid) },
 	}
 	c.Flags().BoolVar(&failOnInvalid, "fail-on-invalid", true, "exit non-zero when any required credential is invalid or under-scoped")
 	return c
 }
 
-func ciRotationPlanCmd() *cobra.Command {
+func RotationPlanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rotation-plan",
 		Short: "route a rotation run: schedule/scope → job-gating step outputs",
@@ -88,7 +87,7 @@ func ciRotationPlanCmd() *cobra.Command {
 			"REASON, *_APPLY, ACTOR, DEPLOYMENTS.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return tokeninv.RunRotationPlan(tokenInvDepsFor(), tokeninv.InputsFromEnv())
+			return RunRotationPlan(TokenInvDepsFor(), InputsFromEnv())
 		},
 	}
 }

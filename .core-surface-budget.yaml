@@ -794,6 +794,31 @@ categories:
 #        time, `globalOpts` is now an alias for it, and the +30 is the alias plus
 #        the comment explaining the binding moment. TestGlobalFlagsAreParsedBefore
 #        RunE pins it. The next entry spends this back many times over.
+#   84th: 17 more command files -> their extensions   5,073 -> 3,657 (-1,416 / 39 files)
+#        The gopts-coupled half, unblocked by internal/cliopts (83rd). Same
+#        currency caveat as the 82nd: this is flag wiring relocating, not logic
+#        untangling.
+#        TWO MOVES REVERTED ON EVIDENCE, and both name a boundary worth keeping:
+#          - ci_managedlock.go is handed sustainDeps(), one of the FIFTEEN deps
+#            assemblers that are main`s dependency-injection layer. A command that
+#            needs main to assemble its capability`s Deps cannot sit on the far
+#            side of that assembly.
+#          - apl.go builds the `llz apl` SUBTREE, wiring five sibling groups. That
+#            is the tree, and the rule is "an extension owns its own command", not
+#            "every constructor leaves".
+#        THE MOVER NOW MASKS STRINGS AND COMMENTS before stripping self-
+#        qualification, which is what trap 61 (the 82nd) cost a debugging session
+#        to find. Re-audited this batch the same way: zero literals lost.
+#        TEST FILES WERE REPOINTED, NOT MOVED. Last batch moved them and hit
+#        colliding same-named-but-different helpers in three packages. These assert
+#        flag WIRING, which is legitimately about the tree, so they stayed in
+#        cmd/llz and now call the exported constructor.
+#        FOURTEEN MORE FLOORS DROPPED, and one of them is an ARTIFACT worth naming:
+#        internal/upgrade fell 51 -> 25 because ci_upgrade_test_gate.go (295 lines)
+#        moved in while its tests stayed in cmd/llz. That code IS tested -- the
+#        per-package number simply cannot see tests living in another package.
+#        The rest is the same dilution as the 82nd: untested flag wiring joining a
+#        tested capability. No test was deleted in either batch.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -806,7 +831,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 5073
+    budget: 3657
     exact: true
     include:
       - "tools/cmd/llz/*.go"

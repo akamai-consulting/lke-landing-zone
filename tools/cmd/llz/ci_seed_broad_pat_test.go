@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
@@ -53,8 +54,8 @@ func TestBroadPATSeedEnabled(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := broadPATSeedEnabled(tc.lz, tc.region); got != tc.want {
-				t.Errorf("broadPATSeedEnabled(%q) = %v, want %v", tc.region, got, tc.want)
+			if got := baoseed.BroadPATSeedEnabled(tc.lz, tc.region); got != tc.want {
+				t.Errorf("baoseed.BroadPATSeedEnabled(%q) = %v, want %v", tc.region, got, tc.want)
 			}
 		})
 	}
