@@ -21,8 +21,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
@@ -107,10 +109,10 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), componentsCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
-		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconciler.Cmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
+		reapCmd(), openbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), verifyCmd(), reconciler.Cmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
 
@@ -412,7 +414,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.SubnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
 	f.IntVar(&o.PromotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.DryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
+	env.AddCommand(add, clusterspec.EnvShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 

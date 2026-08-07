@@ -20,7 +20,7 @@ func installAssertSecretsDeps() {
 			return broadPATSeedEnabled(lz, region)
 		},
 		WaitJobTerminal: func(ns, name string, budget, interval time.Duration) (bool, bool) {
-			return waitJobTerminal(ns, name, budget, interval)
+			return assertsecrets.WaitJobTerminal(ns, name, budget, interval)
 		},
 	})
 }

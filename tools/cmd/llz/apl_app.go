@@ -31,7 +31,7 @@ func aplAppCmd() *cobra.Command {
 			"which the apl-overlay reconciler propagates the change onto apl-<env>.",
 	}
 	c.AddCommand(
-		renamed(componentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
+		renamed(clusterspec.ComponentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
 		aplAppToggleCmd("enable", true),
 		aplAppToggleCmd("disable", false),
 	)

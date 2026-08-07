@@ -1,6 +1,19 @@
 package main
 
-// ci_gen_toc.go — `llz ci gen-toc`: insert or refresh the delimited table of
+// ci_gen_toc.go — STAYS IN PACKAGE MAIN, and its extension's own guard is why.
+//
+// `gen-toc` WRITES a table of contents back into Markdown files. internal/docsguard
+// declares gate:scaffolded[read-repo] and enforces it with
+// TestPackageDeclaresNoWritePathBecauseItHasNone, which forbids os.WriteFile
+// anywhere in the package. Moving this constructor in tripped that test at once.
+//
+// The guard is RIGHT and the rule bends here. "An extension owns its own command"
+// assumes a command's side effects are the extension's side effects. For a
+// read-only gate that also ships a writing verb they are not: the write is a
+// second capability sharing the scanner, and keeping it outside the package is
+// what keeps `read-repo` true. A grant that is not true is worse than no grant.
+
+// cobra_gen_toc.go — `llz ci gen-toc`: insert or refresh the delimited table of
 // contents in a long Markdown document.
 //
 // THE RENDERING IS IN internal/docsguard AND THE WRITE IS HERE, deliberately.
@@ -19,9 +32,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
+	"github.com/spf13/cobra"
 )
 
 func ciGenTOCCmd() *cobra.Command {

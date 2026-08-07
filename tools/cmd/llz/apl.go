@@ -1,6 +1,9 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
+	"github.com/spf13/cobra"
+)
 
 // aplCmd is the APL-layer front door (ADR 0013 — "one binary, two altitudes"): a
 // noun-verb subtree that speaks App Platform's domain model. `user` is HOMED here
@@ -49,7 +52,7 @@ func aplValuesCmd() *cobra.Command {
 	}
 	c.AddCommand(
 		renderCmd(), // apl values render — spec → values/overlay tree
-		renamed(ciAplSchemaValidateCmd(), "validate",
+		renamed(manifestguard.AplSchemaValidateCmd(), "validate",
 			"offline apl-values var-contract + apl-core schema check (no cluster)"),
 	)
 	return c

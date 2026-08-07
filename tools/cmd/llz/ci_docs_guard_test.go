@@ -1,5 +1,14 @@
 package main
 
+// ci_docs_guard_test.go — STAYS IN PACKAGE MAIN, unlike its command.
+//
+// docs-guard checks every documented `llz …` invocation against the LIVE cobra
+// tree. At runtime the command gets that from cobra itself via cmd.Root(), so
+// internal/docsguard owns its command cleanly. A TEST has no running command to
+// ask, so it must BUILD the tree — and newRootCmd is main's. This is the one
+// place the rule "an extension owns its command" leaves a test behind, and the
+// reason is that the extension's subject IS the tree main owns.
+
 // ci_docs_guard_test.go — the docs-guard cases that need the LIVE cobra tree.
 //
 // The extraction to internal/docsguard split this file along a line worth naming:
@@ -34,6 +43,9 @@ func commandFindings(t *testing.T, root string) []docsguard.Finding {
 	return rep.Findings
 }
 
+// writeMD, not writeMD: docsguard_test.go already has a writeMD and the
+// two are NOT the same function. Renamed rather than merged — a shared helper
+// here would have silently changed one caller's fixture.
 func writeMD(t *testing.T, root, rel, body string) {
 	t.Helper()
 	p := filepath.Join(root, filepath.FromSlash(rel))
@@ -45,7 +57,7 @@ func writeMD(t *testing.T, root, rel, body string) {
 	}
 }
 
-func repoRootForDocsGuard(t *testing.T) string {
+func repoRootForDocsGuardCobra(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -185,7 +197,7 @@ func TestCheckDocCommands(t *testing.T) {
 // ── the gh workflow run check ────────────────────────────────────────────────
 
 func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
-	root := repoRootForDocsGuard(t)
+	root := repoRootForDocsGuardCobra(t)
 	rep, err := docsguard.Run(root, docsguard.Options{}, newRootCmd())
 	if err != nil {
 		t.Fatalf("docsguard.Run: %v", err)

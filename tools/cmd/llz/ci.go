@@ -20,25 +20,44 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/argodiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobjstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/chartpublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusteraccess"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/deliverdocs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/gameday"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harbor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/phasetiming"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/releasepublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
@@ -79,7 +98,7 @@ func ciCmd() *cobra.Command {
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
-		ciBaoStatusCmd(),
+		baoread.BaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciBaoBreakglassCmd(),
 		ciExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), ciProvisionPeerCACmd(),
@@ -101,7 +120,7 @@ func ciCmd() *cobra.Command {
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
 	// llz-secret-rotation.yml; rotate-incluster-pat replaced propagate-pat —
 	// the broad PAT is CI/Terraform-only and no longer pushed into clusters).
-	c.AddCommand(ciRotationPlanCmd(), ciRotateInclusterPATCmd())
+	c.AddCommand(ciRotationPlanCmd(), credrotate.RotateInclusterPATCmd())
 	// Harbor API steps (formerly inline curl in llz-bootstrap-openbao.yml).
 	// Harbor: the active-path provisioning (project + robots + OpenBao seed +
 	// repo-secret publication + smoke) runs IN-CLUSTER via harbor-provisioner
@@ -110,7 +129,7 @@ func ciCmd() *cobra.Command {
 	// the workflow's harbor job.
 	// kick-harbor-provisioner force-ticks that CronJob at bootstrap so the
 	// converge tail is event-paced instead of waiting out the */5 schedule.
-	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd(), ciKickHarborProvisionerCmd())
+	c.AddCommand(harbor.HarborProvisionerCmd(), harbor.SeedStandbyHarborRobotsCmd(), assertsecrets.KickHarborProvisionerCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
 	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
@@ -125,7 +144,7 @@ func ciCmd() *cobra.Command {
 	// state output. The API variant exists precisely because it does NOT need
 	// terraform init, the S3 backend, or git auth — the things most likely to be
 	// broken when an operator needs a kubeconfig by hand.
-	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
+	c.AddCommand(clusteraccess.RunnerACLCmd(), clusteraccess.FetchKubeconfigCmd(), clusteraccess.FetchKubeconfigStateCmd())
 	// ── BREAK-GLASS VERBS ────────────────────────────────────────────────────
 	// bao-init, bao-regen-root, fetch-kubeconfig (the API variant) and openbao-login
 	// have ZERO workflow callers on purpose — the manual handles an operator reaches
@@ -155,14 +174,14 @@ func ciCmd() *cobra.Command {
 	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
 	// + apl-core-v6-migration.md — so their commands are gone too.)
-	c.AddCommand(ciDiagnoseArgoCDCmd())
+	c.AddCommand(argodiag.DiagnoseArgoCDCmd())
 	// E2E timing instrumentation (docs/designs/e2e-instrumentation.md): a phase
 	// timeline (phase-mark/phase-report → step summary + JSON artifact) and the
 	// image-pull collector that answers whether a bring-up phase is pull-bound.
-	c.AddCommand(ciPhaseMarkCmd(), ciPhaseReportCmd(), ciCollectImagePullsCmd(), ciCollectTimingCmd())
+	c.AddCommand(phasetiming.PhaseMarkCmd(), phasetiming.PhaseReportCmd(), phasetiming.CollectImagePullsCmd(), phasetiming.CollectTimingCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow.
-	c.AddCommand(ciPinInstanceImagesCmd())
+	c.AddCommand(releasepublish.PinInstanceImagesCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
@@ -177,7 +196,7 @@ func ciCmd() *cobra.Command {
 	// the TF-minted keys + LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub relay +
 	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
 	// CronJob, slim llz image) owns rotation after first boot.
-	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
+	c.AddCommand(credrotate.MintBootstrapObjkeysCmd(), credrotate.RotateLinodeCredsCmd(), credrotate.TempObjkeyCmd())
 	// The databases root's OpenBao half: copy each Managed Postgres cluster's admin
 	// connection from TF state to secret/infra/db-admin/<name>. Unlike the
 	// object-storage keys above there is nothing to MINT — the credential is the
@@ -192,7 +211,7 @@ func ciCmd() *cobra.Command {
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.
-	c.AddCommand(ciRotateBroadPATCmd())
+	c.AddCommand(credrotate.RotateBroadPATCmd())
 	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
 	c.AddCommand(ciSeedBroadPATCmd())
@@ -218,7 +237,7 @@ func ciCmd() *cobra.Command {
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.
-	c.AddCommand(ciMintBootstrapPATCmd())
+	c.AddCommand(credrotate.MintBootstrapPATCmd())
 	// Secretless day-2 auth: exchange a GitHub OIDC token for an OpenBao token
 	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
@@ -228,12 +247,12 @@ func ciCmd() *cobra.Command {
 	// the rest at the template repo. (The former strip-comments verb is gone:
 	// the vendored llz-*.yml bodies ship verbatim so an instance copy matches
 	// the copier render — see copier.yml's _tasks note.)
-	c.AddCommand(ciDeliverDocsCmd())
+	c.AddCommand(deliverdocs.DeliverDocsCmd())
 	// Doc rot, mechanically: llz commands/flags against the live cobra tree,
 	// `gh workflow run` inputs against the workflow YAML, and links resolved BOTH
 	// in the template and in the post-deliver-docs keep-set. Added after an audit
 	// found 30 doc defects, most of them detectable from the repo itself.
-	c.AddCommand(ciDocsGuardCmd())
+	c.AddCommand(docsguard.DocsGuardCmd())
 	c.AddCommand(ciGenTOCCmd())
 	// Day-2 gate: scaffold at the previous release and `copier update` to HEAD.
 	// instance-test.sh covers `copier copy` and stops there, so the upgrade path —
@@ -246,7 +265,7 @@ func ciCmd() *cobra.Command {
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(wavehealth.HealthGuardCmd())
 	c.AddCommand(mtlsguard.Cmd())
-	c.AddCommand(ciPlaintextGuardCmd())
+	c.AddCommand(plaintext.PlaintextGuardCmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).
@@ -254,7 +273,7 @@ func ciCmd() *cobra.Command {
 	// Static guard on ENCRYPTION AT REST for Terraform-declared resources: every
 	// root declares an encryption block, every node pool sets disk_encryption
 	// (Makefile at-rest-guard).
-	c.AddCommand(ciAtRestGuardCmd())
+	c.AddCommand(atrest.AtRestGuardCmd())
 	// Static guard for the #163 wedge class: a workload that hard-depends on a
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
@@ -262,7 +281,7 @@ func ciCmd() *cobra.Command {
 	// Live fault-injection game-day: break one platform ExternalSecret and assert
 	// the wedge is contained to its own carved Application (blast-radius
 	// decomposition proof). Run on a warm e2e cluster.
-	c.AddCommand(ciWedgeGamedayCmd())
+	c.AddCommand(gameday.WedgeGamedayCmd())
 	// Runtime counterpart to wave-health-guard: assert the VAP is bound + enforcing
 	// (negative canary), which is what makes the static guard's verdict hold live.
 	c.AddCommand(assertnetwork.WaveHealthVAPCmd())
@@ -337,7 +356,7 @@ func ciCmd() *cobra.Command {
 	// checks passed while both consumers were returning NoSuchBucket — the
 	// generations are disjoint namespaces, so the API and the consumer were both
 	// telling the truth about different places.
-	c.AddCommand(ciAssertObjRoundTripCmd())
+	c.AddCommand(assertobjstore.AssertObjRoundTripCmd())
 	// assert-certificates consumes a signal that already existed and nothing read:
 	// llz_certificates_not_ready is published and alerted on, but alert-eval is
 	// report-only and --strict ignores FIRING, so a stuck Certificate reds nothing.
@@ -358,7 +377,7 @@ func ciCmd() *cobra.Command {
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
 	c.AddCommand(meshegress.Cmd())
-	c.AddCommand(ciPlaceholderGuardCmd())
+	c.AddCommand(manifestguard.PlaceholderGuardCmd())
 	// Static guard for the #175 day-2-blind class: every ServiceMonitor/PodMonitor/
 	// PrometheusRule must carry `prometheus: system` or apl-core's Prometheus
 	// silently ignores it (metrics unscraped / rules unloaded) — Makefile
@@ -370,7 +389,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciDroppedAPIVersionsCmd())
 	// Offline apl-core schema validation (helm template) — the check
 	// helm_release.apl runs at apply time, shifted left into scaffold-check.
-	c.AddCommand(ciAplSchemaValidateCmd())
+	c.AddCommand(manifestguard.AplSchemaValidateCmd())
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.
@@ -378,39 +397,39 @@ func ciCmd() *cobra.Command {
 	// Render/coverage lint gates ported from template-scripts (the Makefile's
 	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
 	// coverage floor in `make coverage`).
-	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), coverageguard.Cmd())
+	c.AddCommand(chartguard.ChartLockDriftCmd(), manifestguard.ArgoCDRenderedAppsCmd(), coverageguard.Cmd())
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
-	c.AddCommand(ciUntestableLOCCmd())
+	c.AddCommand(budget.UntestableLOCCmd())
 	// Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
 	// destination for converted logic but no capacity, so package main accretes.
 	// This budgets the destination. Ratchets DOWN as code moves to
 	// tools/internal/<pkg> or out to an extension.
-	c.AddCommand(ciCoreSurfaceCmd())
+	c.AddCommand(budget.CoreSurfaceCmd())
 	// Release-hygiene gate: a chart change must bump its Chart.yaml version, or
 	// publish-charts.yml never publishes it and clusters keep the stale artifact.
-	c.AddCommand(ciChartVersionGuardCmd())
+	c.AddCommand(chartguard.ChartVersionGuardCmd())
 	// Companion gate: every Argo CD chart pin (apl-values targetRevision +
 	// llz-argo-bootstrap-apps component version) must match the chart's local
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
-	c.AddCommand(ciChartPinGuardCmd())
+	c.AddCommand(chartguard.ChartPinGuardCmd())
 	c.AddCommand(cosignguard.Cmd())
 	// Runtime companion: a pinned first-party chart version must actually EXIST in
 	// the OCI registry, or Argo 404s the pull on a feature-branch e2e (bumped-but-
 	// unpublished chart) and the OpenBao bootstrap dies on the missing llz-openbao ns.
-	c.AddCommand(ciChartPublishCheckCmd())
+	c.AddCommand(chartpublish.ChartPublishCheckCmd())
 	// Package + push + keyless-sign first-party charts to GHCR (immutable; re-signs a
 	// pushed-but-unsigned version). Replaces publish-charts.yml's inline bash.
-	c.AddCommand(ciPublishChartsCmd())
+	c.AddCommand(releasepublish.PublishChartsCmd())
 	// Cluster-bootstrap native command + its former local-exec bodies. bootstrap-
 	// cluster is the whole in-cluster bootstrap (apl-core install + Argo bridge +
 	// the race-ahead Kyverno policies) that used to be the cluster-bootstrap
 	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
 	// separately runnable (bootstrap-cluster calls them in-process), and
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
-	c.AddCommand(ciBootstrapClusterCmd(), converge.WaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
-		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
+	c.AddCommand(ciBootstrapClusterCmd(), converge.WaitAplPipelineCmd(), kyverno.ApplyKyvernoPolicyCmd(),
+		ciDestroyUnwedgeCmd(), ghsecret.ClearClusterSecretsCmd())
 	// apl-core 6.1.0's pre-upgrade prerequisite (the apl-operator sync-options
 	// annotation). bootstrap-cluster runs it on every apply; it stays separately
 	// runnable so an operator can assert it on a cluster ahead of a managed upgrade
