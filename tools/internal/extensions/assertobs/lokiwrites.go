@@ -150,7 +150,7 @@ func lokiProveWrites(nameMatch, region string, allowFlush bool) []lokiWriteMsg {
 			lokiWriteMsg{fmt.Sprintf("FAIL: %d ingester(s) flushed, nothing reached %s within %s, and they logged "+
 				"write errors doing it — Loki is not persisting logs", flushed, bucket, lokiProveBudget), true},
 			lokiWriteMsg{"  " + errs[0], false},
-			lokiWriteMsg{"  Every other signal in this lane can be color.Green in this state — that is what #397 is. " +
+			lokiWriteMsg{"  Every other signal in this lane can be green in this state — that is what #397 is. " +
 				"A 403 AccessDenied here is usually NOT the credential but Linode's Ceph rejecting the AWS SDK's " +
 				"default aws-chunked trailer-checksum framing", false})
 	case landed:

@@ -935,6 +935,33 @@ categories:
 #        sounding read-only: it writes TERRAFORM STATE, which lives in a remote
 #        object-storage backend. The extension`s own test refused the new rows by
 #        construction (`default: unexpected binding`) until each was argued into it.
+#   90th: the command-wiring guard   1,700 -> 1,700 (0 lines; this one adds a check)
+#        THE GAP IT CLOSES: an extension could be declared, pass Validate(), show
+#        up in `llz extension list`, and ship a verb nobody could run -- wiring is
+#        a hand-written AddCommand and forgetting one is silent. `extension list`
+#        read the registry, the CLI read the tree, and nothing compared them.
+#        CONSTRUCTORS, NOT NAMES. The obvious shape was `Commands []string` on
+#        Extension. Measuring killed it: 214 leaves to hand-author, TWENTY of them
+#        ambiguous because verb names are not unique across groups (`add`, `set`,
+#        `list`, `validate` each appear under two parents), every entry a
+#        duplicate of what the tree already says, and only a test to catch drift.
+#        A function reference is one line, the COMPILER checks it, and renaming a
+#        constructor breaks the build rather than a test three weeks later.
+#        NOT A REGISTRY-DRIVEN TREE, and that was the user`s catch. ~26% of the
+#        wiring is package main`s -- the group constructors ARE the tree, plus the
+#        deps-ABI, composition and gen-toc. A builder needs group-placement
+#        metadata on every extension and an escape hatch for the rest; a verifier
+#        needs neither. The line saving would have been ~83 in ci.go, not the ~800
+#        first claimed -- that figure wrongly counted main.go and the group
+#        constructors, which no registry replaces.
+#        ONE DIRECTION ONLY, deliberately: "every extension command is reachable".
+#        The reverse ("every leaf is claimed") is the 214-entry exercise again, to
+#        catch a failure that has never happened -- an unclaimed leaf still WORKS.
+#        PROVEN TO FAIL: unwiring assertobs.GrafanaDashboardsCmd makes it report
+#        the exact verb and extension. Checked, not assumed.
+#        Three more help strings restored: "onboard.Gather + push instance
+#        credentials" was USER-FACING (`llz secrets`), plus a color.Green and an
+#        onboard.Prompt in prose. Same blanket-rename class as traps 55 and 61.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N

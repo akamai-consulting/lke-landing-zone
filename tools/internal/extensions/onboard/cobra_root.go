@@ -59,7 +59,7 @@ func TokensCmd() *cobra.Command {
 	return c
 }
 func SecretsCmd() *cobra.Command {
-	s := &cobra.Command{Use: "secrets", Short: "onboard.Gather + push instance credentials"}
+	s := &cobra.Command{Use: "secrets", Short: "gather + push instance credentials"}
 	s.AddCommand(
 		&cobra.Command{
 			Use: "onboard.Gather", Short: "paste-everything token wizard (links + .llz/*.env)",

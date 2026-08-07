@@ -71,7 +71,7 @@ func TestCopierScaffoldArgv(t *testing.T) {
 	}
 	// The harness itself must never block on a onboard.Prompt.
 	if !containsArg(argv, "--defaults") {
-		t.Errorf("scaffold argv would onboard.Prompt: %v", argv)
+		t.Errorf("scaffold argv would prompt: %v", argv)
 	}
 	// Deterministic ordering, so a failure diff is stable across runs.
 	if got := upgrade.CopierScaffoldArgv("/t", "v1.0.0", "/d",
