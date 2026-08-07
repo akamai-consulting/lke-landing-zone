@@ -1,4 +1,20 @@
-package tokeninv
+// Package tokenprobe answers one question about a credential: is it still valid,
+// and if not, why. It probes Linode and GitHub, classifies the HTTP status, and
+// renders the verdict cell.
+//
+// IT CAME OUT OF internal/extensions/tokeninv, WHICH IS AN INVENTORY. Five peers
+// imported that inventory -- assert-secrets, config-readiness, cred-coverage,
+// doctor, reconciler -- and what they wanted was this: TokenValidity, the four
+// ValidityStatus values, and the probes. None of them wanted the inventory of
+// WHICH tokens exist and where they are stored, which is what token-inventory is
+// for. Asking whether a credential works is not the same question as knowing the
+// full set of them, and only the second is a capability.
+//
+// THE SPLIT ALSO UNBLOCKED config-readiness, whose own model could not move down
+// while it referenced tokeninv.TokenValidity -- the same two-packages-each-
+// waiting-on-the-other shape that kept the OpenBao client and the HA topology
+// model stuck in extensions/ until they were moved together.
+package tokenprobe
 
 // token_validate.go — active VALIDITY probing for the credentials `llz tokens`
 // gathers, layered onto the presence-only readiness table (state.go). Presence
@@ -19,6 +35,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
@@ -222,4 +240,38 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// GHPATProbe followed ProbeToken: it is the GitHub half of the same question, and
+// leaving it behind would have split "is this token valid" across the package line
+// it was just moved off.
+// GHPATProbe performs one authenticated request and returns the HTTP status
+// (0 == unreachable) and the raw token-expiration header. Package var so callers
+// are exercisable without network access.
+var GHPATProbe = func(api, token string) (code int, expHeader string, err error) {
+	url := strings.TrimRight(api, "/") + "/"
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err // unreachable — code 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("GitHub-Authentication-Token-Expiration"), nil
+}
+
+// envOr is a MINIMAL LOCAL COPY, four lines, for the same reason several packages
+// in this tree keep their own: importing a helper package to read one environment
+// variable costs more than it saves.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

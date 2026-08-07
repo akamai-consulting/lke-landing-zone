@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // a fixed "now" so expiry math is deterministic.
@@ -26,8 +27,8 @@ func (f fakeCredLister) ListObjectStorageKeys(context.Context) ([]map[string]any
 
 func TestGatherGitHubTokens(t *testing.T) {
 	// Stub the probe: name → (code, expHeader).
-	orig := GHPATProbe
-	defer func() { GHPATProbe = orig }()
+	orig := tokenprobe.GHPATProbe
+	defer func() { tokenprobe.GHPATProbe = orig }()
 	resp := map[string]struct {
 		code int
 		hdr  string
@@ -37,7 +38,7 @@ func TestGatherGitHubTokens(t *testing.T) {
 		"noexpiry-token": {200, ""},                        // no header → breach
 		"invalid-token":  {401, ""},                        // 401 → breach
 	}
-	GHPATProbe = func(_, token string) (int, string, error) {
+	tokenprobe.GHPATProbe = func(_, token string) (int, string, error) {
 		r := resp[token]
 		return r.code, r.hdr, nil
 	}
@@ -108,9 +109,9 @@ func TestGatherLinodeTokens(t *testing.T) {
 }
 
 func TestBuildTokenInventorySortedAndStamped(t *testing.T) {
-	orig := GHPATProbe
-	defer func() { GHPATProbe = orig }()
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "2026-09-01 00:00:00 UTC", nil }
+	orig := tokenprobe.GHPATProbe
+	defer func() { tokenprobe.GHPATProbe = orig }()
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "2026-09-01 00:00:00 UTC", nil }
 	inv := buildTokenInventory(context.Background(), tokenInvDeps{
 		ghTargets:   []PATTarget{{"zzz", "https://api", "t"}, {"aaa", "https://api", "t"}},
 		linodeToken: "tok",

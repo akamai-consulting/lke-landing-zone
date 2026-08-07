@@ -147,6 +147,7 @@ COVERAGE_MINS := \
 	internal/shared/envtopology=67 \
 	internal/shared/instanceresolve=87 \
 	internal/shared/portfwd=90 \
+	internal/shared/tokenprobe=50 \
 	internal/extensions/bootstrapcluster=61 \
 	internal/extensions/seedspecial=84 \
 	internal/shared/tfvars=55 \

@@ -1,6 +1,14 @@
-package tokeninv
+package tokenprobe
+
+// TWO OF THE FOUR tests in tokeninv's token_validate_test.go, and only two. The
+// other two drive the inventory's validation lane and correctly stayed. These
+// drive classifyAuthStatus and githubPATValidity, which are unexported here -- so
+// once the probe layer moved they could not have stayed behind even if the file
+// had been left alone. Checking each `func Test` rather than moving the file is
+// what separated them.
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +80,9 @@ func TestKindFor(t *testing.T) {
 func TestProbeToken_DispatchesByKind(t *testing.T) {
 	// Stub the network seams so ProbeToken exercises pure dispatch + classification.
 	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
-	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
+	t.Cleanup(func() {
+		LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH
+	})
 
 	LinodeProbe = func(string) (int, error) { return 200, nil }
 	GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil }
@@ -97,4 +107,43 @@ func TestProbeToken_DispatchesByKind(t *testing.T) {
 	if tv := ProbeToken("HARBOR_URL", "x", "", now); tv.Status != VSkipped {
 		t.Errorf("non-token: got %v, want VSkipped", tv.Status)
 	}
+}
+
+// ValidityCell is what an operator actually reads. It is pure rendering over the
+// four statuses, and it arrived here uncovered -- which matters because a wrong
+// glyph does not fail anything, it just quietly tells someone their credential is
+// fine.
+func TestValidityCell(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tv   TokenValidity
+		want string
+	}{
+		{"valid", TokenValidity{Name: "T", Status: VValid, Detail: "ok"}, "ok"},
+		{"invalid", TokenValidity{Name: "T", Status: VInvalid, Detail: "401"}, "401"},
+		{"warn", TokenValidity{Name: "T", Status: VWarn, Detail: "expires in 3d"}, "expires in 3d"},
+		{"skipped", TokenValidity{Name: "T", Status: VSkipped}, "not probed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ValidityCell(tc.tv)
+			if !strings.Contains(stripANSI(got), tc.want) {
+				t.Errorf("ValidityCell(%v) = %q, want it to contain %q", tc.tv, got, tc.want)
+			}
+		})
+	}
+}
+
+// The cells are colourised, so the assertions above compare against plain text.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }

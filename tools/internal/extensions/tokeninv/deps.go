@@ -6,7 +6,7 @@ import "os"
 //
 // Small, for a package this size. That is the shape of a set of checks that
 // mostly READ credentials out of the environment and probe them over HTTP: the
-// network probes are already package vars (GHPATProbe, s3Probe) because they were
+// network probes are already package vars (tokenprobe.GHPATProbe, s3Probe) because they were
 // written to be exercisable without a network, so the only real seams left are
 // the Linode client and the summary sink.
 type Deps struct {

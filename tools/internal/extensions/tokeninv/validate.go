@@ -28,10 +28,11 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // validatableTokens is the ordered set of pipeline credentials this verb probes
-// from the environment. Only auth-bearing tokens with a probe (KindFor != none)
+// from the environment. Only auth-bearing tokens with a probe (tokenprobe.KindFor != none)
 // belong here; each is checked only when its env var is set.
 var validatableTokens = []string{
 	"LINODE_API_TOKEN",
@@ -71,10 +72,10 @@ func RunValidate(failOnInvalid bool) error {
 		}
 		// Keep the secret value out of any downstream log capture.
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", val)
-		tv := ProbeToken(name, val, ghcrUser, now)
+		tv := tokenprobe.ProbeToken(name, val, ghcrUser, now)
 		probed++
 		suffix := ""
-		if tv.Status == VInvalid {
+		if tv.Status == tokenprobe.VInvalid {
 			if optionalTokens[name] {
 				optionalInvalid++
 				suffix = color.Dim("  (optional — warning only)")
@@ -83,12 +84,12 @@ func RunValidate(failOnInvalid bool) error {
 				blockingInvalid++
 			}
 		}
-		fmt.Printf("  %-30s %s%s\n", name, ValidityCell(tv), suffix)
+		fmt.Printf("  %-30s %s%s\n", name, tokenprobe.ValidityCell(tv), suffix)
 
 		// Authorization, reported as an indented child of the validity line. Asked
 		// only of a credential that authenticated: a dead token has nothing to
 		// authorize, and a second verdict would just bury the real cause.
-		if tv.Status == VInvalid {
+		if tv.Status == tokenprobe.VInvalid {
 			continue
 		}
 		if cr, ok := checkCapability(name, val); ok {
@@ -110,10 +111,10 @@ func RunValidate(failOnInvalid bool) error {
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", sk)
 		tv := ProbeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
 		probed++
-		if tv.Status == VInvalid {
+		if tv.Status == tokenprobe.VInvalid {
 			blockingInvalid++
 		}
-		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", ValidityCell(tv))
+		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", tokenprobe.ValidityCell(tv))
 	}
 
 	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid, %d scope-denied.\n",

@@ -14,31 +14,7 @@ package tokeninv
 
 import (
 	"context"
-	"net/http"
-	"strings"
-	"time"
 )
-
-// GHPATProbe performs one authenticated request and returns the HTTP status
-// (0 == unreachable) and the raw token-expiration header. Package var so callers
-// are exercisable without network access.
-var GHPATProbe = func(api, token string) (code int, expHeader string, err error) {
-	url := strings.TrimRight(api, "/") + "/"
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, "", err
-	}
-	req.Header.Set("Authorization", "token "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, "", err // unreachable — code 0
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode, resp.Header.Get("GitHub-Authentication-Token-Expiration"), nil
-}
 
 // patTarget is one service PAT to self-check: its display name, the API base to
 // probe, and the token value (empty when the secret isn't set).

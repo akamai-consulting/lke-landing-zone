@@ -8,14 +8,14 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
-	origLinode, origGH := tokeninv.LinodeProbe, tokeninv.GHPATProbe
-	t.Cleanup(func() { tokeninv.LinodeProbe, tokeninv.GHPATProbe = origLinode, origGH })
-	tokeninv.LinodeProbe = func(string) (int, error) { return 401, nil } // invalid
-	tokeninv.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGH := tokenprobe.LinodeProbe, tokenprobe.GHPATProbe
+	t.Cleanup(func() { tokenprobe.LinodeProbe, tokenprobe.GHPATProbe = origLinode, origGH })
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 401, nil } // invalid
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	reqs := []configreadiness.Requirement{
 		{Name: "LINODE_API_TOKEN", Secret: true, Required: true},
@@ -31,12 +31,12 @@ func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	if invalid != 1 {
 		t.Errorf("invalid count = %d, want 1 (the dead Linode token)", invalid)
 	}
-	if validity["LINODE_API_TOKEN"].Status != tokeninv.VInvalid {
-		t.Errorf("LINODE_API_TOKEN verdict = %v, want tokeninv.VInvalid", validity["LINODE_API_TOKEN"].Status)
+	if validity["LINODE_API_TOKEN"].Status != tokenprobe.VInvalid {
+		t.Errorf("LINODE_API_TOKEN verdict = %v, want tokenprobe.VInvalid", validity["LINODE_API_TOKEN"].Status)
 	}
 	// APL_VALUES_REPO_TOKEN is set on GitHub but has no local value → CI-only skip.
-	if validity["APL_VALUES_REPO_TOKEN"].Status != tokeninv.VSkipped {
-		t.Errorf("APL_VALUES_REPO_TOKEN verdict = %v, want tokeninv.VSkipped (no local value)", validity["APL_VALUES_REPO_TOKEN"].Status)
+	if validity["APL_VALUES_REPO_TOKEN"].Status != tokenprobe.VSkipped {
+		t.Errorf("APL_VALUES_REPO_TOKEN verdict = %v, want tokenprobe.VSkipped (no local value)", validity["APL_VALUES_REPO_TOKEN"].Status)
 	}
 	// TF_STATE_BUCKET isn't a probeable credential → no entry.
 	if _, ok := validity["TF_STATE_BUCKET"]; ok {

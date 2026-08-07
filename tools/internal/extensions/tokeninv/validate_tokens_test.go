@@ -3,15 +3,19 @@ package tokeninv
 import (
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // TestRunCIValidateTokens_OptionalVsRequired verifies the exit contract: an
 // invalid REQUIRED credential fails the run, while an invalid OPTIONAL one
 // (GHCR/DNS) only warns.
 func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
-	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
-	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGHCR, origGH := tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe
+	t.Cleanup(func() {
+		tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe = origLinode, origGHCR, origGH
+	})
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	clearAll := func() {
 		for _, n := range validatableTokens {
@@ -21,8 +25,8 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 	}
 
 	// A dead REQUIRED token (Linode API) → blocking → exit 1.
-	LinodeProbe = func(string) (int, error) { return 401, nil }
-	GHCRTokenProbe = func(_, _ string) (int, error) { return 200, nil }
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 401, nil }
+	tokenprobe.GHCRTokenProbe = func(_, _ string) (int, error) { return 200, nil }
 	clearAll()
 	t.Setenv("LINODE_API_TOKEN", "dead")
 	if err := RunValidate(true); err == nil {
@@ -30,8 +34,8 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 	}
 
 	// A dead OPTIONAL token (GHCR) only → warning → exit 0.
-	LinodeProbe = func(string) (int, error) { return 200, nil }
-	GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil }
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 200, nil }
+	tokenprobe.GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil }
 	clearAll()
 	t.Setenv("GHCR_READ_TOKEN", "stale")
 	if err := RunValidate(true); err != nil {
@@ -39,7 +43,7 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 	}
 
 	// Blocking-invalid but --fail-on-invalid=false → report only → exit 0.
-	LinodeProbe = func(string) (int, error) { return 401, nil }
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 401, nil }
 	clearAll()
 	t.Setenv("LINODE_API_TOKEN", "dead")
 	if err := RunValidate(false); err != nil {
@@ -53,10 +57,10 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 // after the cluster was already provisioned. A VALID but under-scoped credential
 // must fail HERE.
 func TestRunCIValidateTokens_UnderScopedPAT(t *testing.T) {
-	origGH, origCap := GHPATProbe, GHCapabilityProbe
-	t.Cleanup(func() { GHPATProbe, GHCapabilityProbe = origGH, origCap })
+	origGH, origCap := tokenprobe.GHPATProbe, GHCapabilityProbe
+	t.Cleanup(func() { tokenprobe.GHPATProbe, GHCapabilityProbe = origGH, origCap })
 	// Authenticates cleanly with plenty of life left — exactly the real case.
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	for _, n := range validatableTokens {
 		t.Setenv(n, "")

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // S3BucketProbe issues a SigV4-signed HEAD of bucket at the OBJ endpoint and
@@ -80,42 +81,42 @@ var S3BucketProbe = func(accessKey, secretKey, endpoint, bucket string) (code in
 
 // probeS3Pair validates the OBJ key pair against its bucket. Both keys, the
 // endpoint, and the bucket must be known; otherwise it can't sign a request.
-func ProbeS3Pair(accessKey, secretKey, endpoint, bucket string) TokenValidity {
+func ProbeS3Pair(accessKey, secretKey, endpoint, bucket string) tokenprobe.TokenValidity {
 	const name = "TF_STATE_ACCESS_KEY"
 	if accessKey == "" || secretKey == "" {
-		return TokenValidity{name, VSkipped, "not cached — gather the OBJ keys locally to probe"}
+		return tokenprobe.TokenValidity{Name: name, Status: tokenprobe.VSkipped, Detail: "not cached — gather the OBJ keys locally to probe"}
 	}
 	if endpoint == "" || bucket == "" {
-		return TokenValidity{name, VSkipped, "TF_STATE_ENDPOINT/TF_STATE_BUCKET unknown — can't sign a probe"}
+		return tokenprobe.TokenValidity{Name: name, Status: tokenprobe.VSkipped, Detail: "TF_STATE_ENDPOINT/TF_STATE_BUCKET unknown — can't sign a probe"}
 	}
 	code, s3Code, err := S3BucketProbe(accessKey, secretKey, endpoint, bucket)
 	if err != nil {
 		code = 0
 	}
 	status, detail := classifyS3(code, s3Code)
-	return TokenValidity{name, status, detail}
+	return tokenprobe.TokenValidity{Name: name, Status: status, Detail: detail}
 }
 
 // classifyS3 maps an S3 response to a credential-validity verdict. The key
 // AUTHENTICATED on 2xx, NoSuchBucket (404), or AccessDenied — those are about the
 // bucket/permissions, not the credential. Only InvalidAccessKeyId /
 // SignatureDoesNotMatch mean the CREDENTIAL itself is bad. Pure (unit-tested).
-func classifyS3(code int, s3Code string) (ValidityStatus, string) {
+func classifyS3(code int, s3Code string) (tokenprobe.ValidityStatus, string) {
 	switch {
 	case code == 0:
-		return VUnreachable, "OBJ endpoint unreachable — could not verify"
+		return tokenprobe.VUnreachable, "OBJ endpoint unreachable — could not verify"
 	case s3Code == "InvalidAccessKeyId" || s3Code == "SignatureDoesNotMatch":
-		return VInvalid, fmt.Sprintf("S3 credentials rejected (%s) — rotate the state-bucket key", s3Code)
+		return tokenprobe.VInvalid, fmt.Sprintf("S3 credentials rejected (%s) — rotate the state-bucket key", s3Code)
 	case code/100 == 2:
-		return VValid, "valid (authenticates to Object Storage)"
+		return tokenprobe.VValid, "valid (authenticates to Object Storage)"
 	case code == http.StatusNotFound:
-		return VValid, "valid (authenticated; state bucket not found — check TF_STATE_BUCKET)"
+		return tokenprobe.VValid, "valid (authenticated; state bucket not found — check TF_STATE_BUCKET)"
 	case code == http.StatusForbidden:
 		// Authenticated but not authorized for this bucket (a mis-scoped key). The
 		// CREDENTIAL is valid; flag the scope as a warning.
-		return VWarn, "valid but not authorized for this bucket (AccessDenied) — check the key's bucket scope"
+		return tokenprobe.VWarn, "valid but not authorized for this bucket (AccessDenied) — check the key's bucket scope"
 	default:
-		return VUnreachable, fmt.Sprintf("unexpected S3 response %d — could not verify", code)
+		return tokenprobe.VUnreachable, fmt.Sprintf("unexpected S3 response %d — could not verify", code)
 	}
 }
 

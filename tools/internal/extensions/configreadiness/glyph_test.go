@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // validGlyph maps a validity status to a marker. NOTE the `case vWarn` arm and
@@ -15,11 +15,11 @@ import (
 // arm is redundant. What is assertable, and what matters, is that vInvalid is the
 // only status rendered as a failure.
 func TestValidGlyph(t *testing.T) {
-	invalid := validGlyph(tokeninv.VInvalid)
+	invalid := validGlyph(tokenprobe.VInvalid)
 	if !strings.Contains(invalid, "✗") {
 		t.Errorf("vInvalid must render a cross, got %q", invalid)
 	}
-	for _, s := range []tokeninv.ValidityStatus{tokeninv.VWarn, tokeninv.VUnreachable} {
+	for _, s := range []tokenprobe.ValidityStatus{tokenprobe.VWarn, tokenprobe.VUnreachable} {
 		got := validGlyph(s)
 		if !strings.Contains(got, "⚠") {
 			t.Errorf("status %v must render a warning, got %q", s, got)

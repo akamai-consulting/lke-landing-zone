@@ -54,7 +54,6 @@ var allowedEdges = map[string]bool{
 	"bootstrapcluster -> reconcilelanes": true,
 	"chartpublish -> chartguard":         true,
 	"configreadiness -> teardown":        true,
-	"configreadiness -> tokeninv":        true,
 	"credcoverage -> tokeninv":           true,
 	"database -> tofudriver":             true,
 	"deliverdocs -> docsguard":           true,

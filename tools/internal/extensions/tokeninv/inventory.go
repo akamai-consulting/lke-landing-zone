@@ -13,7 +13,7 @@ package tokeninv
 // and a coarse state — never a token value. It is emitted to stdout as a ConfigMap
 // (JSON, which kubectl apply accepts); the scheduled-checks job pipes it to
 // `kubectl apply`. The measurement (network) is separated from the rendering (pure)
-// so both are unit-tested via the injected GHPATProbe var + credLister interface.
+// so both are unit-tested via the injected tokenprobe.GHPATProbe var + credLister interface.
 
 import (
 	"context"
@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // tokenState is the coarse verdict the reconciler turns into llz_token_audit_ok:
@@ -362,7 +363,7 @@ func gatherGitHubTokens(targets []PATTarget, now time.Time, maxDays, warnDays in
 		code, expHeader := 0, ""
 		if present {
 			fmt.Fprintf(os.Stderr, "::add-mask::%s\n", tgt.token)
-			if c, h, err := GHPATProbe(tgt.api, tgt.token); err == nil {
+			if c, h, err := tokenprobe.GHPATProbe(tgt.api, tgt.token); err == nil {
 				code, expHeader = c, h
 			}
 		}

@@ -3,6 +3,8 @@ package tokeninv
 import (
 	"context"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // Two entries that tie on BOTH sort keys (same provider, same name — e.g. one
@@ -11,9 +13,9 @@ import (
 // equal elements as ordered and the sort swaps them, silently reordering the
 // inventory (and with it any diff a reviewer takes against the previous run).
 func TestBuildTokenInventoryTiedEntriesKeepInputOrder(t *testing.T) {
-	orig := GHPATProbe
-	t.Cleanup(func() { GHPATProbe = orig })
-	GHPATProbe = func(_, token string) (int, string, error) {
+	orig := tokenprobe.GHPATProbe
+	t.Cleanup(func() { tokenprobe.GHPATProbe = orig })
+	tokenprobe.GHPATProbe = func(_, token string) (int, string, error) {
 		if token == "first" {
 			return 200, "2026-09-01 00:00:00 UTC", nil
 		}
