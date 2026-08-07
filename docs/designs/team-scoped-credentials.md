@@ -10,7 +10,7 @@ code is authoritative.
 
 Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
 [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
-[`tools/cmd/llz/ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.go),
+[`tools/internal/identityconfig/openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
 [`tools/cmd/llz/openbao.go`](../../tools/cmd/llz/openbao.go).
 
 ## Problem
@@ -34,7 +34,7 @@ That single identity sits at the bottom of **two** access paths:
    kubeconfig (kubectl `port-forward` / `exec`, since OpenBao has no external
    ingress). Broad writes require the **root token**, which every bootstrap
    deliberately revokes
-   ([`ci_openbao_configure.go:358`](../../tools/cmd/llz/ci_openbao_configure.go)),
+   ([`ci_openbao_configure.go:358`](../../tools/internal/identityconfig/openbao_configure.go)),
    so the documented operator flow is `regen-root` (a 3-of-5 unseal-key quorum)
    before every write session.
 
@@ -51,7 +51,7 @@ transport*, not by *authorization*:
 - The kubeconfig is *not* inherently needed to **authorize** a write — OpenBao's
   own auth methods decide that, and **we run OpenBao**. Its JWT/OIDC auth is
   already used for GitHub Actions OIDC
-  ([`ci_openbao_configure.go:284`](../../tools/cmd/llz/ci_openbao_configure.go));
+  ([`ci_openbao_configure.go:284`](../../tools/internal/identityconfig/openbao_configure.go));
   pointing a second mount at Keycloak needs no LKE-E cooperation.
 
 Therefore: **root-for-writes can be eliminated without solving the LKE-E
@@ -69,16 +69,16 @@ login backs both halves of the plan; no new IdP is introduced.
 
 ## Phase 1 — Keycloak-backed OpenBao write identity (no LKE-E dependency)
 
-Extend [`ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.go),
+Extend [`ci_openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
 whose policy/role sequence is already idempotent and root-driven at bootstrap:
 
 1. **Second JWT/OIDC auth mount** `oidc-keycloak`, with
    `oidc_discovery_url = https://keycloak.<domainSuffix>/realms/otomi`. This
    mirrors the existing GitHub-OIDC `jwtRole` closure
-   ([`:274`](../../tools/cmd/llz/ci_openbao_configure.go)); the GitHub mount is
+   ([`:274`](../../tools/internal/identityconfig/openbao_configure.go)); the GitHub mount is
    untouched.
 2. **Per-team write policy**, shaped like the existing narrow allowlists
-   ([`:74-104`](../../tools/cmd/llz/ci_openbao_configure.go)). Example
+   ([`:74-104`](../../tools/internal/identityconfig/openbao_configure.go)). Example
    `gsap-writer`:
    ```hcl
    path "secret/data/gsap/*"     { capabilities = ["create","update","read"] }
@@ -198,8 +198,8 @@ diverges in these specifics (the code is authoritative):
   `openbao_team` question); there is no load-time default, so existing instances
   are byte-identical until they opt in via the retrofit runbook.
 
-Reference: [`ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.go),
-[`ci_keycloak_configure.go`](../../tools/cmd/llz/ci_keycloak_configure.go),
+Reference: [`ci_openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
+[`ci_keycloak_configure.go`](../../tools/internal/identityconfig/keycloak_configure.go),
 [`openbao_login.go`](../../tools/cmd/llz/openbao_login.go),
 [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
 

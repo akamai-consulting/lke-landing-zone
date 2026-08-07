@@ -26,6 +26,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 )
 
 // tfvarsValue returns the first `key = "value"` assignment in tfvars content
@@ -101,7 +102,7 @@ func runCIResolveHarborURL(region string) error {
 			// harbor.<managed-domain>. Discover the domain from apl-core in-cluster.
 			// Requires cluster access (this preflight runs with the bootstrap
 			// kubeconfig); degrades to the HARBOR_URL-override path when unreachable.
-			if domain = discoverManagedDomain(); domain != "" {
+			if domain = identityconfig.DiscoverManagedDomain(); domain != "" {
 				fmt.Printf("managed App Platform: discovered domain %s from apl-core in-cluster.\n", domain)
 			}
 		}

@@ -357,6 +357,15 @@ categories:
 #        10 then 8, baoread.KVPut to 6, the in-cluster login to 5. The five left
 #        are main/ok/pass/spec/ReadFile, and the middle three are METHOD names the
 #        scanner cannot tell from package-level ones. Nothing here was tangled.
+#   53rd: identity-plane  -> internal/identityconfig   17,690 -> 16,886 (-804 / 130 files)
+#        THE LARGEST SET IN THE CAMPAIGN, 1,713 lines, and it moved on a measurement
+#        that looks like it says nothing: 11 outbound with ci_openbao_configure.go
+#        and 11 without. The COUNT did not change; the SHAPE did. Without that file
+#        three edges were real two-way couplings; with it every edge is an exec
+#        adapter or a one-liner. JUDGE A SET BY WHETHER ITS EDGES ARE CUTTABLE.
+#        Also cost: a directory-scoped test guard (TestSeedTargetsAreReserved-
+#        Namespaces, os.ReadDir(".")) went INERT when its file moved, and only its
+#        own seen==0 check caught it. It walks tools/ now.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -369,7 +378,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 17690
+    budget: 16886
     exact: true
     include:
       - "tools/cmd/llz/*.go"

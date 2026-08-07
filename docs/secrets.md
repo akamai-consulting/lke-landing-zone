@@ -430,7 +430,7 @@ is granted to nothing, and `TestDBAdminGrantsInReconcilerPolicy` pins that.
 
 > **Adding a path to `credPaths` is a two-file change.** Every entry also needs a
 > `secret/metadata/<path>` read in `policyReconcilerRead`
-> ([`ci_openbao_configure.go`](../tools/cmd/llz/ci_openbao_configure.go)). The
+> ([`ci_openbao_configure.go`](../tools/internal/identityconfig/openbao_configure.go)). The
 > sampler treats only a 404 as "not seeded yet"; a 403 is fatal and fails the whole
 > pass, taking the seal gauge and every other credential's age down with it.
 > `TestCredPathsAreGrantedInReconcilerPolicy` pins the pair together.

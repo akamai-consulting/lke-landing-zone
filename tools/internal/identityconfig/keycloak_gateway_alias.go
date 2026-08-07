@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // ci_keycloak_gateway_alias.go — `llz ci pin-keycloak-gateway-alias`.
 //
@@ -30,7 +30,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -46,25 +45,7 @@ const (
 	openbaoStatefulSet = "platform-openbao"
 )
 
-func ciPinKeycloakGatewayAliasCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "pin-keycloak-gateway-alias",
-		Short: "point keycloak.<domain> at the ingress gateway's ClusterIP inside the OpenBao pods",
-		Long: "Pins a hostAliases entry on the OpenBao StatefulSet so the in-cluster JWKS\n" +
-			"fetch reaches the Istio ingress gateway directly instead of hairpinning\n" +
-			"through the external LoadBalancer (unsupported on LKE-E), while keeping the\n" +
-			"public hostname on the wire so the wildcard certificate still verifies.\n\n" +
-			"Idempotent: re-running with an unchanged ClusterIP makes no write, so it does\n" +
-			"not churn the StatefulSet or restart OpenBao.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runPinKeycloakGatewayAlias(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment name (resolves the Keycloak issuer/domain)")
-	return c
-}
-
-func runPinKeycloakGatewayAlias(region string) error {
+func RunPinGatewayAlias(region string) error {
 	issuer := keycloakIssuerFor(region)
 	if issuer == "" {
 		// No issuer means no teams configured / no domain — bao-configure already

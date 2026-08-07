@@ -1,8 +1,8 @@
-package main
+package identityconfig
 
 // TestKeycloakConnect_* STAYED in package main.
 //
-// They drive portForwardKeycloakFn — the port-forward seam the CONFIGURE verb owns
+// They drive PortForwardFn — the port-forward seam the CONFIGURE verb owns
 // — not the admin client. My classifier moved them because their bodies mention
 // AdminToken, which is the classifier's one blind spot: a test can reference a
 // package's symbol while being about something else entirely. Worth stating,
@@ -37,12 +37,12 @@ func TestKeycloakConnect_RetriesUntilServing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := portForwardKeycloakFn
-	portForwardKeycloakFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
-	defer func() { portForwardKeycloakFn = orig }()
+	orig := PortForwardFn
+	PortForwardFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
+	defer func() { PortForwardFn = orig }()
 	defer withScopeWait(5)()
 
-	base, token, cleanup, err := keycloakConnect(srv.Client(), "u", "p", func(time.Duration) {})
+	base, token, cleanup, err := Connect(srv.Client(), "u", "p", func(time.Duration) {})
 	defer cleanup()
 	if err != nil {
 		t.Fatalf("connect should succeed once the server answers: %v", err)
@@ -69,12 +69,12 @@ func TestKeycloakConnect_FailsFastOnAuthDenied(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := portForwardKeycloakFn
-	portForwardKeycloakFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
-	defer func() { portForwardKeycloakFn = orig }()
+	orig := PortForwardFn
+	PortForwardFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
+	defer func() { PortForwardFn = orig }()
 	defer withScopeWait(30)() // generous budget — the point is we DON'T consume it
 
-	_, _, _, err := keycloakConnect(srv.Client(), "u", "p", func(time.Duration) {})
+	_, _, _, err := Connect(srv.Client(), "u", "p", func(time.Duration) {})
 	if err == nil || !errors.Is(err, keycloak.ErrAuthDenied) {
 		t.Fatalf("401 must fail fast with keycloak.ErrAuthDenied, got %v", err)
 	}

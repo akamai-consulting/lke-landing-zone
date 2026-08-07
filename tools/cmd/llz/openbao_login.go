@@ -25,6 +25,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
@@ -180,13 +181,13 @@ func keycloakIssuerForLogin(region string) (string, error) {
 	// Managed App Platform: Linode owns the domain and the spec carries no
 	// domainSuffix, so discover the realm issuer from apl-core's own in-cluster
 	// config — the SAME source `llz ci bao-configure` binds the mount to
-	// (discoverKeycloakIssuerFromCluster → otomi/otomi-api SSO_ISSUER). NEVER fall
+	// (identityconfig.DiscoverIssuerFromCluster → otomi/otomi-api SSO_ISSUER). NEVER fall
 	// back to a spec domainSuffix on managed: it could be stale/wrong and would send
 	// the device login at the wrong Keycloak (the gsap incident). login already has
 	// cluster reach — it port-forwards OpenBao for the token exchange below — so the
 	// ConfigMap read is available here, and this removes the need to pass --issuer.
 	if e.Cluster.Bootstrap.ManagedAppPlatform {
-		if iss := discoverKeycloakIssuerFromCluster(); iss != "" {
+		if iss := identityconfig.DiscoverIssuerFromCluster(); iss != "" {
 			return iss, nil
 		}
 		return "", fmt.Errorf("region %q is managedAppPlatform but the Keycloak issuer could not be discovered from the otomi/otomi-api ConfigMap — is your kubeconfig pointed at the target cluster? — pass --issuer https://keycloak.<domain>/realms/otomi", region)

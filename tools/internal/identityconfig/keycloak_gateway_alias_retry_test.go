@@ -1,10 +1,12 @@
-package main
+package identityconfig
 
 import (
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 )
 
 // The real apiserver rejection observed on two bootstrap runs. The step already
@@ -17,13 +19,13 @@ const kyvernoWebhookRejection = `Error from server (InternalError): Internal err
 
 func withPatchStub(t *testing.T, outs []string, errs []error) *int {
 	t.Helper()
-	prevExec, prevNow, prevSleep := execOutput, keycloakPinNow, keycloakPinSleep
-	t.Cleanup(func() { execOutput, keycloakPinNow, keycloakPinSleep = prevExec, prevNow, prevSleep })
+	prevExec, prevNow, prevSleep := kubectlprobe.Exec, keycloakPinNow, keycloakPinSleep
+	t.Cleanup(func() { kubectlprobe.Exec, keycloakPinNow, keycloakPinSleep = prevExec, prevNow, prevSleep })
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	keycloakPinNow = func() time.Time { return now }
 	keycloakPinSleep = func(d time.Duration) { now = now.Add(d) }
 	calls := 0
-	execOutput = func(_ string, _ ...string) ([]byte, error) {
+	kubectlprobe.Exec = func(_ string, _ ...string) ([]byte, error) {
 		i := calls
 		calls++
 		if i >= len(outs) {

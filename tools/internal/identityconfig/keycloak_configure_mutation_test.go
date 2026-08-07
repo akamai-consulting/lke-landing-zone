@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // ci_keycloak_configure_mutation_test.go — the guards in keycloak-configure that
 // must FAIL a half-wired realm rather than report color.Green. Mutation testing found
@@ -32,16 +32,16 @@ func withScopeBudget(attempts int, interval time.Duration) func() {
 // header therefore tracks the body, not the other way around.
 func TestKeycloakConnect_AttemptAndSleepBudget(t *testing.T) {
 	var attempts int
-	orig := portForwardKeycloakFn
-	portForwardKeycloakFn = func() (string, func(), error) {
+	orig := PortForwardFn
+	PortForwardFn = func() (string, func(), error) {
 		attempts++
 		return "", func() {}, fmt.Errorf("pod not found")
 	}
-	defer func() { portForwardKeycloakFn = orig }()
+	defer func() { PortForwardFn = orig }()
 	defer withScopeBudget(4, 100*time.Millisecond)()
 
 	var sleeps []time.Duration
-	_, _, cleanup, err := keycloakConnect(&http.Client{}, "u", "p", func(d time.Duration) { sleeps = append(sleeps, d) })
+	_, _, cleanup, err := Connect(&http.Client{}, "u", "p", func(d time.Duration) { sleeps = append(sleeps, d) })
 	cleanup()
 	if err == nil {
 		t.Fatal("a persistently-unreachable Keycloak must time out")
@@ -65,11 +65,11 @@ func TestKeycloakConnect_AttemptAndSleepBudget(t *testing.T) {
 // touches a cluster.
 func TestRunCIKeycloakConfigure_TeamsGate(t *testing.T) {
 	t.Run("no teams short-circuits", func(t *testing.T) {
-		t.Chdir(t.TempDir()) // no landingzone.yaml → specTeams() is empty
+		t.Chdir(t.TempDir()) // no landingzone.yaml → SpecTeams() is empty
 		var err error
 		var stdout string
 		stderr := captureStderr(t, func() {
-			stdout = captureStdout(t, func() { err = runCIKeycloakConfigure(globalOpts{dryRun: true}, "primary") })
+			stdout = captureStdout(t, func() { err = RunKeycloakConfigure(true, "primary") })
 		})
 		if err != nil {
 			t.Fatalf("no-teams run must be a clean no-op, got %v", err)
@@ -100,13 +100,13 @@ spec:
 			t.Fatal(err)
 		}
 		t.Chdir(dir)
-		if teams := specTeams(); len(teams) != 1 {
+		if teams := SpecTeams(); len(teams) != 1 {
 			t.Fatalf("fixture spec must declare one team, got %v", teams)
 		}
 		var err error
 		var stdout string
 		stderr := captureStderr(t, func() {
-			stdout = captureStdout(t, func() { err = runCIKeycloakConfigure(globalOpts{dryRun: true}, "primary") })
+			stdout = captureStdout(t, func() { err = RunKeycloakConfigure(true, "primary") })
 		})
 		if err != nil {
 			t.Fatalf("dry-run with teams: %v", err)

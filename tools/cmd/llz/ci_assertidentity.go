@@ -5,6 +5,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 )
 
@@ -14,11 +15,11 @@ func installAssertIdentityDeps() {
 	assertidentity.Install(assertidentity.Deps{
 		Exec:           func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
 		SecretField:    kube.SecretFieldOf,
-		ManagedDomain:  discoverManagedDomain,
+		ManagedDomain:  identityconfig.DiscoverManagedDomain,
 		DescribeSecret: kube.DescribeSecret,
 		SpecTeams: func() []string {
 			var out []string
-			for _, t := range specTeams() {
+			for _, t := range identityconfig.SpecTeams() {
 				out = append(out, t.Name)
 			}
 			return out

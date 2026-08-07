@@ -78,7 +78,7 @@ var reservedTeamNames = map[string]bool{
 // and harbor/linode roles. A team's openbaoSubtree may not carve space inside
 // them: a team scoped to e.g. `secret/linode` would grant itself write on the
 // Linode API token + broad-PAT (secret/data/linode/*), a privilege escalation.
-// KEEP IN SYNC with the policy paths in tools/cmd/llz/ci_openbao_configure.go
+// KEEP IN SYNC with the policy paths in tools/internal/identityconfig/openbao_configure.go
 // (policyPlatformCI et al.) — the guarded set is the union of their top segments.
 // SystemSecretNamespaces is EXPORTED so a cmd/llz test can assert it stays a
 // superset of the platform policy paths (drift = a team-claimable escalation).

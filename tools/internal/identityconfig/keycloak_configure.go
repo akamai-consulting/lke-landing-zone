@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // ci_keycloak_configure.go — `llz ci keycloak-configure`, the Keycloak-realm half
 // of the team-scoped-credentials turnkey path. `llz ci bao-configure` provisions
@@ -27,7 +27,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -35,10 +34,10 @@ const (
 	keycloakPod      = "keycloak-keycloakx-0" // apl-core's Keycloak.X StatefulSet pod-0
 	keycloakHTTPPort = "8080"                 // in-pod plaintext listener (TLS terminates at the edge)
 	keycloakRealm    = "otomi"
-	// keycloakDeviceClientID is the public OIDC client `llz openbao login` uses;
+	// DeviceClientID is the public OIDC client `llz openbao login` uses;
 	// overridable there via --client-id / OPENBAO_OIDC_CLIENT_ID.
-	keycloakDeviceClientID = "llz"
-	// keycloakAdminSecret holds the MASTER-realm admin creds (keycloak.AdminToken
+	DeviceClientID = "llz"
+	// AdminSecret holds the MASTER-realm admin creds (keycloak.AdminToken
 	// direct-grants against /realms/master with client admin-cli). On managed
 	// apl-core that is `keycloak-initial-admin` — the secret the Keycloak.X
 	// StatefulSet consumes as KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD. The old
@@ -48,7 +47,7 @@ const (
 	// team-OIDC OpenBao login silently unavailable. (The otomi-realm portal login
 	// `platform-admin-initial-credentials` is a DIFFERENT secret and cannot
 	// master-realm direct-grant.)
-	keycloakAdminSecret = "keycloak-initial-admin"
+	AdminSecret = "keycloak-initial-admin"
 )
 
 // Bootstrap ordering guard: how long keycloak-configure waits for apl-core to
@@ -59,9 +58,9 @@ const (
 // mutation test can still shrink them). Only the sleep seam stays here.
 var keycloakSleepFn = time.Sleep
 
-// portForwardKeycloakFn opens a port-forward to the Keycloak pod's HTTP port and
+// PortForwardFn opens a port-forward to the Keycloak pod's HTTP port and
 // returns the local base URL + teardown. A package var so tests seam it.
-var portForwardKeycloakFn = portForwardKeycloak
+var PortForwardFn = portForwardKeycloak
 
 func portForwardKeycloak() (string, func(), error) {
 	cmd := exec.Command("kubectl", "port-forward", "-n", keycloakNS, "pod/"+keycloakPod, ":"+keycloakHTTPPort)
@@ -116,48 +115,27 @@ func portForwardKeycloak() (string, func(), error) {
 // carries a `groups` realm-role claim. This command's only job is the one thing
 // apl-core won't do — a PUBLIC device-flow client for `llz openbao login`.
 
-func ciKeycloakConfigureCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "keycloak-configure",
-		Short: "ensure the Keycloak device-flow client for team-scoped OpenBao login (spec.teams)",
-		Long: "Realm half of the team-scoped-credentials turnkey path (bao-configure owns\n" +
-			"the OpenBao half). Port-forwards to the Keycloak pod, authenticates with the\n" +
-			"in-cluster " + keycloakAdminSecret + " admin creds, then idempotently ensures a\n" +
-			"single PUBLIC device-flow OIDC client (" + keycloakDeviceClientID + ") carrying the default `openid`\n" +
-			"scope. The per-team groups + `groups` claim are apl-core's job (the native\n" +
-			"team-<name> group/role from the teamConfig `llz render` emits), so this does\n" +
-			"NOT create groups or mappers. Best-effort: any Keycloak failure WARNS (and\n" +
-			"points at the manual runbook step) rather than failing, so it is safe in the\n" +
-			"bootstrap path. No-op when spec.teams is empty.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIKeycloakConfigure(gopts, region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing messages (required)")
-	return c
-}
-
-func runCIKeycloakConfigure(g globalOpts, region string) error {
+func RunKeycloakConfigure(dryRun bool, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
 	// spec.teams is the intent gate: no teams → no team login path → no client.
-	if teams := specTeams(); len(teams) == 0 {
+	if teams := SpecTeams(); len(teams) == 0 {
 		fmt.Println("No spec.teams declared — nothing to configure in Keycloak.")
 		return nil
 	}
-	if g.dryRun {
-		fmt.Fprintf(os.Stderr, "→ (dry-run) would ensure the public device-flow client %q (openid scope) in realm %s.\n", keycloakDeviceClientID, keycloakRealm)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "→ (dry-run) would ensure the public device-flow client %q (openid scope) in realm %s.\n", DeviceClientID, keycloakRealm)
 		return nil
 	}
 
 	// Best-effort from here: warn + succeed on any Keycloak-side failure so a
 	// realm/API-shape surprise never wedges the bootstrap this runs in. The
 	// manual fallback is docs/runbooks/openbao-team-login.md step 3.
-	user := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "username")
-	pass := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "password")
+	user := kube.SecretFieldOf(keycloakNS, AdminSecret, "username")
+	pass := kube.SecretFieldOf(keycloakNS, AdminSecret, "password")
 	if user == "" || pass == "" {
-		warnKeycloakSkip(region, fmt.Errorf("admin creds not readable from %s/%s (keys username/password)", keycloakNS, keycloakAdminSecret))
+		warnKeycloakSkip(region, fmt.Errorf("admin creds not readable from %s/%s (keys username/password)", keycloakNS, AdminSecret))
 		return nil
 	}
 
@@ -168,7 +146,7 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 	// expires. Bounded + best-effort: a persistently-down Keycloak still warns +
 	// exits 0, and a re-run finishes the wiring.
 	hc := &http.Client{Timeout: 20 * time.Second}
-	base, token, cleanup, err := keycloakConnect(hc, user, pass, keycloakSleepFn)
+	base, token, cleanup, err := Connect(hc, user, pass, keycloakSleepFn)
 	if err != nil {
 		warnKeycloakSkip(region, err)
 		return nil
@@ -185,17 +163,17 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 		return nil
 	}
 
-	if _, err := k.EnsureDeviceClient(keycloakDeviceClientID); err != nil {
-		warnKeycloakSkip(region, fmt.Errorf("ensure device client %s: %w", keycloakDeviceClientID, err))
+	if _, err := k.EnsureDeviceClient(DeviceClientID); err != nil {
+		warnKeycloakSkip(region, fmt.Errorf("ensure device client %s: %w", DeviceClientID, err))
 		return nil
 	}
-	fmt.Printf("Keycloak client %q ready (public device flow, openid scope) — operators can `llz openbao login --team <name>`.\n", keycloakDeviceClientID)
+	fmt.Printf("Keycloak client %q ready (public device flow, openid scope) — operators can `llz openbao login --team <name>`.\n", DeviceClientID)
 	return nil
 }
 
-func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duration)) (base, token string, cleanup func(), err error) {
+func Connect(hc *http.Client, user, pass string, sleep func(time.Duration)) (base, token string, cleanup func(), err error) {
 	for i := 0; i < keycloak.ScopeAttempts; i++ {
-		b, c, e := portForwardKeycloakFn()
+		b, c, e := PortForwardFn()
 		if e == nil {
 			tok, te := keycloak.AdminToken(hc, b, user, pass)
 			if te == nil {
@@ -203,7 +181,7 @@ func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duratio
 			}
 			c() // this port-forward is done
 			if errors.Is(te, keycloak.ErrAuthDenied) {
-				return "", "", func() {}, fmt.Errorf("keycloak admin creds rejected (check %s/%s) — not a readiness problem: %w", keycloakNS, keycloakAdminSecret, te)
+				return "", "", func() {}, fmt.Errorf("keycloak admin creds rejected (check %s/%s) — not a readiness problem: %w", keycloakNS, AdminSecret, te)
 			}
 			err = te // transient (5xx / not-ready) — retry
 		} else {

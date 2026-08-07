@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // users.go — `llz apl user add`, the operator command that onboards a human into
 // APL by creating a Keycloak user in the `otomi` realm and granting them team
@@ -11,7 +11,7 @@ package main
 // groups, invite — lives in internal/apl/identity (ADR 0013 Phase 1). This file
 // keeps the CLI surface, cluster access, and Keycloak HTTP transport: it resolves
 // master-realm admin creds from the in-cluster keycloak Secret, opens an
-// ephemeral kubectl port-forward (keycloakConnect), builds a kcClient, and adapts
+// ephemeral kubectl port-forward (Connect), builds a kcClient, and adapts
 // it to identity.AdminAPI. Everything runs against the admin REST API over the
 // port-forward, so it needs no external DNS/cert — only a reachable cluster (the
 // ambient bootstrap kubeconfig).
@@ -41,90 +41,29 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
-	"github.com/spf13/cobra"
 )
 
-// usersAddOpts are the flags of `llz users add`.
-type usersAddOpts struct {
-	email     string
-	username  string
-	firstName string
-	lastName  string
-	teams     []string
-	admin     bool
-	invite    bool
-	region    string
+// UserAddOpts are the flags of `llz users add`.
+type UserAddOpts struct {
+	Email     string
+	Username  string
+	FirstName string
+	LastName  string
+	Teams     []string
+	Admin     bool
+	Invite    bool
+	Region    string
 }
 
-// aplUserCmd is `llz apl user` — the sole home of APL user management, reached as
-// a leaf of the `apl` front door (aplCmd). Formerly the top-level `llz users`;
-// retired there per ADR 0013 Appendix B (users → apl user).
-func aplUserCmd() *cobra.Command {
-	s := &cobra.Command{
-		Use:   "user",
-		Short: "onboard & manage App Platform (Keycloak) users",
-		Long: "Create and manage the human users of the APL platform — Keycloak users in\n" +
-			"the `otomi` realm. `add` onboards a user and grants them team membership\n" +
-			"(the team-<name> role apl-core provisions from spec.teams) and/or the APL\n" +
-			"platform-admin role. It reaches Keycloak over an ephemeral kubectl\n" +
-			"port-forward using the in-cluster admin creds, so it needs a reachable\n" +
-			"cluster (the ambient bootstrap kubeconfig) but no external DNS. Distinct\n" +
-			"from `llz secrets` (GitHub secrets) and `llz openbao` (OpenBao KV).",
-	}
-	s.AddCommand(usersAddCmd())
-	return s
-}
-
-func usersAddCmd() *cobra.Command {
-	var o usersAddOpts
-	c := &cobra.Command{
-		Use:   "add --email <addr> (--team <name>... | --admin) [--invite] [--yes]",
-		Short: "create an APL user in Keycloak and grant team/admin access (--yes)",
-		Long: "Create a Keycloak user in the `otomi` realm and grant it access.\n" +
-			"\n" +
-			"Access (at least one required):\n" +
-			"  --team <name>   grant membership of an APL team — the team-<name> realm\n" +
-			"                  role (repeatable). The team must already exist (declared\n" +
-			"                  in spec.teams and rendered, or created in the APL console).\n" +
-			"  --admin         grant apl-core's built-in admin TEAM role\n" +
-			"                  (" + identity.PlatformAdminRole + "). Note this is NOT the `platform-admin`\n" +
-			"                  role the built-in otomi-admin account carries, so it does\n" +
-			"                  not currently confer `llz openbao login --team <name>` —\n" +
-			"                  use --team for that. See docs/runbooks/openbao-team-login.md.\n" +
-			"\n" +
-			"Onboarding:\n" +
-			"  default         generate a random TEMPORARY password, print it (masked in\n" +
-			"                  CI), and force UPDATE_PASSWORD at first console login.\n" +
-			"  --invite        instead email the user a Keycloak set-password link\n" +
-			"                  (requires the realm's SMTP to be configured).\n" +
-			"\n" +
-			"Idempotent: if the user already exists the missing roles are added and the\n" +
-			"password is left untouched (add-only). Creating a user is cloud-mutating, so\n" +
-			"it runs only with --yes; without it (or with --dry-run) the plan is printed.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runUsersAdd(gopts, o) },
-	}
-	f := c.Flags()
-	f.StringVar(&o.email, "email", "", "user's email address; also the username unless --username is given (required)")
-	f.StringVar(&o.username, "username", "", "Keycloak username (default: the email)")
-	f.StringVar(&o.firstName, "first-name", "", "user's given name")
-	f.StringVar(&o.lastName, "last-name", "", "user's family name")
-	f.StringArrayVar(&o.teams, "team", nil, "grant membership of an APL team (the team-<name> role); repeatable")
-	f.BoolVar(&o.admin, "admin", false, "grant apl-core's built-in admin team role ("+identity.PlatformAdminRole+"); not the `platform-admin` role, see --help")
-	f.BoolVar(&o.invite, "invite", false, "email the user a set-password link instead of printing a temporary password (needs realm SMTP)")
-	f.StringVar(&o.region, "region", "", "region whose domain gives the console URL shown on success (optional)")
-	return c
-}
-
-func runUsersAdd(g globalOpts, o usersAddOpts) error {
-	if o.email == "" {
+func RunUserAdd(dryRun, yes bool, o UserAddOpts) error {
+	if o.Email == "" {
 		return fmt.Errorf("--email is required")
 	}
-	username := o.username
+	username := o.Username
 	if username == "" {
-		username = o.email
+		username = o.Email
 	}
-	roles, err := identity.DesiredRoles(o.teams, o.admin)
+	roles, err := identity.DesiredRoles(o.Teams, o.Admin)
 	if err != nil {
 		return err
 	}
@@ -132,12 +71,12 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 	// Soft typo guard: a --team not declared in spec.teams is allowed (it may have
 	// been created in the console on a managed cluster), but the role-existence
 	// check in identity.AddUser is authoritative — surface the mismatch early.
-	warnUndeclaredTeams(o.teams)
+	warnUndeclaredTeams(o.Teams)
 
-	fmt.Fprintf(os.Stderr, "→ add APL user %q (username %q) with roles %v in realm %s\n", o.email, username, roles, keycloakRealm)
-	if g.dryRun || !g.yes {
+	fmt.Fprintf(os.Stderr, "→ add APL user %q (username %q) with roles %v in realm %s\n", o.Email, username, roles, keycloakRealm)
+	if dryRun || !yes {
 		how := "generate a temporary password"
-		if o.invite {
+		if o.Invite {
 			how = "email a set-password link"
 		}
 		fmt.Fprintf(os.Stderr, "  onboarding: %s\n", how)
@@ -145,14 +84,14 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 		return nil
 	}
 
-	user := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "username")
-	pass := kube.SecretFieldOf(keycloakNS, keycloakAdminSecret, "password")
+	user := kube.SecretFieldOf(keycloakNS, AdminSecret, "username")
+	pass := kube.SecretFieldOf(keycloakNS, AdminSecret, "password")
 	if user == "" || pass == "" {
-		return fmt.Errorf("admin creds not readable from %s/%s (keys username/password) — is your kubectl context the target cluster?", keycloakNS, keycloakAdminSecret)
+		return fmt.Errorf("admin creds not readable from %s/%s (keys username/password) — is your kubectl context the target cluster?", keycloakNS, AdminSecret)
 	}
 
 	hc := &http.Client{Timeout: 30 * time.Second}
-	base, token, cleanup, err := keycloakConnect(hc, user, pass, time.Sleep)
+	base, token, cleanup, err := Connect(hc, user, pass, time.Sleep)
 	if err != nil {
 		return err
 	}
@@ -161,11 +100,11 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 
 	res, err := identity.AddUser(kcAdmin{k}, identity.AddRequest{
 		Username:  username,
-		Email:     o.email,
-		FirstName: o.firstName,
-		LastName:  o.lastName,
+		Email:     o.Email,
+		FirstName: o.FirstName,
+		LastName:  o.LastName,
 		Roles:     roles,
-		Invite:    o.invite,
+		Invite:    o.Invite,
 	})
 	if err != nil {
 		return err
@@ -177,7 +116,7 @@ func runUsersAdd(g globalOpts, o usersAddOpts) error {
 // reportUserAdd prints the outcome: the add-only note + any non-fatal group
 // warnings, what was granted, how the user signs in, and (temp-password path) the
 // one-time password on stdout (masked in CI).
-func reportUserAdd(o usersAddOpts, username string, res identity.AddResult) {
+func reportUserAdd(o UserAddOpts, username string, res identity.AddResult) {
 	if !res.Created {
 		fmt.Fprintf(os.Stderr, "  user %q already existed — added roles only (password left unchanged)\n", username)
 	}
@@ -186,16 +125,16 @@ func reportUserAdd(o usersAddOpts, username string, res identity.AddResult) {
 	}
 
 	verb := "created"
-	if !res.Created && !o.invite {
+	if !res.Created && !o.Invite {
 		verb = "updated"
 	}
 	fmt.Fprintf(os.Stderr, "✓ %s APL user %q (roles: %s)\n", verb, username, strings.Join(res.Roles, ", "))
-	if console := consoleURLFor(o.region); console != "" {
+	if console := consoleURLFor(o.Region); console != "" {
 		fmt.Fprintf(os.Stderr, "  console: %s\n", console)
 	}
 	switch {
-	case o.invite:
-		fmt.Fprintf(os.Stderr, "  a set-password email was sent to %s\n", o.email)
+	case o.Invite:
+		fmt.Fprintf(os.Stderr, "  a set-password email was sent to %s\n", o.Email)
 	case res.TempPassword != "":
 		ghsecret.Mask(res.TempPassword)
 		fmt.Fprintln(os.Stderr, "  temporary password (must be changed at first login):")
@@ -211,7 +150,7 @@ func warnUndeclaredTeams(teams []string) {
 		return
 	}
 	declared := map[string]bool{}
-	for _, t := range specTeams() {
+	for _, t := range SpecTeams() {
 		declared[t.Name] = true
 	}
 	if len(declared) == 0 {
@@ -243,7 +182,7 @@ func consoleURLFor(region string) string {
 	}
 	domain := e.Cluster.Bootstrap.DomainSuffix
 	if domain == "" && e.Cluster.Bootstrap.ManagedAppPlatform {
-		domain = discoverManagedDomain()
+		domain = DiscoverManagedDomain()
 	}
 	if domain == "" {
 		return ""
@@ -254,7 +193,7 @@ func consoleURLFor(region string) string {
 // ── Keycloak admin transport (kcClient) → identity.AdminAPI ───────────────────
 //
 // The user/role REST methods below stay in package main: they ride the shared
-// kcClient transport (do/decodeJSON, keycloakConnect) that the ci keycloak
+// kcClient transport (do/decodeJSON, Connect) that the ci keycloak
 // commands also use. kcAdmin presents them as identity.AdminAPI so the onboarding
 // domain can drive them without knowing about HTTP or port-forwards.
 

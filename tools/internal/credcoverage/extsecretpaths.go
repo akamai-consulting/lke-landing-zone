@@ -50,7 +50,7 @@ var esManualPaths = map[string]bool{}
 // `llz ci bao-configure`, the sole owner of OpenBao policy config.
 const (
 	esBaoConfigureLabel = "llz ci bao-configure (ci_openbao_configure.go)"
-	esBaoConfigurePath  = "tools/cmd/llz/ci_openbao_configure.go"
+	esBaoConfigurePath  = "tools/internal/identityconfig/openbao_configure.go"
 )
 
 // esRef is one (remoteRef.key, remoteRef.property) pair; hasProp distinguishes
@@ -456,7 +456,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// in-cluster rotator (collectSeededGo runs every parser over every source —
 	// no-ops where a pattern is absent).
 	for _, goSrc := range []string{
-		"tools/cmd/llz/ci_harbor.go",
+		"tools/internal/harbor/harbor.go",
 		"tools/cmd/llz/ci_harbor_provisioner.go",
 		"tools/cmd/llz/ci_seed_special.go",
 		"tools/cmd/llz/ci_bao_seed_all.go",

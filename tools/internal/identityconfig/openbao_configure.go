@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // ci_openbao_configure.go — `llz ci bao-configure`, the native port of
 // configure-openbao.sh: root-token preflight, KV v2 mount, Kubernetes +
@@ -17,7 +17,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/s3sig"
 )
@@ -606,7 +605,7 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			RoleType: "jwt",
 			// Only accept tokens minted for the llz OIDC client (device flow + the
 			// e2e smoke client, both audience-mapped to this id in keycloak-configure).
-			BoundAudiences: []string{keycloakDeviceClientID},
+			BoundAudiences: []string{DeviceClientID},
 			UserClaim:      "sub",
 			// Accept a token whose `groups` claim carries EITHER the team's own
 			// apl-core realm role `team-<name>` OR apl-core's built-in all-teams
@@ -669,7 +668,7 @@ func keycloakIssuerFor(region string) string {
 	// gsap incident) and would silently bind OpenBao to the wrong Keycloak. An empty
 	// result safely skips the team steps (with a warning at the call site).
 	if e.Cluster.Bootstrap.ManagedAppPlatform {
-		return discoverKeycloakIssuerFromCluster()
+		return DiscoverIssuerFromCluster()
 	}
 	if e.Cluster.Bootstrap.DomainSuffix != "" {
 		return "https://keycloak." + e.Cluster.Bootstrap.DomainSuffix + "/realms/otomi"
@@ -677,12 +676,12 @@ func keycloakIssuerFor(region string) string {
 	return ""
 }
 
-// discoverKeycloakIssuerFromCluster reads apl-core's own SSO_ISSUER from the
+// DiscoverIssuerFromCluster reads apl-core's own SSO_ISSUER from the
 // otomi/otomi-api ConfigMap — the source of truth on a Managed App Platform
 // cluster (e.g. https://keycloak.lke634445.akamai-apl.net/realms/otomi). Returns
 // "" when the ConfigMap/key is absent or the cluster is unreachable (kubectl
 // runs with the bootstrap kubeconfig, so this is available at configure time).
-func discoverKeycloakIssuerFromCluster() string {
+func DiscoverIssuerFromCluster() string {
 	out, err := kubectlOut("-n", "otomi", "get", "cm", "otomi-api",
 		"-o", "jsonpath={.data.SSO_ISSUER}")
 	if err != nil {
@@ -691,23 +690,23 @@ func discoverKeycloakIssuerFromCluster() string {
 	return strings.TrimSpace(out)
 }
 
-// discoverManagedDomain returns the Managed App Platform domain suffix
+// DiscoverManagedDomain returns the Managed App Platform domain suffix
 // (lke<clusterID>.akamai-apl.net) discovered from apl-core's own in-cluster
 // config, or "" when unavailable. It reuses the Keycloak realm issuer that
-// discoverKeycloakIssuerFromCluster reads from the otomi/otomi-api ConfigMap and
+// DiscoverIssuerFromCluster reads from the otomi/otomi-api ConfigMap and
 // strips it down to the bare domain. This is the single runtime source of truth
 // on a managed cluster, where Linode owns the domain and the spec has no
 // domainSuffix. (The platform HTTPRoute hostnames — console.<domain>,
 // harbor.<domain> — are an equivalent source; the issuer is reused here to keep
 // one discovery read.)
-func discoverManagedDomain() string {
-	return managedDomainFromIssuer(discoverKeycloakIssuerFromCluster())
+func DiscoverManagedDomain() string {
+	return ManagedDomainFromIssuer(DiscoverIssuerFromCluster())
 }
 
-// managedDomainFromIssuer extracts the bare domain suffix from a Keycloak realm
+// ManagedDomainFromIssuer extracts the bare domain suffix from a Keycloak realm
 // issuer URL of the form https://keycloak.<domain>/realms/otomi. Pure and
 // unit-tested; returns "" for anything that doesn't match that shape.
-func managedDomainFromIssuer(issuer string) string {
+func ManagedDomainFromIssuer(issuer string) string {
 	s, ok := strings.CutPrefix(issuer, "https://keycloak.")
 	if !ok {
 		return ""
@@ -718,8 +717,8 @@ func managedDomainFromIssuer(issuer string) string {
 	return s
 }
 
-// specTeams returns spec.teams, or nil when the spec can't be loaded.
-func specTeams() []clusterspec.Team {
+// SpecTeams returns spec.teams, or nil when the spec can't be loaded.
+func SpecTeams() []clusterspec.Team {
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
 		return nil
@@ -742,25 +741,7 @@ func auditFileDeviceActive(out string) bool {
 	return false
 }
 
-func ciBaoConfigureCmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "bao-configure",
-		Short: "configure OpenBao: KV v2, Kubernetes + GitHub-OIDC auth, policies, roles, audit verify",
-		Long: "Native port of configure-openbao.sh. Preflights $OPENBAO_ROOT_TOKEN (sha256\n" +
-			"audit line + `token lookup` + root-policy check — without it the failure\n" +
-			"mode is an unexplained cascade of 403s from every privileged call), then\n" +
-			"applies the mounts/auth/policy/role sequence and verifies the declarative\n" +
-			"file/ audit device is active (warns + sets BOOTSTRAP_ERRORS=true when not).\n" +
-			"Idempotent: enables tolerate already-enabled, writes upsert.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoConfigure(gopts, region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "region name used in operator-facing error messages (required)")
-	return c
-}
-
-func runCIBaoConfigure(g globalOpts, region string) error {
+func RunBaoConfigure(dryRun bool, region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -779,8 +760,8 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// derived from this region's domainSuffix; skip (with a warning) when teams
 	// are declared but no issuer can be formed, so a misconfigured domain doesn't
 	// silently drop the team roles.
-	teams := specTeams()
-	// LoadInstance (which specTeams uses) does NOT run Validate — only render does.
+	teams := SpecTeams()
+	// LoadInstance (which SpecTeams uses) does NOT run Validate — only render does.
 	// Gate here so a spec that reached this cluster without a render pass can't make
 	// us build OpenBao policies from an unvalidated/unsafe subtree.
 	if errs := clusterspec.ValidateTeams(teams); len(errs) > 0 {
@@ -801,7 +782,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	if len(teams) > 0 && keycloakIssuer == "" {
 		fmt.Fprintf(os.Stderr, "::warning::spec.teams declares %d team(s) but no Keycloak issuer could be derived for region %q (spec unreadable or cluster.bootstrap.domainSuffix unset) — skipping the keycloak team auth setup.\n", len(teams), region)
 	}
-	if g.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")
 		for _, s := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
 			fmt.Fprintf(os.Stderr, "    bao %s\n", strings.Join(s.args, " "))

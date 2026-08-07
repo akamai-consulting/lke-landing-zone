@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // Mutation-test gap closure for ci_openbao_configure.go. bao-configure runs ONCE
 // per cluster and never re-runs, so a skip it takes silently is permanent: the
@@ -13,7 +13,7 @@ import (
 )
 
 // writeConfigureSpec lays down a minimal instance spec (optionally with teams)
-// and chdirs into it, which is how specTeams/keycloakIssuerFor read the world.
+// and chdirs into it, which is how SpecTeams/keycloakIssuerFor read the world.
 func writeConfigureSpec(t *testing.T, teamsBlock string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -63,8 +63,8 @@ func TestManagedDomainFromIssuerEmptyHostSegment(t *testing.T) {
 		"https://keycloak./",
 		"https://keycloak.",
 	} {
-		if got := managedDomainFromIssuer(in); got != "" {
-			t.Errorf("managedDomainFromIssuer(%q) = %q, want %q — a path fragment is not a domain", in, got, "")
+		if got := ManagedDomainFromIssuer(in); got != "" {
+			t.Errorf("ManagedDomainFromIssuer(%q) = %q, want %q — a path fragment is not a domain", in, got, "")
 		}
 	}
 }
@@ -74,12 +74,12 @@ func TestManagedDomainFromIssuerEmptyHostSegment(t *testing.T) {
 // operators to ignore the two warnings that actually mean a team lost its
 // OpenBao access, and the second one also nils out a perfectly good team list.
 func TestRunCIBaoConfigureNoTeamsWarnsAboutNothing(t *testing.T) {
-	t.Chdir(t.TempDir()) // no spec at all → specTeams() nil, issuer ""
+	t.Chdir(t.TempDir()) // no spec at all → SpecTeams() nil, issuer ""
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.root")
 	t.Setenv("GITHUB_REPOSITORY", "acme/platform")
 
 	var err error
-	errOut := captureStderr(t, func() { err = runCIBaoConfigure(globalOpts{dryRun: true}, "primary") })
+	errOut := captureStderr(t, func() { err = RunBaoConfigure(true, "primary") })
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestRunCIBaoConfigureAnnouncesMissingGitHubRepository(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "")
 
 	var err error
-	errOut := captureStderr(t, func() { err = runCIBaoConfigure(globalOpts{dryRun: true}, "primary") })
+	errOut := captureStderr(t, func() { err = RunBaoConfigure(true, "primary") })
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRunCIBaoConfigureValidTeamsAreConfiguredSilently(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "acme/platform")
 
 	var err error
-	errOut := captureStderr(t, func() { err = runCIBaoConfigure(globalOpts{dryRun: true}, "primary") })
+	errOut := captureStderr(t, func() { err = RunBaoConfigure(true, "primary") })
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRunCIBaoConfigureTeamsWithoutIssuerWarns(t *testing.T) {
 
 	var err error
 	// "nope" is not a declared deployment → keycloakIssuerFor returns "".
-	errOut := captureStderr(t, func() { err = runCIBaoConfigure(globalOpts{dryRun: true}, "nope") })
+	errOut := captureStderr(t, func() { err = RunBaoConfigure(true, "nope") })
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestRunCIBaoConfigureInvalidTeamsAreDropped(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "acme/platform")
 
 	var err error
-	errOut := captureStderr(t, func() { err = runCIBaoConfigure(globalOpts{dryRun: true}, "primary") })
+	errOut := captureStderr(t, func() { err = RunBaoConfigure(true, "primary") })
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRunCIBaoConfigureUnwritableGHAEnvIsFatal(t *testing.T) {
 
 	var err error
 	captureStderr(t, func() {
-		captureStdout(t, func() { err = runCIBaoConfigure(globalOpts{}, "primary") })
+		captureStdout(t, func() { err = RunBaoConfigure(false, "primary") })
 	})
 	if err == nil {
 		t.Fatal("a failed BOOTSTRAP_ERRORS write must fail the run — otherwise a cluster with no audit device reports a clean bootstrap")

@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 import (
 	"encoding/json"
@@ -11,18 +11,18 @@ import (
 )
 
 func TestRunUsersAdd_Guards(t *testing.T) {
-	if err := runUsersAdd(globalOpts{}, usersAddOpts{}); err == nil {
+	if err := RunUserAdd(false, false, UserAddOpts{}); err == nil {
 		t.Error("missing --email must error")
 	}
-	if err := runUsersAdd(globalOpts{}, usersAddOpts{email: "a@b.c"}); err == nil {
+	if err := RunUserAdd(false, false, UserAddOpts{Email: "a@b.c"}); err == nil {
 		t.Error("no --team/--admin must error")
 	}
 	// Dry-run with valid intent is a clean no-op that never touches the cluster.
-	if err := runUsersAdd(globalOpts{dryRun: true}, usersAddOpts{email: "a@b.c", admin: true}); err != nil {
+	if err := RunUserAdd(true, false, UserAddOpts{Email: "a@b.c", Admin: true}); err != nil {
 		t.Errorf("dry-run must be a clean no-op, got %v", err)
 	}
 	// Without --yes (and not dry-run) is also plan-only — no cluster access.
-	if err := runUsersAdd(globalOpts{}, usersAddOpts{email: "a@b.c", teams: []string{"platform"}}); err != nil {
+	if err := RunUserAdd(false, false, UserAddOpts{Email: "a@b.c", Teams: []string{"platform"}}); err != nil {
 		t.Errorf("plan-only (no --yes) must be a clean no-op, got %v", err)
 	}
 }

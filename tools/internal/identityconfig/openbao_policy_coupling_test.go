@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 // openbao_policy_coupling_test.go — the lane's credential table against the policy
 // that grants it.

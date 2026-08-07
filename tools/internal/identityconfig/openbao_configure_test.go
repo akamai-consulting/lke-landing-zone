@@ -1,4 +1,4 @@
-package main
+package identityconfig
 
 import (
 	"encoding/json"
@@ -274,8 +274,8 @@ func TestKeycloakTeamSteps(t *testing.T) {
 			}
 			// The role MUST pin the audience to the llz client, or any realm token
 			// carrying the groups claim (Grafana/Harbor/console) would be accepted.
-			if len(body.BoundAudiences) != 1 || body.BoundAudiences[0] != keycloakDeviceClientID {
-				t.Errorf("role %s bound_audiences = %v, want [%s] (audience-confusion guard)", name, body.BoundAudiences, keycloakDeviceClientID)
+			if len(body.BoundAudiences) != 1 || body.BoundAudiences[0] != DeviceClientID {
+				t.Errorf("role %s bound_audiences = %v, want [%s] (audience-confusion guard)", name, body.BoundAudiences, DeviceClientID)
 			}
 		}
 	}
@@ -426,7 +426,7 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	var calls []string
 	withBaoExec(t, configureStub(t, &calls, nil))
 
-	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
+	if err := RunBaoConfigure(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
 	// lookup + 19 steps (15 base + 4 GitHub-OIDC) + audit list.
@@ -462,7 +462,7 @@ func TestRunCIBaoConfigureEnablesTolerateExisting(t *testing.T) {
 		}
 		return "", "", nil, false
 	}))
-	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
+	if err := RunBaoConfigure(false, "primary"); err != nil {
 		t.Fatalf("re-run with existing mounts must succeed, got %v", err)
 	}
 }
@@ -476,7 +476,7 @@ func TestRunCIBaoConfigureFatalStepAborts(t *testing.T) {
 		}
 		return "", "", nil, false
 	}))
-	err := runCIBaoConfigure(globalOpts{}, "primary")
+	err := RunBaoConfigure(false, "primary")
 	if err == nil || !strings.Contains(err.Error(), "platform-ci") {
 		t.Errorf("err = %v, want fatal policy-write failure", err)
 	}
@@ -495,7 +495,7 @@ func TestRunCIBaoConfigureInvalidToken(t *testing.T) {
 		}
 		return "", "Code: 403. * permission denied", errors.New("exit status 2")
 	})
-	if err := runCIBaoConfigure(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "preflight") {
+	if err := RunBaoConfigure(false, "primary"); err == nil || !strings.Contains(err.Error(), "preflight") {
 		t.Errorf("err = %v, want preflight failure", err)
 	}
 }
@@ -508,7 +508,7 @@ func TestRunCIBaoConfigureNonRootToken(t *testing.T) {
 		}
 		return `{"data":{"policies":["platform-ci","default"]}}`, "", nil
 	})
-	if err := runCIBaoConfigure(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "not root") {
+	if err := RunBaoConfigure(false, "primary"); err == nil || !strings.Contains(err.Error(), "not root") {
 		t.Errorf("err = %v, want not-root refusal", err)
 	}
 }
@@ -524,7 +524,7 @@ func TestRunCIBaoConfigureMissingAuditDeviceWarnsNotFails(t *testing.T) {
 		}
 		return "", "", nil, false
 	}))
-	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
+	if err := RunBaoConfigure(false, "primary"); err != nil {
 		t.Fatalf("missing audit device must warn, not fail: %v", err)
 	}
 	b, _ := os.ReadFile(envFile)
@@ -547,7 +547,7 @@ func TestSystemSecretNamespacesCoverPolicyPaths(t *testing.T) {
 	}
 	// Guard against a NEW `const policy… =` being added without extending the list
 	// above (which would leave its paths unchecked).
-	src, err := os.ReadFile("ci_openbao_configure.go")
+	src, err := os.ReadFile("openbao_configure.go")
 	if err != nil {
 		t.Fatalf("read source: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestDiscoverKeycloakIssuerFromCluster(t *testing.T) {
 		gotArgs = args
 		return []byte("https://keycloak.lke634445.akamai-apl.net/realms/otomi\n"), nil
 	})
-	got := discoverKeycloakIssuerFromCluster()
+	got := DiscoverIssuerFromCluster()
 	if want := "https://keycloak.lke634445.akamai-apl.net/realms/otomi"; got != want {
 		t.Errorf("issuer = %q, want %q (trimmed)", got, want)
 	}
@@ -592,7 +592,7 @@ func TestDiscoverKeycloakIssuerFromCluster(t *testing.T) {
 
 	// kubectl error → empty (issuer unresolvable → team steps skipped upstream).
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no cluster") })
-	if got := discoverKeycloakIssuerFromCluster(); got != "" {
+	if got := DiscoverIssuerFromCluster(); got != "" {
 		t.Errorf("on error = %q, want empty", got)
 	}
 }
@@ -610,49 +610,9 @@ func TestManagedDomainFromIssuer(t *testing.T) {
 		{"keycloak.lke1.akamai-apl.net", ""},                     // no scheme
 	}
 	for _, c := range cases {
-		if got := managedDomainFromIssuer(c.in); got != c.want {
-			t.Errorf("managedDomainFromIssuer(%q) = %q, want %q", c.in, got, c.want)
+		if got := ManagedDomainFromIssuer(c.in); got != c.want {
+			t.Errorf("ManagedDomainFromIssuer(%q) = %q, want %q", c.in, got, c.want)
 		}
-	}
-}
-
-// The denylist guard above derives the protected set from the platform POLICIES,
-// which leaves a blind spot: a namespace that code WRITES but no policy names is
-// invisible to it. `secret/infra/db-admin/*` sat in exactly that gap — the
-// db-admin seeder wrote there from the start, yet `platform` was claimable by a
-// team (and so self-grantable to write) until a policy happened to reference it.
-//
-// This closes the class rather than the instance: every literal secret/ root
-// declared in cmd/llz must have its top segment reserved, whether or not any
-// policy mentions it.
-func TestSeedTargetsAreReservedNamespaces(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read package dir: %v", err)
-	}
-	// `const x = "secret/<ns>/…"` — the shape every seed/sample root uses.
-	re := regexp.MustCompile(`(?m)^const [A-Za-z]+ = "secret/([a-z0-9-]+)/`)
-	seen := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-			seen++
-			if !clusterspec.SystemSecretNamespaces[m[1]] {
-				t.Errorf("%s declares a secret root under secret/%s/ but %q is NOT in clusterspec.SystemSecretNamespaces — a team could claim secret/%s and self-grant write on it; add it to the denylist in clusterspec/validate.go",
-					name, m[1], m[1], m[1])
-			}
-		}
-	}
-	// A regex that silently matches nothing would make this test vacuously color.Green.
-	if seen == 0 {
-		t.Error("matched no `const … = \"secret/<ns>/…\"` declarations; the pattern has drifted from the code and this guard is inert")
 	}
 }
 

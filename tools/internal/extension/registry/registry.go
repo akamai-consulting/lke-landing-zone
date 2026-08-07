@@ -53,6 +53,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mutate"
@@ -98,6 +99,7 @@ var declarations = []func() extension.Extension{
 	baoseed.Extension,
 	baolifecycle.Extension,
 	harbor.Extension,
+	identityconfig.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,
