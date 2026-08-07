@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // linode_token_test.go — moved out of the es-store-recovery lane's test file when
 // that lane was extracted. It tests linode_token.go, which stayed: the reconciler
@@ -13,25 +13,25 @@ import (
 
 func TestInclusterLinodeToken(t *testing.T) {
 	dir := t.TempDir()
-	prev := linodeTokenFile
-	linodeTokenFile = filepath.Join(dir, "token")
-	t.Cleanup(func() { linodeTokenFile = prev })
+	prev := LinodeTokenFile
+	LinodeTokenFile = filepath.Join(dir, "token")
+	t.Cleanup(func() { LinodeTokenFile = prev })
 
 	// Neither env nor file → empty.
 	t.Setenv("LINODE_TOKEN", "")
-	if got := inclusterLinodeToken(); got != "" {
+	if got := InClusterLinodeToken(); got != "" {
 		t.Fatalf("no source: got %q", got)
 	}
 	// File appears (the optional volume materializing) → picked up lazily.
-	if err := os.WriteFile(linodeTokenFile, []byte("file-tok\n"), 0o600); err != nil {
+	if err := os.WriteFile(LinodeTokenFile, []byte("file-tok\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := inclusterLinodeToken(); got != "file-tok" {
+	if got := InClusterLinodeToken(); got != "file-tok" {
 		t.Fatalf("file source: got %q", got)
 	}
 	// Env wins (CronJob/CI compatibility).
 	t.Setenv("LINODE_TOKEN", "env-tok")
-	if got := inclusterLinodeToken(); got != "env-tok" {
+	if got := InClusterLinodeToken(); got != "env-tok" {
 		t.Fatalf("env precedence: got %q", got)
 	}
 }

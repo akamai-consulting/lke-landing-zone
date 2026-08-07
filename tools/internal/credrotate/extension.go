@@ -18,13 +18,23 @@ package credrotate
 // is this. Two walls, and the measurement says so plainly: `credentials_pat.go`
 // went from unmeasurable-in-place to a closure of TWO once the framework moved.
 //
-// THERE IS A THIRD WALL, and it is recorded rather than guessed at.
-// `credential-linode` (the LKE-admin rotator, moved here) and `credential-objkey`'s
-// mint path still reach `ci_rotate_linode_creds.go`'s rotation table and
-// `linode_token.go`'s in-cluster token layer — eighteen symbols with callers in
-// mint-objkeys, incluster-pat, rotate-broad-pat, discover-firewall, volumes,
-// reconcile, harbor-provisioner and seed-special. That is shared infrastructure in
-// its own right, not one row's private code.
+// THE THIRD WALL IS ALSO DOWN, and it was the last one. `ci_rotate_linode_creds.go`'s
+// rotation table — which credentials exist, where each lives in OpenBao, which
+// Linode API mints it — and `linode_token.go`'s in-cluster token resolver are now
+// here. Eighteen symbols with callers in mint-objkeys, incluster-pat,
+// rotate-broad-pat, discover-firewall, volumes, reconcile, harbor-provisioner and
+// seed-special: shared infrastructure in its own right, not one row's private code.
+//
+// WHAT THAT BOUGHT, MEASURED RATHER THAN CLAIMED. Every remaining file in the
+// family dropped from unmeasurable-in-place to an ordinary closure:
+//
+//	ci_rotate_broad_pat.go   4      ci_temp_objkey.go    5
+//	ci_seed_broad_pat.go     4      ci_mint_objkeys.go   6
+//	ci_incluster_pat.go     10
+//
+// Three walls, and the third is the one that mattered most: it is the file that
+// knows what a credential IS in this platform, so nothing that handles one could
+// leave while it stayed.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
 
@@ -53,10 +63,11 @@ func PATExtension() extension.Extension {
 			Grants: []extension.Grant{extension.CloudMutate, extension.SecretCustody},
 		}},
 		Incomplete: []string{
-			"the in-cluster PAT path (ci_incluster_pat.go) and the broad-PAT rotation drill " +
-				"stay in package main: both reach ci_rotate_linode_creds.go's rotation table and " +
-				"linode_token.go's in-cluster token layer, which are shared infrastructure with " +
-				"callers across eight other files rather than this extension's private code.",
+			"the in-cluster PAT path (ci_incluster_pat.go, closure 10) and the broad-PAT drill " +
+				"(ci_rotate_broad_pat.go, closure 4) are still in package main — but the wall they " +
+				"sat behind is GONE. Both reached ci_rotate_linode_creds.go's rotation table and " +
+				"linode_token.go's in-cluster token layer, which are now this package. They are " +
+				"ordinary extractions from here, not blocked ones.",
 		},
 	}
 }
@@ -82,10 +93,10 @@ func ObjKeyExtension() extension.Extension {
 			Grants: []extension.Grant{extension.CloudMutate, extension.SecretCustody},
 		}},
 		Incomplete: []string{
-			"the mint path (ci_mint_objkeys.go), the temp-key path (ci_temp_objkey.go) and the " +
-				"obj-cluster resolver stay in package main: they reach the rotation table in " +
-				"ci_rotate_linode_creds.go, which is shared infrastructure and the third wall " +
-				"this family sits behind.",
+			"the mint path (ci_mint_objkeys.go, closure 6), the temp-key path (ci_temp_objkey.go, " +
+				"closure 5) and the obj-cluster resolver are still in package main — but the wall " +
+				"is GONE: the rotation table they reached is now this package. Ordinary " +
+				"extractions from here.",
 		},
 	}
 }

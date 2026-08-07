@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // ci_rotate_linode_creds.go implements `llz ci rotate-linode-creds` — the
 // in-cluster Linode credential rotator (cred-hardening #4, Phase 1). It runs in
@@ -27,19 +27,18 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/spf13/cobra"
 )
 
 const (
-	credKindPAT    = "pat"
-	credKindObjKey = "objkey"
+	CredKindPAT    = "pat"
+	CredKindObjKey = "objkey"
 	// PAT validity must exceed the rotation cadence so the live token never
 	// expires between rotations.
 	patValidityDays = 90
 )
 
-// rotatorLinodeAPI is the Linode surface the rotator needs (seamed for tests).
-type rotatorLinodeAPI interface {
+// LinodeAPI is the Linode surface the rotator needs (seamed for tests).
+type LinodeAPI interface {
 	ListProfileTokens(ctx context.Context) ([]map[string]any, error)
 	CreateProfileToken(ctx context.Context, label, scopes, expiry string) (map[string]any, error)
 	DeleteProfileToken(ctx context.Context, id uint64) error
@@ -49,38 +48,38 @@ type rotatorLinodeAPI interface {
 	Verify(ctx context.Context) error
 }
 
-// baoStore is the OpenBao surface the rotator needs (seamed for tests).
-type baoStore interface {
+// BaoStore is the OpenBao surface the rotator needs (seamed for tests).
+type BaoStore interface {
 	Get(ctx context.Context, path, key string) (string, bool, error)
 	Write(ctx context.Context, path string, data map[string]string) error
 }
 
 var (
-	linodeRotatorClient = func(token string) rotatorLinodeAPI { return linode.NewClient(token, 30*time.Second) }
-	newRotatorBaoStore  = openLinodeRotatorBaoStore
-	rotatorNow          = func() time.Time { return time.Now() }
+	NewLinodeClient = func(token string) LinodeAPI { return linode.NewClient(token, 30*time.Second) }
+	NewBaoStore     = openLinodeRotatorBaoStore
+	Now             = func() time.Time { return time.Now() }
 )
 
-// credEntry is one rotated credential. fields maps the minted material to the
+// CredEntry is one rotated credential. fields maps the minted material to the
 // COMPLETE OpenBao field set (KV v2 writes replace the whole secret), so the
 // builder re-derives any static fields (bucket/endpoint/region) too.
-type credEntry struct {
-	name        string   // log label
-	kind        string   // credKindPAT | credKindObjKey
-	label       string   // Linode resource label (mint + drain target)
-	scopes      string   // PAT only
-	objCluster  string   // objkey only
-	buckets     []string // objkey only — every bucket the key grants (one bucket_access each)
-	permissions string   // objkey only
-	baoPath     string
+type CredEntry struct {
+	Name        string   // log label
+	Kind        string   // CredKindPAT | CredKindObjKey
+	Label       string   // Linode resource label (mint + drain target)
+	Scopes      string   // PAT only
+	ObjCluster  string   // objkey only
+	Buckets     []string // objkey only — every bucket the key grants (one bucket_access each)
+	Permissions string   // objkey only
+	BaoPath     string
 	// presentField is the KV field whose presence means "already seeded" — the
 	// bootstrap mint's idempotency probe (mint-bootstrap-objkeys skips a path
 	// the rotator or an earlier bootstrap already owns).
-	presentField string
-	fields       func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
+	PresentField string
+	Fields       func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
 }
 
-// buildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
+// BuildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
 // region/objCluster come from the CronJob env (rendered per-env, like the
 // volume-labeler's REGION). Labels + bucket grants MIRROR the llz-object-storage
 // module's bootstrap-minted keys ("<label_prefix>-<name>-<region_suffix>",
@@ -88,28 +87,28 @@ type credEntry struct {
 // shared constant "platform", which gave every instance identical labels): the Loki key spans the chunks/ruler/admin buckets —
 // the actual bucket names, NOT the key label (an earlier revision minted against
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
-func buildRotationTable(prefix, region, objCluster string) []credEntry {
-	return []credEntry{
+func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
+	return []CredEntry{
 		{
-			name: "loki-object-store", kind: credKindObjKey, label: prefix + "-loki-" + region,
-			objCluster: objCluster,
-			buckets: []string{
+			Name: "loki-object-store", Kind: CredKindObjKey, Label: prefix + "-loki-" + region,
+			ObjCluster: objCluster,
+			Buckets: []string{
 				prefix + "-loki-chunks-" + region,
 				prefix + "-loki-ruler-" + region,
 				prefix + "-loki-admin-" + region,
 			},
-			permissions: "read_write",
-			baoPath:     "secret/loki/object-store", presentField: "AWS_ACCESS_KEY_ID",
-			fields: func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
+			Permissions: "read_write",
+			BaoPath:     "secret/loki/object-store", PresentField: "AWS_ACCESS_KEY_ID",
+			Fields: func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
 		},
 		{
-			name: "harbor-registry-s3", kind: credKindObjKey, label: prefix + "-harbor-registry-" + region,
-			objCluster:  objCluster,
-			buckets:     []string{prefix + "-harbor-registry-" + region},
-			permissions: "read_write",
-			baoPath:     "secret/harbor/registry-s3", presentField: "access_key_id",
-			fields: func(access, secret string) map[string]string {
-				return harborRegistryS3Fields(prefix, region, objCluster, access, secret)
+			Name: "harbor-registry-s3", Kind: CredKindObjKey, Label: prefix + "-harbor-registry-" + region,
+			ObjCluster:  objCluster,
+			Buckets:     []string{prefix + "-harbor-registry-" + region},
+			Permissions: "read_write",
+			BaoPath:     "secret/harbor/registry-s3", PresentField: "access_key_id",
+			Fields: func(access, secret string) map[string]string {
+				return HarborRegistryS3Fields(prefix, region, objCluster, access, secret)
 			},
 		},
 		{
@@ -121,17 +120,17 @@ func buildRotationTable(prefix, region, objCluster string) []credEntry {
 			// secret/obj/platform; the obj-secrets ExternalSecret projects the secret
 			// half into apl-secrets/obj-secrets (property provider_linode_secretAccessKey),
 			// and the reconciler fills obj.yaml.accessKeyId from AWS_ACCESS_KEY_ID.
-			name: "obj-platform", kind: credKindObjKey, label: prefix + "-obj-" + region,
-			objCluster: objCluster,
-			buckets: []string{
+			Name: "obj-platform", Kind: CredKindObjKey, Label: prefix + "-obj-" + region,
+			ObjCluster: objCluster,
+			Buckets: []string{
 				prefix + "-loki-chunks-" + region,
 				prefix + "-loki-ruler-" + region,
 				prefix + "-loki-admin-" + region,
 				prefix + "-harbor-registry-" + region,
 			},
-			permissions: "read_write",
-			baoPath:     "secret/obj/platform", presentField: "AWS_ACCESS_KEY_ID",
-			fields: func(access, secret string) map[string]string { return objPlatformFields(access, secret) },
+			Permissions: "read_write",
+			BaoPath:     "secret/obj/platform", PresentField: "AWS_ACCESS_KEY_ID",
+			Fields: func(access, secret string) map[string]string { return objPlatformFields(access, secret) },
 		},
 	}
 }
@@ -150,13 +149,13 @@ func lokiObjectStoreFields(access, secret string) map[string]string {
 	return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 }
 
-// harborRegistryS3Fields derives the five secret/harbor/registry-s3 fields.
+// HarborRegistryS3Fields derives the five secret/harbor/registry-s3 fields.
 // The bucket name encodes the deployment region (matches the bucket resource
 // label); endpoint/region come from the obj_cluster the object-storage tfvars
 // actually provisioned into — NOT guessed from the env name. Lives here (not
 // ci_seed_special.go) because the rotation table owns this path now: both the
 // bootstrap mint and the rotator write the same complete field set.
-func harborRegistryS3Fields(prefix, region, objCluster, accessKey, secretKey string) map[string]string {
+func HarborRegistryS3Fields(prefix, region, objCluster, accessKey, secretKey string) map[string]string {
 	return map[string]string{
 		"access_key_id":     accessKey,
 		"secret_access_key": secretKey,
@@ -166,11 +165,11 @@ func harborRegistryS3Fields(prefix, region, objCluster, accessKey, secretKey str
 	}
 }
 
-// isDue reports whether a credential whose OpenBao secret carries rotatedAt
+// IsDue reports whether a credential whose OpenBao secret carries rotatedAt
 // (epoch seconds; "" or unparseable on a fresh bootstrap seed) is due at now.
 // An unrecognized/absent stamp is treated as due so the rotator adopts a
 // bootstrap-seeded secret on its first run. Pure — unit-tested.
-func isDue(rotatedAt string, now time.Time, rotateAfterDays int) bool {
+func IsDue(rotatedAt string, now time.Time, rotateAfterDays int) bool {
 	ts, err := strconv.ParseInt(strings.TrimSpace(rotatedAt), 10, 64)
 	if err != nil {
 		return true
@@ -178,10 +177,10 @@ func isDue(rotatedAt string, now time.Time, rotateAfterDays int) bool {
 	return now.Unix()-ts >= int64(rotateAfterDays)*linode.DaySecs
 }
 
-// idsToDrain returns the resource ids to revoke — every id except the keepNewest
+// IDsToDrain returns the resource ids to revoke — every id except the keepNewest
 // highest (Linode ids increase monotonically, so highest == newest). keepNewest
 // is floored at 1 so the live credential is never drained. Pure — unit-tested.
-func idsToDrain(ids []uint64, keepNewest int) []uint64 {
+func IDsToDrain(ids []uint64, keepNewest int) []uint64 {
 	if keepNewest < 1 {
 		keepNewest = 1
 	}
@@ -206,33 +205,13 @@ func idsByLabel(items []map[string]any, label string) []uint64 {
 	return ids
 }
 
-func ciRotateLinodeCredsCmd() *cobra.Command {
-	var apply bool
-	c := &cobra.Command{
-		Use:   "rotate-linode-creds",
-		Short: "rotate the in-cluster Linode object-storage keys and write them to OpenBao",
-		Long: "In-cluster Linode credential rotator (runs in the linodeCredRotator CronJob).\n" +
-			"For each in-cluster-only Linode credential that is DUE (OpenBao `rotated_at`\n" +
-			"older than --rotate-after-days, or absent), mints a fresh one via the Linode\n" +
-			"API (auth: LINODE_TOKEN), verifies it, writes it to OpenBao via the\n" +
-			"linode-rotator Kubernetes-auth role, then drains older same-labeled resources\n" +
-			"keeping the newest --keep-newest. Dry-run unless --apply. Env: REGION,\n" +
-			"OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_ADDR, OPENBAO_CA_FILE, OPENBAO_KUBERNETES_\n" +
-			"{ROLE,MOUNT}, SA_TOKEN_FILE, ROTATE_AFTER_DAYS, KEEP_NEWEST.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runRotateLinodeCreds(context.Background(), apply) },
-	}
-	c.Flags().BoolVar(&apply, "apply", false, "actually rotate; without it, list what is due and exit")
-	return c
-}
-
-func runRotateLinodeCreds(ctx context.Context, apply bool) error {
+func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 	region := os.Getenv("REGION")
 	if region == "" {
 		return fmt.Errorf("REGION must be set")
 	}
 	objCluster := os.Getenv("OBJ_CLUSTER")
-	minting := inclusterLinodeToken()
+	minting := InClusterLinodeToken()
 	if minting == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (the in-cluster Linode token used to mint replacements)")
 	}
@@ -248,24 +227,24 @@ func runRotateLinodeCreds(ctx context.Context, apply bool) error {
 		return fmt.Errorf("OBJ_LABEL_PREFIX must be set (the instance's Object Storage label prefix). " +
 			"`llz render` writes it into the llz-reconciler Deployment; re-render and re-apply the reconciler if it is missing")
 	}
-	table := buildRotationTable(prefix, region, objCluster)
+	table := BuildRotationTable(prefix, region, objCluster)
 	for _, e := range table {
-		if e.kind == credKindObjKey && objCluster == "" {
-			return fmt.Errorf("OBJ_CLUSTER must be set to rotate object-storage keys (e.g. %s)", e.name)
+		if e.Kind == CredKindObjKey && objCluster == "" {
+			return fmt.Errorf("OBJ_CLUSTER must be set to rotate object-storage keys (e.g. %s)", e.Name)
 		}
 	}
 
-	lc := linodeRotatorClient(minting)
-	now := rotatorNow()
+	lc := NewLinodeClient(minting)
+	now := Now()
 
 	// OpenBao login is deferred until at least one credential is due, so a no-op
 	// run (nothing due) does not require OpenBao to be reachable.
-	var bao baoStore
+	var bao BaoStore
 	ensureBao := func() error {
 		if bao != nil {
 			return nil
 		}
-		b, err := newRotatorBaoStore(ctx)
+		b, err := NewBaoStore(ctx)
 		bao = b
 		return err
 	}
@@ -275,25 +254,25 @@ func runRotateLinodeCreds(ctx context.Context, apply bool) error {
 		if err := ensureBao(); err != nil {
 			return err
 		}
-		rotatedAt, _, err := bao.Get(ctx, e.baoPath, "rotated_at")
+		rotatedAt, _, err := bao.Get(ctx, e.BaoPath, "rotated_at")
 		if err != nil {
-			return fmt.Errorf("read %s rotated_at: %w", e.baoPath, err)
+			return fmt.Errorf("read %s rotated_at: %w", e.BaoPath, err)
 		}
-		if !isDue(rotatedAt, now, rotateAfter) {
-			skipped = append(skipped, e.name)
-			fmt.Printf("%s: not due (rotated_at=%s, threshold %dd)\n", e.name, rotatedAt, rotateAfter)
+		if !IsDue(rotatedAt, now, rotateAfter) {
+			skipped = append(skipped, e.Name)
+			fmt.Printf("%s: not due (rotated_at=%s, threshold %dd)\n", e.Name, rotatedAt, rotateAfter)
 			continue
 		}
 		if !apply {
-			fmt.Printf("%s: DUE — would rotate (dry-run)\n", e.name)
-			rotated = append(rotated, e.name+" (dry-run)")
+			fmt.Printf("%s: DUE — would rotate (dry-run)\n", e.Name)
+			rotated = append(rotated, e.Name+" (dry-run)")
 			continue
 		}
 		if err := rotateOne(ctx, lc, bao, e, now, keepNewest); err != nil {
-			return fmt.Errorf("rotate %s: %w", e.name, err)
+			return fmt.Errorf("rotate %s: %w", e.Name, err)
 		}
-		fmt.Printf("%s: rotated → %s\n", e.name, e.baoPath)
-		rotated = append(rotated, e.name)
+		fmt.Printf("%s: rotated → %s\n", e.Name, e.BaoPath)
+		rotated = append(rotated, e.Name)
 	}
 
 	fmt.Printf("rotate-linode-creds: rotated=%v skipped=%v\n", rotated, skipped)
@@ -303,12 +282,12 @@ func runRotateLinodeCreds(ctx context.Context, apply bool) error {
 // rotateOne mints, verifies, writes, and drains a single credential. The order
 // is load-bearing: nothing old is revoked until the new credential is verified
 // (PAT) and written to OpenBao.
-func rotateOne(ctx context.Context, lc rotatorLinodeAPI, bao baoStore, e credEntry, now time.Time, keepNewest int) error {
+func rotateOne(ctx context.Context, lc LinodeAPI, bao BaoStore, e CredEntry, now time.Time, keepNewest int) error {
 	var fields map[string]string
-	switch e.kind {
-	case credKindPAT:
+	switch e.Kind {
+	case CredKindPAT:
 		expiry := linode.FmtLinodeTS(now.Unix() + patValidityDays*linode.DaySecs)
-		m, err := lc.CreateProfileToken(ctx, e.label, e.scopes, expiry)
+		m, err := lc.CreateProfileToken(ctx, e.Label, e.Scopes, expiry)
 		if err != nil {
 			return err
 		}
@@ -317,12 +296,12 @@ func rotateOne(ctx context.Context, lc rotatorLinodeAPI, bao baoStore, e credEnt
 			return fmt.Errorf("mint returned no token")
 		}
 		// Verify the new token works BEFORE the old one is drained.
-		if err := linodeRotatorClient(token).Verify(ctx); err != nil {
+		if err := NewLinodeClient(token).Verify(ctx); err != nil {
 			return fmt.Errorf("new token failed verification — not draining the old one: %w", err)
 		}
-		fields = e.fields(token, "")
-	case credKindObjKey:
-		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.label, e.objCluster, e.buckets, e.permissions)
+		fields = e.Fields(token, "")
+	case CredKindObjKey:
+		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.Label, e.ObjCluster, e.Buckets, e.Permissions)
 		if err != nil {
 			return err
 		}
@@ -330,43 +309,43 @@ func rotateOne(ctx context.Context, lc rotatorLinodeAPI, bao baoStore, e credEnt
 		if access == "" || secret == "" {
 			return fmt.Errorf("mint returned no access_key/secret_key")
 		}
-		fields = e.fields(access, secret)
+		fields = e.Fields(access, secret)
 	default:
-		return fmt.Errorf("unknown credential kind %q", e.kind)
+		return fmt.Errorf("unknown credential kind %q", e.Kind)
 	}
 
 	fields["rotated_at"] = strconv.FormatInt(now.Unix(), 10)
-	if err := bao.Write(ctx, e.baoPath, fields); err != nil {
-		return fmt.Errorf("write %s: %w", e.baoPath, err)
+	if err := bao.Write(ctx, e.BaoPath, fields); err != nil {
+		return fmt.Errorf("write %s: %w", e.BaoPath, err)
 	}
-	drainOld(ctx, lc, e, keepNewest)
+	DrainOld(ctx, lc, e, keepNewest)
 	return nil
 }
 
-// drainOld revokes older same-labeled resources, keeping the newest keepNewest.
+// DrainOld revokes older same-labeled resources, keeping the newest keepNewest.
 // Best-effort: the new credential is already live + written, so a failed revoke
 // is logged but does not fail the run (keep-newest-N converges next run).
-func drainOld(ctx context.Context, lc rotatorLinodeAPI, e credEntry, keepNewest int) {
+func DrainOld(ctx context.Context, lc LinodeAPI, e CredEntry, keepNewest int) {
 	var (
 		items []map[string]any
 		del   func(context.Context, uint64) error
 		err   error
 	)
-	switch e.kind {
-	case credKindPAT:
+	switch e.Kind {
+	case CredKindPAT:
 		items, err = lc.ListProfileTokens(ctx)
 		del = lc.DeleteProfileToken
-	case credKindObjKey:
+	case CredKindObjKey:
 		items, err = lc.ListObjectStorageKeys(ctx)
 		del = lc.DeleteObjectStorageKey
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::%s: list for drain failed (new credential is live; will converge next run): %v\n", e.name, err)
+		fmt.Fprintf(os.Stderr, "::warning::%s: list for drain failed (new credential is live; will converge next run): %v\n", e.Name, err)
 		return
 	}
-	for _, id := range idsToDrain(idsByLabel(items, e.label), keepNewest) {
+	for _, id := range IDsToDrain(idsByLabel(items, e.Label), keepNewest) {
 		if err := del(ctx, id); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::%s: revoke id=%d failed (will retry next run): %v\n", e.name, id, err)
+			fmt.Fprintf(os.Stderr, "::warning::%s: revoke id=%d failed (will retry next run): %v\n", e.Name, id, err)
 		}
 	}
 }
@@ -374,6 +353,26 @@ func drainOld(ctx context.Context, lc rotatorLinodeAPI, e credEntry, keepNewest 
 // openLinodeRotatorBaoStore logs in to OpenBao via Kubernetes auth (the
 // linode-rotator role) using the pod's ServiceAccount token, trusting the
 // mounted openbao CA, and returns a write-capable client.
-func openLinodeRotatorBaoStore(ctx context.Context) (baoStore, error) {
-	return openInClusterBaoStore(ctx, "linode-rotator")
+func openLinodeRotatorBaoStore(ctx context.Context) (BaoStore, error) {
+	return OpenBaoStore(ctx, "linode-rotator")
+}
+
+// OpenBaoStore logs in to OpenBao via Kubernetes auth for the named role and
+// returns a write-capable client.
+//
+// THE ONE SEAM THIS TABLE NEEDS. Package main owns the in-cluster login path —
+// the ServiceAccount token, the mounted CA, the address and mount defaults — and
+// six other verbs use it. What this package owns is WHICH ROLE a rotation logs in
+// as, which is the part the rotation table decides.
+//
+// The default is inert rather than real, for the reason internal/credrotate's
+// SetSecret is: a default that actually logged in would make an un-installed
+// caller reach a live OpenBao.
+var OpenBaoStore = func(ctx context.Context, role string) (BaoStore, error) {
+	return nil, fmt.Errorf("credrotate: OpenBaoStore not installed")
+}
+
+// InstallBaoStore wires the in-cluster login main owns.
+func InstallBaoStore(open func(ctx context.Context, role string) (BaoStore, error)) {
+	OpenBaoStore = open
 }

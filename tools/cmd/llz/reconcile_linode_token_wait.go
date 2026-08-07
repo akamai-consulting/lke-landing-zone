@@ -35,6 +35,8 @@ package main
 import (
 	"context"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 )
 
 // linodeTokenPollInterval is how often the wrapper re-checks for the token during
@@ -60,12 +62,12 @@ func withLinodeTokenWait(inner func(context.Context, func()) error) func(context
 	}
 }
 
-// waitForLinodeTokenThenKick polls until inclusterLinodeToken() is non-empty, then
+// waitForLinodeTokenThenKick polls until credrotate.InClusterLinodeToken() is non-empty, then
 // fires onEvent once and returns. Returns immediately (without kicking) if the
 // token is already present, which is the steady state on every pass after the first
 // bootstrap — so this costs a live cluster nothing.
 func waitForLinodeTokenThenKick(ctx context.Context, onEvent func()) {
-	if inclusterLinodeToken() != "" {
+	if credrotate.InClusterLinodeToken() != "" {
 		return
 	}
 	t := time.NewTicker(linodeTokenPollInterval)
@@ -75,7 +77,7 @@ func waitForLinodeTokenThenKick(ctx context.Context, onEvent func()) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if inclusterLinodeToken() != "" {
+			if credrotate.InClusterLinodeToken() != "" {
 				// The transition this whole file exists for: the lane's watch
 				// events are long gone, so this kick is what actually relabels
 				// and tags the Volumes created during bootstrap.

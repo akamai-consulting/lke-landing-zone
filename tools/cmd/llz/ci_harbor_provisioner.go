@@ -60,6 +60,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
 )
 
@@ -290,7 +291,7 @@ func runCIHarborProvisioner() error {
 // failed after the seed (or a repo secret someone deleted). No-op without GH
 // env; existing secrets are never overwritten (rotation happens only through
 // robot recreation).
-func republishMissingRepoSecrets(ctx context.Context, bao baoStore) error {
+func republishMissingRepoSecrets(ctx context.Context, bao credrotate.BaoStore) error {
 	if os.Getenv("GH_TOKEN") == "" || os.Getenv("GH_REPO") == "" {
 		fmt.Println("harbor robots seeded and authenticated — nothing to do (GH publication unconfigured).")
 		return nil
@@ -324,12 +325,12 @@ func republishMissingRepoSecrets(ctx context.Context, bao baoStore) error {
 // robotsSeeded reports whether both OpenBao robot paths hold credentials, and
 // returns the push robot's for the smoke test.
 //
-// The read error is RETURNED rather than folded into false. baoStore.Get already
+// The read error is RETURNED rather than folded into false. credrotate.BaoStore.Get already
 // separates "absent" (ok) from "the read failed" (err); collapsing them here made
 // an OpenBao 503 look like an unseeded path, and the caller's 409 branch then
 // told the operator to delete a robot whose credentials were intact — destroying
 // the very secret that was still recoverable.
-func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string, error) {
+func robotsSeeded(ctx context.Context, bao credrotate.BaoStore) (bool, [2]string, error) {
 	user, ok1, err1 := bao.Get(ctx, "secret/harbor/robot", "username")
 	pass, ok2, err2 := bao.Get(ctx, "secret/harbor/robot", "password")
 	_, ok3, err3 := bao.Get(ctx, "secret/harbor/pull-robot", "username")
@@ -361,7 +362,7 @@ func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string, error) {
 // Credentials are never at risk: a KV v2 write REPLACES the secret, so the rewrite
 // carries username/password back verbatim, and a path missing either is skipped
 // loudly rather than rewritten with an empty credential.
-func repairRegistryHost(ctx context.Context, bao baoStore, h *harborAPI, envHost string) error {
+func repairRegistryHost(ctx context.Context, bao credrotate.BaoStore, h *harborAPI, envHost string) error {
 	var broken []string
 	for _, p := range []string{"secret/harbor/robot", "secret/harbor/pull-robot"} {
 		cur, _, err := bao.Get(ctx, p, "registry_host")
@@ -446,6 +447,6 @@ func smokeSeededRobot(h *harborAPI, creds [2]string) error {
 // openHarborProvisionerBaoStore logs in to OpenBao via Kubernetes auth as the
 // harbor-provisioner role using the pod's ServiceAccount token — the same
 // contract as the linode-cred-rotator's login (see openLinodeRotatorBaoStore).
-func openHarborProvisionerBaoStore(ctx context.Context) (baoStore, error) {
+func openHarborProvisionerBaoStore(ctx context.Context) (credrotate.BaoStore, error) {
 	return openInClusterBaoStore(ctx, "harbor-provisioner")
 }

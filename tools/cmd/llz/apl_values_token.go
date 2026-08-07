@@ -1,5 +1,7 @@
 package main
 
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+
 // In-cluster apl-values-repo token resolution (secrets-before-apps Phase 2),
 // mirroring linode_token.go. The llz-reconciler Deployment runs at sync-wave 0 —
 // BEFORE the OpenBao store serves — so the apl-overlay push token must NOT be a
@@ -18,7 +20,7 @@ var aplValuesRepoTokenFile = "/var/run/secrets/llz/apl-values-repo-token/token"
 // inclusterAplValuesRepoToken resolves the apl-overlay push token:
 // APL_VALUES_REPO_TOKEN env (tests/CI), else the optional Secret volume, else ""
 // (not yet synced — the apl-overlay pass no-ops until it appears). Shares the
-// linode resolver's lazy env-then-file logic (inclusterToken).
+// linode resolver's lazy env-then-file logic (credrotate.InClusterToken).
 func inclusterAplValuesRepoToken() string {
-	return inclusterToken("APL_VALUES_REPO_TOKEN", aplValuesRepoTokenFile)
+	return credrotate.InClusterToken("APL_VALUES_REPO_TOKEN", aplValuesRepoTokenFile)
 }

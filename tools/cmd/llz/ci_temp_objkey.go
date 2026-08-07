@@ -31,11 +31,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
 // tempObjkeyLinodeClient is a seam for tests.
-var tempObjkeyLinodeClient = func(token string) rotatorLinodeAPI {
+var tempObjkeyLinodeClient = func(token string) credrotate.LinodeAPI {
 	return linode.NewClient(token, 30*time.Second)
 }
 

@@ -38,7 +38,7 @@ func oidcServer(t *testing.T) {
 
 // patMintStub wraps stubLinode to record the mint arguments (label/scopes) and
 // serve as BOTH client seams: credrotate.NewPATClient (mint + drain) and
-// linodeRotatorClient (the verify probe on the freshly-minted token).
+// credrotate.NewLinodeClient (the verify probe on the freshly-minted token).
 type patMintStub struct {
 	stubLinode
 	label, scopes, expiry string
@@ -52,11 +52,11 @@ func (s *patMintStub) CreateProfileToken(ctx context.Context, label, scopes, exp
 
 func withInclusterPATStubs(t *testing.T, s *patMintStub, now time.Time) {
 	t.Helper()
-	op, ol, on := credrotate.NewPATClient, linodeRotatorClient, rotatorNow
+	op, ol, on := credrotate.NewPATClient, credrotate.NewLinodeClient, credrotate.Now
 	credrotate.NewPATClient = func(string) credrotate.PATAPI { return s }
-	linodeRotatorClient = func(string) rotatorLinodeAPI { return s }
-	rotatorNow = func() time.Time { return now }
-	t.Cleanup(func() { credrotate.NewPATClient, linodeRotatorClient, rotatorNow = op, ol, on })
+	credrotate.NewLinodeClient = func(string) credrotate.LinodeAPI { return s }
+	credrotate.Now = func() time.Time { return now }
+	t.Cleanup(func() { credrotate.NewPATClient, credrotate.NewLinodeClient, credrotate.Now = op, ol, on })
 }
 
 // stubInclusterBaoExec fakes the in-pod bao CLI: `kv get` answers the
@@ -202,7 +202,7 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 		return nil, errors.New("unexpected: " + a)
 	})
 	// Real wall-clock: the drain's grace cutoff (runCredentialsPATRevokeOld)
-	// uses time.Now(), not the rotatorNow seam.
+	// uses time.Now(), not the credrotate.Now seam.
 	now := time.Now()
 	s := &patMintStub{stubLinode: stubLinode{pats: []map[string]any{
 		// An older same-labeled sibling past the 7-day grace → drained; a

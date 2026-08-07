@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/spf13/cobra"
@@ -142,7 +143,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 	if nodeName == "" {
 		return fmt.Errorf("NODE_NAME must be set (downward API spec.nodeName)")
 	}
-	token := inclusterLinodeToken()
+	token := credrotate.InClusterLinodeToken()
 	if token == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume)")
 	}

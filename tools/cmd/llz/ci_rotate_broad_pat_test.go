@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
@@ -23,7 +24,7 @@ func (f *fakeEnvWriter) write(name, env, value string) error {
 	return nil
 }
 
-func broadDeps(lc rotatorLinodeAPI, bao baoStore, w envSecretWriter, now time.Time) broadPATDeps {
+func broadDeps(lc credrotate.LinodeAPI, bao credrotate.BaoStore, w envSecretWriter, now time.Time) broadPATDeps {
 	return broadPATDeps{lc: lc, bao: bao, writeSecret: w, now: func() time.Time { return now }}
 }
 
@@ -151,7 +152,7 @@ func TestRotateBroadPAT_PublishFailSkipsRevoke(t *testing.T) {
 	}
 	// And rotated_at must still be the OLD stamp. This is the ordering the FLOW
 	// comment now depends on: the OpenBao write is what stamps rotated_at, and
-	// rotated_at is what isDue reads. Stamping it before the publish meant a single
+	// rotated_at is what credrotate.IsDue reads. Stamping it before the publish meant a single
 	// failed publish told every subsequent run "not due" — action=skip, exit 0, for
 	// the whole 60-day window, while the 90-day PAT GitHub still held expired ~30
 	// days into it. No failing job, and no alert either: the credential-age gauge reads the OpenBao stamp the premature write had just refreshed.

@@ -324,8 +324,8 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 // ── small helpers ────────────────────────────────────────────────────────────
 
 // envObjKeyLabels are the Object Storage key labels the per-env reap targets —
-// the obj-key entries buildRotationTable mints for a deployment. A test pins this
-// in lockstep with buildRotationTable so a mint-label change can't silently orphan
+// the obj-key entries credrotate.BuildRotationTable mints for a deployment. A test pins this
+// in lockstep with credrotate.BuildRotationTable so a mint-label change can't silently orphan
 // the reaper (the exact failure that let 76 keys pile up to the account cap).
 func envObjKeyLabels(prefix, env string) []string {
 	return clusterspec.ObjKeyLabels(prefix, env)
@@ -333,7 +333,7 @@ func envObjKeyLabels(prefix, env string) []string {
 
 // reapEnvObjKeys deletes the Object Storage keys minted for env — the loki +
 // harbor-registry keys (labels <objLabelPrefix>-loki-<env> / <objLabelPrefix>-harbor-registry-<env>,
-// per buildRotationTable). mint-bootstrap-objkeys and the in-cluster rotator each
+// per credrotate.BuildRotationTable). mint-bootstrap-objkeys and the in-cluster rotator each
 // create a fresh key under the same stable label; a failed teardown or failed
 // grace-window revoke leaks them, and the account caps at 100 keys (a fresh mint
 // then 400s "reached your access key quota"). On a destroy the env is gone, so

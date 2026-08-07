@@ -4,13 +4,15 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 )
 
 func withTempObjkeyStub(t *testing.T) *stubLinode {
 	t.Helper()
 	stub := &stubLinode{}
 	prev := tempObjkeyLinodeClient
-	tempObjkeyLinodeClient = func(string) rotatorLinodeAPI { return stub }
+	tempObjkeyLinodeClient = func(string) credrotate.LinodeAPI { return stub }
 	t.Cleanup(func() { tempObjkeyLinodeClient = prev })
 	return stub
 }

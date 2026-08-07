@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"context"
@@ -22,8 +22,8 @@ func TestIdsToDrainReturnsNilWhenNothingToDrain(t *testing.T) {
 		{"fewer than keepNewest", []uint64{5}, 2},
 		{"single id, keep floored at 1", []uint64{42}, 0},
 	} {
-		if got := idsToDrain(append([]uint64(nil), tc.ids...), tc.keep); got != nil {
-			t.Errorf("%s: idsToDrain = %#v, want nil", tc.name, got)
+		if got := IDsToDrain(append([]uint64(nil), tc.ids...), tc.keep); got != nil {
+			t.Errorf("%s: IDsToDrain = %#v, want nil", tc.name, got)
 		}
 	}
 }
@@ -42,7 +42,7 @@ func TestRunRotateLinodeCredsRefusesWithoutObjCluster(t *testing.T) {
 	bao := &stubBao{data: map[string]map[string]string{}}
 	withRotatorStubs(t, lc, bao, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
 
-	err := runRotateLinodeCreds(context.Background(), true)
+	err := RunRotateLinodeCreds(context.Background(), true)
 	if err == nil || !strings.Contains(err.Error(), "OBJ_CLUSTER must be set") {
 		t.Fatalf("err = %v, want an OBJ_CLUSTER refusal", err)
 	}
@@ -60,25 +60,25 @@ func (f failingDrain) DeleteObjectStorageKey(context.Context, uint64) error {
 }
 
 func TestDrainOldLogsFailedRevokesAndStaysQuietOnSuccess(t *testing.T) {
-	var objEntry credEntry
-	for _, e := range buildRotationTable("acme", "primary", "us-ord-1") {
-		if e.kind == credKindObjKey {
+	var objEntry CredEntry
+	for _, e := range BuildRotationTable("acme", "primary", "us-ord-1") {
+		if e.Kind == CredKindObjKey {
 			objEntry = e
 			break
 		}
 	}
-	if objEntry.label == "" {
+	if objEntry.Label == "" {
 		t.Fatal("no object-storage entry in the rotation table")
 	}
 	keys := []map[string]any{
-		{"id": jn(10), "label": objEntry.label},
-		{"id": jn(11), "label": objEntry.label},
-		{"id": jn(12), "label": objEntry.label},
+		{"id": jn(10), "label": objEntry.Label},
+		{"id": jn(11), "label": objEntry.Label},
+		{"id": jn(12), "label": objEntry.Label},
 	}
 
 	t.Run("success is silent", func(t *testing.T) {
 		lc := &stubLinode{objkeys: keys}
-		out := captureStderr(t, func() { drainOld(context.Background(), lc, objEntry, 1) })
+		out := captureStderr(t, func() { DrainOld(context.Background(), lc, objEntry, 1) })
 		if len(lc.deleted) != 2 {
 			t.Fatalf("deleted = %v, want the two oldest ids", lc.deleted)
 		}
@@ -89,7 +89,7 @@ func TestDrainOldLogsFailedRevokesAndStaysQuietOnSuccess(t *testing.T) {
 
 	t.Run("failure is warned about", func(t *testing.T) {
 		lc := failingDrain{&stubLinode{objkeys: keys}}
-		out := captureStderr(t, func() { drainOld(context.Background(), lc, objEntry, 1) })
+		out := captureStderr(t, func() { DrainOld(context.Background(), lc, objEntry, 1) })
 		if !strings.Contains(out, "revoke id=") || !strings.Contains(out, "403 unauthorized") {
 			t.Errorf("a failed revoke must warn with the id and cause, got %q", out)
 		}

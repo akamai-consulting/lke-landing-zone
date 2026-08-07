@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+)
 
 // TestEnvObjKeyLabelsMatchRotationTable guards that the per-env obj-key reaper
 // targets EXACTLY the labels mint-bootstrap-objkeys creates — so a rename of a
@@ -12,28 +16,28 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 		reaped[l] = true
 	}
 	minted := 0
-	for _, e := range buildRotationTable("acme", env, "us-ord-1") {
-		if e.kind != credKindObjKey {
+	for _, e := range credrotate.BuildRotationTable("acme", env, "us-ord-1") {
+		if e.Kind != credrotate.CredKindObjKey {
 			continue
 		}
 		minted++
-		if !reaped[e.label] {
-			t.Errorf("reapEnvObjKeys does not target minted obj-key label %q — it would leak on teardown", e.label)
+		if !reaped[e.Label] {
+			t.Errorf("reapEnvObjKeys does not target minted obj-key label %q — it would leak on teardown", e.Label)
 		}
 	}
 	if minted == 0 {
-		t.Fatal("buildRotationTable produced no obj-key entries — test can't verify coverage")
+		t.Fatal("credrotate.BuildRotationTable produced no obj-key entries — test can't verify coverage")
 	}
 	// And the reaper must not target a label nothing mints (over-broad delete).
 	for l := range reaped {
 		found := false
-		for _, e := range buildRotationTable("acme", env, "us-ord-1") {
-			if e.kind == credKindObjKey && e.label == l {
+		for _, e := range credrotate.BuildRotationTable("acme", env, "us-ord-1") {
+			if e.Kind == credrotate.CredKindObjKey && e.Label == l {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("reapEnvObjKeys targets label %q that buildRotationTable never mints", l)
+			t.Errorf("reapEnvObjKeys targets label %q that credrotate.BuildRotationTable never mints", l)
 		}
 	}
 }

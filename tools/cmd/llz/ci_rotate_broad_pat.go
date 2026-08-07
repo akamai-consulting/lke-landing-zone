@@ -22,7 +22,7 @@ package main
 //      the next run's LINODE_TOKEN, via ESO) update
 //
 //      GitHub BEFORE OpenBao, because the OpenBao write is what stamps rotated_at
-//      and rotated_at is what `isDue` reads. With the writes the other way round, a
+//      and rotated_at is what `credrotate.IsDue` reads. With the writes the other way round, a
 //      single failed publish left a FRESH stamp behind: the next weekly run saw
 //      "not due", returned action=skip with exit 0, and did so for the whole
 //      60-day ROTATE_AFTER_DAYS window — while the 90-day PAT that GitHub still
@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/spf13/cobra"
 )
@@ -82,8 +83,8 @@ var ghSetEnvSecretFn envSecretWriter = ghSetEnvSecretNative
 // broadPATDeps are the injected collaborators (Linode API, OpenBao, GitHub writeback,
 // clock) so the rotation flow is unit-testable without any network.
 type broadPATDeps struct {
-	lc          rotatorLinodeAPI
-	bao         baoStore
+	lc          credrotate.LinodeAPI
+	bao         credrotate.BaoStore
 	writeSecret envSecretWriter
 	now         func() time.Time
 }
@@ -143,15 +144,15 @@ func runRotateBroadPAT(ctx context.Context, apply bool) error {
 		apply:       apply,
 	}
 
-	bao, err := newRotatorBaoStore(ctx)
+	bao, err := credrotate.NewBaoStore(ctx)
 	if err != nil {
 		return err
 	}
 	deps := broadPATDeps{
-		lc:          linodeRotatorClient(minting),
+		lc:          credrotate.NewLinodeClient(minting),
 		bao:         bao,
 		writeSecret: ghSetEnvSecretFn,
-		now:         rotatorNow,
+		now:         credrotate.Now,
 	}
 	record, err := rotateBroadPAT(ctx, deps, opts)
 	if err != nil {
@@ -176,7 +177,7 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 		"dry_run":        !o.apply,
 		"rotated_at":     rotatedAt,
 	}
-	if !isDue(rotatedAt, now, o.rotateAfter) {
+	if !credrotate.IsDue(rotatedAt, now, o.rotateAfter) {
 		record["action"] = "skip"
 		record["reason"] = fmt.Sprintf("not due (threshold %dd)", o.rotateAfter)
 		return record, nil
@@ -198,7 +199,7 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 		return nil, fmt.Errorf("mint broad PAT: response missing .token")
 	}
 	maskGHA(newToken)
-	if err := linodeRotatorClient(newToken).Verify(ctx); err != nil {
+	if err := credrotate.NewLinodeClient(newToken).Verify(ctx); err != nil {
 		return nil, fmt.Errorf("verify freshly-minted broad PAT (id=%d): %w — nothing written or revoked", newID, err)
 	}
 
@@ -244,7 +245,7 @@ func rotateBroadPAT(ctx context.Context, d broadPATDeps, o broadPATOpts) (map[st
 // keeping the newest (the just-minted one). Best-effort: the new token is already
 // live + published, so a failed list/revoke is logged and converges next run — it
 // never fails the rotation. Mirrors the credentials-pat revoke-old grace logic.
-func revokeOldBroadPATs(ctx context.Context, lc rotatorLinodeAPI, label string, graceDays int64, now time.Time) (revoked, skipped []uint64) {
+func revokeOldBroadPATs(ctx context.Context, lc credrotate.LinodeAPI, label string, graceDays int64, now time.Time) (revoked, skipped []uint64) {
 	revoked, skipped = []uint64{}, []uint64{}
 	items, err := lc.ListProfileTokens(ctx)
 	if err != nil {

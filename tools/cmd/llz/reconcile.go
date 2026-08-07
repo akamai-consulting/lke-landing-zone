@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 	"github.com/spf13/cobra"
@@ -454,7 +455,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// day-2 alerting see the linode lanes' activation state instead of
 			// inferring it from their silence.
 			present := 0.0
-			if inclusterLinodeToken() != "" {
+			if credrotate.InClusterLinodeToken() != "" {
 				present = 1
 			}
 			reg.SetGauge("llz_reconcile_linode_token_present", "1 once the in-cluster Linode token (env or optional Secret volume) is readable", nil, present)
@@ -473,7 +474,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	// failed pass — the observe gauge above reports the waiting state.
 	requireLinodeToken := func(run func(context.Context) error) func(context.Context) error {
 		return func(ctx context.Context) error {
-			if inclusterLinodeToken() == "" {
+			if credrotate.InClusterLinodeToken() == "" {
 				return nil
 			}
 			return run(ctx)
@@ -581,7 +582,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.linodeCredInterval,
 			// Same logic the linodeCredRotator CronJob runs (`ci rotate-linode-creds
 			// --apply`); reads REGION/OBJ_CLUSTER/LINODE_TOKEN/OPENBAO_* from env.
-			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) })),
+			run: gate(requireLinodeToken(func(ctx context.Context) error { return credrotate.RunRotateLinodeCreds(ctx, true) })),
 		})
 	}
 	if o.reconcileESRecovery {

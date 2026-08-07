@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 )
 
 func TestTfvarsValue(t *testing.T) {
@@ -40,7 +42,7 @@ unquoted = bare
 // ── seed-harbor-registry-s3 ───────────────────────────────────────────────────
 
 func TestHarborRegistryS3Fields(t *testing.T) {
-	got := harborRegistryS3Fields("acme", "primary", "us-ord-1", "AK", "SK")
+	got := credrotate.HarborRegistryS3Fields("acme", "primary", "us-ord-1", "AK", "SK")
 	want := map[string]string{
 		"access_key_id":     "AK",
 		"secret_access_key": "SK",
@@ -49,7 +51,7 @@ func TestHarborRegistryS3Fields(t *testing.T) {
 		"region":            "us-ord-1",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("harborRegistryS3Fields = %v, want %v", got, want)
+		t.Errorf("credrotate.HarborRegistryS3Fields = %v, want %v", got, want)
 	}
 }
 
@@ -89,13 +91,13 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	withGHASummaryFile(t)
 
 	fixedNow := time.Unix(1_700_000_000, 0)
-	prevNow := rotatorNow
-	rotatorNow = func() time.Time { return fixedNow }
-	t.Cleanup(func() { rotatorNow = prevNow })
+	prevNow := credrotate.Now
+	credrotate.Now = func() time.Time { return fixedNow }
+	t.Cleanup(func() { credrotate.Now = prevNow })
 
 	stub := &stubLinode{}
 	prevClient := mintObjkeysLinodeClient
-	mintObjkeysLinodeClient = func(string) rotatorLinodeAPI { return stub }
+	mintObjkeysLinodeClient = func(string) credrotate.LinodeAPI { return stub }
 	t.Cleanup(func() { mintObjkeysLinodeClient = prevClient })
 
 	// mint runs in CI inside the instance checkout, so the label prefix comes from
@@ -349,7 +351,7 @@ func TestResolveHarborURLWarnsOnDivergentOverride(t *testing.T) {
 	write("landingzone.yaml", `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
-metadata: { name: t }
+metadata: { Name: t }
 spec:
   instance: { upstreamOrg: akamai-consulting, repo: o/t, forge: github, templateVersion: v0.4.0 }
   defaults:
@@ -360,12 +362,12 @@ spec:
 	write("environments/e2e.yaml", `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: ClusterDefinition
-metadata: { name: e2e }
+metadata: { Name: e2e }
 spec:
   cluster:
     clusterLabel: c-e2e
     region: us-sea
-    bootstrap: { name: b-e2e, domainSuffix: e2e.example.com }
+    bootstrap: { Name: b-e2e, domainSuffix: e2e.example.com }
     objectStorage: { cluster: us-sea-1 }
 `)
 	t.Chdir(dir)

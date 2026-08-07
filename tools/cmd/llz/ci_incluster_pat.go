@@ -98,7 +98,7 @@ func inclusterPATLabel(prefix, region string) string {
 // caller writes it anywhere. A token that fails verification is left for the
 // drain (it can never be the newest verified sibling).
 func mintVerifiedInclusterPAT(ctx context.Context, mint credrotate.PATAPI, prefix, region string) (id uint64, token string, err error) {
-	expiry := linode.FmtLinodeTS(rotatorNow().Unix() + inclusterPATValidityDays*linode.DaySecs)
+	expiry := linode.FmtLinodeTS(credrotate.Now().Unix() + inclusterPATValidityDays*linode.DaySecs)
 	resp, err := mint.CreateProfileToken(ctx, inclusterPATLabel(prefix, region), inclusterPATScopes, expiry)
 	if err != nil {
 		return 0, "", fmt.Errorf("mint in-cluster PAT %s: %w", inclusterPATLabel(prefix, region), err)
@@ -112,7 +112,7 @@ func mintVerifiedInclusterPAT(ctx context.Context, mint credrotate.PATAPI, prefi
 		return 0, "", fmt.Errorf("mint in-cluster PAT: create response missing .token")
 	}
 	maskGHA(token)
-	if err := linodeRotatorClient(token).Verify(ctx); err != nil {
+	if err := credrotate.NewLinodeClient(token).Verify(ctx); err != nil {
 		return 0, "", fmt.Errorf("verify freshly-minted in-cluster PAT (id=%d): %w — leaving it for the next drain", id, err)
 	}
 	return id, token, nil
@@ -170,7 +170,7 @@ func runCIMintBootstrapPAT(region string) error {
 		"token": token,
 		// rotated_at/pat_id: the rotation-age SLA clock + the audit handle —
 		// same convention as the mint-bootstrap-objkeys seeds.
-		"rotated_at": strconv.FormatInt(rotatorNow().Unix(), 10),
+		"rotated_at": strconv.FormatInt(credrotate.Now().Unix(), 10),
 		"pat_id":     strconv.FormatUint(id, 10),
 	}); err != nil {
 		return fmt.Errorf("seed secret/linode/api-token: %w", err)
@@ -234,7 +234,7 @@ func runCIRotateInclusterPAT() error {
 	}
 	if err := secretPropagatorKVPut(region, map[string]string{
 		"token":      token,
-		"rotated_at": strconv.FormatInt(rotatorNow().Unix(), 10),
+		"rotated_at": strconv.FormatInt(credrotate.Now().Unix(), 10),
 		"pat_id":     strconv.FormatUint(id, 10),
 	}); err != nil {
 		return err

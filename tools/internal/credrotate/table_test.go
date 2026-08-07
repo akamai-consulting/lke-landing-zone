@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 import (
 	"context"
@@ -30,8 +30,8 @@ func TestIsDue(t *testing.T) {
 		{"exactly at threshold is due", strconvI(now.Unix() - 80*day), 80, true},
 		{"past threshold is due", strconvI(now.Unix() - 365*day), 80, true},
 	} {
-		if got := isDue(tc.rotatedAt, now, tc.after); got != tc.want {
-			t.Errorf("%s: isDue=%v, want %v", tc.name, got, tc.want)
+		if got := IsDue(tc.rotatedAt, now, tc.after); got != tc.want {
+			t.Errorf("%s: IsDue=%v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -49,14 +49,14 @@ func TestIdsToDrain(t *testing.T) {
 		{"keep floored at 1 (keeps only the newest)", []uint64{9, 4, 7}, 0, []uint64{7, 4}},
 		{"single key never drained", []uint64{42}, 2, nil},
 	} {
-		got := idsToDrain(append([]uint64(nil), tc.ids...), tc.keep)
+		got := IDsToDrain(append([]uint64(nil), tc.ids...), tc.keep)
 		if len(got) != len(tc.want) {
-			t.Errorf("%s: idsToDrain=%v, want %v", tc.name, got, tc.want)
+			t.Errorf("%s: IDsToDrain=%v, want %v", tc.name, got, tc.want)
 			continue
 		}
 		for i := range got {
 			if got[i] != tc.want[i] {
-				t.Errorf("%s: idsToDrain=%v, want %v", tc.name, got, tc.want)
+				t.Errorf("%s: IDsToDrain=%v, want %v", tc.name, got, tc.want)
 				break
 			}
 		}
@@ -77,13 +77,13 @@ func TestIdsByLabel(t *testing.T) {
 }
 
 func TestBuildRotationTable(t *testing.T) {
-	table := buildRotationTable("acme", "primary", "us-ord-1")
+	table := BuildRotationTable("acme", "primary", "us-ord-1")
 	if len(table) != 3 {
 		t.Fatalf("table has %d entries, want 3", len(table))
 	}
-	byName := map[string]credEntry{}
+	byName := map[string]CredEntry{}
 	for _, e := range table {
-		byName[e.name] = e
+		byName[e.Name] = e
 	}
 
 	loki := byName["loki-object-store"]
@@ -91,19 +91,19 @@ func TestBuildRotationTable(t *testing.T) {
 	// grant set the llz-object-storage module's bootstrap key carries. An earlier
 	// revision minted against the nonexistent "acme-loki-<region>" bucket.
 	wantLokiBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary"
-	if loki.kind != credKindObjKey || strings.Join(loki.buckets, ",") != wantLokiBuckets || loki.objCluster != "us-ord-1" {
+	if loki.Kind != CredKindObjKey || strings.Join(loki.Buckets, ",") != wantLokiBuckets || loki.ObjCluster != "us-ord-1" {
 		t.Errorf("loki entry = %+v (want buckets %s)", loki, wantLokiBuckets)
 	}
-	if f := loki.fields("AK", "SK"); f["AWS_ACCESS_KEY_ID"] != "AK" || f["AWS_SECRET_ACCESS_KEY"] != "SK" {
+	if f := loki.Fields("AK", "SK"); f["AWS_ACCESS_KEY_ID"] != "AK" || f["AWS_SECRET_ACCESS_KEY"] != "SK" {
 		t.Errorf("loki fields = %v", f)
 	}
 
 	harbor := byName["harbor-registry-s3"]
-	if harbor.kind != credKindObjKey || harbor.baoPath != "secret/harbor/registry-s3" {
+	if harbor.Kind != CredKindObjKey || harbor.BaoPath != "secret/harbor/registry-s3" {
 		t.Errorf("harbor entry = %+v", harbor)
 	}
 	// Harbor rewrites the COMPLETE field set (incl. static bucket/endpoint/region).
-	f := harbor.fields("AK", "SK")
+	f := harbor.Fields("AK", "SK")
 	for _, k := range []string{"access_key_id", "secret_access_key", "bucket_name", "endpoint", "region"} {
 		if f[k] == "" {
 			t.Errorf("harbor fields missing %s: %v", k, f)
@@ -114,10 +114,10 @@ func TestBuildRotationTable(t *testing.T) {
 	// every provisioned bucket (loki chunks/ruler/admin + harbor), AWS_* fields.
 	obj := byName["obj-platform"]
 	wantObjBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary,acme-harbor-registry-primary"
-	if obj.kind != credKindObjKey || obj.baoPath != "secret/obj/platform" || strings.Join(obj.buckets, ",") != wantObjBuckets {
+	if obj.Kind != CredKindObjKey || obj.BaoPath != "secret/obj/platform" || strings.Join(obj.Buckets, ",") != wantObjBuckets {
 		t.Errorf("obj-platform entry = %+v (want buckets %s)", obj, wantObjBuckets)
 	}
-	if of := obj.fields("AK", "SK"); of["AWS_ACCESS_KEY_ID"] != "AK" || of["AWS_SECRET_ACCESS_KEY"] != "SK" {
+	if of := obj.Fields("AK", "SK"); of["AWS_ACCESS_KEY_ID"] != "AK" || of["AWS_SECRET_ACCESS_KEY"] != "SK" {
 		t.Errorf("obj-platform fields = %v", of)
 	}
 }
@@ -167,13 +167,13 @@ func (b *stubBao) Write(_ context.Context, path string, d map[string]string) err
 	return nil
 }
 
-func withRotatorStubs(t *testing.T, lc rotatorLinodeAPI, bao baoStore, now time.Time) {
+func withRotatorStubs(t *testing.T, lc LinodeAPI, bao BaoStore, now time.Time) {
 	t.Helper()
-	ol, ob, on := linodeRotatorClient, newRotatorBaoStore, rotatorNow
-	linodeRotatorClient = func(string) rotatorLinodeAPI { return lc }
-	newRotatorBaoStore = func(context.Context) (baoStore, error) { return bao, nil }
-	rotatorNow = func() time.Time { return now }
-	t.Cleanup(func() { linodeRotatorClient, newRotatorBaoStore, rotatorNow = ol, ob, on })
+	ol, ob, on := NewLinodeClient, NewBaoStore, Now
+	NewLinodeClient = func(string) LinodeAPI { return lc }
+	NewBaoStore = func(context.Context) (BaoStore, error) { return bao, nil }
+	Now = func() time.Time { return now }
+	t.Cleanup(func() { NewLinodeClient, NewBaoStore, Now = ol, ob, on })
 }
 
 func TestRunRotateLinodeCreds(t *testing.T) {
@@ -192,7 +192,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		}
 		bao := &stubBao{data: map[string]map[string]string{}} // empty -> all due
 		withRotatorStubs(t, lc, bao, now)
-		if err := runRotateLinodeCreds(context.Background(), true); err != nil {
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
 			t.Fatal(err)
 		}
 		for _, p := range []string{"secret/loki/object-store", "secret/harbor/registry-s3"} {
@@ -217,7 +217,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 			"secret/obj/platform":       {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
-		if err := runRotateLinodeCreds(context.Background(), true); err != nil {
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
 			t.Fatal(err)
 		}
 		if lc.patCreates != 0 || lc.objCreates != 0 {
@@ -229,7 +229,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		lc := &stubLinode{}
 		bao := &stubBao{data: map[string]map[string]string{}}
 		withRotatorStubs(t, lc, bao, now)
-		if err := runRotateLinodeCreds(context.Background(), false); err != nil {
+		if err := RunRotateLinodeCreds(context.Background(), false); err != nil {
 			t.Fatal(err)
 		}
 		if lc.patCreates != 0 || lc.objCreates != 0 || len(bao.data) != 0 {

@@ -26,13 +26,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/volumes"
 )
 
 // ciVolumeDeps is the CI-runner shape: kubectl for the cluster, and a step summary.
 func ciVolumeDeps() volumes.Deps {
 	return volumes.Deps{
-		Token:   inclusterLinodeToken(),
+		Token:   credrotate.InClusterLinodeToken(),
 		Kubectl: func(args ...string) ([]byte, error) { return execOutput("kubectl", args...) },
 		Summary: func(lines ...string) error { return appendGHAFile("GITHUB_STEP_SUMMARY", lines...) },
 	}
@@ -44,7 +45,7 @@ func inClusterVolumeDeps() (volumes.Deps, error) {
 	if err != nil {
 		return volumes.Deps{}, err
 	}
-	return volumes.Deps{Token: inclusterLinodeToken(), Kube: k}, nil
+	return volumes.Deps{Token: credrotate.InClusterLinodeToken(), Kube: k}, nil
 }
 
 func runCIReconcileVolumeTags(ctx context.Context, scName string) error {

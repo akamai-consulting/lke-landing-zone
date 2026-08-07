@@ -39,13 +39,14 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
 )
 
 // mintObjkeysLinodeClient is a seam for tests.
-var mintObjkeysLinodeClient = func(token string) rotatorLinodeAPI {
+var mintObjkeysLinodeClient = func(token string) credrotate.LinodeAPI {
 	return linode.NewClient(token, 30*time.Second)
 }
 
@@ -89,7 +90,7 @@ func runCIMintBootstrapObjkeys(region string) error {
 
 	lc := mintObjkeysLinodeClient(minting)
 	ctx := context.Background()
-	now := rotatorNow()
+	now := credrotate.Now()
 
 	// CI, inside the instance checkout — read the prefix from the spec (the
 	// in-cluster rotator gets the same value via OBJ_LABEL_PREFIX instead).
@@ -97,8 +98,8 @@ func runCIMintBootstrapObjkeys(region string) error {
 	if err != nil {
 		return err
 	}
-	for _, e := range buildRotationTable(prefix, region, objCluster) {
-		if e.kind != credKindObjKey {
+	for _, e := range credrotate.BuildRotationTable(prefix, region, objCluster) {
+		if e.Kind != credrotate.CredKindObjKey {
 			continue // the DNS PAT is seeded from LINODE_DNS_TOKEN / minted by the rotator
 		}
 		// Idempotency: a seeded path means an earlier bootstrap (or the rotator)
@@ -106,34 +107,34 @@ func runCIMintBootstrapObjkeys(region string) error {
 		// An unreadable path is not an unseeded one: reading "" off a sealed pod
 		// mints a REAL object-storage key at Linode and overwrites the live one,
 		// breaking Loki/Harbor S3 auth until the next drain. Fail closed.
-		seeded, verdict := baoread.KVGetFieldOK(e.baoPath, e.presentField)
+		seeded, verdict := baoread.KVGetFieldOK(e.BaoPath, e.PresentField)
 		if verdict == baoread.Unknown {
-			return baoread.ErrReadUnknown(e.baoPath, e.presentField, "mint a replacement key for "+e.name)
+			return baoread.ErrReadUnknown(e.BaoPath, e.PresentField, "mint a replacement key for "+e.Name)
 		}
 		if seeded != "" {
-			fmt.Printf("%s: %s already seeded — skipping mint.\n", e.name, e.baoPath)
+			fmt.Printf("%s: %s already seeded — skipping mint.\n", e.Name, e.BaoPath)
 			continue
 		}
-		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.label, e.objCluster, e.buckets, e.permissions)
+		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.Label, e.ObjCluster, e.Buckets, e.Permissions)
 		if err != nil {
-			return fmt.Errorf("mint %s: %w", e.name, err)
+			return fmt.Errorf("mint %s: %w", e.Name, err)
 		}
 		access, secret := cli.AsString(m["access_key"]), cli.AsString(m["secret_key"])
 		if access == "" || secret == "" {
-			return fmt.Errorf("mint %s returned no access_key/secret_key", e.name)
+			return fmt.Errorf("mint %s returned no access_key/secret_key", e.Name)
 		}
 		maskGHA(secret)
-		fields := e.fields(access, secret)
+		fields := e.Fields(access, secret)
 		// rotated_at: the rotator's due-clock — a fresh bootstrap key is not due
 		// until rotate-after-days from now, so the rotator adopts rather than
 		// immediately re-mints.
 		fields["rotated_at"] = strconv.FormatInt(now.Unix(), 10)
-		if err := baoKVPutFn(e.baoPath, fields); err != nil {
-			return fmt.Errorf("seed %s: %w", e.baoPath, err)
+		if err := baoKVPutFn(e.BaoPath, fields); err != nil {
+			return fmt.Errorf("seed %s: %w", e.BaoPath, err)
 		}
-		fmt.Printf("%s: minted %s and seeded %s.\n", e.name, e.label, e.baoPath)
+		fmt.Printf("%s: minted %s and seeded %s.\n", e.Name, e.Label, e.BaoPath)
 		if err := appendGHAFile("GITHUB_STEP_SUMMARY",
-			fmt.Sprintf("Minted object-storage key `%s` and seeded `%s`.", e.label, e.baoPath)); err != nil {
+			fmt.Sprintf("Minted object-storage key `%s` and seeded `%s`.", e.Label, e.BaoPath)); err != nil {
 			return err
 		}
 	}

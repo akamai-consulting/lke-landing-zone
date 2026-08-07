@@ -1,4 +1,4 @@
-package main
+package credrotate
 
 // In-cluster Linode token resolution (secrets-before-apps Phase 2). The
 // llz-reconciler Deployment used to consume the ESO-synced linode-api-token
@@ -17,22 +17,22 @@ import (
 	"strings"
 )
 
-// linodeTokenFile is where the Deployment mounts the optional linode-api-token
+// LinodeTokenFile is where the Deployment mounts the optional linode-api-token
 // Secret volume. Package var so tests can point it at a fixture.
-var linodeTokenFile = "/var/run/secrets/llz/linode-api-token/token"
+var LinodeTokenFile = "/var/run/secrets/llz/linode-api-token/token"
 
-// inclusterLinodeToken resolves the in-cluster Linode token: LINODE_TOKEN env,
+// InClusterLinodeToken resolves the in-cluster Linode token: LINODE_TOKEN env,
 // else the optional Secret volume, else "" (not yet synced — callers no-op or
 // error per their contract).
-func inclusterLinodeToken() string {
-	return inclusterToken("LINODE_TOKEN", linodeTokenFile)
+func InClusterLinodeToken() string {
+	return InClusterToken("LINODE_TOKEN", LinodeTokenFile)
 }
 
-// inclusterToken is the shared secrets-before-apps token resolver: the named env
+// InClusterToken is the shared secrets-before-apps token resolver: the named env
 // var first (CronJob/CI compatibility), else the optional Secret volume mounted at
 // file (kubelet-refreshed on rotate), else "" (not yet synced). Backs both the
 // linode and apl-values-repo resolvers.
-func inclusterToken(envVar, file string) string {
+func InClusterToken(envVar, file string) string {
 	if t := os.Getenv(envVar); t != "" {
 		return t
 	}

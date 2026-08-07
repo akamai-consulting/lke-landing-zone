@@ -325,9 +325,10 @@ guard-docs     always   gate:scaffolded             read-repo  fail when the doc
 | `release-publish` extracted | 21,841 | 138 | −312 — the tenth catalog correction, and the first moved code with no binding |
 | `credential-state-passphrase` extracted | 21,542 | 136 | −299 — the first credential row, and a state the grant table refuses |
 | `internal/baoread` extracted | 21,457 | 136 | −85 — infrastructure, not an extension: the wall five credential rows sit behind |
-| `credential-pat` + `credential-objkey` | **21,082** | 130 | −375 — the second wall down, and the first package to declare two extensions |
+| `credential-pat` + `credential-objkey` | 21,082 | 130 | −375 — the second wall down, and the first package to declare two extensions |
+| the rotation table (wall 3) | **20,835** | 127 | −247 — the file that knows what a credential *is*; the family is now unblocked |
 
-**Net −26,100 (55.3%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
+**Net −26,347 (55.8%) across forty-two extensions** (the last move was a shared package, not an extension) (this one grew an existing extension rather than adding one), and now *below* the 41,803 this gate first recorded —
 the number the whole exercise started from. Read that as a floor on the effort rather than a
 schedule, and read [the closure census](#the-cost-of-the-interesting-half) before reading this table
 as a rate.
@@ -2280,6 +2281,44 @@ argument, which is the best evidence yet that the table encodes something real.
 must say so and change nothing; `--apply` **or** `ROTATION_APPLY=true` arms it. Three subcommands
 re-implementing that would be three chances to default the wrong way, on code whose failure mode is
 deleting a live credential.
+
+### What wall three was — the file that knows what a credential *is*
+
+`ci_rotate_linode_creds.go` holds the **rotation table**: which credentials exist, where each lives in
+OpenBao, which Linode API mints it, and when it is due. `linode_token.go` holds the in-cluster token
+resolver they all share. Together, 18 symbols with callers in mint-objkeys, incluster-pat,
+rotate-broad-pat, discover-firewall, volumes, reconcile, harbor-provisioner and seed-special.
+
+**Nothing that handles a credential could leave while that stayed**, which is why this family needed
+three extractions and not one.
+
+**Measured rather than claimed.** Every remaining file in the family dropped from
+unmeasurable-in-place to an ordinary closure:
+
+| file | closure |
+|---|---:|
+| `ci_rotate_broad_pat.go` | 4 |
+| `ci_seed_broad_pat.go` | 4 |
+| `ci_temp_objkey.go` | 5 |
+| `ci_mint_objkeys.go` | 6 |
+| `ci_incluster_pat.go` | 10 |
+
+The `Incomplete` notes on `credential-pat` and `credential-objkey` were rewritten accordingly: those
+paths are still in package `main`, but they are now **ordinary extractions rather than blocked ones**,
+and the notes say so with the numbers.
+
+**One seam, and the split is the usual one.** `OpenBaoStore` logs in via Kubernetes auth for a named
+role. Package `main` owns the login path — the ServiceAccount token, the mounted CA, the address and
+mount defaults, used by six other verbs — and this package owns *which role a rotation logs in as*.
+The default returns an error rather than doing nothing, because a rotation that silently ran without a
+store would look like success.
+
+**This extraction cost more mistakes than any other**, and all of them were re-runs of recorded traps:
+a bulk field rename hit `kind`/`name`/`label` in four unrelated structs; the blanket restore that
+fixed it also undid two `git mv`s, resurrecting the files it had just moved; and test fakes had to be
+copied in pieces because a non-greedy method regex truncated at the first nested brace. The lesson is
+the one already written down — **rename by exact symbol, per file, after eyeballing** — and the reason
+it keeps recurring is that the shortcut looks cheaper every time.
 
 ## The cost of the interesting half
 

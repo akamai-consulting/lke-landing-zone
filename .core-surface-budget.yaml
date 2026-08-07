@@ -261,12 +261,19 @@ categories:
     #                       A THIRD wall remains: the rotation table in
     #                       ci_rotate_linode_creds.go, 18 symbols with callers in
     #                       eight other files.
+    #   20,835 / 127 files  the rotation table — WALL 3, and the last one. -247.
+    #                       ci_rotate_linode_creds.go knows what a credential IS
+    #                       in this platform (which exist, where each lives in
+    #                       OpenBao, which Linode API mints it), so nothing that
+    #                       handles one could leave while it stayed. Measured
+    #                       result: every remaining file in the family dropped
+    #                       from unmeasurable to closure 4-10.
     #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 21082
+    budget: 20835
     exact: true
     include:
       - "tools/cmd/llz/*.go"

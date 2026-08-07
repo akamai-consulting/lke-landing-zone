@@ -11,8 +11,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 )
@@ -145,3 +147,84 @@ func decodeRecord(t *testing.T, stdout string) map[string]any {
 	}
 	return rec
 }
+
+func jn(i int) json.Number { return json.Number(strconv.Itoa(i)) }
+
+func TestIsDue(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	day := int64(86400)
+	for _, tc := range []struct {
+		name      string
+		rotatedAt string
+		after     int
+		want      bool
+	}{
+		{"never rotated (empty) is due", "", 80, true},
+		{"unparseable is due", "not-a-ts", 80, true},
+		{"recently rotated is not due", strconvI(now.Unix() - 10*day), 80, false},
+		{"exactly at threshold is due", strconvI(now.Unix() - 80*day), 80, true},
+		{"past threshold is due", strconvI(now.Unix() - 365*day), 80, true},
+	} {
+		if got := credrotate.IsDue(tc.rotatedAt, now, tc.after); got != tc.want {
+			t.Errorf("%s: credrotate.IsDue=%v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// stubLinode is a COPY of internal/credrotate's test fake — fixtures travel by
+// copy rather than being exported from a production package.
+type stubLinode struct {
+	pats, objkeys []map[string]any
+	deleted       []uint64
+	verifyErr     error
+	patCreates    int
+	objCreates    int
+}
+
+func (s *stubLinode) ListProfileTokens(context.Context) ([]map[string]any, error) { return s.pats, nil }
+func (s *stubLinode) CreateProfileToken(context.Context, string, string, string) (map[string]any, error) {
+	s.patCreates++
+	return map[string]any{"id": 100 + s.patCreates, "token": "new-pat"}, nil
+}
+func (s *stubLinode) DeleteProfileToken(_ context.Context, id uint64) error {
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+func (s *stubLinode) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
+	return s.objkeys, nil
+}
+func (s *stubLinode) CreateObjectStorageKeyBuckets(context.Context, string, string, []string, string) (map[string]any, error) {
+	s.objCreates++
+	// id as json.Number — the only numeric type cli.AsUint64 accepts, mirroring
+	// how the real client decodes API responses.
+	return map[string]any{"id": jn(200 + s.objCreates), "access_key": "AK", "secret_key": "SK"}, nil
+}
+func (s *stubLinode) DeleteObjectStorageKey(_ context.Context, id uint64) error {
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+func (s *stubLinode) Verify(context.Context) error { return s.verifyErr }
+
+// stubBao is a COPY, same reasoning as stubLinode above.
+type stubBao struct{ data map[string]map[string]string }
+
+func (b *stubBao) Get(_ context.Context, path, key string) (string, bool, error) {
+	v, ok := b.data[path][key]
+	return v, ok, nil
+}
+func (b *stubBao) Write(_ context.Context, path string, d map[string]string) error {
+	b.data[path] = d
+	return nil
+}
+func withRotatorStubs(t *testing.T, lc credrotate.LinodeAPI, bao credrotate.BaoStore, now time.Time) {
+	t.Helper()
+	ol, ob, on := credrotate.NewLinodeClient, credrotate.NewBaoStore, credrotate.Now
+	credrotate.NewLinodeClient = func(string) credrotate.LinodeAPI { return lc }
+	credrotate.NewBaoStore = func(context.Context) (credrotate.BaoStore, error) { return bao, nil }
+	credrotate.Now = func() time.Time { return now }
+	t.Cleanup(func() { credrotate.NewLinodeClient, credrotate.NewBaoStore, credrotate.Now = ol, ob, on })
+}
+func strconvI(n int64) string { return strconv.FormatInt(n, 10) }
+
+// jn mirrors how the Linode client decodes ids — json.Number, the only type
+// cli.AsUint64 accepts.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconcilelanes"
@@ -118,7 +119,7 @@ func buildInClusterBaoHTTPClient() (*http.Client, error) {
 // the kubernetes auth mount which role it may assume. Neither replaces the
 // other — the cert says "you may speak to me", the token says "and this is what
 // you may read".
-func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, error) {
+func openInClusterBaoStore(ctx context.Context, defaultRole string) (credrotate.BaoStore, error) {
 	addr := cigate.EnvOr("OPENBAO_ADDR", reconcilelanes.DefaultOpenBaoAddr)
 	mount := cigate.EnvOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
 	role := cigate.EnvOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
