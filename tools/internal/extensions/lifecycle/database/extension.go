@@ -121,3 +121,21 @@ func Extension() extension.Extension {
 		// the effect, it was the precondition.
 	}
 }
+
+// namedBinding returns the binding with the given name, which is how each lane
+// here gets the grants IT declared rather than the extension's union.
+//
+// THIS EXTENSION IS WHY THE LOOKUP IS BY NAME. It holds two transitions at
+// `seeded` — seed-admin and rotate-admin — plus an assertion. Building a handle
+// from "the transition" would pick whichever came first and silently give one
+// lane the other's grants; building from the extension would hand both the union,
+// which is the over-granting the per-binding model exists to prevent.
+func namedBinding(name string) extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic("database-provisioner: no binding named " + name + " — its OpenBao handle is built " +
+		"from that binding, so the name going stale is a wiring bug, not a missing feature")
+}
