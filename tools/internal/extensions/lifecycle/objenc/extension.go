@@ -87,3 +87,28 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// seedBinding returns the `transition:seeded[secret-custody]` binding — the one
+// that mints and places the SSE-C key, and therefore the one whose grants decide
+// what ObjencDeps may do.
+//
+// LOOKED UP BY KIND AND STATE, NOT BY INDEX. `Bindings[0]` would be correct today
+// and silently wrong the moment someone reorders the slice or adds a binding above
+// it — and what it would be wrong ABOUT is which grants the custody handle is built
+// from. This campaign has a positional test that survived a reorder on record;
+// this is the same hazard pointed at production wiring instead.
+//
+// It panics rather than returning a zero Binding, because a zero Binding declares
+// no grants: capability.For would hand back refusing handles and the seeder would
+// fail at the write with a permission message, sending the reader after a grant
+// bug that does not exist. TestSeedBindingIsFound pins it so the panic is
+// unreachable in a built binary.
+func seedBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition && b.State == extension.Seeded {
+			return b
+		}
+	}
+	panic("obj-encryption: no transition:seeded binding — ObjencDeps builds its OpenBao " +
+		"custody handle from it, so its absence is a wiring bug, not a missing feature")
+}

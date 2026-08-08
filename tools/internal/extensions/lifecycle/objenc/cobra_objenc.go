@@ -11,6 +11,18 @@ package objenc
 // platform mints one, keeps it in OpenBao, and hands it to every writer. That is
 // custody in the literal sense, and it is why this extension is the one that
 // finally binds `transition:seeded[secret-custody]`.
+//
+// AND IT IS WHY THE KV PAIR NOW COMES FROM THE DECLARATION. It used to reach for
+// `baoread.KVGetFieldOK` and `baoread.KVPut` directly — package vars any code can
+// call — so the `secret-custody` on the binding above was a claim with nothing
+// behind it. It is `capability.For(seedBinding())` now: the handles are built FROM
+// the grant, and a binding that stopped declaring custody would find its Put
+// refusing rather than quietly still working.
+//
+// THE VERDICT SURVIVES THE HOP, which is the only thing that made this conversion
+// safe. capability.Secrets.Get returns baoread.Verdict rather than a bool or an
+// error precisely so a REFUSED read reports Unknown and never Absent — because
+// here, "absent" is the answer that mints a key.
 
 import (
 	"os"
@@ -18,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -28,9 +41,10 @@ import (
 // clients. `llz ci readiness` drives objenc's registry-CA check, and its tests
 // used to stub a package-level objEncKubectl that is now a Deps field.
 var ObjencDeps = func() Deps {
+	h := capability.For(seedBinding())
 	return Deps{
 		KVGet: func(path, field string) (string, KVVerdict) {
-			v, verdict := baoread.KVGetFieldOK(path, field)
+			v, verdict := h.Secrets.Get(path, field)
 			// The three-valued answer is load-bearing: only a definite ABSENT may
 			// be read as "not seeded". An unknown treated as absent would mint a
 			// SECOND SSE-C key and every object under the first becomes unreadable.
@@ -43,7 +57,7 @@ var ObjencDeps = func() Deps {
 				return v, KVUnknown
 			}
 		},
-		KVPut:       func(path string, fields map[string]string) error { return baoread.KVPut(path, fields) },
+		KVPut:       h.Custodian.Put,
 		KubectlOut:  kubectlprobe.Out,
 		SecretField: kube.SecretField,
 		MaskGHALines: func(vals ...string) {

@@ -30,6 +30,7 @@ package capability_test
 // work.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -58,54 +59,96 @@ var seamCall = regexp.MustCompile(
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
 	"assertobjstore":  3,
-	"assertsecrets":   3,
-	"branchpolicy":    3,
-	"buildpreflight":  2,
-	"chartguard":      1,
-	"clusteraccess":   2,
-	"healthsla":       2,
-	"identityconfig":  3,
+	"assertsecrets":   2,
+	"branchpolicy":    1,
+	"buildpreflight":  1,
+	"clusteraccess":   1,
+	"healthsla":       1,
+	"identityconfig":  1,
 	"openbao":         4,
-	"reachability":    3,
-	"reconciler":      2,
-	"seedspecial":     3,
-	"statepassphrase": 2,
-	"templatecommit":  2,
+	"reachability":    1,
+	"reconciler":      1,
+	"seedspecial":     1,
+	"statepassphrase": 1,
+	"templatecommit":  1,
+}
+
+// baoSeamCall matches a direct call to one of OpenBao's process seams. KVPut and
+// KVGetFieldOK are included even though they are STRUCTURED helpers, because they
+// are exactly what capability.Custodian and capability.Secrets wrap: calling them
+// directly is now the bypass, in the same way calling kubectlprobe.Exec is.
+var baoSeamCall = regexp.MustCompile(
+	`\bbaoread\.(?:Exec|ExecStdin|ExecPod|ExecFn|KVPut|KVGetFieldOK)\b`)
+
+// allowedBaoSeamCalls is the measured bao surface under internal/extensions.
+// MEASURED, not chosen, and it ratchets in both directions like its siblings.
+//
+// THE SHAPE OF THE REMAINING WORK IS IN THESE NUMBERS. openbao's 22 are the
+// lifecycle itself — `operator init`, `operator generate-root`, the unseal waits —
+// which are quorum flows and interactive prompts that no one-shot handle expresses,
+// the same reason `kubectl exec` stayed raw. The other 25 are day-to-day KV
+// traffic across six packages and are the conversion candidates: each holds a
+// binding already, so the change is to take capability.For(b).Secrets / .Custodian
+// instead of reaching for the package var.
+var allowedBaoSeamCalls = map[string]int{
+	"credrotate":     6,
+	"database":       7,
+	"harbor":         2,
+	"healthsla":      1,
+	"identityconfig": 3,
+	"openbao":        21,
+	"reachability":   1,
+}
+
+func TestNoNewBaoSeamCalls(t *testing.T) {
+	got := countByPackage(t, filepath.Join("..", "..", "extensions"), baoSeamCall)
+	ratchet(t, "bao seam", got, allowedBaoSeamCalls,
+		"that reaches OpenBao with a root token regardless of what its binding declared. "+
+			"Take capability.For(binding).Secrets / .Custodian, whose Get returns a VERDICT "+
+			"so a refusal can never be mistaken for an absent path")
 }
 
 func TestNoNewSeamGlobalCalls(t *testing.T) {
 	got := countByPackage(t, filepath.Join("..", "..", "extensions"), seamCall)
+	ratchet(t, "seam", got, allowedSeamCalls,
+		"that hands it an unconstrained kubectl regardless of what its binding declared. "+
+			"Take capability.For(binding) and use Cluster.Run / the Writer's named operations")
+}
 
+// ratchet is the shared body of the three bypass counters: fail on a new package,
+// on a count that grew, on a count that SHRANK without being banked, and on an
+// allowance for a package that no longer matches. Factored out when the second
+// counter arrived rather than copied, because two copies of a ratchet is two
+// chances to fix one and not the other.
+func ratchet(t *testing.T, what string, got, allowed map[string]int, remedy string) {
+	t.Helper()
 	for pkg, n := range got {
-		want, ok := allowedSeamCalls[pkg]
+		want, ok := allowed[pkg]
 		if !ok {
-			t.Errorf("%s calls a process seam global directly (%d call(s)) — that hands it an "+
-				"unconstrained kubectl regardless of what its binding declared. Take "+
-				"capability.For(binding) and use Cluster.Run / the Writer's named operations, "+
-				"or add it here with the reason it cannot.", pkg, n)
+			t.Errorf("%s makes %d direct %s call(s) — %s, or add it to the allowlist with "+
+				"the reason it cannot.", pkg, n, what, remedy)
 			continue
 		}
 		if n > want {
-			t.Errorf("%s: %d seam calls, allowed %d — a NEW bypass appeared. The grant line "+
-				"stops being true the moment one of these runs a verb the binding did not "+
-				"declare.", pkg, n, want)
+			t.Errorf("%s: %d %s calls, allowed %d — a NEW bypass appeared. The grant line "+
+				"stops being true the moment one of these does something the binding did "+
+				"not declare.", pkg, n, what, want)
 		}
 		if n < want {
-			t.Errorf("%s: %d seam calls but %d allowed — LOWER IT to %d in this commit, so the "+
-				"paydown is banked instead of left as room to regrow", pkg, n, want, n)
+			t.Errorf("%s: %d %s calls but %d allowed — LOWER IT to %d in this commit, so the "+
+				"paydown is banked instead of left as room to regrow", pkg, n, what, want, n)
 		}
 	}
-
 	var gone []string
-	for pkg := range allowedSeamCalls {
+	for pkg := range allowed {
 		if _, still := got[pkg]; !still {
 			gone = append(gone, pkg)
 		}
 	}
 	sort.Strings(gone)
 	if len(gone) > 0 {
-		t.Errorf("these packages no longer call a seam global — delete them from "+
-			"allowedSeamCalls: %s", strings.Join(gone, ", "))
+		t.Errorf("these packages no longer make a %s call — delete them from the allowlist: %s",
+			what, strings.Join(gone, ", "))
 	}
 }
 
@@ -183,6 +226,40 @@ func TestVerbsDoNotMutateTheCluster(t *testing.T) {
 	}
 }
 
+// stripComments blanks out `//` comment text before matching.
+//
+// IT IS HERE BECAUSE THIS GUARD CAUGHT ITS OWN PROSE. objenc was converted to take
+// capability handles, and the comment recording WHY — "it used to reach for
+// baoread.KVGetFieldOK and baoread.KVPut directly" — kept the package at its old
+// count. The guard would have demanded an allowlist entry for a package that had
+// just paid its debt off, which is the fastest way to teach someone that the
+// allowlist is where you put things to make a test quiet.
+//
+// Same rule this campaign already had on record from the other direction: a rename
+// rewrote the English word "answered" in six prose sentences because it was also a
+// method name. Comments are not code, in both directions.
+//
+// Line-level `//` only. Block comments are deliberately not handled, for the
+// reason the core-surface counter gives: this repo documents with `//`, and `/*`
+// appears almost exclusively inside glob and regex string literals, where a naive
+// scanner would swallow the rest of the file.
+func stripComments(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		if i := bytes.Index(line, []byte("//")); i >= 0 {
+			// Not a comment if the marker is inside a string literal — the only
+			// case in this tree is a URL, and cutting there would hide real code
+			// after it on the same line.
+			if bytes.Count(line[:i], []byte(`"`))%2 == 0 {
+				line = line[:i]
+			}
+		}
+		out = append(out, line...)
+		out = append(out, '\n')
+	}
+	return out
+}
+
 // countByPackage counts regex matches per PACKAGE directory under root, skipping
 // tests. Second-to-last path segment, for the reason rawexec_test records: taking
 // the first silently counted per bucket once the tree gained a level.
@@ -198,7 +275,7 @@ func countByPackage(t *testing.T, root string, re *regexp.Regexp) map[string]int
 		if err != nil {
 			return err
 		}
-		if n := len(re.FindAll(b, -1)); n > 0 {
+		if n := len(re.FindAll(stripComments(b), -1)); n > 0 {
 			rel, _ := filepath.Rel(root, path)
 			seg := strings.Split(filepath.ToSlash(rel), "/")
 			got[seg[len(seg)-2]] += n

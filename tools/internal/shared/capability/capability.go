@@ -254,6 +254,12 @@ type Handles struct {
 	Cluster Cluster
 	// Writer is the six named mutations, present-and-refusing without cluster-write.
 	Writer Writer
+	// Secrets READS OpenBao, for a binding declaring secret-read or secret-custody.
+	// Its Get returns a VERDICT rather than a bool: a refusal is Unknown, never
+	// Absent, so a narrower grant can never invite an overwrite. See secrets.go.
+	Secrets Secrets
+	// Custodian PLACES secret material, for secret-custody only.
+	Custodian Custodian
 }
 
 // For builds the handles a binding's declared grants entitle it to.
@@ -279,12 +285,15 @@ func For(b extension.Binding) Handles {
 	if write {
 		w = writer{exec: kubectlprobe.Exec, stdin: execStdin}
 	}
+	sec, cust := secretHandles(b)
 	if !read && !write {
-		return Handles{Cluster: deniedCluster{}, Writer: w}
+		return Handles{Cluster: deniedCluster{}, Writer: w, Secrets: sec, Custodian: cust}
 	}
 	return Handles{
-		Cluster: cluster{exec: kubectlprobe.Exec, comb: kubectlprobe.Combined},
-		Writer:  w,
+		Cluster:   cluster{exec: kubectlprobe.Exec, comb: kubectlprobe.Combined},
+		Writer:    w,
+		Secrets:   sec,
+		Custodian: cust,
 	}
 }
 
