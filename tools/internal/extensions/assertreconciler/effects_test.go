@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 func TestDefaultStorageClasses(t *testing.T) {
@@ -196,13 +198,18 @@ func TestProbeReconcilerEffectsRequireFlagFailsOnAbsent(t *testing.T) {
 // unreachable apiserver. Every other test here seams readTokenInventory and so
 // cannot see the flag at all — this one exercises the default implementation.
 func TestReadTokenInventoryIgnoresNotFound(t *testing.T) {
-	orig := deps.Exec
-	t.Cleanup(func() { deps.Exec = orig })
+	orig := deps.Cluster
+	t.Cleanup(func() { deps.Cluster = orig })
 	var got []string
-	deps.Exec = func(name string, args ...string) ([]byte, error) {
-		got = append([]string{name}, args...)
-		return nil, nil
-	}
+	// Stubbed THROUGH the capability layer, from this extension's own binding, so
+	// the test runs against the same cluster-read ceiling production does — a stub
+	// cannot hand itself a write it did not declare.
+	deps.Cluster = capability.WithExec(Extension().Bindings[0],
+		func(name string, args ...string) ([]byte, error) {
+			got = append([]string{name}, args...)
+			return nil, nil
+		},
+		func(string, ...string) string { return "" }).Cluster
 	if _, err := readTokenInventory("llz-reconciler"); err != nil {
 		t.Fatalf("readTokenInventory: %v", err)
 	}

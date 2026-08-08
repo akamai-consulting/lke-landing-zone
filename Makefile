@@ -154,6 +154,7 @@ COVERAGE_MINS := \
 	internal/shared/gitcmd=95 \
 	internal/shared/envdef=52 \
 	internal/shared/charty=95 \
+	internal/shared/capability=95 \
 	internal/shared/ghapi=88 \
 	internal/shared/templateid=79 \
 	internal/extensions/bootstrapcluster=61 \
