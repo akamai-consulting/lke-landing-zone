@@ -33,9 +33,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
@@ -120,9 +117,7 @@ var declarations = []func() extension.Extension{
 	clusteraccess.Extension,
 	configreadiness.Extension,
 	converge.Extension,
-	baoca.Extension,
-	baoseed.Extension,
-	baolifecycle.Extension,
+	openbao.Extension,
 	harbor.Extension,
 	identityconfig.Extension,
 	reconciler.Extension,
@@ -138,7 +133,6 @@ var declarations = []func() extension.Extension{
 	monitoringlabel.Extension,
 	workflowshells.Extension,
 	firewall.Extension,
-	openbao.Extension,
 	reachability.Extension,
 	branchpolicy.Extension,
 	buildpreflight.Extension,

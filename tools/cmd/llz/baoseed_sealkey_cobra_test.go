@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 )
 
 func TestRunCIBaoSeedSealKeyDryRunAndWiring(t *testing.T) {
@@ -18,22 +18,22 @@ func TestRunCIBaoSeedSealKeyDryRunAndWiring(t *testing.T) {
 		t.Error("dry-run must not exec kubectl")
 		return nil, nil
 	})
-	if err := baoseed.RunSeedSealKey(true, "primary"); err != nil {
+	if err := openbao.RunSeedSealKey(true, "primary"); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	if err := baoseed.RunSeedSealKey(false, ""); err == nil || !strings.Contains(err.Error(), "--region") {
+	if err := openbao.RunSeedSealKey(false, ""); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Errorf("missing region = %v, want --region error", err)
 	}
-	if c := baoseed.BaoSeedSealKeyCmd(); c.Use != "bao-seed-seal-key" {
+	if c := openbao.BaoSeedSealKeyCmd(); c.Use != "bao-seed-seal-key" {
 		t.Errorf("Use = %q, want bao-seed-seal-key", c.Use)
 	}
 }
 
 func TestRunCIBaoSeedAllRequiresRegion(t *testing.T) {
-	if err := baoseed.RunSeedAll(""); err == nil || !strings.Contains(err.Error(), "--region") {
-		t.Errorf("baoseed.RunSeedAll(\"\") = %v, want --region error", err)
+	if err := openbao.RunSeedAll(""); err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Errorf("openbao.RunSeedAll(\"\") = %v, want --region error", err)
 	}
-	if c := baoseed.BaoSeedAllCmd(); c.Use != "bao-seed-all" {
+	if c := openbao.BaoSeedAllCmd(); c.Use != "bao-seed-all" {
 		t.Errorf("Use = %q, want bao-seed-all", c.Use)
 	}
 }

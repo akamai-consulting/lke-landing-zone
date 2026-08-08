@@ -9,11 +9,11 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 )
 
 func TestExtractOpenbaoCAWiring(t *testing.T) {
-	c := baoca.ExtractOpenbaoCACmd()
+	c := openbao.ExtractOpenbaoCACmd()
 	if c.Use != "extract-openbao-ca" {
 		t.Errorf("Use = %q, want extract-openbao-ca", c.Use)
 	}

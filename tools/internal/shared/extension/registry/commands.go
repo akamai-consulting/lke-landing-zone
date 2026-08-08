@@ -40,9 +40,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
@@ -128,17 +125,6 @@ var commands = []Command{
 	{"assertsecrets", assertsecrets.OpenbaoAuditCmd},
 	{"assertsecrets", assertsecrets.RotationHealthCmd},
 	{"atrest", atrest.AtRestGuardCmd},
-	{"baoca", baoca.ExtractOpenbaoCACmd},
-	{"baoca", baoca.ProvisionPeerCACmd},
-	{"baolifecycle", baolifecycle.BaoBreakglassCmd},
-	{"baolifecycle", baolifecycle.BaoEnsureReadyCmd},
-	{"baolifecycle", baolifecycle.BaoInitCmd},
-	{"baolifecycle", baolifecycle.BaoRegenRootCmd},
-	{"baolifecycle", baolifecycle.RegenRootCmd},
-	{"baoseed", baoseed.BaoSeedAllCmd},
-	{"baoseed", baoseed.BaoSeedCmd},
-	{"baoseed", baoseed.BaoSeedSealKeyCmd},
-	{"baoseed", baoseed.SeedBroadPATCmd},
 	{"bootstrapcluster", bootstrapcluster.BootstrapClusterCmd},
 	{"bootstrapcluster", bootstrapcluster.PrepareAplUpgradeCmd},
 	{"budget", budget.CoreSurfaceCmd},
@@ -212,9 +198,20 @@ var commands = []Command{
 	{"onboard", onboard.DoctorCmd},
 	{"onboard", onboard.SecretsCmd},
 	{"onboard", onboard.TokensCmd},
+	{"openbao", openbao.BaoBreakglassCmd},
+	{"openbao", openbao.BaoEnsureReadyCmd},
+	{"openbao", openbao.BaoInitCmd},
+	{"openbao", openbao.BaoRegenRootCmd},
+	{"openbao", openbao.BaoSeedAllCmd},
+	{"openbao", openbao.BaoSeedCmd},
+	{"openbao", openbao.BaoSeedSealKeyCmd},
+	{"openbao", openbao.ExtractOpenbaoCACmd},
 	{"openbao", openbao.OpenBaoLoginCmd},
 	{"openbao", openbao.OpenbaoCmd},
 	{"openbao", openbao.OpenbaoLoginCmd},
+	{"openbao", openbao.ProvisionPeerCACmd},
+	{"openbao", openbao.RegenRootCmd},
+	{"openbao", openbao.SeedBroadPATCmd},
 	{"phasetiming", phasetiming.CollectImagePullsCmd},
 	{"phasetiming", phasetiming.CollectTimingCmd},
 	{"phasetiming", phasetiming.PhaseMarkCmd},

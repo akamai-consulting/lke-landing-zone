@@ -54,7 +54,7 @@ func Append(envVar string, lines ...string) error {
 
 // ── THE OTHER FILE-BASED CHANNEL: ::add-mask:: ───────────────────────────────
 //
-// Mask and MaskLines came from internal/extensions/baoseed, filed there under
+// Mask and MaskLines came from internal/extensions/openbao, filed there under
 // "localised pure helpers: copies, not seams" -- which was the right call while
 // baoseed was the only caller and stopped being true when objenc and openbao
 // started importing the seeding extension to redact a secret from a log. Asking

@@ -1,7 +1,6 @@
 package openbao
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +65,7 @@ func OpenbaoCmd() *cobra.Command {
 		},
 		execCmd,
 		OpenbaoLoginCmd(),
-		baolifecycle.RegenRootCmd(),
+		RegenRootCmd(),
 	)
 	return s
 }

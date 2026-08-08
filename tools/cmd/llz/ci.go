@@ -20,9 +20,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
@@ -97,9 +94,9 @@ func ciCmd() *cobra.Command {
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
 		baoread.BaoStatusCmd(),
-		baolifecycle.BaoInitCmd(), baolifecycle.BaoRegenRootCmd(), identityconfig.BaoConfigureCmd(), baolifecycle.BaoEnsureReadyCmd(),
-		baolifecycle.BaoBreakglassCmd(),
-		baoca.ExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), baoca.ProvisionPeerCACmd(),
+		openbaoext.BaoInitCmd(), openbaoext.BaoRegenRootCmd(), identityconfig.BaoConfigureCmd(), openbaoext.BaoEnsureReadyCmd(),
+		openbaoext.BaoBreakglassCmd(),
+		openbaoext.ExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), openbaoext.ProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
 		identityconfig.KeycloakConfigureCmd(),
@@ -184,7 +181,7 @@ func ciCmd() *cobra.Command {
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
-	c.AddCommand(baoseed.BaoSeedCmd(), baoseed.BaoSeedAllCmd(), baoseed.BaoSeedSealKeyCmd(),
+	c.AddCommand(openbaoext.BaoSeedCmd(), openbaoext.BaoSeedAllCmd(), openbaoext.BaoSeedSealKeyCmd(),
 		seedspecial.ResolveHarborURLCmd(), seedspecial.AuditPVCStorageClassCmd(),
 		// Must run BEFORE the OpenBao pods are waited on: it patches the
 		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
@@ -212,7 +209,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(credrotate.RotateBroadPATCmd())
 	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
-	c.AddCommand(baoseed.SeedBroadPATCmd())
+	c.AddCommand(openbaoext.SeedBroadPATCmd())
 	c.AddCommand(objenc.SeedSSECKeyCmd())
 	c.AddCommand(objenc.AssertObjEncryptionCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.

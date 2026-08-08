@@ -63,7 +63,6 @@ var allowedEdges = map[string]bool{
 	"onboard -> reachability":         true,
 	"onboard -> statepassphrase":      true,
 	"onboard -> templatecommit":       true,
-	"openbao -> baolifecycle":         true,
 	"reconciler -> credrotate":        true,
 	"reconciler -> reconcilelanes":    true,
 	"reconciler -> volumes":           true,

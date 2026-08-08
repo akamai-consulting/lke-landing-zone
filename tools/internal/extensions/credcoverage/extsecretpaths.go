@@ -489,7 +489,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		"tools/internal/extensions/harbor/harbor.go",
 		"tools/internal/extensions/harbor/harbor_provisioner.go",
 		"tools/internal/extensions/seedspecial/special.go",
-		"tools/internal/extensions/baoseed/seedall.go",
+		"tools/internal/extensions/openbao/seedall.go",
 		"tools/internal/extensions/credrotate/table.go",
 		"tools/internal/extensions/credrotate/inclusterpat.go",
 		// seed-broad-pat writes secret/linode/broad-pat (its own header: "Nothing
