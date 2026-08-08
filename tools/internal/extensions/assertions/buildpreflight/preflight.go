@@ -297,7 +297,7 @@ func publishHint(defaultBranch string) string {
 // A 404 is the only answer that means absent, and even then the token may just
 // lack visibility, which the message now says.
 func repoMissing(repo string) bool {
-	_, err := execOutput("gh", "api", "repos/"+repo, "--silent")
+	_, err := forgeHandle().Run("api", "repos/"+repo, "--silent")
 	return err != nil && isNotFoundErr(err)
 }
 

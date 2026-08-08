@@ -73,7 +73,6 @@ var allowedSeamCalls = map[string]int{
 	"assertobjstore":  3,
 	"assertsecrets":   2,
 	"branchpolicy":    1,
-	"buildpreflight":  1,
 	"clusteraccess":   1,
 	"healthsla":       1,
 	"identityconfig":  1,
