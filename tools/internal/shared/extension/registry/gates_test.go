@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -104,7 +105,7 @@ func TestRunGatesReportsEveryFailureNotJustTheFirst(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := RunGates(&out, &errOut)
+	err := RunGates(&out, &errOut, nil)
 	if err == nil {
 		t.Fatal("RunGates returned nil with two failing gates")
 	}
@@ -127,7 +128,7 @@ func TestRunGatesReportsTheCountOnSuccess(t *testing.T) {
 	gates = []Gate{{"a", okCmd(), nil}, {"b", okCmd(), nil}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(&out, &errOut); err != nil {
+	if err := RunGates(&out, &errOut, nil); err != nil {
 		t.Fatalf("RunGates failed on clean gates: %v", err)
 	}
 	if !strings.Contains(out.String(), "2 ran") {
@@ -152,5 +153,68 @@ func failingCmd(msg string) func() *cobra.Command {
 func okCmd() func() *cobra.Command {
 	return func() *cobra.Command {
 		return &cobra.Command{Use: "ok", RunE: func(*cobra.Command, []string) error { return nil }}
+	}
+}
+
+// ENABLEMENT IS LOAD-BEARING HERE, and this is the assertion that says so. Every
+// other enablement test checks the RESOLVER; this checks that the driver acts on
+// it — the difference between knowing an extension is off and not running it.
+func TestRunGatesSkipsADisabledExtension(t *testing.T) {
+	orig := gates
+	t.Cleanup(func() { gates = orig })
+	// wave-health follows no component, so pick one that does. obj-encryption is
+	// not a gate, so borrow its NAME for a synthetic entry: what is under test is
+	// the driver's skip logic keyed on the resolver, not the guard behind it.
+	gates = []Gate{{"obj-encryption", okCmd(), nil}, {"guard-docs", okCmd(), nil}}
+
+	off := false
+	toggles := map[string]clusterspec.ComponentToggle{"objProxy": {Enabled: &off}}
+
+	var out, errOut bytes.Buffer
+	if err := RunGates(&out, &errOut, toggles); err != nil {
+		t.Fatalf("RunGates failed: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "skipped obj-encryption") {
+		t.Errorf("output %q does not skip the disabled extension — the resolver said off and "+
+			"the driver ran it anyway", got)
+	}
+	if !strings.Contains(got, "objProxy") {
+		t.Errorf("output %q does not name the component that disabled it — an operator "+
+			"needs to know WHICH toggle did it", got)
+	}
+	if !strings.Contains(got, "1 ran, 1 skipped") {
+		t.Errorf("output %q does not count runs and skips separately — `all clean` over a "+
+			"silently reduced set is the vacuous-green shape this tree refuses", got)
+	}
+}
+
+// GatesCmd's own wiring, which nothing else reaches: the flags it declares, and
+// that its RunE resolves a spec rather than assuming one. Executed against a
+// synthetic table so this measures the COMMAND, not the fifteen real guards.
+func TestGatesCmdRunsTheDriver(t *testing.T) {
+	orig := gates
+	t.Cleanup(func() { gates = orig })
+	gates = []Gate{{"guard-docs", okCmd(), nil}}
+
+	c := GatesCmd()
+	if c.Use != "gates" || c.Short == "" {
+		t.Errorf("command identity drifted: use=%q short=%q", c.Use, c.Short)
+	}
+
+	var out bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs(nil)
+	// Runs in the tools/ tree, where clusterspec.Detected() finds no instance —
+	// which is the TEMPLATE REPO case, and must run everything rather than
+	// resolving to "disable all".
+	if err := c.Execute(); err != nil {
+		t.Fatalf("GatesCmd failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "1 ran") {
+		t.Errorf("output %q — with no instance spec every gate must still run; treating a "+
+			"missing spec as `nothing enabled` would silence the whole suite in the one "+
+			"place these gates matter most", out.String())
 	}
 }

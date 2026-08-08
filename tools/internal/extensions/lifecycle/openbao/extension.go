@@ -123,17 +123,25 @@ func Extension() extension.Extension {
 				"restore with a different key source (the GitHub-stored recovery quorum rather " +
 				"than operator-held shares) at the same state with the same grants. It is not " +
 				"a separate binding because nothing about it would read differently.",
-			"ENABLEMENT IS PER-EXTENSION, NOT PER-BINDING, and this merge is the first place " +
-				"that costs something. `openbao-peer-ca` shipped `Always: false` -- peer CAs " +
-				"only matter for an HA PAIR, and a standalone deployment never exchanges one -- " +
-				"while the other three were always-on. Merging forces one value and the honest " +
-				"one is `true`, because four of the five bindings are unconditional. So " +
-				"`peer-ca` is now declared always-enabled and is not: its conditionality lives " +
-				"in the code that decides whether to run it, which is exactly the kind of fact " +
-				"this model exists to pull OUT of the code. Nothing regresses today because " +
-				"nothing dispatches on Always yet. Whoever builds enablement needs " +
-				"Binding.Always, or an equivalent, before this note can be deleted -- and this " +
-				"is case one, so the two-case bar for changing the model is not met.",
+			"ENABLEMENT IS PER-EXTENSION, NOT PER-BINDING. `openbao-peer-ca` shipped " +
+				"`Always: false` -- peer CAs only matter for an HA PAIR, and a standalone " +
+				"deployment never exchanges one -- while the other bindings here are " +
+				"unconditional. Merging forced one value and the honest one is `true`, so " +
+				"peer-ca is declared always-enabled and is not. " +
+				"RE-EXAMINED WHEN ENABLEMENT LANDED, AND THE ANSWER CHANGED SHAPE. The obvious " +
+				"remedy was a `Binding.Always` beside the extension's. Still refused, for two " +
+				"reasons that are now evidence rather than caution. STILL ONE CASE: every other " +
+				"multi-binding extension has bindings that share enablement, and the two that " +
+				"follow a spec component (obj-encryption, assert-reconciler) link at the " +
+				"EXTENSION level with all their bindings moving together -- nothing else wants " +
+				"the field. AND IT WOULD NOT HAVE HELPED: Binding.Always is a static default and " +
+				"peer-ca's condition is not. It runs when the deployment is an HA PAIR, a " +
+				"TOPOLOGY fact read from the spec's HA role at the moment the verb runs, not a " +
+				"toggle anyone sets. Even a Binding.Component would miss it, because there is no " +
+				"component called `ha`. What this case asks for is a PREDICATE on a binding, far " +
+				"larger than a bool and invented off one example. The conditionality stays in " +
+				"the code that runs peer-ca, and this note stays until a second case says what " +
+				"shape the answer is.",
 		},
 	}
 }

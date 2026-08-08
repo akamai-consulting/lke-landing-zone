@@ -55,12 +55,21 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/workflowshells"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -93,8 +102,11 @@ type Gate struct {
 // all clean` looks identical to a full pass. That is the vacuous-green shape every
 // corpus guard in this tree already refuses, arriving one level up.
 //
-// AND ONE GATE IS NOT DRIVEABLE AT ALL, which the first run of this driver found
-// by failing. `chart-lock-drift` takes a chart directory as a POSITIONAL argument
+// TWO GATES ARE NOT DRIVEABLE, both found by the driver failing rather than by
+// anyone reasoning about it. `check-coverage` takes a coverprofile path and the
+// whole per-package floor list as positionals — that is Makefile knowledge, and
+// the floors live in COVERAGE_MINS precisely so they can be overridden per
+// invocation. And `chart-lock-drift` takes a chart directory as a POSITIONAL
 // — the Makefile passes $(OPENBAO_CHART) — and the registry has no way to know
 // which charts an instance has. Supplying it here would put instance knowledge in
 // the model.
@@ -112,6 +124,19 @@ var gates = []Gate{
 	{"posture-plaintext", plaintext.PlaintextGuardCmd, []string{"--root", ".."}},
 	{"wave-health", wavehealth.DependencyGuardCmd, []string{"--root", ".."}},
 	{"wave-health", wavehealth.HealthGuardCmd, []string{"--root", ".."}},
+
+	// EIGHT MORE, converted from Makefile targets. Each was one `llz ci <verb>`
+	// shell-out; the args are the ones the Makefile passed, carried over verbatim
+	// rather than guessed.
+	{"guard-cosign-subject", cosignguard.Cmd, []string{"--root", ".."}},
+	{"guard-monitoring-labels", monitoringlabel.Cmd, []string{"--root", ".."}},
+	{"guard-workflow-shells", workflowshells.Cmd, []string{"--dir", "../.github/workflows"}},
+	{"mesh-egress", meshegress.Cmd, []string{"--root", ".."}},
+	{"mtls-wiring", mtlsguard.Cmd, []string{"--root", ".."}},
+	{"version-pins", versionpins.Cmd, []string{"--root", ".."}},
+	// template-manifest scans the SCAFFOLD, not the repo — its subject is what an
+	// instance receives, so its root is instance-template rather than `..`.
+	{"template-manifest", templatemanifest.Cmd, []string{"--root", "../instance-template"}},
 }
 
 // Gates returns the runnable gates, sorted so output does not depend on the order
@@ -149,9 +174,31 @@ func GateBindings() map[string][]extension.Binding {
 // teaches people to run the gates as late as possible. Collecting them costs
 // nothing here because a gate reaches no cluster and cannot leave the tree in a
 // half-changed state.
-func RunGates(out, errOut io.Writer) error {
-	var failed []string
+func RunGates(out, errOut io.Writer, toggles map[string]clusterspec.ComponentToggle) error {
+	// ENABLEMENT IS LOAD-BEARING HERE, AND THIS IS WHERE IT STARTS. A gate is the
+	// harmless case: skipping one runs fewer checks, which is visible in the
+	// output and reversible by a toggle. Skipping an assert lane or a transition
+	// would be a behaviour change hiding inside a config value, which is why the
+	// resolver landed inert and is being made real one kind at a time.
+	skip := map[string]string{}
+	if toggles != nil {
+		res, err := EnabledFor(toggles)
+		if err != nil {
+			return err
+		}
+		for _, e := range res {
+			if !e.Enabled {
+				skip[e.Extension.Name] = e.Reason
+			}
+		}
+	}
+
+	var failed, skipped []string
 	for _, g := range Gates() {
+		if why, off := skip[g.Extension]; off {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", g.Extension, why))
+			continue
+		}
 		c := g.New()
 		c.SetArgs(g.Args)
 		c.SetOut(out)
@@ -164,10 +211,17 @@ func RunGates(out, errOut io.Writer) error {
 			fmt.Fprintf(errOut, "::error::gate %s (%s) failed: %v\n", c.Name(), g.Extension, err)
 		}
 	}
+	// SKIPS ARE PRINTED, ALWAYS, and on the clean path too. A driver that silently
+	// runs fewer checks reads exactly like one that ran them all — the vacuous-green
+	// shape this tree refuses everywhere else. An operator who disabled a component
+	// should see the consequence named.
+	for _, s := range skipped {
+		fmt.Fprintf(out, "gates: skipped %s\n", s)
+	}
 	if len(failed) > 0 {
 		return fmt.Errorf("%d gate(s) failed:\n\t%s", len(failed), strings.Join(failed, "\n\t"))
 	}
-	fmt.Fprintf(out, "gates: %d ran, all clean\n", len(Gates()))
+	fmt.Fprintf(out, "gates: %d ran, %d skipped, all clean\n", len(Gates())-len(skipped), len(skipped))
 	return nil
 }
 
@@ -189,7 +243,29 @@ func GatesCmd() *cobra.Command {
 			"registry/gates.go.",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			return RunGates(c.OutOrStdout(), c.ErrOrStderr())
+			// NO SPEC MEANS RUN EVERYTHING, and that is not a fallback — it is the
+			// template repo, where these gates guard the code that produces
+			// instances and there is no instance whose components could excuse
+			// one. Detected() reporting false is the normal case for `make lint`
+			// here; treating it as "disable everything" would turn the whole gate
+			// suite off in the one place it matters most.
+			lz, ok, err := clusterspec.Detected()
+			if err != nil {
+				return fmt.Errorf("reading the instance spec to resolve enablement: %w", err)
+			}
+			// THE INSTANCE-WIDE DEFAULTS, NOT AN ENVIRONMENT'S, and the
+			// distinction is a real seam between two models. Component toggles in
+			// this spec are PER-ENVIRONMENT: one env can run Harbor and another
+			// not. A gate is repo-scoped — it guards the code that produces every
+			// environment — so there is no env to ask, and asking one would let a
+			// single deployment's configuration silence a check protecting all of
+			// them. spec.defaults.components is the instance-wide answer and the
+			// only one a repo-scoped check can honestly use.
+			var toggles map[string]clusterspec.ComponentToggle
+			if ok && lz != nil {
+				toggles = lz.Spec.Defaults.Components
+			}
+			return RunGates(c.OutOrStdout(), c.ErrOrStderr(), toggles)
 		},
 	}
 }
