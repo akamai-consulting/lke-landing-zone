@@ -1072,6 +1072,22 @@ categories:
 #        -- it had been silently counting per BUCKET, collapsing nine packages
 #        into two rows and calling every allowlist entry stale.
 #
+#   96th: the first registry-driven verb   1,866 -> 1,868 (+2)
+#        TWO LINES, SPENT DELIBERATELY, and they are the smallest possible shape of
+#        the thing this budget exists to encourage: an import and one AddCommand,
+#        wiring `llz ci gates` -- a driver that runs every gate binding the REGISTRY
+#        declares rather than a list typed in package main.
+#        THE DRIVER ITSELF IS ZERO LINES HERE. It lives in
+#        internal/shared/extension/registry, not cmd/llz, because a driver only main
+#        can call is a driver only main can test -- which is the whole argument of
+#        ADR 0014 applied to the code that would otherwise have been its next
+#        exception. Growing package main by 2 to move a dispatcher out of it is the
+#        trade this gate wants.
+#        WHAT IT REPLACES, eventually: 12 Makefile targets, each a separate
+#        `llz ci <verb>` shell-out. Six gates run from the registry today; the
+#        remaining twelve are named in gates.go and reported live by a test, so the
+#        comment cannot drift from the model.
+#
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1176,7 +1192,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1866
+    budget: 1868
     exact: true
     include:
       - "tools/cmd/llz/*.go"
