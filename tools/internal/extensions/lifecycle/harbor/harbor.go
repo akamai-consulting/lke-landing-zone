@@ -40,7 +40,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 )
@@ -57,7 +58,7 @@ func SeedStandbyRobots(registryHost string) error {
 			"Re-run this workflow after the active peer's provisioner has run.")
 	}
 	ghsecret.Mask(secret)
-	if err := baoread.KVPut("secret/harbor/robot", map[string]string{
+	if err := capability.For(seedBinding()).Custodian.Put("secret/harbor/robot", map[string]string{
 		"username": robot, "password": secret, "registry_host": registryHost,
 	}); err != nil {
 		return err
@@ -69,7 +70,7 @@ func SeedStandbyRobots(registryHost string) error {
 			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not published — re-run after the active peer's provisioner has run.")
 	}
 	ghsecret.Mask(pullSecret)
-	if err := baoread.KVPut("secret/harbor/pull-robot", map[string]string{
+	if err := capability.For(seedBinding()).Custodian.Put("secret/harbor/pull-robot", map[string]string{
 		"username": pullRobot, "password": pullSecret, "registry_host": registryHost,
 	}); err != nil {
 		return err

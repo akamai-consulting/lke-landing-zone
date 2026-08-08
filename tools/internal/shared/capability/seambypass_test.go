@@ -102,7 +102,6 @@ var baoSeamCall = regexp.MustCompile(
 var allowedBaoSeamCalls = map[string]int{
 	"credrotate":     6,
 	"database":       7,
-	"harbor":         2,
 	"healthsla":      1,
 	"identityconfig": 3,
 	"openbao":        21,
