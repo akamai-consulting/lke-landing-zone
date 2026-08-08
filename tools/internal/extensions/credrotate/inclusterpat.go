@@ -75,31 +75,15 @@ const (
 	inclusterPATGraceDays    = 7  // ESO refresh is 1-5m; a week covers any straggling consumer
 )
 
-// InClusterPATLabel is the Linode-side token label — also the drain target
-// (keep-newest, like every rotated credential). Per-region: each region's
-// OpenBao gets its own token, so revoking one region never breaks another.
-func InClusterPATLabel(prefix, region string) string {
-	// The instance discriminator matters here for the same reason it does on the
-	// obj keys: runCredentialsPATRevokeOld selects EVERY profile token with this
-	// exact label, keeps the newest, and revokes the rest. Two instances in one
-	// Linode account that both have a deployment named `lab` would each revoke the
-	// other's live in-cluster credential on a schedule — silently, monthly. PATs
-	// are profile-scoped, so the account is the shared namespace.
-	if prefix == "" {
-		return "llz-incluster-" + region
-	}
-	return "llz-incluster-" + prefix + "-" + region
-}
-
 // mintVerifiedInclusterPAT mints the narrow PAT with the broad provisioning
 // token and confirms the NEW token authenticates (GET /v4/profile) before the
 // caller writes it anywhere. A token that fails verification is left for the
 // drain (it can never be the newest verified sibling).
 func mintVerifiedInclusterPAT(ctx context.Context, mint PATAPI, prefix, region string) (id uint64, token string, err error) {
 	expiry := linode.FmtLinodeTS(Now().Unix() + inclusterPATValidityDays*linode.DaySecs)
-	resp, err := mint.CreateProfileToken(ctx, InClusterPATLabel(prefix, region), InClusterPATScopes, expiry)
+	resp, err := mint.CreateProfileToken(ctx, linode.InClusterPATLabel(prefix, region), InClusterPATScopes, expiry)
 	if err != nil {
-		return 0, "", fmt.Errorf("mint in-cluster PAT %s: %w", InClusterPATLabel(prefix, region), err)
+		return 0, "", fmt.Errorf("mint in-cluster PAT %s: %w", linode.InClusterPATLabel(prefix, region), err)
 	}
 	id, ok := cli.AsUint64(resp["id"])
 	if !ok {
@@ -155,15 +139,15 @@ func RunMintBootstrapPAT(region string) error {
 	}); err != nil {
 		return fmt.Errorf("seed secret/linode/api-token: %w", err)
 	}
-	fmt.Printf("Minted in-cluster PAT %s (id=%d) and seeded secret/linode/api-token.\n", InClusterPATLabel(prefix, region), id)
+	fmt.Printf("Minted in-cluster PAT %s (id=%d) and seeded secret/linode/api-token.\n", linode.InClusterPATLabel(prefix, region), id)
 	return ghaout.Append("GITHUB_STEP_SUMMARY",
-		fmt.Sprintf("Minted in-cluster PAT `%s` (id=`%d`) and seeded `secret/linode/api-token`.", InClusterPATLabel(prefix, region), id))
+		fmt.Sprintf("Minted in-cluster PAT `%s` (id=`%d`) and seeded `secret/linode/api-token`.", linode.InClusterPATLabel(prefix, region), id))
 }
 
 func RunRotateInClusterPAT() error {
 	region := os.Getenv("REGION")
 	// Runs from the instance checkout (llz-secret-rotation.yml), so the
-	// instance-scoped label comes from the spec — see InClusterPATLabel for why it
+	// instance-scoped label comes from the spec — see linode.InClusterPATLabel for why it
 	// must not be a bare llz-incluster-<env>.
 	prefix, err := clusterspec.LabelPrefixFor("rotate-incluster-pat")
 	if err != nil {
@@ -203,17 +187,17 @@ func RunRotateInClusterPAT() error {
 	fmt.Printf("Wrote secret/linode/api-token to %s OpenBao (new_pat_id=%d).\n", region, id)
 	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("> Wrote `secret/linode/api-token` (new_pat_id=`%d`, label `%s`) via secret-propagator GitHub-OIDC role.",
-			id, InClusterPATLabel(prefix, region))); err != nil {
+			id, linode.InClusterPATLabel(prefix, region))); err != nil {
 		return err
 	}
 	// Drain older same-labeled siblings past the grace window. Keep-newest
 	// keeps the token just written; consumers re-sync via ESO well inside the
 	// grace window. Drain failure is non-fatal by design of the monthly cadence
 	// (the next run retries) — but surface it, or leaked tokens hide forever.
-	if err := RunPATRevokeOld(ctx, client, true, InClusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", InClusterPATLabel(prefix, region), err)
+	if err := RunPATRevokeOld(ctx, client, true, linode.InClusterPATLabel(prefix, region), inclusterPATGraceDays); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::drain of old %s tokens failed: %v (next monthly run retries)\n", linode.InClusterPATLabel(prefix, region), err)
 		return ghaout.Append("GITHUB_STEP_SUMMARY",
-			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", InClusterPATLabel(prefix, region), err))
+			fmt.Sprintf("> Drain of older `%s` siblings failed (non-fatal): %v", linode.InClusterPATLabel(prefix, region), err))
 	}
 	return nil
 }

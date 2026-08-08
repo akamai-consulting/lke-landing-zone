@@ -44,13 +44,6 @@ func resolveExpectNodes(tfvarsPath string, fallback int) int {
 	return fallback
 }
 
-// WaitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
-// until it returns true or timeout elapses, sleeping interval between tries with
-// an immediate first try. Returns whether cond succeeded within the budget.
-func WaitPoll(timeout, interval time.Duration, cond func() bool) bool {
-	return cigate.PollUntil(time.Now, time.Sleep, timeout, interval, cond)
-}
-
 // runCIWaitPods returns nil once every pod reaches the phase, or an error (which
 // cobra exits 1 on). The ::error:: annotations stay as direct stderr writes —
 // GitHub only parses an annotation at the start of a line, and the returned
@@ -120,7 +113,7 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 		expectNodes = 1
 	}
 	var apiReachable bool
-	ok := WaitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
+	ok := cigate.WaitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
 		// jsonpath: one "<node>=<Ready-condition-status>" line per node, so a
 		// reachable-but-empty pool prints nothing and parses to 0 Ready.
 		out, err := deps.Exec("kubectl", "get", "nodes",

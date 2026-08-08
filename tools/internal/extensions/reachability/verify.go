@@ -13,9 +13,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
@@ -205,12 +205,12 @@ func knownHostsHas(knownHosts, host string) bool {
 }
 
 // selectPlatformApps returns the platform-* (or known llz-*) Applications.
-func selectPlatformApps(appsJSON string) []converge.ArgoApp {
-	all, err := converge.ParseArgoAppList([]byte(appsJSON))
+func selectPlatformApps(appsJSON string) []health.AppRef {
+	all, err := health.ParseAppRefList([]byte(appsJSON))
 	if err != nil {
 		return nil
 	}
-	var out []converge.ArgoApp
+	var out []health.AppRef
 	for _, a := range all {
 		if strings.HasPrefix(a.Name, "platform-") || platformAppRe.MatchString(a.Name) {
 			out = append(out, a)

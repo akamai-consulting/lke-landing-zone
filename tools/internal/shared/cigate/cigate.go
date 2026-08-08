@@ -224,3 +224,15 @@ func SplitCSVList(s string) []string {
 	}
 	return out
 }
+
+// WaitPoll is PollUntil with the real clock, and it came from
+// internal/extensions/converge -- one line wrapping the function directly above
+// it, in a package two peers then had to import to reach. The seamed version
+// exists so tests can drive the loop without sleeping; this is the shape every
+// non-test caller wants, and it belongs next to what it wraps.
+// WaitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
+// until it returns true or timeout elapses, sleeping interval between tries with
+// an immediate first try. Returns whether cond succeeded within the budget.
+func WaitPoll(timeout, interval time.Duration, cond func() bool) bool {
+	return PollUntil(time.Now, time.Sleep, timeout, interval, cond)
+}

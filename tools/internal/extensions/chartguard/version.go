@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
 const chartsRoot = "kubernetes-charts/"
@@ -71,11 +73,11 @@ func RunVersionGuard(d Deps, base, root string) error {
 	var failed []string
 	for _, dir := range dirs {
 		// New version from the working tree; "" when the chart was removed.
-		newVer := ChartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
+		newVer := charty.ChartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
 		// Old version from the base; "" when the chart is new. Safe to discard the
 		// error now that the base ref itself is known good.
 		oldRaw, _ := d.GitOutput(root, "show", base+":"+dir+"/Chart.yaml")
-		oldVer := ChartVersion(oldRaw)
+		oldVer := charty.ChartVersion(oldRaw)
 
 		ok, msg := classifyChartBump(dir, oldVer, newVer)
 		if ok {
@@ -139,31 +141,6 @@ func classifyChartBump(dir, oldVer, newVer string) (ok bool, msg string) {
 	default:
 		return true, fmt.Sprintf("%s: %s → %s", dir, oldVer, newVer)
 	}
-}
-
-// ChartVersion extracts the top-level `version:` value from Chart.yaml content,
-// or "" when absent. Only column-0 `version:` matches, so nested keys and
-// `appVersion:` are not mistaken for it.
-func ChartVersion(chartYAML string) string { return chartScalar(chartYAML, "version:") }
-
-// chartScalar reads a column-0 `<key> <value>` scalar out of Chart.yaml, with
-// surrounding quotes stripped.
-//
-// The quote stripping is the point: `version: "0.1.11"` is valid YAML, and the
-// PIN side of every comparison already strips quotes (extractChartPins,
-// siblingValue). Without it here, quoting a chart version makes chart-pin-guard
-// compare `"0.1.11"` against `0.1.11` and report a drift that does not exist —
-// a spurious failure on a legal edit. Latent today (no chart is quoted), and
-// cheaper to make symmetric than to discover.
-//
-// Column-0 only, so nested keys and `appVersion:` are never mistaken for it.
-func chartScalar(chartYAML, key string) string {
-	for _, line := range strings.Split(chartYAML, "\n") {
-		if strings.HasPrefix(line, key) {
-			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, key)), `"'`)
-		}
-	}
-	return ""
 }
 
 // splitLines splits git output into non-empty trimmed lines.

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
 func TestChangedChartDirs(t *testing.T) {
@@ -52,15 +54,15 @@ func TestClassifyChartBump(t *testing.T) {
 
 func TestChartVersion(t *testing.T) {
 	yaml := "apiVersion: v2\nname: foo\nversion: 0.4.1\nappVersion: \"latest\"\n"
-	if got := ChartVersion(yaml); got != "0.4.1" {
+	if got := charty.ChartVersion(yaml); got != "0.4.1" {
 		t.Errorf("ChartVersion = %q, want 0.4.1", got)
 	}
 	// appVersion must not be mistaken for version.
-	if got := ChartVersion("appVersion: 9.9.9\n"); got != "" {
-		t.Errorf("ChartVersion(appVersion only) = %q, want empty", got)
+	if got := charty.ChartVersion("appVersion: 9.9.9\n"); got != "" {
+		t.Errorf("charty.ChartVersion(appVersion only) = %q, want empty", got)
 	}
-	if got := ChartVersion("name: x\n"); got != "" {
-		t.Errorf("ChartVersion(no version) = %q, want empty", got)
+	if got := charty.ChartVersion("name: x\n"); got != "" {
+		t.Errorf("charty.ChartVersion(no version) = %q, want empty", got)
 	}
 }
 
@@ -173,12 +175,12 @@ func TestChartScalarStripsQuotes(t *testing.T) {
 		{"nested not matched", "dependencies:\n  version: 3.3.3\n", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ChartVersion(tt.yaml); got != tt.want {
+			if got := charty.ChartVersion(tt.yaml); got != tt.want {
 				t.Errorf("ChartVersion = %q, want %q", got, tt.want)
 			}
 		})
 	}
-	if got := ChartName("name: \"llz-foo\"\nversion: 0.1.0\n"); got != "llz-foo" {
+	if got := charty.ChartName("name: \"llz-foo\"\nversion: 0.1.0\n"); got != "llz-foo" {
 		t.Errorf("ChartName = %q, want llz-foo (quotes stripped, as the pin side does)", got)
 	}
 }

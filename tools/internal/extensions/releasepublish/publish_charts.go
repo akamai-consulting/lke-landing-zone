@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
 var pcDigestRe = regexp.MustCompile(`(?i)digest:\s*(sha256:[0-9a-f]+)`)
@@ -38,7 +38,7 @@ var (
 		if e != nil {
 			return "", "", fmt.Errorf("helm show chart %s: %w", dir, e)
 		}
-		return chartguard.ChartName(string(out)), chartguard.ChartVersion(string(out)), nil
+		return charty.ChartName(string(out)), charty.ChartVersion(string(out)), nil
 	}
 	// pcPublished reports whether ociRef:version already exists in the registry.
 	pcPublished = func(ociRef, version string) bool {

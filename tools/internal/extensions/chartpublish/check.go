@@ -33,7 +33,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
 var (
@@ -263,10 +263,10 @@ func extractPublishPins(content string) []publishPin {
 			continue
 		}
 		indent, name := m[1], strings.Trim(m[2], `"'`)
-		repoURL := chartguard.SiblingValue(lines, i, indent, "repoURL")
-		version := chartguard.SiblingValue(lines, i, indent, "targetRevision")
+		repoURL := charty.SiblingValue(lines, i, indent, "repoURL")
+		version := charty.SiblingValue(lines, i, indent, "targetRevision")
 		if version == "" {
-			version = chartguard.SiblingValue(lines, i, indent, "version")
+			version = charty.SiblingValue(lines, i, indent, "version")
 		}
 		if repoURL != "" && version != "" {
 			pins = append(pins, publishPin{RepoURL: repoURL, Chart: name, Version: version, Line: i + 1})

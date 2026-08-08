@@ -93,7 +93,7 @@ func resolveRotationLabel(explicit, kind, what string) (string, error) {
 			return l, nil
 		}
 	}
-	prefix, err := ObjLabelPrefixFor(what)
+	prefix, err := clusterspec.LabelPrefixFor(what)
 	if err != nil {
 		return "", err
 	}

@@ -311,3 +311,48 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 		Drifted:   drifted,
 	}, nil
 }
+
+// ── THE Application LIST SHAPE ───────────────────────────────────────────────
+//
+// AppRef and ParseAppRefList came from internal/extensions/converge. This file
+// already owns the Argo classification predicates; the struct those predicates
+// describe sat in the extension that happened to parse it first, which meant
+// `reachability` imported the whole convergence capability to decode a list.
+
+type AppRef struct {
+	Name   string
+	Sync   string
+	Health string
+}
+
+// ParseAppRefList reads `kubectl get applications -o json` into the name +
+// sync/health triple. The same anonymous struct and the same append loop were
+// written out twice, here and in selectPlatformApps (verify.go) — identical down
+// to the field tags.
+//
+// Deliberately NOT health.ParseArgoApp: that one is richer (spec-error
+// conditions, automated-policy detection) and is the right tool where those
+// matter. These two callers want only the triple.
+func ParseAppRefList(raw []byte) ([]AppRef, error) {
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Sync   struct{ Status string } `json:"sync"`
+				Health struct{ Status string } `json:"health"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	apps := make([]AppRef, 0, len(doc.Items))
+	for _, it := range doc.Items {
+		apps = append(apps, AppRef{it.Metadata.Name, it.Status.Sync.Status, it.Status.Health.Status})
+	}
+	return apps, nil
+}
+
+func (a AppRef) Healthy() bool { return a.Sync == "Synced" && a.Health == "Healthy" }

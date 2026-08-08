@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -373,7 +372,7 @@ func ReapEnvObjKeys(ctx context.Context, client *linode.Client, prefix, env stri
 }
 
 // ReapEnvInclusterPAT deletes the narrow in-cluster PAT(s) minted for env (label
-// llz-incluster-<objLabelPrefix>-<env>, per credrotate.InClusterPATLabel). mint-bootstrap-pat drains older
+// llz-incluster-<objLabelPrefix>-<env>, per linode.InClusterPATLabel). mint-bootstrap-pat drains older
 // siblings on each mint, but a failed drain / failed run leaks them toward the
 // account's 100-PAT cap. Exact-label match — the broad token this sweep RUNS under
 // carries a different label, so it is never self-revoked.
@@ -382,7 +381,7 @@ func ReapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env
 	if err != nil {
 		return fmt.Errorf("list profile tokens: %w", err)
 	}
-	label := credrotate.InClusterPATLabel(prefix, env)
+	label := linode.InClusterPATLabel(prefix, env)
 	for _, t := range toks {
 		if linode.MapString(t, "label") != label {
 			continue

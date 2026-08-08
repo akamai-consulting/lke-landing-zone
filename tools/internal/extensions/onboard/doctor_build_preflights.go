@@ -39,9 +39,9 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
@@ -79,7 +79,7 @@ func checkSpecPreflights(env string) []error {
 	// it never gates. Naming the labels here is what gives the operator the right
 	// vocabulary if the apply does collide.
 	if env != "" {
-		if prefix, perr := credrotate.ObjLabelPrefixFor("`llz doctor`"); perr == nil {
+		if prefix, perr := clusterspec.LabelPrefixFor("`llz doctor`"); perr == nil {
 			checkBucketLabelsAvailable(prefix, env)
 		}
 	}

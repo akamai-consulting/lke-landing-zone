@@ -206,7 +206,7 @@ func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 		return fmt.Errorf("REGION must be set")
 	}
 	objCluster := os.Getenv("OBJ_CLUSTER")
-	minting := InClusterLinodeToken()
+	minting := linode.InClusterLinodeToken()
 	if minting == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (the in-cluster Linode token used to mint replacements)")
 	}
@@ -355,19 +355,17 @@ func openLinodeRotatorBaoStore(ctx context.Context) (openbao.BaoStore, error) {
 // OpenBaoStore logs in to OpenBao via Kubernetes auth for the named role and
 // returns a write-capable client.
 //
-// THE ONE SEAM THIS TABLE NEEDS. Package main owns the in-cluster login path —
-// the ServiceAccount token, the mounted CA, the address and mount defaults — and
-// six other verbs use it. What this package owns is WHICH ROLE a rotation logs in
-// as, which is the part the rotation table decides.
+// IT IS A PLAIN VAR OVER shared/openbao NOW, not an installed seam. It used to be
+// a func-valued var defaulting to an error, filled in at startup by an init() in
+// internal/extensions/openbao that called credrotate.InstallBaoStore -- an
+// extension reaching sideways into another extension to wire itself up, and the
+// last of this package's four inbound edges.
 //
-// The default is inert rather than real, for the reason internal/credrotate's
-// SetSecret is: a default that actually logged in would make an un-installed
-// caller reach a live OpenBao.
-var OpenBaoStore = func(ctx context.Context, role string) (openbao.BaoStore, error) {
-	return nil, fmt.Errorf("credrotate: OpenBaoStore not installed")
-}
-
-// InstallBaoStore wires the in-cluster login main owns.
-func InstallBaoStore(open func(ctx context.Context, role string) (openbao.BaoStore, error)) {
-	OpenBaoStore = open
-}
+// The indirection existed because the in-cluster login path (the ServiceAccount
+// token, the mounted CA, the address and mount defaults) lived in an extension
+// that this one must not import. It lives in internal/shared/openbao now, so the
+// seam has nothing left to bridge: what this package owns is WHICH ROLE a rotation
+// logs in as, and that was always just the argument.
+//
+// Tests that need to substitute the store still can -- it is still a var.
+var OpenBaoStore = openbao.OpenInClusterStore

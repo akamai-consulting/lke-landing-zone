@@ -24,15 +24,15 @@ package reconciler
 import (
 	"context"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // ciVolumeDeps is the CI-runner shape: kubectl for the cluster, and a step summary.
 func ciVolumeDeps() volumes.Deps {
 	return volumes.Deps{
-		Token:   credrotate.InClusterLinodeToken(),
+		Token:   linode.InClusterLinodeToken(),
 		Kubectl: func(args ...string) ([]byte, error) { return execOutput("kubectl", args...) },
 		Summary: func(lines ...string) error { return ghaout.Append("GITHUB_STEP_SUMMARY", lines...) },
 	}
@@ -44,7 +44,7 @@ func inClusterVolumeDeps() (volumes.Deps, error) {
 	if err != nil {
 		return volumes.Deps{}, err
 	}
-	return volumes.Deps{Token: credrotate.InClusterLinodeToken(), Kube: k}, nil
+	return volumes.Deps{Token: linode.InClusterLinodeToken(), Kube: k}, nil
 }
 
 func runCIReconcileVolumeTags(ctx context.Context, scName string) error {
