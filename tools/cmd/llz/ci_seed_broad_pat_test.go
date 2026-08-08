@@ -3,7 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
 func lzWith(region string, toggles map[string]clusterspec.ComponentToggle) *clusterspec.LandingZone {
@@ -53,8 +55,8 @@ func TestBroadPATSeedEnabled(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := broadPATSeedEnabled(tc.lz, tc.region); got != tc.want {
-				t.Errorf("broadPATSeedEnabled(%q) = %v, want %v", tc.region, got, tc.want)
+			if got := openbao.BroadPATSeedEnabled(tc.lz, tc.region); got != tc.want {
+				t.Errorf("openbao.BroadPATSeedEnabled(%q) = %v, want %v", tc.region, got, tc.want)
 			}
 		})
 	}

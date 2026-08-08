@@ -67,7 +67,7 @@ func TestDispatchWatchWithoutABaselineRejectsACompletedRun(t *testing.T) {
 func TestDispatchWatchIsDisarmedWhenNothingWasDispatched(t *testing.T) {
 	// --dry-run and a missing --yes dispatch nothing, so there is no run to point
 	// at and no reason to spend API calls or wall-clock looking for one.
-	for _, g := range []globalOpts{{dryRun: true, yes: true}, {yes: false}} {
+	for _, g := range []globalOpts{{DryRun: true, Yes: true}, {Yes: false}} {
 		if beginDispatchWatch(g, "terraform.yml").armed {
 			t.Errorf("watch must be disarmed for %+v", g)
 		}

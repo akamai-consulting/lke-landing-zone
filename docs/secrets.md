@@ -382,7 +382,7 @@ to fire on.
 #### Credential-age coverage and the rotation class
 
 The `--reconcile-openbao-gauges` lane reads KV-v2 `updated_time` for every path in
-`credPaths` ([`reconcile_openbao.go`](../tools/cmd/llz/reconcile_openbao.go)) and
+`credPaths` ([`reconcile_openbao.go`](../tools/internal/extensions/lifecycle/reconcilelanes/openbao.go)) and
 publishes `llz_credential_age_days{cred, class}`. The `class` label is what makes
 the coverage honest — it separates "a rotator is late" from "nothing rotates this":
 
@@ -430,7 +430,7 @@ is granted to nothing, and `TestDBAdminGrantsInReconcilerPolicy` pins that.
 
 > **Adding a path to `credPaths` is a two-file change.** Every entry also needs a
 > `secret/metadata/<path>` read in `policyReconcilerRead`
-> ([`ci_openbao_configure.go`](../tools/cmd/llz/ci_openbao_configure.go)). The
+> ([`ci_openbao_configure.go`](../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go)). The
 > sampler treats only a 404 as "not seeded yet"; a 403 is fatal and fails the whole
 > pass, taking the seal gauge and every other credential's age down with it.
 > `TestCredPathsAreGrantedInReconcilerPolicy` pins the pair together.
@@ -629,7 +629,7 @@ Wired for the three workloads that hold an OpenBao token:
 | `broad-pat-rotator` CronJob | `llz-pat-rotator` |
 
 **The contract.** `inClusterBaoHTTPClient()`
-([`openbao_k8s_login.go`](../tools/cmd/llz/openbao_k8s_login.go)) is the single
+([`openbao_k8s_login.go`](../tools/internal/shared/openbao/openbao_k8s_login.go)) is the single
 place the transport is chosen:
 
 1. `OPENBAO_CA_FILE` set → verify against that bundle.

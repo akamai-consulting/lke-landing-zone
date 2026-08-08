@@ -25,6 +25,7 @@ command/flag check for exactly that reason, and still checks the links.)
 | 0011 | *Reserved* — ambient mesh migration | — | **Not written.** Cited by 0010 and 0012 as where the remaining plaintext residuals close |
 | [0012](0012-credential-observability-gaps.md) | Credential observability gaps | 2026-07-30 | Accepted |
 | [0013](0013-llz-as-apl-cli.md) | Reframe LLZ as the APL CLI: one binary, two altitudes | 2026-07-24 | Proposed |
+| [0014](0014-core-surface-budget.md) | The core-surface budget: cap the destination, not just the source | 2026-08-03 | Accepted |
 
 ## ⚠️ Two ADRs share the number 0007
 

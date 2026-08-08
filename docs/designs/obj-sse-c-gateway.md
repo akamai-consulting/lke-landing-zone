@@ -189,7 +189,7 @@ Secrets from its own namespace, so it cannot live beside the proxy.
 | `tools/cmd/llz/ci_seed_ssec_key.go` | `llz ci seed-ssec-key` — generate-once |
 | `tools/cmd/llz/ci_assert_obj_encryption.go` | `llz ci assert-obj-encryption` |
 
-The Kyverno policy lives in the **component**, not in `tools/cmd/llz/manifests/`
+The Kyverno policy lives in the **component**, not in `tools/internal/extensions/lifecycle/bootstrapcluster/manifests/`
 with its siblings. Those are applied by `llz ci apply-kyverno-policy`, and that
 command is invoked by nothing — no workflow, no Terraform, and `bootstrap-cluster`
 does not call it despite `ci.go` saying it does. Putting it there would have shipped

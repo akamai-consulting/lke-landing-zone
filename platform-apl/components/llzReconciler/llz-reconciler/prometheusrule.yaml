@@ -13,7 +13,7 @@
 #                              up=1 alone would miss.
 #
 # One property governs half the rules below: the reconciler's registry is
-# UPSERT-ONLY (tools/internal/metrics — no Delete, no expiry). A lane that stops
+# UPSERT-ONLY (tools/internal/shared/metrics — no Delete, no expiry). A lane that stops
 # sampling does not go absent and does not go stale to Prometheus, because the
 # endpoint is up and still answering with the last value it ever wrote. So an
 # alert shaped `max(llz_foo) == 1` cannot fire while the thing that would set it

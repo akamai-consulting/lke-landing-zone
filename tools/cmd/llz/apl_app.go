@@ -11,9 +11,16 @@ package main
 import (
 	"fmt"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/yamledit"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
 func aplAppCmd() *cobra.Command {
@@ -26,7 +33,7 @@ func aplAppCmd() *cobra.Command {
 			"which the apl-overlay reconciler propagates the change onto apl-<env>.",
 	}
 	c.AddCommand(
-		renamed(componentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
+		renamed(clusterspec.ComponentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
 		aplAppToggleCmd("enable", true),
 		aplAppToggleCmd("disable", false),
 	)
@@ -63,7 +70,7 @@ func runAppToggle(env, app string, enable bool) error {
 		return fmt.Errorf("%q is a required component and cannot be disabled (the cluster would not converge)", app)
 	}
 
-	envFile, err := envSpecFile(env)
+	envFile, err := envtopoext.SpecFile(env)
 	if err != nil {
 		return err
 	}
@@ -72,8 +79,8 @@ func runAppToggle(env, app string, enable bool) error {
 	if !enable {
 		value = "false"
 	}
-	if err := editSpecFile(envFile, func(doc *yaml.Node) error {
-		return setSpecPath(doc, path, value)
+	if err := yamledit.EditSpecFile(envFile, func(doc *yaml.Node) error {
+		return yamledit.SetSpecPath(doc, path, value)
 	}, func(b []byte) error { _, e := clusterspec.DecodeClusterDefinition(b); return e }); err != nil {
 		return err
 	}
@@ -82,9 +89,9 @@ func runAppToggle(env, app string, enable bool) error {
 	if !enable {
 		done = "disabled"
 	}
-	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", green(done), app, env, path, value)
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
-	return runRender(gopts, env, false, false, false)
+	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", color.Green(done), app, env, path, value)
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
+	return render.Run(cliopts.Global.DryRun, env, false, false, false)
 }
 
 // findComponent returns the component registry entry for an exact name.

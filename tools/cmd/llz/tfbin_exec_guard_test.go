@@ -11,7 +11,7 @@ import (
 // TestNoHardcodedTerraformExec is the regression guard for the OpenTofu
 // migration's long tail (ADR 0008).
 //
-// #356 converted seven call sites from a hardcoded "terraform" to tfBin(), and
+// #356 converted seven call sites from a hardcoded "terraform" to tfbin.Bin(), and
 // MISSED two — `tf-import` and `tf-apply`. Nothing caught it: the unit tests stub
 // the exec seams, `make lint` never shells out, and a local checkout resolves a
 // `tofu` on PATH (often via `alias terraform=tofu`), so a clean local run proved
@@ -57,13 +57,13 @@ func TestNoHardcodedTerraformExec(t *testing.T) {
 		for _, re := range patterns {
 			if loc := re.FindIndex(b); loc != nil {
 				line := 1 + strings.Count(string(b[:loc[0]]), "\n")
-				t.Errorf("%s:%d execs a hardcoded \"terraform\". The landing zone runs OpenTofu and the CI image carries no `terraform` binary, so this fails at runtime in CI while passing locally. Use tfCommand/tfCommandContext, or tfBin() for the helpers that take a binary name.", name, line)
+				t.Errorf("%s:%d execs a hardcoded \"terraform\". The landing zone runs OpenTofu and the CI image carries no `terraform` binary, so this fails at runtime in CI while passing locally. Use tfCommand/tfCommandContext, or tfbin.Bin() for the helpers that take a binary name.", name, line)
 			}
 		}
 	}
-	// A guard that scanned nothing reports the same green as one that scanned
+	// A guard that scanned nothing reports the same color.Green as one that scanned
 	// everything — the contract this repo's other guards share.
 	if scanned == 0 {
-		t.Fatal("scanned 0 Go files — the guard's corpus is empty, so its green means nothing")
+		t.Fatal("scanned 0 Go files — the guard's corpus is empty, so its color.Green means nothing")
 	}
 }

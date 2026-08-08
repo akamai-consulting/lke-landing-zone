@@ -54,6 +54,7 @@ doing its job. Links are still checked.
 | [apl-core-v6-migration](apl-core-v6-migration.md) | apl-core 5.x → 6.x. Pinned to GA `v6.0.0`; validate in lab before any non-lab environment. |
 | [apl-core-v61-upgrade](apl-core-v61-upgrade.md) | apl-core 6.0 → 6.1. Baseline moved, pinned to GA `v6.1.0`; same lab-first caveat. |
 | [apl-overlay-obj-native](apl-overlay-obj-native.md) | Adopting apl-core-native object storage; runtime behaviour still unconfirmed on a live cluster. |
+| [internal-extension-model](internal-extension-model.md) | Phases 1–2 — the declaration model (`tools/internal/shared/extension`) and the first forty-five extensions (`guard-budgets`, `guard-docs`, `posture-at-rest`, `assert-storage`, `reconcile-actions`, `teardown`, `template-sustain`, `import-brownfield`, `obj-encryption`, `guard-charts`, `cluster-access`, `health-sla`, `token-inventory`, `converge`, `assert-platform`, `assert-reconciler`, `assert-registry`, `promote-pipeline`, `posture-credential-coverage`, `config-readiness`, `env-topology`, `assert-network`, `wave-health`, `tofu-driver`, `assert-observability`, `assert-secrets`, `assert-identity`, `deliver-docs`, `argocd-diagnostics`, `posture-plaintext`, `chart-publish`, `guard-manifests`, `assert-objstore`, `wedge-gameday`, `phase-timing`, `doctor-probes`, `kyverno-policies`, `dev-mutation-testing`, `release-publish`, `credential-state-passphrase`, `credential-pat`, `credential-objkey`, `database-provisioner`, `openbao-seed`, `openbao-peer-ca`, plus a registry and `llz extension list`). Nothing is dispatched through it yet: the declarations are inert and all forty-five still run as cobra commands. Action ABI, manifest, per-instance enablement and the remote half did not land; issue #399 sequences them. |
 
 ### Proposed — analysed, not built
 
@@ -61,6 +62,7 @@ doing its job. Links are still checked.
 |---|---|
 | [credential-single-pane-incluster](credential-single-pane-incluster.md) | Moving the credential pane fully in-cluster. Input to the credential-rotation / PAT-window review. |
 | [windows-support](windows-support.md) | What native Windows support for `llz` would take, as a tiered spectrum rather than a switch. Tier 0 (WSL2 / Dev Container) already works. |
+| [internal-extensions](internal-extensions.md) | The measurement under the decomposition: every non-test file in package `main` assigned to a candidate extension exactly once, with line counts, grants and a suggested order. Nothing is built from it yet. |
 
 ### Superseded
 

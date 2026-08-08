@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )
 
 func TestGenericSecretManifest(t *testing.T) {
-	m := genericSecretManifest("ns1", "sec1", "secretId", "v@lue:with\nnewline")
+	m := kube.SecretManifest("ns1", "sec1", "secretId", "v@lue:with\nnewline")
 	for _, want := range []string{
 		"kind: Secret",
 		"name: sec1",

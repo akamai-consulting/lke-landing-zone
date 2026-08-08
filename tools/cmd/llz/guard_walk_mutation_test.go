@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
 // gwFinding is a guard finding with a THIRD field outside the sort key, so a
@@ -46,7 +48,7 @@ func TestSortGuardFindingsOrdersByFileThenSecondary(t *testing.T) {
 		{"b.yaml", "a", "3"},
 		{"a.yaml", "c", "4"},
 	}
-	sortGuardFindings(in, gwKey)
+	guardwalk.SortFindings(in, gwKey)
 	gwWant(t, gwOrder(in), []string{
 		"a.yaml|c|4",
 		"a.yaml|m|2",
@@ -60,7 +62,7 @@ func TestSortGuardFindingsOrdersByFileThenSecondary(t *testing.T) {
 		{"z.yaml", "aaa", "1"},
 		{"a.yaml", "zzz", "2"},
 	}
-	sortGuardFindings(in2, gwKey)
+	guardwalk.SortFindings(in2, gwKey)
 	gwWant(t, gwOrder(in2), []string{"a.yaml|zzz|2", "z.yaml|aaa|1"})
 }
 
@@ -74,6 +76,6 @@ func TestSortGuardFindingsKeepsFullyTiedFindingsPut(t *testing.T) {
 		{"a.yaml", "same", "first"},
 		{"a.yaml", "same", "second"},
 	}
-	sortGuardFindings(in, gwKey)
+	guardwalk.SortFindings(in, gwKey)
 	gwWant(t, gwOrder(in), []string{"a.yaml|same|first", "a.yaml|same|second"})
 }

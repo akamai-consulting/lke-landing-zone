@@ -208,4 +208,4 @@ observation, and an assertion by the rotating job was always the weaker signal.
 - The **PAT-rotation-locus** question — "where does the credential live" as a blast-radius question. (Reserved as ADR 0001; not yet written — see [the ADR index](README.md).)
 - [docs/secrets.md](../secrets.md) — the rotation-class table and the
   credential-age coverage section this extends.
-- `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list.
+- `tools/internal/extensions/assertions/tokeninv/inventory.go` — Kind 1's target list.

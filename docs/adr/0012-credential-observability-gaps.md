@@ -65,7 +65,7 @@ in opposite directions:
 - `LLZCredentialRootTokenParked` — presence does not match expectation, and the credential is **set**
 
 **The expectation is applied in the reconciler, not carried as a metric label.**
-`tools/internal/metrics` upserts keyed by the rendered label set and has no
+`tools/internal/shared/metrics` upserts keyed by the rendered label set and has no
 delete, so a label that encodes a *classification* — which changes when the
 writer's `llz` is upgraded, independently of the long-lived reconciler pod —
 would ADD a series rather than replace one, and the stale sample is served at its

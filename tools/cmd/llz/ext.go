@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -74,7 +76,7 @@ func addExtCommands(root *cobra.Command, cmds []extCommand) {
 			// too; rely on your command's own flags rather than llz's.)
 			DisableFlagParsing: true,
 			RunE: func(_ *cobra.Command, args []string) error {
-				return run(gopts, append(append([]string{}, ec.Argv...), args...)...)
+				return proc.RunEcho(cliopts.Global.DryRun, append(append([]string{}, ec.Argv...), args...)...)
 			},
 		})
 	}

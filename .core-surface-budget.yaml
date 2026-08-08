@@ -1,0 +1,1233 @@
+# Core-surface budget — Go logic lines in package main (tools/cmd/llz).
+#
+# WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
+# WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
+# WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
+#                                            tools/internal/extensions/guards/budget/remedy.go
+#
+# This file is the operational half of that: the number, and the rule for
+# changing it. The argument lives in the ADR and is not repeated here.
+#
+# THE RULE. `budget` equals the measurement exactly — it is a high-water mark, not
+# a ceiling with headroom (`exact: true` enforces both directions). So:
+#
+#   grew package main?    the gate fails until you raise this line in the SAME
+#                         commit, and say in the message why the code belongs in
+#                         package main rather than tools/internal/<pkg>.
+#   shrank it?            the gate fails until you LOWER this line. Bank the
+#                         paydown; slack left behind silently pre-approves the
+#                         next change's growth.
+#
+# Raising it is expected, not forbidden. The signal is the trend of this line, not
+# any single value.
+#
+# COUNTING (`llz ci core-surface --verbose` prints the per-file breakdown).
+# `go-logic` counts non-blank lines of Go that do not START with `//` — the
+# `script` counter's rule with Go's comment marker. Block comments are
+# deliberately not tracked: this repo documents with `//`, and `/*` appears almost
+# only inside glob and regex string literals, where a naive scanner would swallow
+# the rest of the file.
+#
+# SCOPE. Non-test Go directly under tools/cmd/llz — package main, the one package
+# that cannot be imported, cannot be unit-tested from outside, and has no boundary
+# of its own. tools/internal/** is NOT counted: code that moved there has already
+# done the thing this gate asks for. Tests are excluded outright, because they are
+# what this repo wants more of.
+#
+# NO `remedy:` KEY, deliberately. The breach guidance lives only in
+# budget.CoreSurfaceRemedy: when it lived in both places the YAML copy silently
+# won, and an edit to the Go constant never reached an operator. The key stays supported
+# for a gate that needs to override the default; this one does not.
+
+categories:
+  cmd-llz-package-main:
+    kind: go-logic
+    # 38,364 logic lines across 202 non-test files, 113 of them ci_*.go.
+    #
+    # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
+    # matters about a ratchet:
+    #
+    #   41,803 / 215 files  2026-08-03. The first number the gate ever recorded.
+    #   47,182 / 236 files  2026-08-05, on rebase. +5,379 in five weeks of `main`
+    #                       with nothing extracted — the trend ADR 0014 predicted,
+    #                       arriving on schedule and restated by hand because the
+    #                       gate went red until someone did.
+    #   46,716 / 234 files  the guard-budgets EXTRACTION. The budget engine, the
+    #                       counters, the remedies and their tests are now
+    #                       tools/internal/extensions/budget; the two commands are a flag set
+    #                       each. -466, and the FIRST paydown.
+    #   46,797 / 235 files  `llz extension list`. +81, spent deliberately: the
+    #                       declaration model was validated with no way to look at
+    #                       it, and a ratchet that could only be paid into would be
+    #                       a freeze rather than a budget.
+    #   46,106 / 235 files  guard-docs, the second extension. docs-guard and the
+    #                       TOC renderer are tools/internal/extensions/docsguard; the two
+    #                       commands are a flag set and a file write. -691, the
+    #                       largest single move so far.
+    #   45,763 / 234 files  posture-at-rest, the first extension that is not a
+    #                       gate, plus the guardkit its extraction forced out.
+    #                       -343.
+    #   45,229 / 232 files  assert-storage, the first extension that touches a
+    #                       cluster and a cloud — and the first whose extraction
+    #                       needed seams injected rather than none at all. -534.
+    #   44,826 / 228 files  reconcile-actions, four of the reconciler's eight
+    #                       lanes. The four that stayed are the finding; see the
+    #                       declaration. -403.
+    #   44,171 / 226 files  teardown, the first TRANSITION binding. -655.
+    #   43,817 / 221 files  template-sustain (partial — the own-paths half cannot
+    #                       leave core) plus internal/color, which every extracted
+    #                       extension needs. -354.
+    #   40,827 / 214 files  import-brownfield, the first OPT-IN extension and the
+    #                       largest single move: -2,990. Below the 41,803 this
+    #                       gate first recorded, and below the pre-rebase number.
+    #   38,821 / 206 files  obj-encryption, the first extension to bind `seeded` —
+    #                       the group PR #15's ceiling banned by omission. -2,006,
+    #                       plus internal/harborauth and internal/s3sig.
+    #   38,364 / 202 files  guard-charts, the fourth gate — plus internal/guardwalk,
+    #                       the manifest traversal TEN guards share. -457.
+    #   37,483 / 199 files  cluster-access, the first extension whose binding is a
+    #                       TRANSITION at `provisioned` — and the second to widen
+    #                       grantStates (secret-custody, for the cloud-issued
+    #                       bootstrap kubeconfig). Plus internal/tfbin. -881.
+    #   37,131 / 197 files  health-sla, two NAMED invariants split on capability.
+    #                       Only -352: internal/kubectlprobe (the 9th shared
+    #                       package, 10 callers) left, but four cobra commands came
+    #                       BACK as flag sets. A paydown is net of what returns.
+    #   36,107 / 192 files  token-inventory, the FIRST binding at `configured` —
+    #                       and the first extraction to add a WORD to the model
+    #                       rather than a table row (secret-read, split out of
+    #                       secret-custody). -1,024.
+    #   34,359 / 188 files  converge, THE ACID TEST — the transition/assertion split
+    #                       the catalog predicted, plus internal/cigate (12 callers).
+    #                       -1,748, the second-largest single move.
+    #   33,877 / 185 files  assert-platform, the first PURELY-assertion extension —
+    #                       four lanes, one read grant each, nothing that mutates.
+    #                       Only -482: the fifth file the catalog named was template
+    #                       -pin machinery and stayed. 
+    #   33,157 / 185 files  assert-reconciler, the SECOND opt-in extension and the
+    #                       first half of a capability/assertion pair. Plus
+    #                       internal/promwire. -720, with no file-count change: the
+    #                       moved lines came back as Deps wiring and shared packages.
+    #   32,965 / 185 files  assert-registry, the CHEAPEST extraction (closure 2) and
+    #                       the only one needing NO injected capabilities. -192, the
+    #                       smallest paydown so far — the cobra Long text is most of
+    #                       what came back.
+    #   32,733 / 184 files  promote-pipeline, which binds `promoted` — the LAST
+    #                       unclaimed state. All ten now carry a binding. -232; the
+    #                       os.WriteFile stayed in cmd/llz so the read-repo grant
+    #                       remains true (3rd case, same resolution as gen-toc).
+    #   32,077 / 182 files  posture-credential-coverage, a GATE the catalog filed
+    #                       under `invariant: operating` — it reaches no cluster at
+    #                       all. 5th catalog correction, 1st about a STATE rather
+    #                       than a file list. -656, at 90.5% coverage.
+    #   31,372 / 182 files  config-readiness — the `configured` PREDICATE, which the
+    #                       catalog called right. Plus internal/instancelayout, a hub
+    #                       extracted to break a CYCLE rather than on caller count:
+    #                       it took env-topology's closure 21 -> 6. -705.
+    #   30,687 / 179 files  env-topology, plus internal/yamledit (3 callers). -685.
+    #                       branchpolicy.go went BACK to cmd/llz: its GitHub PUT is
+    #                       cloud-mutate at `configured`, which grantStates refuses,
+    #                       and one shipping case is below the two-case bar.
+    #   29,853 / 176 files  assert-network — BELOW 30,000, and the best ratio yet:
+    #                       closure 6 across 1,267 lines. -834.
+    #   29,450 / 174 files  wave-health, a GATE the catalog filed as an invariant —
+    #                       2nd state-level correction. Closure 3, all noise. -403.
+    #   29,230 / 172 files  tofu-driver — three verbs the catalog gave ONE row and
+    #                       one grant; two of the three mutate nothing. -220.
+    #   27,156 / 161 files  assert-observability, the LARGEST assert row and the
+    #                       second-biggest single move: -2,074. Adding ci_readiness
+    #                       to the file set LOWERED closure 20 -> 14.
+    #   26,174 / 158 files  assert-secrets. -982. Grepped for hidden writes BEFORE
+    #                       declaring and found one: the broad-PAT drill applies a
+    #                       Job. Four extractions, four hidden mutations.
+    #   25,274 / 157 files  assert-identity. -900. FIVE for five on hidden
+    #                       mutations: the "smoke test" CREATES a Keycloak client
+    #                       and a user. First extraction the LANGUAGE forced into
+    #                       a shared package — Go will not let two packages define
+    #                       methods on a type neither owns, so internal/keycloak
+    #                       had to come out first.
+    #   25,020 / 156 files  deliver-docs. -254, the SMALLEST paydown yet, and the
+    #                       one that cost the most model. It added `write-repo` —
+    #                       the second word this vocabulary has gained, after
+    #                       three earlier extractions recorded the gap and refused
+    #                       to invent it. gen-toc, guard-docs and promote-pipeline
+    #                       could each keep the os.WriteFile in cmd/llz; this one
+    #                       PRUNES a directory mid-walk, so there was no seam to
+    #                       split on and the declaration was impossible rather
+    #                       than incomplete.
+    #   24,807 / 155 files  argocd-diagnostics. -213. The FIRST extension whose
+    #                       binding KIND is wrong on purpose: a diagnostic that
+    #                       always exits 0, declared `assertion` and marked
+    #                       Incomplete, because a fifth kind needs two cases and
+    #                       this is one. Needed NO Deps — kubectlprobe.Exec
+    #                       already had the only seam. EffectiveKubeconfig moved
+    #                       to internal/kubectlprobe: closure measures what moved
+    #                       files REACH, not what reaches them, so the inbound
+    #                       caller in cluster-bootstrap was invisible until the
+    #                       build broke.
+    #   24,203 / 154 files  posture-plaintext. -604, and the CLEANEST BOUNDARY of
+    #                       the campaign: a real closure of ZERO. 984 lines plus
+    #                       719 of test moved with no injected capability, no
+    #                       stranded fixture and no symbol crossing either way.
+    #                       closure.py first said 5 — all five words inside error
+    #                       STRINGS, because it stripped backtick literals before
+    #                       double-quoted ones and a backtick inside a "..." ate
+    #                       an arbitrary span. Every closure measured before that
+    #                       fix is an UPPER BOUND.
+    #   23,898 / 153 files  chart-publish. -305, and the THIRD grantStates
+    #                       widening: cloud-mutate at `configured`. env-topology
+    #                       wrote that exact binding 10 extractions ago, was
+    #                       refused, and moved branchpolicy.go BACK to main rather
+    #                       than widen on one case. This is case two, so the row
+    #                       moved and env-topology's third binding is now
+    #                       expressible. 7th catalog correction, and the SECOND
+    #                       file pulled out of the `release-publish` row.
+    #   23,653 / 150 files  guard-manifests, three lanes of four. -245. The
+    #                       declaration's own test found the split: the first cut
+    #                       called all three a gate, and TestPackageStaysFilesOnly
+    #                       failed on `apl_schema.go reaches os/exec` — that lane
+    #                       shells out to helm to resolve the chart it validates
+    #                       against, so it is an assertion holding cloud-read.
+    #                       8th catalog correction. dropped-apiversions stayed
+    #                       (entangled with checks.go both ways), marked Incomplete.
+    #   23,387 / 149 files  assert-objstore. -266. SIX FOR SIX on assert- lanes
+    #                       that mutate — and the first where the write is NOT
+    #                       hidden: its own header says it PUTs, GETs and deletes.
+    #                       The write IS the check, because Linode's obj
+    #                       generations are disjoint namespaces and the API's
+    #                       bucket listing was the misleading view.
+    #   23,205 / 148 files  wedge-gameday. -182. Cleanest boundary since
+    #                       posture-plaintext: closure 2, one inbound edge, NO
+    #                       Deps. SIXTH forced `transition:converged`, and the
+    #                       first where BOTH halves are forced — a gameday belongs
+    #                       at `operating` and Transition cannot reach it.
+    #   22,964 / 146 files  phase-timing. -241, and a NEGATIVE RESULT worth more
+    #                       than the lines: the SECOND diagnostic, so the two-case
+    #                       bar for a fifth binding kind is met — and the two cases
+    #                       DISAGREE about shape. Not one kind, so nothing invented.
+    #   22,726 / 143 files  doctor-probes. -238. CASE THREE OF THREE closes the
+    #                       fifth-kind question in the negative: the three
+    #                       "diagnostics" attach to the FAILURE of a state, NO
+    #                       state, and TWO states. "Diagnostic" is a tone of voice,
+    #                       and the model already has a field for that (Short).
+    #   22,566 / 142 files  kyverno-policies. -160. FIRST CATALOG NOTE THAT WAS
+    #                       RIGHT FIRST TIME, after eight corrections. Also the
+    #                       first UNFORCED transition:converged after six forced
+    #                       ones — it genuinely acts. //go:embed PINS DATA to its
+    #                       package dir, so the manifests could not follow.
+    #   22,383 / 141 files  managed-fresh, into template-sustain's existing gate.
+    #                       -183, and the NINTH catalog correction: the
+    #                       `apl-upgrade` row groups two unrelated things, by WHEN
+    #                       they run rather than what they touch. A coverage floor
+    #                       went DOWN 84 -> 55 — the documented exception, because
+    #                       the tests assert what the CLASS TABLE locks.
+    #   22,153 / 140 files  dev-mutation-testing. -230, and the FIRST extension
+    #                       that is not about the platform at all — its subject is
+    #                       the repository's own tests. 97 lines of RunE moved with
+    #                       it: a flag set that keeps its verb in a cobra callback
+    #                       has been relabelled, not extracted. testdata/ moved
+    #                       WITH the package, unlike kyverno's embedded manifests.
+    #   21,841 / 138 files  release-publish. -312, TENTH catalog correction, and
+    #                       the THIRD file out of this one row. Its note says
+    #                       "template-repo-side, not instance-side" and three of
+    #                       its five files are not. Also the FIRST row where moved
+    #                       code got NO BINDING: publish-charts runs only in the
+    #                       template repo's own workflow, so it has no instance
+    #                       lifecycle state — a catalog row that is not an
+    #                       extension.
+    #   21,542 / 136 files  credential-state-passphrase. -299, and the FIRST
+    #                       credential row extractable at all: the other five read
+    #                       OpenBao through bao_read.go, whose verdict type has 7
+    #                       callers and whose exec seam has 9. This one is not
+    #                       blocked because the Tofu state passphrase never enters
+    #                       OpenBao — it must exist before any cluster does. Its
+    #                       binding is PUSHED to `seeded`: the honest state is
+    #                       `configured`, and grantStates rightly refuses
+    #                       secret-custody there.
+    #   21,457 / 136 files  internal/baoread — INFRASTRUCTURE, not an extension.
+    #                       Only -85, and that is the point: the OpenBao read
+    #                       classifier is 170 lines that SEVEN files depend on, so
+    #                       extracting it buys almost no surface and unblocks a
+    #                       family. It did not unblock as much as predicted: the
+    #                       credential rows share a SECOND framework
+    #                       (credentials.go's rotator client + the rotation
+    #                       table), which is the actual next wall.
+    #   21,082 / 130 files  credential-pat + credential-objkey, on the
+    #                       internal/credrotate framework. -375, and the SECOND
+    #                       WALL down. The measurement proves it: credentials_pat
+    #                       was unmeasurable in place and is closure TWO once the
+    #                       framework moved. FIRST PACKAGE TO DECLARE TWO
+    #                       EXTENSIONS — they share a framework, not a lifecycle.
+    #                       A THIRD wall remains: the rotation table in
+    #                       ci_rotate_linode_creds.go, 18 symbols with callers in
+    #                       eight other files.
+    #   20,835 / 127 files  the rotation table — WALL 3, and the last one. -247.
+    #                       ci_rotate_linode_creds.go knows what a credential IS
+    #                       in this platform (which exist, where each lives in
+    #                       OpenBao, which Linode API mints it), so nothing that
+    #                       handles one could leave while it stayed. Measured
+    #                       result: every remaining file in the family dropped
+    #                       from unmeasurable to closure 4-10.
+    #   20,591 / 125 files  broad-PAT rotation + temp-objkey, into credrotate.
+    #                       -244, and a FOURTH wall found: the other three files
+    #                       (seed-broad-pat, mint-objkeys, incluster-pat) reach
+    #                       the OpenBao WRITE/seed layer (baoKVPutFn, runCIBaoSeed,
+    #                       baoExecFn) and the GitHub OIDC layer. My "these are
+    #                       ordinary extractions now" was right for two of five —
+    #                       per-file closures were clean, the COMBINED set was 16.
+    #   20,492 / 122 files  wall 4, HALF DOWN. -99. The GitHub OIDC layer went to
+    #                       internal/forge and two kubectl Secret probes that were
+    #                       never the seeder's went to internal/kube (four callers,
+    #                       none of which seeds anything). The set fell 16 -> 12.
+    #                       What is left is the OpenBao WRITE path proper:
+    #                       baoExecFn, baoKVPutFn, baoSeedOpts/runCIBaoSeed.
+    #   20,269 / 120 files  wall 4 done for the credential family. -223. The
+    #                       OpenBao WRITE seams (ExecStdin, KVPut) went into
+    #                       internal/baoread rather than a new package — the read
+    #                       classifier and the write use the SAME in-pod bao CLI,
+    #                       and two packages installing one exec twice is worse
+    #                       than a package whose name describes its better half.
+    #                       mint-objkeys and incluster-pat followed.
+    #   19,436 / 144 files  database-provisioner + assert-database. -833, the
+    #                       largest single move since assert-observability. The
+    #                       catalog's textbook capability/assertion pair, and the
+    #                       code agreed — unlike credential-pat/objkey one
+    #                       extraction earlier, which share a framework and NOT a
+    #                       subject. Also the first binding refused by BOTH
+    #                       tables: rotation belongs at `operating`, and the two
+    #                       tables disagree about where it may go instead.
+    #   19,074 / 142 files  openbao-seed — the seeding THIRD of the
+    #                       openbao-lifecycle row. -362. The whole row measures 20
+    #                       outbound against ~25 inbound across six other files:
+    #                       not one boundary, six. The seeders ARE one, and only
+    #                       because four earlier walls had already turned
+    #                       baoKVPutFn into baoread.KVPut and openbaoNS into
+    #                       baoread.Namespace.
+    #   19,006 / 141 files  openbao-peer-ca — the CA slice of the same row, and
+    #                       the SECOND slice taken. -68, the smallest paydown
+    #                       since posture-plaintext's measurement fix, and the
+    #                       point is the boundary rather than the lines: two verbs
+    #                       whose entire inbound surface is their own cobra
+    #                       constructors. secret_apply.go went to internal/kube on
+    #                       the way — helpers that had already been orphaned TWICE
+    #                       by the code they were typed next to.
+    #
+    #   47th: openbao exec layer  -> internal/baoread   19,006 -> 18,870 (-136 / 141 files)
+#        SMALL ON PURPOSE. ci_openbao.go is 287 lines and the hub every remaining
+#        OpenBao file reaches for, but half of it was NOT the exec layer: a cobra
+#        command and appendGHAFile, which has 25 callers of which exactly one is an
+#        OpenBao one. Moving that would have made every caller import OpenBao to
+#        write a step output, so it came straight back. The paydown is the retry
+#        wrapper, the pod-status parse, the loopback addressing and baoExec — which
+#        is what unblocks breakglass, init, configure and ensure-ready.
+#   48th: gh-secret writers  -> internal/ghsecret   18,870 -> 18,851 (-19 / 141 files)
+#        TINY, AND NOT THE POINT. The OpenBao lifecycle family had exactly three
+#        outbound edges that were not localisable noise and all three were these,
+#        STRADDLING: ci_openbao_init.go DEFINED ghSetSecretFn while ci_baoseed.go
+#        and credrotate_deps.go consumed it, and commands.go/openbao.go/
+#        ci_clear_secrets.go pointed the other way. Settling it first is what took
+#        that family from 11 outbound to 8, all noise.
+#   49th: openbao-lifecycle  -> internal/baolifecycle   18,851 -> 18,245 (-606 / 138 files)
+#        THE ROW THAT RESISTED FOUR ITERATIONS. init + regen-root + break-glass +
+#        ensure-ready, 1,013 lines. It could not move until the exec layer (47th)
+#        and the gh-secret writers (48th) moved first: with both settled it
+#        measures 8 outbound, all noise; before them every probe came back 16-17.
+#        A set that measures badly is usually not entangled with the code it names
+#        -- it is waiting on a layer underneath that nobody has separated yet.
+#        Bonus: every lane took a globalOpts and read ONE field. They take a bool.
+#   50th: gh REST secret writers -> internal/ghsecret   18,245 -> 18,184 (-61 / 137 files)
+#        The `gh` CLI half moved in the 48th; this is the REST half, and the two
+#        belong together -- SetRepoNative/SetEnvNative are the same write with a
+#        different transport. Closure was 1 (`main`), so this was free. What it
+#        BUYS is harbor-provisioner: that set was 17 outbound at the start of the
+#        campaign, 10 after the 48th, and is 8 now with only two real edges left.
+#   51st: baoKVPutFn + in-cluster k8s login -> baoread / openbao   18,184 -> 18,086 (-98 / 135 files)
+#        The LAST straddling seam. baoKVPutFn was defined in ci_harbor.go, consumed
+#        by ci_objenc.go, baoread_deps.go and five packages through baoread.KVPut --
+#        whose default main was installing was that very function, three files away.
+#        It gets a REAL default now, unlike Exec/ExecStdin/PodStatusUnsealed: those
+#        shell out to kubectl and an unstubbed test would silently reach a live
+#        cluster, while kvPut is gated on OPENBAO_ROOT_TOKEN and fails loudly.
+#        openbao_k8s_login.go moved too and exposed a real cycle: openbao ->
+#        reconcilelanes -> openbao, because a LANE package was holding an OpenBao
+#        fact (DefaultOpenBaoAddr). Harbor is now 5 outbound, all noise.
+#   52nd: harbor-provisioner  -> internal/harbor   18,086 -> 17,690 (-396 / 133 files)
+#        THE CLEANEST MEASUREMENT IN THE CAMPAIGN. 17 outbound at the start, 5 when
+#        it moved, and nobody touched a harbor file in between: ghsecret took it to
+#        10 then 8, baoread.KVPut to 6, the in-cluster login to 5. The five left
+#        are main/ok/pass/spec/ReadFile, and the middle three are METHOD names the
+#        scanner cannot tell from package-level ones. Nothing here was tangled.
+#   53rd: identity-plane  -> internal/identityconfig   17,690 -> 16,886 (-804 / 130 files)
+#        THE LARGEST SET IN THE CAMPAIGN, 1,713 lines, and it moved on a measurement
+#        that looks like it says nothing: 11 outbound with ci_openbao_configure.go
+#        and 11 without. The COUNT did not change; the SHAPE did. Without that file
+#        three edges were real two-way couplings; with it every edge is an exec
+#        adapter or a one-liner. JUDGE A SET BY WHETHER ITS EDGES ARE CUTTABLE.
+#        Also cost: a directory-scoped test guard (TestSeedTargetsAreReserved-
+#        Namespaces, os.ReadDir(".")) went INERT when its file moved, and only its
+#        own seen==0 check caught it. It walks tools/ now.
+#   54th: GitHub git-data API -> internal/ghgitdata   16,886 -> 16,641 (-245 / 128 files)
+#        Closure 3, of which one was real (redactSecret). The THIRD free-enabler of
+#        this shape: ghsecret before harbor, baoread before baolifecycle, this
+#        before reconciler-runtime -- which drops from 11 outbound to 7, and three
+#        of the seven are its own lanes in ci_volumes.go/ci_discover_firewall.go.
+#   55th: reconciler-runtime -> internal/reconciler   16,641 -> 14,937 (-1,704 / 117 files)
+#        THE LARGEST SINGLE MOVE IN THE CAMPAIGN, and the only DAEMON in the tree.
+#        11 files, 2,758 production lines that never terminate on purpose.
+#        FIRST DEPARTURE FROM THE FLAG-SETS-GO-BACK RULE, argued in cmds.go:
+#        reconcileOpts has 25 fields, 20 of them a --reconcile-<lane> bool paired
+#        with a resync interval. That struct IS the runtime configuration surface;
+#        exporting all 25 so main could set them trades a private struct for a
+#        public one and buys nothing.
+#        The seed-roots guard went inert A SECOND TIME -- the first repair walked
+#        ".." and cmd/llz's parent is cmd/, not tools/. It passed anyway because
+#        seed roots still happened to be in cmd/llz. Now "../..". A relative walk
+#        root is the same class of bug as the ReadDir(".") it replaced.
+#        NEW TRAP: a source-scanning test in an UNCHANGED package (assertreconciler
+#        reads reconcile.go) keeps returning a CACHED PASS after the file it reads
+#        has moved. `go test ./...` was green; `-count=1` was not. Run -count=1
+#        after every extraction.
+#   56th: gh argv/display layer -> internal/ghcli   14,937 -> 14,909 (-28 / 117 files)
+#        The SMALLEST paydown in the campaign and an enabler, like ghsecret before
+#        harbor. ghsecret owns gh EXECUTION; this owns what a dry-run PRINTS --
+#        argv builders, shell quoting, the gh host, the "gh is not installed"
+#        diagnostic. Quote has five callers in main that never execute anything.
+#        Took scaffold-instance from 25 outbound to 21. NOT ENOUGH: see below.
+#   57th: assert-suite + template-manifest   14,909 -> 14,237 (-672 / 115 files)
+#        BOTH MEASURED CLOSURE 2, BOTH NOISE. 442 + 446 lines that never needed
+#        anything from package main, sitting there the whole campaign while four
+#        iterations went into sets that were NOT separable. The measurement is
+#        cheap and the intuition is unreliable IN BOTH DIRECTIONS -- scaffold
+#        looked movable and is not; these looked like command plumbing and were
+#        the two cleanest boundaries left.
+#        assert-suite is the runner that runs the other extensions, and the only
+#        member of the catalog for which `verified` is the honest state.
+#   58th: version-pins, openbao CLI, reap + drain   14,237 -> 13,183 (-1,054 / 112 files)
+#        Four candidates, closures 2/3/4/5, every edge noise -- and TWO of them went
+#        into packages that already existed (internal/openbao, internal/teardown)
+#        rather than new ones, which is what a campaign looks like when it is
+#        running out of genuinely new boundaries.
+#        A COPY MET ITS ORIGINAL: teardown.go carried orAll with a comment saying
+#        it was "a local copy of package main's helper", and reap.go IS that
+#        helper. Ten packages kept a three-line copy in this campaign; this is the
+#        first time two ended up in one package, and the copy is the one deleted.
+#        Two cycles broken: openbao -> ghcli -> configreadiness -> tokeninv ->
+#        reconcilelanes -> openbao, over ONE dry-run line, fixed with a local
+#        12-line quote(); and a self-import left by a bulk `openbao.` strip.
+#        COVERAGE DEBT, recorded not hidden: internal/openbao 88 -> 63 and
+#        internal/teardown 80 -> 47. Both absorbed exec/API-bound code that was
+#        equally untested in package main; the arithmetic moved, not the
+#        standard. THE EXPLANATION LIVES HERE AND NOT IN THE MAKEFILE: the
+#        untestable-loc gate counts Makefile COMMENT lines, and two lines of
+#        justification put makefile-recipe at 30/28. Lower a floor here, not
+#        there.
+#   59th: mtls-wiring -> internal/mtlsguard   13,183 -> 12,970 (-213 / 111 files)
+#        CLOSURE 1 -- `main`, and nothing else. 282 lines that needed nothing from
+#        package main and were never measured until the campaign ran out of hard
+#        candidates and started sweeping. Third time a sweep beat a hunch.
+#   60th: tfvars layer + seed-special   12,970 -> 12,721 (-249 / 110 files)
+#        The tfvars READER (ci_seed_special.go), WRITER (scaffold.go) and
+#        EXISTENCE CHECK (render.go) were in three different files. Putting them
+#        in one package surfaced a disagreement none could show alone: Value
+#        TrimSpace()s the left side and so accepts an INDENTED assignment, while
+#        SetField and HasKey anchor at column 0. llz can read a value it would
+#        never rewrite. Not yet a bug -- this tree generates these files
+#        unindented -- and now pinned by a test written to FAIL if one side is
+#        "fixed" without the other.
+#        Also took scaffold from 21 outbound to 19. Still blocked; still not a
+#        boundary problem.
+#   61st: loadSpec -> clusterspec, bootstrap-cluster -> internal/bootstrapcluster
+#         12,721 -> 11,756 (-965 / 107 files)
+#        THE LAST BIG CLEAN SET, and it looked entangled for the whole campaign.
+#        Measured ALONE ci_bootstrap_cluster.go is 15 outbound -- and EIGHT of the
+#        fifteen are its own manifests sibling. With the sibling and
+#        ci_prepare_apl_upgrade.go it is 6; after loadSpec moved, 5.
+#        THE MIRROR OF THE FIRST TRAP: a per-file closure UNDERSTATES a set by
+#        hiding shared helpers and OVERSTATES it by counting a sibling as a
+#        foreign dependency. Check where the edges POINT.
+#        loadSpec was 8 lines of adapter with ELEVEN callers, all of which had to
+#        agree about the "spec present?" rule. It is clusterspec.Detected now.
+#        The manifests/ dir travelled with its embedder, which moved a constraint
+#        internal/kyverno had DOCUMENTED rather than solving it -- and kyverno's
+#        own TestManifestsStayWithTheEmbeddingPackage is what caught the move.
+#   62nd: the copier-answers hub -> internal/answers   11,756 -> 11,730 (-26 / 106 files)
+#        A CORRECTION TO THE PREVIOUS ENTRY. This ledger had just written the
+#        scaffold mass off as "a design task, no enabler to extract first". That
+#        was wrong about instance.go: 65 lines, CLOSURE 1, and the hub FOURTEEN
+#        cmd/llz files reached through.
+#        It was also only partly wrong. Moving it took template_commit 10 -> 8,
+#        selfupdate 8 -> 7, render 11 -> 10 -- real, and nothing like the
+#        collapses ghsecret and ghgitdata produced. The rest of the coupling is
+#        not one shared helper; it is main.go's globals and the
+#        answers/spec/tfvars read path genuinely interleaving. THAT part is still
+#        a design task.
+#        Cost: a blanket type rename (Answers -> File) rewrote the STRING LITERAL
+#        ".copier-answers.yml" into ".copier-File.yml". Four tests caught it.
+#        Rename by exact symbol -- and check string literals, not just code.
+#   63rd: FIVE guards, all CLOSURE 1   11,730 -> 11,108 (-622 / 101 files)
+#        mesh-egress (245), coverage (208), cosign-subject (203), workflow-shells
+#        (125), monitoring-label (118). ~900 lines of real logic that needed
+#        NOTHING from package main except `main` itself, and had been sitting
+#        there for the entire campaign.
+#        THE THIRD TIME "mechanical extraction is complete" WAS WRONG. Found by
+#        running the per-file sweep instead of trusting the previous conclusion.
+#        All five built and vetted clean on the FIRST pass -- no stranded
+#        helpers, no path-keyed registry, no seam. That is what a genuinely
+#        separable file looks like, and it is why the sweep is now step one of
+#        every iteration rather than a thing done when hunches run out.
+#        Note guard-coverage: extracting it puts the thing that JUDGES coverage
+#        under a coverage floor of its own -- the same loop assert-suite closed.
+#   64th: instance-resolve -> internal/instanceresolve   11,108 -> 10,775 (-333 / 97 files)
+#        546 lines, closure 2, both edges noise. Second sweep find in one
+#        iteration.
+#        THE MODEL CORRECTED ME. I declared it gate:scaffolded[read-repo,
+#        cloud-read] on the belief that the gate rule bars only MUTATING grants.
+#        It does not: a gate permits read-repo AND NOTHING ELSE, because "it runs
+#        in the fast pre-commit path over files alone". checkRegion and
+#        resolveOBJCluster call the Linode API. A gate is not defined by being
+#        harmless -- it is defined by being CHEAP AND OFFLINE. Now an assertion.
+#        Also: the naive test-helper puller tried to drag runEnvAdd, a PRODUCTION
+#        function from scaffold.go, across the boundary. The guard against
+#        ciCmd/gopts/globalOpts/main must cover production symbols too.
+#   65th: ci_shared split + cloud-firewall-bootstrap   10,775 -> 10,562 (-213 / 96 files)
+#        A "SHARED HELPERS" FILE IS USUALLY TWO THINGS THAT WERE NEVER NAMED.
+#        cmd/llz/ci_shared.go was 66 lines used by six files, holding a Linode
+#        client constructor and a tfvars reader with nothing in common. NEITHER
+#        needed a new package: the client went to internal/linode beside
+#        NewClient, the reader to internal/tfvars beside the read/write pair
+#        extracted two moves earlier. That took ci_firewall.go from closure 3 to
+#        closure 1. Fourth enabler of this shape.
+#        cloud-firewall-bootstrap declares NO cloud-mutate on purpose: it seeds
+#        in-cluster state and the firewall-controller does the reconciling. That
+#        split is why a one-shot bootstrap and a continuous reconciler cannot
+#        fight over the same Linode resource.
+#   66th: openbao-login -> internal/openbao   10,562 -> 10,291 (-271 / 95 files)
+#        The interactive `llz openbao login --team` and the in-cluster CI login,
+#        6 outbound together, all noise.
+#        THEY CARRIED A NAME COLLISION: runOpenbaoLogin and runOpenBaoLogin,
+#        differing by ONE CAPITAL, in two files that had never shared a package.
+#        Now RunTeamLogin and RunCILogin. Second such collision in this package.
+#        A TEST-BUILD IMPORT CYCLE, and Go names it misleadingly: teamlogin.go
+#        imported internal/identityconfig for the issuer lookup, giving
+#        identityconfig(test) -> reconcilelanes -> openbao -> identityconfig.
+#        The message says "import cycle not allowed in test", which reads like a
+#        test problem; it is the build saying two packages both want to own
+#        "which Keycloak issues our tokens". Settled as a seam defaulting to "".
+#        The seam PROVED ITSELF: TestKeycloakIssuerForLogin failed the moment it
+#        was introduced, which is the path confirming it really did depend on
+#        that lookup rather than on anything local.
+#   67th: reachability -> internal/reachability   10,291 -> 10,001 (-290 / 92 files)
+#        verify + status-preflight + sshcheck, ~420 lines, 6 outbound together.
+#        THE ENABLER WAS A THREE-LINE FUNCTION IN THE WRONG FILE: kubectlOut,
+#        four callers across three packages, lived in verify.go -- a file about
+#        the `llz verify` COMMAND, which is not what a kubectl exec helper is
+#        about. Now kubectlprobe.Out, with lookable as kubectlprobe.Lookable.
+#        THAT MOVE BRIEFLY CREATED A SECOND SEAM. lookable reads
+#        kubectlprobe.LookPathFn while package main kept its own swappable
+#        execLookPath; a test stubbing one left the other reading the REAL PATH,
+#        which passes or fails on what the developer happens to have installed --
+#        the exact failure a preflight exists to catch. main s now delegates.
+#        Fifth time a copied with*() helper dragged its old package s wiring
+#        (installConfigReadinessDeps). A minimal local version, every time.
+#   68th: proc.Run + branch-policy   10,001 -> 9,830 (-171 / 91 files)
+#        UNDER 10,000, from 47,182.
+#        SIXTH ENABLER, SAME SHAPE AS THE LAST TWO: execArgv was TEN LINES with
+#        EIGHT callers, living in commands.go -- a 1,100-line file about the llz
+#        subcommands. A process runner is not a subcommand. Now internal/proc.Run.
+#        It is deliberately NOT in kubectlprobe: that package captures output so a
+#        check can classify it, this one hands stdout/stderr/stdin straight
+#        through because its callers run copier, gh, tofu and git for a human who
+#        needs to see -- and sometimes answer -- them.
+#        branch-policy is the second shipping case behind cloud-mutate@configured:
+#        GitHub is configured before Linode is provisioned, and resolving an input
+#        can mean CREATING one.
+#   69th: env-definition -> internal/envdef   9,830 -> 9,597 (-233 / 90 files)
+#        THE RISKIEST RENAME IN THE CAMPAIGN: envAddOpts, 18 fields, read by five
+#        files, moved with the writer that consumes it. A blanket o.<field> pass
+#        was NOT safe -- envAddOpts has a `region` field and so do openbaoLoginOpts
+#        and ReapOpts, and that collision had already bitten twice.
+#        METHOD THAT WORKED: move the type FIRST, then let the COMPILER drive the
+#        repair -- each round applies only what `go build` reports, by exact file
+#        and line. Six rounds. The two ha* fields needed a separate pass because
+#        haRole -> HARole is too far apart for Go to offer a "but does have" hint,
+#        and one `dryRun :=` short declaration was caught by the `field:` pattern.
+#        IT STILL WENT WRONG ONCE: the `<field>:` rewrite matched YAML KEYS INSIDE
+#        STRING LITERALS, so the emitted spec said `Region:` where the schema says
+#        `region:`. go build was CLEAN; one test caught it. Repaired against the
+#        pre-move file and verified by diffing every quoted literal -- empty.
+#        VERIFY A LITERAL-TOUCHING RENAME WITH:
+#          diff <(git show HEAD:./<old> | grep -oE '"[^"]*"' | sort) \
+#               <(grep -oE '"[^"]*"' <new> | sort)
+#   70th: build-preflight (+ templateid, answers.ResolveInstanceRepo)
+#         9,597 -> 9,348 (-249 / 89 files)
+#        BOTH real edges were ENABLERS, not entanglement -- now the campaign s
+#        most reliable finding. resolveInstanceRepo (4 callers) went to
+#        internal/answers, where three of its four branches already lived; it in
+#        turn needed templateName and defaultTemplateOrg, two CONSTS with 23
+#        references, now internal/templateid. Facts, same call as baoread.Namespace.
+#        existingPaths was nine lines and got copied.
+#        NOTE FOR THE NEXT PASS: scaffold.go is closure 4 and its remaining edges
+#        are runRender (render.go) and syncPromoteWorkflow (promote.go) -- the
+#        "blocked mass" label is looking less true with every enabler.
+#   71st: self-upgrade -> internal/selfupgrade (+ proc.RunEcho)
+#         9,348 -> 8,870 (-478 / 87 files)
+#        THE ENABLER WAS SEVEN LINES WITH 21 CALL SITES: `run` in commands.go --
+#        print the quoted argv, return early under --dry-run, else exec. A name so
+#        generic the closure scanner could not tell it from a method. Now
+#        proc.RunEcho, with the dry-run check travelling WITH the announcement.
+#
+#        AN EXTENSION S OWN GUARD REFUSED A MOVE, AND WAS RIGHT. syncPromoteWorkflow
+#        looked like a clean enabler (20 lines wrapping promote.PlanWorkflow), but
+#        internal/promote s TestPackageContainsNoWritePath rejected it: the package
+#        declares transition:promoted[read-repo] and the write was deliberately
+#        left in cmd/llz so that stays TRUE. Changing the declaration is not an
+#        option either -- write-repo s states are {scaffolded, upgraded}, so a
+#        promote-time repo write is INEXPRESSIBLE. Reverted. scaffold.go is
+#        therefore genuinely blocked, by two decisions that are both correct.
+#   72nd: template-commit -> internal/templatecommit   8,870 -> 8,651 (-219 / 86 files)
+#        Closure 7 -> 4 after two enablers, both FACTS IN THE WRONG FILE:
+#          templateRepo   one line, six callers  -> templateid.Repo()
+#          ciTofuTag/ciKubernetesTag, three      -> versionpins.CI*Tag
+#        The second has a SCAR: ciTofuTag was still 1.9.8 after build-images.yml
+#        and lint.yml had both moved, which would have scaffolded instances onto a
+#        HashiCorp Terraform image while every caller invoked `tofu`. That is the
+#        drift internal/versionpins exists to catch, so the value it catches drift
+#        IN should not sit in a file about GitHub tokens.
+#        THREE test files this move held tests with DIFFERENT SUBJECTS -- the
+#        computation went to the new package while reportCIImageSkew,
+#        printNextSteps and repinPlanNote tests all went back to main.
+#   73rd: gh owner/404 helpers -> internal/ghcli   8,651 -> 8,630 (-21 / 86 files)
+#        NINTH ENABLER, and the smallest paydown yet -- taken purely for what it
+#        unblocks. ghNotFound (7 lines) and ghOwnerKind (10) had two callers each
+#        and both are about the gh CLI, which is what internal/ghcli is for. The
+#        OwnerKindFn SEAM moved with the function rather than staying in main:
+#        two swappable vars over one call is the second-seam bug already paid for
+#        twice in this campaign.
+#        RESULT: wizard.go + tokens.go together are now CLOSURE 5 -- execLookPath,
+#        execOutput (localisable) and globalOpts/gopts/main (noise, 3 fields).
+#        1,238 lines, cleanly cuttable. That pair was the "design task" two
+#        iterations ago.
+#   74th: onboard -> internal/onboard   8,630 -> 7,758 (-872 / 85 files)
+#        wizard.go + tokens.go, 1,238 lines, AND THE ONE I WAS MOST WRONG ABOUT.
+#        Two iterations earlier this ledger recorded them as part of "the CLI
+#        front-end design task" needing its own PR. NINE enablers dissolved that
+#        without either file being touched; the last was 7 and 10 lines of gh
+#        helper. Apart they measure closure 6 and 13; together, 5.
+#
+#        THE MODEL REFUSED secret-custody@configured AND HAS A POINT. grantStates
+#        allows custody only at provisioned/seeded/operating because custody
+#        earlier "would mean a credential exists before anything has been built to
+#        issue one". That rationale assumes the PLATFORM mints it. Here a HUMAN
+#        pastes a Linode PAT and a GitHub token, so nothing needs to exist yet.
+#        A real gap -- and CASE ONE. Recorded under Incomplete rather than
+#        widening the row on a single case, as argocd-diagnostics did for the
+#        missing fifth kind. Case two would be another lane taking an
+#        operator-supplied credential before the substrate exists; there is NONE,
+#        which means this is the only place a human hands llz a secret.
+#
+#        Also: four symbols were briefly exported to satisfy main-side tests. The
+#        TESTS moved instead and the symbols went back to lowercase. Prompt stayed
+#        exported because commands.go really calls it -- that is a seam, the other
+#        four were internals reached for by a test.
+#        COVERAGE DEBT: internal/onboard lands at 13.7%. It is interactive --
+#        prompts, browser launches, gh/linode round-trips -- and it was equally
+#        untested in package main. Recorded, not hidden; raise it by testing
+#        the pure halves (Gather, RepoStatus, the token-URL builders).
+#   75th: the copier layer -> internal/copier   7,758 -> 7,712 (-46 / 85 files)
+#        THE INTERNAL ENABLER INSIDE commands.go, which is what the loop was told
+#        to look for before calling that file blocked. commands.go is not one
+#        thing: it is `llz new` (~570 lines), `llz upgrade` (~270) and four thin
+#        dispatchers -- and the two commands SHARE a copier layer. Measured:
+#        six symbols used by both halves, zero used by new from upgrade.
+#        Extracting the shared layer first is what stops the split duplicating it.
+#        commands.go: closure 13 -> 8.
+#        Ref carries the rule worth keeping: a scaffold must NEVER float on main
+#        (tflint rejects an unpinned module source, Renovate cannot bump it,
+#        copier s llz_version validator refuses it), so it errors rather than
+#        returning "". That behaviour had no direct test; it has four now.
+#   76th: render -> internal/render   7,712 -> 7,246 (-466 / 85 files)
+#        THE HUB THAT WAS BLOCKING THREE OTHER FILES. runRender is why scaffold.go
+#        could not move, why `llz upgrade` could not, and why checks.go could not
+#        (via hooks.go -> runLint). All three were recorded here as BLOCKED.
+#        render.go itself measured CLOSURE 6, and its only real edges were:
+#          first3   ONE LINE, an alias for linode.RegionShort
+#          indent   FIVE LINES, already duplicated once in this repo
+#        NOBODY HAD MEASURED THE BLOCKER ITSELF. Fifth overturned "blocked" call.
+#        When file A is stuck on a symbol in file B, MEASURE FILE B.
+#
+#        SECOND CASE FOR write-repo@configured. render writes tfvars into the
+#        working tree at configuration time; the grant carries {scaffolded,
+#        upgraded} only. `onboard` opened this gap one move ago from the
+#        credential side. TWO independent cases is what the rule asks for, so the
+#        next person can argue the widening rather than guess it. Both are
+#        recorded under Incomplete, not acted on.
+#   77th: env-add -> internal/envadd   7,246 -> 7,017 (-229 / 84 files)
+#        This was scaffold.go, recorded here as BLOCKED for FOUR iterations --
+#        twice with an argument for why the block was correct. Both blockers
+#        dissolved without it being touched: runRender became internal/render
+#        (76) and envAddOpts became internal/envdef (69). One edge was left,
+#        syncPromoteWorkflow, and that one is INJECTED rather than moved because
+#        internal/promote s own guard refuses a write path and write-repo is not
+#        legal at `promoted`. Sixth overturned "blocked" call.
+#        COVERAGE DEBT: 13.7%. Most of what is left in this package is the
+#        placeholder-checklist REPORTING (groupFindings, printPlaceholderChecklist)
+#        and it was equally untested in package main. The writes it delegates to
+#        (envdef, render) are tested in their own packages.
+#   78th: upgrade -> internal/upgrade   7,017 -> 6,800 (-217 / 84 files)
+#        commands.go split at last: `llz upgrade` out, `llz new` and ~145 lines of
+#        dispatchers left. The answer-map helpers came with it -- answerRegressions,
+#        currentAnswerMap and readAnswerMap sat in ci_upgrade_test_gate.go, a file
+#        about a CI gate, and only the first two have a caller there. The third did
+#        not, and stayed unexported.
+#        FILE COUNT UNCHANGED AT 84: this move deleted no file. commands.go lost
+#        ~270 lines and remains, which is the shape of every split-a-big-file move
+#        and the reason the "/ N files" annotation says less than the line count.
+#        A GATE THAT CAUGHT A REAL REGRESSION IN A PRIOR COMMIT: while tracing the
+#        upgrade callers, `grep -rn 'upgrade\.' cmd/llz` surfaced NINE occurrences
+#        of `selfupgrade.Cleanup` inside COMMENTS AND HELP STRINGS in ci.go,
+#        ci_clear_secrets.go, ci_teardown.go and ci_docs_guard_test.go -- prose
+#        corrupted by the 75th move's rename of `cleanup`. There is no
+#        `func Cleanup` in internal/selfupgrade, so `go build` was always clean and
+#        one of the strings was USER-FACING help text. Restored here. The rename
+#        was word-boundary correct (`cleanups` survived); word boundaries do not
+#        distinguish code from prose, and only a string-literal diff does.
+#        COVERAGE FLOOR 51%. The uncovered half is printSummary and the
+#        commit/render orchestration in Run -- print-and-shell-out code that was
+#        equally untested in package main. What the tests do cover is the part
+#        with a wrong answer: the conflict scan, the answer-map regression
+#        compare, and the image-skew warning`s silence cases.
+#   79th: new -> internal/newinstance   6,800 -> 6,523 (-277 / 84 files)
+#        `llz new`, and commands.go is now only dispatchers. THE SHARED LAYER CAME
+#        OUT AS AN EXPORT, NOT A COPY: runGated had callers on both sides of the
+#        split -- three in the repo-creation path that moved, one in cmdBuild that
+#        stayed -- and it is the only thing standing between --dry-run and a real
+#        `gh repo create`. Two copies of that refusal is one too many.
+#        TWO SEAMS INSTEAD OF TWO MOVES. runHooksInstall lives in hooks.go, which
+#        needs runLint from checks.go, which needs gitOutput back from hooks.go --
+#        a cycle between two cobra-heavy files, for one best-effort call. execOutput
+#        is worse: moving it is a 64-site rename across four files of comments and
+#        help strings, which after the 78th move`s prose damage is its own change.
+#        Both are injected by main. exec.go (78 lines, closure 1) is the enabler
+#        the NEXT iteration should take.
+#        COVERAGE FLOOR 79%. High because most of this package is error text with
+#        a test asserting the exact remediation -- `gh repo create` fails three
+#        ways that look identical and have different fixes, and the operator
+#        hitting one has no instance yet to diagnose it with.
+#   80th: exec.go -> internal/kubectlprobe   6,523 -> 6,498 (-25 / 84 files)
+#        THE SMALLEST PAYDOWN OF THE CAMPAIGN, AND NOT WHY IT WAS DONE. The plan
+#        was exec.go -> internal/proc, a 64-site rename. Measuring first killed
+#        that: proc`s OWN PACKAGE DOC says it is deliberately separate from
+#        kubectlprobe because "kubectlprobe CAPTURES output ... this one hands
+#        stdout straight through". These three helpers capture. Wrong destination.
+#        THE RIGHT ONE ALREADY HELD THE SEAM, AND HELD IT BROKEN. kubectlprobe.Exec
+#        existed with a PLAIN .Output() default, and cmd/llz/exec.go had an init()
+#        overwriting it at startup with the stderr-attaching version. So the
+#        wrapper was present in the llz binary and absent everywhere else --
+#        including in every test of the ELEVEN packages that delegate to it.
+#        ErrText survived (it reads ee.Stderr off the *exec.ExitError itself);
+#        the MESSAGE did not, which is what a caller wrapping with %w prints.
+#        The body is now kubectlprobe`s default and the init() is gone.
+#        47 CALL SITES DID NOT MOVE, ON PURPOSE. exec.go is three delegating
+#        closures now -- the identical shape eleven internal packages already use.
+#        Rewriting the call sites would be a large diff for no behaviour change,
+#        across files that also name these helpers in help strings. After move 78`s
+#        prose damage that is the diff worth NOT taking.
+#        COVERAGE 71%% -> 77.6%%: the two defaults arrived untested, because in
+#        package main they were vars every test replaced with a stub. Pinned now.
+#   81st: pin-coherence -> internal/pincoherence   6,498 -> 6,475 (-23 / 83 files)
+#        A TEXTBOOK GATE: reads one file, decides, returns. No cluster, no network,
+#        no clock -- which is exactly what lets it hold read-repo and nothing else
+#        and run in the pre-commit path. 87.5%% covered on arrival.
+#        THE MODEL REFUSED THE FIRST DECLARATION AND WAS RIGHT. It was written as
+#        `gate:upgraded`, because only an upgrade can create the skew it catches --
+#        a fresh scaffold writes `_commit` and `llz_version` in one pass. Validate()
+#        rejected it: a gate PRECEDES the state it names, and this one follows an
+#        upgrade rather than preceding one. Declared `gate:scaffolded` with an
+#        Incomplete note, not widened. The gap has a name now -- "a check that runs
+#        after X to catch what X broke" -- and internal/argodiag is the same shape
+#        from the other side, a DIAGNOSTIC that runs after a state failed.
+#   82nd: 26 command files -> their extensions   6,475 -> 5,043 (-1,432 / 56 files)
+#        THE NUMBER CHANGES MEANING HERE, AND THAT MATTERS MORE THAN THE DROP.
+#        Every entry above measured the same thing: logic leaving package main.
+#        This one moves COBRA CONSTRUCTORS, which are not logic -- the capability
+#        already lived in the extension; only its flag set was on the wrong side.
+#        So -1,432 is not -1,432 lines of untangling, and a later reader comparing
+#        it against, say, the 76th (-466 for internal/render) would be comparing
+#        two different currencies. The rule this enforces is now "an extension
+#        owns its own command; main owns the tree", and the budget measures what
+#        is left of the tree.
+#        TWO MOVES WERE REFUSED AND BOTH REFUSALS WERE RIGHT.
+#          - `gen-toc` writes a TOC back into Markdown. internal/docsguard declares
+#            gate:scaffolded[read-repo] and enforces it with a test that forbids
+#            os.WriteFile anywhere in the package; moving the constructor in tripped
+#            it at once. The command stayed in main. THE RULE HAS AN EXCEPTION:
+#            it assumes a command`s side effects are the extension`s side effects,
+#            and for a read-only gate shipping a writing verb they are not.
+#          - `ci_docs_guard_test.go` builds the LIVE cobra tree to check the docs
+#            against it, and newRootCmd is main`s. The command is fine where it is
+#            (it uses cobra`s own cmd.Root() at runtime); only the test came back.
+#        TRAP 61: THE SELF-QUALIFICATION STRIP HIT STRING LITERALS. Moving a file
+#        into package X means deleting `X.` prefixes -- and `.core-surface-budget.yaml`
+#        CONTAINS `budget.`, so it became `.core-surface-yaml` and the gate could not
+#        read its own config. Same for `.untestable-budget.yaml` and the ADR link
+#        `0014-core-surface-budget.md`. go build was clean throughout. Caught by
+#        diffing HEAD`s comment lines and string literals against the moved files.
+#        SIXTEEN COVERAGE FLOORS DROPPED, AND NOT ONE TEST WAS LOST. The floors
+#        measured a package that was pure capability; they now measure that plus
+#        its flag wiring, which is untestable-by-shape and was equally untested
+#        when it sat in package main (whose own floor is 29%). The DENOMINATOR
+#        grew -- worst hit internal/manifestguard 86->71 and internal/credrotate
+#        73->61, both of which took several large flag sets. Lowered to the
+#        measurement rather than papered over with tests of `c.Flags().StringVar`.
+#        The campaign rule "if adding code drops a floor, WRITE THE TESTS" is
+#        about moving LOGIC in; this moved wiring, and testing wiring to restore
+#        a ratio would be writing tests for the coverage number rather than for
+#        the code.
+#   83rd: globals -> internal/cliopts   5,043 -> 5,073 (+30 / 56 files)
+#        A DELIBERATE GROWTH, and the only one in this campaign. --dry-run, --yes
+#        and --open are PERSISTENT flags: cobra parses them when a command
+#        EXECUTES, long after every constructor ran. Moving commands into
+#        extension packages made it tempting to thread `dryRun bool` in as a
+#        constructor argument -- which would capture the pre-parse ZERO. Nothing
+#        would fail. --dry-run would just stop working, on cloud-mutating
+#        commands. So the globals became a value any package can read at RunE
+#        time, `globalOpts` is now an alias for it, and the +30 is the alias plus
+#        the comment explaining the binding moment. TestGlobalFlagsAreParsedBefore
+#        RunE pins it. The next entry spends this back many times over.
+#   84th: 17 more command files -> their extensions   5,073 -> 3,657 (-1,416 / 39 files)
+#        The gopts-coupled half, unblocked by internal/cliopts (83rd). Same
+#        currency caveat as the 82nd: this is flag wiring relocating, not logic
+#        untangling.
+#        TWO MOVES REVERTED ON EVIDENCE, and both name a boundary worth keeping:
+#          - ci_managedlock.go is handed sustainDeps(), one of the FIFTEEN deps
+#            assemblers that are main`s dependency-injection layer. A command that
+#            needs main to assemble its capability`s Deps cannot sit on the far
+#            side of that assembly.
+#          - apl.go builds the `llz apl` SUBTREE, wiring five sibling groups. That
+#            is the tree, and the rule is "an extension owns its own command", not
+#            "every constructor leaves".
+#        THE MOVER NOW MASKS STRINGS AND COMMENTS before stripping self-
+#        qualification, which is what trap 61 (the 82nd) cost a debugging session
+#        to find. Re-audited this batch the same way: zero literals lost.
+#        TEST FILES WERE REPOINTED, NOT MOVED. Last batch moved them and hit
+#        colliding same-named-but-different helpers in three packages. These assert
+#        flag WIRING, which is legitimately about the tree, so they stayed in
+#        cmd/llz and now call the exported constructor.
+#        FOURTEEN MORE FLOORS DROPPED, and one of them is an ARTIFACT worth naming:
+#        internal/upgrade fell 51 -> 25 because ci_upgrade_test_gate.go (295 lines)
+#        moved in while its tests stayed in cmd/llz. That code IS tested -- the
+#        per-package number simply cannot see tests living in another package.
+#        The rest is the same dilution as the 82nd: untested flag wiring joining a
+#        tested capability. No test was deleted in either batch.
+#   85th: tools/internal split into extensions/ + shared/   3,657 -> 3,657 (0)
+#        Pure relocation: 74 packages that declare an Extension() to
+#        internal/extensions/, 39 to internal/shared/. 1,243 import lines.
+#        BOTH STAY UNDER internal/, which is the whole point -- it is compiler-
+#        enforced, tools/ is one module, and this repo is the public upstream.
+#        Hoisting to tools/extensions/ would have made 113 packages public API.
+#        FIVE CLASSES OF PATH BROKE AND ONLY ONE WAS AN IMPORT: path-keyed
+#        registries (plaintext, atrest), segment-joined filepath.Join("tools",
+#        "internal",...) that a literal rewrite cannot see, relative escapes now
+#        one level short, package-identity constants in boundary_test.go, and 106
+#        Makefile COVERAGE_MINS keys including one NESTED (extension/registry)
+#        that a single-segment pattern missed.
+#        THREE THINGS DELIBERATELY NOT BUMPED, each a real bug if it had been:
+#        tfroots/roots/*.tf (embedded Terraform, relative to the RENDERED
+#        instance), clusterspec+render kustomize refs (EMITTED, not read), and
+#        deliverdocs` ../../../etc/passwd traversal fixture.
+#   86th: root + ci verbs -> their extensions   3,657 -> 2,968 (-689 / 39 files)
+#        main.go 561 -> 289 and ci.go 1,001 -> 545. Eleven ROOT-level flag sets
+#        (llz doctor/tokens/secrets/upgrade/openbao/reap/self-update/verify/...)
+#        and the ci orphan-reap family, each to the extension that owns it.
+#        TWO LANDED SOMEWHERE THE PLAN DID NOT SAY, and the compiler picked:
+#          - doctorCmd went to internal/extensions/onboard, not .../doctor. It
+#            calls onboard.RunDoctor and onboard already imports doctor, so the
+#            obvious home closed an import cycle. The verb is named for the
+#            capability it REPORTS on; the code that runs it lives elsewhere.
+#          - driftCmd came BACK to main. It is handed sustainDeps(), one of the
+#            fifteen deps assemblers -- the same boundary ci_managedlock.go hit.
+#        THE REAP VERBS WERE DECLARED ALL ALONG, just not by name: teardown`s own
+#        doc says "the reaper is the transition`s job and the gate only counts",
+#        so they belong to the transition:destroyed binding already there.
+#        tf-import/tf-apply did NOT move: tofudriver declares only ASSERTIONS at
+#        `provisioned`, and an apply is a transition. That needs a new binding
+#        argued, which is a declaration change rather than a move.
+#        TRAP 62: A BRACE MATCHER MUST SKIP THE PARAMETER LIST. Three reap helpers
+#        take an inline `interface { ... }` as a parameter; latching onto that
+#        brace ended the span inside the signature and silently truncated the
+#        function. The parser caught it, but only because the truncation happened
+#        to be syntactically invalid -- a shorter one would have compiled.
+#        SEVEN FLOORS LOWERED, same dilution as the 82nd/84th: untested flag
+#        wiring joining a tested capability. cmd/llz`s own floor did NOT move --
+#        the wiring left, and what remains there is no better covered than before.
+#   87th: lint + dropped-apiversions -> extensions   2,968 -> 2,421 (-547)
+#        checks.go is GONE. `llz lint` / `fmt` / `validate` / `check` shipped for
+#        the whole campaign with NOTHING DECLARING THEM -- not composition like
+#        `up` and `import`, but thirteen steps owned outright. Now internal/
+#        extensions/lint, the 76th extension.
+#        TWO BINDINGS BECAUSE ONE VERB WRITES: gate:scaffolded[read-repo] for
+#        lint/check/validate, transition:scaffolded[read-repo,write-repo] for
+#        `llz fmt`, which runs the formatters in FIX mode. Folding fmt into the
+#        gate would have put a write behind a read-repo declaration -- the exact
+#        failure docsguard`s guard caught when gen-toc tried to move in.
+#        IT IMPORTS ITS STEPS RATHER THAN RE-EXEC`ING THEM, unlike assert-suite,
+#        and the declaration says why: lint is sequential and fails fast, so none
+#        of assert-suite`s three reasons (stdout interleaving, os.Exit isolation,
+#        independent seams) apply.
+#        AND A RECORDED `Incomplete` TURNED OUT TO BE WRONG. manifestguard said
+#        dropped-apiversions was "entangled with checks.go in BOTH directions".
+#        The entanglement was one of LOCATION, not logic: the whole cluster only
+#        ever had callers in checks.go and in the `llz ci` face of the same guard.
+#        Nothing of `llz check` came with it. The note is deleted and its pinning
+#        test FLIPPED -- it now fails if an Incomplete reappears unargued.
+#        Two sibling notes (reconcile-actions, template-sustain) say similar
+#        things and deserve the same re-measurement before being believed.
+#        COVERAGE FLOOR 45%. The uncovered half is the argv builders and the
+#        shell-out steps, every one of which no-ops when its tool is absent --
+#        they were equally untested in package main (floor 29%). What IS covered
+#        is the part with a wrong answer: the conflict-marker scanner, the
+#        dropped-apiVersion detector, and the two orchestrators` failure paths.
+#   88th: the last three undeclared verbs   2,421 -> 2,033 (-388)
+#        NONE OF THEM NEEDED A NEW EXTENSION, which is the finding. All three were
+#        recorded as "unclaimed" because no extension named them; measuring showed
+#        every one already had an owner whose declaration covered it.
+#          - assert-image-fresh -> template-commit, whose Short already reads
+#            "resolve the pinned template commit and report CI image refs that
+#            have drifted from it" and which already binds
+#            assertion:configured[read-repo,cloud-read]. Zero declaration change.
+#          - assert-adopter-pin -> template-commit too. Its leg four IS
+#            assert-image-fresh, called directly. Same grants, same kind.
+#          - hooks + precommit -> lint. precommit is RunLint plus a secret-path
+#            refusal; hooks installs the shim whose only job is to call it. The
+#            gate row covers one, the write row (earned by `llz fmt`) the other.
+#        A THIRD MODEL GAP, RECORDED NOT WIDENED. assert-adopter-pin is bound at
+#        `configured` and does not run against a configured instance -- it runs on
+#        the TEMPLATE REPO when a release is cut, asserting an adopter scaffolding
+#        from that tag WOULD reach `configured` coherently. Kind and grants are
+#        exactly right; the STATE is a stand-in, because the model describes an
+#        INSTANCE`s lifecycle and has no word for a gate on the template`s own
+#        release. Distinct from pin-coherence`s gap (a check running AFTER a state)
+#        and argodiag`s (a diagnostic running when a state FAILED); recorded as its
+#        own on template-commit rather than folded into either.
+#        cmd/llz is now 33 files and holds no undeclared capability.
+#        TWO FLOORS DOWN: lint 45->37 and template-commit 92->84, the same
+#        dilution every batch has had -- untested cobra wiring joining a tested
+#        capability. Both files were equally untested in package main.
+#   89th: stale notes re-measured, tf-apply/import declared   2,033 -> 1,700 (-333)
+#        THE POINT WAS THE NOTES, NOT THE LINES. Six Incomplete notes across the
+#        catalog made a falsifiable claim -- "X is still in package main". FOUR
+#        WERE STALE: baoca and baoseed each listed eight-to-ten openbao-lifecycle
+#        files that have since gone to baolifecycle/identityconfig/openbao/harbor/
+#        healthsla; credrotate named four paths that are now here or in
+#        assertsecrets; bootstrapcluster`s PinnedTemplateRef seam had become a var
+#        the package self-installed, which is dead indirection, and collapsed to a
+#        direct answers.PinnedTemplateRef() call.
+#        A NOTE THAT SAYS WHY SOMETHING IS BLOCKED AGES BADLY -- the reason expires
+#        before anyone re-reads the note. Every one of the four PREDICTED its own
+#        end ("the wall they sat behind is GONE ... ordinary extractions") and none
+#        was deleted when the prediction came true. Four pinning tests FLIPPED:
+#        they used to fail if a note was emptied, and now fail if one reappears
+#        unargued. Partial markers 20 -> 16.
+#        TWO BINDINGS ARGUED, NOT ASSUMED. tf-apply and tf-import sat in main long
+#        after plan/output/destroy left because tofu-driver declared only
+#        ASSERTIONS at `provisioned` and an apply is a TRANSITION. Both now hold
+#        transition:provisioned[cloud-mutate]. `import` holds cloud-mutate despite
+#        sounding read-only: it writes TERRAFORM STATE, which lives in a remote
+#        object-storage backend. The extension`s own test refused the new rows by
+#        construction (`default: unexpected binding`) until each was argued into it.
+#   90th: the command-wiring guard   1,700 -> 1,700 (0 lines; this one adds a check)
+#        THE GAP IT CLOSES: an extension could be declared, pass Validate(), show
+#        up in `llz extension list`, and ship a verb nobody could run -- wiring is
+#        a hand-written AddCommand and forgetting one is silent. `extension list`
+#        read the registry, the CLI read the tree, and nothing compared them.
+#        CONSTRUCTORS, NOT NAMES. The obvious shape was `Commands []string` on
+#        Extension. Measuring killed it: 214 leaves to hand-author, TWENTY of them
+#        ambiguous because verb names are not unique across groups (`add`, `set`,
+#        `list`, `validate` each appear under two parents), every entry a
+#        duplicate of what the tree already says, and only a test to catch drift.
+#        A function reference is one line, the COMPILER checks it, and renaming a
+#        constructor breaks the build rather than a test three weeks later.
+#        NOT A REGISTRY-DRIVEN TREE, and that was the user`s catch. ~26% of the
+#        wiring is package main`s -- the group constructors ARE the tree, plus the
+#        deps-ABI, composition and gen-toc. A builder needs group-placement
+#        metadata on every extension and an escape hatch for the rest; a verifier
+#        needs neither. The line saving would have been ~83 in ci.go, not the ~800
+#        first claimed -- that figure wrongly counted main.go and the group
+#        constructors, which no registry replaces.
+#        ONE DIRECTION ONLY, deliberately: "every extension command is reachable".
+#        The reverse ("every leaf is claimed") is the 214-entry exercise again, to
+#        catch a failure that has never happened -- an unclaimed leaf still WORKS.
+#        PROVEN TO FAIL: unwiring assertobs.GrafanaDashboardsCmd makes it report
+#        the exact verb and extension. Checked, not assumed.
+#        Three more help strings restored: "onboard.Gather + push instance
+#        credentials" was USER-FACING (`llz secrets`), plus a color.Green and an
+#        onboard.Prompt in prose. Same blanket-rename class as traps 55 and 61.
+#   91st: nine vestigial closures collapsed   1,700 -> 1,700 (0 lines)
+#        ZERO LINES, and that is worth saying: each closure was a ONE-LINE field
+#        assignment, so collapsing it changed characters and not the count. The
+#        gate stayed green without a re-baseline, which is how it was noticed.
+#        SELF-INFLICTED AND SELF-FOUND. The 80th move turned execOutput/
+#        execCombined from package-level VARS into plain funcs delegating to
+#        kubectlprobe. The deps assemblers wrapped them in
+#        `func(n string, a ...string) (...) { return execOutput(n, a...) }` for a
+#        reason that expired at that moment: a closure defers reading a VAR, and a
+#        func reference is already deferred. Nine of them across seven files,
+#        redundant since e655adc8 and flagged by nothing.
+#        MEASUREMENT THAT CORRECTS AN EARLIER CLAIM: the deps-ABI was reported at
+#        511 lines. That was the FILES. The actual assembler bodies total 199
+#        across 14 functions, and ci_teardown.go -- the biggest contributor to the
+#        511 -- is mostly cobra commands with one Deps func in it.
+#        A SHARED Deps CORE WAS CONSIDERED AND REJECTED ON THE NUMBERS. Six fields
+#        recur (Exec 11x, LoadSpec 5, ExecCombined 5, Summary 4, InstanceRepo 3,
+#        Confirm 3 = 31 assignments). Embedding a core replaces those 31 with 14
+#        `Core: core` lines plus ~8 of construction -- a saving of about nine
+#        lines, in exchange for a shared type every embedder depends on and
+#        LoadSpec dragging clusterspec into packages that only wanted Exec.
+#        The uniformity is still the useful finding: 14 identical Exec signatures,
+#        5 identical LoadSpec, one Summary variant. A grant->handle resolver has
+#        six handles to produce, not eighteen bespoke structs.
+#   92nd: the first ENFORCED grant invariant   1,700 -> 1,700 (0 lines)
+#        THE deps-ABI, APPROACHED FROM THE CHEAP END. The full resolver is a large
+#        refactor whose value is "you cannot use a capability you did not declare".
+#        One class of that is checkable today without touching a single assembler:
+#        a package holding an `Exec` seam is shelling out and reading the result,
+#        so its declaration must carry SOME read grant.
+#        IT FOUND ONE IMMEDIATELY. clusteraccess held an Exec seam and declared
+#        only cloud-mutate/cluster-write/secret-custody. It runs `tofu output
+#        -json` and `tofu state list` against a REMOTE object-storage backend --
+#        a cloud read nobody had written down. cloud-mutate does not imply
+#        cloud-read here: grants are explicit and eight extensions declare both.
+#        The extension`s own guard refused the fix ("a transition that asks for
+#        more than it uses is the over-granting the model exists to make visible")
+#        until it was argued in -- the right refusal, wrong conclusion, and the
+#        argument is now recorded in the test.
+#        DELIBERATELY NOT a seam->specific-grant map. `Exec` runs kubectl, gh, git
+#        and tofu depending on caller, so demanding cluster-read would be wrong for
+#        the gh-only packages. "Some read grant" is the strongest claim the
+#        evidence supports; a check that overreaches gets weakened, not satisfied.
+#        A HYPOTHESIS DIED ON THE WAY: `Confirm` (--yes) looked like it should
+#        become a declarable property, since teardown records it as "what the model
+#        has no word for". Measured: 12 extensions gate on it, 24 mutate WITHOUT
+#        it, 8 gate without mutating. It tracks OPERATOR-invoked mutation, not
+#        mutation -- `llz ci` verbs run inside a workflow that is itself the
+#        authorization. So it stays caller-supplied, and a resolver produces
+#        capability handles only. That is the right split, not a wart.
+#   93rd: merge origin/main   1,700 -> 1,885 (+185)
+#        NOT A REGRESSION -- main`s first-run audit (#416) landed real new code in
+#        package main while this branch was relocating everything under it. Nine
+#        conflicts, and every one was main fixing a file this branch had moved.
+#        THE FIXES MERGED, NOT THE LOCATIONS. Each was applied at the new home:
+#        resolveDeploymentScope (the deployment-name-as-Linode-region bug that made
+#        the Volume census read 0, so a destroy could go green having leaked every
+#        Volume) went to configreadiness and is now called by BOTH `ci preflight`
+#        and `ci assert-no-orphans`; checkReapRegion`s guard, the objkey drain,
+#        checkpointEnvFiles, the dispatch watcher and the reordered manual-actions
+#        list all landed with their capabilities.
+#        +185 IS MAIN`S NEW CODE, not drift: build_watch.go (97) serves cmdBuild,
+#        which is composition and stays; ci_build_failure_summary.go (90) is a NEW
+#        undeclared verb and wants the same treatment the last three got -- an
+#        owner argued, then a move. Recorded rather than done, because a
+#        declaration decision does not belong in a merge commit.
+#        ~20 of main`s symbols had to be repointed at their new homes
+#        (appendGHAFile -> ghaout.Append, execArgv -> proc.Run, probeTokenValidities
+#        -> doctor.ProbeTokenValidities, lookable -> kubectlprobe.Lookable, ...).
+#   94th: staticcheck`s first run on this branch   1,885 -> 1,853 (-32)
+#        122 FINDINGS, TWO OF THEM REAL, and both were this campaign`s doing:
+#        teardown lost the `!dryRun` half of its confirm gate (see e1f79ba5), and
+#        a bootstrap-cluster skew guard became value-against-itself when the alias
+#        it compared was deleted. Neither was visible because lint.yml -- the only
+#        workflow that runs go test AND staticcheck -- is filtered to
+#        branches [main, master], and #415 targeted a branch until today.
+#        THE OTHER 120 WERE DEAD TEST HELPERS the extraction left behind as tests
+#        moved between packages, plus THREE DEAD NON-TEST FILES in cmd/llz
+#        (forge_env.go, sortedmapkeys.go, orq.go, indent.go -- the last two had
+#        only their own tests as callers, their production users having moved to
+#        configreadiness and extension.go`s own copy).
+#        A LINE-ARITHMETIC PRUNER TRUNCATED A RAW STRING LITERAL on the first
+#        attempt -- the trap this campaign already had on record -- and deleted a
+#        helper that was in use. Reverted whole, then redone with a go/ast pruner
+#        that cannot be confused by a brace in a comment or a backtick block.
+#   95th: sub-divide extensions/, verbs out   1,869 -> 1,866 (-3)
+#        THE SMALLEST PAYDOWN OF THE CAMPAIGN, and package main is not the point
+#        of the change -- internal/extensions is. 69 packages were filed by what
+#        they ARE (capabilities 7 / lifecycle 23 / assertions 15 / guards 15) and
+#        nine CLI verbs left for internal/verbs, losing their declarations: nobody
+#        ships an instance with `lint` disabled or enables `llz new`.
+#        THE 3 LINES ARE IMPORT LINES cmd/llz no longer needs. That is the whole
+#        effect here, and it is worth recording that a 102-file import rewrite
+#        moved this number by three: the budget measures package main, and by this
+#        point package main is thin enough that re-organising everything ELSE
+#        barely touches it. Read a near-zero delta here as the gate saying the
+#        change was not about core surface, not as the change being small.
+#        WHAT DID MOVE is the coupling ratchet: extension -> extension edges fell
+#        30 -> 14, and all fifteen banked belong to the three composite verbs
+#        (onboard 6, lint 5, upgrade 4). Half that graph was commands composing
+#        capabilities, which is not the defect the ratchet exists to catch.
+#        EIGHT GUARDS BROKE ON DEPTH and every one broke loudly -- four corpus
+#        guards refused an empty scan, the Exec-seam guard fataled at "0 packages
+#        matched, the pattern has drifted", and seedspecial`s Kyverno test names
+#        this exact trap in its own comment before springing it. Two are fixed
+#        structurally rather than by counting `..`: the Exec-seam guard now WALKS
+#        for package dirs, and rawexec_test takes the second-to-last path segment
+#        -- it had been silently counting per BUCKET, collapsing nine packages
+#        into two rows and calling every allowlist entry stale.
+#
+#   96th: the first registry-driven verb   1,866 -> 1,868 (+2)
+#        TWO LINES, SPENT DELIBERATELY, and they are the smallest possible shape of
+#        the thing this budget exists to encourage: an import and one AddCommand,
+#        wiring `llz ci gates` -- a driver that runs every gate binding the REGISTRY
+#        declares rather than a list typed in package main.
+#        THE DRIVER ITSELF IS ZERO LINES HERE. It lives in
+#        internal/shared/extension/registry, not cmd/llz, because a driver only main
+#        can call is a driver only main can test -- which is the whole argument of
+#        ADR 0014 applied to the code that would otherwise have been its next
+#        exception. Growing package main by 2 to move a dispatcher out of it is the
+#        trade this gate wants.
+#        WHAT IT REPLACES, eventually: 12 Makefile targets, each a separate
+#        `llz ci <verb>` shell-out. Six gates run from the registry today; the
+#        remaining twelve are named in gates.go and reported live by a test, so the
+#        comment cannot drift from the model.
+#
+#   97th: staticcheck ST1019, found by CI   1,868 -> 1,866 (-2)
+#        THE TWO LINES THE 96th ENTRY SPENT, HANDED BACK BY A DIFFERENT GATE. The
+#        env merge left cmd/llz/main.go and import.go importing the merged package
+#        TWICE -- once aliased `envtopoext`, once plain -- because before the merge
+#        those were two packages and the alias existed to disambiguate them. Go
+#        compiles that happily and `go vet` says nothing; only staticcheck's ST1019
+#        sees it, and `make lint` does not run staticcheck.
+#        SO IT TOOK A PUSH TO FIND. Every gate ran green locally -- 125 packages,
+#        LINT_ALL=1, seven individual targets -- and CI failed on the first run.
+#        That is the scar this repo already has written down from the other
+#        direction ("a clean local run proves NOTHING about CI"), earned again.
+#        `make staticcheck` is a separate target and belongs in the pre-push habit,
+#        not only in the CI job.
+#
+#   98th: the assert battery learns to skip   1,866 -> 1,889 (+23)
+#        THE JOIN BETWEEN THE REGISTRY AND THE BATTERY, and it can only live here.
+#        internal/shared/extension/registry IMPORTS assertsuite in order to declare
+#        it, so assertsuite asking the registry back is a cycle. package main is the
+#        one place that sees both, which is exactly the "wire two things that must
+#        not know about each other" job ADR 0014 leaves to core.
+#        WHAT IT BUYS is a real defect closed. Several assert lanes already "skip
+#        clean when the component is disabled" -- by EXITING 0 -- and laneResult had
+#        no skip state, so a lane that ran nothing was reported exactly like one
+#        that proved something. Worse, the closing verdict counted DECLARED gating
+#        lanes, so a run that skipped three still announced that all of them passed.
+#        That is the vacuous-green shape suite.go`s own header was written to kill,
+#        reappearing one level up.
+#        EVERY FAILURE PATH IN THESE 23 LINES ANSWERS "RUN IT" -- no spec, unreadable
+#        spec, unresolvable registry. A battery that fell silent because it could not
+#        read a file would be the same bug in a new place, so refusing to SKIP is the
+#        safe direction here, inverse to the seeder rule where refusing to WRITE is.
+#
+# THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
+    # line counts are not. `exact: true` checks the NUMBER every commit, so every
+    # budget figure here has been verified by the gate; nothing checks the "/ N
+    # files" annotation, and it was being decremented by hand rather than measured.
+    # By the database entry it read 115 against an actual 144. Corrected there;
+    # earlier entries in that stretch are approximate and were left rather than
+    # invented. Read `llz ci core-surface --verbose | wc -l` for the real count.
+
+    # LAYERING (no core-surface change; this budget stayed at 1853). internal/shared
+    # is substrate and internal/extensions is capability, and the arrow is supposed
+    # to point one way only. It had already inverted FOUR times -- shared/answers
+    # reaching up for promote.TemplateRefFromStamp, shared/ghcli for
+    # configreadiness.SecretIsEnvScoped, shared/copier for four selfupgrade version
+    # helpers, shared/ghgitdata for credrotate.InClusterToken. Every one arrived the
+    # same way: a genuinely general helper was written inside whichever extension
+    # needed it FIRST, and the second caller imported the extension rather than
+    # moving the helper. Nobody chose to invert the layering; they chose not to move
+    # a function. Three were moved down (a new shared/llzver holds the version
+    # vocabulary); the fourth was policy, not substrate, so ghcli now takes the
+    # answer as a parameter from a caller that already knew it.
+    # internal/shared/llzver=95 and the selfupgrade floor 49 -> 56 are here rather
+    # than as Makefile comments because untestable-loc COUNTS MAKEFILE COMMENT
+    # LINES. llzver arrived at 68% because LatestRelease shells out to `gh` and read
+    # as untestable; it is not -- kubectlprobe.Exec is a swappable seam and every
+    # decision is made on the returned bytes, so it went to 96.5%. selfupgrade FELL
+    # to 44.3% without one line of it getting worse: the version helpers were among
+    # its best-covered code and they left. Lowering that floor would have been the
+    # wrong read of the number -- it described a package that no longer exists -- so
+    # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
+    # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
+    #
+    # 1857 -> 1869. TWELVE LINES, AND THEY ARE THE POINT OF THE CHANGE. Five
+    # installers in cmd/llz now build their extension's cluster Writer from a NAMED
+    # binding — `capability.For(assertnetwork.MutatingBinding()).Writer` — instead
+    # of handing over a general exec seam. Three lines of that is the comment
+    # saying so, which belongs at the wiring site: this is the file where a
+    # reviewer can see what each extension was granted, and a bare
+    # `Writer: capability.For(x)` would say nothing about why THAT binding.
+    #
+    # This is package main doing the one job the model always gave it — deciding
+    # what each extension receives — and it is the first time that decision has had
+    # any consequence. Shrinking it would mean moving the grant resolution into the
+    # extensions, which is exactly backwards: an extension that chooses its own
+    # capabilities has not been granted anything.
+    #
+    # 1856 -> 1857. One import line. The two firewall names moved from
+    # internal/extensions/reconciler to internal/shared/platform, and the two
+    # cmd/llz files that use them still import `reconciler` for other things, so
+    # each gained a `platform` import without losing the old one. Five insertions
+    # against four deletions.
+    #
+    # It is recorded rather than absorbed because `exact: true` means every number
+    # here was checked, and a budget that quietly rounds off single lines stops
+    # being able to say anything about ten.
+    #
+    # IN-DEGREE SWEEP, ROUND TWO (no core-surface change). 90 -> 66 extension ->
+    # extension edges, by splitting the four biggest hubs. The COVERAGE FLOORS MOVED
+    # WITH THE CODE and three of them went DOWN, which needs saying plainly rather
+    # than being left to look like a regression:
+    #
+    #   internal/extensions/instanceresolve   87 -> 95   (0 lib lines left; 100% now)
+    #   internal/extensions/envtopology       31 ->  8
+    #   internal/extensions/openbao           58 -> 32
+    #   internal/shared/instanceresolve             87   (measured 89.6)
+    #   internal/shared/envtopology                 67   (measured 69.9)
+    #   internal/shared/openbao                     76   (measured 79.0)
+    #   internal/shared/portfwd                     90   (40 -> 93.3, timeout path)
+    #
+    # THE COVERAGE DID NOT DROP, IT RELOCATED. Each of those three extensions was
+    # mostly library, the library was mostly what was tested, and both went to
+    # internal/shared together -- so the shared floors above are where the same
+    # tests now count. What is left behind in envtopology and openbao is cobra verb
+    # plumbing, which is genuinely less covered and always was; it had been hidden
+    # inside a package average carried by the library sitting next to it. Lowering
+    # those two is the number stopping being flattering, not the tests getting worse.
+    #
+    # This is the OPPOSITE case to the selfupgrade entry below, where a floor also
+    # fell after a move and the right answer was to write tests rather than lower
+    # it. The difference is where the uncovered code came from: there, well-covered
+    # code left and the REMAINDER had cheap untested functions worth covering
+    # (verifyChecksum, walkUpgradeFiles, both at 0%). Here the remainder is 2,600
+    # lines of command wiring. instanceresolve is the case that proves the rule
+    # rather than breaking it -- its floor went UP, because what remained was a bare
+    # declaration with no test at all, and a declaration is cheap to check.
+    #
+    # 1853 -> 1856, AND THE FIRST DELIBERATE GROWTH IN A LONG WHILE. Binding gained
+    # a Requires field (the precondition axis) and `llz extension list` renders it:
+    # three lines in bindingSummary. The code belongs in package main because that
+    # is the CLI rendering layer and the summary string is a presentation choice —
+    # it uses `<operating` rather than Binding.String()'s spelled-out form because
+    # the column holds several bindings side by side.
+    #
+    # Not rendering it was the alternative and it was wrong. `database-provisioner`
+    # holds two bindings at `transition:seeded`, one of which requires `operating`;
+    # without the field they collapsed to a single entry and the list silently
+    # showed one binding where there are two. A list command whose help says it
+    # shows bindings, quietly dropping the part that distinguishes two of them, is
+    # the banning-by-omission shape this whole model was built to prevent — in the
+    # one surface an operator actually reads.
+    #
+    # `exact: true` is what made this commit possible to get wrong and therefore
+    # possible to get right: extracting the code and forgetting this line fails the
+    # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
+    # rather than left as slack the next change grows into unremarked.
+    budget: 1889
+    exact: true
+    include:
+      - "tools/cmd/llz/*.go"
+
+exclude:
+  - "tools/cmd/llz/*_test.go"

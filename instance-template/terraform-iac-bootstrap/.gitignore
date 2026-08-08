@@ -17,5 +17,5 @@
 
 # The TF roots' *.tf (cluster, object-storage, databases, vpc) are generated on the fly by `llz render` from the
 # embedded tfroots package (like the per-env *.tfvars) — an instance commits ZERO
-# Terraform code, only the .terraform.lock.hcl provider pins. See tools/internal/tfroots.
+# Terraform code, only the .terraform.lock.hcl provider pins. See tools/internal/shared/tfroots.
 */*.tf

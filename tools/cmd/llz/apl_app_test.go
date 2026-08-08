@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
 func TestFindComponent(t *testing.T) {

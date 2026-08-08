@@ -39,6 +39,11 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 // dispatchedRun is the run a dispatch produced.
@@ -72,7 +77,7 @@ var latestDispatchRun = func(repo, workflow string) (dispatchedRun, bool) {
 	// workflow_dispatch so a push-triggered run on the same workflow is never
 	// mistaken for it.
 	path := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=1", repo, workflow)
-	if err := ghAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
+	if err := ghapi.GHAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
 		return dispatchedRun{}, false
 	}
 	r := resp.Runs[0]
@@ -98,10 +103,10 @@ type dispatchWatch struct {
 // the repo or `gh` cannot be resolved, so it costs an unrelated invocation
 // nothing.
 func beginDispatchWatch(g globalOpts, workflow string) dispatchWatch {
-	if g.dryRun || !g.yes || !lookable("gh") {
+	if g.DryRun || !g.Yes || !kubectlprobe.Lookable("gh") {
 		return dispatchWatch{}
 	}
-	repo, err := resolveInstanceRepo("", false)
+	repo, err := answers.ResolveInstanceRepo("", false)
 	if err != nil {
 		return dispatchWatch{}
 	}
@@ -142,21 +147,21 @@ func (w dispatchWatch) report() {
 		if !ok || !w.isOurs(run) {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "%s dispatched — the build runs in GitHub Actions and takes ~40 minutes.\n", green("✓"))
-		fmt.Fprintf(os.Stderr, "    %s %s\n", dim("run:"), cyan(run.URL))
-		fmt.Fprintf(os.Stderr, "    %s %s\n", dim("follow:"), cyan(fmt.Sprintf("gh run watch %d --repo %s", run.ID, w.repo)))
+		fmt.Fprintf(os.Stderr, "%s dispatched — the build runs in GitHub Actions and takes ~40 minutes.\n", color.Green("✓"))
+		fmt.Fprintf(os.Stderr, "    %s %s\n", color.Dim("run:"), color.Cyan(run.URL))
+		fmt.Fprintf(os.Stderr, "    %s %s\n", color.Dim("follow:"), color.Cyan(fmt.Sprintf("gh run watch %d --repo %s", run.ID, w.repo)))
 		// Named here rather than only in a runbook: this is the moment an operator
 		// learns the run failed, and the moment they need to know where to look.
-		fmt.Fprintf(os.Stderr, "    %s %s\n", dim("if it fails:"), cyan(fmt.Sprintf("gh run view %d --repo %s --log-failed", run.ID, w.repo)))
-		fmt.Fprintln(os.Stderr, dim("                 then docs/runbooks/first-build-failed.md — the apply is re-runnable"))
+		fmt.Fprintf(os.Stderr, "    %s %s\n", color.Dim("if it fails:"), color.Cyan(fmt.Sprintf("gh run view %d --repo %s --log-failed", run.ID, w.repo)))
+		fmt.Fprintln(os.Stderr, color.Dim("                 then docs/runbooks/first-build-failed.md — the apply is re-runnable"))
 		return
 	}
 	// Deliberately does NOT fall back to "the newest run": that is the wrong-run
 	// bug this whole file is built around. A command the operator runs themselves
 	// is the honest answer when we cannot identify ours.
-	fmt.Fprintf(os.Stderr, "%s dispatched. The run takes ~40 minutes; GitHub had not registered it yet, so find it with:\n", green("✓"))
-	fmt.Fprintf(os.Stderr, "    %s\n", cyan("gh run list --repo "+w.repo+" --workflow "+w.workflow+" --limit 5"))
-	fmt.Fprintln(os.Stderr, dim("    if it fails: docs/runbooks/first-build-failed.md — the apply is re-runnable"))
+	fmt.Fprintf(os.Stderr, "%s dispatched. The run takes ~40 minutes; GitHub had not registered it yet, so find it with:\n", color.Green("✓"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh run list --repo "+w.repo+" --workflow "+w.workflow+" --limit 5"))
+	fmt.Fprintln(os.Stderr, color.Dim("    if it fails: docs/runbooks/first-build-failed.md — the apply is re-runnable"))
 }
 
 // sleepFn is time.Sleep, seamed so tests don't wait.

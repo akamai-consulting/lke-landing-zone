@@ -1,6 +1,18 @@
 package main
 
-import "github.com/spf13/cobra"
+// STAYS IN PACKAGE MAIN: it builds the `llz apl` SUBTREE, wiring five sibling
+// command groups together. That is the tree, and main owns the tree — the rule
+// is "an extension owns its own command", not "every constructor leaves".
+//
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
+	"github.com/spf13/cobra"
+)
 
 // aplCmd is the APL-layer front door (ADR 0013 — "one binary, two altitudes"): a
 // noun-verb subtree that speaks App Platform's domain model. `user` is HOMED here
@@ -25,13 +37,13 @@ func aplCmd() *cobra.Command {
 			"move down into internal/apl in later phases.",
 	}
 	c.AddCommand(
-		aplUserCmd(),   // apl user — onboarding (retired from the top level)
-		aplAppCmd(),    // apl app — list | enable | disable App Platform apps
-		aplValuesCmd(), // apl values — render | validate the apl-values
-		openbaoCmd(),   // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
-		statusCmd(),    // apl status — platform health
-		doctorCmd(),    // apl doctor — APL-scoped readiness
-		verifyCmd(),    // apl verify — platform verification
+		identityconfig.AplUserCmd(), // apl user — onboarding (retired from the top level)
+		aplAppCmd(),                 // apl app — list | enable | disable App Platform apps
+		aplValuesCmd(),              // apl values — render | validate the apl-values
+		openbaoext.OpenbaoCmd(),     // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
+		statusCmd(),                 // apl status — platform health
+		onboard.DoctorCmd(),         // apl doctor — APL-scoped readiness
+		reachability.VerifyCmd(),    // apl verify — platform verification
 	)
 	return c
 }
@@ -48,8 +60,8 @@ func aplValuesCmd() *cobra.Command {
 		Short: "author & check the App Platform values (apl-values): render, validate",
 	}
 	c.AddCommand(
-		renderCmd(), // apl values render — spec → values/overlay tree
-		renamed(ciAplSchemaValidateCmd(), "validate",
+		render.RenderCmd(), // apl values render — spec → values/overlay tree
+		renamed(manifestguard.AplSchemaValidateCmd(), "validate",
 			"offline apl-values var-contract + apl-core schema check (no cluster)"),
 	)
 	return c

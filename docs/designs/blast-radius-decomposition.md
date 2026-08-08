@@ -52,7 +52,7 @@ OWN content. A `Degraded` resource then fails only its own App.
 
 This PR generalizes that to the four bundles. When `spec.components.<name>` is enabled
 and the component declares a `CarvedApp` (registry field in
-`tools/internal/clusterspec/components.go`), `llz render` emits:
+`tools/internal/shared/clusterspec/components.go`), `llz render` emits:
 
 1. a health-inert `Application` CR `llz-<name>` into `apl-values/<env>/manifest/`
    (referenced under `resources:` of the thin overlay, replacing the old

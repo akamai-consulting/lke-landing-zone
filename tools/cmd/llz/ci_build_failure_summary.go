@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +43,7 @@ func ciBuildFailureSummaryCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// Never propagate: this runs inside an already-failing job, and an
 			// error here would replace the real failure in the operator's view.
-			if err := appendGHAFile("GITHUB_STEP_SUMMARY", buildFailureSummary(stage, region)); err != nil {
+			if err := ghaout.Append("GITHUB_STEP_SUMMARY", buildFailureSummary(stage, region)); err != nil {
 				fmt.Printf("could not write the failure summary (%v); the recovery steps are in docs/runbooks/first-build-failed.md\n", err)
 			}
 			return nil
