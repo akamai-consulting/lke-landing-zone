@@ -303,6 +303,32 @@ type Extension struct {
 	// to catch a mistake. It is declaration data the registry reads when it
 	// decides the default enabled set.
 	Always bool
+
+	// Component names the `spec.components` toggle whose enablement decides this
+	// extension's. Empty means enablement does not follow a component.
+	//
+	// THE SPEC ALREADY HAD ENABLEMENT AND THIS REUSES IT rather than inventing a
+	// parallel `extensions:` map for an operator to keep in step. Components carry
+	// Mandatory, DependsOn and a tri-state toggle that Defaults() fills; an
+	// extension that tracks a platform feature is enabled exactly when the feature
+	// is. obj-encryption said so in prose long before this field existed — "once,
+	// when spec.components.objProxy is enabled" — and that comment was the only
+	// thing connecting the two.
+	//
+	// A STRING, NOT A TYPED REFERENCE, because this package must not import
+	// clusterspec: it is the model every extension depends on, and
+	// TestDeclarationModelStaysDependencyFree pins that it imports nothing but
+	// strings. Resolution lives in the registry, which may import both — and the
+	// registry is also where a name that matches no component is caught, since only
+	// something holding the component list can know.
+	//
+	// EMPTY IS NOT "ALWAYS ON". Four of the seven opt-in extensions have no
+	// component and should not be given one: import-brownfield is a one-time
+	// adoption path, wedge-gameday and dev-mutation-testing are not about the
+	// platform at all, and release-publish runs template-repo-side. Enablement for
+	// those is a question this field does not answer, and answering it here would
+	// mean inventing a component that exists only to be a checkbox.
+	Component string
 	// Bindings is where it attaches and, per binding, what it may touch. At least
 	// one.
 	Bindings []Binding

@@ -53,7 +53,10 @@ func Extension() extension.Extension {
 		Name:  "assert-registry",
 		Short: "fail unless a minted Harbor robot can actually authenticate for pull and push",
 		// OPT-IN: an instance without Harbor has no robot to exercise.
-		Always: false,
+		Always:    false,
+		Component: "harbor", // assert-registry proves Harbor can round-trip an image. An instance without the
+		// harbor component has no registry to assert about, and the pairing with
+		// harbor-provisioner is the catalog’s strongest structural signal.
 		Bindings: []extension.Binding{{
 			Kind:   extension.Assertion,
 			Name:   "harbor-roundtrip",

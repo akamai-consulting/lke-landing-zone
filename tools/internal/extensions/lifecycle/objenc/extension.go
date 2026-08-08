@@ -48,9 +48,12 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // NOT DECLARED, and deliberately: the `sync`/drain verbs. See Incomplete.
 func Extension() extension.Extension {
 	return extension.Extension{
-		Name:   "obj-encryption",
-		Short:  "mint, hold and prove the SSE-C key that encrypts Linode Object Storage",
-		Always: false,
+		Name:      "obj-encryption",
+		Short:     "mint, hold and prove the SSE-C key that encrypts Linode Object Storage",
+		Always:    false,
+		Component: "objProxy", // obj-encryption exists to protect what the OBJ proxy writes; its own declaration
+		// already said "once, when spec.components.objProxy is enabled", and this is that
+		// sentence made load-bearing.
 		Bindings: []extension.Binding{
 			{
 				// `llz ci seed-ssec-key` — generate the key and write it to
