@@ -52,6 +52,20 @@ import (
 // Lane is one parallel lane of the battery.
 type Lane struct {
 	Name string
+	// Extension names the extension this lane belongs to, so the battery can ask
+	// whether an instance still has it. Empty means the lane always runs.
+	//
+	// IT EXISTS BECAUSE A LANE THAT SKIPS ITSELF IS INVISIBLE. Several lanes
+	// already "skip clean when the component is disabled" — health-workflow's Why
+	// says so — and the way they do it is by EXITING 0. This struct had no skip
+	// state, so a lane that ran nothing was reported exactly like one that proved
+	// something. That is the vacuous-green shape this file's own header was
+	// written to kill (the bash battery it replaced had a step that "RUNS AND CAN
+	// NEVER FAIL"), reappearing one level up.
+	//
+	// With the extension named, the BATTERY decides and the skip is a state rather
+	// than an exit code nobody can interpret.
+	Extension string
 	// Steps run IN ORDER inside the lane, stopping at the first failure. One step
 	// is one `llz ci …` invocation, given as its argv after "ci".
 	Steps [][]string
@@ -209,7 +223,23 @@ type laneResult struct {
 	// Failed is the GATING verdict: report-only lanes never fail the battery even
 	// when their exit code is non-zero.
 	Failed bool
+	// Skipped means the lane did not run because the instance does not have its
+	// extension. A skipped lane is NOT a passing lane, and nothing may count it as
+	// evidence that `verified` holds.
+	Skipped bool
+	// SkipReason names what turned it off, so an operator asking why a lane is
+	// missing does not have to guess which toggle did it.
+	SkipReason string
 }
+
+// Disabled reports whether an extension is off for this instance, and why. Nil
+// means "run everything", which is the template repo and any caller that has no
+// spec to consult.
+//
+// INJECTED RATHER THAN RESOLVED HERE, because internal/shared/extension/registry
+// imports this package to declare it — asking the registry directly would be a
+// cycle. The caller that has both is the one that supplies it.
+type Disabled func(extension string) (reason string, off bool)
 
 // runLaneFn executes one `llz ci …` step and returns its combined output and
 // exit code. Seamed so the orchestration is testable without spawning processes.
@@ -232,9 +262,16 @@ var runLaneFn = func(args []string) (string, int) {
 }
 
 // runLane executes a lane's steps in order, stopping at the first failure.
-func runLane(l Lane, now func() time.Time) laneResult {
+func runLane(l Lane, now func() time.Time, disabled Disabled) laneResult {
 	start := now()
 	res := laneResult{Lane: l}
+	if disabled != nil && l.Extension != "" {
+		if why, off := disabled(l.Extension); off {
+			res.Skipped, res.SkipReason = true, why
+			res.Duration = now().Sub(start)
+			return res
+		}
+	}
 	var out strings.Builder
 	for _, step := range l.Steps {
 		stepOut, code := runLaneFn(step)
@@ -254,18 +291,45 @@ func runLane(l Lane, now func() time.Time) laneResult {
 
 // runAssertSuiteLanes runs every lane concurrently and returns results in the
 // lane table's order (deterministic output regardless of completion order).
-func runAssertSuiteLanes(lanes []Lane, now func() time.Time) []laneResult {
+func runAssertSuiteLanes(lanes []Lane, now func() time.Time, disabled Disabled) []laneResult {
 	results := make([]laneResult, len(lanes))
 	var wg sync.WaitGroup
 	for i, l := range lanes {
 		wg.Add(1)
 		go func(i int, l Lane) {
 			defer wg.Done()
-			results[i] = runLane(l, now)
+			results[i] = runLane(l, now, disabled)
 		}(i, l)
 	}
 	wg.Wait()
 	return results
+}
+
+// laneDisabled is the battery's enablement source. It is a package var rather
+// than a parameter because RunAssertSuite is a cobra RunE with a fixed signature,
+// and package main installs the real resolver at init — the same seam pattern
+// every other capability in this tree uses.
+//
+// NIL BY DEFAULT MEANS RUN EVERYTHING, deliberately. An uninstalled resolver must
+// not silence the battery: a default that skipped lanes would turn assertions off
+// wherever the wiring was forgotten, which is the dangerous direction.
+var laneDisabled Disabled
+
+// InstallDisabled wires the enablement resolver. Call once, before RunAssertSuite.
+func InstallDisabled(d Disabled) { laneDisabled = d }
+
+// skippedLaneNames returns the lanes that did not run, sorted. Reported
+// separately from failures because they are a different thing and a reader who
+// conflates them will believe the battery proved more than it did.
+func skippedLaneNames(rs []laneResult) []string {
+	var out []string
+	for _, r := range rs {
+		if r.Skipped {
+			out = append(out, r.Lane.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // failedLaneNames returns the gating lanes that failed, sorted.
@@ -342,9 +406,20 @@ func Run(region string, only []string, list bool) error {
 	}
 
 	fmt.Printf("## E2E assert suite — %d lanes (%d gating)\n", len(lanes), countGating(lanes))
-	results := runAssertSuiteLanes(lanes, time.Now)
+	results := runAssertSuiteLanes(lanes, time.Now, laneDisabled)
 
 	for _, r := range results {
+		// A SKIPPED LANE IS ANNOUNCED, NOT OMITTED. Printing nothing would leave the
+		// battery reporting fewer lanes than its own header counted, which reads as
+		// a passing run over a reduced set — the failure this state exists to end.
+		if r.Skipped {
+			fmt.Printf("::group::assert %s — SKIPPED (%s)\n", r.Lane.Name, r.SkipReason)
+			fmt.Printf("# %s\n", r.Lane.Why)
+			fmt.Printf("NOT RUN, and NOT PASSED: this instance does not have %s. Nothing here "+
+				"is evidence about the platform either way.\n", r.Lane.Extension)
+			fmt.Println("::endgroup::")
+			continue
+		}
 		fmt.Printf("::group::assert %s (rc=%d, %s)\n", r.Lane.Name, r.ExitCode, r.Duration.Round(time.Second))
 		if r.Lane.Why != "" {
 			fmt.Printf("# %s\n", r.Lane.Why)
@@ -368,8 +443,35 @@ func Run(region string, only []string, list bool) error {
 	if bad := failedLaneNames(results); len(bad) > 0 {
 		return fmt.Errorf("e2e assert lane(s) failed: %s", strings.Join(bad, ", "))
 	}
-	fmt.Printf("All %d gating lane(s) passed.\n", countGating(lanes))
+
+	// THE COUNT IS OF LANES THAT RAN, NOT LANES THAT EXIST, and that distinction is
+	// the whole point of the skip state. This printed countGating(lanes) — the
+	// DECLARED gating lanes — so a battery that skipped three of them still
+	// announced that all of them passed. A reader takes that line as the verdict.
+	skipped := skippedLaneNames(results)
+	ran := countGating(lanes) - countGatingSkipped(results)
+	if len(skipped) > 0 {
+		fmt.Printf("All %d gating lane(s) that RAN passed. %d skipped: %s\n",
+			ran, len(skipped), strings.Join(skipped, ", "))
+		fmt.Println("A skipped lane proves nothing. `verified` is a claim about the lanes " +
+			"that ran, and these did not.")
+		return nil
+	}
+	fmt.Printf("All %d gating lane(s) passed.\n", ran)
 	return nil
+}
+
+// countGatingSkipped counts the GATING lanes that did not run. Report-only lanes
+// are excluded for the same reason they never fail the battery: they are not part
+// of the verdict either way.
+func countGatingSkipped(rs []laneResult) int {
+	n := 0
+	for _, r := range rs {
+		if r.Skipped && r.Lane.Gating {
+			n++
+		}
+	}
+	return n
 }
 
 func countGating(ls []Lane) int {

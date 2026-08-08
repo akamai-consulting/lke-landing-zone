@@ -1102,6 +1102,24 @@ categories:
 #        `make staticcheck` is a separate target and belongs in the pre-push habit,
 #        not only in the CI job.
 #
+#   98th: the assert battery learns to skip   1,866 -> 1,889 (+23)
+#        THE JOIN BETWEEN THE REGISTRY AND THE BATTERY, and it can only live here.
+#        internal/shared/extension/registry IMPORTS assertsuite in order to declare
+#        it, so assertsuite asking the registry back is a cycle. package main is the
+#        one place that sees both, which is exactly the "wire two things that must
+#        not know about each other" job ADR 0014 leaves to core.
+#        WHAT IT BUYS is a real defect closed. Several assert lanes already "skip
+#        clean when the component is disabled" -- by EXITING 0 -- and laneResult had
+#        no skip state, so a lane that ran nothing was reported exactly like one
+#        that proved something. Worse, the closing verdict counted DECLARED gating
+#        lanes, so a run that skipped three still announced that all of them passed.
+#        That is the vacuous-green shape suite.go`s own header was written to kill,
+#        reappearing one level up.
+#        EVERY FAILURE PATH IN THESE 23 LINES ANSWERS "RUN IT" -- no spec, unreadable
+#        spec, unresolvable registry. A battery that fell silent because it could not
+#        read a file would be the same bug in a new place, so refusing to SKIP is the
+#        safe direction here, inverse to the seeder rule where refusing to WRITE is.
+#
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1206,7 +1224,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1866
+    budget: 1889
     exact: true
     include:
       - "tools/cmd/llz/*.go"
