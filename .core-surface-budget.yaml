@@ -1088,6 +1088,20 @@ categories:
 #        remaining twelve are named in gates.go and reported live by a test, so the
 #        comment cannot drift from the model.
 #
+#   97th: staticcheck ST1019, found by CI   1,868 -> 1,866 (-2)
+#        THE TWO LINES THE 96th ENTRY SPENT, HANDED BACK BY A DIFFERENT GATE. The
+#        env merge left cmd/llz/main.go and import.go importing the merged package
+#        TWICE -- once aliased `envtopoext`, once plain -- because before the merge
+#        those were two packages and the alias existed to disambiguate them. Go
+#        compiles that happily and `go vet` says nothing; only staticcheck's ST1019
+#        sees it, and `make lint` does not run staticcheck.
+#        SO IT TOOK A PUSH TO FIND. Every gate ran green locally -- 125 packages,
+#        LINT_ALL=1, seven individual targets -- and CI failed on the first run.
+#        That is the scar this repo already has written down from the other
+#        direction ("a clean local run proves NOTHING about CI"), earned again.
+#        `make staticcheck` is a separate target and belongs in the pre-push habit,
+#        not only in the CI job.
+#
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1192,7 +1206,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1868
+    budget: 1866
     exact: true
     include:
       - "tools/cmd/llz/*.go"

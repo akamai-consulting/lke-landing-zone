@@ -14,7 +14,6 @@ package main
 // the catalog got wrong.
 
 import (
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 
@@ -48,7 +47,7 @@ func brownfieldDeps() brownfield.Deps {
 				SubnetCIDR:      spec.SubnetCIDR,
 			})
 		},
-		EnvSpecFile: envtopoext.SpecFile,
+		EnvSpecFile: environments.SpecFile,
 		EditSpec: func(path string, mutate func(*yamlv3.Node) error, parse func([]byte) error) error {
 			return yamledit.EditSpecFile(path, mutate, parse)
 		},
