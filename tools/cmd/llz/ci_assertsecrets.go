@@ -6,9 +6,9 @@ package main
 import (
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )

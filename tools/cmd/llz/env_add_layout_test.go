@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 )
 

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/spf13/cobra"
 )
 

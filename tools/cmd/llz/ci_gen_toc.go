@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/spf13/cobra"
 )
 

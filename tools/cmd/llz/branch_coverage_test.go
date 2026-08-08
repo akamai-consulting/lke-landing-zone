@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────

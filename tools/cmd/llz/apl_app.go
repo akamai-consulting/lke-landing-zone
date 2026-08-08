@@ -11,9 +11,9 @@ package main
 import (
 	"fmt"
 
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/yamledit"

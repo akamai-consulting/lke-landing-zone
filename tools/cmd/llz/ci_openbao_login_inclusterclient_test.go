@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )

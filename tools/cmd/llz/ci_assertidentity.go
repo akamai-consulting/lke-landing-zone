@@ -4,8 +4,8 @@ package main
 // extension (internal/assertidentity).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertidentity"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )

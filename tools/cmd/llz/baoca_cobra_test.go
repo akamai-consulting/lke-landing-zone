@@ -9,7 +9,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 )
 
 func TestExtractOpenbaoCAWiring(t *testing.T) {

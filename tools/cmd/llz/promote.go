@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"

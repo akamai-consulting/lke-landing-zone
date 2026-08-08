@@ -14,14 +14,13 @@ package main
 // the catalog got wrong.
 
 import (
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/capabilities/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
@@ -29,6 +28,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/yamledit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/newinstance"
 )
 
 func brownfieldDeps() brownfield.Deps {

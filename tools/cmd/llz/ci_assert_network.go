@@ -4,7 +4,7 @@ package main
 // extension (internal/assertnetwork).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 

@@ -10,9 +10,9 @@ package main
 // keep-set both exist to prevent.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/doctor"
 )
 
 func init() { installDoctorDeps() }

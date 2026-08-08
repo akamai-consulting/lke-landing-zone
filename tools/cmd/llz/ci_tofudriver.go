@@ -4,7 +4,7 @@ package main
 // (internal/tofudriver).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 

@@ -29,7 +29,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 )
 
 // commandFindings runs ONLY the command/flag check over a fixture repo. The other
