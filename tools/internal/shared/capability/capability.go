@@ -87,12 +87,28 @@ var writeVerbs = map[string]bool{
 	"debug": true, "port-forward": true, "proxy": true, "attach": true,
 }
 
-// configWriteSubverbs are the `kubectl config` subcommands that mutate kubeconfig.
-// `config view` and `config current-context` read; these do not.
-var configWriteSubverbs = map[string]bool{
-	"set": true, "set-context": true, "set-cluster": true, "set-credentials": true,
-	"unset": true, "use-context": true, "rename-context": true, "delete-context": true,
-	"delete-cluster": true, "delete-user": true,
+// subverbReads lists, for the verbs whose MEANING IS IN THE SECOND WORD, which
+// subcommands READ. It is an allowlist for the same reason the verb table is, and
+// it was written the other way round first: as `subverbWrites`, permitting
+// anything not listed. That fails OPEN — `kubectl rollout <anything-unlisted>`
+// sailed through a read-only handle, which the reader test caught on the first
+// run. An unknown subcommand of a mutating verb is refused. `config view` reads and `config set-context` rewrites
+// kubeconfig; `rollout status` blocks on a condition and `rollout restart` rolls
+// pods. A verb-only check gets both of these wrong, and it got `rollout status`
+// wrong until the write census listed the argv side by side and the read was
+// sitting in the middle of them.
+var subverbReads = map[string]map[string]bool{
+	"config": {
+		"view": true, "current-context": true, "get-contexts": true,
+		"get-clusters": true, "get-users": true,
+	},
+	"rollout": {
+		// `rollout status` BLOCKS ON A CONDITION and changes nothing. The verb-only
+		// check called it a write; the census exposed that by listing `rollout
+		// status deploy/argocd-redis --timeout=120s` directly beneath `rollout
+		// restart deploy/argocd-redis` in converge.
+		"status": true, "history": true,
+	},
 }
 
 // Cluster is the handle a cluster-read or cluster-write binding receives. Both
@@ -112,9 +128,8 @@ type Cluster interface {
 }
 
 type cluster struct {
-	write bool
-	exec  func(string, ...string) ([]byte, error)
-	comb  func(string, ...string) string
+	exec func(string, ...string) ([]byte, error)
+	comb func(string, ...string) string
 }
 
 // Verb extracts the kubectl subcommand from an argv, skipping leading global
@@ -146,19 +161,28 @@ func (c cluster) Permits(args ...string) error {
 		return fmt.Errorf("capability: refusing a kubectl call with no subcommand (argv %q) — "+
 			"the verb is what the grant is checked against, so an argv that has none cannot be judged", args)
 	}
-	if v == "config" && !c.write {
-		// The mutation is in the second word, so `config` alone is not enough.
-		if sub := secondWord(args, v); configWriteSubverbs[sub] {
-			return c.deny(v + " " + sub)
+	// Verbs whose mutation is in the SECOND word are judged on that word.
+	if reads, split := subverbReads[v]; split {
+		sub := secondWord(args, v)
+		if reads[sub] {
+			return nil // `config view`, `rollout status`
 		}
+		if sub == "" {
+			return fmt.Errorf("capability: kubectl %s needs a subcommand — %s alone cannot be "+
+				"judged read or write", v, v)
+		}
+		return c.deny(v + " " + sub)
 	}
 	if readVerbs[v] {
 		return nil
 	}
 	if writeVerbs[v] {
-		if c.write {
-			return nil
-		}
+		// A GENERIC WRITE IS NEVER PERMITTED THROUGH THIS HANDLE, whatever the
+		// binding declared. Writes go through the named operations on Writer, which
+		// is the whole point of the granular pass: `cluster-write` used to mean "any
+		// kubectl mutation", including `drain`, `exec` and `delete namespace`. It now
+		// means six specific shapes, and a reviewer sees Annotate/Delete/PatchMerge
+		// in the diff rather than an argv they have to parse.
 		return c.deny(v)
 	}
 	// Unclassified: refused by both handles, on purpose.
@@ -167,8 +191,9 @@ func (c cluster) Permits(args ...string) error {
 }
 
 func (c cluster) deny(v string) error {
-	return fmt.Errorf("capability: kubectl %s needs the %q grant, which this binding did not declare — "+
-		"either add it to the binding (and satisfy grantStates for its state) or stop mutating here",
+	return fmt.Errorf("capability: kubectl %s is a mutation and cannot go through a cluster read handle — "+
+		"declare %q and call the named operation on Writer (Annotate, Delete, PatchMerge, "+
+		"RolloutRestart, CreateToken, ApplyServerSide) instead of assembling an argv",
 		v, extension.ClusterWrite)
 }
 
@@ -213,8 +238,11 @@ func (d deniedCluster) Combined(args ...string) string     { return d.Permits(ar
 // Handles is what a binding receives. Every field is non-nil; a capability the
 // binding did not declare is present and refuses.
 type Handles struct {
-	// Cluster is the kubectl handle, scoped by cluster-read / cluster-write.
+	// Cluster READS. It is read-only for every binding, including one holding
+	// cluster-write — mutations do not go through an argv at all.
 	Cluster Cluster
+	// Writer is the six named mutations, present-and-refusing without cluster-write.
+	Writer Writer
 }
 
 // For builds the handles a binding's declared grants entitle it to.
@@ -236,14 +264,17 @@ func For(b extension.Binding) Handles {
 	// cluster-write implies the ability to read: every mutating lane in the tree
 	// reads back what it wrote, and forcing it to declare both would make the
 	// grant line noisier without making it more informative.
-	if !read && !write {
-		return Handles{Cluster: deniedCluster{}}
+	var w Writer = deniedWriter{}
+	if write {
+		w = writer{exec: kubectlprobe.Exec}
 	}
-	return Handles{Cluster: cluster{
-		write: write,
-		exec:  kubectlprobe.Exec,
-		comb:  kubectlprobe.Combined,
-	}}
+	if !read && !write {
+		return Handles{Cluster: deniedCluster{}, Writer: w}
+	}
+	return Handles{
+		Cluster: cluster{exec: kubectlprobe.Exec, comb: kubectlprobe.Combined},
+		Writer:  w,
+	}
 }
 
 // WithExec is For with the process seam replaced, for tests that must not shell
@@ -251,12 +282,15 @@ func For(b extension.Binding) Handles {
 // than the declaration allows.
 func WithExec(b extension.Binding, exec func(string, ...string) ([]byte, error), comb func(string, ...string) string) Handles {
 	h := For(b)
-	c, ok := h.Cluster.(cluster)
-	if !ok {
-		return h // denied stays denied; a test cannot widen a binding by stubbing
+	if c, ok := h.Cluster.(cluster); ok {
+		c.exec, c.comb = exec, comb
+		h.Cluster = c
 	}
-	c.exec, c.comb = exec, comb
-	return Handles{Cluster: c}
+	if _, ok := h.Writer.(writer); ok {
+		h.Writer = writer{exec: exec}
+	}
+	// denied stays denied: a test cannot widen a binding by stubbing.
+	return h
 }
 
 // ClassifiedVerbs returns every verb this package knows, for the doc-agreement

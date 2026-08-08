@@ -341,7 +341,7 @@ var (
 		return string(out), err
 	}
 	deleteProbeNamespace = func(ns string) {
-		_ = deps.ExecCombined("kubectl", "delete", "namespace", ns, "--ignore-not-found", "--wait=false")
+		_, _ = deps.W().Delete("", "namespace", ns, "--wait=false")
 	}
 	waitProbePod = func(ns string, timeout time.Duration) error {
 		_, err := deps.Exec("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Succeeded",

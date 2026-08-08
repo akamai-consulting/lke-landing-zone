@@ -157,8 +157,9 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 
 	// Reap any prior e2e probe Workflows first: on a REUSED cluster a Failed one
 	// lingers and (even with converge now ignoring them) is just noise. Best-effort.
-	deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow",
-		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running", "--ignore-not-found")
+	// --ignore-not-found is applied by Delete itself.
+	_, _ = deps.W().Delete(namespace, "workflow",
+		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running")
 
 	for attempt := 1; ; attempt++ {
 		out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
@@ -187,7 +188,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 			if attempt < healthRetryAttempts && healthTransientOnly(logs) {
 				fmt.Printf("::warning::assert-health-workflow: %s/%s failed with 0 hard-failed (in-progress only — cluster still settling); retrying in %s…\n",
 					namespace, name, healthRetryPause)
-				deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow", name, "--ignore-not-found")
+				_, _ = deps.W().Delete(namespace, "workflow", name)
 				time.Sleep(healthRetryPause)
 				continue
 			}

@@ -24,9 +24,20 @@ func TestDeclaresCustody(t *testing.T) {
 	if !Extension().HasGrant(extension.SecretCustody) {
 		t.Error("secret-custody dropped — this is the code that puts credential material in place")
 	}
-	if Extension().HasGrant(extension.ClusterWrite) {
-		t.Error("cluster-write declared on the extension — only the seal-key path applies a " +
-			"Secret, and it does so through the KubectlApply seam rather than as a general grant")
+	// THIS GUARD RAN THE OTHER WAY UNTIL THE CAPABILITY LAYER FALSIFIED IT. It
+	// asserted cluster-write was ABSENT, on the stated grounds that "only the
+	// seal-key path applies a Secret, and it does so through the KubectlApply seam
+	// rather than as a general grant". That was true about the Secret and missed
+	// the annotate: the seal-key wait forces a hard refresh on the parent
+	// Application when it wedges, which is a cluster mutation with no Secret in it.
+	//
+	// Nothing could have caught that while writes went through a general exec seam
+	// — the grant was checked against a state table and then handed no teeth, so a
+	// read-only declaration and a mutating one produced identical behaviour. It
+	// surfaced on the first run after the write moved to a named operation.
+	if !Extension().HasGrant(extension.ClusterWrite) {
+		t.Error("cluster-write dropped — the seal-key wait annotates the parent Application " +
+			"to force a hard refresh, and without the grant that mutation is refused at runtime")
 	}
 }
 

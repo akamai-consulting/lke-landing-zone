@@ -3,6 +3,7 @@ package assertnetwork
 import (
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -30,7 +31,25 @@ func TestNoLaneMutates(t *testing.T) {
 		extension.SecretCustody: true,
 		extension.OwnPaths:      true,
 	}
+	// THIS TEST PREDICTED ITS OWN EXCEPTION, down to the state problem: "If a lane
+	// now needs to create its probe fixture, that half is a TRANSITION — and note
+	// `verified` does not accept one, so it needs a state as well as a binding."
+	//
+	// The lane already did. It creates a namespace and a probe pod and deletes the
+	// namespace afterwards, and had been doing so since before this test was
+	// written — the delete through a general exec seam, the apply through a raw
+	// exec.Command no seam touches. `probe-fixture` is that transition, at
+	// `converged` because `verified` cannot take one.
+	var transitions int
 	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition {
+			transitions++
+			if b.Name != "probe-fixture" {
+				t.Errorf("unexpected transition %q — the one mutating lane here is the probe "+
+					"fixture; anything else is a new claim about what this extension does", b.Name)
+			}
+			continue
+		}
 		if b.Kind != extension.Assertion {
 			t.Errorf("%s: kind = %s, want assertion", b.Name, b.Kind)
 		}
@@ -45,6 +64,9 @@ func TestNoLaneMutates(t *testing.T) {
 					"needs a state as well as a binding", b.Name, g)
 			}
 		}
+	}
+	if transitions != 1 {
+		t.Errorf("%d transition bindings, want exactly 1", transitions)
 	}
 }
 
@@ -63,4 +85,28 @@ func TestNetProbeReachesNothing(t *testing.T) {
 		return
 	}
 	t.Fatal("no binding named \"net-probe\"")
+}
+
+// The probe fixture's grant is what makes the namespace teardown work at all: a
+// denied Writer would make `deleteProbeNamespace` a silent no-op, leaking a
+// namespace per run. That failure mode is invisible — the assertions still pass —
+// so it is pinned rather than left to be noticed on a cluster months later.
+func TestProbeFixtureCanActuallyDelete(t *testing.T) {
+	b := MutatingBinding()
+	if b.Name == "" {
+		t.Fatal("probe-fixture binding is gone — deleteProbeNamespace becomes a silent no-op")
+	}
+	if err := capability.For(b).Writer.PermitsWrite(); err != nil {
+		t.Errorf("probe-fixture cannot mutate: %v", err)
+	}
+	// And the assertions still cannot.
+	for _, other := range Extension().Bindings {
+		if other.Kind != extension.Assertion {
+			continue
+		}
+		if err := capability.For(other).Writer.PermitsWrite(); err == nil {
+			t.Errorf("assertion %q can mutate — the split exists so the observing lanes cannot",
+				other.Name)
+		}
+	}
 }

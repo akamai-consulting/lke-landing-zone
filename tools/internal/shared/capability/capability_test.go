@@ -66,18 +66,25 @@ func TestAReaderCanRead(t *testing.T) {
 	}
 }
 
-func TestAWriterCanDoBoth(t *testing.T) {
+// A cluster-write binding READS through Cluster and MUTATES through Writer. It
+// does not get a wider argv path — that is the whole granular pass: `cluster-write`
+// used to mean any mutating kubectl subcommand, including `drain`, `taint` and
+// `exec ... -- sh -c`.
+func TestAWriterReadsThroughClusterAndMutatesThroughWriter(t *testing.T) {
 	h := WithExec(binding(extension.ClusterWrite),
 		func(string, ...string) ([]byte, error) { return []byte("ok"), nil },
 		func(string, ...string) string { return "ok" })
-	for _, argv := range [][]string{
-		{"-n", "argocd", "get", "applications"},
-		{"-n", "argocd", "annotate", "application", "x", "argocd.argoproj.io/refresh=hard"},
-		{"delete", "job", "x", "--ignore-not-found"},
-	} {
-		if _, err := h.Cluster.Run(argv...); err != nil {
-			t.Errorf("cluster-write refused %v: %v", argv, err)
-		}
+
+	if _, err := h.Cluster.Run("-n", "argocd", "get", "applications"); err != nil {
+		t.Errorf("cluster-write refused a read: %v", err)
+	}
+	// The argv path stays read-only even here.
+	if err := h.Cluster.Permits("-n", "argocd", "annotate", "application", "x", "k=v"); err == nil {
+		t.Error("cluster-write got a generic write through the argv path — mutations must go " +
+			"through the named operations so a reviewer sees Annotate, not an argv")
+	}
+	if err := h.Writer.PermitsWrite(); err != nil {
+		t.Errorf("cluster-write cannot mutate: %v", err)
 	}
 }
 

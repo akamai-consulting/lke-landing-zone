@@ -346,7 +346,7 @@ const esoServiceAccount = "external-secrets"
 // output-capturing shell-out — this is not one of the interactive/stdin call
 // sites that deliberately keep calling os/exec directly.
 func mintServiceAccountToken(ns, sa string) (string, error) {
-	out, err := caps.Exec("kubectl", "create", "token", sa, "-n", ns, "--duration=10m")
+	out, err := caps.W().CreateToken(ns, sa, "10m")
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return "", fmt.Errorf("kubectl create token %s/%s: %s", ns, sa, strings.TrimSpace(string(ee.Stderr)))

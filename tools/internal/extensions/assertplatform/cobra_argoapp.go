@@ -30,7 +30,7 @@ func ArgoAppCmd() *cobra.Command {
 			"cause). Uses kubectl with the ambient KUBECONFIG.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return assertArgoApp(cigate.NewDeps(), namespace, app, parent, time.Duration(within)*time.Second)
+			return assertArgoApp(cigate.NewDeps().GrantedBy(MutatingBinding()), namespace, app, parent, time.Duration(within)*time.Second)
 		},
 	}
 	cmd.Flags().StringVar(&app, "app", "", "Application that must appear (required)")

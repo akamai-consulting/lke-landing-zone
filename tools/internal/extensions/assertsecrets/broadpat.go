@@ -79,7 +79,7 @@ func runAssertBroadPATRotation(region string) error {
 	}
 
 	// Fresh Job; drop a prior exercise Job first so re-runs are clean.
-	caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
+	func() string { _, _ = caps.W().Delete(broadPATRotatorNS, "job", broadPATRotatorE2EJob); return "" }()
 	if out, err := kubectlApplyStdin(jobJSON); err != nil {
 		return fmt.Errorf("create rotation Job (ROTATE_AFTER_DAYS=0): %w\n%s", err, out)
 	}

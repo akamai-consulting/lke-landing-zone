@@ -1,6 +1,10 @@
 package assertplatform
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+)
 
 // Deps carries what this package cannot reach for itself.
 //
@@ -14,6 +18,11 @@ type Deps struct {
 	// an Argo Workflow fails, the tool's own error text is the entire value of the
 	// failure report, and a stdout-only, error-gated read discards exactly that.
 	ExecCombined func(name string, args ...string) string
+
+	// Writer is the six named cluster mutations, scoped by this extension's
+	// declared grants. The two ephemeral `delete workflow` calls used to go
+	// through ExecCombined, which could equally have run `delete namespace`.
+	Writer capability.Writer
 
 	// Exec captures a command's stdout. The classified cluster reads go through
 	// internal/kubectlprobe, which owns its own seam; this is for the one call that
@@ -32,7 +41,9 @@ type Deps struct {
 // the lanes are leaf predicates and a capability parameter on each would be noise.
 var deps = Deps{
 	ExecCombined: func(string, ...string) string { return "" },
-	Exec:         func(string, ...string) ([]byte, error) { return nil, nil },
+	// Refuses until installed: an un-installed Deps must not mutate a cluster.
+	Writer: capability.For(extension.Binding{}).Writer,
+	Exec:   func(string, ...string) ([]byte, error) { return nil, nil },
 	LoadSpec: func() (*clusterspec.LandingZone, bool, error) {
 		return nil, false, nil
 	},
@@ -40,3 +51,14 @@ var deps = Deps{
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
 func Install(d Deps) { deps = d }
+
+// W returns the Writer, or a refusing one if the field was never populated. A
+// Deps built as a struct literal has a nil interface there, and a nil interface
+// method call is a panic rather than the permission fault the denied handle
+// exists to produce.
+func (d Deps) W() capability.Writer {
+	if d.Writer == nil {
+		return capability.Denied()
+	}
+	return d.Writer
+}

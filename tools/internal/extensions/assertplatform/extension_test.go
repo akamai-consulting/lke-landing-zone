@@ -27,7 +27,22 @@ func TestEveryLaneOnlyObserves(t *testing.T) {
 		extension.SecretCustody: true,
 		extension.OwnPaths:      true,
 	}
+	// THE EXCEPTION IS THE ONE THIS TEST ASKED FOR. It used to require that EVERY
+	// binding be an assertion, while its own failure message said "declare the
+	// mutating half as its own transition binding" — and when the capability layer
+	// revealed that two lanes here really do mutate, following that instruction
+	// broke the assertion above it. The rule is unchanged; what is pinned now is
+	// that the mutation lives in exactly one named transition and nowhere else.
+	var transitions int
 	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition {
+			transitions++
+			if b.Name != "nudge-and-reap" {
+				t.Errorf("unexpected transition %q — this extension observes a platform "+
+					"someone else built; the one mutating lane is nudge-and-reap", b.Name)
+			}
+			continue
+		}
 		if b.Kind != extension.Assertion {
 			t.Errorf("%s: kind = %s, want assertion — this extension observes a platform "+
 				"someone else built", b.Name, b.Kind)
@@ -38,6 +53,11 @@ func TestEveryLaneOnlyObserves(t *testing.T) {
 					"assertion. Declare the mutating half as its own transition binding", b.Name, g)
 			}
 		}
+	}
+	if transitions != 1 {
+		t.Errorf("%d transition bindings, want exactly 1 — every mutation here goes through "+
+			"nudge-and-reap, and a second one is a new claim about what this extension does",
+			transitions)
 	}
 }
 

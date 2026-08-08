@@ -78,7 +78,7 @@ func WaitForNamespace(d cigate.Deps, ns string, within time.Duration) error {
 		// returns fast, so a fresh refresh each cycle re-attempts rather than
 		// interrupts. The namespace is created downstream once the re-fetch succeeds.
 		if cerr := health.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
-			d.Kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			d.W().Annotate(openbaoNSParentNS, "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, cigate.FirstLine(cerr))
 			lastRefresh = d.Now()
 		}
@@ -108,7 +108,7 @@ func RunSeedSealKey(dryRun bool, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := WaitForNamespace(cigate.NewDeps(), baoread.Namespace, openbaoNSWait); err != nil {
+	if err := WaitForNamespace(cigate.NewDeps().GrantedBy(Extension().Bindings[0]), baoread.Namespace, openbaoNSWait); err != nil {
 		return err
 	}
 

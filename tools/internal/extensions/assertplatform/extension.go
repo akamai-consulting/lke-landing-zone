@@ -74,6 +74,31 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.ClusterRead},
 			},
 			{
+				// THE MUTATING HALF, AND IT WAS UNDECLARED UNTIL THE CAPABILITY LAYER
+				// ASKED. Two of the assertions above mutate: argo-app forces a hard
+				// refresh on a wedged parent Application, and health-workflow reaps its
+				// own prior probe Workflows before submitting a new one. Both were going
+				// through a general exec seam, so `assertion:verified[cluster-read]` and
+				// a mutating binding produced identical behaviour and nothing could tell
+				// them apart.
+				//
+				// It is a SEPARATE BINDING rather than cluster-write added to those
+				// assertions, because Validate refuses a mutating grant on an assertion —
+				// "if it must mutate, declare the mutating half as its own transition
+				// binding". That rule was written for exactly this and had never been
+				// exercised against a real violation.
+				//
+				// `converged` rather than `verified`: a transition cannot target
+				// `verified` (it is the conclusion of assertions, not a place you move
+				// to), and both mutations are nudges that drive the platform TOWARD
+				// convergence — the refresh makes Argo re-fetch, the reap clears a Failed
+				// Workflow that would otherwise be read as a live failure.
+				Kind:   extension.Transition,
+				Name:   "nudge-and-reap",
+				State:  extension.Converged,
+				Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+			},
+			{
 				Kind:   extension.Assertion,
 				Name:   "apl-version",
 				State:  extension.Configured,
@@ -81,4 +106,16 @@ func Extension() extension.Extension {
 			},
 		},
 	}
+}
+
+// MutatingBinding is the `nudge-and-reap` transition — the only binding here that
+// may write. Callers name it explicitly rather than indexing Bindings, so that
+// adding an assertion cannot silently shift which grants the writer is built from.
+func MutatingBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == "nudge-and-reap" {
+			return b
+		}
+	}
+	return extension.Binding{}
 }

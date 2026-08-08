@@ -230,8 +230,8 @@ func esStoreRef(d cigate.Deps, ns, name string) (string, bool) {
 // fault (a store that does not exist forces the ExternalSecret not-Ready).
 func patchESStore(d cigate.Deps, ns, name, store string) bool {
 	patch := fmt.Sprintf(`{"spec":{"secretStoreRef":{"name":%q}}}`, store)
-	_, ok := d.Kubectl("-n", ns, "patch", "externalsecret.external-secrets.io", name, "--type=merge", "-p", patch)
-	return ok
+	_, err := d.W().PatchMerge(ns, "externalsecret.external-secrets.io", name, patch)
+	return err == nil
 }
 
 // setSelfHeal flips the target Application's syncPolicy.automated.selfHeal and
@@ -242,7 +242,7 @@ func setSelfHeal(d cigate.Deps, namespace, app string, on bool) bool {
 	was, _ := d.Kubectl("-n", namespace, "get", "application.argoproj.io", app,
 		"-o", "jsonpath={.spec.syncPolicy.automated.selfHeal}")
 	patch := fmt.Sprintf(`{"spec":{"syncPolicy":{"automated":{"selfHeal":%t}}}}`, on)
-	if _, ok := d.Kubectl("-n", namespace, "patch", "application.argoproj.io", app, "--type=merge", "-p", patch); !ok {
+	if _, err := d.W().PatchMerge(namespace, "application.argoproj.io", app, patch); err != nil {
 		return false
 	}
 	if on {

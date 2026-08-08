@@ -4,7 +4,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 // Deps carries what this package cannot reach for itself.
@@ -15,6 +17,11 @@ import (
 // localised below — and internal/promwire and internal/kubectlprobe already own
 // the Prometheus and kubectl seams, so neither appears here.
 type Deps struct {
+	// Writer is the six named cluster mutations, scoped by this extension's
+	// declared grants. The mutating calls here used to be assembled as an argv on
+	// the general exec seam, which could equally have run `delete namespace` or
+	// `exec ... -- sh -c`.
+	Writer capability.Writer
 	// Exec captures a command's stdout.
 	Exec func(name string, args ...string) ([]byte, error)
 
@@ -36,6 +43,8 @@ type Deps struct {
 
 // caps is the installed capability set. Defaults are non-nil and harmless.
 var caps = Deps{
+	// Refuses until installed: an un-installed Deps must not mutate a cluster.
+	Writer:              capability.For(extension.Binding{}).Writer,
 	Exec:                func(string, ...string) ([]byte, error) { return nil, nil },
 	ExecCombined:        func(string, ...string) string { return "" },
 	BroadPATSeedEnabled: func(*clusterspec.LandingZone, string) bool { return false },
@@ -60,4 +69,15 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// W returns the Writer, or a refusing one if the field was never populated. A
+// Deps built as a struct literal has a nil interface there, and a nil interface
+// method call is a panic rather than the permission fault the denied handle
+// exists to produce.
+func (d Deps) W() capability.Writer {
+	if d.Writer == nil {
+		return capability.Denied()
+	}
+	return d.Writer
 }

@@ -57,6 +57,22 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.ClusterRead},
 			},
 			{
+				// THE PROBE FIXTURE, AND IT WAS UNDECLARED. This extension CREATES a
+				// namespace and a probe pod and then DELETES the namespace — an
+				// `assertion:verified[cluster-read]` that stands up and tears down real
+				// cluster objects. Nothing could see it: the delete went through a
+				// general exec seam, and the apply goes through a raw exec.Command that
+				// no seam touches at all.
+				//
+				// A separate transition rather than cluster-write on an assertion, for
+				// the reason Validate enforces: an assertion that changes what it
+				// measures is not an assertion.
+				Kind:   extension.Transition,
+				Name:   "probe-fixture",
+				State:  extension.Converged,
+				Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+			},
+			{
 				// Runs INSIDE the probe pod: a net.DialTimeout and an exit code. It
 				// touches no cluster API, so read-repo is the honest floor — every
 				// binding must declare at least one grant, and this one genuinely
@@ -74,4 +90,16 @@ func Extension() extension.Extension {
 			},
 		},
 	}
+}
+
+// MutatingBinding is `probe-fixture`, the only binding here that may write. Named
+// rather than indexed so adding an assertion cannot shift which grants the writer
+// is built from.
+func MutatingBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == "probe-fixture" {
+			return b
+		}
+	}
+	return extension.Binding{}
 }

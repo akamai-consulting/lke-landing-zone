@@ -58,12 +58,13 @@ func runCINudgeArgo(dryRun bool, o nudgeOpts) error {
 		// apiserver blip) must not fail the bootstrap — the in-cluster
 		// argo-resync-nudger CronJob is the standing safety net. Errors are
 		// logged, not returned.
-		if _, err := deps.Exec("kubectl", "-n", "argocd", "annotate", "application", app,
-			"argocd.argoproj.io/refresh=hard", "--overwrite"); err != nil {
+		// --overwrite is applied by Annotate itself; this loop runs repeatedly and
+		// an un-overwritable annotate fails from the second pass on.
+		if _, err := deps.W().Annotate("argocd", "application", app,
+			"argocd.argoproj.io/refresh=hard"); err != nil {
 			fmt.Fprintf(os.Stderr, "nudge %s: refresh annotate failed (ignored): %v\n", app, err)
 		}
-		if _, err := deps.Exec("kubectl", "-n", "argocd", "patch", "application", app,
-			"--type", "merge", "-p", syncPatch); err != nil {
+		if _, err := deps.W().PatchMerge("argocd", "application", app, syncPatch); err != nil {
 			fmt.Fprintf(os.Stderr, "nudge %s: sync patch failed (ignored): %v\n", app, err)
 		}
 		fmt.Printf("nudged %s\n", app)
@@ -83,8 +84,8 @@ func runCINudgeArgo(dryRun bool, o nudgeOpts) error {
 	// with it the validation), making the Ready wait below event-paced instead of
 	// timer-paced. Best-effort like everything else here.
 	stampStore := fmt.Sprintf("force-sync=%d", nowUnix())
-	if _, err := deps.Exec("kubectl", "annotate", "clustersecretstore", o.store,
-		stampStore, "--overwrite"); err != nil {
+	// Cluster-scoped, so no namespace — Annotate emits no -n for an empty one.
+	if _, err := deps.W().Annotate("", "clustersecretstore", o.store, stampStore); err != nil {
 		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s revalidation bump failed (ignored): %v\n", o.store, err)
 	}
 	// Block until the store can actually serve (post unseal + bao-configure) — a

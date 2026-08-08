@@ -11,6 +11,8 @@ package cigate
 import (
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 // TestPollUntilCannotSpinOnAStuckClock pins the attempt cap. The deadline check
@@ -55,4 +57,49 @@ func TestPollUntilCannotSpinOnAStuckClock(t *testing.T) {
 			t.Fatal("want false")
 		}
 	})
+}
+
+// W() and GrantedBy are the two places a Deps acquires (or fails to acquire) the
+// ability to mutate, so both need to be exact.
+func TestWIsNilSafeAndDeniedByDefault(t *testing.T) {
+	// A struct LITERAL — which every test in this tree builds — leaves Writer nil.
+	// The whole point of the denied handle is that an ungranted capability fails as
+	// a refusal you can read, and a nil interface method call is a panic instead.
+	var d Deps
+	if d.W() == nil {
+		t.Fatal("W() returned nil")
+	}
+	if err := d.W().PermitsWrite(); err == nil {
+		t.Error("a zero Deps could mutate — the default must be refusal")
+	}
+	if _, err := d.W().Delete("ns", "job", "x"); err == nil {
+		t.Error("a zero Deps deleted through the Writer")
+	}
+}
+
+func TestGrantedByScopesToTheBinding(t *testing.T) {
+	readOnly := extension.Binding{
+		Kind: extension.Assertion, State: extension.Converged,
+		Grants: []extension.Grant{extension.ClusterRead},
+	}
+	if err := NewDepsFor("").GrantedBy(readOnly).W().PermitsWrite(); err == nil {
+		t.Error("GrantedBy handed cluster-write to a binding that declared only cluster-read")
+	}
+
+	writes := extension.Binding{
+		Kind: extension.Transition, State: extension.Converged,
+		Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+	}
+	if err := NewDepsFor("").GrantedBy(writes).W().PermitsWrite(); err != nil {
+		t.Errorf("GrantedBy refused a binding that declared cluster-write: %v", err)
+	}
+}
+
+// NewDepsFor must NOT hand out a writer. Granting is an explicit act at the
+// construction site, which is what makes `grep -rn GrantedBy` a complete list of
+// every place in the tree that can mutate a cluster.
+func TestNewDepsForIsDeniedUntilGranted(t *testing.T) {
+	if err := NewDepsFor("").W().PermitsWrite(); err == nil {
+		t.Error("NewDepsFor returned a Deps that can mutate without any binding being named")
+	}
 }
