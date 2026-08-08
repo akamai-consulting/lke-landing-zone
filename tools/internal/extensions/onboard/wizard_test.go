@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 )
 
 func TestGhTokenURL(t *testing.T) {
@@ -49,7 +51,7 @@ func TestWriteEnvFilePermsAndRoundTrip(t *testing.T) {
 		t.Errorf("perm = %o, want 600", perm)
 	}
 	// Value containing '=' must survive (split on first '=' only).
-	out := ReadEnvFile(path)
+	out := cli.ReadEnvFile(path)
 	if out["LINODE_API_TOKEN"] != "abc=123" || out["TF_STATE_BUCKET"] != "tf-state" {
 		t.Errorf("round trip: %v", out)
 	}
@@ -61,14 +63,14 @@ func TestReadEnvFileIgnoresCommentsAndBlanks(t *testing.T) {
 	if err := os.WriteFile(path, []byte("# comment\n\nA=1\n  B=2 \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := ReadEnvFile(path)
+	m := cli.ReadEnvFile(path)
 	if len(m) != 2 || m["A"] != "1" || m["B"] != "2" {
 		t.Errorf("ReadEnvFile: %v", m)
 	}
 }
 
 func TestReadEnvFileMissingIsEmpty(t *testing.T) {
-	if m := ReadEnvFile(filepath.Join(t.TempDir(), "nope.env")); len(m) != 0 {
+	if m := cli.ReadEnvFile(filepath.Join(t.TempDir(), "nope.env")); len(m) != 0 {
 		t.Errorf("missing file should yield empty map, got %v", m)
 	}
 }

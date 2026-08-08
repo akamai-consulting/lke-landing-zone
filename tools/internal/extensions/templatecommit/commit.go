@@ -38,8 +38,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 )
 
 // Endpoint bases, overridable so tests point the two network legs at an httptest
@@ -195,11 +193,11 @@ var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 // pre-copier or hand-assembled instance still resolves.
 func InstanceTemplateRepo() string {
 	if a, _ := answers.Read("."); a != nil {
-		if r := sustain.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
+		if r := templateid.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
 			return r
 		}
 	}
-	return sustain.DefaultTemplateRepo
+	return templateid.DefaultRepo
 }
 
 // pinnedImageTag returns the ci image tag that pins an instance to the SAME commit

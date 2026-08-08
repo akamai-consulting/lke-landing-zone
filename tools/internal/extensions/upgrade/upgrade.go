@@ -20,12 +20,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
@@ -281,7 +281,7 @@ func printSummary(oldRef, newRef string) {
 // remediation verbatim, because an operator who ignores this will meet that one
 // next and the two must read as the same instruction.
 var reportCIImageSkew = func(ref string) {
-	local := onboard.ReadEnvFile(".llz/vars.env")
+	local := cli.ReadEnvFile(".llz/vars.env")
 	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
 	if len(skew) == 0 {
 		return

@@ -7,7 +7,7 @@ package newinstance
 // not: this package took its own injected `Exec` var, and the first draft stubbed
 // that alone, arguing in a comment that the package "never touches kubectlprobe —
 // it shells out to git and gh only". Four tests said otherwise on the spot,
-// because `ghcli.OwnerKind` and `onboard.RepoStatus` reach the shell through
+// because `ghcli.OwnerKind` and `ghapi.RepoStatus` reach the shell through
 // kubectlprobe.Exec. The injected var is gone now and there is one seam again,
 // which is the state that made the wrong comment impossible to write.
 

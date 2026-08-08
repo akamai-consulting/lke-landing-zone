@@ -79,10 +79,10 @@ func CopyArgv(org, ref, dir string) []string {
 // UpdateArgv is the update invocation, and --defaults is load-bearing.
 //
 // Without it `copier update` RE-ASKS every question — upstream_org,
-// instance_repo, openbao_team — using the stored answers as onboard.Prompt defaults. Two
+// instance_repo, openbao_team — using the stored answers as prompt defaults. Two
 // costs, and the second is the one that bit:
 //
-//   - With no terminal that is not a onboard.Prompt, it is an unhandled OSError out of
+//   - With no terminal that is not a prompt, it is an unhandled OSError out of
 //     prompt_toolkit. `llz upgrade` inherits the operator's stdin, so it worked
 //     by hand and died in CI, in a wrapper script, and over `ssh host 'llz
 //     upgrade'` — with a Python traceback, not a message.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
@@ -40,8 +40,8 @@ func TestNormalizeTemplateRepo(t *testing.T) {
 		"https://github.com/owner/repo.git": "owner/repo",
 	}
 	for in, want := range cases {
-		if got := sustain.NormalizeTemplateRepo(in); got != want {
-			t.Errorf("sustain.NormalizeTemplateRepo(%q) = %q, want %q", in, got, want)
+		if got := templateid.NormalizeTemplateRepo(in); got != want {
+			t.Errorf("templateid.NormalizeTemplateRepo(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

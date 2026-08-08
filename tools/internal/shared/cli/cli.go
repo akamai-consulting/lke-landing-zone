@@ -5,9 +5,11 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -90,4 +92,49 @@ func InClusterToken(envVar, file string) string {
 		return strings.TrimSpace(string(b))
 	}
 	return ""
+}
+
+// ── THREE HELPERS OUT OF internal/extensions/onboard ─────────────────────────
+//
+// Prompt reads one trimmed line with a label, ReadEnvFile parses a KEY=VALUE
+// file, SortedKeys orders a map for deterministic output. None of them is an
+// onboarding concern; onboarding was simply the first thing in this tree that
+// needed to ask a human a question and read a dotenv, so they were written there
+// and `upgrade` then imported the whole wizard to reach them.
+
+func Prompt(in *bufio.Scanner, label string) string {
+	fmt.Printf("  %s: ", label)
+	if !in.Scan() {
+		return ""
+	}
+	return strings.TrimSpace(in.Text())
+}
+
+// ReadEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
+// file → empty map.
+func ReadEnvFile(path string) map[string]string {
+	m := map[string]string{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return m
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			m[strings.TrimSpace(k)] = v
+		}
+	}
+	return m
+}
+
+func SortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
