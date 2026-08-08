@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/capabilities/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 )
 
 // Deps carries what this package cannot reach for itself.

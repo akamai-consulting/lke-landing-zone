@@ -5,7 +5,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/capabilities/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )

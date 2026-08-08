@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/capabilities/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"

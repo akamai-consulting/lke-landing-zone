@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/capabilities/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"

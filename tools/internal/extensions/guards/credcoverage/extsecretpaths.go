@@ -501,7 +501,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		// else seeds it, and it is generate-once (Linode discards SSE-C keys, so a
 		// second write orphans every encrypted object) — so it never appears as a
 		// `bao kv put` step in a workflow, only here.
-		"tools/internal/extensions/capabilities/objenc/seed_key.go",
+		"tools/internal/extensions/lifecycle/objenc/seed_key.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(guardkit.RepoPath(root, goSrc))
 		if err != nil {
