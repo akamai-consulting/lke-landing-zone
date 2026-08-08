@@ -22,6 +22,23 @@ package capability
 // strongest sense the model has. Adding `secret-admin` would have meant a grant
 // nobody has declared, retro-fitted onto sixteen bindings.
 //
+// IT IS WIRED TO baoread.ExecFn — A POD EXEC — AND THAT IS PART OF ITS CONTRACT,
+// not an implementation detail. OpenBao is reached two ways in this tree: ExecFn
+// runs `bao` INSIDE a named pod, and ExecStdin runs it against a configured
+// address with stdin piped. They are different transports with different auth and
+// different failure modes.
+//
+// A caller on ExecStdin is therefore NOT a caller that can be moved here by
+// swapping the function. credential-pat's jwt login was converted and reverted for
+// exactly this: its tests stubbed ExecStdin, the handle read through ExecFn, and
+// the login failed against a fake that was never consulted. That is the
+// double-seam trap this campaign has now hit seven times, and the tests caught it
+// because they stub the seam rather than the behaviour.
+//
+// Expressing the address-based transport is a second handle or a second
+// constructor; one caller is not enough to know which, so ExecStdin callers stay
+// raw and stay counted.
+//
 // AND ONE THING IT DELIBERATELY DOES NOT SOLVE. `operator generate-root` is the
 // quorum flow: it reads recovery-key shares from the operator's terminal in raw
 // mode, one at a time. A one-shot argv handle cannot express that, exactly as it

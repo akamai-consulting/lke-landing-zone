@@ -100,11 +100,10 @@ var baoSeamCall = regexp.MustCompile(
 // binding already, so the change is to take capability.For(b).Secrets / .Custodian
 // instead of reaching for the package var.
 var allowedBaoSeamCalls = map[string]int{
-	"credrotate":     6,
-	"healthsla":      1,
-	"identityconfig": 3,
-	"openbao":        21,
-	"reachability":   1,
+	"credrotate":   6,
+	"healthsla":    1,
+	"openbao":      21,
+	"reachability": 1,
 }
 
 func TestNoNewBaoSeamCalls(t *testing.T) {
