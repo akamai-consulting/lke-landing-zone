@@ -41,9 +41,21 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
-// seamCall matches a call to one of the exported process seams. These are the
-// vars that hand out an unconstrained kubectl; `kube.Apply` is included because it
-// applies a manifest, which is a write by any reading.
+// seamCall matches a call to one of the exported process seams.
+//
+// `kubectlprobe.Exec` IS NOT A KUBECTL CLIENT, despite the package name, and this
+// took a round to notice. Its signature is `(name string, args ...string)` — the
+// BINARY is the first argument — so it is `exec.Command` with a swappable seam,
+// and four of the packages counted below use it to run `gh`, not kubectl:
+// branch-policy, build-preflight, credential-state-passphrase and template-commit.
+// reachability runs `ssh-keyscan` through it.
+//
+// The count is still the right count: an unconstrained process runner is a bypass
+// whatever it launches. But the REMEDY differs, and a guard that tells a package
+// running `gh api` to "take a Cluster handle" is a guard whose advice does not
+// apply — which is how an allowlist entry gets added to make a test quiet. So the
+// message names both, and the forge half is honest that no handle exists for it
+// yet.
 var seamCall = regexp.MustCompile(
 	`\b(?:kubectlprobe\.(?:Exec|Combined)|kube\.(?:Exec|Combined|Apply))\b`)
 
@@ -111,8 +123,12 @@ func TestNoNewBaoSeamCalls(t *testing.T) {
 func TestNoNewSeamGlobalCalls(t *testing.T) {
 	got := countByPackage(t, filepath.Join("..", "..", "extensions"), seamCall)
 	ratchet(t, "seam", got, allowedSeamCalls,
-		"that hands it an unconstrained kubectl regardless of what its binding declared. "+
-			"Take capability.For(binding) and use Cluster.Run / the Writer's named operations")
+		"that hands it an unconstrained PROCESS RUNNER regardless of what its binding "+
+			"declared — the seam takes the binary as its first argument, so this is not "+
+			"only about kubectl. If it runs kubectl, take capability.For(binding) and use "+
+			"Cluster.Run / the Writer's named operations. If it runs gh or git, there is no "+
+			"handle for the forge yet: say so here, and the entry becomes the measurement of "+
+			"what that capability would have to cover")
 }
 
 // ratchet is the shared body of the three bypass counters: fail on a new package,

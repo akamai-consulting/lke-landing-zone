@@ -84,6 +84,32 @@ import (
 // unset; it was simply never read. Wrapped with %w so errors.Is/As still work.
 // Without it a failure arrived as a bare "exit status 1" with an empty message,
 // and callers that dutifully appended the captured output appended nothing.
+// ── WHY THIS STAYS EXPORTED, AND WILL. ──────────────────────────────────────
+//
+// It is a package-level mutable var, so any code can call it and any code can
+// swap it. That makes it the capability layer's back door: a binding declaring
+// `cluster-read` can reach it and run `kubectl delete`, which is why
+// capability/seambypass_test.go ratchets every remaining caller.
+//
+// The obvious next move is to unexport it so capability.For is the only door. IT
+// WAS MEASURED AND REFUSED: 70 assignments across 24 distinct packages' tests swap
+// this var to keep their subjects runnable without a cluster. That seam is the
+// single largest win of the decomposition — `assert-storage` went 0% -> 85.3%
+// purely by taking its capabilities as parameters instead of reaching for them —
+// and unexporting would trade it for a guarantee the ratchet already approximates.
+//
+// So the enforcement is a counted allowlist rather than the compiler, deliberately,
+// and the trade is written down here rather than rediscovered. What WOULD change
+// the answer is a test-only swap that does not require export (a build-tagged
+// setter, or moving the seam into capability and giving kubectlprobe a
+// constructor); neither is worth doing for its own sake, but either would make
+// unexporting cheap and both are the shape to reach for if this is revisited.
+//
+// NOTE THE NAME IS WRONG, TOO. This runs whatever binary it is given — kubectl,
+// gh, bao, tofu, ssh-keyscan — as the comment above already says. It is the tree's
+// general process seam and four extensions use it purely for `gh`. Renaming it
+// touches 66 production and 70 test references, so it has not been done; read
+// "kubectlprobe" as where it started rather than what it is.
 var Exec = func(name string, args ...string) ([]byte, error) {
 	out, err := exec.Command(name, args...).Output()
 	if err == nil {
