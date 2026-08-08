@@ -44,6 +44,7 @@ package capability
 
 import (
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -173,6 +174,16 @@ func (c cluster) Permits(args ...string) error {
 		}
 		return c.deny(v + " " + sub)
 	}
+	// A DRY RUN IS A READ, whatever the verb. `apply --dry-run=server` sends the
+	// object to the apiserver for validation and admission and persists nothing —
+	// assert-network's wave-health gate is built entirely on that, and refusing it
+	// would force a read-only gate to declare cluster-write for a call that cannot
+	// change anything. `--dry-run=client` never reaches the cluster at all.
+	for _, a := range args {
+		if strings.HasPrefix(a, "--dry-run") && a != "--dry-run=none" {
+			return nil
+		}
+	}
 	if readVerbs[v] {
 		return nil
 	}
@@ -266,7 +277,7 @@ func For(b extension.Binding) Handles {
 	// grant line noisier without making it more informative.
 	var w Writer = deniedWriter{}
 	if write {
-		w = writer{exec: kubectlprobe.Exec}
+		w = writer{exec: kubectlprobe.Exec, stdin: execStdin}
 	}
 	if !read && !write {
 		return Handles{Cluster: deniedCluster{}, Writer: w}
@@ -287,7 +298,13 @@ func WithExec(b extension.Binding, exec func(string, ...string) ([]byte, error),
 		h.Cluster = c
 	}
 	if _, ok := h.Writer.(writer); ok {
-		h.Writer = writer{exec: exec}
+		h.Writer = writer{
+			exec: exec,
+			// The stdin runner routes through the SAME fake, dropping the manifest:
+			// a test that stubs the process must not have one operation escape to a
+			// real kubectl because it happens to pipe its input.
+			stdin: func(_ string, args ...string) ([]byte, error) { return exec("kubectl", args...) },
+		}
 	}
 	// denied stays denied: a test cannot widen a binding by stubbing.
 	return h
@@ -305,4 +322,16 @@ func ClassifiedVerbs() (read, write []string) {
 	sort.Strings(read)
 	sort.Strings(write)
 	return read, write
+}
+
+// execStdin runs kubectl with a manifest on stdin.
+//
+// It is a direct exec.Command rather than kubectlprobe.Exec because that seam
+// takes no stdin — which is precisely why every `apply -f -` in this tree bypassed
+// the seams and went unmeasured. Giving the capability layer its own stdin path is
+// what lets those calls be declared instead of hidden.
+var execStdin = func(in string, args ...string) ([]byte, error) {
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdin = strings.NewReader(in)
+	return cmd.CombinedOutput()
 }

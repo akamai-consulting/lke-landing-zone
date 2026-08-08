@@ -55,16 +55,30 @@ type Writer interface {
 	RolloutRestart(ns, target string) ([]byte, error)
 	// CreateToken mints a short-lived ServiceAccount token.
 	CreateToken(ns, serviceAccount, duration string) ([]byte, error)
-	// ApplyServerSide applies a manifest with server-side apply. See the header:
-	// this is the escape hatch, deliberately named.
+	// ApplyServerSide applies a manifest FROM A PATH with server-side apply. See
+	// the header: this is the escape hatch, deliberately named.
 	ApplyServerSide(manifestPath, fieldManager string) ([]byte, error)
+	// ApplyStdin applies a manifest supplied as text (`kubectl apply -f -`).
+	//
+	// IT IS THE SAME ESCAPE HATCH BY ANOTHER ROUTE and is listed separately because
+	// that is how it was FOUND: the first census counted Deps seams and missed this
+	// entirely, because every caller reached for exec.Command directly and piped a
+	// manifest to stdin. assert-network creating its probe namespace never appeared
+	// in a seam-based count for exactly that reason.
+	ApplyStdin(manifest, fieldManager string) ([]byte, error)
+	// CreateStdin creates from a manifest supplied as text, returning the created
+	// object. Distinct from ApplyStdin because `create` FAILS on an existing object
+	// where `apply` reconciles it, and the one caller (a health Workflow submission)
+	// depends on that failure to detect a duplicate submission.
+	CreateStdin(ns, manifest string) ([]byte, error)
 	// PermitsWrite reports whether this handle may mutate at all, so a caller can
 	// fail early with its own message.
 	PermitsWrite() error
 }
 
 type writer struct {
-	exec func(string, ...string) ([]byte, error)
+	exec  func(string, ...string) ([]byte, error)
+	stdin func(in string, args ...string) ([]byte, error)
 }
 
 func ns(namespace string) []string {
@@ -120,6 +134,19 @@ func (w writer) ApplyServerSide(manifestPath, fieldManager string) ([]byte, erro
 	return w.exec("kubectl", append(a, "-f", manifestPath)...)
 }
 
+func (w writer) ApplyStdin(manifest, fieldManager string) ([]byte, error) {
+	a := []string{"apply", "--server-side", "--force-conflicts"}
+	if fieldManager != "" {
+		a = append(a, "--field-manager="+fieldManager)
+	}
+	return w.stdin(manifest, append(a, "-f", "-")...)
+}
+
+func (w writer) CreateStdin(namespace, manifest string) ([]byte, error) {
+	a := append(ns(namespace), "create", "-f", "-", "-o", "json")
+	return w.stdin(manifest, a...)
+}
+
 // deniedWriter is what a binding without cluster-write receives. Non-nil and
 // refusing, for the same reason deniedCluster is.
 type deniedWriter struct{}
@@ -136,6 +163,8 @@ func (d deniedWriter) PatchMerge(_, _, _, _ string) ([]byte, error) { return nil
 func (d deniedWriter) RolloutRestart(_, _ string) ([]byte, error)   { return nil, d.PermitsWrite() }
 func (d deniedWriter) CreateToken(_, _, _ string) ([]byte, error)   { return nil, d.PermitsWrite() }
 func (d deniedWriter) ApplyServerSide(_, _ string) ([]byte, error)  { return nil, d.PermitsWrite() }
+func (d deniedWriter) ApplyStdin(_, _ string) ([]byte, error)       { return nil, d.PermitsWrite() }
+func (d deniedWriter) CreateStdin(_, _ string) ([]byte, error)      { return nil, d.PermitsWrite() }
 
 // Denied is the refusing Writer. Exported so a caller holding a struct whose
 // Writer field was never populated — a test building a Deps literal, say — can

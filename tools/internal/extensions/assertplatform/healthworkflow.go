@@ -22,9 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -128,9 +126,10 @@ var (
 // json, manifest over stdin) and returns the created object's JSON. Seamed for
 // tests. Interactive-style call site (pipes stdin), like firewallKubectlFn.
 var submitHealthWorkflowFn = func(namespace, manifest string) ([]byte, error) {
-	cmd := exec.Command("kubectl", "-n", namespace, "create", "-f", "-", "-o", "json")
-	cmd.Stdin = strings.NewReader(manifest)
-	return cmd.Output()
+	// CreateStdin rather than ApplyStdin, and the difference is load-bearing:
+	// `create` FAILS on an existing object where `apply` reconciles it, and the
+	// retry loop below reads that failure as "a submission is already in flight".
+	return deps.W().CreateStdin(namespace, manifest)
 }
 
 // runCIAssertHealthWorkflow returns nil on Succeeded/skipped and an error on

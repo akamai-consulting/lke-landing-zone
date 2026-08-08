@@ -46,6 +46,23 @@ func Extension() extension.Extension {
 			State: extension.Seeded,
 			Grants: []extension.Grant{
 				extension.ReadRepo, extension.ClusterRead, extension.SecretCustody,
+				// cluster-write, FOR `kubectl exec`, and this is the most privileged
+				// undeclared call the capability audit found. `llz openbao exec` runs
+				// arbitrary `bao` subcommands inside the OpenBao pod with a ROOT token —
+				// policy writes, mount changes, anything the root policy permits.
+				//
+				// It is a cluster WRITE even though nothing here patches a Kubernetes
+				// object, and that is the rule the capability layer states: what an exec
+				// may do is bounded by the container, not by kubectl. A declaration that
+				// said cluster-read while shelling into a pod as root would be describing
+				// a different command.
+				//
+				// It stays a raw exec rather than a named operation because it is
+				// INTERACTIVE — stdin, stdout and stderr are wired to the operator's
+				// terminal — which the Writer's one-shot []byte shape cannot express. The
+				// grant is what makes it visible; a passthrough operation is the next
+				// piece if one is wanted.
+				extension.ClusterWrite,
 			},
 		}},
 	}

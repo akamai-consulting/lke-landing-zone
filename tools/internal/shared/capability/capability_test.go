@@ -6,8 +6,10 @@ package capability
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
@@ -245,3 +247,66 @@ func TestEveryClassifiedVerbIsInExactlyOneList(t *testing.T) {
 }
 
 var _ = errors.New // keep errors imported for future refusal-type assertions
+
+// A dry run persists nothing, so a read-only handle may perform one. Without this
+// assert-network's wave-health gate — which is built entirely on
+// `apply --dry-run=server` — would have to declare cluster-write for a call that
+// cannot change anything, and the declaration would then overstate what it does.
+func TestADryRunIsAReadWhateverTheVerb(t *testing.T) {
+	h := WithExec(binding(extension.ClusterRead),
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) string { return "" })
+	for _, argv := range [][]string{
+		{"apply", "--dry-run=server", "-f", "-"},
+		{"apply", "--dry-run=client", "-f", "-"},
+		{"-n", "ns", "create", "--dry-run=server", "-f", "-"},
+	} {
+		if err := h.Cluster.Permits(argv...); err != nil {
+			t.Errorf("a reader was refused a dry run %v: %v", argv, err)
+		}
+	}
+	// --dry-run=none is kubectl's way of saying "actually do it".
+	if err := h.Cluster.Permits("apply", "--dry-run=none", "-f", "-"); err == nil {
+		t.Error("--dry-run=none is a real apply and must still be refused")
+	}
+}
+
+// execStdin is the real process path for the stdin operations. It is exercised
+// against a command that cannot fail rather than left at 0%, because it is the
+// one place in this package that builds an os/exec call — the same construct the
+// whole layer exists to displace.
+func TestExecStdinPipesItsInput(t *testing.T) {
+	// The pipe shape itself, against a binary present wherever `go test` runs.
+	out, err := runStdinFor(t, "hello from stdin")
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if !strings.Contains(string(out), "hello from stdin") {
+		t.Errorf("stdin did not reach the process: %q", out)
+	}
+
+	// And execStdin itself. It hardcodes kubectl, so this asserts only that it
+	// RETURNS rather than panics or hangs — the argv is deliberately one kubectl
+	// rejects immediately, and an absent kubectl is an error too. Both outcomes
+	// exercise the same lines; what must not happen is a hang, which is what a
+	// stdin pipe left unclosed would produce.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = execStdin("kind: Nonsense\n", "--this-flag-does-not-exist")
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("execStdin did not return — an unclosed stdin pipe hangs the caller forever")
+	}
+}
+
+// runStdinFor exercises the same pipe-and-capture shape execStdin uses, against a
+// binary that is present everywhere `go test` runs.
+func runStdinFor(t *testing.T, in string) ([]byte, error) {
+	t.Helper()
+	cmd := exec.Command("cat")
+	cmd.Stdin = strings.NewReader(in)
+	return cmd.CombinedOutput()
+}

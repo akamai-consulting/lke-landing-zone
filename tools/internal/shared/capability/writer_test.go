@@ -184,16 +184,86 @@ func TestEveryOperationRefusesWithoutTheGrant(t *testing.T) {
 	}
 }
 
-// The Writer interface is the ceiling: if a seventh operation appears, it is a
-// decision someone made about what cluster-write means, and it should be visible
-// as a change to this list rather than as a new argv somewhere.
-func TestTheOperationSetIsSix(t *testing.T) {
-	// Compile-time: this fails to build if a method is added or removed without
-	// the count below being reconsidered.
+// The Writer interface is the ceiling: a new operation is a decision someone made
+// about what cluster-write means, and it should be visible as a change here rather
+// than as a new argv somewhere.
+//
+// IT WAS SIX AND IS NOW EIGHT, which is the honest record of how it was built. The
+// first census counted Deps seams and produced six shapes. It undercounted: every
+// mutation that reached for exec.Command directly and piped a manifest to stdin was
+// invisible to a seam-based count, and that is how assert-network came to be
+// creating a namespace under an `assertion:verified[cluster-read]` declaration.
+// ApplyStdin and CreateStdin are those two shapes.
+func TestTheOperationSetIsEight(t *testing.T) {
 	var _ Writer = writer{}
 	var _ Writer = deniedWriter{}
-	const measuredOperations = 6
-	if measuredOperations != 6 {
-		t.Fatal("unreachable; the constant documents the count the census produced")
+	ops := []string{
+		"Annotate", "Delete", "PatchMerge", "RolloutRestart",
+		"CreateToken", "ApplyServerSide", "ApplyStdin", "CreateStdin",
+	}
+	if len(ops) != 8 {
+		t.Fatalf("the operation list says %d; update the name of this test with it", len(ops))
+	}
+}
+
+// The stdin operations exist because the FIRST census missed them: they were
+// reached through raw exec.Command, so a seam-based count never saw them. Both
+// route their manifest through the same stubbed process as everything else, which
+// is the property worth pinning — an operation that escaped to a real kubectl
+// because it happens to pipe its input would be exactly the old hole again.
+func TestApplyStdinAndCreateStdin(t *testing.T) {
+	w, got := recordingWriter(t)
+
+	if _, err := w.ApplyStdin("apiVersion: v1\nkind: Namespace\n", "llz-net-probe"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*got, " ")
+	for _, want := range []string{"apply", "--server-side", "--field-manager=llz-net-probe", "-f -"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ApplyStdin argv %q missing %q", joined, want)
+		}
+	}
+
+	if _, err := w.CreateStdin("argo", "kind: Workflow\n"); err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(*got, " ")
+	// `create`, not `apply`: create FAILS on an existing object and the one caller
+	// reads that failure as "a submission is already in flight".
+	for _, want := range []string{"-n argo", "create", "-f -", "-o json"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("CreateStdin argv %q missing %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "apply") {
+		t.Errorf("CreateStdin used apply: %s", joined)
+	}
+}
+
+func TestStdinOperationsRefuseWithoutTheGrant(t *testing.T) {
+	var ran bool
+	h := WithExec(binding(extension.ClusterRead),
+		func(string, ...string) ([]byte, error) { ran = true; return nil, nil },
+		func(string, ...string) string { ran = true; return "" })
+	if _, err := h.Writer.ApplyStdin("kind: Namespace", "fm"); err == nil {
+		t.Error("ApplyStdin succeeded on a cluster-read binding — this is the shape that " +
+			"created a namespace undeclared for as long as it went through raw exec")
+	}
+	if _, err := h.Writer.CreateStdin("ns", "kind: Workflow"); err == nil {
+		t.Error("CreateStdin succeeded on a cluster-read binding")
+	}
+	if ran {
+		t.Error("a refused stdin operation still shelled out")
+	}
+}
+
+func TestDeniedIsExportedAndRefuses(t *testing.T) {
+	// Denied() exists so a struct whose Writer field was never populated degrades
+	// to a refusal instead of a nil-pointer panic.
+	if err := Denied().PermitsWrite(); err == nil {
+		t.Error("Denied() permits writes")
+	}
+	if _, err := Denied().ApplyStdin("x", "y"); err == nil {
+		t.Error("Denied().ApplyStdin succeeded")
 	}
 }
