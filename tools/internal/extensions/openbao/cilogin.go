@@ -42,7 +42,6 @@ import (
 
 	"net/http"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -94,7 +93,7 @@ func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar s
 	if err != nil {
 		return err
 	}
-	baoseed.MaskGHALines(token)
+	ghaout.MaskLines(token)
 	if err := ghaout.Append("GITHUB_ENV", exportVar+"="+token); err != nil {
 		return err
 	}
@@ -129,6 +128,6 @@ func oidcOpenBaoLogin(ctx context.Context, client *http.Client, addr, role strin
 	if err != nil {
 		return "", fmt.Errorf("mint GitHub OIDC token: %w (does the job set `permissions: id-token: write`?)", err)
 	}
-	baoseed.MaskGHALines(oidcToken)
+	ghaout.MaskLines(oidcToken)
 	return openbao.JWTLogin(ctx, client, addr, role, oidcToken)
 }

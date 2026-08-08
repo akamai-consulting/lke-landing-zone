@@ -40,15 +40,3 @@ var deps = Deps{
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
 func Install(d Deps) { deps = d }
-
-// firstNonEmpty returns the first non-empty string. A local three-liner rather
-// than an import: package main's copy lives in tokens.go, the credential
-// provisioning wizard, and there is no behaviour here to drift.
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}

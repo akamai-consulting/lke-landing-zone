@@ -21,9 +21,9 @@ import (
 )
 
 func TestImportScaffoldsASupportedChart(t *testing.T) {
-	if clusterspec.AplSemverLess(clusterspec.BaselineAplChartVersion, MinSupportedAplChartVersion) {
+	if clusterspec.AplSemverLess(clusterspec.BaselineAplChartVersion, clusterspec.MinSupportedAplChartVersion) {
 		t.Errorf("llz import init scaffolds apl-core %s, below the supported floor %s — "+
 			"`llz ci assert-apl-version` would refuse the instance it just created",
-			clusterspec.BaselineAplChartVersion, MinSupportedAplChartVersion)
+			clusterspec.BaselineAplChartVersion, clusterspec.MinSupportedAplChartVersion)
 	}
 }

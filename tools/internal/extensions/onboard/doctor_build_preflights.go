@@ -38,7 +38,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -49,11 +48,11 @@ import (
 // resolve-then-test pair the CI verb runs, so doctor and the build cannot reach
 // different verdicts about the same spec.
 func checkAplChartFloor(env string) error {
-	v, err := assertplatform.ResolveAplChartVersion(env)
+	v, err := clusterspec.ResolveAplChartVersion(env)
 	if err != nil {
 		return err
 	}
-	return assertplatform.AplVersionSupported(v, env)
+	return clusterspec.AplVersionSupported(v, env)
 }
 
 // checkSpecPreflights reports the CI preflights answerable from the local spec.

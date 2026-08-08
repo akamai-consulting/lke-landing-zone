@@ -32,7 +32,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
-// MinSupportedAplChartVersion is the oldest apl-core chart the landing zone still
+// clusterspec.MinSupportedAplChartVersion is the oldest apl-core chart the landing zone still
 // supports. It used to be an ALIAS of clusterspec.BaselineAplChartVersion, with a note saying
 // to give it its own literal on the day the floor and the target legitimately
 // diverged. The v6.1.0 baseline bump is that day.
@@ -45,76 +45,15 @@ import (
 // in lockstep would have hard-failed every instance still on 6.0.0 for no reason —
 // minor drift is a WARNING (clusterspec.AplChartVersionWarnings), not a block.
 //
-// Raise it only when a 6.0.0 cluster genuinely stops working, and say why here the
-// way the 5.x rationale below does.
-// MinSupportedAplChartVersion is EXPORTED because one assertion needs both it and
-// the scaffold baseline: an instance `llz import` creates must be born on a chart
-// this gate would not refuse. That test now lives here, since this is the side
-// that owns the floor.
-const MinSupportedAplChartVersion = "6.0.0"
-
-// ResolveAplChartVersion mirrors runBootstrapCluster's resolution: the deployment's
-// spec pin when present, else the baked default. A missing spec/deployment is not an
-// error here — it simply means the default applies.
-func ResolveAplChartVersion(env string) (string, error) {
-	pinned := ""
-	lz, present, err := deps.LoadSpec()
-	if err != nil {
-		return "", fmt.Errorf("load spec to resolve the apl-core chart version: %w", err)
-	}
-	if present && env != "" {
-		if e, ok := lz.Env(env); ok {
-			pinned = e.Cluster.Bootstrap.AplChartVersion
-		}
-	}
-	return firstNonEmpty(pinned, clusterspec.BaselineAplChartVersion), nil
-}
 
 func assertAplVersion(env string) error {
-	v, err := ResolveAplChartVersion(env)
+	v, err := clusterspec.ResolveAplChartVersion(env)
 	if err != nil {
 		return err
 	}
-	if err := AplVersionSupported(v, env); err != nil {
+	if err := clusterspec.AplVersionSupported(v, env); err != nil {
 		return err
 	}
-	fmt.Printf("apl-core chart version %s (deployment %q) is supported (>= %s).\n", v, env, MinSupportedAplChartVersion)
-	return nil
-}
-
-// AplVersionSupported is the pure predicate behind the preflight: nil when v is a
-// semver >= MinSupportedAplChartVersion, else an error explaining exactly what
-// breaks and how to fix it. Split out from assertAplVersion so it is testable
-// without a spec on disk.
-func AplVersionSupported(v, env string) error {
-	if _, _, _, ok := clusterspec.AplSemver(v); !ok {
-		return fmt.Errorf("apl-core chart version %q (deployment %q) is not a semver — set spec.cluster.bootstrap.aplChartVersion to a released apl-core chart (>= %s)",
-			v, env, MinSupportedAplChartVersion)
-	}
-	if clusterspec.AplSemverLess(v, MinSupportedAplChartVersion) {
-		//lint:ignore ST1005 multi-line operator diagnostic: the trailing period ends a sentence of remediation prose that continues on the next line
-		return fmt.Errorf(`apl-core chart version %q (deployment %q) is NOT supported — this landing zone requires >= %s.
-
-The v6 migration made the template apl-core-6.x-only in two ways that do not fail
-until the cluster is already up, and then only as cryptic pod errors:
-
-  * the `+"`apl-sops-secrets`"+` placeholder was dropped (v6 made the operator's envFrom
-    optional:true). On %s it is optional:false, so apl-operator dies with
-    CreateContainerConfigError "secret \"apl-sops-secrets\" not found" and the whole
-    otomi control loop stops.
-  * the self-managed external-secrets operator was retired (v6 bundles one). %s
-    bundles none, so the cluster gets NO ESO: the CRDs never install and every
-    ESO-backed Secret (loki-object-store, harbor-registry-s3, …) never materializes.
-
-Fix one of:
-  * set spec.cluster.bootstrap.aplChartVersion to >= %s for deployment %q (preferred), or
-  * pin the instance to a template release that still supported %s.
-
-NOTE: `+"`llz import init`"+` scaffolds apl-core %s (this release's baseline), which is
-already above this floor — so a rejection here means an EXISTING pin was carried
-across an llz upgrade, not that the scaffolder produced it.`,
-			v, env, MinSupportedAplChartVersion,
-			v, v, MinSupportedAplChartVersion, env, v, clusterspec.BaselineAplChartVersion)
-	}
+	fmt.Printf("apl-core chart version %s (deployment %q) is supported (>= %s).\n", v, env, clusterspec.MinSupportedAplChartVersion)
 	return nil
 }

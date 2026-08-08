@@ -17,8 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
@@ -48,7 +48,7 @@ var ObjencDeps = func() Deps {
 		SecretField: kube.SecretField,
 		MaskGHALines: func(vals ...string) {
 			for _, v := range vals {
-				baoseed.MaskGHALines(v)
+				ghaout.MaskLines(v)
 			}
 		},
 	}

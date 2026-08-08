@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 // MaskGHALines must emit one ::add-mask:: per NON-BLANK line. Masking a blank or
@@ -17,7 +19,7 @@ import (
 func TestMaskGHALinesMasksOnlyNonBlankLines(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "true")
 	out := captureStdout(t, func() {
-		MaskGHALines("-----BEGIN KEY-----\n\n   \nsecret-body\n-----END KEY-----\n")
+		ghaout.MaskLines("-----BEGIN KEY-----\n\n   \nsecret-body\n-----END KEY-----\n")
 	})
 	want := "::add-mask::-----BEGIN KEY-----\n::add-mask::secret-body\n::add-mask::-----END KEY-----\n"
 	if out != want {

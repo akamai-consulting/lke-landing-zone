@@ -155,14 +155,6 @@ func defaultMissingAnnotation(path string, missing []string) string {
 	return fmt.Sprintf("%s not set — %s not seeded", strings.Join(missing, " / "), path)
 }
 
-func MaskGHALines(v string) {
-	for _, line := range strings.Split(v, "\n") {
-		if strings.TrimSpace(line) != "" {
-			maskGHA(line)
-		}
-	}
-}
-
 type Opts struct {
 	Path                string
 	FieldSpecs          []string
@@ -262,7 +254,7 @@ func RunSeed(o Opts) error {
 	// workflow-visible non-secrets — see the file header).
 	for _, f := range fields {
 		if f.src.kind != "literal" {
-			MaskGHALines(values[f.key])
+			ghaout.MaskLines(values[f.key])
 		}
 	}
 

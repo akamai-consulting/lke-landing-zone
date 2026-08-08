@@ -16,7 +16,6 @@ package baoseed
 import (
 	"errors"
 	"fmt"
-	"os"
 )
 
 // errNotInstalled is what an un-wired capability returns. What matters is only
@@ -46,10 +45,3 @@ func Install(apply func(string) error, setSecret func(name, env, value string) e
 }
 
 // ── localised pure helpers: copies, not seams ──────────────────────────────
-
-// maskGHA asks GitHub Actions to redact a value from the log.
-func maskGHA(v string) {
-	if os.Getenv("GITHUB_ACTIONS") != "" && v != "" {
-		fmt.Printf("::add-mask::%s\n", v)
-	}
-}

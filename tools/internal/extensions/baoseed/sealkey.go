@@ -163,7 +163,7 @@ func resolveSealKey(region string) ([]byte, error) {
 		return nil, fmt.Errorf("crypto/rand for the static seal key: %w", err)
 	}
 	enc := base64.StdEncoding.EncodeToString(key)
-	maskGHA(enc)
+	ghaout.Mask(enc)
 
 	// Offline-backup banner first — the key is generated exactly once. (It is NOT
 	// printed here; the operator retrieves it from the infra-<region> secret.)
