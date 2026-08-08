@@ -735,3 +735,35 @@ func warmUp(base string) error {
 	}
 	return fmt.Errorf("port-forward tunnel never became ready: %w", lastErr)
 }
+
+// ── PARSERS FOR `bao status` / `bao token lookup` OUTPUT ─────────────────────
+//
+// Both came from internal/extensions/baolifecycle, under a heading that already
+// said what they were: "pure parse helpers (unit-tested)". Reading OpenBao's JSON
+// is this package's subject; regenerating a root token is a lifecycle capability,
+// and identity-config and reachability were each importing that whole capability
+// to decode one field.
+
+func ParseStatus(s string) (sealed bool, threshold int) {
+	var v struct {
+		Sealed bool `json:"sealed"`
+		T      int  `json:"t"`
+	}
+	_ = json.Unmarshal([]byte(s), &v)
+	return v.Sealed, v.T
+}
+
+func PoliciesIncludeRoot(lookupJSON string) bool {
+	var v struct {
+		Data struct {
+			Policies []string `json:"policies"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(lookupJSON), &v)
+	for _, p := range v.Data.Policies {
+		if p == "root" {
+			return true
+		}
+	}
+	return false
+}

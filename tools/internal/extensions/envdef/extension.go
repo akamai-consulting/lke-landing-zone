@@ -22,6 +22,19 @@ package envdef
 // clean; one test caught it. The repair used the pre-move file as the authority
 // and is verified by diffing every quoted literal against it — that diff is empty.
 
+// ── THE CODE MOVED OUT; THIS DECLARATION DID NOT. ────────────────────────────
+//
+// Second extension in this sweep to turn out to own NO COBRA COMMAND while three
+// peers imported it -- envadd, newinstance and render, for WriteEnvDefinition,
+// EnsureLandingZone and a pair of string helpers. instance-resolve was the first,
+// and the pattern is the same: a package with several importers and no verb is a
+// library that acquired a declaration, not a capability other capabilities happen
+// to want.
+//
+// The library is internal/shared/envdef now. The declaration stays here for the
+// reason it stayed there -- the assertion is true, and a shared package cannot
+// declare, because declaring is what makes an extension.
+
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
 // Extension is the `env-definition` declaration.

@@ -13,11 +13,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 type VerifyOpts struct {
@@ -121,7 +121,7 @@ func RunVerify(dryRun bool, o VerifyOpts) error {
 		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", color.Dim("INFO"))
 	} else {
 		st, _, _ := baoread.ExecPod(strings.TrimSpace(pod), "", "", "status", "-format=json")
-		sealed, _ := baolifecycle.ParseStatus(st)
+		sealed, _ := openbao.ParseStatus(st)
 		if strings.TrimSpace(st) == "" {
 			fmt.Printf("  %s  could not determine seal status (pod may be initialising)\n", color.Dim("INFO"))
 		} else if sealed {

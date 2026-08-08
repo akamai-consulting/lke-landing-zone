@@ -12,11 +12,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
@@ -812,7 +812,7 @@ func RunBaoConfigure(dryRun bool, region string) error {
 		}
 		return fmt.Errorf("root-token preflight failed on %s", region)
 	}
-	if !baolifecycle.PoliciesIncludeRoot(lookupOut) {
+	if !openbao.PoliciesIncludeRoot(lookupOut) {
 		fmt.Fprintf(os.Stderr, "::error::OPENBAO_ROOT_TOKEN on %s is a valid token but not root. Configure steps require root. Re-seed the infra-%s environment secret with an actual root token.\n", region, region)
 		return fmt.Errorf("root-token preflight failed on %s: token is not root", region)
 	}

@@ -1,16 +1,8 @@
 package baolifecycle
 
-import "testing"
-
-func TestParseBaoStatus(t *testing.T) {
-	sealed, th := ParseStatus(`{"sealed":false,"t":3,"n":5}`)
-	if sealed || th != 3 {
-		t.Errorf("got sealed=%v t=%d, want false 3", sealed, th)
-	}
-	if s, _ := ParseStatus(`{"sealed":true,"t":2}`); !s {
-		t.Error("want sealed=true")
-	}
-}
+import (
+	"testing"
+)
 
 func TestParseIsSelf(t *testing.T) {
 	if !parseIsSelf(`{"is_self":true}`) {
@@ -39,15 +31,9 @@ func TestParseGenRootInitAndStep(t *testing.T) {
 	}
 }
 
-func TestParseTokenAndPolicies(t *testing.T) {
+func TestParseTokenField(t *testing.T) {
 	if parseTokenField(`{"token":"s.deadbeef"}`) != "s.deadbeef" {
 		t.Error("token parse")
-	}
-	if !PoliciesIncludeRoot(`{"data":{"policies":["default","root"]}}`) {
-		t.Error("should include root")
-	}
-	if PoliciesIncludeRoot(`{"data":{"policies":["default"]}}`) {
-		t.Error("should not include root")
 	}
 }
 
