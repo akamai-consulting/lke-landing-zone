@@ -4,14 +4,7 @@ package templatecommit
 
 import (
 	"regexp"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
-
-// execOutput delegates to kubectlprobe.Exec through a CLOSURE, never by
-// assignment. Nothing here runs kubectl — it runs git and gh — but that seam has
-// always taken the binary as its first argument and it is the ONE seam.
-func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
 // firstNonEmpty is copied, not shared. Sixteenth package in this campaign to keep
 // its own three lines.

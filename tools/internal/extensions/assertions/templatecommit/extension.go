@@ -61,3 +61,14 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// pinBinding returns the assertion whose grants scope this package's forge access.
+// By kind, not by index — the reason obj-encryption's seedBinding records.
+func pinBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Assertion {
+			return b
+		}
+	}
+	panic("template-commit: no assertion binding — the forge handle is built from it")
+}

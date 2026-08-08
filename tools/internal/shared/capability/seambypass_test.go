@@ -80,7 +80,6 @@ var allowedSeamCalls = map[string]int{
 	"reconciler":      1,
 	"seedspecial":     1,
 	"statepassphrase": 1,
-	"templatecommit":  1,
 }
 
 // baoSeamCall matches a direct call to one of OpenBao's process seams. KVPut and
