@@ -243,7 +243,7 @@ func esFixtureRepo(t *testing.T) string {
 		`          llz openbao exec -- kv put secret/otel/ingress token="$T"`,
 		`          llz openbao exec -- kv put secret/infra/github-dispatch-token token="$D"`,
 	}, "\n"))
-	fixWrite(t, root, "tools/internal/extensions/harbor/harbor.go",
+	fixWrite(t, root, "tools/internal/extensions/lifecycle/harbor/harbor.go",
 		"package main\nvar _ = baoKVPutFn(\"secret/harbor/admin\", map[string]string{\"password\": p})\n")
 
 	var policy strings.Builder
@@ -253,7 +253,7 @@ func esFixtureRepo(t *testing.T) string {
 		policy.WriteString(`path "secret/metadata/` + p + `" { capabilities = ["read", "list"] }` + "\n")
 	}
 	policy.WriteString("`\n")
-	fixWrite(t, root, "tools/internal/extensions/identityconfig/openbao_configure.go", policy.String())
+	fixWrite(t, root, "tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go", policy.String())
 	return root
 }
 
@@ -314,8 +314,8 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 	for _, want := range []string{
 		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'grafana/admin' property 'missing_field' is not written by any 'bao kv put secret/grafana/admin' step in bootstrap-openbao.yml\n",
 		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'never/seeded' is not seeded by any bootstrap workflow — add a 'bao kv put secret/never/seeded' step to bootstrap-openbao.yml, or add to MANUAL_PATHS if intentionally manual\n",
-		"::error file=tools/internal/extensions/identityconfig/openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/data/uncovered/path' with read capability\n",
-		"::error file=tools/internal/extensions/identityconfig/openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/metadata/uncovered/path' with read and list capabilities\n",
+		"::error file=tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/data/uncovered/path' with read capability\n",
+		"::error file=tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/metadata/uncovered/path' with read and list capabilities\n",
 		"\n4 ExternalSecret ref(s) failed seed or policy validation.\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -339,8 +339,8 @@ func TestRunCIExternalSecretPathsInstanceTemplateLayout(t *testing.T) {
 		fixWrite(t, root, "instance-template/"+rel, string(b))
 	}
 	for _, rel := range []string{
-		"tools/internal/extensions/harbor/harbor.go",
-		"tools/internal/extensions/identityconfig/openbao_configure.go",
+		"tools/internal/extensions/lifecycle/harbor/harbor.go",
+		"tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go",
 		"apl-values/env/secrets.yaml",
 	} {
 		b, err := os.ReadFile(filepath.Join(flat, filepath.FromSlash(rel)))
@@ -359,7 +359,7 @@ func TestRunCIExternalSecretPathsInstanceTemplateLayout(t *testing.T) {
 // the same gate `make externalsecret-paths-check` enforces (minus the rendered
 // charts, which need helm; the seeded-path policy coverage is fully exercised).
 func TestExternalSecretPathsRealRepo(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}

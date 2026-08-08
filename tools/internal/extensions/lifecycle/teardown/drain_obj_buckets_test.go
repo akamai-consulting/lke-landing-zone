@@ -20,7 +20,7 @@ import (
 // A workflow cannot be unit-tested, so this asserts the invocation directly: any
 // `ci drain-obj-buckets` in a shipped workflow must carry --yes.
 func TestWorkflowsInvokeDrainObjBucketsWithYes(t *testing.T) {
-	const wf = "../../../../instance-template/.github/workflows/llz-terraform.yml"
+	const wf = "../../../../../instance-template/.github/workflows/llz-terraform.yml"
 	raw, err := os.ReadFile(wf)
 	if err != nil {
 		t.Fatalf("could not read %s (%v) — a skip here would reproduce the gap it closes", wf, err)

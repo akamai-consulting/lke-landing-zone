@@ -214,7 +214,7 @@ func TestRunCICheckPromRulesEmptyCorpusFails(t *testing.T) {
 // skipped clean for months. Both roots are walked, and the reconciler's alerts
 // (the label-joined LLZReconcilerStale) must be among what gets validated.
 func TestDefaultPromRulesDirsCoverShippedRules(t *testing.T) {
-	t.Chdir("../../../..") // the roots are repo-relative; tests run in tools/cmd/llz
+	t.Chdir("../../../../..") // the roots are repo-relative; tests run in the package dir
 	seen := stubPromtool(t, false)
 	var out bytes.Buffer
 	if err := runCICheckPromRules(defaultPromRulesDirs, nil, &out); err != nil {

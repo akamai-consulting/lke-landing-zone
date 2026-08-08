@@ -246,7 +246,7 @@ func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
 // (or drops a load-bearing values override), this test fails at PR time
 // instead of wedging a fresh-cluster bootstrap 40 minutes into an e2e run.
 func TestWaveGuardRealTree(t *testing.T) {
-	if err := runCIWaveHealthGuard("../../../.."); err != nil {
+	if err := runCIWaveHealthGuard("../../../../.."); err != nil {
 		t.Fatalf("wave-health-guard fails on the shipped tree: %v", err)
 	}
 }

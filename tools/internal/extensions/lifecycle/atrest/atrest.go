@@ -519,7 +519,7 @@ func Report(out io.Writer, f Findings) error {
 			continue
 		}
 		fmt.Fprintf(out, "::error file=%s,line=%d::%s. Either close it, or register %q in atRestAllowed "+
-			"(tools/internal/extensions/atrest/atrest.go) with a reason naming WHAT is exposed and an exit condition "+
+			"(tools/internal/extensions/lifecycle/atrest/atrest.go) with a reason naming WHAT is exposed and an exit condition "+
 			"that retires the entry. See docs/adr/0007-terraform-state-encryption.md.\n",
 			fd.file, fd.line, fd.what, fd.key)
 	}

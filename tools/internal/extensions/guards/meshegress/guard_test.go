@@ -109,7 +109,7 @@ func TestMeshEgressScanDirsIncludeRenderedCharts(t *testing.T) {
 // guard scans a directory the build never fills and silently returns to the blind
 // spot this change closed.
 func TestMeshEgressRenderedDirMatchesMakefile(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "Makefile"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "Makefile"))
 	if err != nil {
 		t.Skipf("Makefile not readable from here: %v", err)
 	}

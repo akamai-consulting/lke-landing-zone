@@ -101,11 +101,11 @@ var errRetrofitNotFound = errors.New("Error from server (NotFound)")
 
 // reconcilerRuleCRD is the PrometheusRule under test, repo-relative.
 //
-// THE PATH CHANGED WITH THE PACKAGE. It was "../../../../platform-apl/..." from
+// THE PATH CHANGED WITH THE PACKAGE. It was "../../../../../platform-apl/..." from
 // cmd/llz and is the same depth from internal/assertobs, which is luck rather than
 // design — a relative path in a test is a dependency on where the test file sits,
 // and moving the file silently re-points it. Checked rather than assumed.
-const reconcilerRuleCRD = "../../../../platform-apl/components/llzReconciler/llz-reconciler/prometheusrule.yaml"
+const reconcilerRuleCRD = "../../../../../platform-apl/components/llzReconciler/llz-reconciler/prometheusrule.yaml"
 
 // containsString: the definition travelled out of package main with a file this
 // extraction moved, leaving both sides using it. Defined here rather than hunted

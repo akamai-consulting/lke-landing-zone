@@ -91,7 +91,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"https:// would connect to nothing. This closes when the hop is meshed — i.e. when " +
 			"llz-openbao and monitoring are both enrolled in ambient",
 	},
-	"tools/internal/extensions/harbor/harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
+	"tools/internal/extensions/lifecycle/harbor/harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
 		owner: "llz",
 		reason: "the harbor-robot-provisioner's REST base. Carries the Harbor ADMIN PASSWORD in a " +
 			"Basic-auth header and receives freshly minted ROBOT SECRETS in the response — the " +
@@ -107,7 +107,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"sidecar upgrades the hop to mTLS. Registered separately because the guard keys on file " +
 			"path, and a reviewer reading the manifest should find the reasoning here too",
 	},
-	"tools/internal/extensions/bootstrapcluster/bootstrap_cluster.go:http://git-server.git-server.svc.cluster.local": {
+	"tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go:http://git-server.git-server.svc.cluster.local": {
 		owner: "llz",
 		reason: "aplGiteaInClusterURL — apl-core's in-cluster Gitea values repo, used to re-seed a " +
 			"missing apl-values branch. NOT mesh-upgraded: giteaSourceFromCloneCmd injects the Gitea " +
@@ -281,7 +281,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"intercept. Pod-network callers can no longer reuse it even by mistake — the listener " +
 			"requires and verifies a client cert, so an unverified transport fails the handshake",
 	},
-	"tools/internal/extensions/converge/wait.go:apiProbeClient": {
+	"tools/internal/extensions/lifecycle/converge/wait.go:apiProbeClient": {
 		owner: "inherent",
 		reason: "probes the LKE-managed control-plane endpoint from OUTSIDE the cluster during " +
 			"provisioning, before a cluster exists to have a PKI. Reads a status line; carries no " +
@@ -494,7 +494,7 @@ func Run(root string) error {
 			continue
 		}
 		failed = true
-		fmt.Printf("::error file=%s,line=%d::unregistered plaintext hop (%s). Every unencrypted in-cluster hop must be an explicit, reviewed decision: either secure it, or register %q in plaintextAllowed (tools/internal/extensions/plaintext/guard.go) with a reason naming WHAT crosses the wire and an owner who could close it. See docs/adr/0010-in-cluster-mtls.md.\n",
+		fmt.Printf("::error file=%s,line=%d::unregistered plaintext hop (%s). Every unencrypted in-cluster hop must be an explicit, reviewed decision: either secure it, or register %q in plaintextAllowed (tools/internal/extensions/guards/plaintext/guard.go) with a reason naming WHAT crosses the wire and an owner who could close it. See docs/adr/0010-in-cluster-mtls.md.\n",
 			f.file, f.line, f.what, f.key)
 	}
 
@@ -529,7 +529,7 @@ func Run(root string) error {
 // guardOwnDir is the path fragment identifying this package's own source. Kept as
 // a single constant so the self-exemption and the registry's own keys cannot drift
 // apart; TestGuardExemptsItself fails if a real file here stops matching it.
-const guardOwnDir = "tools/internal/extensions/plaintext/"
+const guardOwnDir = "tools/internal/extensions/guards/plaintext/"
 
 func plaintextScanDirs(root string) []string {
 	dirs := guardwalk.PlatformTreeDirs(root)

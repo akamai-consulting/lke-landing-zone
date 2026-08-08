@@ -38,7 +38,7 @@ func TestDeclaresBothHalves(t *testing.T) {
 func TestManifestsStayWithTheEmbeddingPackage(t *testing.T) {
 	if _, err := os.Stat("manifests"); err == nil {
 		t.Error("a manifests/ directory appeared in this package — ci_bootstrap_cluster.go " +
-			"//go:embed-s three files from tools/internal/extensions/bootstrapcluster/manifests, and Go's embed cannot reach " +
+			"//go:embed-s three files from tools/internal/extensions/lifecycle/bootstrapcluster/manifests, and Go's embed cannot reach " +
 			"outside its own package. Two copies of these policies is the drift the shipped set exists to prevent")
 	}
 	if _, err := os.Stat(manifestDir); err != nil {

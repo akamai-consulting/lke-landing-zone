@@ -126,7 +126,7 @@ func TestPlaintextRegistryEntriesAreReviewable(t *testing.T) {
 func repoRootForGuardTest(t *testing.T) string {
 	t.Helper()
 	// Tests run from tools/cmd/llz; the repo root is three levels up.
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,8 +703,8 @@ func TestScanDefaultedSchemeReportsFileRelativeLines(t *testing.T) {
 // add a drift gate, and this test states the fact so a future reader does not
 // mistake "no findings" for "not wired up".
 func TestDefaultedSchemeIsLatentOnThisTree(t *testing.T) {
-	dirs := plaintextScanDirs("../../../..")
-	findings, examined, err := collectPlaintextFindings("../../../..", dirs)
+	dirs := plaintextScanDirs("../../../../..")
+	findings, examined, err := collectPlaintextFindings("../../../../..", dirs)
 	if err != nil {
 		t.Fatal(err)
 	}

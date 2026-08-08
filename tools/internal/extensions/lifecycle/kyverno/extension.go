@@ -18,7 +18,7 @@ package kyverno
 // language decided the order of the work rather than the design did.
 //
 // THE EMBEDDER HAS SINCE MOVED, and the const moved with it: the manifests were in
-// tools/cmd/llz/manifests and are now in tools/internal/extensions/bootstrapcluster/manifests,
+// tools/cmd/llz/manifests and are now in tools/internal/extensions/lifecycle/bootstrapcluster/manifests,
 // because `bootstrap-cluster` was extracted. The constraint is unchanged — the
 // assets still live beside whoever embeds them, and this package still cannot own
 // them. What DID change is that they are no longer stranded in `package main`.

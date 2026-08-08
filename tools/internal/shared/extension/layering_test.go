@@ -32,8 +32,17 @@ import (
 const (
 	sharedPrefix    = modulePath + "/internal/shared/"
 	extensionPrefix = modulePath + "/internal/extensions/"
+	verbPrefix      = modulePath + "/internal/verbs/"
 	registryPkg     = modulePath + "/internal/shared/extension/registry"
 )
+
+// upward names the trees internal/shared must never depend on: extensions are
+// capabilities, verbs are the CLI commands that compose them. Both sit ABOVE
+// shared. `verbs` was added when the composite commands (onboard, lint, upgrade)
+// moved out of internal/extensions -- without it the rule would have had a hole
+// exactly where the most-composed code went, which is where it is most tempting to
+// reach back down and then sideways.
+var upward = []string{extensionPrefix, verbPrefix}
 
 // imports returns each package matching pattern with its DIRECT, non-test
 // imports. Test imports are deliberately outside the rule: a shared package's
@@ -67,11 +76,15 @@ func TestSharedPackagesDoNotImportExtensions(t *testing.T) {
 			continue
 		}
 		for _, dep := range deps {
-			if strings.HasPrefix(dep, extensionPrefix) {
-				t.Errorf("%s imports %s\n\tinternal/shared must not depend on internal/extensions. "+
+			for _, up := range upward {
+				if !strings.HasPrefix(dep, up) {
+					continue
+				}
+				t.Errorf("%s imports %s\n\tinternal/shared must not depend on %s. "+
 					"Either move the symbol down into shared (if it is substrate — most are), "+
-					"or pass the answer in as a parameter (if it encodes an extension's policy).",
-					strings.TrimPrefix(pkg, sharedPrefix), strings.TrimPrefix(dep, extensionPrefix))
+					"or pass the answer in as a parameter (if it encodes a caller's policy).",
+					strings.TrimPrefix(pkg, sharedPrefix), strings.TrimPrefix(dep, up),
+					strings.TrimSuffix(strings.TrimPrefix(up, modulePath+"/"), "/"))
 			}
 		}
 		// The registry launders the exemption: anything importing it inherits a

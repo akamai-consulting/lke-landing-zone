@@ -83,15 +83,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/argodiag"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/doctor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/mutate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/phasetiming"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/upgrade"
 )
 
 // declarations is the built-in set. One line per extension; the catalog
@@ -102,7 +93,6 @@ import (
 var declarations = []func() extension.Extension{
 	assertobs.Extension,
 	assertsecrets.Extension,
-	argodiag.Extension,
 	assertidentity.Extension,
 	assertobjstore.Extension,
 	deliverdocs.Extension,
@@ -136,21 +126,15 @@ var declarations = []func() extension.Extension{
 	reachability.Extension,
 	branchpolicy.Extension,
 	buildpreflight.Extension,
-	selfupgrade.Extension,
 	templatecommit.Extension,
-	onboard.Extension,
 	render.Extension,
-	upgrade.Extension,
-	newinstance.Extension,
 	pincoherence.Extension,
-	lint.Extension,
 	environments.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,
 	database.Extension,
 	docsguard.Extension,
-	doctor.Extension,
 	healthsla.Extension,
 	tofudriver.Extension,
 	tokeninv.Extension,
@@ -159,8 +143,6 @@ var declarations = []func() extension.Extension{
 	gameday.Extension,
 	kyverno.Extension,
 	manifestguard.Extension,
-	mutate.Extension,
-	phasetiming.Extension,
 	plaintext.Extension,
 	promote.Extension,
 	releasepublish.Extension,

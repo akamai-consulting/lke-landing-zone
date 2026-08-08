@@ -48,7 +48,7 @@ var esManualPaths = map[string]bool{}
 // `llz ci bao-configure`, the sole owner of OpenBao policy config.
 const (
 	esBaoConfigureLabel = "llz ci bao-configure (ci_openbao_configure.go)"
-	esBaoConfigurePath  = "tools/internal/extensions/identityconfig/openbao_configure.go"
+	esBaoConfigurePath  = "tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go"
 )
 
 // esRef is one (remoteRef.key, remoteRef.property) pair; hasProp distinguishes
@@ -486,22 +486,22 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// in-cluster rotator (collectSeededGo runs every parser over every source —
 	// no-ops where a pattern is absent).
 	for _, goSrc := range []string{
-		"tools/internal/extensions/harbor/harbor.go",
-		"tools/internal/extensions/harbor/harbor_provisioner.go",
-		"tools/internal/extensions/seedspecial/special.go",
-		"tools/internal/extensions/openbao/seedall.go",
-		"tools/internal/extensions/credrotate/table.go",
-		"tools/internal/extensions/credrotate/inclusterpat.go",
+		"tools/internal/extensions/lifecycle/harbor/harbor.go",
+		"tools/internal/extensions/lifecycle/harbor/harbor_provisioner.go",
+		"tools/internal/extensions/assertions/seedspecial/special.go",
+		"tools/internal/extensions/lifecycle/openbao/seedall.go",
+		"tools/internal/extensions/lifecycle/credrotate/table.go",
+		"tools/internal/extensions/lifecycle/credrotate/inclusterpat.go",
 		// seed-broad-pat writes secret/linode/broad-pat (its own header: "Nothing
 		// else seeds that path"). It was missing here, which stayed invisible only
 		// because the REF side could not see the ExternalSecret that reads it — the
 		// two incomplete corpora masked each other.
-		"tools/internal/extensions/credrotate/broadpat.go",
+		"tools/internal/extensions/lifecycle/credrotate/broadpat.go",
 		// seed-ssec-key writes secret/obj/ssec, the obj-proxy's SSE-C key. Nothing
 		// else seeds it, and it is generate-once (Linode discards SSE-C keys, so a
 		// second write orphans every encrypted object) — so it never appears as a
 		// `bao kv put` step in a workflow, only here.
-		"tools/internal/extensions/objenc/seed_key.go",
+		"tools/internal/extensions/capabilities/objenc/seed_key.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(guardkit.RepoPath(root, goSrc))
 		if err != nil {

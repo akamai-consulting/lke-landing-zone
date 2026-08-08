@@ -3,7 +3,7 @@
 # WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
 # WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
 # WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
-#                                            tools/internal/extensions/budget/remedy.go
+#                                            tools/internal/extensions/guards/budget/remedy.go
 #
 # This file is the operational half of that: the number, and the rule for
 # changing it. The argument lives in the ADR and is not repeated here.

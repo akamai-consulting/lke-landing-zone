@@ -199,7 +199,7 @@ func TestRunAssertRotationHealthFailsOnUnreachablePrometheus(t *testing.T) {
 // nobody is paged about, or pass on ones they are — and the two are edited in
 // different files by different changes.
 func TestRotationSLAsMatchThePrometheusRules(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "..", "platform-apl", "components",
+	path := filepath.Join("..", "..", "..", "..", "..", "platform-apl", "components",
 		"llzReconciler", "llz-reconciler", "prometheusrule.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {

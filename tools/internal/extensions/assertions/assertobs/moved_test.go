@@ -628,7 +628,7 @@ func TestReconcilerAlertSemantics(t *testing.T) {
 // cannot drift apart — they are edited by different changes in different repos'
 // worth of context.
 func TestDefaultGrafanaDashboardsMatchTheManifests(t *testing.T) {
-	dir := filepath.Join("..", "..", "..", "..", "platform-apl", "components", "observability")
+	dir := filepath.Join("..", "..", "..", "..", "..", "platform-apl", "components", "observability")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Skipf("observability manifests not reachable from the test cwd: %v", err)

@@ -72,13 +72,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tokeninv"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/argodiag"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/mutate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/phasetiming"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/upgrade"
 )
 
 // Command pairs an extension name with one constructor it owns.
@@ -92,7 +85,6 @@ type Command struct {
 func Commands() []Command { return append([]Command(nil), commands...) }
 
 var commands = []Command{
-	{"argodiag", argodiag.DiagnoseArgoCDCmd},
 	{"assertidentity", assertidentity.CertificatesCmd},
 	{"assertidentity", assertidentity.TeamLoginSmokeCmd},
 	{"assertnetwork", assertnetwork.AdmissionEnforcementCmd},
@@ -181,23 +173,13 @@ var commands = []Command{
 	{"identityconfig", identityconfig.PinKeycloakGatewayAliasCmd},
 	{"identityconfig", identityconfig.UsersAddCmd},
 	{"kyverno", kyverno.ApplyKyvernoPolicyCmd},
-	{"lint", lint.CheckCmd},
-	{"lint", lint.FmtCmd},
-	{"lint", lint.HooksCmd},
-	{"lint", lint.LintCmd},
-	{"lint", lint.PrecommitCmd},
-	{"lint", lint.ValidateCmd},
 	{"manifestguard", manifestguard.AplSchemaValidateCmd},
 	{"manifestguard", manifestguard.ArgoCDRenderedAppsCmd},
 	{"manifestguard", manifestguard.DroppedAPIVersionsCmd},
 	{"manifestguard", manifestguard.PlaceholderGuardCmd},
-	{"mutate", mutate.MutateCmd},
 	{"objenc", objenc.AssertObjEncryptionCmd},
 	{"objenc", objenc.ObjProxyCmd},
 	{"objenc", objenc.SeedSSECKeyCmd},
-	{"onboard", onboard.DoctorCmd},
-	{"onboard", onboard.SecretsCmd},
-	{"onboard", onboard.TokensCmd},
 	{"openbao", openbao.BaoBreakglassCmd},
 	{"openbao", openbao.BaoEnsureReadyCmd},
 	{"openbao", openbao.BaoInitCmd},
@@ -212,10 +194,6 @@ var commands = []Command{
 	{"openbao", openbao.ProvisionPeerCACmd},
 	{"openbao", openbao.RegenRootCmd},
 	{"openbao", openbao.SeedBroadPATCmd},
-	{"phasetiming", phasetiming.CollectImagePullsCmd},
-	{"phasetiming", phasetiming.CollectTimingCmd},
-	{"phasetiming", phasetiming.PhaseMarkCmd},
-	{"phasetiming", phasetiming.PhaseReportCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
 	{"reachability", reachability.VerifyCmd},
 	{"reconciler", reconciler.AssertVolumeEncryptionCmd},
@@ -228,7 +206,6 @@ var commands = []Command{
 	{"render", render.RenderCmd},
 	{"seedspecial", seedspecial.AuditPVCStorageClassCmd},
 	{"seedspecial", seedspecial.ResolveHarborURLCmd},
-	{"selfupgrade", selfupgrade.SelfUpdateCmd},
 	{"statepassphrase", statepassphrase.RotateStatePassphraseCmd},
 	{"teardown", teardown.DrainObjBucketsCmd},
 	{"teardown", teardown.ReapCmd},
@@ -245,8 +222,6 @@ var commands = []Command{
 	{"tokeninv", tokeninv.RotationPlanCmd},
 	{"tokeninv", tokeninv.TokenInventoryCmd},
 	{"tokeninv", tokeninv.ValidateTokensCmd},
-	{"upgrade", upgrade.UpgradeCmd},
-	{"upgrade", upgrade.UpgradeTestCmd},
 	{"wavehealth", wavehealth.DependencyGuardCmd},
 	{"wavehealth", wavehealth.HealthGuardCmd},
 }

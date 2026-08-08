@@ -79,7 +79,7 @@ var reservedTeamNames = map[string]bool{
 // them: a team scoped to e.g. `secret/linode` would grant itself write on the
 // Linode API token + broad-PAT (secret/data/linode/*), a privilege escalation.
 // THE SET IS THE UNION OF THE TOP SEGMENTS of the platform OpenBao policy paths
-// in tools/internal/extensions/identityconfig/openbao_configure.go (policyPlatformCI
+// in tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go (policyPlatformCI
 // et al.). That is not a "keep in sync" request, which is the kind of comment that
 // is true when written and silently false a year later — it is CHECKED, by
 // identityconfig's TestSystemSecretNamespacesCoverPolicyPaths, which lives beside

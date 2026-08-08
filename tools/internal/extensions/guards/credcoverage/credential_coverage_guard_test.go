@@ -157,7 +157,7 @@ func TestCredCoverageExemptEntriesAreReviewable(t *testing.T) {
 // The live tree must be color.Green, and it must be color.Green because everything is
 // covered rather than because nothing was read.
 func TestCredentialCoverageGuardPassesOnThisRepo(t *testing.T) {
-	if err := runCICredentialCoverageGuard("../../../.."); err != nil {
+	if err := runCICredentialCoverageGuard("../../../../.."); err != nil {
 		t.Fatalf("credential-coverage-guard must be color.Green on this repo: %v", err)
 	}
 }

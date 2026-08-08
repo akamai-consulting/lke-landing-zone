@@ -19,7 +19,7 @@ import (
 // AllowedKinds + AllowedNames. If they drift (a kind vetted in one
 // place but not the other), the two guards disagree and this fails the build.
 func TestWaveHealthVAPMatchesGuard(t *testing.T) {
-	path := guardkit.RepoPath("../../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
+	path := guardkit.RepoPath("../../../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read VAP: %v", err)
@@ -61,7 +61,7 @@ func TestWaveHealthVAPMatchesGuard(t *testing.T) {
 // dropped, the admission twin would deny a hook the other two allow (the release-e2e
 // v0.0.23 coredns-restart PostSync Job false positive) — so fail the build.
 func TestWaveHealthVAPSkipsHooks(t *testing.T) {
-	path := guardkit.RepoPath("../../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
+	path := guardkit.RepoPath("../../../../..", "platform-apl/manifest/admission/wave-health-policy.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read VAP: %v", err)

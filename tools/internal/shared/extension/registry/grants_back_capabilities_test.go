@@ -29,9 +29,11 @@ package registry
 // a check that overreaches is one someone weakens rather than satisfies.
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -62,18 +64,41 @@ func extensionsDir(t *testing.T) string {
 	return ""
 }
 
-func TestAnExecSeamIsBackedByAReadGrant(t *testing.T) {
-	root := extensionsDir(t)
-	pkgs, err := os.ReadDir(root)
+// packageDirs returns every directory under root that holds Go source.
+//
+// IT WALKS RATHER THAN LISTING, and that is not incidental. This used to
+// `os.ReadDir(internal/extensions)` and treat each entry as a package, which was
+// true while the tree was flat. Sub-dividing it into capabilities/ lifecycle/
+// assertions/ guards/ turned those entries into BUCKETS: the glob matched no .go
+// files, `checked` fell to zero, and the corpus check below is the only reason
+// anyone found out. Walking is indifferent to how deep the tree gets.
+func packageDirs(t *testing.T, root string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(p, ".go") {
+			seen[filepath.Dir(p)] = true
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	dirs := make([]string, 0, len(seen))
+	for d := range seen {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+func TestAnExecSeamIsBackedByAReadGrant(t *testing.T) {
 	checked := 0
-	for _, p := range pkgs {
-		if !p.IsDir() {
-			continue
-		}
-		files, err := filepath.Glob(filepath.Join(root, p.Name(), "*.go"))
+	for _, dir := range packageDirs(t, extensionsDir(t)) {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +121,8 @@ func TestAnExecSeamIsBackedByAReadGrant(t *testing.T) {
 		if !readGrant.MatchString(s) {
 			t.Errorf("%s holds an Exec seam but declares no read grant — it shells out and "+
 				"reads the result, so cloud-read / cluster-read / read-repo / secret-read "+
-				"is missing from the declaration rather than absent from the code", p.Name())
+				"is missing from the declaration rather than absent from the code",
+				filepath.Base(dir))
 		}
 	}
 	// A corpus check, for the reason requireCorpus exists elsewhere in this tree: a

@@ -310,13 +310,21 @@ spec:
 // attributing an out-of-scope PVC to "Kyverno's webhook lagged" — sending the reader
 // after a timing bug that cannot explain it — or stop naming a namespace the policy
 // really does cover.
-// The path reaches BACK INTO cmd/llz on purpose: the policy is //go:embed-ed
-// there and did not move with this file. A relative path across a package
-// boundary is the trap that made two other guards go inert in this campaign, so
-// it is named here rather than left to be rediscovered — if the manifest moves,
-// this fails loudly, which is the behaviour that was wanted.
+// The path reaches into ANOTHER EXTENSION on purpose: the policy is //go:embed-ed
+// by bootstrap-cluster and did not move with this file. A relative path across a
+// package boundary is the trap that made two other guards go inert in this
+// campaign, so it is named here rather than left to be rediscovered — if the
+// manifest moves, this fails loudly, which is the behaviour that was wanted.
+//
+// IT MOVED, AND IT DID FAIL LOUDLY. The path was `../bootstrapcluster/...` while
+// every extension was a sibling. Sub-dividing internal/extensions by KIND put the
+// two in different buckets — this contributes evidence (assertions/) and
+// bootstrap-cluster moves the platform (lifecycle/) — so the hop is now up and
+// across. That is the design working rather than a wart: the two really are
+// different kinds of thing, and the coupling between them is a fact about the
+// Kyverno policy, not about where the packages live.
 func TestKyvernoScopeMatchesPolicy(t *testing.T) {
-	raw, err := os.ReadFile("../bootstrapcluster/manifests/kyverno-pvc-encrypted-storage-class.yaml")
+	raw, err := os.ReadFile("../../lifecycle/bootstrapcluster/manifests/kyverno-pvc-encrypted-storage-class.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

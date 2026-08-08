@@ -6,7 +6,7 @@ any non-lab promotion.
 **Relates to:** [apl-core-migration-runbook.md](../apl-core-migration-runbook.md),
 [../secrets.md](../secrets.md), [linode-credential-rotator.md](linode-credential-rotator.md),
 `instance-template/apl-values/`, `instance-template/terraform-iac-bootstrap/cluster-bootstrap/`,
-`tools/internal/extensions/identityconfig/openbao_configure.go`.
+`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`.
 
 ## Why
 

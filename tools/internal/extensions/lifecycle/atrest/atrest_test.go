@@ -139,7 +139,7 @@ func TestAtRestAllowedEntriesCarryAnExitCondition(t *testing.T) {
 
 // The live tree must be green, and green because it was read.
 func TestAtRestGuardPassesOnThisRepo(t *testing.T) {
-	if err := Run(io.Discard, "../../../.."); err != nil {
+	if err := Run(io.Discard, "../../../../.."); err != nil {
 		t.Fatalf("at-rest-guard must be green on this repo: %v", err)
 	}
 }
@@ -260,7 +260,7 @@ func TestAtRestGuardStillSeesLeveredResourcesAfterABucket(t *testing.T) {
 // makes the probe result durable: if someone adds a fifth bucket, the guard fails
 // until they say what lands in it and what would retire the entry.
 func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
-	root := "../../../.." // tools/cmd/llz -> repo root, as TestAtRestGuardPassesOnThisRepo
+	root := "../../../../.." // tools/cmd/llz -> repo root, as TestAtRestGuardPassesOnThisRepo
 	findings, _, err := collectAtRestFindings(root, ScanDirs(root))
 	if err != nil {
 		t.Fatal(err)
