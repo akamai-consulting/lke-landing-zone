@@ -1,10 +1,16 @@
-package templatemanifest
-
-// ci_template_manifest.go implements `llz ci template-manifest` — the native
-// port of template-scripts/check-template-manifest.sh. It keeps
-// instance-template/.template-manifest honest by verifying that every scaffold
-// file has an update class (managed / merge / owned), and it provides the same
-// path classifier used by humans and update tooling.
+// Package manifest is .template-manifest: which files the template owns, what
+// class each is in, and what `copier update` is allowed to do to it.
+//
+// ADR 0014 PINS THIS AS THE SINGLE OWNERSHIP AUTHORITY, which is exactly why it
+// should not have been inside an extension. `selfupgrade` reads the class table to
+// decide what an upgrade may overwrite or restore, `lint` and `upgrade` load it to
+// check drift -- three peers depending on a capability for the one fact the whole
+// upgrade path is defined against.
+//
+// WHAT STAYED BEHIND is Run, the `llz ci template-manifest` verb: it takes an
+// io.Writer pair and prints a classification report for a human. Reading the
+// manifest is substrate; reporting on it is a command.
+package manifest
 
 import (
 	"bufio"
@@ -20,9 +26,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/pathglob"
 )
 
-// UpgradeAction is what `llz upgrade` does to a file of a given class once
-// `copier update` has run. It is the manifest's operational meaning: the class
-// name is the label, this is the behaviour.
 type UpgradeAction string
 
 const (
@@ -79,9 +82,9 @@ func LookupClass(name string) (Class, bool) {
 	return Class{}, false
 }
 
-// templateClassNames renders the class set for help and error text, so adding a
+// ClassNames renders the class set for help and error text, so adding a
 // row to templateClasses updates every message that lists the classes.
-func templateClassNames() string {
+func ClassNames() string {
 	names := make([]string, len(templateClasses))
 	for i, c := range templateClasses {
 		names[i] = c.name
@@ -98,75 +101,6 @@ type Manifest struct {
 	Root  string
 	path  string
 	rules []templateManifestRule
-}
-
-func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
-	if classifyPath != "" && listClass != "" {
-		return fmt.Errorf("template-manifest: use only one of --classify or --list")
-	}
-	m, err := Load(root)
-	if err != nil {
-		return err
-	}
-
-	if classifyPath != "" {
-		cls := m.Classify(classifyPath)
-		if cls == "" {
-			fmt.Fprintf(errOut, "%s: UNCLASSIFIED\n", classifyPath)
-			return fmt.Errorf("template-manifest: %s is unclassified", classifyPath)
-		}
-		fmt.Fprintln(out, cls)
-		return nil
-	}
-
-	files, err := ScaffoldFiles(m.Root)
-	if err != nil {
-		return err
-	}
-
-	if listClass != "" {
-		if !validTemplateClass(listClass) {
-			return fmt.Errorf("template-manifest: unknown class %q (%s)", listClass, templateClassNames())
-		}
-		for _, rel := range files {
-			if m.Classify(rel) == listClass {
-				fmt.Fprintln(out, rel)
-			}
-		}
-		return nil
-	}
-
-	counts := map[string]int{}
-	for _, c := range templateClasses {
-		counts[c.name] = 0
-	}
-	var unclassified []string
-	for _, rel := range files {
-		cls := m.Classify(rel)
-		if cls == "" {
-			unclassified = append(unclassified, rel)
-			continue
-		}
-		counts[cls]++
-	}
-	if len(unclassified) > 0 {
-		fmt.Fprintf(errOut, "::error::%d scaffold file(s) match no rule in %s:\n", len(unclassified), m.path)
-		for _, rel := range unclassified {
-			fmt.Fprintf(errOut, "  - %s\n", rel)
-		}
-		fmt.Fprintf(errOut, "Add a rule for each (%s) — see the header in %s.\n", templateClassNames(), m.path)
-		return fmt.Errorf("template-manifest: %d unclassified scaffold file(s)", len(unclassified))
-	}
-	if err := m.checkCopierFencing(files, errOut); err != nil {
-		return err
-	}
-	var tally []string
-	for _, c := range templateClasses {
-		tally = append(tally, fmt.Sprintf("%s=%d", c.name, counts[c.name]))
-	}
-	fmt.Fprintf(out, "template-manifest: OK — %s (%d files, all classified)\n",
-		strings.Join(tally, " "), len(files))
-	return nil
 }
 
 // copierProtect holds the copier.yml keys that decide whether `copier update`
@@ -361,8 +295,8 @@ func Load(root string) (Manifest, error) {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) != 2 || !validTemplateClass(parts[0]) {
-			return Manifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<%s>  <glob>`): %q", m.path, lineNo, templateClassNames(), line)
+		if len(parts) != 2 || !ValidClass(parts[0]) {
+			return Manifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<%s>  <glob>`): %q", m.path, lineNo, ClassNames(), line)
 		}
 		m.rules = append(m.rules, templateManifestRule{class: parts[0], pattern: parts[1]})
 	}
@@ -414,7 +348,7 @@ func ScaffoldFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func validTemplateClass(s string) bool {
+func ValidClass(s string) bool {
 	_, ok := LookupClass(s)
 	return ok
 }
@@ -422,4 +356,79 @@ func validTemplateClass(s string) bool {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// Run is `llz ci template-manifest`'s body, and it lives HERE rather than with the
+// cobra command because it reaches into this package's internals -- the manifest's
+// source path, the class table, the copier-fencing check. Splitting it out meant
+// exporting four things for exactly one caller, which is API widening dressed as
+// layering. The extension keeps the command and the declaration; the report is
+// part of what a manifest can tell you about itself.
+func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
+	if classifyPath != "" && listClass != "" {
+		return fmt.Errorf("template-manifest: use only one of --classify or --list")
+	}
+	m, err := Load(root)
+	if err != nil {
+		return err
+	}
+
+	if classifyPath != "" {
+		cls := m.Classify(classifyPath)
+		if cls == "" {
+			fmt.Fprintf(errOut, "%s: UNCLASSIFIED\n", classifyPath)
+			return fmt.Errorf("template-manifest: %s is unclassified", classifyPath)
+		}
+		fmt.Fprintln(out, cls)
+		return nil
+	}
+
+	files, err := ScaffoldFiles(m.Root)
+	if err != nil {
+		return err
+	}
+
+	if listClass != "" {
+		if !ValidClass(listClass) {
+			return fmt.Errorf("template-manifest: unknown class %q (%s)", listClass, ClassNames())
+		}
+		for _, rel := range files {
+			if m.Classify(rel) == listClass {
+				fmt.Fprintln(out, rel)
+			}
+		}
+		return nil
+	}
+
+	counts := map[string]int{}
+	for _, c := range templateClasses {
+		counts[c.name] = 0
+	}
+	var unclassified []string
+	for _, rel := range files {
+		cls := m.Classify(rel)
+		if cls == "" {
+			unclassified = append(unclassified, rel)
+			continue
+		}
+		counts[cls]++
+	}
+	if len(unclassified) > 0 {
+		fmt.Fprintf(errOut, "::error::%d scaffold file(s) match no rule in %s:\n", len(unclassified), m.path)
+		for _, rel := range unclassified {
+			fmt.Fprintf(errOut, "  - %s\n", rel)
+		}
+		fmt.Fprintf(errOut, "Add a rule for each (%s) — see the header in %s.\n", ClassNames(), m.path)
+		return fmt.Errorf("template-manifest: %d unclassified scaffold file(s)", len(unclassified))
+	}
+	if err := m.checkCopierFencing(files, errOut); err != nil {
+		return err
+	}
+	var tally []string
+	for _, c := range templateClasses {
+		tally = append(tally, fmt.Sprintf("%s=%d", c.name, counts[c.name]))
+	}
+	fmt.Fprintf(out, "template-manifest: OK — %s (%d files, all classified)\n",
+		strings.Join(tally, " "), len(files))
+	return nil
 }

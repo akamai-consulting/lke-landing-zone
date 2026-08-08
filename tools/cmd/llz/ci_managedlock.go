@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 )
 
 // lockableScaffoldFiles answers sustain's LockableScaffoldFiles: the scaffold root
@@ -27,17 +27,17 @@ import (
 // The class table lives here by ADR 0014 and cannot move; what crosses the
 // boundary is the ANSWER, not the model.
 func lockableScaffoldFiles(root string) (string, []string, error) {
-	m, err := templatemanifest.Load(root)
+	m, err := manifest.Load(root)
 	if err != nil {
 		return "", nil, err
 	}
-	files, err := templatemanifest.ScaffoldFiles(m.Root)
+	files, err := manifest.ScaffoldFiles(m.Root)
 	if err != nil {
 		return "", nil, err
 	}
 	var out []string
 	for _, rel := range files {
-		if c, ok := templatemanifest.LookupClass(m.Classify(rel)); ok && c.DigestLocked {
+		if c, ok := manifest.LookupClass(m.Classify(rel)); ok && c.DigestLocked {
 			out = append(out, rel)
 		}
 	}

@@ -1,4 +1,4 @@
-package templatemanifest
+package manifest
 
 import (
 	"bytes"
@@ -63,18 +63,6 @@ func TestTemplateManifestReportsUnclassifiedFiles(t *testing.T) {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr %q missing %q", errOut.String(), want)
 		}
-	}
-}
-
-func TestTemplateManifestCommandWiring(t *testing.T) {
-	c := Cmd()
-	for _, flag := range []string{"root", "classify", "list"} {
-		if c.Flags().Lookup(flag) == nil {
-			t.Fatalf("missing --%s flag", flag)
-		}
-	}
-	if err := c.Args(c, []string{"extra"}); err == nil {
-		t.Fatal("template-manifest accepted positional args")
 	}
 }
 
@@ -156,11 +144,11 @@ func TestTemplateClassTableInvariants(t *testing.T) {
 			t.Errorf("class %q is copierFenced but overwritten on upgrade — the fence would be pointless", c.name)
 		}
 	}
-	if !validTemplateClass("managed") || validTemplateClass("nonsense") {
-		t.Error("validTemplateClass must be backed by the table")
+	if !ValidClass("managed") || ValidClass("nonsense") {
+		t.Error("ValidClass must be backed by the table")
 	}
-	if got := templateClassNames(); !strings.Contains(got, "managed") || !strings.Contains(got, "owned") {
-		t.Errorf("templateClassNames() = %q, want it to list the table's names", got)
+	if got := ClassNames(); !strings.Contains(got, "managed") || !strings.Contains(got, "owned") {
+		t.Errorf("ClassNames() = %q, want it to list the table's names", got)
 	}
 }
 

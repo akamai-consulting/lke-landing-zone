@@ -34,7 +34,7 @@ import (
 //
 // INJECTED RATHER THAN MOVED, and this is the edge that made `commands.go` look
 // blocked for five iterations. `runHooksInstall` lives in hooks.go, which needs
-// `runLint` from checks.go, which needs `gitOutput` back from hooks.go — a cycle
+// `runLint` from checks.go, which needs `gitcmd.Output` back from hooks.go — a cycle
 // between two cobra-heavy files that this command needs exactly one function from.
 // One seam settles it; dragging 886 lines across to satisfy a best-effort call
 // would not.

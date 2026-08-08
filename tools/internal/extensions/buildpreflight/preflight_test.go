@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
@@ -39,9 +40,9 @@ func writeMiniInstance(t *testing.T, dir string, envs ...string) {
 // substring of the request path. A path with no entry 404s (returns an error).
 func stubGitHub(t *testing.T, bodies map[string]any) {
 	t.Helper()
-	orig := GHAPIJSON
-	t.Cleanup(func() { GHAPIJSON = orig })
-	GHAPIJSON = func(path string, out any) error {
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
+	ghapi.GHAPIJSON = func(path string, out any) error {
 		// Longest match wins: "repos/<r>" is a prefix of "repos/<r>/contents/…",
 		// and map iteration order would otherwise pick between them at random.
 		best, found := "", false
@@ -162,8 +163,8 @@ func TestBuildPreflightUnreachableGitHubDoesNotBlock(t *testing.T) {
 		"gh: You have exceeded a secondary rate limit (HTTP 403)",
 		"gh: Internal Server Error (HTTP 500)",
 	} {
-		orig := GHAPIJSON
-		GHAPIJSON = func(path string, out any) error {
+		orig := ghapi.GHAPIJSON
+		ghapi.GHAPIJSON = func(path string, out any) error {
 			if strings.Contains(path, "/contents/") {
 				return errors.New(transient)
 			}
@@ -171,7 +172,7 @@ func TestBuildPreflightUnreachableGitHubDoesNotBlock(t *testing.T) {
 		}
 		var err error
 		warn := captureStderr(t, func() { err = Run("lab") })
-		GHAPIJSON = orig
+		ghapi.GHAPIJSON = orig
 		if err != nil {
 			t.Errorf("%q must not block the dispatch, got: %v", transient, err)
 		}
@@ -182,16 +183,16 @@ func TestBuildPreflightUnreachableGitHubDoesNotBlock(t *testing.T) {
 }
 
 func TestGhFileSHASeparatesAbsenceFromIgnorance(t *testing.T) {
-	orig := GHAPIJSON
-	t.Cleanup(func() { GHAPIJSON = orig })
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
 
 	// A real 404 is an ANSWER: the file is not on that ref.
-	GHAPIJSON = func(string, any) error { return errors.New("gh: Not Found (HTTP 404)") }
+	ghapi.GHAPIJSON = func(string, any) error { return errors.New("gh: Not Found (HTTP 404)") }
 	if _, found, ok := ghFileSHA("o/r", "environments/lab.yaml", "main"); !ok || found {
 		t.Errorf("404 → found=false ok=true; got found=%v ok=%v", found, ok)
 	}
 	// Anything else is not an answer at all.
-	GHAPIJSON = func(string, any) error { return errors.New("HTTP 503 Service Unavailable") }
+	ghapi.GHAPIJSON = func(string, any) error { return errors.New("HTTP 503 Service Unavailable") }
 	if _, _, ok := ghFileSHA("o/r", "environments/lab.yaml", "main"); ok {
 		t.Error("a 503 must not be reported as a usable answer")
 	}
@@ -213,9 +214,9 @@ func TestBuildPreflightChecksTheInstanceSpecToo(t *testing.T) {
 	kubectlprobe.LookPathFn = func(string) (string, error) { return "/usr/bin/gh", nil }
 
 	// The deployment is on the branch; the instance spec is not.
-	orig := GHAPIJSON
-	t.Cleanup(func() { GHAPIJSON = orig })
-	GHAPIJSON = func(path string, out any) error {
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
+	ghapi.GHAPIJSON = func(path string, out any) error {
 		switch {
 		case strings.Contains(path, "contents/landingzone.yaml"):
 			return errors.New("gh: Not Found (HTTP 404)")
@@ -398,10 +399,10 @@ func TestGhFileSHAEscapesTheRef(t *testing.T) {
 	// A branch name may legally contain '#', which a query string treats as a
 	// fragment delimiter: "?ref=feat/#123" asks about the DEFAULT ref instead,
 	// answering a different question than the caller asked.
-	orig := GHAPIJSON
-	t.Cleanup(func() { GHAPIJSON = orig })
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
 	var seen string
-	GHAPIJSON = func(path string, out any) error {
+	ghapi.GHAPIJSON = func(path string, out any) error {
 		seen = path
 		return json.Unmarshal([]byte(`{"sha":"abc"}`), out)
 	}

@@ -51,6 +51,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
 )
 
@@ -196,7 +197,7 @@ func MergeConflictArtifacts(root string) (markers, rejects []string, err error) 
 func RunUpgradeTest(o upgradeTestOpts) error {
 	root := o.template
 	if root == "" {
-		out, err := gitOutput(".", "rev-parse", "--show-toplevel")
+		out, err := gitcmd.Output(".", "rev-parse", "--show-toplevel")
 		if err != nil {
 			return fmt.Errorf("not in a git checkout of the template (pass --template): %w", err)
 		}
@@ -223,7 +224,7 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 
 	to := o.to
 	if to == "" {
-		sha, err := gitOutput(root, "rev-parse", "HEAD")
+		sha, err := gitcmd.Output(root, "rev-parse", "HEAD")
 		if err != nil {
 			return fmt.Errorf("resolve HEAD: %w", err)
 		}
@@ -231,11 +232,11 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 	}
 	from := o.from
 	if from == "" {
-		tagsOut, err := gitOutput(root, "tag", "--list")
+		tagsOut, err := gitcmd.Output(root, "tag", "--list")
 		if err != nil {
 			return fmt.Errorf("list tags: %w", err)
 		}
-		headOut, _ := gitOutput(root, "tag", "--points-at", to)
+		headOut, _ := gitcmd.Output(root, "tag", "--points-at", to)
 		headTags := map[string]bool{}
 		for _, t := range strings.Fields(headOut) {
 			headTags[t] = true

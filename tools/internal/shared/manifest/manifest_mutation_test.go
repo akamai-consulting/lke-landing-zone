@@ -1,4 +1,4 @@
-package templatemanifest
+package manifest
 
 import (
 	"bytes"

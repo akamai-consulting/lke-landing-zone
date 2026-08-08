@@ -1,10 +1,12 @@
-package buildpreflight
+package ghapi
 
 import (
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 type pageShape struct {
@@ -116,4 +118,16 @@ func TestGHAPIJSONPagedPropagatesRealErrors(t *testing.T) {
 	if err := GHAPIJSONPaged("repos/o/r/environments", &got); err == nil {
 		t.Fatal("a 403 must propagate, not degrade to a single page")
 	}
+}
+
+// withExecOutput swaps the capture seam. A LOCAL COPY, as everywhere else in this
+// campaign: a stream-swapping helper cannot live in a shared package without
+// shipping `testing` into production code. It swaps kubectlprobe.Exec directly
+// because that is what this package calls -- buildpreflight's version wrapped a
+// package-local execOutput closure that did not come with the move.
+func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
+	t.Helper()
+	orig := kubectlprobe.Exec
+	kubectlprobe.Exec = fn
+	t.Cleanup(func() { kubectlprobe.Exec = orig })
 }

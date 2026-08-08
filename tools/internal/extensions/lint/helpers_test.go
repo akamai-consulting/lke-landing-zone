@@ -3,7 +3,7 @@ package lint
 // helpers_test.go — the two helpers the moved tests use, local and minimal.
 //
 // withExecOutput swaps kubectlprobe.Exec, which is the ONE seam: deps.go's
-// execOutput and gitOutput are closures over it, so replacing it covers every
+// execOutput and gitcmd.Output are closures over it, so replacing it covers every
 // shell-out this package makes.
 
 import (

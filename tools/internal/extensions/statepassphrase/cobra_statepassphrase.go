@@ -4,15 +4,14 @@ package statepassphrase
 // Deps wiring for tools/internal/statepassphrase.
 
 import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/spf13/cobra"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
 )
 
 func Init() {
 	Install(Deps{
 		Exec:        execOutput,
-		GHJSONPaged: buildpreflight.GHAPIJSONPaged,
+		GHJSONPaged: ghapi.GHAPIJSONPaged,
 	})
 }
 

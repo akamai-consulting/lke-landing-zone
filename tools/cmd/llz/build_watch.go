@@ -40,9 +40,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
@@ -77,7 +77,7 @@ var latestDispatchRun = func(repo, workflow string) (dispatchedRun, bool) {
 	// workflow_dispatch so a push-triggered run on the same workflow is never
 	// mistaken for it.
 	path := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=1", repo, workflow)
-	if err := buildpreflight.GHAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
+	if err := ghapi.GHAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
 		return dispatchedRun{}, false
 	}
 	r := resp.Runs[0]

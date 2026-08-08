@@ -15,11 +15,12 @@ package chartguard
 import (
 	"os"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/spf13/cobra"
 )
 
 func ChartguardDeps() Deps {
-	return Deps{GitOutput: gitOutput}
+	return Deps{GitOutput: gitcmd.Output}
 }
 
 func ChartLockDriftCmd() *cobra.Command {
