@@ -71,7 +71,13 @@ func TestSortedKeys(t *testing.T) {
 	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("SortedKeys = %v, want %v — the order is what makes rendered output diffable", got, want)
 	}
-	if got := SortedKeys(nil); len(got) != 0 {
-		t.Errorf("SortedKeys(nil) = %v, want empty", got)
+	// nil map, both value types — the generic signature has to infer V from the
+	// argument, so a bare nil cannot be passed.
+	if got := SortedKeys(map[string]string(nil)); len(got) != 0 {
+		t.Errorf("SortedKeys(nil string map) = %v, want empty", got)
+	}
+	// The set form brownfield used to have its own copy of.
+	if got := SortedKeys(map[string]bool{"b": true, "a": false}); len(got) != 2 || got[0] != "a" {
+		t.Errorf("SortedKeys over a set = %v, want [a b] — the VALUE is never read", got)
 	}
 }

@@ -56,6 +56,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -929,7 +930,7 @@ func checkDeliveredDocLinks(root string, docs []docFile, n *Scanned) []Finding {
 			return false
 		}
 		top := strings.SplitN(strings.TrimPrefix(rel, "docs/"), "/", 2)[0]
-		return DeliveredDocs[top]
+		return platform.DeliveredDocs[top]
 	}
 	for _, d := range docs {
 		rel := d.rel

@@ -14,7 +14,14 @@ package health
 // different packages. This library is where classification rules live precisely so
 // there is one of each.
 
-import "strings"
+import (
+	"encoding/json"
+	"regexp"
+	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+)
 
 // transientFetchError reports whether msg is a transient git-fetch failure — the
 // intermittent flakes an anonymous clone of the template repo throws (the kustomize
@@ -44,4 +51,61 @@ func IsTransientFetchError(msg string) bool {
 		}
 	}
 	return false
+}
+
+// ── THREE MORE READS OF WHAT A CLUSTER SAYS ──────────────────────────────────
+//
+// IsWebhookRace, ArgoComparisonError and LokiConfigText came from three different
+// extensions -- kyverno, assert-platform and converge -- and each was imported by
+// exactly one peer that wanted only this. They belong beside IsTransientFetchError
+// above: all four answer "what is the cluster actually telling us", none of them
+// acts, and getting any of them wrong turns a retryable condition into a hard
+// failure or the reverse.
+
+// kyvernoWebhookRaceRE matches the transient kyverno-svc admission errors that
+// mean "Kyverno is up but its webhook endpoint/cert isn't reachable yet" — a
+// 30-90s race that re-running terraform apply clears, so it must not fail the
+// whole apply.
+var kyvernoWebhookRaceRE = regexp.MustCompile(`failed calling webhook|connect: operation not permitted|connection refused|no endpoints available`)
+
+func IsWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchString(out) }
+
+// EXPORTED for cmd/llz/ci_bao_seed_seal_key.go, which surfaces the same
+// ComparisonError when a seal-key seed leaves the parent Application unable to
+// compare. One reading of "why is Argo stuck", two callers.
+//
+// ArgoComparisonError returns the parent Application's ComparisonError condition
+// message (the "failed to generate manifest …" text), or "" when there is none.
+// A ComparisonError means Argo CD could not compute the target state at all —
+// distinct from a sync operation failure (argoOperationState).
+func ArgoComparisonError(d cigate.Deps, namespace, parent string) string {
+	out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+		"-o", `jsonpath={range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}`)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// lokiConfigText concatenates the data values of every name-matching ConfigMap
+// (where the rendered Loki config lives) so the S3 detection can scan it.
+func LokiConfigText(match string) string {
+	re := regexp.MustCompile(match)
+	var b strings.Builder
+	for _, raw := range kubectlprobe.Items("get", "configmap", "-A") {
+		var cm struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Data map[string]string `json:"data"`
+		}
+		if json.Unmarshal(raw, &cm) != nil || !re.MatchString(cm.Metadata.Name) {
+			continue
+		}
+		for _, v := range cm.Data {
+			b.WriteString(v)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }

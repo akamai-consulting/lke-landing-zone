@@ -36,9 +36,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"sigs.k8s.io/yaml"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 )
 
 //go:embed manifests/block-storage-class.yaml
@@ -598,7 +597,7 @@ func parseStorageClass(raw []byte) (stockStorageClass, error) {
 		VolumeBindingMode:    doc.VolumeBindingMode,
 		AllowVolumeExpansion: doc.AllowVolumeExpansion,
 		Parameters:           doc.Parameters,
-		IsDefault:            doc.Metadata.Annotations[reconcilelanes.SCDefaultAnnotation] == "true",
+		IsDefault:            doc.Metadata.Annotations[platform.SCDefaultAnnotation] == "true",
 	}, nil
 }
 

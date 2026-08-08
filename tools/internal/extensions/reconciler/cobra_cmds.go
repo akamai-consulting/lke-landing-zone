@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +41,7 @@ func DiscoverFirewallCmd() *cobra.Command {
 		Long: "In-cluster replacement for the bootstrap-cloud-firewall CI seed. Resolves the\n" +
 			"node-pool firewall ID, LKE cluster ID and VPC subnet CIDR from this pod's own\n" +
 			"node via the Linode API (providerID → instance → attached firewall / VPC\n" +
-			"interface), reconciles them into the " + FirewallConfigMapName + " ConfigMap,\n" +
+			"interface), reconciles them into the " + platform.FirewallConfigMapName + " ConfigMap,\n" +
 			"and rolls the controller Deployment only when a value changed.\n\n" +
 			"Env: NODE_NAME (downward API), LINODE_TOKEN (ESO-synced rotating token).",
 		Args: cobra.NoArgs,

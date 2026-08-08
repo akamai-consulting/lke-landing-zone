@@ -2,8 +2,8 @@
 // the org that publishes it.
 //
 // Two consts with TWENTY-THREE references in package main, and they are FACTS —
-// the same call baoread.Namespace, docsguard.DeliveredDocs and
-// reconciler.FirewallConfigMapName got. Anything that needs to name the template
+// the same call baoread.Namespace, platform.DeliveredDocs and
+// platform.FirewallConfigMapName got. Anything that needs to name the template
 // has to agree, and the only way two callers can disagree is if there are two
 // copies.
 //

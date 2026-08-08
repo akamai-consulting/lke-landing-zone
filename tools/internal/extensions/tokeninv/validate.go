@@ -109,7 +109,7 @@ func RunValidate(failOnInvalid bool) error {
 	if ak, sk := os.Getenv("TF_STATE_ACCESS_KEY"), os.Getenv("TF_STATE_SECRET_KEY"); ak != "" && sk != "" {
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", ak)
 		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", sk)
-		tv := ProbeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
+		tv := tokenprobe.ProbeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
 		probed++
 		if tv.Status == tokenprobe.VInvalid {
 			blockingInvalid++

@@ -130,7 +130,19 @@ func ReadEnvFile(path string) map[string]string {
 	return m
 }
 
-func SortedKeys(m map[string]string) []string {
+// SortedKeys orders a map's keys for deterministic output.
+//
+// GENERIC OVER THE VALUE TYPE, because it arrived here as one of TWO copies with
+// the same body and different map values: onboard's took a map[string]string and
+// brownfield's SortedSetKeys took a map[string]bool. Neither reads the value at
+// all -- the value type was the only thing keeping them apart, and it is exactly
+// what a type parameter is for.
+//
+// The nil-vs-empty difference between them was real and is resolved in favour of
+// the empty slice: brownfield's returned nil for an empty set and onboard's
+// returned an empty slice, and every caller ranges over the result, where the two
+// behave identically.
+func SortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

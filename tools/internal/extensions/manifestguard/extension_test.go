@@ -91,7 +91,7 @@ func hasGrant(b extension.Binding, g extension.Grant) bool {
 // The placeholder set is defined HERE and imported by cmd/llz's bootstrap-cluster,
 // not the other way round: a check that validates a set is meaningless if it runs
 // against a different set than the producer ships. Same resolution as
-// docsguard.DeliveredDocs.
+// platform.DeliveredDocs.
 func TestPlaceholderSetIsOwnedHere(t *testing.T) {
 	if len(BootstrapValuePlaceholders) == 0 {
 		t.Fatal("the placeholder set emptied — bootstrap-cluster substitutes these and this guard validates them")

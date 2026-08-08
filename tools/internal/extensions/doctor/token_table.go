@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
@@ -33,7 +32,7 @@ func ProbeTokenValidities(reqs []envreq.Requirement, secrets, vars map[string]st
 	// shows a bare N/A. Values come from the local .llz cache.
 	endpoint := firstNonEmpty(vars["TF_STATE_ENDPOINT"], instance.Value("TF_STATE_ENDPOINT"))
 	bucket := firstNonEmpty(vars["TF_STATE_BUCKET"], instance.Value("TF_STATE_BUCKET"))
-	s3v := tokeninv.ProbeS3Pair(secrets["TF_STATE_ACCESS_KEY"], secrets["TF_STATE_SECRET_KEY"], endpoint, bucket)
+	s3v := tokenprobe.ProbeS3Pair(secrets["TF_STATE_ACCESS_KEY"], secrets["TF_STATE_SECRET_KEY"], endpoint, bucket)
 
 	invalid := 0
 	for _, r := range reqs {

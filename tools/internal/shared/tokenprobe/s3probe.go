@@ -1,4 +1,4 @@
-package tokeninv
+package tokenprobe
 
 // s3_probe.go — validity probe for the Terraform-state Object Storage keys
 // (TF_STATE_ACCESS_KEY / TF_STATE_SECRET_KEY). Unlike the Linode/GitHub/GHCR
@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // S3BucketProbe issues a SigV4-signed HEAD of bucket at the OBJ endpoint and
@@ -81,42 +80,42 @@ var S3BucketProbe = func(accessKey, secretKey, endpoint, bucket string) (code in
 
 // probeS3Pair validates the OBJ key pair against its bucket. Both keys, the
 // endpoint, and the bucket must be known; otherwise it can't sign a request.
-func ProbeS3Pair(accessKey, secretKey, endpoint, bucket string) tokenprobe.TokenValidity {
+func ProbeS3Pair(accessKey, secretKey, endpoint, bucket string) TokenValidity {
 	const name = "TF_STATE_ACCESS_KEY"
 	if accessKey == "" || secretKey == "" {
-		return tokenprobe.TokenValidity{Name: name, Status: tokenprobe.VSkipped, Detail: "not cached — gather the OBJ keys locally to probe"}
+		return TokenValidity{Name: name, Status: VSkipped, Detail: "not cached — gather the OBJ keys locally to probe"}
 	}
 	if endpoint == "" || bucket == "" {
-		return tokenprobe.TokenValidity{Name: name, Status: tokenprobe.VSkipped, Detail: "TF_STATE_ENDPOINT/TF_STATE_BUCKET unknown — can't sign a probe"}
+		return TokenValidity{Name: name, Status: VSkipped, Detail: "TF_STATE_ENDPOINT/TF_STATE_BUCKET unknown — can't sign a probe"}
 	}
 	code, s3Code, err := S3BucketProbe(accessKey, secretKey, endpoint, bucket)
 	if err != nil {
 		code = 0
 	}
 	status, detail := classifyS3(code, s3Code)
-	return tokenprobe.TokenValidity{Name: name, Status: status, Detail: detail}
+	return TokenValidity{Name: name, Status: status, Detail: detail}
 }
 
 // classifyS3 maps an S3 response to a credential-validity verdict. The key
 // AUTHENTICATED on 2xx, NoSuchBucket (404), or AccessDenied — those are about the
 // bucket/permissions, not the credential. Only InvalidAccessKeyId /
 // SignatureDoesNotMatch mean the CREDENTIAL itself is bad. Pure (unit-tested).
-func classifyS3(code int, s3Code string) (tokenprobe.ValidityStatus, string) {
+func classifyS3(code int, s3Code string) (ValidityStatus, string) {
 	switch {
 	case code == 0:
-		return tokenprobe.VUnreachable, "OBJ endpoint unreachable — could not verify"
+		return VUnreachable, "OBJ endpoint unreachable — could not verify"
 	case s3Code == "InvalidAccessKeyId" || s3Code == "SignatureDoesNotMatch":
-		return tokenprobe.VInvalid, fmt.Sprintf("S3 credentials rejected (%s) — rotate the state-bucket key", s3Code)
+		return VInvalid, fmt.Sprintf("S3 credentials rejected (%s) — rotate the state-bucket key", s3Code)
 	case code/100 == 2:
-		return tokenprobe.VValid, "valid (authenticates to Object Storage)"
+		return VValid, "valid (authenticates to Object Storage)"
 	case code == http.StatusNotFound:
-		return tokenprobe.VValid, "valid (authenticated; state bucket not found — check TF_STATE_BUCKET)"
+		return VValid, "valid (authenticated; state bucket not found — check TF_STATE_BUCKET)"
 	case code == http.StatusForbidden:
 		// Authenticated but not authorized for this bucket (a mis-scoped key). The
 		// CREDENTIAL is valid; flag the scope as a warning.
-		return tokenprobe.VWarn, "valid but not authorized for this bucket (AccessDenied) — check the key's bucket scope"
+		return VWarn, "valid but not authorized for this bucket (AccessDenied) — check the key's bucket scope"
 	default:
-		return tokenprobe.VUnreachable, fmt.Sprintf("unexpected S3 response %d — could not verify", code)
+		return VUnreachable, fmt.Sprintf("unexpected S3 response %d — could not verify", code)
 	}
 }
 

@@ -61,7 +61,7 @@ func assertArgoApp(d cigate.Deps, namespace, app, parent string, within time.Dur
 			fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s's sync is terminally %s — nothing will create it without intervention. operationState: %s | %s\n", app, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s sync terminally %s before %s was created", parent, phase, app)
 		}
-		cerr := ArgoComparisonError(d, namespace, parent)
+		cerr := health.ArgoComparisonError(d, namespace, parent)
 		// A git-auth refusal is terminal for the same reason it vetoes the phase1
 		// downgrade in healthExitCodeState: the remote answered, and nothing in the
 		// bootstrap re-mints the credential. Without this the loop merely stops
@@ -136,21 +136,4 @@ func argoParentDiag(d cigate.Deps, namespace, parent string) string {
 		return fmt.Sprintf("%s state unavailable (missing, or cluster unreachable)", parent)
 	}
 	return fmt.Sprintf("%s sync/health: %s", parent, out)
-}
-
-// EXPORTED for cmd/llz/ci_bao_seed_seal_key.go, which surfaces the same
-// ComparisonError when a seal-key seed leaves the parent Application unable to
-// compare. One reading of "why is Argo stuck", two callers.
-//
-// ArgoComparisonError returns the parent Application's ComparisonError condition
-// message (the "failed to generate manifest …" text), or "" when there is none.
-// A ComparisonError means Argo CD could not compute the target state at all —
-// distinct from a sync operation failure (argoOperationState).
-func ArgoComparisonError(d cigate.Deps, namespace, parent string) string {
-	out, ok := d.Kubectl("-n", namespace, "get", "application.argoproj.io", parent,
-		"-o", `jsonpath={range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}`)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(out)
 }

@@ -186,7 +186,7 @@ func ErrReadUnknown(path, field, action string) error {
 //     describes kube/konnectivity transport failures, and the only thing that
 //     REASONS about them is the classifier below, which has to tell "the pod
 //     answered: no such path" from "nothing answered at all". Same resolution as
-//     docsguard.DeliveredDocs and manifestguard.BootstrapValuePlaceholders: the
+//     platform.DeliveredDocs and manifestguard.BootstrapValuePlaceholders: the
 //     fact lives once, next to the code that decides on it, and ci_openbao.go
 //     imports it.
 //
@@ -216,7 +216,7 @@ var ExecStdin = func(token, stdin string, args ...string) (stdout, stderr string
 //
 // They are consts in package main with six callers between them, and they moved
 // here rather than being injected because they are FACTS, not capabilities — the
-// same call docsguard.DeliveredDocs and manifestguard.BootstrapValuePlaceholders
+// same call platform.DeliveredDocs and manifestguard.BootstrapValuePlaceholders
 // got. Anything that talks to OpenBao needs to agree on which pod that is, and the
 // only way two copies can disagree is if there are two.
 const (

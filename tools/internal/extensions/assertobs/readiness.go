@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -120,7 +119,7 @@ func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string
 	}
 
 	// 2. Loki is configured for S3 object storage (not the filesystem default).
-	if health.LokiConfigUsesS3(converge.LokiConfigText(nameMatch)) {
+	if health.LokiConfigUsesS3(health.LokiConfigText(nameMatch)) {
 		msgs = append(msgs, "OK: Loki config references S3 object storage")
 	} else {
 		msgs = append(msgs, "FAIL: Loki config does not reference S3 — still on the filesystem default? (kyverno loki-s3-object-store may not have applied)")

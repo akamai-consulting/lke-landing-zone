@@ -11,11 +11,12 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 func TestSCIsDefault(t *testing.T) {
 	def := func(v string) map[string]any {
-		return map[string]any{"metadata": map[string]any{"annotations": map[string]any{SCDefaultAnnotation: v}}}
+		return map[string]any{"metadata": map[string]any{"annotations": map[string]any{platform.SCDefaultAnnotation: v}}}
 	}
 	if !scIsDefault(def("true")) {
 		t.Error(`is-default-class "true" should be default`)
@@ -51,7 +52,7 @@ func scServer(t *testing.T, name string, getStatus int, isDefault bool) (*kube.C
 			}
 			ann := map[string]any{}
 			if isDefault {
-				ann[SCDefaultAnnotation] = "true"
+				ann[platform.SCDefaultAnnotation] = "true"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": name, "annotations": ann}})
 		case http.MethodPatch:

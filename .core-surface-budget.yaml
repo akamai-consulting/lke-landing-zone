@@ -1078,6 +1078,16 @@ categories:
     # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
     # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
     #
+    # 1856 -> 1857. One import line. The two firewall names moved from
+    # internal/extensions/reconciler to internal/shared/platform, and the two
+    # cmd/llz files that use them still import `reconciler` for other things, so
+    # each gained a `platform` import without losing the old one. Five insertions
+    # against four deletions.
+    #
+    # It is recorded rather than absorbed because `exact: true` means every number
+    # here was checked, and a budget that quietly rounds off single lines stops
+    # being able to say anything about ten.
+    #
     # IN-DEGREE SWEEP, ROUND TWO (no core-surface change). 90 -> 66 extension ->
     # extension edges, by splitting the four biggest hubs. The COVERAGE FLOORS MOVED
     # WITH THE CODE and three of them went DOWN, which needs saying plainly rather
@@ -1127,7 +1137,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1856
+    budget: 1857
     exact: true
     include:
       - "tools/cmd/llz/*.go"

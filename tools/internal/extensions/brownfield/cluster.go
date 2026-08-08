@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 )
 
 // ── node pools (pure) ────────────────────────────────────────────────────────
@@ -399,7 +401,7 @@ func parseCRDOperators(js string) (operators []string, components map[string]boo
 			components[c] = true
 		}
 	}
-	return SortedSetKeys(opSet), components
+	return cli.SortedKeys(opSet), components
 }
 
 // ── app versions from images (pure) ──────────────────────────────────────────
@@ -518,7 +520,7 @@ func parseClusterIssuers(js string) (acmeEmail string, solvers []string) {
 			}
 		}
 	}
-	return acmeEmail, SortedSetKeys(solverSet)
+	return acmeEmail, cli.SortedKeys(solverSet)
 }
 
 // ── resource quotas (pure) ───────────────────────────────────────────────────
