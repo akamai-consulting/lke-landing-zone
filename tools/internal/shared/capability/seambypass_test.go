@@ -70,7 +70,6 @@ var seamCall = regexp.MustCompile(
 // interactive and long-lived cases the Writer's one-shot []byte shape cannot
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
-	"assertobjstore":  3,
 	"assertsecrets":   2,
 	"clusteraccess":   1,
 	"healthsla":       1,

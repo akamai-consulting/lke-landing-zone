@@ -49,7 +49,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 )
 
@@ -179,7 +178,7 @@ func parseObjConfig(cfg string) (endpoint, bucket string, err error) {
 var (
 	readObjSecret = func(ref string) ([]byte, error) {
 		ns, name, _ := strings.Cut(ref, "/")
-		return kubectlprobe.Exec("kubectl", "-n", ns, "get", "secret", name, "-o", "json")
+		return objstoreCluster().Run("-n", ns, "get", "secret", name, "-o", "json")
 	}
 	// readObjConfig returns the consumer's rendered config as text. Secrets and
 	// ConfigMaps both carry it depending on the chart, so the ref names the kind.
@@ -189,7 +188,7 @@ var (
 			return "", fmt.Errorf("config ref %q is not <kind>/<namespace>/<name>", ref)
 		}
 		kind, ns, name := parts[0], parts[1], parts[2]
-		out, err := kubectlprobe.Exec("kubectl", "-n", ns, "get", kind, name, "-o", "json")
+		out, err := objstoreCluster().Run("-n", ns, "get", kind, name, "-o", "json")
 		if err != nil {
 			return "", err
 		}
@@ -244,7 +243,7 @@ func readFirstObjConfig(refs []string) (cfg, from string, err error) {
 // listSecretsIn returns the Secret names in a namespace, for failure messages
 // only. Seamed with the other cluster reads.
 var listSecretsIn = func(ns string) ([]string, error) {
-	out, err := kubectlprobe.Exec("kubectl", "-n", ns, "get", "secret",
+	out, err := objstoreCluster().Run("-n", ns, "get", "secret",
 		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`)
 	if err != nil {
 		return nil, err
