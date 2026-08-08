@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 import (
 	"os"

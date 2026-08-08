@@ -1,4 +1,4 @@
-package envadd
+package environments
 
 import "testing"
 

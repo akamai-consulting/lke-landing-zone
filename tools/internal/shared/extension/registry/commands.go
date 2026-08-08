@@ -55,7 +55,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/database"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
@@ -174,14 +174,14 @@ var commands = []Command{
 	{"database", database.SeedDBAdminCmd},
 	{"deliverdocs", deliverdocs.DeliverDocsCmd},
 	{"docsguard", docsguard.DocsGuardCmd},
-	{"envtopology", envtopology.EditCmd},
-	{"envtopology", envtopology.ListCmd},
-	{"envtopology", envtopology.NetworkCmd},
-	{"envtopology", envtopology.PeerCmd},
-	{"envtopology", envtopology.ResolveCmd},
-	{"envtopology", envtopology.RoleCmd},
-	{"envtopology", envtopology.SetCmd},
-	{"envtopology", envtopology.SpecCmd},
+	{"environments", environments.EditCmd},
+	{"environments", environments.ListCmd},
+	{"environments", environments.NetworkCmd},
+	{"environments", environments.PeerCmd},
+	{"environments", environments.ResolveCmd},
+	{"environments", environments.RoleCmd},
+	{"environments", environments.SetCmd},
+	{"environments", environments.SpecCmd},
 	{"gameday", gameday.WedgeGamedayCmd},
 	{"harbor", harbor.HarborProvisionerCmd},
 	{"harbor", harbor.SeedStandbyHarborRobotsCmd},

@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // cobra_list.go — the CLI surface for list.
 //

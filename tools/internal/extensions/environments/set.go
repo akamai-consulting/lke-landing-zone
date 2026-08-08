@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // env_set.go is the spec WRITE side — the counterpart to the read commands
 // (`llz env show`, `llz components`). `llz env set` mutates fields in

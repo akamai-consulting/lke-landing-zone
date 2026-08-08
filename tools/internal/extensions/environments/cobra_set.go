@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // cobra_set.go — the CLI surface for set.
 //

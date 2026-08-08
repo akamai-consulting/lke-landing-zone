@@ -1,4 +1,4 @@
-package envadd
+package environments
 
 // deps.go — the one edge this package could not bring with it.
 

@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"os"
 
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
@@ -63,7 +63,7 @@ func init() {
 	// envadd regenerates promote.yml after adding an environment, but the WRITE
 	// stays here: internal/promote declares transition:promoted[read-repo] and its
 	// own guard refuses a write path, and write-repo is not legal at `promoted`.
-	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
+	environments.SyncPromoteWorkflow = syncPromoteWorkflow
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
 	lint.SustainDeps = sustainDeps

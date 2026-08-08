@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // A COPY of package main's chdirTempDir fixture.
 

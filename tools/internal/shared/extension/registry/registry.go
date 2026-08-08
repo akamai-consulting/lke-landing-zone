@@ -54,15 +54,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
@@ -140,12 +137,10 @@ var declarations = []func() extension.Extension{
 	cosignguard.Extension,
 	monitoringlabel.Extension,
 	workflowshells.Extension,
-	instanceresolve.Extension,
 	firewall.Extension,
 	openbao.Extension,
 	reachability.Extension,
 	branchpolicy.Extension,
-	envdef.Extension,
 	buildpreflight.Extension,
 	selfupgrade.Extension,
 	templatecommit.Extension,
@@ -155,12 +150,11 @@ var declarations = []func() extension.Extension{
 	newinstance.Extension,
 	pincoherence.Extension,
 	lint.Extension,
-	envadd.Extension,
+	environments.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,
 	database.Extension,
-	envtopology.Extension,
 	docsguard.Extension,
 	doctor.Extension,
 	healthsla.Extension,

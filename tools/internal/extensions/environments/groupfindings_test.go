@@ -1,4 +1,4 @@
-package envadd
+package environments
 
 // TestGroupFindings STAYED with GroupFindings, which is in scaffold.go.
 //

@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // cobra_topology.go — the CLI surface for topology.
 //

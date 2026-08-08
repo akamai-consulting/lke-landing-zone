@@ -1,4 +1,4 @@
-package envtopology
+package environments
 
 // envlist.go implements `llz env list` — the topo.Deployment inventory the CI
 // workflows fan their per-topo.Deployment matrices out over. The set of deployments

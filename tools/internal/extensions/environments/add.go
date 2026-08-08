@@ -1,4 +1,4 @@
-package envadd
+package environments
 
 // scaffold.go ports `template-scripts/new-deployment.sh` into the llz binary so
 // `llz env add` works in a rendered instance, which carries NO scripts/ tree (the

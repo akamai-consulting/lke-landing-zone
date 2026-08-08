@@ -9,7 +9,7 @@ package main
 // reach this extension's copy too.
 
 import (
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"

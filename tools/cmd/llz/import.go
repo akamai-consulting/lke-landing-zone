@@ -14,12 +14,12 @@ package main
 // the catalog got wrong.
 
 import (
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/spf13/cobra"
 	yamlv3 "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
@@ -38,7 +38,7 @@ func brownfieldDeps() brownfield.Deps {
 		},
 		ValidateEnvName: validate.EnvName,
 		EnvAdd: func(env string, spec brownfield.EnvSpec) error {
-			return envadd.Run(cliopts.Global.DryRun, env, envdef.Opts{
+			return environments.Run(cliopts.Global.DryRun, env, envdef.Opts{
 				Region:          spec.Region,
 				ClusterDomain:   spec.ClusterDomain,
 				ObjCluster:      spec.ObjCluster,
