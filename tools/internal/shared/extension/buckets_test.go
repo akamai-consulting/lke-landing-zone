@@ -19,7 +19,7 @@ package extension_test
 //     whether admission policy rejects a bad manifest. The mutation exists to
 //     produce the verdict; it is not what the package is for.
 //   - `render` would move to assertions/, holding no mutating grant, because its
-//     file write lives in cmd/llz to keep the declaration honest. It is the
+//     file write lives in internal/cli to keep the declaration honest. It is the
 //     value-producer the whole product is downstream of.
 //
 // PURPOSE IS NOT DERIVABLE FROM GRANTS. So the rule below is mechanical only where

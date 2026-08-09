@@ -46,10 +46,18 @@ type KindRule struct {
 
 // AllowedKinds maps "group/Kind" (core group = "") to the reason it
 // may appear at a negative sync wave in the platform-bootstrap tree.
-// EXPORTED because a coupling test in cmd/llz asserts this Go allowlist and the
-// wave-health ValidatingAdmissionPolicy's CEL agree. A kind vetted in one place
-// and not the other is the drift the pair exists to prevent, and the two halves
-// now live in different packages.
+// THE EXPORT'S STATED REASON NO LONGER HOLDS, and saying so beats leaving a
+// justification that sends the next reader looking for a caller. It read "EXPORTED
+// because a coupling test in cmd/llz asserts this Go allowlist and the wave-health
+// ValidatingAdmissionPolicy's CEL agree … the two halves now live in different
+// packages". Both halves moved here: the test is health_vap_test.go IN THIS
+// PACKAGE, and nothing outside it references AllowedKinds or AllowedNames.
+//
+// The coupling itself is intact and is the point — a kind vetted in the Go
+// allowlist and not in the CEL (or the reverse) is exactly the drift the pair
+// exists to prevent. What is gone is the reason it had to be exported to check it.
+// Left exported rather than narrowed in an audit commit: it is the guard's stated
+// surface and unexporting is a change a reader should see on its own.
 var AllowedKinds = map[string]KindRule{
 	// Plain config/RBAC — Argo assesses no health; applied == done.
 	"/Namespace":                                   {reason: "no Argo health check"},

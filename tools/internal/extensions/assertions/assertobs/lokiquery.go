@@ -48,7 +48,7 @@ var WithLoki = func(spec, tenant string, fn func(get func(apiPath string) ([]byt
 }
 
 // LokiEntry is one log line and the timestamp Loki stored it under.
-// EXPORTED because the openbao-audit assert lane in package main parses the same
+// EXPORTED because the openbao-audit assert lane in assertions/assertsecrets parses the same
 // Loki response shape. One decoder, so a change to how Loki reports entries
 // cannot be applied in one lane and missed in the other.
 type LokiEntry struct {

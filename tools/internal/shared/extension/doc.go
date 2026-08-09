@@ -53,7 +53,7 @@
 //	                    nothing and can do nothing.
 //
 // ONE OF THE FOUR KINDS DISPATCHES FROM THE REGISTRY. Gates do. Assertions and
-// transitions are hand-wired into the cobra tree in cmd/llz (ci.go, commands.go);
+// transitions are hand-wired into the cobra tree in internal/cli (ci.go, commands.go);
 // invariants are scheduled by the in-cluster reconciler. Kind is therefore a real
 // constraint for the validator and a real dispatch key for exactly one kind, and
 // saying so plainly is cheaper than a reader inferring otherwise from the model's

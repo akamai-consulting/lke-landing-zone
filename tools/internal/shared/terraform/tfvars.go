@@ -3,7 +3,7 @@
 // derivations, node-pool selection, `terraform state show` id extraction, and
 // the kubeconfig-or-stub decision. It is deliberately side-effect free (no exec,
 // no HTTP, no filesystem) so every branch the bash drifted on is unit-tested;
-// the `llz ci` orchestrator in cmd/llz wires it to terraform + the Linode client.
+// the `llz ci` orchestrator in internal/cli wires it to terraform + the Linode client.
 package terraform
 
 import (

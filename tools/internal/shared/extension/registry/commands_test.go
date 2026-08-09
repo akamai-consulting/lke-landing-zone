@@ -3,7 +3,7 @@ package registry
 import "testing"
 
 // Every row must name an extension this registry actually declares. A typo in the
-// name string would make the wiring guard in package main report a failure
+// name string would make the wiring guard in internal/cli report a failure
 // against an extension nobody can find.
 func TestEveryCommandRowNamesADeclaredExtension(t *testing.T) {
 	// The row key is the PACKAGE name, not the catalog name — the two differ often

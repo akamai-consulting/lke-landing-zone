@@ -89,7 +89,7 @@ func AplChartDriftOf(pin string) AplChartDrift {
 //
 // EXPORTED for internal/assertplatform, whose apl-version lane compares a pinned
 // chart version against the minimum this llz supports. Note there is a SECOND
-// semver parser in package main (selfupdate.go) and they are deliberately NOT
+// semver parser in internal/verbs/selfupgrade (selfupdate.go) and they are deliberately NOT
 // merged: that one strips a leading "llz/" because it parses llz RELEASE TAGS,
 // and this one TrimSpaces and rejects negatives because it parses operator-typed
 // CHART versions out of a spec file. Same shape, different inputs — collapsing

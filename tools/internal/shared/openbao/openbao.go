@@ -577,9 +577,12 @@ func ExecArgv(pod, token string, args []string) []string {
 // the shape this campaign keeps finding: a set that measures badly is usually not
 // entangled with the code it names, it is waiting on a layer nobody has separated.
 
-// Client builds a client for an HA role from the OPENBAO_* env. Pure
+// NewClientFor builds a *Client for an HA role from the OPENBAO_* env. Pure
 // (env → client, no side effects); the auto port-forward default lives in
 // ClientForward, which callers use.
+//
+// The doc used to open "Client builds…", which was this function's name before the
+// Client TYPE took it — so the first line named a different, existing symbol.
 func NewClientFor(role string) (*Client, error) {
 	var addr, token string
 	switch role {

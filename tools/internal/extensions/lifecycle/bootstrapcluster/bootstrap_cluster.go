@@ -819,6 +819,9 @@ var (
 // config on a managed cluster then apl-core is not installed, and nothing this
 // bootstrap does afterwards can work. Saying so here beats discovering it at
 // converge.
+
+// aplGitConfigAttempts is waitAplGitConfig's budget, expressed as a COUNT.
+//
 // Bounded by ATTEMPTS, not by a deadline read off d.now(). The deps' clock and
 // sleep are independent seams, and every existing fake pairs a real time.Now with a
 // no-op sleep — under which a `for d.now().Before(deadline)` loop spins at full
@@ -831,6 +834,10 @@ func aplGitConfigAttempts() int {
 	return 1
 }
 
+// waitAplGitConfig polls for apl-core's published git config. The paragraphs above
+// aplGitConfigAttempts are about THIS function — why exhausting the budget is
+// terminal rather than a skip — and were separated from it when the budget helper
+// was split out.
 func waitAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
 	attempts := aplGitConfigAttempts()
 	var cur aplGitConfig

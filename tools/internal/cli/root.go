@@ -109,9 +109,12 @@ func init() {
 	}
 }
 
-// globalOpts holds the persistent flags shared by every subcommand. It's
-// populated from the root command's flags before any RunE runs.
-// onboardOpts narrows globalOpts to the three fields internal/onboard reads.
+// onboardOptsOf narrows globalOpts to the three fields internal/onboard reads.
+//
+// (Two lines describing globalOpts itself sat here, orphaned above this function
+// and stale besides — they said the fields are "populated from the root command's
+// flags before any RunE runs", which is the opposite of the reason the alias
+// exists. The type's real doc is on its declaration below.)
 //
 // A CONVERTER, NOT AN EXPORT. Handing the whole struct over would put package
 // main's flag model on the other side of a package boundary and make every future
