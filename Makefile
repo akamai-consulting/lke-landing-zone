@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard source-ref-guard symbol-ref-guard lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -90,123 +90,123 @@ COVERAGE_MINS := \
 	internal/cli=71 \
 	internal/cli/deps=41 \
 	internal/extensions/lifecycle/brownfield=80 \
-	internal/extensions/guards/budget=86 \
-	internal/extensions/guards/chartguard=70 \
-	internal/shared/cli=95 \
+	internal/extensions/guards/budget=87 \
+	internal/extensions/guards/chartguard=71 \
+	internal/shared/cli=98 \
 	internal/extensions/assertions/assertnetwork=52 \
-	internal/extensions/assertions/assertplatform=51 \
-	internal/extensions/assertions/assertreconciler=81 \
+	internal/extensions/assertions/assertplatform=53 \
+	internal/extensions/assertions/assertreconciler=82 \
 	internal/extensions/assertions/assertregistry=62 \
-	internal/extensions/lifecycle/atrest=89 \
+	internal/extensions/lifecycle/atrest=90 \
 	internal/shared/clusterspec=88 \
 	internal/extensions/lifecycle/clusteraccess=68 \
-	internal/shared/cigate=25 \
+	internal/shared/cigate=33 \
 	internal/extensions/lifecycle/converge=75 \
 	internal/extensions/lifecycle/healthsla=78 \
 	internal/shared/color=86 \
 	internal/extensions/guards/docsguard=71 \
-	internal/shared/extension=95 \
-	internal/shared/extension/registry=90 \
+	internal/shared/extension=96 \
+	internal/shared/extension/registry=93 \
 	internal/shared/harborauth=57 \
 	internal/shared/health=95 \
 	internal/shared/kube=86 \
-	internal/shared/linode=80 \
-	internal/shared/metrics=95 \
+	internal/shared/linode=81 \
+	internal/shared/metrics=100 \
 	internal/shared/guardkit=100 \
-	internal/shared/guardwalk=46 \
-	internal/extensions/lifecycle/objenc=50 \
+	internal/shared/guardwalk=60 \
+	internal/extensions/lifecycle/objenc=52 \
 	internal/extensions/lifecycle/environments=10 \
-	internal/extensions/lifecycle/openbao=32 \
+	internal/extensions/lifecycle/openbao=53 \
 	internal/shared/pathglob=93 \
 	internal/shared/promwire=92 \
-	internal/extensions/lifecycle/promote=85 \
+	internal/extensions/lifecycle/promote=90 \
 	internal/extensions/guards/credcoverage=87 \
-	internal/extensions/assertions/configreadiness=39 \
+	internal/extensions/assertions/configreadiness=45 \
 	internal/shared/instancelayout=55 \
 	internal/shared/yamledit=89 \
 	internal/shared/kubectlprobe=77 \
 	internal/shared/tfbin=90 \
-	internal/shared/preflight=95 \
-	internal/extensions/lifecycle/reconcilelanes=78 \
+	internal/shared/preflight=100 \
+	internal/extensions/lifecycle/reconcilelanes=79 \
 	internal/shared/s3sig=100 \
 	internal/shared/shquote=100 \
 	internal/extensions/assertions/sustain=55 \
-	internal/extensions/lifecycle/teardown=46 \
-	internal/extensions/assertions/tokeninv=67 \
-	internal/shared/terraform=95 \
+	internal/extensions/lifecycle/teardown=47 \
+	internal/extensions/assertions/tokeninv=74 \
+	internal/shared/terraform=100 \
 	internal/extensions/assertions/volumes=85 \
 	internal/extensions/guards/wavehealth=82 \
 	internal/extensions/lifecycle/tofudriver=25 \
-	internal/extensions/assertions/assertobs=67 \
-	internal/extensions/assertions/assertsecrets=63 \
+	internal/extensions/assertions/assertobs=68 \
+	internal/extensions/assertions/assertsecrets=65 \
 	internal/shared/keycloak=49 \
 	internal/extensions/assertions/assertidentity=24 \
 	internal/extensions/lifecycle/deliverdocs=93 \
 	internal/verbs/argodiag=81 \
-	internal/extensions/guards/plaintext=89 \
-	internal/extensions/lifecycle/chartpublish=54 \
-	internal/extensions/assertions/manifestguard=71 \
-	internal/extensions/lifecycle/assertobjstore=22 \
+	internal/extensions/guards/plaintext=90 \
+	internal/extensions/lifecycle/chartpublish=55 \
+	internal/extensions/assertions/manifestguard=73 \
+	internal/extensions/lifecycle/assertobjstore=23 \
 	internal/extensions/lifecycle/gameday=26 \
-	internal/verbs/phasetiming=62 \
+	internal/verbs/phasetiming=63 \
 	internal/verbs/doctor=86 \
 	internal/extensions/lifecycle/kyverno=84 \
 	internal/verbs/mutate=81 \
 	internal/extensions/lifecycle/releasepublish=60 \
-	internal/extensions/lifecycle/statepassphrase=70 \
-	internal/shared/ghsecret=55 \
-	internal/extensions/lifecycle/render=56 \
+	internal/extensions/lifecycle/statepassphrase=74 \
+	internal/shared/ghsecret=60 \
+	internal/extensions/lifecycle/render=58 \
 	internal/verbs/upgrade=24 \
 	internal/verbs/newinstance=79 \
 	internal/extensions/guards/pincoherence=94 \
-	internal/verbs/lint=36 \
-	internal/shared/copier=68 \
-	internal/verbs/onboard=12 \
+	internal/verbs/lint=37 \
+	internal/shared/copier=69 \
+	internal/verbs/onboard=13 \
 	internal/extensions/assertions/templatecommit=83 \
-	internal/verbs/selfupgrade=56 \
-	internal/extensions/assertions/buildpreflight=90 \
-	internal/extensions/lifecycle/branchpolicy=31 \
-	internal/extensions/assertions/reachability=33 \
+	internal/verbs/selfupgrade=57 \
+	internal/extensions/assertions/buildpreflight=94 \
+	internal/extensions/lifecycle/branchpolicy=34 \
+	internal/extensions/assertions/reachability=37 \
 	internal/extensions/lifecycle/firewall=68 \
-	internal/extensions/guards/meshegress=51 \
-	internal/extensions/guards/coverageguard=74 \
-	internal/extensions/guards/cosignguard=72 \
-	internal/extensions/guards/monitoringlabel=60 \
-	internal/extensions/guards/sourceref=86 \
-	internal/extensions/guards/workflowshells=48 \
-	internal/shared/answers=85 \
-	internal/shared/llzver=95 \
-	internal/shared/objstore=48 \
-	internal/shared/openbao=76 \
-	internal/shared/envtopology=67 \
-	internal/shared/instanceresolve=87 \
-	internal/shared/portfwd=90 \
+	internal/extensions/guards/meshegress=52 \
+	internal/extensions/guards/coverageguard=84 \
+	internal/extensions/guards/cosignguard=75 \
+	internal/extensions/guards/monitoringlabel=66 \
+	internal/extensions/guards/sourceref=87 \
+	internal/extensions/guards/workflowshells=71 \
+	internal/shared/answers=87 \
+	internal/shared/llzver=96 \
+	internal/shared/objstore=49 \
+	internal/shared/openbao=79 \
+	internal/shared/envtopology=69 \
+	internal/shared/instanceresolve=89 \
+	internal/shared/portfwd=93 \
 	internal/shared/tokenprobe=44 \
-	internal/shared/credtargets=80 \
-	internal/shared/envreq=29 \
-	internal/shared/manifest=87 \
-	internal/shared/gitcmd=95 \
-	internal/shared/envdef=52 \
+	internal/shared/credtargets=83 \
+	internal/shared/envreq=30 \
+	internal/shared/manifest=88 \
+	internal/shared/gitcmd=100 \
+	internal/shared/envdef=54 \
 	internal/shared/charty=95 \
 	internal/shared/capability=94 \
-	internal/shared/ghapi=88 \
-	internal/shared/templateid=79 \
+	internal/shared/ghapi=89 \
+	internal/shared/templateid=80 \
 	internal/extensions/lifecycle/bootstrapcluster=61 \
-	internal/extensions/assertions/seedspecial=84 \
-	internal/shared/tfvars=55 \
-	internal/extensions/guards/mtlsguard=89 \
-	internal/extensions/guards/versionpins=83 \
-	internal/extensions/assertions/assertsuite=70 \
+	internal/extensions/assertions/seedspecial=85 \
+	internal/shared/tfvars=56 \
+	internal/extensions/guards/mtlsguard=91 \
+	internal/extensions/guards/versionpins=84 \
+	internal/extensions/assertions/assertsuite=73 \
 	internal/extensions/guards/templatemanifest=93 \
 	internal/shared/ghcli=42 \
 	internal/extensions/lifecycle/reconciler=70 \
-	internal/shared/ghgitdata=78 \
-	internal/extensions/lifecycle/identityconfig=57 \
-	internal/extensions/lifecycle/harbor=74 \
-	internal/shared/baoread=76 \
-	internal/shared/ghaout=70 \
-	internal/extensions/lifecycle/credrotate=61 \
-	internal/extensions/lifecycle/database=63
+	internal/shared/ghgitdata=79 \
+	internal/extensions/lifecycle/identityconfig=58 \
+	internal/extensions/lifecycle/harbor=77 \
+	internal/shared/baoread=79 \
+	internal/shared/ghaout=81 \
+	internal/extensions/lifecycle/credrotate=63 \
+	internal/extensions/lifecycle/database=64
 
 help:
 	@echo "lke-landing-zone — template repository targets"
@@ -226,6 +226,7 @@ help:
 	@echo "  sbom            Generate CycloneDX SBOMs into sbom/"
 	@echo "  test            go test ./... in tools/"
 	@echo "  coverage        go test -cover for the tools module (fails below per-pkg COVERAGE_MINS)"
+	@echo "  coverage-bank   raise each COVERAGE_MINS floor to what its package now measures"
 	@echo "  clean           Remove build + coverage artifacts"
 	@echo
 	@echo "Terraform targets:"
@@ -778,7 +779,7 @@ actions-lint:
 # promtool on PATH and is an ASSERTION binding rather than a gate. External tools
 # are not gates and the driver has no business pretending otherwise.
 # ──────────────────────────────────────────────────────────────────────────────
-LINT_K8S := k8s-lint k8s-validate llz-gates prom-rules-check \
+LINT_K8S := k8s-lint k8s-validate prom-rules-check \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
 LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
@@ -911,6 +912,21 @@ symbol-ref-guard: export LLZ_FORCE_SOURCE := 1
 symbol-ref-guard:
 	$(call LLZ_CI,gates --only symbol-ref-guard,)
 
+# THE PER-GATE TRIGGERS ARE GONE, AND THE MEASUREMENT IS WHY. This recipe used to
+# carry a hand-written `grep -qE` per gate — which gate cares about which paths,
+# in a shell string beside the gate that knows. It is the same duplication the
+# thirteen-target collapse removed one layer up, and it had already failed the
+# same way: docs-guard shipped tested and wired in here with a filter matching no
+# Markdown, so the single change class it was built for could not run it.
+#
+# The obvious fix was to move the mapping onto the Gate declaration. Measuring
+# first made that unnecessary: the WHOLE suite of 24 gates runs in 3.8s, so
+# selection was buying nothing and costing a copy that can drift. `llz-gates` now
+# runs unconditionally and the copy is deleted rather than relocated.
+#
+# What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
+# kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
+# Those are not gates and the registry has no opinion about them.
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
@@ -950,15 +966,8 @@ lint:
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
 		$(MAKE) --no-print-directory actions-lint; \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$|^tools/internal/cli/.*\.go$$|^\.core-surface-budget\.yaml$$'; then \
-		$(MAKE) --no-print-directory untestable-loc-check core-surface-check; \
-	fi; \
-	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/internal/cli/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
-		$(MAKE) --no-print-directory docs-guard; \
-	fi; \
-	if echo "$$CHANGED" | grep -qE '\.md$$|\.ya?ml$$|\.sh$$|\.go$$|^Makefile$$'; then \
-		$(MAKE) --no-print-directory source-ref-guard symbol-ref-guard; \
-	fi
+	$(MAKE) --no-print-directory llz-gates
+
 
 # ── Audit ─────────────────────────────────────────────────────────────────────
 
@@ -1168,6 +1177,19 @@ coverage:
 	@cd $(GO_DIR) && go run ./cmd/llz ci check-coverage \
 		--profile "$(CURDIR)/coverage/tools.out" $(COVERAGE_MINS)
 	@echo "Coverage profile written to coverage/tools.out"
+
+# coverage-bank: raise every floor to what its package now measures.
+#
+# THE FLOORS WERE A MANUAL RATCHET AND SLACK IS INVISIBLE. A package at 86%
+# against a floor of 80 reports `ok`, and those six points are free for the next
+# change to spend without anyone deciding to. One guard added in a single session
+# moved its floor four times by hand, each bump after a red run.
+#
+# It NEVER lowers a floor and refuses to run while anything is red — see bank.go.
+# Run it after adding tests, and commit the Makefile change with them.
+coverage-bank:
+	@cd $(GO_DIR) && go run ./cmd/llz ci check-coverage --bank \
+		--profile "$(CURDIR)/coverage/tools.out" --makefile "$(CURDIR)/Makefile" $(COVERAGE_MINS)
 
 # ── Instance smoke test ───────────────────────────────────────────────────────
 # instance-test: the fast, LOCAL, no-cloud counterpart to release-e2e.yml. That

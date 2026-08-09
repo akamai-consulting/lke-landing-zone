@@ -322,7 +322,7 @@ func TestRunSymbolsFailsWhenNoTestCitationIsExtracted(t *testing.T) {
 	if err == nil {
 		t.Fatal("zero test citations must fail")
 	}
-	if !strings.Contains(err.Error(), "not one test citation") {
+	if !strings.Contains(err.Error(), "not one citation matched") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

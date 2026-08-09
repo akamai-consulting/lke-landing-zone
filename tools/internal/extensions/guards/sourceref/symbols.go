@@ -103,17 +103,7 @@ var testExpr = regexp.MustCompile(`(^|[^A-Za-z0-9_.])(Test[A-Z][A-Za-z0-9_]*)`)
 // SymbolReport is what a run examined. Exported for the same reason Report is:
 // the coverage numbers are what separate a real green from a broken corpus.
 type SymbolReport struct {
-	Packages      int      // packages whose exported surface was indexed
-	Symbols       int      // exported identifiers in the table
-	Tests         int      // test functions indexed from _test.go
-	Targets       int      // make rules indexed from the Makefile
-	Verbs         int      // `llz ci` subcommands in the live tree
 	Scanned       int      // files read
-	Refs          int      // pkg.Symbol references judged
-	TestRefs      int      // bare test-function citations judged
-	MakeRefs      int      // `make <target>` citations judged
-	VerbRefs      int      // `llz ci <verb>` citations judged
-	ADRRefs       int      // `ADR NNNN` citations judged
 	IndexFindings []string // ADR index vs directory disagreements
 	Findings      []Finding
 }
@@ -154,10 +144,82 @@ func RunSymbols(root string, tree *cobra.Command) error {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
-	rep := SymbolReport{Packages: len(table), Tests: len(tests), Targets: len(targets), Verbs: len(verbs)}
-	rep.IndexFindings = checkADRIndex(adrs)
+	rep := SymbolReport{IndexFindings: checkADRIndex(adrs)}
+
+	symbolCount := 0
 	for _, syms := range table {
-		rep.Symbols += len(syms)
+		symbolCount += len(syms)
+	}
+
+	// THE TABLE IS THE GUARD. Everything above builds an index; everything below
+	// is one loop. A seventh vocabulary is a row here, not a sixth copy of the
+	// same five steps — see vocabulary.go for what that copying cost.
+	vocabs := []*vocabulary{
+		{
+			Name: "symbol", Expr: symExpr, Size: symbolCount,
+			Empty: "this repo's headers cite their own API constantly",
+			Judge: func(_, line string, m []int) (string, bool) {
+				pkg, sym := line[m[4]:m[5]], line[m[6]:m[7]]
+				syms, ours := table[pkg]
+				if !ours {
+					return "", false // somebody else's API; we cannot see its source
+				}
+				if symbolKnown(syms, sym) {
+					return "", true
+				}
+				return fmt.Sprintf("%s.%s is not exported by any package named %q — the symbol was "+
+					"renamed or moved; name the one that exists now", pkg, sym, pkg), true
+			},
+		},
+		{
+			Name: "test", Expr: testExpr, Size: len(tests),
+			Empty: "this repo names the test that keeps a claim true as a matter of habit",
+			Judge: func(_, line string, m []int) (string, bool) {
+				name := line[m[4]:m[5]]
+				if wrappedName(line, m[5], name, tests) {
+					return "", false
+				}
+				if symbolKnown(tests, name) {
+					return "", true
+				}
+				return fmt.Sprintf("no test named %s exists — a citation like this claims a mechanism "+
+					"keeps something true, so a renamed one leaves the sentence reading as a "+
+					"guarantee with nothing behind it. Name the test that runs today", name), true
+			},
+		},
+		{
+			Name: "make target", Expr: makeCiteExpr, Size: len(targets),
+			Empty: "the runbooks and skills tell a reader to run one constantly",
+			Judge: func(_, line string, m []int) (string, bool) {
+				t := line[m[2]:m[3]]
+				if targets[t] {
+					return "", true
+				}
+				return fmt.Sprintf("the Makefile declares no `%s` rule — a runbook step that cannot "+
+					"run is worse than no step. Name the target that exists", t), true
+			},
+		},
+		{
+			Name: "ci verb", Expr: ciCiteExpr, Size: len(verbs),
+			Empty: "the workflows and docs invoke them on nearly every page",
+			Judge: func(_, line string, m []int) (string, bool) {
+				cited := citedCIVerb(line, m[2], m[3])
+				if ciVerbKnown(verbs, cited) {
+					return "", true
+				}
+				return fmt.Sprintf("`llz ci %s` is not a verb this binary carries — a runbook step "+
+					"that answers `unknown command` fails at the worst moment. Name the verb that "+
+					"exists, or, if the sentence is about a RETIRED one, drop the `llz ci` prefix "+
+					"and name it bare so it stops reading as something to run", cited), true
+			},
+		},
+		{
+			Name: "ADR", Expr: adrCiteExpr, Size: len(adrs.Rows),
+			Empty: "this repo cites its decisions constantly",
+			Judge: func(file, line string, m []int) (string, bool) {
+				return adrCitationFinding(adrs, file, line, m), true
+			},
+		},
 	}
 
 	for _, rel := range files {
@@ -173,59 +235,7 @@ func RunSymbols(root string, tree *cobra.Command) error {
 			return fmt.Errorf("symbol-ref-guard: %s: %w", rel, err)
 		}
 		for _, ln := range lines {
-			for _, m := range symExpr.FindAllStringSubmatch(ln.text, -1) {
-				pkg, sym := m[2], m[3]
-				syms, ours := table[pkg]
-				if !ours {
-					continue // somebody else's API; we cannot see its source
-				}
-				rep.Refs++
-				if !symbolKnown(syms, sym) {
-					rep.Findings = append(rep.Findings, Finding{
-						File: rel, Line: ln.num, Ref: pkg + "." + sym,
-					})
-				}
-			}
-			for _, m := range testExpr.FindAllStringSubmatchIndex(ln.text, -1) {
-				name := ln.text[m[4]:m[5]]
-				if wrappedTestName(ln.text, m[5], name, tests) {
-					continue
-				}
-				rep.TestRefs++
-				if !symbolKnown(tests, name) {
-					rep.Findings = append(rep.Findings, Finding{
-						File: rel, Line: ln.num, Ref: name,
-					})
-				}
-			}
-			for _, m := range makeCiteExpr.FindAllStringSubmatch(ln.text, -1) {
-				if len(targets) == 0 {
-					continue // no Makefile here; nothing to judge against
-				}
-				rep.MakeRefs++
-				if !targets[m[1]] {
-					rep.Findings = append(rep.Findings, Finding{
-						File: rel, Line: ln.num, Ref: "make " + m[1],
-					})
-				}
-			}
-			for _, m := range adrCiteExpr.FindAllStringSubmatchIndex(ln.text, -1) {
-				rep.ADRRefs++
-				if d := adrCitationFinding(adrs, rel, ln.text, m); d != "" {
-					rep.Findings = append(rep.Findings, Finding{File: rel, Line: ln.num, Ref: "ADR:" + d})
-				}
-			}
-			for _, m := range ciCiteExpr.FindAllStringSubmatchIndex(ln.text, -1) {
-				if len(verbs) == 0 {
-					continue // no `ci` group in this tree; nothing to judge against
-				}
-				rep.VerbRefs++
-				if cited := citedCIVerb(ln.text, m[2], m[3]); !ciVerbKnown(verbs, cited) {
-					rep.Findings = append(rep.Findings, Finding{
-						File: rel, Line: ln.num, Ref: "llz ci " + cited,
-					})
-				}
-			}
+			scanLine(vocabs, rel, ln, &rep.Findings)
 		}
 	}
 
@@ -236,37 +246,7 @@ func RunSymbols(root string, tree *cobra.Command) error {
 		return rep.Findings[i].Line < rep.Findings[j].Line
 	})
 	for _, f := range rep.Findings {
-		if strings.HasPrefix(f.Ref, "ADR:") {
-			fmt.Printf("::error file=%s,line=%d::%s\n", f.File, f.Line, strings.TrimPrefix(f.Ref, "ADR:"))
-			continue
-		}
-		if strings.HasPrefix(f.Ref, "llz ci ") {
-			fmt.Printf("::error file=%s,line=%d::`%s` is not a verb this binary carries — a runbook "+
-				"step that answers `unknown command` fails at the worst moment. Name the verb that "+
-				"exists, or, if the sentence is about a RETIRED one, drop the `llz ci` prefix and "+
-				"name it bare so it stops reading as something to run\n", f.File, f.Line, f.Ref)
-			continue
-		}
-		if strings.HasPrefix(f.Ref, "make ") {
-			fmt.Printf("::error file=%s,line=%d::the Makefile declares no `%s` rule — a runbook "+
-				"step that cannot run is worse than no step, and this repo's docs and skills "+
-				"tell a reader (often an agent) to run one. Name the target that exists\n",
-				f.File, f.Line, f.Ref)
-			continue
-		}
-		if !strings.Contains(f.Ref, ".") {
-			fmt.Printf("::error file=%s,line=%d::no test named %s exists — a citation like this "+
-				"claims a mechanism keeps something true, so a renamed one leaves the sentence "+
-				"reading as a guarantee with nothing behind it. Name the test that runs today\n",
-				f.File, f.Line, f.Ref)
-			continue
-		}
-		fmt.Printf("::error file=%s,line=%d::%s is not exported by any package named %q — "+
-			"the symbol was renamed or moved; name the one that exists now\n",
-			f.File, f.Line, f.Ref, strings.SplitN(f.Ref, ".", 2)[0])
-	}
-	for _, d := range rep.IndexFindings {
-		fmt.Printf("::error file=%s::%s\n", adrIndexPath, d)
+		fmt.Printf("::error file=%s,line=%d::%s\n", f.File, f.Line, f.Ref)
 	}
 	if len(rep.Findings)+len(rep.IndexFindings) > 0 {
 		return fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s), "+
@@ -274,86 +254,26 @@ func RunSymbols(root string, tree *cobra.Command) error {
 			len(rep.Findings), countFiles(rep.Findings), len(rep.IndexFindings))
 	}
 
-	// FAIL CLOSED ON THREE AXES, one more than the path guard, because this one
-	// can also be vacuously green by indexing nothing: an empty symbol table makes
-	// every reference "somebody else's" and skips the lot.
-	if rep.Packages == 0 || rep.Symbols == 0 {
+	// FAIL CLOSED ON WHAT WAS INDEXED AND WHAT WAS SCANNED. An empty symbol table
+	// makes every reference look third-party and skips the lot — a green earned by
+	// indexing nothing — and a corpus of zero files is the classic wrong --root.
+	// The per-vocabulary arms live in one place now; see emptyVocabulary.
+	if len(table) == 0 || symbolCount == 0 {
 		return fmt.Errorf("symbol-ref-guard: indexed %d package(s) and %d symbol(s) under %q — "+
 			"with an empty table every reference looks third-party and is skipped, so this "+
-			"fails rather than reporting a green it did not earn", rep.Packages, rep.Symbols, root)
+			"fails rather than reporting a green it did not earn", len(table), symbolCount, root)
 	}
 	if rep.Scanned == 0 {
 		return fmt.Errorf("symbol-ref-guard: no scannable file under %q — a guard that "+
 			"examined nothing cannot report that everything is fine. Check --root", root)
 	}
-	if rep.Refs == 0 {
-		return fmt.Errorf("symbol-ref-guard: %d file(s) scanned against %d symbol(s) but not one "+
-			"pkg.Symbol reference found — this repo's headers cite their own API constantly, "+
-			"so zero means the extraction is broken", rep.Scanned, rep.Symbols)
-	}
-	// The test axis needs no empty-INDEX arm: an empty `tests` map makes every
-	// citation unknown and the run floods with findings rather than going quiet,
-	// which is the failure mode the other arms are built to prevent. Zero
-	// CITATIONS is the silent one, and it is what a broken testExpr looks like.
-	//
-	// GATED ON HAVING INDEXED ANY, which is not belt-and-braces. A tree with no
-	// test files has nothing to cite, and zero is then the correct answer rather
-	// than a broken one — an instance repo carries this binary's docs and none of
-	// its tests. Firing there would make the guard refuse the trees it is pointed
-	// at second.
-	if rep.Tests > 0 && rep.TestRefs == 0 {
-		return fmt.Errorf("symbol-ref-guard: %d file(s) scanned against %d test(s) but not one "+
-			"test citation found — this repo names the test that keeps a claim true as a matter "+
-			"of habit, so zero means the extraction is broken", rep.Scanned, rep.Tests)
+	if err := emptyVocabulary(vocabs, rep.Scanned); err != nil {
+		return err
 	}
 
-	// The ADR axis takes the same gating as the test and make ones: a tree with no
-	// index cannot answer the question, so zero citations there is correct rather
-	// than broken.
-	if len(adrs.Rows) > 0 && rep.ADRRefs == 0 {
-		return fmt.Errorf("symbol-ref-guard: %d file(s) scanned against an ADR index of %d "+
-			"row(s) but not one `ADR NNNN` citation found — this repo cites its decisions "+
-			"constantly, so zero means the extraction is broken", rep.Scanned, len(adrs.Rows))
-	}
-
-	fmt.Printf("symbol-ref-guard: %d symbol, %d test, %d make, %d ci-verb and %d ADR reference(s) "+
-		"across %d file(s) all resolve (%d package(s), %d symbol(s), %d test(s), %d target(s), "+
-		"%d verb(s) indexed).\n", rep.Refs, rep.TestRefs, rep.MakeRefs, rep.VerbRefs, rep.ADRRefs,
-		rep.Scanned, rep.Packages, rep.Symbols, rep.Tests, rep.Targets, rep.Verbs)
+	fmt.Printf("symbol-ref-guard: %s reference(s) across %d file(s) all resolve (%s indexed).\n",
+		vocabularySummary(vocabs), rep.Scanned, indexedSummary(vocabs))
 	return nil
-}
-
-// wrappedTestName reports whether a citation is the first half of a test name a
-// paragraph broke across lines, rather than a stale one.
-//
-// TWO CONDITIONS, AND BOTH ARE REQUIRED. The line must END at the citation —
-// immediately, or after the hyphen a wrap leaves behind — and a longer real test
-// must start with what was cited. Either alone is too loose: plenty of correct
-// citations sit at end of line, and plenty of stale ones are prefixes of
-// something real. Together they describe exactly the shape a wrap makes.
-//
-// Both live instances came from the same file four hundred lines apart, one
-// broken on a hyphen and one broken with no hyphen at all, its remaining four
-// characters beginning the next line. It is the bug trimRef already carries, one
-// identifier over — long names and wrapped prose produce it wherever they meet.
-// (Neither is quoted here: this guard reads its own source, and it has already
-// flagged two earlier headers for illustrating a defect too faithfully.)
-//
-// A COMPLETE CITATION AT END OF LINE LOSES NOTHING: it resolves on its own, so it
-// never reaches the prefix test. What this forgives is narrow — a genuinely stale
-// citation that is both a prefix of a real test and sits at a line break — and
-// that is the right trade against reporting every wrapped name in the repo.
-func wrappedTestName(line string, end int, name string, tests map[string]bool) bool {
-	rest := strings.TrimRight(line[end:], " \t")
-	if rest != "" && rest != "-" {
-		return false
-	}
-	for known := range tests {
-		if len(known) > len(name) && strings.HasPrefix(known, name) {
-			return true
-		}
-	}
-	return false
 }
 
 // symbolKnown reports whether sym names something the package exports. A `*`

@@ -33,8 +33,38 @@ func Extension() extension.Extension {
 			Kind:   extension.Gate,
 			State:  extension.Scaffolded,
 			Grants: []extension.Grant{extension.ReadRepo},
+		}, {
+			// THE `--bank` HALF NEEDS ITS OWN BINDING, and the model is what said
+			// so: a Gate may hold read-repo and nothing else, so the floors cannot
+			// be raised through the binding that reads the profile. Same shape and
+			// same reason as template-sustain's `lock-refresh` — a `--write` that
+			// borrowed its gate's grant would be a gate that writes, which is the
+			// one thing the kind exists to forbid.
+			//
+			// A TRANSITION rather than a second gate, because it MUTATES: it edits
+			// COVERAGE_MINS in the Makefile to match what the packages measure.
+			// Tighten-only, and it refuses to run while anything is red — see
+			// bank.go for why both rules are load-bearing.
+			Kind:   extension.Transition,
+			Name:   "floor-bank",
+			State:  extension.Scaffolded,
+			Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 		}},
 	}
+}
+
+// bankBinding is the binding `--bank` writes through. Looked up by NAME rather
+// than by kind: the extension has two bindings now, and picking "the one that is
+// not a gate" would silently start returning something else the moment a third
+// appears.
+func bankBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition && b.Name == "floor-bank" {
+			return b
+		}
+	}
+	panic("guard-coverage: no floor-bank binding — `--bank` builds its writer from " +
+		"one, so its absence is a wiring bug")
 }
 
 // coverageBinding is the gate binding this guard reads its coverprofile through.
