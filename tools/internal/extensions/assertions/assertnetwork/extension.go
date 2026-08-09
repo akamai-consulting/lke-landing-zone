@@ -96,10 +96,11 @@ func Extension() extension.Extension {
 // rather than indexed so adding an assertion cannot shift which grants the writer
 // is built from.
 func MutatingBinding() extension.Binding {
-	for _, b := range Extension().Bindings {
-		if b.Name == "probe-fixture" {
-			return b
-		}
-	}
-	return extension.Binding{}
+	// PANICS RATHER THAN RETURNING A ZERO BINDING. It used to do the latter, and a
+	// zero Binding declares no grants — so a rename would have handed the caller a
+	// refusing Writer and surfaced as a permission error naming a grant nobody
+	// forgot. That is the failure two assert lanes actually shipped with, from the
+	// positional form of the same mistake. Thirty-two sibling accessors panic; these
+	// two were the exceptions, and they are the two feeding a MUTATING handle.
+	return Extension().MustBinding("probe-fixture")
 }

@@ -468,6 +468,84 @@ func (e Extension) HasGrant(g Grant) bool {
 	return false
 }
 
+// MustBinding returns the binding with the given name, and PANICS if there is
+// none.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT EXISTS BECAUSE `Bindings[0]` SHIPPED A BROKEN LANE.
+//
+// Nine sites selected a binding by INDEX, and objenc's seedBinding had already
+// written down why that is wrong — "correct today and silently wrong the moment
+// someone reorders the slice or adds a binding above it… capability.For would hand
+// back refusing handles and the seeder would fail at the write with a permission
+// message, sending the reader after a grant bug that does not exist."
+//
+// That is not a prediction any more. `internal/cli` built assert-identity's and
+// assert-secrets' Writers from `Extension().Bindings[0]`, which is an ASSERTION in
+// both — the transitions carrying cluster-write sit at index 1 and index 3. Both
+// lanes run in `llz ci assert-suite`, both call the Writer for real (CreateToken,
+// Delete, ApplyStdin), and both got:
+//
+//	capability: this binding did not declare "cluster-write", so it cannot mutate
+//
+// A permission refusal, which reads as the capability layer working correctly.
+//
+// SO THE LOOKUP IS BY NAME AND THE MISS IS LOUD. A zero Binding declares no grants,
+// so returning one converts a wiring bug into a permission bug and sends the reader
+// somewhere else entirely — which is exactly what two accessors did by returning
+// `extension.Binding{}` on a miss, while the other thirty-two panicked. This is the
+// one shape, so nobody has to re-derive it per package.
+// ─────────────────────────────────────────────────────────────────────────────
+func (e Extension) MustBinding(name string) Binding {
+	for _, b := range e.Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic(e.Name + ": no binding named " + name + " — a handle is built from it, so its " +
+		"absence is a wiring bug rather than a missing feature. Returning a zero Binding " +
+		"here would declare no grants and surface as a permission error at the first write.")
+}
+
+// MustBindingOf returns the single binding of a kind at a state, for the
+// declarations whose bindings carry no name because there is only one to
+// distinguish. It panics on a miss, and equally on an AMBIGUOUS match: two
+// bindings of the same kind and state are exactly when a Name becomes required,
+// and picking the first would be `Bindings[0]` again with more steps.
+func (e Extension) MustBindingOf(k BindingKind, s State) Binding {
+	var found []Binding
+	for _, b := range e.Bindings {
+		if b.Kind == k && b.State == s {
+			found = append(found, b)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0]
+	case 0:
+		panic(e.Name + ": no " + string(k) + " binding at " + string(s) +
+			" — a handle is built from it, so its absence is a wiring bug")
+	default:
+		panic(e.Name + ": " + string(k) + " at " + string(s) + " is ambiguous (" +
+			itoa(len(found)) + " bindings) — give them Names and look one up with " +
+			"MustBinding, because choosing among them by position is the defect this replaced")
+	}
+}
+
+// itoa keeps the package dependency-free; strconv would be the first import beyond
+// strings, fmt and sort, and TestDeclarationModelStaysDependencyFree pins that set.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}
+
 // Binds reports whether the extension carries a binding of the given kind.
 func (e Extension) Binds(k BindingKind) bool {
 	for _, b := range e.Bindings {

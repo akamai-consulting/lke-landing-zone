@@ -317,45 +317,118 @@ func isBindingSlice(e ast.Expr) bool {
 	return ok && arr.Len == nil && isExtensionType(arr.Elt, "Binding")
 }
 
-func TestGuardsDoNotMintTheirOwnBindings(t *testing.T) {
-	root := filepath.FromSlash("../../extensions")
+// mintScanRoots is every tree that may name a binding.
+//
+// internal/cli JOINED THE WALK AFTER IT SHIPPED A BROKEN LANE. The rule had only
+// ever covered internal/extensions, on the reasoning that an extension is what
+// declares grants — which missed that the ASSEMBLY layer is the one that decides
+// which declared binding a handle is built from, and is therefore the only place
+// that can hand an extension somebody else's capability. It has no declaration
+// constructor, so no binding literal there is legal, which is exactly right.
+var mintScanRoots = []string{"../../extensions", "../../cli"}
 
+func TestGuardsDoNotMintTheirOwnBindings(t *testing.T) {
 	var scanned int
 	fset := token.NewFileSet()
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return err
+	walk := func(root string) error {
+		return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			f, perr := parser.ParseFile(fset, path, nil, 0)
+			if perr != nil {
+				t.Fatalf("parsing %s: %v", path, perr)
+			}
+			scanned++
+			for _, at := range mintedBindingsIn(fset, f) {
+				t.Errorf("%s builds an extension.Binding with fields set, outside any function that "+
+					"returns an extension.Extension. Look the binding up from Extension() instead "+
+					"(capability.RepoForGate, or an accessor like objenc's seedBinding or "+
+					"reconcilelanes' laneBinding, both of which RANGE over Extension().Bindings) — a "+
+					"capability minted at the call site has been through neither Validate() nor `llz "+
+					"extension list`, so the reach a reviewer sees is not the reach the code has.", at)
+			}
+			return nil
+		})
+	}
+	for _, root := range mintScanRoots {
+		if err := walk(root); err != nil {
+			t.Fatalf("walk %s: %v", root, err)
 		}
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			t.Fatalf("parsing %s: %v", path, perr)
-		}
-		scanned++
-		for _, at := range mintedBindingsIn(fset, f) {
-			t.Errorf("%s builds an extension.Binding with fields set, outside any function that "+
-				"returns an extension.Extension. Look the binding up from Extension() instead "+
-				"(capability.RepoForGate, or an accessor like objenc's seedBinding or "+
-				"reconcilelanes' laneBinding, both of which RANGE over Extension().Bindings) — a "+
-				"capability minted at the call site has been through neither Validate() nor `llz "+
-				"extension list`, so the reach a reviewer sees is not the reach the code has.", at)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk: %v", err)
 	}
 	// A guard that walked an empty tree reports the same green as one that read
 	// every file — the vacuity rule this package applies everywhere else.
 	if scanned == 0 {
-		t.Fatal("parsed no sources under internal/extensions — the tree moved and this guard " +
-			"has been vacuous since it did")
+		t.Fatal("parsed no sources under " + strings.Join(mintScanRoots, " or ") +
+			" — the trees moved and this guard has been vacuous since they did")
 	}
 	// The rule is only meaningful if declarations EXIST to be exempted; if none
 	// parsed as such, every real declaration would be reported and someone would
 	// weaken the rule rather than read it.
-	if len(All62Declarations(t, root, fset)) == 0 {
+	if len(All62Declarations(t, "../../extensions", fset)) == 0 {
 		t.Fatal("no function returning extension.Extension was found — the exemption has stopped " +
 			"matching declarations, and the next run would flag all sixty-two of them")
+	}
+}
+
+// A BINDING IS SELECTED BY NAME, NEVER BY POSITION.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// objenc WROTE THIS RULE DOWN AND NINE SITES BROKE IT ANYWAY.
+//
+// Its seedBinding comment: "`Bindings[0]` would be correct today and silently
+// wrong the moment someone reorders the slice or adds a binding above it — and
+// what it would be wrong ABOUT is which grants the custody handle is built from…
+// capability.For would hand back refusing handles and the seeder would fail at the
+// write with a permission message, sending the reader after a grant bug that does
+// not exist."
+//
+// Every clause of that came true. internal/cli built assert-identity's and
+// assert-secrets' Writers from `Extension().Bindings[0]`, an ASSERTION in both,
+// while the transitions carrying cluster-write sat at index 1 and index 3. Both
+// lanes run in `llz ci assert-suite`, both call the Writer for real, and both got
+// a permission refusal — which reads as the capability layer working.
+//
+// A flagged anomaly is a defect report, not a footnote. So the rule is a rule now:
+// Extension().MustBinding(name), or MustBindingOf(kind, state) where a declaration
+// has one binding and no name to give it. Both panic on a miss, so a rename is
+// loud instead of silently narrowing a capability.
+// ────────────────────────────────────────────────────────────────────────────
+func TestNoBindingIsSelectedByPosition(t *testing.T) {
+	positional := regexp.MustCompile(`\.Bindings\[`)
+
+	var scanned int
+	for _, root := range mintScanRoots {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") ||
+				strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			scanned++
+			if positional.Match(stripComments(b)) {
+				t.Errorf("%s selects a binding by POSITION. Which binding index 0 is depends on the "+
+					"order someone typed the declaration in, and getting it wrong builds the handle "+
+					"from the wrong grants — a refusing handle that fails later as a permission "+
+					"error naming a grant nobody forgot. Use Extension().MustBinding(name), or "+
+					"MustBindingOf(kind, state) when the declaration has a single unnamed binding.",
+					filepath.ToSlash(path))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no sources — the trees moved and this guard has been vacuous since")
+	}
+	if !positional.MatchString(`Extension().Bindings[0]`) ||
+		positional.MatchString(`Extension().MustBinding("drive")`) {
+		t.Error("the positional-selection pattern no longer discriminates")
 	}
 }
 

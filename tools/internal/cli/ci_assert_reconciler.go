@@ -26,7 +26,7 @@ func installAssertReconcilerDeps() {
 	// transition's grant from inside the assertion. Both bindings here are
 	// identical; a package whose bindings DIFFER must install per lane.
 	assertreconciler.Install(assertreconciler.Deps{
-		Cluster:               capability.For(assertreconciler.Extension().Bindings[0]).Cluster,
+		Cluster:               capability.MustCluster(assertreconciler.Extension().MustBinding("functional-health")),
 		FirewallConfigMapName: platform.FirewallConfigMapName,
 	})
 }

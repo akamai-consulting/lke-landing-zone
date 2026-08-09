@@ -187,3 +187,55 @@ func TestForCarriesTheCloudHandle(t *testing.T) {
 		t.Error("a binding declaring no cloud grant was handed a working cloud handle")
 	}
 }
+
+// AND THE GUARD RAIL ITSELF MUST FIRE. mustWriter passes on a clean tree by
+// construction, so prove it rejects the exact shape that shipped: an assertion
+// binding asked for a Writer.
+func TestTheWiringGuardRailRejectsARefusingHandle(t *testing.T) {
+	assertion := extension.Binding{
+		Kind: extension.Assertion, State: extension.Verified,
+		Grants: []extension.Grant{extension.ClusterRead},
+	}
+	// This is assert-identity's Bindings[0] in all but name — the binding that was
+	// actually selected for a Writer.
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("mustWriter accepted an assertion binding with no cluster-write — the " +
+					"guard rail does not fire, and the next mis-wired Deps installs silently")
+			}
+			if msg, _ := r.(string); !strings.Contains(msg, "cluster-write") ||
+				!strings.Contains(msg, "by NAME") {
+				t.Errorf("the panic does not name the missing grant and the remedy: %v", r)
+			}
+		}()
+		_ = MustWriter(assertion)
+	}()
+
+	// mustCluster is the same rail on the read side.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("mustCluster accepted a binding declaring no cluster grant")
+			}
+		}()
+		_ = MustCluster(extension.Binding{
+			Kind: extension.Transition, State: extension.Scaffolded,
+			Grants: []extension.Grant{extension.ReadRepo},
+		})
+	}()
+
+	// A correctly selected binding must pass through untouched, or the rail is an
+	// outage rather than a check.
+	live := extension.Binding{
+		Kind: extension.Transition, State: extension.Converged,
+		Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+	}
+	if w := MustWriter(live); IsRefusing(w) {
+		t.Error("mustWriter returned a refusing Writer for a binding that declares cluster-write")
+	}
+	if c := MustCluster(live); IsRefusing(c) {
+		t.Error("mustCluster returned a refusing Cluster for a binding that declares cluster-read")
+	}
+}

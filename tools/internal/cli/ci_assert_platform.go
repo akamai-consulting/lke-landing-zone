@@ -22,7 +22,7 @@ func installAssertPlatformDeps() {
 	assertplatform.Install(assertplatform.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what assertplatform's binding declared, not whatever an argv can express.
-		Writer:       capability.For(assertplatform.MutatingBinding()).Writer,
+		Writer:       capability.MustWriter(assertplatform.MutatingBinding()),
 		ExecCombined: execCombined,
 		Exec:         execOutput,
 		LoadSpec:     func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },

@@ -40,7 +40,7 @@ func installConvergeDeps(g globalOpts) {
 	converge.Install(converge.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what converge's binding declared, not whatever an argv can express.
-		Writer:       capability.For(converge.Extension().Bindings[0]).Writer,
+		Writer:       capability.MustWriter(converge.Extension().MustBinding("drive")),
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		Summary:      ghaout.Append,

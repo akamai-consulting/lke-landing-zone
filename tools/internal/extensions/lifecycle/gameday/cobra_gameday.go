@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 func WedgeGamedayCmd() *cobra.Command {
@@ -37,7 +38,7 @@ func WedgeGamedayCmd() *cobra.Command {
 			"converge-only fast-path reuses one).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return Run(cigate.NewDeps().GrantedBy(Extension().Bindings[0]), Opts{
+			return Run(cigate.NewDeps().GrantedBy(Extension().MustBindingOf(extension.Transition, extension.Converged)), Opts{
 				ESRef:     externalSecret,
 				TargetApp: targetApp,
 				Namespace: namespace,

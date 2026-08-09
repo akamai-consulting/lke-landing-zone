@@ -33,6 +33,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"sigs.k8s.io/yaml"
 )
@@ -66,7 +67,7 @@ func Run() error {
 	}
 	defer cleanup()
 
-	return Apply(o, cigate.NewDepsFor(kubeconfig).GrantedBy(Extension().Bindings[0]))
+	return Apply(o, cigate.NewDepsFor(kubeconfig).GrantedBy(Extension().MustBindingOf(extension.Transition, extension.Converged)))
 }
 
 func kyvernoOptsFromEnv(getenv func(string) string) (Opts, error) {

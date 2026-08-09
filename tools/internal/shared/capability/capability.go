@@ -516,3 +516,35 @@ var execStdin = func(in string, args ...string) ([]byte, error) {
 	cmd.Stdin = strings.NewReader(in)
 	return cmd.CombinedOutput()
 }
+
+// IsRefusing reports whether a handle is the present-and-refusing variant — the
+// one a binding gets when it did not declare the grant.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT MAKES A DESIGN CHOICE OBSERVABLE, WITHOUT UNDOING IT.
+//
+// This package hands back a non-nil refusing handle rather than nil, deliberately:
+// "a nil handle would panic at the call site and be reported as a crash rather
+// than as a permission fault, and — worse — would tempt callers into `if w != nil`
+// guards that silently skip the work." That is right, and it has a cost nobody had
+// paid: a Deps struct assembled from the WRONG binding is indistinguishable from
+// one assembled correctly, because both fields are non-nil and both look like
+// handles. The difference only shows up when the code path runs, as a permission
+// error naming a grant nobody forgot.
+//
+// That is how two assert-suite lanes shipped unable to mutate. So the ASSEMBLY
+// layer gets a way to ask, and the answer is used exactly there — not at the call
+// site, which must keep treating a refusal as a refusal.
+//
+// It is a type switch rather than an interface method, so that adding a refusing
+// type without listing it here fails this package's own test rather than silently
+// reporting a denied handle as live.
+// ─────────────────────────────────────────────────────────────────────────────
+func IsRefusing(h any) bool {
+	switch h.(type) {
+	case deniedCluster, deniedWriter, deniedSecrets, deniedCustodian,
+		deniedBaoAdmin, deniedForge, deniedCloud, deniedRepo, deniedRepoWriter, deniedKube:
+		return true
+	}
+	return false
+}

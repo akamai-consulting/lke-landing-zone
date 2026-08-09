@@ -108,7 +108,7 @@ func RunSeedSealKey(dryRun bool, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := WaitForNamespace(cigate.NewDeps().GrantedBy(Extension().Bindings[0]), baoread.Namespace, openbaoNSWait); err != nil {
+	if err := WaitForNamespace(cigate.NewDeps().GrantedBy(Extension().MustBinding("init")), baoread.Namespace, openbaoNSWait); err != nil {
 		return err
 	}
 

@@ -16,7 +16,7 @@ func installAssertIdentityDeps() {
 	assertidentity.Install(assertidentity.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what assertidentity's binding declared, not whatever an argv can express.
-		Writer:         capability.For(assertidentity.Extension().Bindings[0]).Writer,
+		Writer:         capability.MustWriter(assertidentity.Extension().MustBinding("login-smoke")),
 		Exec:           execOutput,
 		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  identityconfig.DiscoverManagedDomain,

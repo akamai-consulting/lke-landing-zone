@@ -14,7 +14,7 @@ func installAssertNetworkDeps() {
 	assertnetwork.Install(assertnetwork.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what assertnetwork's binding declared, not whatever an argv can express.
-		Writer:       capability.For(assertnetwork.MutatingBinding()).Writer,
+		Writer:       capability.MustWriter(assertnetwork.MutatingBinding()),
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 	})

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
@@ -19,7 +19,7 @@ func installAssertSecretsDeps() {
 	assertsecrets.Install(assertsecrets.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what assertsecrets's binding declared, not whatever an argv can express.
-		Writer:       capability.For(assertsecrets.Extension().Bindings[0]).Writer,
+		Writer:       capability.MustWriter(assertsecrets.Extension().MustBinding("broad-pat-drill")),
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		BroadPATSeedEnabled: func(lz *clusterspec.LandingZone, region string) bool {
