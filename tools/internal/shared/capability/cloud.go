@@ -2,8 +2,10 @@ package capability
 
 // cloud.go — the handles a `cloud-read` or `cloud-mutate` binding receives.
 //
+// The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
+//
 // SEVENTH AND EIGHTH CAPABILITY, and between them the largest hole left in the
-// vocabulary: 20 declarations of `cloud-read` and 21 of `cloud-mutate`, forty-one
+// vocabulary: 19 declarations of `cloud-read` and 21 of `cloud-mutate`, forty
 // in total, with nothing behind either. Every one of them could destroy an LKE
 // cluster, and the declaration said so or did not with equal effect.
 //

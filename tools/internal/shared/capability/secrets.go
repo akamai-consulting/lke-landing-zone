@@ -2,7 +2,9 @@ package capability
 
 // secrets.go — the handles a `secret-read` or `secret-custody` binding receives.
 //
-// SECOND CAPABILITY, and it is the one the grant vocabulary most needed. Sixteen
+// The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
+//
+// SECOND CAPABILITY, and it is the one the grant vocabulary most needed. Eighteen
 // bindings declare `secret-custody`, eleven declare `secret-read`, and until now
 // both were review metadata: a binding claiming read-only was handed
 // `baoread.Exec` and could `kv put` with a root token exactly as easily as the

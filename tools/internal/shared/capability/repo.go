@@ -2,8 +2,11 @@ package capability
 
 // repo.go — the handle for `read-repo`, whose fence is PATH CONTAINMENT.
 //
-// FIFTH CAPABILITY, AND THE LAST GRANT WITHOUT ONE. `read-repo` is declared by 40
-// of 61 extensions — more than any other grant — and until now it meant nothing at
+// The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry — they
+// were hand-transcribed once and had drifted by the time anyone re-read them.
+//
+// FIFTH CAPABILITY, AND THE LAST GRANT WITHOUT ONE. `read-repo` is declared by 42
+// of 62 extensions — more than any other grant — and until now it meant nothing at
 // runtime. The validator refuses a gate that declares anything ELSE
 // (checkBindingCeiling), so the entire safety claim of `llz ci gates` — "these
 // touch nothing but files" — rested on a check of the DECLARATION and on nothing
@@ -14,7 +17,8 @@ package capability
 //
 // An earlier architecture critique proposed splitting `read-repo` into reading the
 // SPEC, the TREE, and `.template-manifest`'s class table, arguing they are
-// materially different permissions. Counted across all 40 holders:
+// materially different permissions. Counted across the holders at the time (40 of
+// the then-61 extensions; the shape is what matters, not the total):
 //
 //	tree      26    os.ReadFile / filepath.Walk / guardwalk
 //	manifest  12    .template-manifest, .copier-answers.yml
