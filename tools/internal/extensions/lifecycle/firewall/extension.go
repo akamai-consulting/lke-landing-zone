@@ -39,6 +39,10 @@ func Extension() extension.Extension {
 		Name:   "cloud-firewall-bootstrap",
 		Short:  "seed the node-pool Cloud Firewall state the in-cluster firewall-controller reconciles from",
 		Always: true,
+		// FOLLOWS `cidrFirewall`. It seeds the state the in-cluster firewall-controller
+		// reconciles FROM, and that controller is what the component installs — seeding
+		// for a controller nobody deployed leaves a Secret and a ConfigMap nothing reads.
+		Component: "cidrFirewall",
 		Bindings: []extension.Binding{{
 			Kind:  extension.Transition,
 			State: extension.Provisioned,

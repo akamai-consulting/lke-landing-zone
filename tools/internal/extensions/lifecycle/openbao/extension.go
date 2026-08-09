@@ -72,6 +72,14 @@ func Extension() extension.Extension {
 		Name:   "openbao",
 		Short:  "the platform's secret store: initialise it, exchange peer CAs, seed credentials into it, and obtain tokens from it",
 		Always: true,
+		// FOLLOWS `openbao`. Initialising the store, exchanging peer CAs and seeding
+		// credentials into it all presuppose the store the component installs.
+		//
+		// THIS ONE IS LOAD-BEARING AND THAT IS THE POINT. Disabling the component is a
+		// large decision, and the link is what makes the consequence legible: every
+		// binding here resolves off with it, rather than running against an OpenBao
+		// that was never deployed and failing on connection refused.
+		Component: "openbao",
 		Bindings: []extension.Binding{
 			{
 				Kind:  extension.Transition,

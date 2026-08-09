@@ -72,6 +72,9 @@ func Extension() extension.Extension {
 		Name:   "reconcile-actions",
 		Short:  "the llzReconciler's action lanes — each an invariant that must keep holding",
 		Always: true,
+		// FOLLOWS `llzReconciler`. These are the daemon's action lanes — they run inside
+		// the process the component deploys, so their enablement cannot differ from its.
+		Component: "llzReconciler",
 		Bindings: []extension.Binding{
 			{
 				// LKE's Flux-managed HelmRelease keeps re-marking the retain

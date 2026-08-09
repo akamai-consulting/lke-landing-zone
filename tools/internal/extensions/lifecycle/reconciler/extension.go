@@ -62,6 +62,9 @@ func Extension() extension.Extension {
 		Name:   "reconciler-runtime",
 		Short:  "the in-cluster reconcile daemon: leader election, lane scheduling, health and metrics",
 		Always: true,
+		// FOLLOWS `llzReconciler`. This IS the in-cluster reconcile daemon the component
+		// deploys; with the component off there is no pod for it to be.
+		Component: "llzReconciler",
 		Bindings: []extension.Binding{
 			{
 				Kind: extension.Invariant, Name: "cidr-firewall", State: extension.Operating,

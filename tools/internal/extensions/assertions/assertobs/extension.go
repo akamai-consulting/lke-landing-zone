@@ -50,6 +50,12 @@ func Extension() extension.Extension {
 		Name:   "assert-observability",
 		Short:  "the telemetry stack works: targets scraped, alerts evaluated and delivered, logs ingested, dashboards present",
 		Always: true,
+		// FOLLOWS `observability`. Every lane this extension owns reads the telemetry
+		// stack itself — Loki bootstrapped, ServiceMonitors scraped, alerts evaluated
+		// and delivered, dashboards labelled. With the component off there is no
+		// Prometheus to query and no Loki to ship to, so these assertions are not
+		// failing, they are asking about something the instance does not have.
+		Component: "observability",
 		Bindings: []extension.Binding{
 			{
 				Kind:   extension.Assertion,

@@ -53,6 +53,9 @@ func Extension() extension.Extension {
 		Name:   "harbor-provisioner",
 		Short:  "mint Harbor robot accounts, seed them into OpenBao, and publish them as repo secrets",
 		Always: true,
+		// FOLLOWS `harbor`. This mints Harbor robot accounts and seeds them; with no
+		// Harbor there is no project to provision into and no robot to mint.
+		Component: "harbor",
 		Bindings: []extension.Binding{{
 			Kind:  extension.Transition,
 			Name:  "harbor-robots",

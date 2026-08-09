@@ -62,6 +62,10 @@ func Extension() extension.Extension {
 		Name:   "kyverno-policies",
 		Short:  "apply a Kyverno ClusterPolicy and wait until it is actually enforcing",
 		Always: true,
+		// FOLLOWS `policyEngine`. It applies Kyverno ClusterPolicies and waits until
+		// they are enforcing. Without the engine there is no admission controller to
+		// bind them to, and the wait would time out on a webhook that will never exist.
+		Component: "policyEngine",
 		Bindings: []extension.Binding{{
 			Kind:  extension.Transition,
 			State: extension.Converged,

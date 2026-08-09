@@ -115,10 +115,45 @@ func TestUnlinkedExtensionsStillFollowAlways(t *testing.T) {
 // changing which component gates a capability is exactly the drift a reader of the
 // declaration would not notice.
 func TestComponentLinksArePinned(t *testing.T) {
+	// THE REASON MATTERS MORE THAN THE PAIR. A link decides whether a capability
+	// runs at all, in BOTH directions, so each one is a claim that the extension
+	// exists BECAUSE the component does — not merely that the two are related.
+	// Extensions spanning several components are deliberately absent below:
+	// `assert-secrets` touches externalSecrets, openbao and broadPatRotator, and a
+	// single link would turn one of the three into a switch for all of them.
 	want := map[string]string{
-		"obj-encryption":    "objProxy",
-		"assert-registry":   "harbor",
+		// the SSE-C key exists to encrypt what the OBJ proxy writes
+		"obj-encryption": "objProxy",
+		// proves a minted Harbor robot can authenticate; no Harbor, no robot
+		"assert-registry": "harbor",
+		// measures the in-cluster reconciler the component deploys
 		"assert-reconciler": "llzReconciler",
+
+		// SEVEN ADDED TOGETHER, taking enablement from 3 of 61 to 10. The field had
+		// been readable since the resolver landed and almost nothing used it, so the
+		// model's headline promise — an instance can turn a capability off in its own
+		// configuration rather than by taking a different build — was true for three
+		// extensions and undeliverable for the rest.
+		//
+		// every lane reads the telemetry stack itself: no Prometheus to query, no
+		// Loki to ship to
+		"assert-observability": "observability",
+		// mints Harbor robots and seeds them; no Harbor, no project to mint into
+		"harbor-provisioner": "harbor",
+		// applies ClusterPolicies and waits for enforcement; without the engine the
+		// wait is for a webhook that will never exist
+		"kyverno-policies": "policyEngine",
+		// seeds the state the in-cluster firewall-controller reconciles FROM, and
+		// that controller is what the component installs
+		"cloud-firewall-bootstrap": "cidrFirewall",
+		// IS the reconcile daemon the component deploys
+		"reconciler-runtime": "llzReconciler",
+		// the daemon's action lanes run inside that same process, so their
+		// enablement cannot differ from its
+		"reconcile-actions": "llzReconciler",
+		// initialising the store, exchanging peer CAs and seeding into it all
+		// presuppose the store the component installs
+		"openbao": "openbao",
 	}
 	got := ComponentLinks()
 	for name, comp := range want {
