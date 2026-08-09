@@ -322,6 +322,32 @@ type Extension struct {
 	// registry is also where a name that matches no component is caught, since only
 	// something holding the component list can know.
 	//
+	// IT IS EXTENSION-SCOPED, WHICH IS THE MISTAKE Grants WAS CORRECTED FROM, AND
+	// THERE IS ONE CASE THAT PROVES IT — which is one short of this model's bar.
+	//
+	// `assert-secrets` carries four named bindings, and each belongs to a DIFFERENT
+	// component: eso-roundtrip follows externalSecrets, openbao-audit follows
+	// openbao, broad-pat-drill follows broadPatRotator, and rotation-health follows
+	// none of them (it gates every credential credpaths declares). A single
+	// Component here can only be one of those, so the extension carries none and an
+	// instance that dropped externalSecrets still runs the ESO round-trip.
+	//
+	// THE FIX IS NOT A SLICE. `[]string` would ask a question with no good answer —
+	// all of them off, or any? — and both readings are wrong for assert-secrets,
+	// whose four bindings want four independent answers. The shape is per-BINDING,
+	// which is exactly the argument made for grants twenty lines up: every rule
+	// about a component is really a rule about the binding that follows it, so
+	// extension-scoped components cannot be reconciled with multi-binding
+	// extensions.
+	//
+	// NOTHING IS INVENTED HERE, because one case is an anecdote. The two other
+	// candidates were checked and are not cases: `credential-pat` has a single
+	// binding (so its link is a whole-extension decision, not a per-binding one),
+	// and `health-sla`'s two invariants are both cross-cutting — neither follows a
+	// component at all. When a second multi-component extension appears, this is
+	// the note it belongs beside, and the reconciler lanes are already carrying the
+	// binding name that per-binding resolution would need (see LaneDecl).
+	//
 	// EMPTY IS NOT "ALWAYS ON". Four of the seven opt-in extensions have no
 	// component and should not be given one: import-brownfield is a one-time
 	// adoption path, wedge-gameday and dev-mutation-testing are not about the
