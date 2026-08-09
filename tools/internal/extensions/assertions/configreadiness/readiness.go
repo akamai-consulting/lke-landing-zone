@@ -280,7 +280,7 @@ func RunEnvReadiness(env string) error {
 }
 
 // isDeferrable reports whether a readiness finding lives in the cert/DNS tree
-// (platform-apl/manifest/dns/...). Those placeholders configure cert-manager
+// (manifest/dns/...). Those placeholders configure cert-manager
 // DNS-01 issuance (the Argo-synced letsencrypt ClusterIssuers), which is settable
 // after the first build (quickstart §4), so they must not block the apply.
 func isDeferrable(file string) bool {

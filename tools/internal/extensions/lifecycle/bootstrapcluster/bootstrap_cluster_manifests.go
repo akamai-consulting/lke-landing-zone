@@ -4,7 +4,7 @@ package bootstrapcluster
 // bootstrap-cluster` — the Go map literals server-side-applied in place of the
 // module's `kubectl_manifest` resources (yamlencode(...) + server_side_apply).
 // Each function is a faithful port of the corresponding resource in
-// terraform-modules/llz-cluster-bootstrap/main.tf; the labels, annotations,
+// llz-cluster-bootstrap/main.tf; the labels, annotations,
 // sourceRepos pin, and full syncPolicy (retry 40 @ 90s cap,
 // SkipDryRunOnMissingResource) are carried verbatim — see the module for the
 // per-field rationale.

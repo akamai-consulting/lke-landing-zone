@@ -57,3 +57,27 @@ var DeliveredDocs = map[string]bool{
 	"playbooks":     true, // routine operational how-tos
 	"README.md":     true, // the pointer deliver-docs writes (kept if it already exists)
 }
+
+// RenderTimeArtifact names paths that exist in a RENDERED instance but not in the
+// template, because the render itself creates them. They are not dead links — the
+// guard simply cannot see them from here. Keep this list tiny and cite the creator,
+// so it stays a statement of fact rather than a place to bury real breakage.
+// IT LIVES HERE FOR THE REASON DeliveredDocs DOES, and an architecture guard is
+// what said so: source-ref-guard needed it too, importing docsguard to get it, and
+// TestNoNewExtensionToExtensionImports refused the edge — "extension packages must
+// not import each other; the library half moves to internal/shared". Which path is
+// written by a render rather than committed is a FACT two consumers must agree on
+// exactly, not a capability either of them owns. docs-guard skips these links;
+// source-ref-guard skips these literals; a second copy is how one of them grows.
+var RenderTimeArtifact = map[string]bool{
+	// runDeliverDocs writes it (docsPointer) after pruning docs/ to the keep-set.
+	"docs/README.md": true,
+	// `llz render` writes the per-root tfvars; terraform-iac-bootstrap/.gitignore
+	// excludes the whole rendered tree, which is why the instance commits zero
+	// Terraform. Cited by shared/terraform as the variable contract to stay in
+	// step with.
+	"instance-template/terraform-iac-bootstrap/cluster/variables.tf": true,
+	// `llz scaffold` writes it from landingzone.yaml.example; only the example is
+	// committed. e2e-instantiate rm -f's it to force a clean re-scaffold.
+	"instance-template/landingzone.yaml": true,
+}

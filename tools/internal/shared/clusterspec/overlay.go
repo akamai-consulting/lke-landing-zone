@@ -52,7 +52,7 @@ const (
 
 // aplStaticDisabledApps are the apl-core apps the landing zone keeps OFF for
 // every environment (no per-env component drives them) — the enabled:false set in
-// instance-template/apl-values/_shared/values.yaml. They render into the _shared
+// apl-values/_shared/values.yaml. They render into the _shared
 // apps overlay. Keep in lockstep with that values.yaml block. external-dns is NOT
 // here: its schema permits no `enabled` key (it is gated by otomi.hasExternalDNS).
 var aplStaticDisabledApps = []string{

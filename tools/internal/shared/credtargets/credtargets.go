@@ -128,7 +128,7 @@ const (
 // circular with respect to the OpenBao that would hold it: the state-backend
 // credentials guard the state that reaches the cluster OpenBao runs in, and the
 // seal key, recovery quorum and root token ARE OpenBao's own escrow. Storing any
-// of them in OpenBao means losing all of them together. See docs/adr/0009.
+// of them in OpenBao means losing all of them together. See docs/adr/0009-unmeasurable-credential-coverage.md.
 //
 // The write-time probe is the mechanism ADR 0009 built for the first three. The
 // rest were left behind not because a different mechanism was needed but because

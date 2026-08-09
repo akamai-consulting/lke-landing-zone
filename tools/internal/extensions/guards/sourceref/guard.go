@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 // guardedPrefixes are the trees whose path literals are resolved.
@@ -44,40 +45,37 @@ import (
 // way; nothing was wrong with it.
 //
 // ────────────────────────────────────────────────────────────────────────────
-// THE OTHER FIVE TREES ARE NOT HERE, AND "ADD A PREFIX" IS NOT WHAT IT COSTS.
+// THE OTHER SIX WERE ADDED AFTER MEASURING, and the measurement is the story.
 //
 // An earlier version of this comment claimed they "were scanned during
 // development and are quiet". That was never measured — it was inferred, in a
-// file whose whole subject is unverified claims about the repo. Measured, with
-// trimRef's trailing-hyphen rule already applied:
+// file whose whole subject is unverified claims about the repo. Measured, they
+// held 95 findings: docs 35, platform-apl 33, template-scripts 14,
+// instance-template 6, terraform-modules 3, dockerfiles 3.
 //
-//	docs 35    platform-apl 33    template-scripts 14
-//	instance-template 6    terraform-modules 3    dockerfiles 3
+// TWO CLASSES HAD TO BE MODELLED FIRST, because both are prose that merely LOOKS
+// like a path, and an ignore-list is not available here — see this file's header:
 //
-// TWO CLASSES BLOCK THEM, and neither is answerable with an ignore-list — see
-// this file's header for why that door stays shut:
+//  1. RENDER-TIME ARTIFACTS. `docs/README.md` is cited 21 times and does not exist
+//     here BY DESIGN: deliver-docs writes it into a rendered instance and the docs
+//     skill says never to create one. All 21 citations are correct, so shipping
+//     this prefix naively would have told 21 authors to fix working prose — which
+//     is how a guard earns its deletion. docs-guard already modelled it, so the
+//     set is SHARED rather than copied — from shared/platform, not from docsguard:
+//     importing a peer extension is refused by TestNoNewExtensionToExtensionImports,
+//     correctly, and which paths a render creates is a FACT both guards consult
+//     rather than a capability either owns.
 //
-//  1. RENDER-TIME ARTIFACTS. `docs/README.md` is referenced 21 times and does not
-//     exist here BY DESIGN: `deliver-docs` writes it into a rendered instance,
-//     and the docs skill says in as many words never to create one. Every one of
-//     those references is correct. Shipping that prefix without modelling this
-//     would tell 21 authors to fix working prose, which is how a guard earns its
-//     deletion. docs-guard already carries the notion — renderTimeArtifact — so
-//     the fix is to share it rather than reinvent it.
+//  2. PROSE THAT WEARS A PATH'S CLOTHES. Three shapes, each with a rule that
+//     cannot mask a real reference: an illustrative segment (a single letter,
+//     verified absent from every tracked path), a hyphenated adjective hanging off
+//     a directory ("the docs/-scoped rewrite"), and a name broken across a line
+//     (trimRef). Nobody writes a `tools/`-shaped path to mean "some file", which
+//     is why none of this surfaced under the first prefix.
 //
-//  2. ILLUSTRATIVE PATHS. Nobody writes a `tools/`-shaped path to mean "some
-//     file", so the class never appeared under this prefix. One tree over it is
-//     everywhere: capability/repo.go explains what a scan root does to a
-//     finding's name using invented platform-apl paths, and the plaintext guard's
-//     tests do the same. They are examples, not claims, and no rule available
-//     here separates the two.
-//
-// So the remaining five are a design slice, not a config change: solve (1) by
-// sharing docs-guard's render-time set, and (2) by deciding whether an example
-// path earns a convention — as `pkg's Symbol` did for the symbol half — or
-// whether those trees are simply out of scope. Nothing else in this file is
-// prefix-aware; the cost is entirely in those two answers.
-var guardedPrefixes = []string{"tools", "kubernetes-charts"}
+// The 68 that survived those rules were real, and are fixed.
+var guardedPrefixes = []string{"tools", "kubernetes-charts", "docs", "platform-apl",
+	"template-scripts", "instance-template", "terraform-modules", "dockerfiles"}
 
 // refExpr matches a guarded path literal, with the character BEFORE it captured
 // so the boundary rule below can judge it.
@@ -285,7 +283,9 @@ func extractRefs(file, body string) []Finding {
 				continue
 			}
 			p := trimRef(line[start:end])
-			if p == "" || strings.Contains(p, "**") {
+			if p == "" || strings.Contains(p, "**") ||
+				illustrativeSegment.MatchString(p) || hyphenAdjective.MatchString(p) ||
+				platform.RenderTimeArtifact[p] {
 				// `**` needs a recursive match this guard has no reason to implement:
 				// the only literals carrying one are glob PATTERNS in prose
 				// ("tools/internal/**/*_test.go"), which name a shape rather than a
@@ -315,6 +315,29 @@ func isRegexFragment(line string, start, end int) bool {
 	}
 	return end < len(line) && line[end] == '\\'
 }
+
+// illustrativeSegment matches a path segment that stands for "some file" rather
+// than naming one: a single letter, alone or with an extension.
+//
+// SAFE BECAUSE NO REAL PATH HERE HAS ONE — every tracked path was checked, and
+// not a single segment is one character. So the rule cannot mask a genuine
+// reference; it can only excuse the invented ones.
+//
+// It exists because the class is unavoidable outside tools/. Nobody writes a
+// `tools/`-shaped path to mean "some file", but capability/repo.go explains what
+// a scan root does to a finding's NAME by inventing two platform-apl paths, and
+// the plaintext guard's tests do the same. Those are examples, not claims, and
+// without this rule the guard reports the documentation that teaches it.
+var illustrativeSegment = regexp.MustCompile(`(^|/)[A-Za-z](\.[A-Za-z0-9]+)?(/|$)`)
+
+// hyphenAdjective matches a path whose next segment starts with `-`, which is
+// prose rather than a path: "the docs/-scoped rewrite" means the rewrite scoped
+// to docs/, and "a docs/-relative link" the same. No real path here has a segment
+// beginning with a hyphen, so this cannot mask a genuine reference.
+//
+// It is the mirror of trimRef's trailing-hyphen rule — English attaches hyphens
+// on both sides of a path and neither side is part of one.
+var hyphenAdjective = regexp.MustCompile(`/-`)
 
 // trimRef strips the trailing punctuation a path collects from prose — the `.`
 // ending a sentence and the `/` ending a directory. Neither is legal as the last

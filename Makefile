@@ -445,7 +445,7 @@ k8s-validate: render-charts
 # (openbao-alerts, support-plane-alerts, …) — the previous default pointed at
 # the retired prometheus-rules-crd path, so the gate skip-cleaned on every run
 # and nothing promtool-validated the live rules. `llz ci check-prom-rules` is
-# the native port of the former template-scripts/linting-and-validation/
+# the native port of the former linting-and-validation/
 # check-prometheus-rule-crds.py; uses the PATH llz when present (the CI images
 # bake it), else builds from source.
 # LLZ_CI — invoke one `llz ci <verb>`. Nine targets stamped out this same
@@ -700,7 +700,7 @@ helm-dep-lock-check:
 
 # helm-lint-charts: lint + template every first-party Helm chart under kubernetes-charts/.
 # These are the extracted, independently-versioned charts published to GHCR
-# (docs/templatization-plan.md §5). `helm lint --strict` enforces schema +
+# (templatization-plan.md §5). `helm lint --strict` enforces schema +
 # best-practices; `helm template` proves every chart renders with its default
 # values (the operational scars are encoded as those defaults). Mirrors the
 # helm-lint-charts CI step in .github/workflows/lint.yml.

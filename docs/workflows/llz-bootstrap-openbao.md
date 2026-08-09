@@ -330,7 +330,7 @@ phase marks complete the timeline.
 
 The out-of-band self-signed `openbao-tls` seed that used to live here has been REMOVED.
 `openbao-tls` is now issued by the stable, self-signed cert-manager CA `openbao-ca`
-(`platform-apl/manifest/cert-manager/raw/openbao-bootstrap-ca.yaml`), which has no
+(`manifest/cert-manager/raw/openbao-bootstrap-ca.yaml`), which has no
 OpenBao dependency. cert-manager issues `openbao-tls` before OpenBao starts — the
 StatefulSet pod simply waits in `ContainerCreating` for the Secret mount — and the
 serving CA never changes, so there is no mid-bootstrap CA rotation, no OpenBao reload,
@@ -589,7 +589,7 @@ Non-fatal: a standby whose `openbao-tls` isn't up yet just skips peer-CA provisi
 ### Removed: Verify ExternalSecrets synced
 
 The `Verify ExternalSecrets synced` step (and its backing
-`template-scripts/verify-externalsecrets.sh`) was deleted in the convergence-contract
+`verify-externalsecrets.sh`) was deleted in the convergence-contract
 anti-pattern cleanup. It existed to `kubectl annotate ... force-sync=$(date +%s)` every
 ExternalSecret because ESO's 24h refresh cache could hold a `Ready=False` from before
 the workflow seeded the source path. Replaced by Argo CD `health.lua` for

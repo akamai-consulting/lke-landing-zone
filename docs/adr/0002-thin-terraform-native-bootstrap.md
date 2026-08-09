@@ -87,7 +87,7 @@ Supporting decisions (see the PR's plan for the full rationale):
   command's deterministic ordering, its `--dry-run`, and the retained
   `diagnose-argocd` on failure.
 - **Removed:** `terraform-iac-bootstrap/cluster-bootstrap`,
-  `terraform-modules/llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
+  `llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
   tfroot, and the now-dead `llz ci tf-untrack` + `internal/terraform/untrack.go`.
   The offline apl-values var-contract guard (`llz ci validate-apl-values`) now
   checks against the Go `bootstrapValuePlaceholders` constant instead of parsing

@@ -1,6 +1,6 @@
 package environments
 
-// scaffold.go ports `template-scripts/new-deployment.sh` into the llz binary so
+// scaffold.go ports `new-deployment.sh` into the llz binary so
 // `llz env add` works in a rendered instance, which carries NO scripts/ tree (the
 // reusable workflows source instance-scripts from a template checkout; copier no
 // longer copies any script trees into an instance). The bash version still ships

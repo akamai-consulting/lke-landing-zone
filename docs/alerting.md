@@ -55,7 +55,7 @@ no GitHub secret, no values churn:
 
    apl-core mounts the URL from the `alertmanager-credentials` Secret; the
    `kyverno-alertmanager-slack-webhook` policy (Kyverno is owned by the managed
-   App Platform — LLZ no longer ships a `platform-apl/manifest/kyverno-policies/`
+   App Platform — LLZ no longer ships a `manifest/kyverno-policies/`
    base) repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
    the seed up within its 5m refresh. Rotation is the same `llz openbao set`
    again. An unseeded path leaves the ExternalSecret NotReady — a loud, named

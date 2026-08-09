@@ -96,6 +96,12 @@ func (f Finding) String() string {
 	return fmt.Sprintf("%s:%d: [%s] %s", f.File, f.Line, f.Kind, f.Detail)
 }
 
+// The scaffold subtree, whose Markdown renders to the instance ROOT.
+const (
+	scaffoldDirName = "instance-template"
+	scaffoldPrefix  = scaffoldDirName + "/"
+)
+
 // docsGuardSkipDir names the directories that hold Markdown belonging to
 // something other than this repo — build output and vendored third-party trees,
 // whose links resolve against THEIR project and would report as dead here.
@@ -106,21 +112,6 @@ func (f Finding) String() string {
 // from 105 files to 101 while still reporting success. A deny-set fails in the
 // safe direction: an artifact tree nobody listed produces noisy findings, which
 // gets fixed. An over-broad skip produces silent under-coverage, which does not.
-// renderTimeArtifact names paths that exist in a RENDERED instance but not in the
-// template, because the render itself creates them. They are not dead links — the
-// guard simply cannot see them from here. Keep this list tiny and cite the creator,
-// so it stays a statement of fact rather than a place to bury real breakage.
-var renderTimeArtifact = map[string]bool{
-	// runDeliverDocs writes it (docsPointer) after pruning docs/ to the keep-set.
-	"docs/README.md": true,
-}
-
-// The scaffold subtree, whose Markdown renders to the instance ROOT.
-const (
-	scaffoldDirName = "instance-template"
-	scaffoldPrefix  = scaffoldDirName + "/"
-)
-
 var docsGuardSkipDir = map[string]bool{
 	".git":           true,
 	".terraform":     true, // provider/module cache: third-party READMEs
@@ -695,8 +686,9 @@ func checkDocLinks(repo capability.Repo, docs []docFile, n *Scanned) []Finding {
 				// gave `docs/docs/x.md` and reported a valid link as dead.
 				//
 				// (It never escaped to the OS root, as one review suggested:
-				// filepath.Join CLEANS, so `Join("docs","/etc/passwd")` is
-				// "docs/etc/passwd" — contained. The defect is a false POSITIVE,
+				// filepath.Join CLEANS, so joining the docs dir with an absolute
+				// link target yields that target UNDER the docs dir rather than at
+				// the filesystem root — contained. The defect is a false POSITIVE,
 				// not a filesystem read outside the tree.)
 				base := linkDir
 				if strings.HasPrefix(path, "/") {
@@ -732,7 +724,7 @@ func checkDocLinks(repo capability.Repo, docs []docFile, n *Scanned) []Finding {
 				if rendered && pathExists(repo, filepath.Join(scaffoldDirName, resolved)) {
 					continue // template-owned; renders into the instance beside this file
 				}
-				if rendered && renderTimeArtifact[filepath.ToSlash(resolved)] {
+				if rendered && platform.RenderTimeArtifact[filepath.ToSlash(resolved)] {
 					continue // written during render, so absent here by construction
 				}
 				out = append(out, Finding{File: rel, Line: i + 1, Kind: "link",

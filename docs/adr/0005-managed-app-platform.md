@@ -15,7 +15,7 @@ no longer exists.
 **Corrections — where the shipped code diverged from the design log below (authoritative; the prose further down predates these):**
 - **No opt-in flag.** `managedAppPlatform: true` is mandatory; there is no `--managed-app-platform` toggle and no self-install default. Phase 1's "default off = unchanged self-install" framing is obsolete.
 - **Block-storage is the cluster DEFAULT on managed** (same as self-install), not the *non-default* class GAP 1 describes. The always-on `llzReconciler` sc-demote pass keeps LKE's `linode-block-storage-retain` non-default, so `block-storage-retain` is the single encrypted+Retain default. `managedBlockStorageClassYAML` was dropped.
-- **The manifest tree was collapsed to ONE base** — there is no `manifest-managed` variant (as the status line above states). GAP 2's "Managed base variant `platform-apl/manifest-managed/`" prose predates the collapse; the self-install-only pieces were dropped from the single base instead.
+- **The manifest tree was collapsed to ONE base** — there is no `manifest-managed` variant (as the status line above states). GAP 2's "Managed base variant `manifest-managed/`" prose predates the collapse; the self-install-only pieces were dropped from the single base instead.
 - **Values ownership was reversed by [ADR 0006](0006-managed-default-apps.md).** The "managed apl-core owns its values via apl-api + in-cluster gitea; LLZ does NOT push into apl-core's values/gitea" conclusion below (Option A, spike findings) is **superseded**: LLZ *does* push a github `apl-<env>` values branch (App Platform BYO-Git) to enable apl-core's default apps and repoints apl-core at it. See ADR 0006 for the shipped mechanism.
 
 Date: 2026-07-22
@@ -234,7 +234,7 @@ are ABSENT** (opt-in via the console). So the managed LLZ extras split into thre
    - **certManager split** into `certManagerBootstrapCA` (always — OpenBao's `issuerRef` hard-requires the CA) +
      `certAutomation` (skip — apl-core owns letsencrypt/DNS + the public cert). Repoints openbao's `DependsOn` + the
      cert-manager import mappings.
-   - **Managed base variant** `platform-apl/manifest-managed/`: keeps only the AppProjects + the wave-health
+   - **Managed base variant** `manifest-managed/`: keeps only the AppProjects + the wave-health
      admission guard; excludes cluster-foundation (its sc-default-patcher would demote managed's default SC), the
      apl-core-gap Kyverno policies, the letsencrypt DNS-01 issuers, and the grafana/otel generated-secrets. (The two
      AppProject files are copied local — kustomize's load restrictor blocks sibling-FILE refs — with a drift-guard test.)

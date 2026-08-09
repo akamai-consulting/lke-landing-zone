@@ -1,7 +1,7 @@
 package coverageguard
 
 // ci_coverage_guard.go implements `llz ci check-coverage` — the native port of
-// template-scripts/ci/check-go-coverage.sh. It enforces PER-PACKAGE minimum
+// check-go-coverage.sh. It enforces PER-PACKAGE minimum
 // statement coverage from a Go coverprofile: each `<pkg-suffix>=<min>` argument
 // names a package by the END of its import path (so `cmd/llz` matches
 // .../tools/cmd/llz) and a minimum percentage, and the command fails if any

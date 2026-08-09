@@ -131,7 +131,7 @@ spec:
       # installs+manages apl-core and provisions the lke<id>.akamai-apl.net domain +
       # DNS + wildcard cert. Do NOT set cluster.bootstrap.domainSuffix (Linode owns
       # the domain). Declare optional apl-core apps you enable in the Console via
-      # cluster.bootstrap.managedApps (e.g. [harbor, loki]). See docs/adr/0005.
+      # cluster.bootstrap.managedApps (e.g. [harbor, loki]). See docs/adr/0005-managed-app-platform.md.
       bootstrap: { managedAppPlatform: true }
 `, clusterspec.APIVersion, clusterspec.Kind, instanceName,
 		upstreamOrg, repo, clusterspec.SanitizeObjLabelPrefix(instanceName),

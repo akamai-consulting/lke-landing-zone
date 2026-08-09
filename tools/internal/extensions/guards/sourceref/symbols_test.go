@@ -324,3 +324,74 @@ func TestRunSymbolsFailsWhenNoTestCitationIsExtracted(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+// ── make-target citations ───────────────────────────────────────────────────
+
+// `make lint` is cited 33 times and `make coverage` 10; the runbooks and skills
+// tell a reader — often an agent — to run one. A renamed target turns every
+// citation into a step that fails at the point of use.
+func TestRunSymbolsFailsOnACitedMakeTargetThatDoesNotExist(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Makefile":     "lint:\n\techo hi\n",
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		"docs/a.md":    "run `make lint`, then `make coverage`. `p.F`\n",
+	})
+	err := RunSymbols(root)
+	if err == nil {
+		t.Fatal("a citation to a target the Makefile does not declare must fail")
+	}
+	if !strings.Contains(err.Error(), "1 stale reference") {
+		t.Errorf("expected one finding, got %v", err)
+	}
+}
+
+func TestRunSymbolsPassesCitedMakeTargetsThatExist(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Makefile":     "lint:\n\techo hi\ncoverage:\n\techo hi\n",
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		"docs/a.md":    "run `make lint`, then `make coverage`. `p.F`\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("both targets exist: %v", err)
+	}
+}
+
+// `make` is an ordinary English verb. An unanchored scan finds "make sure" and
+// "make it impossible", which swamps the signal — measured before choosing the
+// backticked form.
+func TestBareMakeInProseIsNotACitation(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Makefile":     "lint:\n\techo hi\n",
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		"docs/a.md":    "make sure to make everything work; that would make sense. `make lint`, `p.F`\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("prose uses of the verb are not citations: %v", err)
+	}
+}
+
+// A rule is declared at column zero; a TAB-indented recipe line can contain a
+// colon and is not a target. Indexing one would let a citation resolve against
+// something that is not a rule.
+func TestRecipeLinesAreNotIndexedAsTargets(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Makefile":     "lint:\n\t@echo running: coverage\n",
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		"docs/a.md":    "run `make coverage`. `p.F`\n",
+	})
+	if err := RunSymbols(root); err == nil {
+		t.Fatal("`coverage` appears only inside a recipe, so the citation must fail")
+	}
+}
+
+// Target-specific variables (`t: export VAR := x`) still declare the target.
+func TestTargetSpecificVariableLineStillDeclaresTheTarget(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Makefile":     "docs-guard: export LLZ_FORCE_SOURCE := 1\ndocs-guard:\n\techo hi\n",
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		"docs/a.md":    "run `make docs-guard`. `p.F`\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("a target-specific variable line declares the target: %v", err)
+	}
+}

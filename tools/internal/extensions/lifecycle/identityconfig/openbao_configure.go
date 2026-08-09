@@ -71,7 +71,7 @@ path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 
 // eso-pusher: narrow create/update access to the in-cluster-sourced secrets that
 // ESO PushSecrets write into OpenBao — the self-generated grafana admin password
-// and otel ingress bearer (platform-apl/manifest/generated-secrets/), plus
+// and otel ingress bearer (manifest/generated-secrets/), plus
 // the Harbor admin password mirrored from Harbor's Helm Secret
 // (platform-apl/components/harbor/harbor-admin-push.yaml). Replaces the imperative
 // `llz ci bao-seed` of these paths (root-token + kubectl exec) with a

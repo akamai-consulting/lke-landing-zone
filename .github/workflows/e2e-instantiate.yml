@@ -167,7 +167,7 @@ jobs:
         # A throwaway e2e instance has no .copier-answers.yml for `llz render` to read a
         # version from, so hand it the SHA under test — ArgoCD then fetches the shared
         # components from THIS commit (which carries the changes being validated), not a
-        # published tag. See docs/designs/apl-values-remote-refs.md + resolveTemplateRef.
+        # published tag. See designs/apl-values-remote-refs.md + resolveTemplateRef.
         env:
           LLZ_TEMPLATE_REF: ${{ github.sha }}
           # The reconciler + harbor components ship ghcr.io/…/llz:latest and are retagged
@@ -184,7 +184,7 @@ jobs:
           rm -f instance-template/terraform-iac-bootstrap/*/"${E2E_ENV}.tfvars" 2>/dev/null || true
           rm -f "instance-template/environments/${E2E_ENV}.yaml" instance-template/landingzone.yaml 2>/dev/null || true
           # `llz env add` is the spec-first scaffolder (folded into the binary from
-          # the old template-scripts/new-deployment.sh). It is layout-aware: run from
+          # the old new-deployment.sh). It is layout-aware: run from
           # the template root it writes into instance-template/.
           bin/llz env add "${E2E_ENV}" \
             --region "${E2E_LINODE_REGION}" \
@@ -196,7 +196,7 @@ jobs:
           # construction.)
           # This env add runs at the TEMPLATE root, where .copier-answers.yml holds
           # unrendered jinja — so readAnswers fails and spec.instance.repo falls back
-          # to a dirname guess (instance-template/instance-template). Fix the IDENTITY
+          # to a dirname guess (the scaffold dir name repeated under itself). Fix the IDENTITY
           # rather than papering over it downstream: it is what the render-time
           # otomi.git.repoUrl default derives from (apl-operator pushes its values tree
           # there), what the carved Argo Applications and the AppProject sourceRepos

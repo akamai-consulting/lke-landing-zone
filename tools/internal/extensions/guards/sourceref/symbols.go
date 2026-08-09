@@ -104,9 +104,11 @@ type SymbolReport struct {
 	Packages int // packages whose exported surface was indexed
 	Symbols  int // exported identifiers in the table
 	Tests    int // test functions indexed from _test.go
+	Targets  int // make rules indexed from the Makefile
 	Scanned  int // files read
 	Refs     int // pkg.Symbol references judged
 	TestRefs int // bare test-function citations judged
+	MakeRefs int // `make <target>` citations judged
 	Findings []Finding
 }
 
@@ -125,12 +127,17 @@ func RunSymbols(root string) error {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
+	targets, err := makeTargets(repo)
+	if err != nil {
+		return fmt.Errorf("symbol-ref-guard: %w", err)
+	}
+
 	files, err := corpus(repo)
 	if err != nil {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
-	rep := SymbolReport{Packages: len(table), Tests: len(tests)}
+	rep := SymbolReport{Packages: len(table), Tests: len(tests), Targets: len(targets)}
 	for _, syms := range table {
 		rep.Symbols += len(syms)
 	}
@@ -173,6 +180,17 @@ func RunSymbols(root string) error {
 					})
 				}
 			}
+			for _, m := range makeCiteExpr.FindAllStringSubmatch(ln.text, -1) {
+				if len(targets) == 0 {
+					continue // no Makefile here; nothing to judge against
+				}
+				rep.MakeRefs++
+				if !targets[m[1]] {
+					rep.Findings = append(rep.Findings, Finding{
+						File: rel, Line: ln.num, Ref: "make " + m[1],
+					})
+				}
+			}
 		}
 	}
 
@@ -183,6 +201,13 @@ func RunSymbols(root string) error {
 		return rep.Findings[i].Line < rep.Findings[j].Line
 	})
 	for _, f := range rep.Findings {
+		if strings.HasPrefix(f.Ref, "make ") {
+			fmt.Printf("::error file=%s,line=%d::the Makefile declares no `%s` rule — a runbook "+
+				"step that cannot run is worse than no step, and this repo's docs and skills "+
+				"tell a reader (often an agent) to run one. Name the target that exists\n",
+				f.File, f.Line, f.Ref)
+			continue
+		}
 		if !strings.Contains(f.Ref, ".") {
 			fmt.Printf("::error file=%s,line=%d::no test named %s exists — a citation like this "+
 				"claims a mechanism keeps something true, so a renamed one leaves the sentence "+
@@ -232,9 +257,10 @@ func RunSymbols(root string) error {
 			"of habit, so zero means the extraction is broken", rep.Scanned, rep.Tests)
 	}
 
-	fmt.Printf("symbol-ref-guard: %d symbol and %d test reference(s) across %d file(s) all resolve "+
-		"(%d package(s), %d exported symbol(s), %d test(s) indexed).\n",
-		rep.Refs, rep.TestRefs, rep.Scanned, rep.Packages, rep.Symbols, rep.Tests)
+	fmt.Printf("symbol-ref-guard: %d symbol, %d test and %d make reference(s) across %d file(s) "+
+		"all resolve (%d package(s), %d exported symbol(s), %d test(s), %d target(s) indexed).\n",
+		rep.Refs, rep.TestRefs, rep.MakeRefs, rep.Scanned,
+		rep.Packages, rep.Symbols, rep.Tests, rep.Targets)
 	return nil
 }
 

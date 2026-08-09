@@ -16,7 +16,7 @@ func Cmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "check-coverage <pkg-suffix=min>...",
 		Short: "enforce per-package minimum statement coverage from a Go coverprofile",
-		Long: "Native port of template-scripts/ci/check-go-coverage.sh (the per-package\n" +
+		Long: "Native port of check-go-coverage.sh (the per-package\n" +
 			"floor enforced by `make coverage`). Each <pkg-suffix>=<min> argument matches\n" +
 			"the END of a package import path (cmd/llz -> .../tools/cmd/llz) and a minimum\n" +
 			"statement-coverage percentage. Fails if any gated package is below its floor\n" +

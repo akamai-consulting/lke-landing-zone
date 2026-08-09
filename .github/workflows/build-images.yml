@@ -6,7 +6,7 @@ on:
     # `llz` binary stamped with `dev-<github.sha>` (--build-arg LLZ_VERSION), and
     # `llz ci assert-image-fresh` (run by release-e2e.yml + the instance dispatch
     # preflight) hard-fails when the `:latest` image's baked sha doesn't match the
-    # checked-out template ref. A path filter on dockerfiles/tools meant any main
+    # checked-out template ref. A path filter on dockerfiles/ and tools/ meant any main
     # merge that DIDN'T touch those paths (a chart-only or docs-only change) left
     # `:latest` stamped at an older sha, so the next e2e tripped the freshness
     # guard ("image/template skew"). Building on every main push keeps `:latest`'s

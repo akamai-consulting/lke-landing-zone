@@ -1,7 +1,7 @@
 package assertobs
 
 // ci_check_prom_rules.go implements `llz ci check-prom-rules` — the native port
-// of the former template-scripts/linting-and-validation/
+// of the former linting-and-validation/
 // check-prometheus-rule-crds.py (the Makefile's prom-rules-check target, and
 // the last first-party Python script in the repo).
 //
@@ -37,7 +37,7 @@ import (
 
 // defaultPromRulesDirs are the roots that ship PrometheusRule CRDs (matched by
 // kube-prometheus-stack's ruleSelector). It was a single dir,
-// platform-apl/manifest/observability/prometheus-rules-crd, until the rules moved
+// manifest/observability/prometheus-rules-crd, until the rules moved
 // into the observability component — the stale default made the gate skip-clean
 // on every run, so nothing promtool-validated the live rules.
 //

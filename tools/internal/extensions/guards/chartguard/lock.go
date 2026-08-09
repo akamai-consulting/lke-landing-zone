@@ -1,7 +1,7 @@
 package chartguard
 
 // ci_chart_lock_guard.go implements `llz ci chart-lock-drift` — the native port
-// of template-scripts/linting-and-validation/check-chart-lock-drift.py (the
+// of check-chart-lock-drift.py (the
 // Makefile's helm-dep-lock-check). It verifies that every named chart's
 // committed Chart.lock matches the dependency declarations in its Chart.yaml:
 // a dependency name, version, or repository that differs means Chart.yaml was

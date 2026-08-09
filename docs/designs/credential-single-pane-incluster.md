@@ -136,7 +136,7 @@ without Alertmanager receivers wired. Keep them.
 
 - `tools/internal/extensions/assertions/tokeninv/inventory.go` (+ `_test.go`) — add `--apply` (create-or-update via
   `kube.Client`).
-- `platform-apl/components/tokenInventory/` — new component (namespace, SA, cross-ns RBAC
+- `components/tokenInventory/` — new component (namespace, SA, cross-ns RBAC
   into `llz-reconciler`, `ExternalSecret`s, default-deny + egress NetworkPolicy, CronJob),
   modeled on `platform-apl/components/broadPatRotator/`.
 - `tools/internal/shared/clusterspec/components.go` — register `tokenInventory` (DependsOn

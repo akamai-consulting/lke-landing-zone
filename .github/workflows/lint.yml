@@ -263,7 +263,7 @@ jobs:
           # `helm template --include-crds` and yq filter, same pattern as argocd/eso above.
           # Installs: workflows, workflowtemplates, cronworkflows, clusterworkflowtemplates,
           # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
-          # Referenced from platform-apl/manifest/cert-automation/
+          # Referenced from manifest/cert-automation/
           # haproxy-rebuild-workflowtemplate.yaml.
           $R helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
             --include-crds \
@@ -275,7 +275,7 @@ jobs:
           # returns nothing — use `helm template --include-crds` and yq filter,
           # same pattern as argocd/eso above.
           # Installs: eventbus, eventsources, sensors. Referenced from
-          # platform-apl/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
+          # manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
           $R helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \

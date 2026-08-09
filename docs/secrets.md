@@ -140,7 +140,7 @@ useful context for emergency recovery and understanding the secret layout.
    - `secret/infra/github-dispatch-token` (harbor-ready PostSync dispatch)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
    - `secret/loki/object-store` (Linode Object Storage keys minted at bootstrap by `llz ci mint-bootstrap-objkeys`, rotated by the in-cluster linodeCredRotator)
-   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `platform-apl/components/harbor/` and `platform-apl/manifest/generated-secrets/`.
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `platform-apl/components/harbor/` and `manifest/generated-secrets/`.
    - Note: `secret/harbor/docker-config` is NO LONGER seeded — the buildah `config.json` is derived in-cluster by the `llz-cert-automation` chart's `harborDockerConfig` ExternalSecret, which renders the dockerconfigjson from the robot creds (`username`/`password`/`registry_host`) in `secret/harbor/robot` via an ESO template.
 
 5. **Revoke root token** — runs unconditionally even on failure.

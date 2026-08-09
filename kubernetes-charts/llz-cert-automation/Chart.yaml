@@ -30,15 +30,15 @@ type: application
 # 0.1.7: doc-only — retarget a stale apl-values/_shared/… comment path ref in
 #        network-policies.yaml to the platform-apl/ layout (behavior unchanged;
 #        bumped so the guard republishes the corrected artifact).
-# 0.1.9: doc-only — the README pointed at `platform-apl/manifest/cert-automation/`,
+# 0.1.9: doc-only — the README pointed at `manifest/cert-automation/`,
 #        a directory that never existed in the platform-apl/ layout; retargeted to
-#        the real consumer `platform-apl/components/certManager/cert-automation.yaml`
+#        the real consumer `components/certManager/cert-automation.yaml`
 #        (behavior unchanged; bumped so the guard republishes the corrected artifact).
 # 0.1.10: add values.schema.json — root-strict, so a typo'd top-level key is
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
 # 0.1.11: doc-only — 0.1.9 retargeted the README at
-#        `platform-apl/components/certManager/cert-automation.yaml` as "the real
+#        `components/certManager/cert-automation.yaml` as "the real
 #        consumer"; that file does not exist, and on Managed App Platform (the
 #        only supported mode, ADR 0005) cert-automation is apl-core's, so the
 #        component is ManagedSkip and NOTHING in this repo deploys this chart.

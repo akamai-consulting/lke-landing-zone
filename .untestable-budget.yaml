@@ -145,13 +145,13 @@ categories:
     # the remaining shell is 529, so keep ~3% headroom rather than leaving the
     # freed budget as slack a future PR could fill with untested bash.
     #
-    # Ratcheted 545 → 471 when template-scripts/check-template-manifest.sh moved
+    # Ratcheted 545 → 471 when check-template-manifest.sh moved
     # into `llz ci template-manifest`, then 471 → 420 when
-    # template-scripts/stamp-template-version.sh moved into
+    # stamp-template-version.sh moved into
     # `llz ci stamp-template-version`: remaining shell is 408, so keep ~3%
     # headroom and do not let the retired checkers creep back as shell.
     #
-    # Ratcheted 420 → 375 when template-scripts/linting-and-validation/
+    # Ratcheted 420 → 375 when linting-and-validation/
     # cleanup-workflow-runs.sh (54 counted lines) was deleted: a one-shot utility
     # that purged Actions run history for seven workflows (ci/fuzz/scorecard/
     # trivy/build-firewall-controller/sync-firewall-cidrs/firewall.yml) which no

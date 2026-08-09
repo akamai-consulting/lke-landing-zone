@@ -88,7 +88,7 @@ spec:
           restartPolicy: Never
           serviceAccountName: harbor-robot-provisioner
           containers:
-            # Slim distroless llz image (dockerfiles/llz). Rendered by copier;
+            # Slim distroless llz image (the `llz` target in dockerfiles/Dockerfile). Rendered by copier;
             # release-e2e pins it to the signed sha image for the commit under test.
             - name: provision
               image: ghcr.io/akamai-consulting/llz:latest

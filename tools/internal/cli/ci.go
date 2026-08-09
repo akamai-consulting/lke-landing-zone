@@ -450,7 +450,7 @@ func ciCmd() *cobra.Command {
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
-	// Scaffold update-class manifest gate (former template-scripts/check-template-manifest.sh).
+	// Scaffold update-class manifest gate (former check-template-manifest.sh).
 	c.AddCommand(templatemanifest.Cmd())
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.

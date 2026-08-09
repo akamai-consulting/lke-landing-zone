@@ -57,9 +57,9 @@ func TestSourceRefBindingIsTheDeclaredGate(t *testing.T) {
 
 func TestExtractRefsFindsPathsInEveryProseShape(t *testing.T) {
 	body := strings.Join([]string{
-		"see `tools/internal/cli/commands.go` for the wiring",       // markdown backticks
-		"# tools/internal/shared/openbao/openbao.go owns baoEnv",    // yaml/shell comment
-		`   fmt.Errorf("register it in tools/x/y.go with the key")`, // go string literal
+		"see `tools/internal/cli/commands.go` for the wiring",                            // markdown backticks
+		"# tools/internal/shared/openbao/openbao.go owns baoEnv",                         // yaml/shell comment
+		`   fmt.Errorf("register it in tools/internal/verbs/lint/lint.go with the key")`, // go string literal
 		"nothing on this line",
 	}, "\n")
 
@@ -67,7 +67,7 @@ func TestExtractRefsFindsPathsInEveryProseShape(t *testing.T) {
 	want := []string{
 		"tools/internal/cli/commands.go",
 		"tools/internal/shared/openbao/openbao.go",
-		"tools/x/y.go",
+		"tools/internal/verbs/lint/lint.go",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d refs, got %d: %v", len(want), len(got), got)

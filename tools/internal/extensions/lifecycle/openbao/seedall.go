@@ -87,7 +87,7 @@ func bootstrapSeeds(region string) []Opts {
 		// kube-native ESO flow: a Password generator mints the value and a
 		// PushSecret writes it into OpenBao with updatePolicy: IfNotExists (the
 		// declarative equivalent of the old generate-once + skip-if-present). See
-		// platform-apl/manifest/generated-secrets/ and the eso-pusher policy/
+		// manifest/generated-secrets/ and the eso-pusher policy/
 		// role in ci_openbao_configure.go. This drops two root-token + kubectl-exec
 		// seed steps from the bootstrap.
 		//

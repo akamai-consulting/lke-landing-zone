@@ -211,7 +211,7 @@ apps:
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
-    # policy (platform-apl/manifest/kyverno-policies/), NOT here — overriding
+    # policy (manifest/kyverno-policies/), NOT here — overriding
     # schemaConfig corrupts it.
     _rawValues:
       # memberlist DNS bootstrap deadlock (observed live: loki-0 at 37 restarts).

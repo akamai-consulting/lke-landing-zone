@@ -1,7 +1,7 @@
 package credcoverage
 
 // ci_extsecret_paths.go implements `llz ci externalsecret-paths` — the native
-// port of the former template-scripts/linting-and-validation/
+// port of the former linting-and-validation/
 // validate-externalsecret-paths.py (invoked by the Makefile's
 // externalsecret-paths-check target, after render-charts).
 //
@@ -13,7 +13,7 @@ package credcoverage
 // provision-harbor-robots, ci_seed_special.go), then verifies the bootstrap
 // (`llz ci bao-configure`) platform-ci OpenBao policy covers those KV v2 paths.
 // `llz ci bao-configure` is the SOLE owner of OpenBao auth/policy config (the
-// former terraform-modules/llz-openbao vault-provider module was retired), so
+// former llz-openbao vault-provider module was retired), so
 // it is the only policy source cross-checked here. Every bootstrap-seeded KV
 // path must have matching policy coverage even when it is consumed by CI rather
 // than an ExternalSecret.
@@ -482,7 +482,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// The `bao kv put secret/…` seeding lives in the reusable workflow BODIES
 	// (the per-instance bootstrap-*.yml are thin callers with no seeds) and in
 	// `llz ci provision-harbor-robots` (ci_harbor.go, parsed by the Go-aware
-	// collector). See docs/templatization-plan.md §"Keeping instances in sync".
+	// collector). See templatization-plan.md §"Keeping instances in sync".
 	seededPaths, seededFields, err := collectSeeded(repo, []string{
 		guardkit.RepoPath(repo, ".github/workflows/llz-bootstrap-openbao.yml"),
 	})

@@ -60,7 +60,7 @@ dogfooded", not "what is deployed".
 
 > **Known stale references in `components.go`.** `clusterFoundation` and several
 > other component entries still carry `ArgoApps: []string{"applications/…"}` paths
-> under `platform-apl/manifest/applications/`, **a directory that no longer exists**.
+> under `manifest/applications/`, **a directory that no longer exists**.
 > They are unreachable rather than broken: every one of them is `ManagedSkip`, so
 > the render never resolves them on a managed cluster. Anyone re-enabling a
 > self-installed path must restore those manifests first.
