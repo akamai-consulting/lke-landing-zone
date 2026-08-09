@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 )
 
 // An absolute --render-dir must survive the --root join: filepath.Join(".",
@@ -23,7 +25,7 @@ import (
 func TestPlaceholderGuardAcceptsAbsoluteRenderDir(t *testing.T) {
 	dir := t.TempDir() // t.TempDir() is absolute
 	writeManifest(t, dir, "c.yaml", "host: placeholder.example.com\n")
-	cmd := ciPlaceholderGuardCmd()
+	cmd := manifestguard.PlaceholderGuardCmd()
 	cmd.SetArgs([]string{"--render-dir", dir})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("absolute --render-dir should have been scanned and found the placeholder")

@@ -94,7 +94,7 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 >
 > **Then down, for the first time: 46,797** across 235 files, when `guard-budgets`
 > became the first internal extension and the engine moved to
-> `tools/internal/budget`. The downward move is the half that was still unproven —
+> `tools/internal/extensions/budget`. The downward move is the half that was still unproven —
 > and `exact: true` is what forced it to be recorded, since extracting the code
 > and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
 >
@@ -212,7 +212,7 @@ would be actively wrong. untestable-loc's remedy is "move the logic into
 breach message says both is not a gate, it's a riddle.
 
 So they share the *engine* and not the *doctrine*: one scan, one glob walk, one
-tally, one ratchet convention, in `tools/internal/budget`. The only thing this ADR
+tally, one ratchet convention, in `tools/internal/extensions/budget`. The only thing this ADR
 made configurable is the remedy sentence. The two budgets are then reviewed and
 ratcheted independently, which is what they need — they will often move in
 opposite directions in the same PR, and that is exactly the trade being made
@@ -287,11 +287,11 @@ a second fence appearing, not a bug fix.
 
   This is the gate working, not the gate obstructing. It converts "this PR is
   large" into a number and a specific ask: land the framework in
-  `tools/internal/extension` behind a package boundary, and let the capabilities
+  `tools/internal/shared/extension` behind a package boundary, and let the capabilities
   it migrates come out of the core rather than alongside it. A relief valve that
   is itself plumbed into the core relieves nothing.
 
-  **Phase 1 of that ask is in this change.** `tools/internal/extension`
+  **Phase 1 of that ask is in this change.** `tools/internal/shared/extension`
   (docs/designs/internal-extension-model.md) is the declaration model — states,
   bindings, grants and their validation — behind a package boundary, wired to
   nothing, costing zero core surface. It replaces PR #15's `kind: check|tool`

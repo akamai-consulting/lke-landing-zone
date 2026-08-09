@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )
 
 func TestGenericSecretManifest(t *testing.T) {

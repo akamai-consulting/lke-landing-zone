@@ -1,0 +1,230 @@
+// Package registry collects the extensions compiled into this binary.
+//
+// It is the smallest thing that can be called a registry, and deliberately so.
+// There is no loader, no YAML manifest, no enable/disable resolution and no remote
+// half — docs/designs/internal-extension-model.md records why each is absent, and
+// issue #399 sequences them. What exists here is the one function everything else
+// will eventually be built around: "which extensions are there, and are their
+// declarations legal?"
+//
+// EACH EXTENSION DECLARES ITSELF IN ITS OWN PACKAGE and this file only names them.
+// The alternative — a central table transcribing every extension's bindings and
+// grants — is a hand-maintained list beside the code it describes, which is the
+// shape this repo has been burned by before: two copies, one edited. The import
+// list below is the only thing that has to be remembered, and forgetting it is
+// loud (the extension is simply absent from `llz extension list`) rather than
+// quiet (a declaration that no longer matches its code).
+//
+// ORDER IS BY NAME, not by import. Output that depends on import order is output
+// that changes when someone reformats a file.
+package registry
+
+import (
+	"sort"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/argodiag"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobjstore"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertregistry"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsuite"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/branchpolicy"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartpublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/clusteraccess"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/coverageguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/database"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/firewall"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/gameday"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/harbor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/monitoringlabel"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mutate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/phasetiming"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/releasepublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/seedspecial"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/versionpins"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/workflowshells"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+)
+
+// declarations is the built-in set. One line per extension; the catalog
+// (docs/designs/internal-extensions.md) sizes the other 49.
+//
+// Listed in import order, NOT declaration order — All sorts by name, so the order
+// here carries no meaning and nobody has to maintain one.
+var declarations = []func() extension.Extension{
+	assertobs.Extension,
+	assertsecrets.Extension,
+	argodiag.Extension,
+	assertidentity.Extension,
+	assertobjstore.Extension,
+	deliverdocs.Extension,
+	assertnetwork.Extension,
+	assertplatform.Extension,
+	assertreconciler.Extension,
+	assertregistry.Extension,
+	atrest.Extension,
+	brownfield.Extension,
+	budget.Extension,
+	chartguard.Extension,
+	clusteraccess.Extension,
+	configreadiness.Extension,
+	converge.Extension,
+	baoca.Extension,
+	baoseed.Extension,
+	baolifecycle.Extension,
+	harbor.Extension,
+	identityconfig.Extension,
+	reconciler.Extension,
+	assertsuite.Extension,
+	templatemanifest.Extension,
+	versionpins.Extension,
+	mtlsguard.Extension,
+	seedspecial.Extension,
+	bootstrapcluster.Extension,
+	meshegress.Extension,
+	coverageguard.Extension,
+	cosignguard.Extension,
+	monitoringlabel.Extension,
+	workflowshells.Extension,
+	instanceresolve.Extension,
+	firewall.Extension,
+	openbao.Extension,
+	reachability.Extension,
+	branchpolicy.Extension,
+	envdef.Extension,
+	buildpreflight.Extension,
+	selfupgrade.Extension,
+	templatecommit.Extension,
+	onboard.Extension,
+	render.Extension,
+	upgrade.Extension,
+	newinstance.Extension,
+	pincoherence.Extension,
+	lint.Extension,
+	envadd.Extension,
+	credcoverage.Extension,
+	credrotate.PATExtension,
+	credrotate.ObjKeyExtension,
+	database.Extension,
+	envtopology.Extension,
+	docsguard.Extension,
+	doctor.Extension,
+	healthsla.Extension,
+	tofudriver.Extension,
+	tokeninv.Extension,
+	objenc.Extension,
+	chartpublish.Extension,
+	gameday.Extension,
+	kyverno.Extension,
+	manifestguard.Extension,
+	mutate.Extension,
+	phasetiming.Extension,
+	plaintext.Extension,
+	promote.Extension,
+	releasepublish.Extension,
+	reconcilelanes.Extension,
+	statepassphrase.Extension,
+	sustain.Extension,
+	teardown.Extension,
+	wavehealth.Extension,
+	volumes.Extension,
+}
+
+// All returns every compiled-in extension, ordered by name.
+//
+// It does NOT validate. Validation is a separate call because the two questions
+// have different answers at different times: "what is here" must work even when
+// something is malformed, or an operator debugging a bad declaration loses the
+// listing that would show them which one it is.
+func All() []extension.Extension {
+	out := make([]extension.Extension, 0, len(declarations))
+	for _, d := range declarations {
+		out = append(out, d())
+	}
+	return sortByName(out)
+}
+
+// sortByName is a separate function because of a coverage finding worth keeping:
+// with ONE extension registered, sort.Slice never calls its comparator, so a test
+// over All() cannot tell name-ordering from insertion-ordering — it passes either
+// way, and would keep passing right up until the second extension landed in the
+// wrong place. Split out, the guarantee is testable against a scrambled slice
+// today. Expect the same shape wherever a collection is asserted about before it
+// has two members.
+func sortByName(exts []extension.Extension) []extension.Extension {
+	sort.Slice(exts, func(i, j int) bool { return exts[i].Name < exts[j].Name })
+	return exts
+}
+
+// Lookup returns the extension with the given name.
+func Lookup(name string) (extension.Extension, bool) {
+	for _, e := range All() {
+		if e.Name == name {
+			return e, true
+		}
+	}
+	return extension.Extension{}, false
+}
+
+// Validate checks the whole built-in set: every declaration against the model's
+// rules, plus the cross-extension rules ValidateSet owns (today, name collisions).
+//
+// A test calls this, so a declaration that stops validating fails the build rather
+// than the operator. That is the property worth keeping as the set grows: the
+// registry is where "all of them are legal" can be asserted once, instead of each
+// package remembering to assert it about itself.
+func Validate() []error { return extension.ValidateSet(All()) }

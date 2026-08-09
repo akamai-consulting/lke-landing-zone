@@ -4,16 +4,16 @@ package main
 // extension (internal/assertidentity).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )
 
 func init() { installAssertIdentityDeps() }
 
 func installAssertIdentityDeps() {
 	assertidentity.Install(assertidentity.Deps{
-		Exec:           func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:           execOutput,
 		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  identityconfig.DiscoverManagedDomain,
 		DescribeSecret: kube.DescribeSecret,

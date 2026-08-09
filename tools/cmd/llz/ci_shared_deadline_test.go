@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
 // pollRecorderEpoch is the fake clock's zero point — a fixed instant so a failure

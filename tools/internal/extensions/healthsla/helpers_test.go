@@ -1,0 +1,153 @@
+package healthsla
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+)
+
+// td is the Deps under test. The stub helpers below mutate it, and each test
+// starts from testDeps(t), which installs implementations that ACTUALLY WORK
+// rather than no-ops.
+//
+// That distinction is not stylistic. Two earlier extractions shipped a fixture
+// stubbed to return a zero value — teardown's Summary and objenc's SecretField —
+// and in both cases every assertion downstream ran against nothing and passed.
+// Summary here appends to a real file, so a test asserting on summary contents
+// is asserting on something.
+var td Deps
+
+// ensureDeps installs the baseline exactly once per test, so a stub helper can
+// be called before or after it without the baseline wiping the stub. Ordering
+// dependence between fixtures is its own bug class — this removes it rather than
+// documenting it.
+func ensureDeps(t *testing.T) {
+	t.Helper()
+	if !depsInstalled {
+		testDeps(t)
+	}
+}
+
+var depsInstalled bool
+
+func testDeps(t *testing.T) {
+	t.Helper()
+	depsInstalled = true
+	t.Cleanup(func() { depsInstalled = false })
+	td = Deps{
+		Summary: realAppend,
+		BaoExec: func(string, string, string, ...string) (string, string, error) {
+			return "", "", fmt.Errorf("no bao stub installed")
+		},
+		Exec:      func(string, ...string) ([]byte, error) { return nil, fmt.Errorf("no exec stub installed") },
+		Reachable: func() bool { return true },
+		BaoExecArgv: func(pod, token string, args []string) []string {
+			return append([]string{"exec", pod, "--", "bao"}, args...)
+		},
+		RootPod: "platform-openbao-0",
+	}
+	// The probes hold their own seam; leaving it live would shell out for real.
+	orig := kubectlprobe.Exec
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return nil, fmt.Errorf("no kubectl stub installed") }
+	t.Cleanup(func() { kubectlprobe.Exec = orig })
+}
+
+// realAppend is a genuine GITHUB_STEP_SUMMARY append — the same contract
+// package main's appendGHAFile has. Tests read the file back.
+func realAppend(envVar string, lines ...string) error {
+	path := os.Getenv(envVar)
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(strings.Join(lines, "\n") + "\n")
+	return err
+}
+
+// stubKubectl drives the classified probes AND the direct Exec seam from canned
+// output. Both, because this extension reads the cluster two ways: through
+// internal/kubectlprobe (the list/jsonpath probes) and through Deps.Exec (the
+// `kubectl exec … bao kv metadata get` that carries the root token). Stubbing
+// only one leaves the other reaching for a real cluster.
+func stubKubectl(t *testing.T, fn func(args []string) ([]byte, error)) {
+	t.Helper()
+	ensureDeps(t)
+	wrapped := func(name string, args ...string) ([]byte, error) {
+		if name != "kubectl" {
+			return nil, fmt.Errorf("unexpected command %q", name)
+		}
+		return fn(args)
+	}
+	td.Exec = wrapped
+	td.Reachable = func() bool {
+		_, err := wrapped("kubectl", "version", "--request-timeout=10s")
+		return err == nil
+	}
+	orig := kubectlprobe.Exec
+	kubectlprobe.Exec = wrapped
+	t.Cleanup(func() { kubectlprobe.Exec = orig })
+}
+
+// stubBaoExec replaces the RESILIENT bao exec seam for one test. The readiness
+// check reads seal state through this (not a bare kubectl exec) so that
+// documented transient failures — konnectivity "No agent available" and friends —
+// retry instead of being reported as a sealed pod.
+func stubBaoExec(t *testing.T, fn func(pod string, args []string) (string, error)) {
+	t.Helper()
+	ensureDeps(t)
+	td.BaoExec = func(pod, _, _ string, args ...string) (string, string, error) {
+		out, err := fn(pod, args)
+		if err != nil {
+			return "", err.Error(), err
+		}
+		return out, "", nil
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	return capture(t, &os.Stdout, fn)
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	return capture(t, &os.Stderr, fn)
+}
+
+func capture(t *testing.T, target **os.File, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := *target
+	*target = w
+	done := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	fn()
+	// Restore BEFORE reading: the copy goroutine only finishes on EOF, and EOF
+	// only arrives once the write end is closed.
+	*target = orig
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
+// errWithStderr builds a failure carrying stderr text, which is how the probes
+// tell a genuine NotFound from an unanswerable call.
+func errWithStderr(msg string) error { return &exec.ExitError{Stderr: []byte(msg)} }

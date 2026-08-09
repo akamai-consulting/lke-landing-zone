@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
 )
 
 // Helpers the returned tests use, copied back across the boundary.

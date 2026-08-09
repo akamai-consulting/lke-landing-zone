@@ -6,7 +6,7 @@ databases + roles out of a cluster (e.g. with Crossplane `provider-sql`),
 reaching it **over the VPC** — the cluster has no public endpoint.
 
 It is the database analog of [`llz-object-storage`](../llz-object-storage): the
-embedded `databases` root (`tools/internal/tfroots/roots/databases`) is a thin
+embedded `databases` root (`tools/internal/shared/tfroots/roots/databases`) is a thin
 consumer, and a sibling system team can provision the same clusters by calling
 this module with their own `label_prefix` + VPC.
 

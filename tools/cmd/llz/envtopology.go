@@ -9,19 +9,20 @@ package main
 // reach this extension's copy too.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 )
 
 func init() { installEnvTopologyDeps() }
 
 func installEnvTopologyDeps() {
 	envtopology.Install(envtopology.Deps{
-		Exec:     func(n string, a ...string) ([]byte, error) { return execOutput(n, a...) },
+		Exec:     execOutput,
 		ExecArgv: proc.Run,
 		Summary:  ghaout.Append,
 		LoadSpec: func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
@@ -35,8 +36,8 @@ func installEnvTopologyDeps() {
 		},
 		// `llz env set` writes the declarative source and then re-renders; this is
 		// the second half of every mutation the extension performs.
-		Render:      func(env string) error { return render.Run(gopts.dryRun, env, false, false, false) },
-		DryRun:      gopts.dryRun,
+		Render:      func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
+		DryRun:      cliopts.Global.DryRun,
 		PromoteDeps: promoteDeps,
 	})
 }

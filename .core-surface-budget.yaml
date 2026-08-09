@@ -3,7 +3,7 @@
 # WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
 # WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
 # WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
-#                                            tools/internal/budget/remedy.go
+#                                            tools/internal/extensions/budget/remedy.go
 #
 # This file is the operational half of that: the number, and the rule for
 # changing it. The argument lives in the ADR and is not repeated here.
@@ -54,14 +54,14 @@ categories:
     #                       gate went red until someone did.
     #   46,716 / 234 files  the guard-budgets EXTRACTION. The budget engine, the
     #                       counters, the remedies and their tests are now
-    #                       tools/internal/budget; the two commands are a flag set
+    #                       tools/internal/extensions/budget; the two commands are a flag set
     #                       each. -466, and the FIRST paydown.
     #   46,797 / 235 files  `llz extension list`. +81, spent deliberately: the
     #                       declaration model was validated with no way to look at
     #                       it, and a ratchet that could only be paid into would be
     #                       a freeze rather than a budget.
     #   46,106 / 235 files  guard-docs, the second extension. docs-guard and the
-    #                       TOC renderer are tools/internal/docsguard; the two
+    #                       TOC renderer are tools/internal/extensions/docsguard; the two
     #                       commands are a flag set and a file write. -691, the
     #                       largest single move so far.
     #   45,763 / 234 files  posture-at-rest, the first extension that is not a
@@ -746,6 +746,272 @@ categories:
 #        Incomplete note, not widened. The gap has a name now -- "a check that runs
 #        after X to catch what X broke" -- and internal/argodiag is the same shape
 #        from the other side, a DIAGNOSTIC that runs after a state failed.
+#   82nd: 26 command files -> their extensions   6,475 -> 5,043 (-1,432 / 56 files)
+#        THE NUMBER CHANGES MEANING HERE, AND THAT MATTERS MORE THAN THE DROP.
+#        Every entry above measured the same thing: logic leaving package main.
+#        This one moves COBRA CONSTRUCTORS, which are not logic -- the capability
+#        already lived in the extension; only its flag set was on the wrong side.
+#        So -1,432 is not -1,432 lines of untangling, and a later reader comparing
+#        it against, say, the 76th (-466 for internal/render) would be comparing
+#        two different currencies. The rule this enforces is now "an extension
+#        owns its own command; main owns the tree", and the budget measures what
+#        is left of the tree.
+#        TWO MOVES WERE REFUSED AND BOTH REFUSALS WERE RIGHT.
+#          - `gen-toc` writes a TOC back into Markdown. internal/docsguard declares
+#            gate:scaffolded[read-repo] and enforces it with a test that forbids
+#            os.WriteFile anywhere in the package; moving the constructor in tripped
+#            it at once. The command stayed in main. THE RULE HAS AN EXCEPTION:
+#            it assumes a command`s side effects are the extension`s side effects,
+#            and for a read-only gate shipping a writing verb they are not.
+#          - `ci_docs_guard_test.go` builds the LIVE cobra tree to check the docs
+#            against it, and newRootCmd is main`s. The command is fine where it is
+#            (it uses cobra`s own cmd.Root() at runtime); only the test came back.
+#        TRAP 61: THE SELF-QUALIFICATION STRIP HIT STRING LITERALS. Moving a file
+#        into package X means deleting `X.` prefixes -- and `.core-surface-budget.yaml`
+#        CONTAINS `budget.`, so it became `.core-surface-yaml` and the gate could not
+#        read its own config. Same for `.untestable-budget.yaml` and the ADR link
+#        `0014-core-surface-budget.md`. go build was clean throughout. Caught by
+#        diffing HEAD`s comment lines and string literals against the moved files.
+#        SIXTEEN COVERAGE FLOORS DROPPED, AND NOT ONE TEST WAS LOST. The floors
+#        measured a package that was pure capability; they now measure that plus
+#        its flag wiring, which is untestable-by-shape and was equally untested
+#        when it sat in package main (whose own floor is 29%). The DENOMINATOR
+#        grew -- worst hit internal/manifestguard 86->71 and internal/credrotate
+#        73->61, both of which took several large flag sets. Lowered to the
+#        measurement rather than papered over with tests of `c.Flags().StringVar`.
+#        The campaign rule "if adding code drops a floor, WRITE THE TESTS" is
+#        about moving LOGIC in; this moved wiring, and testing wiring to restore
+#        a ratio would be writing tests for the coverage number rather than for
+#        the code.
+#   83rd: globals -> internal/cliopts   5,043 -> 5,073 (+30 / 56 files)
+#        A DELIBERATE GROWTH, and the only one in this campaign. --dry-run, --yes
+#        and --open are PERSISTENT flags: cobra parses them when a command
+#        EXECUTES, long after every constructor ran. Moving commands into
+#        extension packages made it tempting to thread `dryRun bool` in as a
+#        constructor argument -- which would capture the pre-parse ZERO. Nothing
+#        would fail. --dry-run would just stop working, on cloud-mutating
+#        commands. So the globals became a value any package can read at RunE
+#        time, `globalOpts` is now an alias for it, and the +30 is the alias plus
+#        the comment explaining the binding moment. TestGlobalFlagsAreParsedBefore
+#        RunE pins it. The next entry spends this back many times over.
+#   84th: 17 more command files -> their extensions   5,073 -> 3,657 (-1,416 / 39 files)
+#        The gopts-coupled half, unblocked by internal/cliopts (83rd). Same
+#        currency caveat as the 82nd: this is flag wiring relocating, not logic
+#        untangling.
+#        TWO MOVES REVERTED ON EVIDENCE, and both name a boundary worth keeping:
+#          - ci_managedlock.go is handed sustainDeps(), one of the FIFTEEN deps
+#            assemblers that are main`s dependency-injection layer. A command that
+#            needs main to assemble its capability`s Deps cannot sit on the far
+#            side of that assembly.
+#          - apl.go builds the `llz apl` SUBTREE, wiring five sibling groups. That
+#            is the tree, and the rule is "an extension owns its own command", not
+#            "every constructor leaves".
+#        THE MOVER NOW MASKS STRINGS AND COMMENTS before stripping self-
+#        qualification, which is what trap 61 (the 82nd) cost a debugging session
+#        to find. Re-audited this batch the same way: zero literals lost.
+#        TEST FILES WERE REPOINTED, NOT MOVED. Last batch moved them and hit
+#        colliding same-named-but-different helpers in three packages. These assert
+#        flag WIRING, which is legitimately about the tree, so they stayed in
+#        cmd/llz and now call the exported constructor.
+#        FOURTEEN MORE FLOORS DROPPED, and one of them is an ARTIFACT worth naming:
+#        internal/upgrade fell 51 -> 25 because ci_upgrade_test_gate.go (295 lines)
+#        moved in while its tests stayed in cmd/llz. That code IS tested -- the
+#        per-package number simply cannot see tests living in another package.
+#        The rest is the same dilution as the 82nd: untested flag wiring joining a
+#        tested capability. No test was deleted in either batch.
+#   85th: tools/internal split into extensions/ + shared/   3,657 -> 3,657 (0)
+#        Pure relocation: 74 packages that declare an Extension() to
+#        internal/extensions/, 39 to internal/shared/. 1,243 import lines.
+#        BOTH STAY UNDER internal/, which is the whole point -- it is compiler-
+#        enforced, tools/ is one module, and this repo is the public upstream.
+#        Hoisting to tools/extensions/ would have made 113 packages public API.
+#        FIVE CLASSES OF PATH BROKE AND ONLY ONE WAS AN IMPORT: path-keyed
+#        registries (plaintext, atrest), segment-joined filepath.Join("tools",
+#        "internal",...) that a literal rewrite cannot see, relative escapes now
+#        one level short, package-identity constants in boundary_test.go, and 106
+#        Makefile COVERAGE_MINS keys including one NESTED (extension/registry)
+#        that a single-segment pattern missed.
+#        THREE THINGS DELIBERATELY NOT BUMPED, each a real bug if it had been:
+#        tfroots/roots/*.tf (embedded Terraform, relative to the RENDERED
+#        instance), clusterspec+render kustomize refs (EMITTED, not read), and
+#        deliverdocs` ../../../etc/passwd traversal fixture.
+#   86th: root + ci verbs -> their extensions   3,657 -> 2,968 (-689 / 39 files)
+#        main.go 561 -> 289 and ci.go 1,001 -> 545. Eleven ROOT-level flag sets
+#        (llz doctor/tokens/secrets/upgrade/openbao/reap/self-update/verify/...)
+#        and the ci orphan-reap family, each to the extension that owns it.
+#        TWO LANDED SOMEWHERE THE PLAN DID NOT SAY, and the compiler picked:
+#          - doctorCmd went to internal/extensions/onboard, not .../doctor. It
+#            calls onboard.RunDoctor and onboard already imports doctor, so the
+#            obvious home closed an import cycle. The verb is named for the
+#            capability it REPORTS on; the code that runs it lives elsewhere.
+#          - driftCmd came BACK to main. It is handed sustainDeps(), one of the
+#            fifteen deps assemblers -- the same boundary ci_managedlock.go hit.
+#        THE REAP VERBS WERE DECLARED ALL ALONG, just not by name: teardown`s own
+#        doc says "the reaper is the transition`s job and the gate only counts",
+#        so they belong to the transition:destroyed binding already there.
+#        tf-import/tf-apply did NOT move: tofudriver declares only ASSERTIONS at
+#        `provisioned`, and an apply is a transition. That needs a new binding
+#        argued, which is a declaration change rather than a move.
+#        TRAP 62: A BRACE MATCHER MUST SKIP THE PARAMETER LIST. Three reap helpers
+#        take an inline `interface { ... }` as a parameter; latching onto that
+#        brace ended the span inside the signature and silently truncated the
+#        function. The parser caught it, but only because the truncation happened
+#        to be syntactically invalid -- a shorter one would have compiled.
+#        SEVEN FLOORS LOWERED, same dilution as the 82nd/84th: untested flag
+#        wiring joining a tested capability. cmd/llz`s own floor did NOT move --
+#        the wiring left, and what remains there is no better covered than before.
+#   87th: lint + dropped-apiversions -> extensions   2,968 -> 2,421 (-547)
+#        checks.go is GONE. `llz lint` / `fmt` / `validate` / `check` shipped for
+#        the whole campaign with NOTHING DECLARING THEM -- not composition like
+#        `up` and `import`, but thirteen steps owned outright. Now internal/
+#        extensions/lint, the 76th extension.
+#        TWO BINDINGS BECAUSE ONE VERB WRITES: gate:scaffolded[read-repo] for
+#        lint/check/validate, transition:scaffolded[read-repo,write-repo] for
+#        `llz fmt`, which runs the formatters in FIX mode. Folding fmt into the
+#        gate would have put a write behind a read-repo declaration -- the exact
+#        failure docsguard`s guard caught when gen-toc tried to move in.
+#        IT IMPORTS ITS STEPS RATHER THAN RE-EXEC`ING THEM, unlike assert-suite,
+#        and the declaration says why: lint is sequential and fails fast, so none
+#        of assert-suite`s three reasons (stdout interleaving, os.Exit isolation,
+#        independent seams) apply.
+#        AND A RECORDED `Incomplete` TURNED OUT TO BE WRONG. manifestguard said
+#        dropped-apiversions was "entangled with checks.go in BOTH directions".
+#        The entanglement was one of LOCATION, not logic: the whole cluster only
+#        ever had callers in checks.go and in the `llz ci` face of the same guard.
+#        Nothing of `llz check` came with it. The note is deleted and its pinning
+#        test FLIPPED -- it now fails if an Incomplete reappears unargued.
+#        Two sibling notes (reconcile-actions, template-sustain) say similar
+#        things and deserve the same re-measurement before being believed.
+#        COVERAGE FLOOR 45%. The uncovered half is the argv builders and the
+#        shell-out steps, every one of which no-ops when its tool is absent --
+#        they were equally untested in package main (floor 29%). What IS covered
+#        is the part with a wrong answer: the conflict-marker scanner, the
+#        dropped-apiVersion detector, and the two orchestrators` failure paths.
+#   88th: the last three undeclared verbs   2,421 -> 2,033 (-388)
+#        NONE OF THEM NEEDED A NEW EXTENSION, which is the finding. All three were
+#        recorded as "unclaimed" because no extension named them; measuring showed
+#        every one already had an owner whose declaration covered it.
+#          - assert-image-fresh -> template-commit, whose Short already reads
+#            "resolve the pinned template commit and report CI image refs that
+#            have drifted from it" and which already binds
+#            assertion:configured[read-repo,cloud-read]. Zero declaration change.
+#          - assert-adopter-pin -> template-commit too. Its leg four IS
+#            assert-image-fresh, called directly. Same grants, same kind.
+#          - hooks + precommit -> lint. precommit is RunLint plus a secret-path
+#            refusal; hooks installs the shim whose only job is to call it. The
+#            gate row covers one, the write row (earned by `llz fmt`) the other.
+#        A THIRD MODEL GAP, RECORDED NOT WIDENED. assert-adopter-pin is bound at
+#        `configured` and does not run against a configured instance -- it runs on
+#        the TEMPLATE REPO when a release is cut, asserting an adopter scaffolding
+#        from that tag WOULD reach `configured` coherently. Kind and grants are
+#        exactly right; the STATE is a stand-in, because the model describes an
+#        INSTANCE`s lifecycle and has no word for a gate on the template`s own
+#        release. Distinct from pin-coherence`s gap (a check running AFTER a state)
+#        and argodiag`s (a diagnostic running when a state FAILED); recorded as its
+#        own on template-commit rather than folded into either.
+#        cmd/llz is now 33 files and holds no undeclared capability.
+#        TWO FLOORS DOWN: lint 45->37 and template-commit 92->84, the same
+#        dilution every batch has had -- untested cobra wiring joining a tested
+#        capability. Both files were equally untested in package main.
+#   89th: stale notes re-measured, tf-apply/import declared   2,033 -> 1,700 (-333)
+#        THE POINT WAS THE NOTES, NOT THE LINES. Six Incomplete notes across the
+#        catalog made a falsifiable claim -- "X is still in package main". FOUR
+#        WERE STALE: baoca and baoseed each listed eight-to-ten openbao-lifecycle
+#        files that have since gone to baolifecycle/identityconfig/openbao/harbor/
+#        healthsla; credrotate named four paths that are now here or in
+#        assertsecrets; bootstrapcluster`s PinnedTemplateRef seam had become a var
+#        the package self-installed, which is dead indirection, and collapsed to a
+#        direct answers.PinnedTemplateRef() call.
+#        A NOTE THAT SAYS WHY SOMETHING IS BLOCKED AGES BADLY -- the reason expires
+#        before anyone re-reads the note. Every one of the four PREDICTED its own
+#        end ("the wall they sat behind is GONE ... ordinary extractions") and none
+#        was deleted when the prediction came true. Four pinning tests FLIPPED:
+#        they used to fail if a note was emptied, and now fail if one reappears
+#        unargued. Partial markers 20 -> 16.
+#        TWO BINDINGS ARGUED, NOT ASSUMED. tf-apply and tf-import sat in main long
+#        after plan/output/destroy left because tofu-driver declared only
+#        ASSERTIONS at `provisioned` and an apply is a TRANSITION. Both now hold
+#        transition:provisioned[cloud-mutate]. `import` holds cloud-mutate despite
+#        sounding read-only: it writes TERRAFORM STATE, which lives in a remote
+#        object-storage backend. The extension`s own test refused the new rows by
+#        construction (`default: unexpected binding`) until each was argued into it.
+#   90th: the command-wiring guard   1,700 -> 1,700 (0 lines; this one adds a check)
+#        THE GAP IT CLOSES: an extension could be declared, pass Validate(), show
+#        up in `llz extension list`, and ship a verb nobody could run -- wiring is
+#        a hand-written AddCommand and forgetting one is silent. `extension list`
+#        read the registry, the CLI read the tree, and nothing compared them.
+#        CONSTRUCTORS, NOT NAMES. The obvious shape was `Commands []string` on
+#        Extension. Measuring killed it: 214 leaves to hand-author, TWENTY of them
+#        ambiguous because verb names are not unique across groups (`add`, `set`,
+#        `list`, `validate` each appear under two parents), every entry a
+#        duplicate of what the tree already says, and only a test to catch drift.
+#        A function reference is one line, the COMPILER checks it, and renaming a
+#        constructor breaks the build rather than a test three weeks later.
+#        NOT A REGISTRY-DRIVEN TREE, and that was the user`s catch. ~26% of the
+#        wiring is package main`s -- the group constructors ARE the tree, plus the
+#        deps-ABI, composition and gen-toc. A builder needs group-placement
+#        metadata on every extension and an escape hatch for the rest; a verifier
+#        needs neither. The line saving would have been ~83 in ci.go, not the ~800
+#        first claimed -- that figure wrongly counted main.go and the group
+#        constructors, which no registry replaces.
+#        ONE DIRECTION ONLY, deliberately: "every extension command is reachable".
+#        The reverse ("every leaf is claimed") is the 214-entry exercise again, to
+#        catch a failure that has never happened -- an unclaimed leaf still WORKS.
+#        PROVEN TO FAIL: unwiring assertobs.GrafanaDashboardsCmd makes it report
+#        the exact verb and extension. Checked, not assumed.
+#        Three more help strings restored: "onboard.Gather + push instance
+#        credentials" was USER-FACING (`llz secrets`), plus a color.Green and an
+#        onboard.Prompt in prose. Same blanket-rename class as traps 55 and 61.
+#   91st: nine vestigial closures collapsed   1,700 -> 1,700 (0 lines)
+#        ZERO LINES, and that is worth saying: each closure was a ONE-LINE field
+#        assignment, so collapsing it changed characters and not the count. The
+#        gate stayed green without a re-baseline, which is how it was noticed.
+#        SELF-INFLICTED AND SELF-FOUND. The 80th move turned execOutput/
+#        execCombined from package-level VARS into plain funcs delegating to
+#        kubectlprobe. The deps assemblers wrapped them in
+#        `func(n string, a ...string) (...) { return execOutput(n, a...) }` for a
+#        reason that expired at that moment: a closure defers reading a VAR, and a
+#        func reference is already deferred. Nine of them across seven files,
+#        redundant since e655adc8 and flagged by nothing.
+#        MEASUREMENT THAT CORRECTS AN EARLIER CLAIM: the deps-ABI was reported at
+#        511 lines. That was the FILES. The actual assembler bodies total 199
+#        across 14 functions, and ci_teardown.go -- the biggest contributor to the
+#        511 -- is mostly cobra commands with one Deps func in it.
+#        A SHARED Deps CORE WAS CONSIDERED AND REJECTED ON THE NUMBERS. Six fields
+#        recur (Exec 11x, LoadSpec 5, ExecCombined 5, Summary 4, InstanceRepo 3,
+#        Confirm 3 = 31 assignments). Embedding a core replaces those 31 with 14
+#        `Core: core` lines plus ~8 of construction -- a saving of about nine
+#        lines, in exchange for a shared type every embedder depends on and
+#        LoadSpec dragging clusterspec into packages that only wanted Exec.
+#        The uniformity is still the useful finding: 14 identical Exec signatures,
+#        5 identical LoadSpec, one Summary variant. A grant->handle resolver has
+#        six handles to produce, not eighteen bespoke structs.
+#   92nd: the first ENFORCED grant invariant   1,700 -> 1,700 (0 lines)
+#        THE deps-ABI, APPROACHED FROM THE CHEAP END. The full resolver is a large
+#        refactor whose value is "you cannot use a capability you did not declare".
+#        One class of that is checkable today without touching a single assembler:
+#        a package holding an `Exec` seam is shelling out and reading the result,
+#        so its declaration must carry SOME read grant.
+#        IT FOUND ONE IMMEDIATELY. clusteraccess held an Exec seam and declared
+#        only cloud-mutate/cluster-write/secret-custody. It runs `tofu output
+#        -json` and `tofu state list` against a REMOTE object-storage backend --
+#        a cloud read nobody had written down. cloud-mutate does not imply
+#        cloud-read here: grants are explicit and eight extensions declare both.
+#        The extension`s own guard refused the fix ("a transition that asks for
+#        more than it uses is the over-granting the model exists to make visible")
+#        until it was argued in -- the right refusal, wrong conclusion, and the
+#        argument is now recorded in the test.
+#        DELIBERATELY NOT a seam->specific-grant map. `Exec` runs kubectl, gh, git
+#        and tofu depending on caller, so demanding cluster-read would be wrong for
+#        the gh-only packages. "Some read grant" is the strongest claim the
+#        evidence supports; a check that overreaches gets weakened, not satisfied.
+#        A HYPOTHESIS DIED ON THE WAY: `Confirm` (--yes) looked like it should
+#        become a declarable property, since teardown records it as "what the model
+#        has no word for". Measured: 12 extensions gate on it, 24 mutate WITHOUT
+#        it, 8 gate without mutating. It tracks OPERATOR-invoked mutation, not
+#        mutation -- `llz ci` verbs run inside a workflow that is itself the
+#        authorization. So it stays caller-supplied, and a resolver produces
+#        capability handles only. That is the right split, not a wart.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -758,7 +1024,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 6475
+    budget: 1700
     exact: true
     include:
       - "tools/cmd/llz/*.go"

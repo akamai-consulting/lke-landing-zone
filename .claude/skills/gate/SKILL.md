@@ -121,7 +121,7 @@ true and useless and sent the reader to a live cluster.
 2. **Unit-test it** — the pure evaluator, every fail-closed arm (empty,
    malformed, unreachable), and the static half of the contract.
 3. **Add the lane** to `assertSuiteLanes` in
-   [`tools/internal/assertsuite/suite.go`](../../../tools/internal/assertsuite/suite.go).
+   [`tools/internal/extensions/assertsuite/suite.go`](../../../tools/internal/extensions/assertsuite/suite.go).
    One list, so a lane is both run and collected — the "declared but never
    checked" hazard is structurally gone. Fill in every field:
    - `Steps` run in order and short-circuit. Order them only when a later step

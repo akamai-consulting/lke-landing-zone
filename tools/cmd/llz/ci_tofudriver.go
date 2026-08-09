@@ -4,8 +4,8 @@ package main
 // (internal/tofudriver).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 func init() {

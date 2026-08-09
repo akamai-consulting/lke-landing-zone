@@ -23,14 +23,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
-	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfbin"
 )
 
 func teardownDeps() teardown.Deps {
@@ -47,7 +48,7 @@ func teardownDeps() teardown.Deps {
 		},
 		Summary: ghaout.Append,
 		TFBin:   tfbin.Bin,
-		Confirm: func() bool { return gopts.yes },
+		Confirm: func() bool { return cliopts.Global.Yes },
 	}
 }
 

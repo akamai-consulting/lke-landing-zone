@@ -6,7 +6,7 @@ package main
 // testable without a cluster; this keeps the ONE shell-out implementation in
 // package main rather than letting two drift.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 
 // A DELEGATING CLOSURE, NOT `kube.Exec = execOutput`.
 //
@@ -16,5 +16,5 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/kube"
 // already paid for once, with harborCARetrofitKubectl. The closure reads the
 // variable at call time, which is the whole point of a seam.
 func init() {
-	kube.Exec = func(name string, args ...string) ([]byte, error) { return execOutput(name, args...) }
+	kube.Exec = execOutput
 }

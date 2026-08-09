@@ -93,7 +93,7 @@ When writing a new check, the question to ask is:
 
 One loud readiness gate replaces the ~600 lines of imperative polling that used to live in `null_resource.wait_for_argo_application_crd`, `null_resource.wait_for_kyverno_crd`, and friends:
 
-- **`waitAplPipeline`** (`tools/internal/converge/aplpipeline.go`, also runnable as `llz ci wait-apl-pipeline`) — waits for the apl-operator's helmfile pipeline by asserting **Argo CD's `argocd-application-controller` is serving, Kyverno's admission controller is Available, and cert-manager's webhook is Available**. Those are the canonical "the platform prerequisites are up" signals; before they're true, applying the bootstrap Application (or letting the helmfile create PVCs) is a race. We gate on these rather than the helm install's built-in wait because that wait only covers the `apl-operator` Deployment, not its downstream pipeline. The gate **fails loud** (non-nil error → the command fails) — no soft-fail-and-continue.
+- **`waitAplPipeline`** (`tools/internal/extensions/converge/aplpipeline.go`, also runnable as `llz ci wait-apl-pipeline`) — waits for the apl-operator's helmfile pipeline by asserting **Argo CD's `argocd-application-controller` is serving, Kyverno's admission controller is Available, and cert-manager's webhook is Available**. Those are the canonical "the platform prerequisites are up" signals; before they're true, applying the bootstrap Application (or letting the helmfile create PVCs) is a race. We gate on these rather than the helm install's built-in wait because that wait only covers the `apl-operator` Deployment, not its downstream pipeline. The gate **fails loud** (non-nil error → the command fails) — no soft-fail-and-continue.
 
 The command applies the bootstrap Argo Application only **after** that gate returns; from there Argo owns the reconcile (its `retry: backoff` rides out the first-boot convergence window), and the deep-convergence verdict is `llz ci converge` (below). The previous pattern — bash polling loops scattered across multiple `null_resource`s that each made up their own answer to "is X ready?" — is replaced by **one shared readiness model**.
 
@@ -135,7 +135,7 @@ If you find yourself writing any of these, stop and reconsider:
 ## See also
 
 - `tools/cmd/llz/ci_bootstrap_cluster.go` — the native bootstrap command: header comment + the ordered flow (the `waitAplPipeline` gate raced against the two Kyverno policies).
-- `tools/internal/converge/aplpipeline.go` — the loud readiness gate (`aplPipelineStages` + the existence-poll → condition-wait state machine).
+- `tools/internal/extensions/converge/aplpipeline.go` — the loud readiness gate (`aplPipelineStages` + the existence-poll → condition-wait state machine).
 - ``llz ci health`` — header comment + the `MODE_*` constants + the helper functions that classify a resource into `0/1/2`.
 - `instance-template/.github/workflows/bootstrap-openbao.yml` — header comment + the Branch A / Branch B / Re-configure mode selector, which is the same `0/1/2` shape applied to OpenBao seal state.
 - ``llz ci converge`` — the polling wrapper itself.

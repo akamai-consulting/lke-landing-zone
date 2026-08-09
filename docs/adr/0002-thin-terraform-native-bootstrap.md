@@ -5,7 +5,7 @@
 - Deciders: platform / LLZ maintainers
 - Related: `docs/architecture/convergence-contract.md`,
   `tools/cmd/llz/ci_bootstrap_cluster.go`,
-  `tools/internal/converge/aplpipeline.go`,
+  `tools/internal/extensions/converge/aplpipeline.go`,
   `tools/cmd/llz/ci_kyverno.go`
 
 ## Context

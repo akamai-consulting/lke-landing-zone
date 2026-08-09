@@ -10,19 +10,19 @@ code is authoritative.
 
 Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
 [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
-[`tools/internal/identityconfig/openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
-[`tools/internal/openbao/cli.go`](../../tools/internal/openbao/cli.go).
+[`tools/internal/extensions/identityconfig/openbao_configure.go`](../../tools/internal/extensions/identityconfig/openbao_configure.go),
+[`tools/internal/extensions/openbao/cli.go`](../../tools/internal/extensions/openbao/cli.go).
 
 ## Problem
 
 There is exactly **one** human-facing credential per LKE-Enterprise cluster: the
 Linode-issued **cluster-admin** kubeconfig (`lke-admin-token`), fetched via the
 Linode API or Terraform state
-([`fetch.go:9`](../../tools/internal/clusteraccess/fetch.go),
-[`lkeadmin.go`](../../tools/internal/credrotate/lkeadmin.go)) and
+([`fetch.go:9`](../../tools/internal/extensions/clusteraccess/fetch.go),
+[`lkeadmin.go`](../../tools/internal/extensions/credrotate/lkeadmin.go)) and
 shared by every SRE and every CI job
 ([`lke-admin-rotation.md:13`](../runbooks/lke-admin-rotation.md),
-[`prom_query.go:8`](../../tools/internal/assertobs/promquery.go)). It is
+[`prom_query.go:8`](../../tools/internal/extensions/assertobs/promquery.go)). It is
 `system:masters`-equivalent, unattributable (everyone is the same identity),
 and can only be rotated by deleting and regenerating that single token — never
 scoped or individually revoked.
@@ -34,7 +34,7 @@ That single identity sits at the bottom of **two** access paths:
    kubeconfig (kubectl `port-forward` / `exec`, since OpenBao has no external
    ingress). Broad writes require the **root token**, which every bootstrap
    deliberately revokes
-   ([`ci_openbao_configure.go:358`](../../tools/internal/identityconfig/openbao_configure.go)),
+   ([`ci_openbao_configure.go:358`](../../tools/internal/extensions/identityconfig/openbao_configure.go)),
    so the documented operator flow is `regen-root` (a 3-of-5 unseal-key quorum)
    before every write session.
 
@@ -51,7 +51,7 @@ transport*, not by *authorization*:
 - The kubeconfig is *not* inherently needed to **authorize** a write — OpenBao's
   own auth methods decide that, and **we run OpenBao**. Its JWT/OIDC auth is
   already used for GitHub Actions OIDC
-  ([`ci_openbao_configure.go:284`](../../tools/internal/identityconfig/openbao_configure.go));
+  ([`ci_openbao_configure.go:284`](../../tools/internal/extensions/identityconfig/openbao_configure.go));
   pointing a second mount at Keycloak needs no LKE-E cooperation.
 
 Therefore: **root-for-writes can be eliminated without solving the LKE-E
@@ -69,16 +69,16 @@ login backs both halves of the plan; no new IdP is introduced.
 
 ## Phase 1 — Keycloak-backed OpenBao write identity (no LKE-E dependency)
 
-Extend [`ci_openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
+Extend [`ci_openbao_configure.go`](../../tools/internal/extensions/identityconfig/openbao_configure.go),
 whose policy/role sequence is already idempotent and root-driven at bootstrap:
 
 1. **Second JWT/OIDC auth mount** `oidc-keycloak`, with
    `oidc_discovery_url = https://keycloak.<domainSuffix>/realms/otomi`. This
    mirrors the existing GitHub-OIDC `jwtRole` closure
-   ([`:274`](../../tools/internal/identityconfig/openbao_configure.go)); the GitHub mount is
+   ([`:274`](../../tools/internal/extensions/identityconfig/openbao_configure.go)); the GitHub mount is
    untouched.
 2. **Per-team write policy**, shaped like the existing narrow allowlists
-   ([`:74-104`](../../tools/internal/identityconfig/openbao_configure.go)). Example
+   ([`:74-104`](../../tools/internal/extensions/identityconfig/openbao_configure.go)). Example
    `gsap-writer`:
    ```hcl
    path "secret/data/gsap/*"     { capabilities = ["create","update","read"] }
@@ -96,7 +96,7 @@ whose policy/role sequence is already idempotent and root-driven at bootstrap:
    reached over the **existing auto port-forward** from PR #298 → caches a
    short-lived, team-scoped token in the shell. Subsequent `llz openbao set`
    picks it up via the normal `OPENBAO_TOKEN` path
-   ([`openbao.go`](../../tools/internal/openbao/cli.go)).
+   ([`openbao.go`](../../tools/internal/extensions/openbao/cli.go)).
 
 **Outcome:** operators authenticate as themselves; writes are **attributed** (the
 `sub` claim) and **least-privilege** (their team subtree only); root stays
@@ -131,12 +131,12 @@ Phase 2 also inherits two LKE-E realities to design around: the control-plane
 [`cluster-access/action.yml`](../../instance-template/.github/actions/cluster-access/action.yml))
 and admission **webhook denials** on some subresources for even cluster-admin
 (`services/proxy` denied, `pods/portforward` allowed —
-[`prom_query.go:6`](../../tools/internal/assertobs/promquery.go)).
+[`prom_query.go:6`](../../tools/internal/extensions/assertobs/promquery.go)).
 
 ## Spec surface
 
 Teams are greenfield in the spec — the LandingZone CRD has no `Team` type today
-([`clusterspec/types.go`](../../tools/internal/clusterspec/types.go)). Introduce a
+([`clusterspec/types.go`](../../tools/internal/shared/clusterspec/types.go)). Introduce a
 minimal declaration so team → group → secret-subtree is one source of truth that
 `ci bao-configure` (and, in Phase 2, an RBAC generator) consumes:
 
@@ -198,9 +198,9 @@ diverges in these specifics (the code is authoritative):
   `openbao_team` question); there is no load-time default, so existing instances
   are byte-identical until they opt in via the retrofit runbook.
 
-Reference: [`ci_openbao_configure.go`](../../tools/internal/identityconfig/openbao_configure.go),
-[`ci_keycloak_configure.go`](../../tools/internal/identityconfig/keycloak_configure.go),
-[`openbao_login.go`](../../tools/internal/openbao/teamlogin.go),
+Reference: [`ci_openbao_configure.go`](../../tools/internal/extensions/identityconfig/openbao_configure.go),
+[`ci_keycloak_configure.go`](../../tools/internal/extensions/identityconfig/keycloak_configure.go),
+[`openbao_login.go`](../../tools/internal/extensions/openbao/teamlogin.go),
 [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
 
 ## The read half (shipped in #336)

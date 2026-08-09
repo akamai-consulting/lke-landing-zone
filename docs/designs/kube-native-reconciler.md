@@ -23,9 +23,9 @@ controller). CronJob deletions follow once each reconciler proves out per the
 "keep the CronJob until a green e2e" discipline.
 
 - **Phase 0 (merged, #150).** The observe-only foundation:
-  [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
+  [`internal/metrics`](../../tools/internal/shared/metrics/metrics.go) (a dependency-free
   Prometheus text-exposition registry — gauges + counters) and the
-  [`llz reconcile`](../../tools/internal/reconciler/reconcile.go) command (serves
+  [`llz reconcile`](../../tools/internal/extensions/reconciler/reconcile.go) command (serves
   `:8080/metrics` and `:8081/healthz` on SEPARATE listeners — metrics is mTLS,
   healthz is plaintext because the kubelet probing it cannot present a client
   certificate; see ADR 0010 — SIGTERM-graceful), plus the deployable
@@ -33,11 +33,11 @@ controller). CronJob deletions follow once each reconciler proves out per the
   component (Deployment + read-only RBAC + a default-deny-compatible NetworkPolicy
   that closes the scrape path + Service + ServiceMonitor + PrometheusRule).
 - **Phase 1 (merged, #151).** The `internal/kube` watch primitive
-  ([`Client.Watch`](../../tools/internal/kube/kube.go) — the Kubernetes watch API
+  ([`Client.Watch`](../../tools/internal/shared/kube/kube.go) — the Kubernetes watch API
   over raw HTTP, no client-go; borrows only the transport so a long-lived stream
   isn't guillotined by the client's 30s timeout, ctx governs its lifetime).
 - **Phase 2 (merged, #152).** The reconciler **manager**
-  ([`reconcile_manager.go`](../../tools/internal/reconciler/reconcile_manager.go)) — runs N
+  ([`reconcile_manager.go`](../../tools/internal/extensions/reconciler/reconcile_manager.go)) — runs N
   named reconcilers with a uniform per-reconciler metric set
   (`llz_reconcile_{runs_total,errors_total,up,last_success_timestamp_seconds,last_duration_seconds}{reconciler}`).
   The observe sampler is now one such reconciler; the two **timed reconcilers** —
@@ -45,16 +45,16 @@ controller). CronJob deletions follow once each reconciler proves out per the
   CronJobs as bounded-resync loops calling the same `ci`-verb logic, **off by
   default**.
 - **Watch reconcilers (#153).** The manager gains an **event-triggered**
-  loop ([`runWatchReconcilerLoop`](../../tools/internal/reconciler/reconcile_manager.go)): a
+  loop ([`runWatchReconcilerLoop`](../../tools/internal/extensions/reconciler/reconcile_manager.go)): a
   reconciler with a `watch` closure runs level-based on each watch event (via
   `Client.Watch`), plus a resync floor, re-establishing the stream on close. The
   first watch reconciler — **argo-resync-nudger**
-  ([`reconcile_argo_nudge.go`](../../tools/internal/reconcilelanes/argo_nudge.go)) —
+  ([`reconcile_argo_nudge.go`](../../tools/internal/extensions/reconcilelanes/argo_nudge.go)) —
   watches Argo CD Applications and re-triggers the terminally-failed ones (pure
   Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
   stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
 - **Leader election (#154).** A minimal `coordination.k8s.io` Lease elector
-  ([`reconcile_leader.go`](../../tools/internal/reconciler/reconcile_leader.go)) over the
+  ([`reconcile_leader.go`](../../tools/internal/extensions/reconciler/reconcile_leader.go)) over the
   hand-rolled kube client — acquire/renew/take-over/step-down, no client-go
   leaderelection. The observe sampler (read-only) runs on every replica; the
   **driving** reconcilers are gated to no-op unless this replica holds the lease,
@@ -72,7 +72,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
     once vs the script's per-volume GET). Retires the 103-line embedded-shell blob
     from the `untestable-budget` once the CronJob switches to the new verb.
 - **Convergence gauge (this branch).** The observe reconciler now also publishes
-  `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/internal/reconciler/reconcile_convergence.go)):
+  `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/internal/extensions/reconciler/reconcile_convergence.go)):
   it lists Argo CD Applications and classifies each through the **same tested
   predicate `llz ci health` uses** (`internal/health.ParseArgoApp` +
   `ClassifyArgoApp`), publishing the 0/1/2 verdict (+ failed/pending app counts).
@@ -82,7 +82,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   It **observes** — drives nothing (contract-clean).
 - **Health gauges (this branch).** The observe reconciler also publishes the
   readiness signals the daily `scheduled-checks` jobs port-forward for
-  ([`reconcile_health.go`](../../tools/internal/reconciler/reconcile_health.go)), all over the
+  ([`reconcile_health.go`](../../tools/internal/extensions/reconciler/reconcile_health.go)), all over the
   Kubernetes API (no OpenBao wiring): `llz_eso_store_ready` (the openbao
   ClusterSecretStore, via the shared `ClassifyReady` predicate),
   `llz_certificates_{total,not_ready}` (cert-manager Certificates, same predicate),
@@ -91,7 +91,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   `LLZOpenBaoNotAvailable`. This is what lets **Phase 3** demote the CIDR-fragile
   `openbao-health` (ESO) + `certmanager-health` external checks to belt-and-suspenders.
 - **OpenBao-auth gauges (this branch).** An **opt-in, read-only** reconciler
-  (`--reconcile-openbao-gauges`, [`reconcile_openbao.go`](../../tools/internal/reconcilelanes/openbao.go))
+  (`--reconcile-openbao-gauges`, [`reconcile_openbao.go`](../../tools/internal/extensions/reconcilelanes/openbao.go))
   that adds the two signals needing OpenBao access: `llz_openbao_sealed` /
   `llz_openbao_initialized` (the precise `/v1/sys/seal-status`, unauthenticated)
   and `llz_credential_age_days{cred}` (the rotation age of the in-cluster object-
@@ -111,7 +111,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   events), the policy is **starved** and never re-demotes, leaving two default
   StorageClasses that hard-fail `llz ci converge`. The CronJob is the durable
   backstop. This reconciler
-  ([`reconcile_sc_demote.go`](../../tools/internal/reconcilelanes/sc_demote.go)) preserves
+  ([`reconcile_sc_demote.go`](../../tools/internal/extensions/reconcilelanes/sc_demote.go)) preserves
   that guarantee: it **watches** StorageClasses (fast demote) **and** carries a
   resync floor, so a slipped-through re-promotion is re-demoted on the next resync
   tick even with no events — exactly the starvation case the CronJob's `*/2`
@@ -228,7 +228,7 @@ speak for itself.
   `StorageClass`) and Linode-side state. No `apiextensions`, no Kubebuilder API
   types.
 - **No client-go, no controller-runtime, no `prometheus/client_golang`.** The
-  `tools/` module is deliberately lean — [`internal/kube`](../../tools/internal/kube/kube.go)
+  `tools/` module is deliberately lean — [`internal/kube`](../../tools/internal/shared/kube/kube.go)
   is a hand-rolled REST client ("no kubectl, no client-go") built for the slim
   distroless image, and `internal/*` holds pure, unit-tested logic while `cmd/llz`
   wires the I/O. This design **stays inside that stance**: the watch is the

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 )
 
 func TestCredentialsCommandWiring(t *testing.T) {
@@ -43,7 +43,7 @@ func TestCredentialsCommandWiring(t *testing.T) {
 
 	run := func(args ...string) string {
 		t.Helper()
-		c := credentialsCmd()
+		c := credrotate.CredentialsCmd()
 		c.SetArgs(args)
 		var err error
 		stdout, _ := captureFirewallOutput(t, func() { err = c.Execute() })

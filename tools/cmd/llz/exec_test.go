@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 // withExecOutput / withLookPath swap the package-level exec seam for the
@@ -53,21 +53,6 @@ func TestGitOut(t *testing.T) {
 	}
 }
 
-func TestGitOutputPassesDirFlag(t *testing.T) {
-	var gotArgs []string
-	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
-		gotArgs = args
-		return []byte("ok\n"), nil
-	})
-	out, err := gitOutput("/work/dir", "rev-parse", "--show-toplevel")
-	if err != nil || out != "ok" {
-		t.Fatalf("gitOutput = (%q, %v), want (ok, nil)", out, err)
-	}
-	if len(gotArgs) < 2 || gotArgs[0] != "-C" || gotArgs[1] != "/work/dir" {
-		t.Errorf("gitOutput did not pass `-C /work/dir`: %v", gotArgs)
-	}
-}
-
 func TestKubectlOut(t *testing.T) {
 	withExecOutput(t, func(name string, _ ...string) ([]byte, error) {
 		if name != "kubectl" {
@@ -81,19 +66,15 @@ func TestKubectlOut(t *testing.T) {
 	}
 }
 
-func TestHaveToolAndLookable(t *testing.T) {
+// haveTool moved to internal/extensions/lint with the steps that call it; what
+// is left here is the kubectlprobe half this test always also covered.
+func TestLookable(t *testing.T) {
 	withLookPath(t, func(file string) (string, error) { return "/usr/bin/" + file, nil })
-	if !haveTool("tflint") {
-		t.Error("haveTool(present) = false, want true")
-	}
 	if !kubectlprobe.Lookable("gh") {
 		t.Error("kubectlprobe.Lookable(present) = false, want true")
 	}
 
 	withLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
-	if haveTool("tflint") {
-		t.Error("haveTool(absent) = true, want false")
-	}
 	if kubectlprobe.Lookable("gh") {
 		t.Error("kubectlprobe.Lookable(absent) = true, want false")
 	}

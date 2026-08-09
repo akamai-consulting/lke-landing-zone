@@ -11,14 +11,15 @@ package main
 import (
 	"fmt"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/yamledit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/yamledit"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
 func aplAppCmd() *cobra.Command {
@@ -31,7 +32,7 @@ func aplAppCmd() *cobra.Command {
 			"which the apl-overlay reconciler propagates the change onto apl-<env>.",
 	}
 	c.AddCommand(
-		renamed(componentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
+		renamed(clusterspec.ComponentsCmd(), "list", "list the component registry (default state, backends, sizing knobs)"),
 		aplAppToggleCmd("enable", true),
 		aplAppToggleCmd("disable", false),
 	)
@@ -89,7 +90,7 @@ func runAppToggle(env, app string, enable bool) error {
 	}
 	fmt.Printf("  %s %s in %s (spec.%s = %s)\n", color.Green(done), app, env, path, value)
 	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
-	return render.Run(gopts.dryRun, env, false, false, false)
+	return render.Run(cliopts.Global.DryRun, env, false, false, false)
 }
 
 // findComponent returns the component registry entry for an exact name.

@@ -16,17 +16,17 @@ package main
 // is silent. base64Auth with a swapped separator still returns valid base64 and
 // breaks registry auth at runtime. isAlreadyExists misclassifying turns a benign
 // conflict into a failure, or hides a real one. drivingEnabled dropping one
-// disjunct silently disables a reconciler. Those are worth pinning; `orDash` is
+// disjunct silently disables a reconciler. Those are worth pinning; `clusterspec.OrDash` is
 // borderline and included only because it costs nothing alongside its siblings.
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 )
 
 // base64Auth builds the docker-config auth field. A swapped order or separator
@@ -106,23 +106,23 @@ func TestEnvWithKubeconfig(t *testing.T) {
 	}
 }
 
-// Moved BACK from internal/brownfield: optSubnet lives in components_cmd.go and
+// Moved BACK from internal/brownfield: clusterspec.OptSubnet lives in components_cmd.go and
 // stayed. It travelled out because it shared a test file with brownfield symbols —
 // the same "neighbours, not relatives" mistake the teardown extraction found, and
 // the second time an iterative move has needed correcting.
 
 func TestOptSubnetAndOrDash(t *testing.T) {
-	if got := optSubnet(""); got != "" {
-		t.Errorf("optSubnet(empty) = %q, want empty (no stray parens)", got)
+	if got := clusterspec.OptSubnet(""); got != "" {
+		t.Errorf("clusterspec.OptSubnet(empty) = %q, want empty (no stray parens)", got)
 	}
-	if got := optSubnet("10.0.0.0/24"); got != " (10.0.0.0/24)" {
-		t.Errorf("optSubnet = %q — the leading space separates it from the label", got)
+	if got := clusterspec.OptSubnet("10.0.0.0/24"); got != " (10.0.0.0/24)" {
+		t.Errorf("clusterspec.OptSubnet = %q — the leading space separates it from the label", got)
 	}
-	if got := orDash(""); got != "—" {
-		t.Errorf("orDash(empty) = %q, want an em dash", got)
+	if got := clusterspec.OrDash(""); got != "—" {
+		t.Errorf("clusterspec.OrDash(empty) = %q, want an em dash", got)
 	}
-	if got := orDash("us-ord"); got != "us-ord" {
-		t.Errorf("orDash passthrough = %q", got)
+	if got := clusterspec.OrDash("us-ord"); got != "us-ord" {
+		t.Errorf("clusterspec.OrDash passthrough = %q", got)
 	}
 }
 
@@ -143,8 +143,8 @@ func TestControlPlaneSummary(t *testing.T) {
 		{"HA false, audit true", clusterspec.ControlPlane{HighAvailability: &no, AuditLogsEnabled: &yes}, "audit logs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := controlPlaneSummary(tc.cp); got != tc.want {
-				t.Errorf("controlPlaneSummary = %q, want %q", got, tc.want)
+			if got := clusterspec.ControlPlaneSummary(tc.cp); got != tc.want {
+				t.Errorf("clusterspec.ControlPlaneSummary = %q, want %q", got, tc.want)
 			}
 		})
 	}

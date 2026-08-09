@@ -4,7 +4,7 @@
 - Date: 2026-07-24
 - Deciders: platform / LLZ maintainers
 - Related: `docs/designs/apl-core-values-branch-isolation.md`,
-  `tools/internal/reconciler/reconcile_apl_overlay.go`,
+  `tools/internal/extensions/reconciler/reconcile_apl_overlay.go`,
   the reserved ADR 0001 (PAT rotation locus) — see [the ADR index](README.md)
 
 ## Context

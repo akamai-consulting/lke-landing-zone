@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 )
 
 // pulled_helpers_test.go — helpers the moved tests use, copied across the new

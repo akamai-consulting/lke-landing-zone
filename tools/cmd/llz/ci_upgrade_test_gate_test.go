@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
 )
 
 // TestCopierUpdateArgvIsNonInteractive is the unit-speed twin of the gate's
@@ -49,7 +50,7 @@ func TestCopierCopyArgvStillPrompts(t *testing.T) {
 }
 
 func TestCopierScaffoldArgv(t *testing.T) {
-	argv := copierScaffoldArgv("/tmp/tmpl", "v0.0.39", "/tmp/out/instance",
+	argv := upgrade.CopierScaffoldArgv("/tmp/tmpl", "v0.0.39", "/tmp/out/instance",
 		map[string]string{"instance_repo": "probe-org/probe-instance", "openbao_team": "probe-team"})
 
 	// The template must be addressed as a PATH, so the gate runs offline and
@@ -70,10 +71,10 @@ func TestCopierScaffoldArgv(t *testing.T) {
 	}
 	// The harness itself must never block on a onboard.Prompt.
 	if !containsArg(argv, "--defaults") {
-		t.Errorf("scaffold argv would onboard.Prompt: %v", argv)
+		t.Errorf("scaffold argv would prompt: %v", argv)
 	}
 	// Deterministic ordering, so a failure diff is stable across runs.
-	if got := copierScaffoldArgv("/t", "v1.0.0", "/d",
+	if got := upgrade.CopierScaffoldArgv("/t", "v1.0.0", "/d",
 		map[string]string{"b": "2", "a": "1"}); !containsArg(got, "a=1") ||
 		indexOfArg(got, "a=1") > indexOfArg(got, "b=2") {
 		t.Errorf("answers not emitted in sorted order: %v", got)
@@ -93,9 +94,9 @@ func TestPreviousReleaseTag(t *testing.T) {
 	// Numeric ordering, not string: "v0.0.9" > "v0.0.10" lexically, and picking the
 	// wrong one quietly narrows what the gate covers.
 	t.Run("picks the highest release numerically", func(t *testing.T) {
-		got, ok := previousReleaseTag([]string{"v0.0.9", "v0.0.10", "v0.0.2"}, nil)
+		got, ok := upgrade.PreviousReleaseTag([]string{"v0.0.9", "v0.0.10", "v0.0.2"}, nil)
 		if !ok || got != "v0.0.10" {
-			t.Errorf("previousReleaseTag = %q,%v; want v0.0.10", got, ok)
+			t.Errorf("upgrade.PreviousReleaseTag = %q,%v; want v0.0.10", got, ok)
 		}
 	})
 
@@ -103,25 +104,25 @@ func TestPreviousReleaseTag(t *testing.T) {
 	// test, and "upgrade v0.0.40 → v0.0.40" is a no-op that passes while testing
 	// nothing — a color.Green gate meaning least on the run that matters most.
 	t.Run("skips a tag on the commit under test", func(t *testing.T) {
-		got, ok := previousReleaseTag(
+		got, ok := upgrade.PreviousReleaseTag(
 			[]string{"v0.0.39", "v0.0.40"}, map[string]bool{"v0.0.40": true})
 		if !ok || got != "v0.0.39" {
-			t.Errorf("previousReleaseTag = %q,%v; want v0.0.39 — the release being cut is not something to upgrade FROM", got, ok)
+			t.Errorf("upgrade.PreviousReleaseTag = %q,%v; want v0.0.39 — the release being cut is not something to upgrade FROM", got, ok)
 		}
 	})
 
 	// Delegated to selfupgrade.LatestLLZTag, so pre-releases and the retired llz/v* track are
 	// excluded by the same rule `llz self-update` and `llz new` apply.
 	t.Run("ignores pre-releases and the legacy tag track", func(t *testing.T) {
-		got, ok := previousReleaseTag([]string{"v0.0.39", "v0.0.41-rc1", "llz/v9.9.9"}, nil)
+		got, ok := upgrade.PreviousReleaseTag([]string{"v0.0.39", "v0.0.41-rc1", "llz/v9.9.9"}, nil)
 		if !ok || got != "v0.0.39" {
-			t.Errorf("previousReleaseTag = %q,%v; want v0.0.39", got, ok)
+			t.Errorf("upgrade.PreviousReleaseTag = %q,%v; want v0.0.39", got, ok)
 		}
 	})
 
 	t.Run("reports not-ok on a clone with no release tags", func(t *testing.T) {
-		if got, ok := previousReleaseTag([]string{"main", ""}, nil); ok {
-			t.Errorf("previousReleaseTag = %q,%v; want not-ok so the gate skips rather than inventing a release", got, ok)
+		if got, ok := upgrade.PreviousReleaseTag([]string{"main", ""}, nil); ok {
+			t.Errorf("upgrade.PreviousReleaseTag = %q,%v; want not-ok so the gate skips rather than inventing a release", got, ok)
 		}
 	})
 }
@@ -145,7 +146,7 @@ func TestMergeConflictArtifacts(t *testing.T) {
 	// instance's content; scanning it would report artifacts that ship nowhere.
 	write(".git/MERGE_MSG", "<<<<<<< HEAD\n")
 
-	markers, rejects, err := mergeConflictArtifacts(root)
+	markers, rejects, err := upgrade.MergeConflictArtifacts(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,31 +161,31 @@ func TestMergeConflictArtifacts(t *testing.T) {
 func TestIndentedTail(t *testing.T) {
 	// The tail, because copier's message and a traceback's exception line are LAST
 	// while the head is a wall of file-creation noise.
-	got := indentedTail("create a\ncreate b\nOSError: [Errno 22]", 2)
+	got := upgrade.IndentedTail("create a\ncreate b\nOSError: [Errno 22]", 2)
 	if strings.Contains(got, "create a") {
-		t.Errorf("indentedTail kept the head: %q", got)
+		t.Errorf("upgrade.IndentedTail kept the head: %q", got)
 	}
 	if !strings.Contains(got, "OSError") {
-		t.Errorf("indentedTail dropped the exception line: %q", got)
+		t.Errorf("upgrade.IndentedTail dropped the exception line: %q", got)
 	}
 	for _, ln := range strings.Split(got, "\n") {
 		if !strings.HasPrefix(ln, "      ") {
 			t.Errorf("line %q is not indented into the report", ln)
 		}
 	}
-	if got := indentedTail("", 5); !strings.Contains(got, "no output") {
-		t.Errorf("indentedTail(\"\") = %q; want it to say there was no output", got)
+	if got := upgrade.IndentedTail("", 5); !strings.Contains(got, "no output") {
+		t.Errorf("upgrade.IndentedTail(\"\") = %q; want it to say there was no output", got)
 	}
 }
 
 func TestShortRef(t *testing.T) {
 	const sha = "a8fc6a768bb16862eb2b4c5719b5c26b7ca82ce4"
-	if got := shortRef(sha); got != "a8fc6a768bb1" {
-		t.Errorf("shortRef(sha) = %q", got)
+	if got := upgrade.ShortRef(sha); got != "a8fc6a768bb1" {
+		t.Errorf("upgrade.ShortRef(sha) = %q", got)
 	}
 	// A tag is already short and meaningful — truncating it would turn v0.0.40 into
 	// noise.
-	if got := shortRef("v0.0.40"); got != "v0.0.40" {
-		t.Errorf("shortRef(tag) = %q; want it left alone", got)
+	if got := upgrade.ShortRef("v0.0.40"); got != "v0.0.40" {
+		t.Errorf("upgrade.ShortRef(tag) = %q; want it left alone", got)
 	}
 }

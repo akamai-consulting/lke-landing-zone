@@ -38,7 +38,7 @@ dependency (cluster access, DNS, the whole health tree) failed, not each lane.
 ## Step 2 — let the classifiers name it before you guess
 
 Large classes of wedge are **already encoded** in
-`tools/internal/health/argo.go` and `tools/cmd/llz/ci_health.go`. Each verdict
+`tools/internal/shared/health/argo.go` and `tools/cmd/llz/ci_health.go`. Each verdict
 carries its reasoning in a comment beside it, and those comments are the
 authority — this is an index into them, not a substitute, and when the two
 disagree the code is right:

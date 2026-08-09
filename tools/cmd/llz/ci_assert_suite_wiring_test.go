@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsuite"
 )
 
 // The one test that asserts the suite command is REGISTERED in the ci tree.

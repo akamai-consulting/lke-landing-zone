@@ -6,7 +6,7 @@ any non-lab promotion.
 **Relates to:** [apl-core-migration-runbook.md](../apl-core-migration-runbook.md),
 [../secrets.md](../secrets.md), [linode-credential-rotator.md](linode-credential-rotator.md),
 `instance-template/apl-values/`, `instance-template/terraform-iac-bootstrap/cluster-bootstrap/`,
-`tools/internal/identityconfig/openbao_configure.go`.
+`tools/internal/extensions/identityconfig/openbao_configure.go`.
 
 ## Why
 
@@ -163,7 +163,7 @@ else is removable** — the remaining workarounds are confirmed load-bearing on 
   generated); v6 *removed* the OTLP collector, so LLZ's OTelCollector CR is still
   required.
 - **Bug fixed, not a simplification:** the `gitea` component in
-  `tools/internal/clusterspec/components.go` lacked `DefaultDisabled`, so
+  `tools/internal/shared/clusterspec/components.go` lacked `DefaultDisabled`, so
   `llz render` would flip the committed `gitea: { enabled: false }` back to `true`
   on every spec instance (silently re-enabling Gitea on v6). Fixed + regression
   test (`TestRenderValues_GiteaDisabledByDefault`).
@@ -180,7 +180,7 @@ env/manifests/{namespaces,global}`) in the values repo.
   operator's envFrom `optional: true`). Remaining `sops` hits are inert: the
   `import` tooling reads a *foreign* 5.x cluster's SOPS values (legitimate), and
   `secrets.md`'s "without a KMS" line is about OpenBao's static seal key, not
-  SOPS. One stale reference — `AplCoreChain()` in `tools/internal/terraform/
+  SOPS. One stale reference — `AplCoreChain()` in `tools/internal/shared/terraform/
   untrack.go` still listed the removed placeholder — was **harmless** (`stateRm`
   skips addresses not in state) and has been dropped.
 - **(b) manifests-dir collision — NONE.** The operator writes a **top-level

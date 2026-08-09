@@ -8,7 +8,7 @@ package main
 // baoread.ParsePodStatus has four other callers and stays; the package asks
 // "answering and unsealed?" through a seam rather than parsing status itself.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 
 func init() {
 	// Delegating closures, never direct assignment: baoread.ExecFn is

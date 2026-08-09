@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
 
 // withBaoExec swaps the RESILIENT entry point — the one every caller in this

@@ -28,8 +28,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extension/registry"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension/registry"
 )
 
 func extensionCmd() *cobra.Command {

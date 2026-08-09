@@ -1,44 +1,44 @@
 # Design: the internal extension model — bindings and grants
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first ten
-extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
-`posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
-`reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
-`template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
-`obj-encryption` (`tools/internal/objenc`), `guard-charts`
-(`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`), `health-sla`
-(`tools/internal/healthsla`) `token-inventory` (`tools/internal/tokeninv`) `converge`
-(`tools/internal/converge`) `assert-platform`
-(`tools/internal/assertplatform`) `assert-reconciler`
-(`tools/internal/assertreconciler`) `assert-registry`
-(`tools/internal/assertregistry`) `promote-pipeline`
-(`tools/internal/promote`) `posture-credential-coverage`
-(`tools/internal/credcoverage`) `config-readiness`
-(`tools/internal/configreadiness`) `env-topology`
-(`tools/internal/envtopology`) `assert-network`
-(`tools/internal/assertnetwork`) `wave-health`
-(`tools/internal/wavehealth`) `tofu-driver`
-(`tools/internal/tofudriver`) `assert-observability`
-(`tools/internal/assertobs`) `assert-secrets`
-(`tools/internal/assertsecrets`) and `assert-identity` (`tools/internal/assertidentity`) and `deliver-docs`
-(`tools/internal/deliverdocs`) and `argocd-diagnostics`
-(`tools/internal/argodiag`) and `posture-plaintext`
-(`tools/internal/plaintext`) and `chart-publish`
-(`tools/internal/chartpublish`) and `guard-manifests`
-(`tools/internal/manifestguard`) and `assert-objstore`
-(`tools/internal/assertobjstore`) and `wedge-gameday`
-(`tools/internal/gameday`) and `phase-timing`
-(`tools/internal/phasetiming`) and `doctor-probes`
-(`tools/internal/doctor`) and `kyverno-policies`
-(`tools/internal/kyverno`) and `dev-mutation-testing`
-(`tools/internal/mutate`) and `release-publish`
-(`tools/internal/releasepublish`) and `credential-state-passphrase`
-(`tools/internal/statepassphrase`) and `credential-pat` + `credential-objkey`
-(both in `tools/internal/credrotate` — the first package to declare two) and `database-provisioner`
-(`tools/internal/database`, holding `assert-database` as its third binding) and `openbao-seed`
-(`tools/internal/baoseed`) and `openbao-peer-ca`
-(`tools/internal/baoca`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+bindings, grants and their validation) in `tools/internal/shared/extension`. Phase 2 is the first ten
+extensions: `guard-budgets` (`tools/internal/extensions/budget`), `guard-docs` (`tools/internal/extensions/docsguard`),
+`posture-at-rest` (`tools/internal/extensions/atrest`), `assert-storage` (`tools/internal/extensions/volumes`) and
+`reconcile-actions` (`tools/internal/extensions/reconcilelanes`) `teardown` (`tools/internal/extensions/teardown`) and
+`template-sustain` (`tools/internal/extensions/sustain`) and `import-brownfield` (`tools/internal/extensions/brownfield`) and
+`obj-encryption` (`tools/internal/extensions/objenc`), `guard-charts`
+(`tools/internal/extensions/chartguard`), `cluster-access` (`tools/internal/extensions/clusteraccess`), `health-sla`
+(`tools/internal/extensions/healthsla`) `token-inventory` (`tools/internal/extensions/tokeninv`) `converge`
+(`tools/internal/extensions/converge`) `assert-platform`
+(`tools/internal/extensions/assertplatform`) `assert-reconciler`
+(`tools/internal/extensions/assertreconciler`) `assert-registry`
+(`tools/internal/extensions/assertregistry`) `promote-pipeline`
+(`tools/internal/extensions/promote`) `posture-credential-coverage`
+(`tools/internal/extensions/credcoverage`) `config-readiness`
+(`tools/internal/extensions/configreadiness`) `env-topology`
+(`tools/internal/extensions/envtopology`) `assert-network`
+(`tools/internal/extensions/assertnetwork`) `wave-health`
+(`tools/internal/extensions/wavehealth`) `tofu-driver`
+(`tools/internal/extensions/tofudriver`) `assert-observability`
+(`tools/internal/extensions/assertobs`) `assert-secrets`
+(`tools/internal/extensions/assertsecrets`) and `assert-identity` (`tools/internal/extensions/assertidentity`) and `deliver-docs`
+(`tools/internal/extensions/deliverdocs`) and `argocd-diagnostics`
+(`tools/internal/extensions/argodiag`) and `posture-plaintext`
+(`tools/internal/extensions/plaintext`) and `chart-publish`
+(`tools/internal/extensions/chartpublish`) and `guard-manifests`
+(`tools/internal/extensions/manifestguard`) and `assert-objstore`
+(`tools/internal/extensions/assertobjstore`) and `wedge-gameday`
+(`tools/internal/extensions/gameday`) and `phase-timing`
+(`tools/internal/extensions/phasetiming`) and `doctor-probes`
+(`tools/internal/extensions/doctor`) and `kyverno-policies`
+(`tools/internal/extensions/kyverno`) and `dev-mutation-testing`
+(`tools/internal/extensions/mutate`) and `release-publish`
+(`tools/internal/extensions/releasepublish`) and `credential-state-passphrase`
+(`tools/internal/extensions/statepassphrase`) and `credential-pat` + `credential-objkey`
+(both in `tools/internal/extensions/credrotate` — the first package to declare two) and `database-provisioner`
+(`tools/internal/extensions/database`, holding `assert-database` as its third binding) and `openbao-seed`
+(`tools/internal/extensions/baoseed`) and `openbao-peer-ca`
+(`tools/internal/extensions/baoca`) declare themselves, `tools/internal/shared/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
 all forty-five still run because `ci.go` and the reconciler register them, and the declarations are inert.
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,

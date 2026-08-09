@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it

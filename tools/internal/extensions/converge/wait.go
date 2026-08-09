@@ -1,0 +1,250 @@
+package converge
+
+// ci_wait.go implements `llz ci wait-pods` and `llz ci wait-cluster-ready` —
+// native ports of the inline kubectl polling loops the bootstrap/rotation
+// workflows used to carry (llz-bootstrap-openbao.yml's pod wait,
+// llz-secret-rotation.yml's post-rotation health gate). One place owns the
+// deadline/interval mechanics and the timeout diagnostics instead of each
+// workflow re-rolling them in bash.
+
+import (
+	"crypto/tls"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
+)
+
+// resolveExpectNodes returns the number of Ready nodes wait-cluster-ready should
+// require. A tfvars file's node_count wins when present and positive (so the gate
+// waits for the whole statically-sized pool); otherwise fallback (the
+// --expect-nodes flag) applies. The fallback is floored at 1 — a cluster with
+// zero Ready nodes is never "ready". Reading tfvars is best-effort: an unreadable
+// path silently falls back, matching the gate's tolerance of partial cluster state.
+func resolveExpectNodes(tfvarsPath string, fallback int) int {
+	if fallback < 1 {
+		fallback = 1
+	}
+	if tfvarsPath == "" {
+		return fallback
+	}
+	content, err := os.ReadFile(tfvarsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::could not read %s (%v) — expecting %d Ready node(s)\n", tfvarsPath, err, fallback)
+		return fallback
+	}
+	if n := tf.ParseTFVars(string(content)).NodeCount; n > 0 {
+		return n
+	}
+	return fallback
+}
+
+// WaitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
+// until it returns true or timeout elapses, sleeping interval between tries with
+// an immediate first try. Returns whether cond succeeded within the budget.
+func WaitPoll(timeout, interval time.Duration, cond func() bool) bool {
+	return cigate.PollUntil(time.Now, time.Sleep, timeout, interval, cond)
+}
+
+// runCIWaitPods returns nil once every pod reaches the phase, or an error (which
+// cobra exits 1 on). The ::error:: annotations stay as direct stderr writes —
+// GitHub only parses an annotation at the start of a line, and the returned
+// error is printed behind main.go's "llz: " prefix.
+func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) error {
+	_ = interval // kubectl wait is watch-based; --interval retained for CLI compatibility
+	if ns == "" {
+		fmt.Fprintln(os.Stderr, "::error::--namespace is required")
+		return fmt.Errorf("--namespace is required")
+	}
+	// One shared deadline across all pods, like the bash loop: a StatefulSet's
+	// OrderedReady pods come up one at a time, so per-pod budgets would either
+	// be too tight for pod 0 or balloon the worst case.
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	for _, pod := range pods {
+		// Two watch-based waits under the shared deadline: --for=create rides out a
+		// pod that does not exist yet (a bare --for=jsonpath errors on NotFound),
+		// then --for=jsonpath blocks until .status.phase matches.
+		if err := kubectlWaitStream("-n", ns, "wait", "--for=create", "pod/"+pod,
+			fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
+			fmt.Fprintf(os.Stderr, "::error::%s was not created within %ds\n", pod, timeout)
+			dumpPodDiagnostics(ns, pod)
+			return fmt.Errorf("%s was not created within %ds", pod, timeout)
+		}
+		if err := kubectlWaitStream("-n", ns, "wait", "--for=jsonpath={.status.phase}="+phase,
+			"pod/"+pod, fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
+			fmt.Fprintf(os.Stderr, "::error::%s did not reach %s phase within %ds\n", pod, phase, timeout)
+			dumpPodDiagnostics(ns, pod)
+			return fmt.Errorf("%s did not reach %s phase within %ds", pod, phase, timeout)
+		}
+		fmt.Printf("%s is %s\n", pod, phase)
+	}
+	return nil
+}
+
+// remainingSecs is the whole seconds left until deadline, floored at 1 so a
+// `kubectl wait --timeout` is always positive — passing 0 would mean "wait
+// forever", the opposite of an exhausted budget.
+func remainingSecs(deadline time.Time) int {
+	if s := int(time.Until(deadline).Seconds()); s > 1 {
+		return s
+	}
+	return 1
+}
+
+// dumpPodDiagnostics prints best-effort cluster state after a wait timeout. It
+// goes through execCombined (combined stdout+stderr, unconditional), so the cases
+// that previously went dark now surface: an empty namespace prints "No resources
+// found" — the signature of a StatefulSet/pods that were never created (e.g. an
+// Argo app that hasn't synced) — and a NotFound describe prints its error instead
+// of being silently skipped. Events are the highest-signal source: FailedScheduling,
+// ImagePull, PVC-binding, and sync failures all land there. Each block is tail-
+// capped so a noisy namespace can't bury the output.
+func dumpPodDiagnostics(ns, pod string) {
+	for _, args := range [][]string{
+		{"-n", ns, "get", "statefulset,pod", "-o", "wide"},
+		{"-n", ns, "describe", "pod", pod},
+		{"-n", ns, "get", "events", "--sort-by=.lastTimestamp"},
+	} {
+		fmt.Fprintf(os.Stderr, "\n# kubectl %s\n%s\n",
+			strings.Join(args, " "), cigate.TailLines(deps.ExecCombined("kubectl", args...), 40))
+	}
+}
+
+func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) error {
+	if expectNodes < 1 {
+		expectNodes = 1
+	}
+	var apiReachable bool
+	ok := WaitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
+		// jsonpath: one "<node>=<Ready-condition-status>" line per node, so a
+		// reachable-but-empty pool prints nothing and parses to 0 Ready.
+		out, err := deps.Exec("kubectl", "get", "nodes",
+			"-o", `jsonpath={range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}`,
+			fmt.Sprintf("--request-timeout=%ds", requestTimeout))
+		if err != nil {
+			// PRINT THE REASON. This used to discard err and out entirely, so a
+			// 15-minute timeout produced fifteen identical lines and no cause —
+			// and the three outcomes it hides want completely different responses:
+			//
+			//   i/o timeout / no route  -> this runner is not in the ACL
+			//   EOF / connection reset  -> ACL'd but the apiserver is closing us
+			//   TLS/x509                -> kubeconfig or CA mismatch
+			//   NotFound/Forbidden      -> reachable; an RBAC or resource problem
+			//
+			// Observed on run 30485106067 only because a DIFFERENT command happened
+			// to log it: "couldn't get current server API group list: ... EOF".
+			// execCombined, NOT the captured stdout: kubectl writes these errors to
+			// STDERR, so the first version of this printed "exit status 1: " with an
+			// empty reason on all 15 polls of run 30499831638 — a diagnostic that
+			// looked like one and carried nothing.
+			detail := cigate.FirstLine(strings.TrimSpace(deps.ExecCombined("kubectl", "get", "--raw", "/readyz",
+				fmt.Sprintf("--request-timeout=%ds", requestTimeout))))
+			if detail == "" {
+				detail = cigate.FirstLine(strings.TrimSpace(string(out)))
+			}
+			fmt.Printf("Waiting for the control plane to accept the kubeconfig... (%v: %s)\n", err, detail)
+			return false
+		}
+		apiReachable = true
+		ready := countReadyNodes(string(out))
+		if ready < expectNodes {
+			fmt.Printf("Control plane reachable; %d/%d node(s) Ready — waiting for the pool to come up...\n", ready, expectNodes)
+			return false
+		}
+		return true
+	})
+	// The two timeout arms stay distinguishable in the returned error, the same
+	// way the ::error:: annotations distinguish them: "API never came up" and
+	// "API up, nodes never joined" want different operator responses. The
+	// annotations are still written directly — GitHub parses an annotation only
+	// at the start of a line, and the returned error is printed behind main.go's
+	// "llz: " prefix.
+	if !ok {
+		var err error
+		if apiReachable {
+			fmt.Fprintf(os.Stderr, "::error::control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up (check Linode capacity/quota for the requested type, or a node_pool_label ≥ 16 chars).\n", expectNodes, timeout)
+			fmt.Fprintf(os.Stderr, "\n# kubectl get nodes -o wide\n%s\n", cigate.TailLines(deps.ExecCombined("kubectl", "get", "nodes", "-o", "wide"), 40))
+			err = fmt.Errorf("control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up", expectNodes, timeout)
+		} else {
+			fmt.Fprintf(os.Stderr, "::error::cluster unreachable after %ds — investigate the kubeconfig before relying on CI.\n", timeout)
+			err = fmt.Errorf("cluster unreachable after %ds — investigate the kubeconfig before relying on CI", timeout)
+		}
+		diagnoseAPIServer()
+		return err
+	}
+	fmt.Printf("Control plane is reachable and ≥%d node(s) Ready:\n", expectNodes)
+	fmt.Print(deps.ExecCombined("kubectl", "get", "nodes", "-o", "wide"))
+	return nil
+}
+
+// countReadyNodes counts nodes reporting Ready=True from the wait loop's
+// jsonpath output — one "<node>=<status>" line per node (status is the Ready
+// condition's value, e.g. "True"/"False"/"Unknown", or empty if the condition
+// is not yet present). Pure + tested: it is the gate's core decision.
+func countReadyNodes(jsonpathOut string) int {
+	ready := 0
+	for _, line := range strings.Split(jsonpathOut, "\n") {
+		_, status, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && status == "True" {
+			ready++
+		}
+	}
+	return ready
+}
+
+// diagnoseAPIServer probes the kubeconfig's server URL directly on timeout:
+// /version answering while `kubectl get nodes` fails points at the credentials
+// or the control-plane ACL (is this runner's egress IP opened?), not at a
+// still-provisioning API. Best-effort — no kubeconfig, no probe.
+func diagnoseAPIServer() {
+	out, err := deps.Exec("kubectl", "config", "view", "--minify",
+		"-o", "jsonpath={.clusters[0].cluster.server}")
+	server := strings.TrimSpace(string(out))
+	if err != nil || server == "" {
+		fmt.Fprintln(os.Stderr, "API endpoint: unknown (could not read the kubeconfig server)")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "API endpoint: %s\n", server)
+	resp, perr := apiProbeClient().Get(server + "/version")
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "direct /version probe failed: %v (API not reachable from this runner — still provisioning, or the control-plane ACL does not include this runner's egress IP)\n", perr)
+		return
+	}
+	defer resp.Body.Close()
+	body := make([]byte, 300)
+	n, _ := resp.Body.Read(body)
+	fmt.Fprintf(os.Stderr, "direct /version probe: HTTP %d %s (API is up — suspect the kubeconfig credentials)\n",
+		resp.StatusCode, strings.TrimSpace(string(body[:n])))
+}
+
+// apiProbeClient is the short-deadline, verification-off HTTP client the
+// timeout diagnostics use (LKE's API cert is fine; a bootstrap-window probe
+// must not fail on TLS while the endpoint is mid-provision). A package var so
+// tests can point it at a stub server.
+//
+// DELIBERATELY OUT OF SCOPE for the in-cluster mTLS work (ADR 0010), which
+// covers pod↔pod traffic. This probes the LKE-managed control-plane endpoint
+// from OUTSIDE the cluster during provisioning, before the cluster exists to
+// have a PKI, and it is a diagnostic that reads a status line — it carries no
+// credential and its result authorizes nothing. Left as-is on purpose; do not
+// "fix" it by reference to that ADR.
+var apiProbeClient = func() *http.Client {
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
+	}
+}
+
+// kubectlWaitStream runs `kubectl <args>` with streamed output (the condition
+// wait's progress lines are the operator's feedback). A package var so tests
+// can stub the wait.
+var kubectlWaitStream = func(args ...string) error {
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}

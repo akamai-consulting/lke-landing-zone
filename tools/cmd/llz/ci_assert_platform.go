@@ -9,8 +9,8 @@ package main
 // cluster and where an instance repo keeps its spec.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
 // installAssertPlatformDeps hands the extension the capabilities it declares.

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 // TestMain zeroes the probe retry delay for the whole package. Every probe now

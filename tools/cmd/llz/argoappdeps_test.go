@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
 // assertArgoAppDeps builds seam deps: kubectl answers from the script (keyed

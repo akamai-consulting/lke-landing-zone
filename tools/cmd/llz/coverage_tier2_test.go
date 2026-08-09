@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
 )
 
 func TestWriteEnvFile(t *testing.T) {

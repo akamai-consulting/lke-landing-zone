@@ -1,5 +1,14 @@
 package main
 
+// mint_bootstrap_objkeys_test.go — did NOT follow its command, same debt as
+// credentials_cobra_test.go beside it.
+//
+// It depends on package main's bao/objkey stubs, and internal/credrotate's
+// same-named stubs behave differently — moving it made an "already seeded paths
+// are skipped" assertion fail, because the two fixtures disagree about what is
+// already seeded. Reconciling them is a real change to what the existing
+// credrotate tests assert, not a mechanical one.
+
 import (
 	"path/filepath"
 	"strconv"
@@ -7,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 )
 
 // The mint-bootstrap-objkeys test, returned to package main.
 //
 // It travelled inside ci_seed_special_test.go and its subject is
-// credrotate.MintBootstrapObjkeys, which has nothing to do with resolve-harbor-url
+// MintBootstrapObjkeys, which has nothing to do with resolve-harbor-url
 // or the PVC storage-class audit. Filename-as-subject, eleventh occurrence — and
 // this one FAILED on arrival rather than passing quietly, because the fixtures it
 // needs are wired in package main.

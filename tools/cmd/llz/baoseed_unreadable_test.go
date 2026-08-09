@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoread"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baoseed"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
 
 // The seeder must not overwrite a path it could not read. This is the bug:

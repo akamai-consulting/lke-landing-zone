@@ -14,11 +14,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/spf13/cobra"
 )
 

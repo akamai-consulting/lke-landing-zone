@@ -19,7 +19,7 @@ pool an `llz-pool` module. Both were single-consumer wrappers and are now inline
 as a plain `linode_lke_node_pool`.
 
 **A working composition** is the generated `cluster` root:
-[`../tools/internal/tfroots/roots/cluster/`](../tools/internal/tfroots/roots/cluster/)
+[`../tools/internal/shared/tfroots/roots/cluster/`](../tools/internal/shared/tfroots/roots/cluster/)
 (alongside `object-storage/` and `vpc/`). An instance commits **zero** Terraform —
 `llz render` writes these roots and their `<env>.tfvars` as gitignored build
 artifacts, so the roots live once, in the binary.
