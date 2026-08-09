@@ -76,6 +76,24 @@ func TestNoNewRawFilesystemReadsInGuards(t *testing.T) {
 	root := filepath.FromSlash("../../extensions/guards")
 	got := map[string]int{}
 
+	// THE PATTERN MUST STILL MATCH A CONTROL, for the reason rawcloud_test.go sets
+	// out at length: a pattern-scanning ratchet is guarded against a stale regex
+	// only by its own outstanding debt, and this allowlist is EMPTY because every
+	// guard was converted. Paying the debt off removed the safety net — verified by
+	// renaming the pattern, after which this test stayed green over a tree it was
+	// no longer reading.
+	//
+	// repo.go is where the fenced reads actually happen, so the calls this pattern
+	// describes must exist there. If they do not, the pattern moved rather than the
+	// guards getting clean.
+	if control, err := os.ReadFile(filepath.FromSlash("repo.go")); err != nil {
+		t.Fatalf("reading the control file: %v", err)
+	} else if !rawReadCalls.Match(control) {
+		t.Fatal("the raw-read pattern matches nothing in repo.go, where the fenced reads are " +
+			"implemented — it now finds nothing anywhere and would report every guard clean " +
+			"while reading none of them")
+	}
+
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err

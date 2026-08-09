@@ -52,6 +52,23 @@ func TestNoNewRawKubectlExec(t *testing.T) {
 	got := map[string]int{}
 	re := regexp.MustCompile(`exec\.Command\("kubectl"`)
 
+	// THE PATTERN MUST STILL MATCH A CONTROL. See rawcloud_test.go for the full
+	// argument: a pattern-scanning ratchet is guarded against a stale regex only by
+	// its own outstanding debt, and this list is down to nine. When it reaches zero
+	// — which is the goal — a renamed construct would make this scan find nothing
+	// and report a clean tree for the wrong reason, exactly as rawcloud's did.
+	//
+	// capability.go's own execStdin shells out to kubectl and must, because it is
+	// the stdin path Writer needs and the seam cannot provide. If the pattern stops
+	// matching there, the pattern moved.
+	if control, err := os.ReadFile(filepath.FromSlash("capability.go")); err != nil {
+		t.Fatalf("reading the control file: %v", err)
+	} else if !re.Match(control) {
+		t.Fatal("the raw-kubectl pattern matches nothing in capability.go, where execStdin " +
+			"shells out to kubectl — the construct was renamed, so this scan now finds nothing " +
+			"anywhere and would pass over a tree full of raw exec")
+	}
+
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err

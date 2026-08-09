@@ -70,7 +70,40 @@ func TestNoNewUnpolicedLinodeClients(t *testing.T) {
 	root := filepath.FromSlash("../../extensions")
 	got := map[string]int{}
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	// THE PATTERN MUST STILL MATCH SOMETHING, PROVEN AGAINST A CONTROL.
+	//
+	// ────────────────────────────────────────────────────────────────────────
+	// THIS RATCHET BECAME UNABLE TO FAIL AT THE MOMENT IT SUCCEEDED, which is a
+	// property of the shape rather than a mistake in this file.
+	//
+	// A pattern-scanning ratchet is guarded against a bad ROOT by the walk error.
+	// It is guarded against a stale PATTERN only by its own outstanding debt: kill
+	// rawexec's regex and its nine allowed packages all report "no longer", which
+	// fails loudly. Kill this one's and nothing happens — allowedRawCloud is EMPTY,
+	// because every Linode client under internal/extensions was converted, so there
+	// is no entry left to notice the subject vanished. Verified by renaming the
+	// pattern: the suite stayed green.
+	//
+	// So the safety net was the debt, and paying the debt off removed it. Every
+	// ratchet here inherits that the day it reaches zero.
+	//
+	// The fix cannot be "expect a finding" — the whole point is that there are
+	// none. It is a CONTROL: capability's own cloud.go builds the client this
+	// pattern describes, and must, because CloudFor is what the conversions route
+	// through. If the pattern stops matching there, it is the pattern that moved.
+	// ────────────────────────────────────────────────────────────────────────
+	control, err := os.ReadFile(filepath.FromSlash("cloud.go"))
+	if err != nil {
+		t.Fatalf("reading the control file: %v", err)
+	}
+	if !rawCloudCtor.Match(control) {
+		t.Fatalf("rawCloudCtor matches nothing in cloud.go, which is where CloudFor builds the " +
+			"client it describes — the constructor was renamed and this scan now finds nothing " +
+			"anywhere, reporting a clean tree because it lost its subject rather than because " +
+			"the tree is clean")
+	}
+
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
 		}
