@@ -144,7 +144,7 @@ var grantStates = map[Grant][]State{
 	// NOTHING ELSE IS LISTED, and the omissions are deliberate rather than
 	// pending. `promoted` looks obvious — promote-pipeline generates
 	// .github/workflows/promote.yml — but that extension does not hold this grant:
-	// its rendering is pure and its os.WriteFile stayed in package main, so adding
+	// its rendering is pure and its os.WriteFile stayed in internal/cli, so adding
 	// the state would list a row no shipping code exercises. The rule this table
 	// has followed for both earlier widenings is that a state earns its place by an
 	// extraction that needed it, not by seeming plausible. When promote-pipeline's

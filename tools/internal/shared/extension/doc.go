@@ -46,7 +46,7 @@
 //	                    from the table there; `make llz-gates` is how CI calls it.
 //	registry/           enablement.go resolves an instance's enabled set from
 //	                    spec.components; registry.Commands() pins that every verb an
-//	                    extension exposes is reachable in package main's tree.
+//	                    extension exposes is reachable in internal/cli's tree.
 //	shared/capability   builds the HANDLES a binding's grants entitle it to —
 //	                    capability.For(binding), CloudFor, RepoForGate. A grant is
 //	                    the handle, so a binding that declares nothing is handed

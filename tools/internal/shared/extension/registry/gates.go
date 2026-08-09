@@ -118,9 +118,17 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: eighteen of nineteen gates read the repository root through
-// `--root`, so eighteen rows say nothing about their subject at all, and the two
-// that differ say so in the field that differs.
+// UNUSUAL about a row: twenty-one of the twenty-four gates read the repository root
+// through `--root`, so twenty-one rows say nothing about their subject at all, and
+// the three that differ say so in the field that differs — `guard-workflow-shells`
+// (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
+// subtree each).
+//
+// THOSE NUMBERS ARE PINNED by TestTheDefaultedMajorityIsStillTheMajority, because
+// the previous version of this sentence said "eighteen of nineteen … and the two
+// that differ" — stale on both counts and self-contradictory on its face, since
+// eighteen of nineteen leaves one. A count in a comment that nothing compares is
+// the same footnote-not-measurement shape the name/package count fell into.
 type Gate struct {
 	Extension string
 	New       func() *cobra.Command

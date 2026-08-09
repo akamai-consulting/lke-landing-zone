@@ -5,7 +5,7 @@
 // (the lanes) and `reconciler-runtime` (the loop, leader election, the manager) as
 // two entries, and calls the lanes "seven separate invariants whose needs differ —
 // the clearest case for one-invariant-per-extension". This package is the half that
-// could be moved; the runtime stays in package main, where the elector, the health
+// could be moved; the runtime stays in internal/cli, where the elector, the health
 // port and `func main` live.
 //
 // WHAT A LANE IS, structurally: a free function taking a Client and returning an
@@ -33,7 +33,7 @@ import (
 // daemon still owns the watches and calls the lanes on each event.
 
 // DefaultSecretStore is the ClusterSecretStore the platform's ExternalSecrets
-// point at. Shared with `llz ci nudge-argo` in package main, which annotates the
+// point at. Shared with `llz ci nudge-argo` in internal/cli, which annotates the
 // same store — a second copy of the name would be a second thing to keep in step.
 const DefaultSecretStore = "openbao"
 

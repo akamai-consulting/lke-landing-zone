@@ -87,7 +87,7 @@ var BaoHTTPClient = func() (*http.Client, error) {
 
 var (
 	// OpenBaoClientFn, OpenBaoLoginFn and OpenBaoJWTFn are exported because the
-	// apl-overlay lane still lives in package main and shares this credential path.
+	// apl-overlay lane still lives in internal/cli and shares this credential path.
 	// That sharing is the reason the two are one grant cluster and would move
 	// together; it is recorded in the declaration rather than worked around.
 	OpenBaoClientFn = func(addr, token string) (openbaoProbe, error) {

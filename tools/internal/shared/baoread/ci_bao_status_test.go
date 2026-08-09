@@ -83,7 +83,7 @@ func TestCIBaoCommandWiring(t *testing.T) {
 	})
 	// No gh-secret stub: bao-status writes to GITHUB_OUTPUT, not to a GitHub
 	// secret. The stub was here because the table it shared covered three
-	// lifecycle verbs that DO write secrets, and those stayed in package main.
+	// lifecycle verbs that DO write secrets, and those stayed in internal/cli.
 	// The --dry-run global used to be pinned here. The command never read it —
 	// it reports OpenBao's seal state and writes a GitHub output — so the stanza
 	// went nowhere and did not survive the move out of package main.

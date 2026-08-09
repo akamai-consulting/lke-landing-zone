@@ -480,7 +480,7 @@ func braceDelta(code string) int {
 //
 // EXAMINED IS RETURNED, NOT JUST LOGGED, because "found nothing" and "looked at
 // nothing" print the same green. The caller decides what an empty corpus means —
-// here that is requireCorpus in package main, which owns corpus LOCATION (the
+// here that is requireCorpus in internal/cli, which owns corpus LOCATION (the
 // template-vs-instance layout resolution eight guards share) while this package
 // owns what a Terraform file has to say.
 type Findings struct {

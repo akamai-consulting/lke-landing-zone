@@ -3,10 +3,10 @@ package registry
 // commands.go — which cobra constructor belongs to which extension.
 //
 // IT EXISTS FOR ONE CHECK: every command an extension exposes must be reachable
-// in the tree package main builds. Nothing caught that before. An extension could
+// in the tree internal/cli builds. Nothing caught that before. An extension could
 // be declared, validate, appear in `llz extension list`, and still have a verb
-// nobody could run, because wiring it is a hand-written AddCommand in ci.go or
-// main.go and forgetting one is silent.
+// nobody could run, because wiring it is a hand-written AddCommand in that package
+// and forgetting one is silent.
 //
 // CONSTRUCTORS, NOT NAMES, and that is the whole design. The obvious shape was a
 // `Commands []string` field on Extension holding verb names. Authoring it meant

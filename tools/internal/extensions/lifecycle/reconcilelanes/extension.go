@@ -5,25 +5,26 @@ package reconcilelanes
 // FIFTH EXTENSION, AND THE ONE THE CATALOG CALLS "the clearest case for
 // one-invariant-per-extension" — seven separate invariants whose needs differ,
 // where collapsing them widens the grants to their union. That is the claim under
-// test here, and it is the first one the model gets unambiguously RIGHT: four
-// lanes, four named bindings, and two distinct grant sets that a single binding
+// test here, and it is the first one the model gets unambiguously RIGHT: FIVE
+// lanes, five named bindings, and three distinct grant sets that a single binding
 // could not have expressed without over-granting.
 //
 // It is also the first extension where what could NOT be extracted is as
-// informative as what could. Four of the eight lanes stayed in package main, and
-// their reasons are recorded below rather than smoothed over — the extension is
-// honestly partial, and the model has no way to say so, which is itself a finding.
+// informative as what could. Three of the eight lanes are still unextracted (they
+// live in internal/cli, not in package main, which is now 29 lines), and their
+// reasons are in Incomplete rather than smoothed over.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
 // Extension is the `reconcile-actions` declaration.
 //
-//	invariant:operating [cluster-read, cluster-write]  sc-demote
-//	invariant:operating [cluster-read, cluster-write]  argo-nudge
-//	invariant:operating [cluster-read, cluster-write]  es-store-recovery
-//	invariant:operating [cluster-read, secret-custody] openbao-gauges
+//	invariant:operating [cluster-read, cloud-mutate, secret-custody] linode-creds
+//	invariant:operating [cluster-read, cluster-write]                sc-demote
+//	invariant:operating [cluster-read, cluster-write]                argo-nudge
+//	invariant:operating [cluster-read, cluster-write]                es-store-recovery
+//	invariant:operating [cluster-read, secret-custody]               openbao-gauges
 //
-// WHY THE SPLIT IS LOAD-BEARING, in one number: collapse these four into a single
+// WHY THE SPLIT IS LOAD-BEARING, in one number: collapse these five into a single
 // binding and it must hold the UNION — `cluster-write` *and* `secret-custody`. The
 // OpenBao sampler would then carry permission to patch StorageClasses and Argo
 // Applications, and the three cluster lanes would carry an OpenBao token. Neither
@@ -40,7 +41,9 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // `cloud-mutate` in `assert-storage` this one needed no ceiling change; it is the
 // control case showing the table is not simply permissive everywhere.
 //
-// FOUR OF THE EIGHT LANES DID NOT MOVE, and the reasons are three different kinds:
+// THREE OF THE EIGHT LANES HAVE NOT MOVED, and the reasons are three different
+// kinds. (`linode-creds` was a fourth until the coupling test found it undeclared;
+// see its binding below.)
 //
 //   - `tokens` — 15 references into ci_token_inventory.go, which is the
 //     `token-inventory` extension's territory (a separate catalog entry, 1,473
@@ -58,14 +61,13 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //     and it is a scheduling concern belonging to the runtime. A miscount, found
 //     only by trying to declare it.
 //
-// WHAT THE MODEL CANNOT SAY: that this extension is PARTIAL. `reconcile-actions`
-// is declared with four bindings and reads as complete; nothing distinguishes "has
-// four invariants" from "has eight, four of which are still in core". Every
-// extraction from here on will pass through this state, and an extension that
-// silently under-declares its own surface is the same failure shape as banning by
-// omission — the reader cannot tell what is missing. Recorded, not fixed: the
-// remedy is probably a declaration-level "incomplete" marker, and inventing one
-// from a single case is what the `write-repo` deferral was right to avoid.
+// WHAT THE MODEL COULD NOT SAY, AND NOW CAN: that this extension is PARTIAL. It
+// read as complete because nothing distinguished "has five invariants" from "has
+// eight, three of which are unextracted" — the same failure shape as banning by
+// omission, since the reader cannot tell what is missing. This extension was the
+// first of the two independent cases that bought `Extension.Incomplete`
+// (`template-sustain` was the second); the notes below are that field in use, and
+// `llz extension list` marks the extension `◐` off them.
 func Extension() extension.Extension {
 	cluster := []extension.Grant{extension.ClusterRead, extension.ClusterWrite}
 	return extension.Extension{
@@ -77,10 +79,6 @@ func Extension() extension.Extension {
 		Component: "llzReconciler",
 		Bindings: []extension.Binding{
 			{
-				// LKE's Flux-managed HelmRelease keeps re-marking the retain
-				// StorageClass as cluster default; two defaults hard-fail converge,
-				// and the Kyverno policy is admission-only so it starves once Flux
-				// goes quiet. This is the durable backstop.
 				// FOUND BY THE COUPLING TEST, NOT BY REVIEW. This lane rotates the
 				// in-cluster Linode object-storage credentials on a timer
 				// (credrotate.RunRotateLinodeCreds) and had NO declaration at all —
@@ -103,6 +101,10 @@ func Extension() extension.Extension {
 				},
 			},
 			{
+				// LKE's Flux-managed HelmRelease keeps re-marking the retain
+				// StorageClass as cluster default; two defaults hard-fail converge,
+				// and the Kyverno policy is admission-only so it starves once Flux
+				// goes quiet. This is the durable backstop.
 				Kind: extension.Invariant, Name: "sc-demote",
 				State: extension.Operating, Grants: cluster,
 			},

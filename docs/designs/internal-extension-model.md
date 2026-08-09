@@ -14,7 +14,7 @@ after it stopped being true. Three consumers read them today, and only one is di
 | consumer | what it does with a declaration |
 |---|---|
 | `registry/gates.go` | **RUNS** gate bindings — 24 of them. `llz ci gates` drives the whole set from the table there; `make llz-gates` is how CI calls it |
-| `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 10 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in package `main`'s tree |
+| `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 10 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in the cobra tree `internal/cli` builds |
 | `shared/capability` | builds the **handles** a binding's grants entitle it to — `capability.For`, `CloudFor`, `RepoForGate`. The grant IS the handle, so a binding declaring nothing is handed nothing |
 
 **Exactly one of the four kinds dispatches from the registry.** Gates do. Assertions and transitions

@@ -22,11 +22,12 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 //	transition:configured[read-repo, write-repo]
 //
-// `write-repo` at `configured`… IS NOT LEGAL, and the model is right to say so —
-// that grant carries `{scaffolded, upgraded}` only. See Incomplete: this renders
-// AT configuration time and writes files into the working tree, which is a second
-// independent case for the same gap `onboard` opened one move ago from the other
-// direction.
+// `write-repo` at `configured` WAS NOT LEGAL WHEN THIS LANDED, and this extension
+// is half of why it is now. The grant carried `{scaffolded, upgraded}` only; this
+// renders AT configuration time and writes files into the working tree, which was
+// the second independent case for that gap — `environments`' `set` binding is the
+// first. Two cases is what the campaign's rule asks for, so the row was widened
+// rather than the declaration bent. See validate.go's FOURTH WIDENING.
 //
 // WHAT IT ACTUALLY GUARANTEES is worth stating: the committed tfvars are DERIVED,
 // never authored. `CheckManifestDrift` and the `--diff` path exist so a hand-edit
@@ -48,14 +49,15 @@ func Extension() extension.Extension {
 			State:  extension.Configured,
 			Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 		}},
-		Incomplete: []string{
-			"write-repo is TRUE and undeclarable at `configured`: this writes tfvars " +
-				"and apl-values files into the working tree, but the grant carries " +
-				"{scaffolded, upgraded} only. That is the SECOND independent case for " +
-				"this gap — `onboard` is the first, from the credential side. Two cases " +
-				"is what the campaign's rule asks for before widening a grantStates " +
-				"row, so the next person to look at this can argue it rather than guess.",
-		},
+		// NO Incomplete NOTE, and its REMOVAL is the point worth recording. This
+		// carried one saying `write-repo` was "TRUE and undeclarable at `configured`"
+		// — accurate when written, and left behind when the row it asked for was
+		// widened and this binding took the grant. A partial-declaration marker that
+		// outlives its gap is worse than none: `llz extension list` renders `◐` off
+		// this field, so the listing reported `render` as under-declared while the
+		// declaration was complete. That is the misreading Incomplete exists to
+		// prevent, running backwards. Closing a gap means deleting the note in the
+		// same change.
 	}
 }
 

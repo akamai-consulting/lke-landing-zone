@@ -36,7 +36,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // No ceiling change: cloud-mutate is legal at `destroyed` — that row exists for
 // exactly this — and cloud-read is unrestricted.
 // TWO ROWS ADDED WHEN apply/import FINALLY MOVED, and they are why those two sat
-// in package main long after plan/output/destroy left: this extension declared
+// in internal/cli long after plan/output/destroy left: this extension declared
 // only ASSERTIONS at `provisioned`, and an apply is a TRANSITION. Moving them
 // without arguing a binding would have put a cloud write behind a `cloud-read`
 // declaration.

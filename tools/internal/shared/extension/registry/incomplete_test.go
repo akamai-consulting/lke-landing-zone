@@ -46,7 +46,6 @@ var incompleteNotes = map[string]int{
 	"openbao":                     2,
 	"pin-coherence":               1,
 	"reconcile-actions":           3,
-	"render":                      1,
 	"release-publish":             1,
 	"seed-special":                1,
 	"template-commit":             1,

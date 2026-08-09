@@ -430,6 +430,40 @@ func TestNoGateCarriesAnAbsoluteOrEscapingSubtree(t *testing.T) {
 	}
 }
 
+// THE DEFAULTED MAJORITY IS THE WHOLE ARGUMENT FOR Flag/Subtree, so it is pinned
+// rather than described. gates.go says the table states only what is UNUSUAL about
+// a row — that claim is only true while the overwhelming majority of rows state
+// nothing at all, and its previous telling ("eighteen of nineteen … and the two
+// that differ") was stale in both numbers and self-contradictory besides: eighteen
+// of nineteen leaves one, not two.
+//
+// Nothing compared it, so it rotted silently. Bumping these is expected as gates
+// are added; updating gates.go's prose in the same commit is the point.
+func TestTheDefaultedMajorityIsStillTheMajority(t *testing.T) {
+	var defaulted, custom []string
+	for _, g := range Gates() {
+		if g.Flag == "" && g.Subtree == "" {
+			defaulted = append(defaulted, g.Extension)
+			continue
+		}
+		custom = append(custom, g.Extension)
+	}
+	const wantDefaulted, wantCustom = 21, 3
+	if len(defaulted) != wantDefaulted || len(custom) != wantCustom {
+		t.Errorf("%d gates take the default subject and %d differ; gates.go's header says %d and %d.\n"+
+			"\tThe rows that differ are %v. Update that comment in this commit — a count nothing "+
+			"compares is a footnote, not a measurement.",
+			len(defaulted), len(custom), wantDefaulted, wantCustom, custom)
+	}
+	// The claim is comparative, not just arithmetic: "only what is unusual" stops
+	// being true long before the counts are equal.
+	if len(custom)*4 > len(defaulted) {
+		t.Errorf("%d of %d gates now carry a custom subject — the table no longer states only "+
+			"what is unusual, and gates.go's justification for Flag/Subtree needs rewriting "+
+			"rather than renumbering", len(custom), len(Gates()))
+	}
+}
+
 // ── --only ───────────────────────────────────────────────────────────────────
 
 // THE MAKEFILE USED TO HOLD THE SECOND COPY. Thirteen single-guard targets each

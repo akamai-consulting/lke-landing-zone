@@ -44,7 +44,7 @@ type forwardedService struct {
 // promSpec ("<namespace>/<service>:<port>"), invokes fn with a getter bound to
 // it, and tears the forward down on return. Package var so tests can seam it.
 // EXPORTED as a SEAM, not just a function: the rotation-health and reconciler
-// assert lanes still in package main open Prometheus through it, and their tests
+// assert lanes still in internal/cli open Prometheus through it, and their tests
 // stub it. One place decides how this repo reaches Prometheus.
 var WithPrometheus = func(promSpec string, fn func(get func(apiPath string) ([]byte, error)) error) error {
 	return withForwardedAPI(promSpec, forwardedService{name: "Prometheus", readyPath: "/-/ready"}, fn)

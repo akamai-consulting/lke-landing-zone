@@ -3,7 +3,7 @@ package kubectlprobe
 // probe_test.go — the three tests that are ABOUT the probes, moved with them.
 //
 // The other three in the origin file (TestSectionsRefuseEmptyCorpus and the two
-// firewall-bootstrap cases) stayed in package main: they assert what a SECTION
+// firewall-bootstrap cases) stayed in internal/cli: they assert what a SECTION
 // does when a probe comes back unanswered, which is main's behaviour, not this
 // package's. Tests travel with the file by default and that is usually wrong —
 // the question is which package's claim the test is making.

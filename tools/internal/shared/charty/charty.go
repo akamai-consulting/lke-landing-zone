@@ -50,7 +50,7 @@ func ChartName(chartYAML string) string { return chartScalar(chartYAML, "name:")
 // directions and stopping at a dedent.
 //
 // EXPORTED because `llz ci chart-publish-check` asks the same question about the
-// same files and stayed in package main (it is release-publish's territory, not
+// same files and stayed in internal/cli (it is release-publish's territory, not
 // this extension's). Two scanners disagreeing about what "the same block" means is
 // how a pin gets read from the wrong chart.
 // siblingValue returns the value of `<indent>key: <value>` in the contiguous block

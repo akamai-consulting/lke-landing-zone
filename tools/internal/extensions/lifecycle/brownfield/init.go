@@ -35,7 +35,7 @@ import (
 
 // d.DefaultAplChartVersion was a const naming the platform baseline apl-core
 // version, so an imported instance is born on a SUPPORTED chart. It is now
-// Deps.DefaultAplChartVersion: the value lives in package main because
+// Deps.DefaultAplChartVersion: the value lives in internal/cli because
 // ci_bootstrap_cluster reads it too, and a second copy here is exactly the
 // two-authorities shape every extraction so far has found.
 

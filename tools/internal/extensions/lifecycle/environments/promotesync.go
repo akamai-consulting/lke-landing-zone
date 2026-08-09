@@ -11,7 +11,7 @@ package environments
 // to keep that declaration TRUE. Changing the declaration is not available either:
 // `write-repo` is legal at {scaffolded, upgraded}, not at `promoted`.
 //
-// So the write stays in package main and this package asks for it. The default is
+// So the write stays in internal/cli and this package asks for it. The default is
 // a NO-OP returning (false, nil) — "nothing changed" — because an env-add that
 // silently skipped the pipeline regeneration is better than one that invents a
 // result, and package main installs the real thing at init.

@@ -83,6 +83,12 @@ in package `main`, enforced by `llz ci core-surface` from `lint.yml` and `make
 lint`, on the same ratchet doctrine as its sibling: lower it as code moves out,
 never raise it to make a red build green.
 
+> **Superseded in part — read the [Amendment](#amendment-2026-08-08-the-subject-moved-and-one-of-the-two-arguments-went-with-it).**
+> The subject is no longer package `main`: the command tree moved to
+> `tools/internal/cli` and `cmd/llz/main.go` is now 29 lines, so the budget's globs
+> follow the tree rather than the package. The *decision* — budget the destination,
+> ratchet down only — is unchanged, and everything below records it as taken.
+
 **The number is a high-water mark with no slack: 41,803**, the exact measurement
 when this was written (215 non-test files, 121 of them `ci_*.go`).
 

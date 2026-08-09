@@ -38,7 +38,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // split is a real answer rather than a workaround being repeated.
 //
 // The count is now much larger than three, and that is worth recording for
-// whoever does decide the grant's shape: SIXTEEN non-test files in package main
+// whoever does decide the grant's shape: SIXTEEN non-test files in internal/cli
 // call os.WriteFile. If `write-repo` is ever added, those are its candidates, and
 // the question it has to answer is which of them are writing the OPERATOR'S repo
 // (this one, gen-toc) versus a build artifact or a temp file — a distinction none

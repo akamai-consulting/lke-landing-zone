@@ -192,7 +192,7 @@ func consoleURLFor(region string) string {
 
 // ── Keycloak admin transport (kcClient) → identity.AdminAPI ───────────────────
 //
-// The user/role REST methods below stay in package main: they ride the shared
+// The user/role REST methods below stay in internal/cli: they ride the shared
 // kcClient transport (do/decodeJSON, Connect) that the ci keycloak
 // commands also use. kcAdmin presents them as identity.AdminAPI so the onboarding
 // domain can drive them without knowing about HTTP or port-forwards.

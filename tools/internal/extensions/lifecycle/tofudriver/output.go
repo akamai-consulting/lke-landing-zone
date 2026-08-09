@@ -21,7 +21,7 @@ import (
 // or a clean absence, with no inline warnings.
 
 // EXPORTED, and it is a SEAM as much as a function: the db-report and
-// rotate-dbadmin verbs in package main read Terraform outputs through it, and
+// rotate-dbadmin verbs in internal/cli read Terraform outputs through it, and
 // their tests stub it. Exporting the var rather than duplicating the exec keeps
 // one place where "how this repo asks Tofu for an output" is decided.
 //

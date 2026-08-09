@@ -62,7 +62,7 @@ const (
 	// ProbeRepo is the repository the scope is requested against. It need
 	// not exist: a token scoped to a repository is granted (or refused) on the
 	// robot's policy, and tags/list on a missing repo is a clean NAME_UNKNOWN.
-	// ProbeRepo is EXPORTED because the cobra flag default lives in package main.
+	// ProbeRepo is EXPORTED because the cobra flag default lives in internal/cli.
 	ProbeRepo = "library/llz-roundtrip-probe"
 )
 

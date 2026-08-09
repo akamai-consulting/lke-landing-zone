@@ -6,7 +6,7 @@ package assertobjstore
 // the most direct about it: the file is named for THREE unrelated subjects — obj,
 // certs, db — so whichever subject moves first leaves the other two behind and
 // takes a build break with it. The certs tests already left with assert-identity;
-// these are the obj ones; the SCRAM/Postgres tests stay in package main until
+// these are the obj ones; the SCRAM/Postgres tests stay in internal/cli until
 // assert-database is extracted.
 //
 // The three patterns already recorded: named for a coverage METRIC

@@ -2,7 +2,7 @@ package cli
 
 // spec_topology_test.go — the cross-cutting topology read.
 //
-// It stayed in package main when the `components`/`env show` UX tests moved to
+// It stayed in this package when the `components`/`env show` UX tests moved to
 // internal/clusterspec, because it reaches promoteDeps — one of main's fifteen
 // deps assemblers, which is the dependency-injection layer main owns and no
 // extension can see. The other two tests in its old file went; this one is about

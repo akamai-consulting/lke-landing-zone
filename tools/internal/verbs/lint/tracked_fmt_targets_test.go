@@ -2,7 +2,7 @@ package lint
 
 // tracked_fmt_targets_test.go — moved with trackedFmtTargets, which the fmt
 // steps use to list what is worth formatting. The rest of dynamic_tfvars_test.go
-// stayed in package main: it tests untrackRenderedTfvars, which is main's.
+// stayed in package main: it tests untrackRenderedTfvars, which is internal/cli's.
 
 import (
 	"path/filepath"

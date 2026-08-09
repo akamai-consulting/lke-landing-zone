@@ -5,7 +5,7 @@ package promwire
 // It exists because TWO assertion extensions need the same parse and a third
 // will: `assert-reconciler` reads the reconciler's lane gauges,
 // `assert-rotation-health` reads credential ages, and `assert-observability`
-// (still in package main) is built entirely on this shape.
+// (still in internal/cli) is built entirely on this shape.
 //
 // THE PROPERTY WORTH PROTECTING is the one both decoders below spell out: a query
 // FAILURE and an EMPTY RESULT are different answers. "We could not ask" must never

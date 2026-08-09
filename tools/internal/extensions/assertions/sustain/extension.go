@@ -114,7 +114,7 @@ func Extension() extension.Extension {
 				"pins as the single ownership authority, so the binding that would hold " +
 				"own-paths cannot be separated from the file that defines it",
 			"template_commit.go and ci_upgrade_test_gate.go — provenance resolution over " +
-				"the GitHub API and the copier-update smoke gate, both still in package main",
+				"the GitHub API and the copier-update smoke gate, both still in internal/cli",
 		},
 	}
 }

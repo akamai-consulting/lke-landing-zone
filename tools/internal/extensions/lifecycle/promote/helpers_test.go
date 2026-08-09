@@ -2,7 +2,7 @@ package promote
 
 // helpers_test.go — fixtures COPIED from package main, not exported from it.
 //
-// mustWrite, chdir and writeCluster all live in package main test files too. The
+// mustWrite, chdir and writeCluster all live in internal/cli test files too. The
 // call this branch has made consistently (fakeKubectl, pollRecorder, containsArg)
 // is to copy: a fixture shared across an extraction boundary makes the extracted
 // package a dependency of the CLI's own tests, which is the coupling the

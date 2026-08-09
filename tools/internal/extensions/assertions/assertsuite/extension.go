@@ -6,7 +6,7 @@ package assertsuite
 // FIFTIETH EXTENSION, AND THE ONE THAT RUNS THE OTHER EXTENSIONS. Every
 // `assert-*` extension in this catalog is a lane in the table this package owns,
 // and until now the thing that scheduled them and decided the exit status was the
-// last piece of the battery still living in package main.
+// last piece of the battery still living in internal/cli.
 //
 // ITS OWN FILE HEADER ARGUES THE CASE BETTER THAN A DECLARATION CAN: the suite
 // replaced a bash job runner whose lane list was written TWICE, so a lane present

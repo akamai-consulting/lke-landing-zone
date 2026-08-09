@@ -15,7 +15,7 @@ package cigate
 //
 // readRegionTFVars and ciClient did NOT come along. They know the repo's
 // terraform layout and the CI PAT reader respectively, neither of which is a gate
-// primitive; they stayed in package main.
+// primitive; they stayed in internal/cli.
 
 import (
 	"bytes"

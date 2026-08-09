@@ -12,7 +12,7 @@ package sustain
 // sites across 10 files and is genuinely core — the instance provenance model many
 // verbs read — so it does not move. Declaring the three fields actually used here
 // keeps the dependency to what is consumed rather than to whatever the struct
-// grows next, and the adapter in package main is four lines.
+// grows next, and the adapter in internal/cli is four lines.
 type Answers struct {
 	Commit  string // _commit — the template SHA this instance rendered from
 	SrcPath string // _src_path — the template repo

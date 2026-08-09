@@ -16,7 +16,7 @@ func TestExtensionDeclarationValidates(t *testing.T) {
 }
 
 // THIS EXTENSION IS PARTIAL AND MUST SAY SO. It declares two bindings while the
-// one that would hold `own-paths` is still in package main, welded to
+// one that would hold `own-paths` is still in internal/cli, welded to
 // .template-manifest. An empty Incomplete here would make it read as complete —
 // the ban-by-omission shape, one level up.
 func TestItDeclaresWhatItCannotYetDeclare(t *testing.T) {

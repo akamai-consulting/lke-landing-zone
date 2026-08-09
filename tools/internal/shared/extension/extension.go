@@ -398,7 +398,7 @@ type Extension struct {
 	//
 	// IT EXISTS BECAUSE TWO EXTRACTIONS ARRIVED PARTIAL AND THE MODEL COULD NOT SAY
 	// SO. `reconcile-actions` declares four invariants while four more of its lanes
-	// are still in package main; `template-sustain` declares the half that does not
+	// are still in internal/cli; `template-sustain` declares the half that does not
 	// touch `.template-manifest`, which ADR 0014 pins as permanently core. Both
 	// read as COMPLETE — nothing distinguished "has four bindings" from "has eight,
 	// four of which have not moved" — and an extension that silently under-declares
