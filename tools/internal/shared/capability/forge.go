@@ -132,35 +132,110 @@ func ClassifyForge(args []string) ForgeAction {
 	}
 }
 
-// classifyAPIMethod reads -X/--method out of a `gh api` argv. An absent method is
-// gh's own default of GET, so it is a read.
+// classifyAPIMethod works out what HTTP method `gh api` will actually send.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT USED TO MODEL `-X` AS THE ONLY THING THAT SETS THE METHOD, AND READ ONLY THE
+// FIRST ONE. Three ways past it, all probed against a cloud-read handle and all
+// permitted:
+//
+//	gh api -X GET repos/o/r -X DELETE          -> read
+//	gh api repos/o/r/issues -f title=x         -> read
+//	gh api graphql -f query=mutation{...}      -> read
+//
+// THE FIRST IS THE kubectl `--dry-run` DEFECT AGAIN, in a different tool: the
+// classifier and the program disagree about which token is authoritative. gh parses
+// with pflag, where a repeated flag takes the LAST value, and this returned on the
+// FIRST. So the argv gh executes as DELETE was judged as GET.
+//
+// THE SECOND IS THE ONE MOST LIKELY TO BE REACHED, because it needs no adversary —
+// it is how `gh api` is ordinarily written. From gh's own manual: "The default HTTP
+// request method is GET normally and POST if any parameters were added." `-f`, `-F`
+// and `--input` all add parameters, so an argv with no `-X` at all can be a write,
+// and "absent method means GET" was true only of the argv nobody sends.
+//
+// THE THIRD IS REFUSED RATHER THAN CLASSIFIED, and that is the honest answer.
+// GitHub's GraphQL endpoint accepts POST only, so gh always POSTs it — but a
+// GraphQL document can be a query or a mutation, and telling them apart means
+// parsing GraphQL. Guessing either way is wrong in one direction, so it goes to
+// ForgeUnclassified, which every grant refuses. Nothing in this tree calls
+// `gh api graphql`; when something does, the first caller makes the decision, which
+// is what this package already does for a kubectl verb nobody has classified.
+// ─────────────────────────────────────────────────────────────────────────────
 func classifyAPIMethod(rest []string) ForgeAction {
+	var explicit string
+	var params, graphql bool
+
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
-		var m string
 		switch {
 		case a == "-X" || a == "--method":
 			if i+1 >= len(rest) {
 				// A dangling flag: the argv is malformed and its intent unknown.
 				return ForgeUnclassified
 			}
-			m = rest[i+1]
+			// LAST WINS, not first — pflag's rule, and gh's by construction.
+			explicit = rest[i+1]
+			i++
 		case strings.HasPrefix(a, "--method="):
-			m = strings.TrimPrefix(a, "--method=")
+			explicit = strings.TrimPrefix(a, "--method=")
 		case strings.HasPrefix(a, "-X="):
-			m = strings.TrimPrefix(a, "-X=")
-		default:
-			continue
+			explicit = strings.TrimPrefix(a, "-X=")
+		case paramFlags[a]:
+			params = true
+			// Consume the value so a field like `-f method=GET` cannot be mistaken
+			// for anything but data.
+			if i+1 < len(rest) {
+				i++
+			}
+		case hasAnyPrefix(a, paramFlagPrefixes):
+			params = true
+		case a == "graphql" && !strings.HasPrefix(a, "-"):
+			graphql = true
 		}
-		if mutatingMethods[strings.ToUpper(m)] {
+	}
+
+	// An explicit method beats every inference, in both directions: `-X GET` with
+	// fields is a GET with a body, which gh will send as written.
+	if explicit != "" {
+		switch u := strings.ToUpper(explicit); {
+		case mutatingMethods[u]:
 			return ForgeMutate
-		}
-		if u := strings.ToUpper(m); u == "GET" || u == "HEAD" {
+		case u == "GET" || u == "HEAD":
+			// A GraphQL GET is not a thing GitHub serves; if someone writes one the
+			// argv is confused enough to be worth refusing.
+			if graphql {
+				return ForgeUnclassified
+			}
 			return ForgeRead
+		default:
+			return ForgeUnclassified
 		}
+	}
+	if graphql {
 		return ForgeUnclassified
 	}
+	if params {
+		return ForgeMutate
+	}
 	return ForgeRead
+}
+
+// paramFlags and paramFlagPrefixes are the `gh api` flags that ADD PARAMETERS, and
+// therefore flip its default method from GET to POST.
+var paramFlags = map[string]bool{
+	"-f": true, "--raw-field": true, "-F": true, "--field": true, "--input": true,
+}
+
+var paramFlagPrefixes = []string{"-f=", "-F=", "--raw-field=", "--field=", "--input="}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // Forge is the handle a binding receives for the git forge. One Run, gated by

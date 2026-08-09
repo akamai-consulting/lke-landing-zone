@@ -239,3 +239,103 @@ func TestTheWiringGuardRailRejectsARefusingHandle(t *testing.T) {
 		t.Error("mustCluster returned a refusing Cluster for a binding that declares cluster-read")
 	}
 }
+
+// THE gh CLASSIFIER MODELLED `-X` AS THE ONLY THING THAT SETS THE METHOD.
+//
+// Three ways past it, each probed against a cloud-read handle and each permitted
+// before this test existed. They are the same class as the kubectl `--dry-run`
+// hole above: the classifier and the program disagreeing about what an argv means.
+func TestForgeClassifiesTheMethodGhWillActuallySend(t *testing.T) {
+	read := For(binding(extension.CloudRead)).Forge
+
+	for _, tc := range []struct {
+		what string
+		argv []string
+	}{
+		// pflag takes the LAST value of a repeated flag; the classifier took the
+		// first, so gh executed a DELETE that had been judged a GET.
+		{"a repeated -X, where the last one wins",
+			[]string{"api", "-X", "GET", "repos/o/r", "-X", "DELETE"}},
+		// "The default HTTP request method is GET normally and POST if any
+		// parameters were added" — gh's own manual. This needs no adversary; it is
+		// how `gh api` is ordinarily written.
+		{"-f, which makes gh POST", []string{"api", "repos/o/r/issues", "-f", "title=x"}},
+		{"-F, the same", []string{"api", "repos/o/r/issues", "-F", "n=1"}},
+		{"--input, the same", []string{"api", "repos/o/r/contents/f", "--input", "b.json"}},
+		// GitHub's GraphQL endpoint is POST-only and a document may be a query or a
+		// mutation. Unclassified, which every grant refuses.
+		{"graphql, which cannot be judged without parsing it",
+			[]string{"api", "graphql", "-f", "query=mutation{deleteRepo}"}},
+	} {
+		if err := read.Permits(tc.argv...); err == nil {
+			t.Errorf("%s: `gh %s` permitted through a cloud-read handle", tc.what,
+				strings.Join(tc.argv, " "))
+		}
+	}
+
+	// The ordinary read must still work, or the fix is an outage. Every `gh api`
+	// call in this tree is one of these shapes.
+	for _, argv := range [][]string{
+		{"api", "repos/o/r"},
+		{"api", "-X", "GET", "repos/o/r"},
+		{"api", "--method=GET", "repos/o/r"},
+		{"auth", "token", "--hostname", "github.com"},
+	} {
+		if err := read.Permits(argv...); err != nil {
+			t.Errorf("`gh %s` refused through a cloud-read handle: %v", strings.Join(argv, " "), err)
+		}
+	}
+
+	// A mutate-granted binding must still be able to write, including through the
+	// newly-inferred POST.
+	w := For(extension.Binding{Kind: extension.Transition, State: extension.Configured,
+		Grants: []extension.Grant{extension.CloudRead, extension.CloudMutate}}).Forge
+	for _, argv := range [][]string{
+		{"api", "repos/o/r/issues", "-f", "title=x"},
+		{"api", "-X", "DELETE", "repos/o/r"},
+	} {
+		if err := w.Permits(argv...); err != nil {
+			t.Errorf("cloud-mutate refused `gh %s`: %v", strings.Join(argv, " "), err)
+		}
+	}
+}
+
+// The classifier's remaining branches, which the shapes above do not reach: the
+// attached-value spellings, a dangling flag, an unknown method, and the
+// explicit-beats-inference rule in both directions.
+func TestForgeApiMethodEdgeSpellings(t *testing.T) {
+	read := For(binding(extension.CloudRead)).Forge
+	mutate := For(extension.Binding{Kind: extension.Transition, State: extension.Configured,
+		Grants: []extension.Grant{extension.CloudRead, extension.CloudMutate}}).Forge
+
+	refused := [][]string{
+		{"api", "repos/o/r", "-X=DELETE"},       // attached short form
+		{"api", "repos/o/r", "--method=POST"},   // attached long form
+		{"api", "repos/o/r", "-f=title=x"},      // attached param flag
+		{"api", "repos/o/r", "--raw-field=a=b"}, // long attached param
+		{"api", "repos/o/r", "-X"},              // dangling: intent unknown
+		{"api", "repos/o/r", "-X", "TRACE"},     // a method nobody classified
+		{"api", "graphql", "-X", "GET"},         // GitHub serves no GraphQL GET
+	}
+	for _, argv := range refused {
+		if err := read.Permits(argv...); err == nil {
+			t.Errorf("`gh %s` permitted through a cloud-read handle", strings.Join(argv, " "))
+		}
+	}
+
+	// AN EXPLICIT METHOD BEATS THE INFERENCE, both ways. `-X GET` with fields is a
+	// GET with a body, which gh sends as written — refusing it would make the
+	// inference a rule rather than a default.
+	if err := read.Permits("api", "repos/o/r", "-X", "GET", "-f", "a=b"); err != nil {
+		t.Errorf("an explicit GET carrying fields was refused a read handle: %v", err)
+	}
+	// And the param inference must still reach a mutate grant.
+	if err := mutate.Permits("api", "repos/o/r", "-f=title=x"); err != nil {
+		t.Errorf("cloud-mutate refused an attached param flag: %v", err)
+	}
+	// A value that merely LOOKS like a flag must be consumed as data, not read as
+	// one — `-f method=DELETE` is a field named method, not a method.
+	if err := mutate.Permits("api", "repos/o/r", "-f", "method=DELETE"); err != nil {
+		t.Errorf("a field whose value names a method was misread: %v", err)
+	}
+}
