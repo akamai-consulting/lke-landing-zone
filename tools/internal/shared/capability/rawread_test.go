@@ -171,8 +171,29 @@ func TestNoNewRawFilesystemReadsInGuards(t *testing.T) {
 // RepoContaining with a looked-up binding) are the sanctioned door, and a
 // hand-built extension.Binding inside guards/ is not.
 func TestGuardsDoNotMintTheirOwnBindings(t *testing.T) {
-	root := filepath.FromSlash("../../extensions/guards")
-	mintsBinding := regexp.MustCompile(`capability\.RepoAt\(\s*extension\.Binding\{`)
+	root := filepath.FromSlash("../../extensions")
+	// EVERY HANDLE CONSTRUCTOR, NOT JUST RepoAt.
+	//
+	// This checked RepoAt alone and scanned guards/ alone, which was right when
+	// read-repo was the only fenced grant and the guards were its only customer.
+	// Both facts changed: capability now hands out cluster, cloud, secret, forge,
+	// bao and in-cluster-API handles, and the newest customer is the reconcile
+	// daemon's lanes under lifecycle/.
+	//
+	// A binding built at the call site is not a declared one, whichever handle it
+	// opens — the point of `capability.X(<binding>)` is that the binding came FROM
+	// Extension(), so the reach a reader sees in `llz extension list` is the reach
+	// the code actually has. An inline literal is the one-line bypass the model was
+	// corrected to prevent, and it would look identical to a legitimate call.
+	//
+	// AN EMPTY LITERAL IS THE OPPOSITE OF A BYPASS AND MUST NOT MATCH.
+	// `capability.For(extension.Binding{})` grants NOTHING — it is the refusing
+	// default several Deps sets install so an un-installed seam cannot mutate a
+	// cluster. Six packages use it exactly that way. The dangerous shape is a
+	// POPULATED literal, which is a capability the call site granted itself, so the
+	// pattern requires something inside the braces.
+	mintsBinding := regexp.MustCompile(
+		`capability\.(RepoAt|KubeFor|CloudFor|For)\(\s*extension\.Binding\{\s*[A-Za-z]`)
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -183,9 +204,10 @@ func TestGuardsDoNotMintTheirOwnBindings(t *testing.T) {
 			return err
 		}
 		if mintsBinding.Match(b) {
-			t.Errorf("%s builds a reader from a binding it constructed inline. Look the binding up "+
-				"from Extension() instead (capability.RepoForGate, or an accessor like objenc's "+
-				"seedBinding) — a capability minted at the call site is not a declared one.", path)
+			t.Errorf("%s builds a capability handle from a binding it constructed inline. Look "+
+				"the binding up from Extension() instead (capability.RepoForGate, or an accessor "+
+				"like objenc's seedBinding or reconcilelanes' laneBinding) — a capability minted "+
+				"at the call site is not a declared one.", path)
 		}
 		return nil
 	})
