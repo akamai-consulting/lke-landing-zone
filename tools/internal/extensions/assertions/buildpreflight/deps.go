@@ -5,13 +5,23 @@ package buildpreflight
 import (
 	"os"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
-// execOutput delegates to kubectlprobe.Exec through a CLOSURE, never by
-// assignment. The name is inherited and the package it points at is named for its
-// first callers; what matters is that this is the ONE seam, reached at call time.
-func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
+// forgeHandle is this package's ONE forge seam, and it comes from the DECLARATION
+// rather than from a package var.
+//
+// It used to be `execOutput`, a closure over kubectlprobe.Exec — which despite the
+// name is the tree's general process runner, so this package held an unconstrained
+// launcher in order to make one read-only `gh api` call. The binding declares
+// cloud-read and read-repo; capability.For turns exactly that into a handle that
+// permits `gh api repos/<r>` and refuses `gh api -X PUT`, `gh secret set` and
+// anything unclassified.
+//
+// Reached at CALL TIME through a function rather than stored, for the reason the
+// old comment gave: a stored value snapshots whatever the seam pointed at when
+// this package initialised, which is the capture bug this campaign has on record.
+func forgeHandle() capability.Forge { return capability.For(readBinding()).Forge }
 
 // existingPaths filters a list down to the paths that exist. Copied from
 // scaffold.go rather than shared: nine lines with two callers, and a package

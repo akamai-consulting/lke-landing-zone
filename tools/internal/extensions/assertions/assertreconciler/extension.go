@@ -59,7 +59,10 @@ func Extension() extension.Extension {
 		// OPT-IN: an instance that does not run a reconciler has nothing here to
 		// assert about, and a lane that always fails on such an instance is a lane
 		// operators learn to ignore.
-		Always: false,
+		Always:    false,
+		Component: "llzReconciler", // assert-reconciler measures the in-cluster reconciler. With the component off
+		// there is no loop to measure, and the lane would assert about a pod that was
+		// never meant to exist.
 		Bindings: []extension.Binding{
 			{
 				Kind:   extension.Assertion,

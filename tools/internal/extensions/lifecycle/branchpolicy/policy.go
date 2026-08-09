@@ -21,6 +21,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
@@ -205,8 +207,15 @@ func HasMainBranchRule(repo, envName, branch string) bool {
 
 // ghAPIOut runs `gh api <args>` and returns stdout + an error on non-zero exit
 // (the multi-arg, error-returning sibling of state.go's ghAPI(path) []byte).
+// IT GOES THROUGH THE DECLARATION NOW. This ran `gh api` via an unconstrained
+// process launcher, so the `cloud-mutate` on the binding below was a claim with
+// nothing behind it — the same launcher would have run `gh secret set` just as
+// happily. capability.For(policyBinding()).Forge classifies each argv by HTTP
+// method: the `-X PUT` that writes a deployment-branch-policy is permitted because
+// the binding declares cloud-mutate, and a `gh secret set` from here would be
+// refused because it does not declare secret-custody.
 func ghAPIOut(args ...string) ([]byte, error) {
-	return execOutput("gh", append([]string{"api"}, args...)...)
+	return capability.For(policyBinding()).Forge.Run(append([]string{"api"}, args...)...)
 }
 
 func numOr(v any, def float64) float64 {

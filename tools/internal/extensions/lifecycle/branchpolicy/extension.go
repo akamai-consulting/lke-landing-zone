@@ -43,3 +43,15 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// policyBinding returns the transition whose grants scope this package's forge
+// access. By kind and state, not by index, for the reason obj-encryption's
+// seedBinding records.
+func policyBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition {
+			return b
+		}
+	}
+	panic("branch-policy: no transition binding — the forge handle is built from it")
+}

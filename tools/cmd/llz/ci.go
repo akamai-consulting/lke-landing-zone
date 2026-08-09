@@ -59,6 +59,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension/registry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/argodiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/mutate"
@@ -103,6 +104,11 @@ func ciCmd() *cobra.Command {
 		assertidentity.TeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
+	// THE FIRST REGISTRY-DRIVEN VERB. `llz ci gates` runs every gate binding the
+	// registry declares AND can drive, rather than a list typed here — issue #399's
+	// Phase 2 acceptance criterion. The driver lives in the registry, not in this
+	// package, because a driver only main can call is a driver only main can test.
+	c.AddCommand(registry.GatesCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())

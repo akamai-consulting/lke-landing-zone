@@ -45,3 +45,18 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// readBinding returns the assertion this package's forge access is scoped to.
+//
+// BY KIND AND STATE, NOT BY INDEX, for the reason obj-encryption's seedBinding
+// gives: a positional lookup is correct until someone reorders the slice, and what
+// it would be wrong about is which grants the handle is built from.
+func readBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Assertion {
+			return b
+		}
+	}
+	panic("build-preflight: no assertion binding — the forge handle is built from it, " +
+		"so its absence is a wiring bug rather than a missing feature")
+}
