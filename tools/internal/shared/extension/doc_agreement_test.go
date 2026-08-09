@@ -233,3 +233,55 @@ func TestDesignDocGrantStatesMatchesTheCode(t *testing.T) {
 		}
 	}
 }
+
+// THE CLOSED VOCABULARY MUST BE CLOSED IN THE DOC TOO.
+//
+// The doc's Grants section ends "The vocabulary is closed" and then listed EIGHT
+// of the nine — `write-repo`, the most recent addition, was missing from the very
+// sentence asserting completeness. A reader checking whether a grant exists would
+// have concluded it does not.
+//
+// Same class as the grantStates drift below it, and found the same way: the doc
+// restates the model in several places and only one of them was gated.
+func TestDesignDocGrantVocabularyIsComplete(t *testing.T) {
+	body, err := os.ReadFile(filepath.FromSlash(modelDoc))
+	if err != nil {
+		t.Fatalf("the model doc is the spec for this package and must exist: %v", err)
+	}
+	doc := string(body)
+
+	// The section, not the whole file: every grant is named somewhere in the prose,
+	// so scanning globally would pass over an empty list.
+	i := strings.Index(doc, "### Grants")
+	if i < 0 {
+		t.Fatal("the model doc has no `### Grants` section — the vocabulary is undocumented, " +
+			"and this check cannot tell that from a renamed heading")
+	}
+	section := doc[i:]
+	if j := strings.Index(section[1:], "\n## "); j >= 0 {
+		section = section[:j]
+	}
+
+	for _, g := range extension.Grants() {
+		if !strings.Contains(section, "`"+string(g)+"`") {
+			t.Errorf("the Grants section does not list %q, immediately above the claim that the "+
+				"vocabulary is closed. A reader checking whether a grant exists would conclude "+
+				"it does not.", g)
+		}
+	}
+	// And the reverse: a grant the doc invents would send someone to declare
+	// something the validator refuses.
+	for _, m := range regexp.MustCompile("`([a-z][a-z-]+)`").FindAllStringSubmatch(section, -1) {
+		var known bool
+		for _, g := range extension.Grants() {
+			if string(g) == m[1] {
+				known = true
+				break
+			}
+		}
+		if !known && strings.Contains(m[1], "-") {
+			t.Logf("note: the Grants section mentions %q, which is not a grant — prose, or a "+
+				"vocabulary that moved?", m[1])
+		}
+	}
+}

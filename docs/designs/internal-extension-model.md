@@ -115,8 +115,9 @@ inside the package with extra indirection. The declaration was **impossible**, n
 is this model's stated bar for a new word.
 
 `write-repo` means the instance repo's **tracked** files; a temp dir needs no grant, the same way
-reading `/tmp` needs no `read-repo`. Its `grantStates` row is `{scaffolded, upgraded}` — the two
-moments copier runs — and deliberately **not** `promoted`, because `promote-pipeline` still keeps its
+reading `/tmp` needs no `read-repo`. Its `grantStates` row is `{scaffolded, configured, upgraded}` — the two
+moments copier runs, plus `configured`, which `environments` and `render` earned by authoring the
+instance's own files — and deliberately **not** `promoted`, because `promote-pipeline` still keeps its
 write in `main` and a row no shipping code exercises is a guess. It is not `own-paths`: that is a
 **fence** ("copier must not render these bytes") and this is a **permit**; `deliver-docs` holds the
 permit and not the fence, since it prunes what copier just rendered and wants the re-render.
@@ -334,8 +335,8 @@ count from ~57 toward ~49.
 
 ### Grants
 
-`read-repo` · `cloud-read` · `cluster-read` · `secret-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
-`own-paths`
+`read-repo` · `cloud-read` · `cluster-read` · `secret-read` · `write-repo` · `cluster-write` ·
+`cloud-mutate` · `secret-custody` · `own-paths`
 
 The vocabulary is closed. [The catalog](internal-extensions.md) records how it distributes across all
 57 candidates, and no grant is held by a majority — which is what a scoping model looks like when it
