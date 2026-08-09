@@ -103,8 +103,9 @@ var testExpr = regexp.MustCompile(`(^|[^A-Za-z0-9_.])(Test[A-Z][A-Za-z0-9_]*)`)
 // SymbolReport is what a run examined. Exported for the same reason Report is:
 // the coverage numbers are what separate a real green from a broken corpus.
 type SymbolReport struct {
-	Scanned       int      // files read
-	IndexFindings []string // ADR index vs directory disagreements
+	Vocab         []VocabStat // what each vocabulary indexed and matched
+	Scanned       int         // files read
+	IndexFindings []string    // ADR index vs directory disagreements
 	Findings      []Finding
 }
 
@@ -114,34 +115,51 @@ type SymbolReport struct {
 //
 // `tree` is the LIVE cobra root, threaded from the command constructor for the
 // ci-verb half. Nil disables that half rather than failing it — see ciVerbs.
+// RunSymbols is the CLI entry point: it runs the check and reports only whether
+// it passed.
 func RunSymbols(root string, tree *cobra.Command) error {
+	_, err := RunSymbolsReport(root, tree)
+	return err
+}
+
+// RunSymbolsReport is RunSymbols with the counts handed back, so a test can
+// assert FLOORS on what was examined.
+//
+// IT EXISTS BECAUSE `Size == 0` DISABLES A VOCABULARY SILENTLY. That rule is
+// right — a tree with no Makefile, no `ci` group or no ADR index cannot answer
+// those questions, and an instance repo is such a tree — but in THIS repo all six
+// are answerable, so a zero means the index broke rather than that the tree is
+// different. Nothing could see that: the summary line simply omits a disabled
+// vocabulary, and a run with five of six checks live reads exactly like a run
+// with six. See repo_floors_test.go for the assertion this enables.
+func RunSymbolsReport(root string, tree *cobra.Command) (SymbolReport, error) {
 	repo := capability.RepoForGate(Extension(), root)
 
 	table, err := symbolTable(repo)
 	if err != nil {
-		return fmt.Errorf("symbol-ref-guard: %w", err)
+		return SymbolReport{}, fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
 	tests, err := testNames(repo)
 	if err != nil {
-		return fmt.Errorf("symbol-ref-guard: %w", err)
+		return SymbolReport{}, fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
 	targets, err := makeTargets(repo)
 	if err != nil {
-		return fmt.Errorf("symbol-ref-guard: %w", err)
+		return SymbolReport{}, fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
 	verbs := ciVerbs(tree)
 
 	adrs, err := readADRs(repo)
 	if err != nil {
-		return fmt.Errorf("symbol-ref-guard: %w", err)
+		return SymbolReport{}, fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
 	files, err := corpus(repo)
 	if err != nil {
-		return fmt.Errorf("symbol-ref-guard: %w", err)
+		return SymbolReport{}, fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
 	rep := SymbolReport{IndexFindings: checkADRIndex(adrs)}
@@ -225,14 +243,14 @@ func RunSymbols(root string, tree *cobra.Command) error {
 	for _, rel := range files {
 		data, err := repo.ReadFile(rel)
 		if err != nil {
-			return fmt.Errorf("symbol-ref-guard: %s could not be read (%w) — "+
+			return rep, fmt.Errorf("symbol-ref-guard: %s could not be read (%w) — "+
 				"the guard cannot vouch for a file it did not open", rel, err)
 		}
 		rep.Scanned++
 
 		lines, err := scannableLines(rel, data)
 		if err != nil {
-			return fmt.Errorf("symbol-ref-guard: %s: %w", rel, err)
+			return rep, fmt.Errorf("symbol-ref-guard: %s: %w", rel, err)
 		}
 		for _, ln := range lines {
 			scanLine(vocabs, rel, ln, &rep.Findings)
@@ -248,8 +266,9 @@ func RunSymbols(root string, tree *cobra.Command) error {
 	for _, f := range rep.Findings {
 		fmt.Printf("::error file=%s,line=%d::%s\n", f.File, f.Line, f.Ref)
 	}
+	rep.Vocab = stats(vocabs)
 	if len(rep.Findings)+len(rep.IndexFindings) > 0 {
-		return fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s), "+
+		return rep, fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s), "+
 			"%d ADR index disagreement(s)",
 			len(rep.Findings), countFiles(rep.Findings), len(rep.IndexFindings))
 	}
@@ -259,21 +278,22 @@ func RunSymbols(root string, tree *cobra.Command) error {
 	// indexing nothing — and a corpus of zero files is the classic wrong --root.
 	// The per-vocabulary arms live in one place now; see emptyVocabulary.
 	if len(table) == 0 || symbolCount == 0 {
-		return fmt.Errorf("symbol-ref-guard: indexed %d package(s) and %d symbol(s) under %q — "+
+		return rep, fmt.Errorf("symbol-ref-guard: indexed %d package(s) and %d symbol(s) under %q — "+
 			"with an empty table every reference looks third-party and is skipped, so this "+
 			"fails rather than reporting a green it did not earn", len(table), symbolCount, root)
 	}
 	if rep.Scanned == 0 {
-		return fmt.Errorf("symbol-ref-guard: no scannable file under %q — a guard that "+
+		return rep, fmt.Errorf("symbol-ref-guard: no scannable file under %q — a guard that "+
 			"examined nothing cannot report that everything is fine. Check --root", root)
 	}
 	if err := emptyVocabulary(vocabs, rep.Scanned); err != nil {
-		return err
+		return rep, err
 	}
 
+	rep.Vocab = stats(vocabs)
 	fmt.Printf("symbol-ref-guard: %s reference(s) across %d file(s) all resolve (%s indexed).\n",
 		vocabularySummary(vocabs), rep.Scanned, indexedSummary(vocabs))
-	return nil
+	return rep, nil
 }
 
 // symbolKnown reports whether sym names something the package exports. A `*`

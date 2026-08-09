@@ -59,6 +59,25 @@ type vocabulary struct {
 	refs int
 }
 
+// VocabStat is what one vocabulary indexed and matched, for the repo-level floor
+// test. Exported for the same reason docs-guard exports its Scanned counters: the
+// only thing separating a real green from a silently-disabled check is how much
+// it looked at, and a number nobody can read is a number nobody can assert on.
+type VocabStat struct {
+	Name    string
+	Indexed int // names in the index; 0 means the vocabulary was disabled
+	Refs    int // citations judged
+}
+
+// Stats reports what each vocabulary indexed and matched.
+func stats(vocabs []*vocabulary) []VocabStat {
+	out := make([]VocabStat, 0, len(vocabs))
+	for _, v := range vocabs {
+		out = append(out, VocabStat{Name: v.Name, Indexed: v.Size, Refs: v.refs})
+	}
+	return out
+}
+
 // scanLine runs every enabled vocabulary over one line, appending findings.
 func scanLine(vocabs []*vocabulary, file string, ln line, out *[]Finding) {
 	for _, v := range vocabs {
