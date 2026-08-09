@@ -1,6 +1,6 @@
 package capability
 
-// The six operations, and the safety flags they apply on the caller's behalf.
+// The named operations, and the safety flags they apply on the caller's behalf.
 // Those flags are the reason the operations are named rather than argv: every
 // measured caller passed them, and the one that forgets gets a subtly different
 // failure — an absent fixture reported as a failed assertion, or an annotate that
@@ -194,15 +194,28 @@ func TestEveryOperationRefusesWithoutTheGrant(t *testing.T) {
 // invisible to a seam-based count, and that is how assert-network came to be
 // creating a namespace under an `assertion:verified[cluster-read]` declaration.
 // ApplyStdin and CreateStdin are those two shapes.
+//
+// THIS TEST USED TO BE VACUOUS, and it is worth recording because it is the reason
+// the drift below survived a test whose NAME says it would not. It built a slice
+// literal of eight strings and asserted `len(ops) != 8` — a tautology over a value
+// it had just written, never once touching the Writer interface. A ninth operation
+// could land and this would stay green; that is precisely what "six" surviving in
+// five places looked like from here.
+//
+// It now asks the TYPE. See TestWriterOperationCountMatchesTheProse for the half
+// that pins the header's number.
 func TestTheOperationSetIsEight(t *testing.T) {
 	var _ Writer = writer{}
 	var _ Writer = deniedWriter{}
-	ops := []string{
-		"Annotate", "Delete", "PatchMerge", "RolloutRestart",
-		"CreateToken", "ApplyServerSide", "ApplyStdin", "CreateStdin",
+	want := []string{
+		"Annotate", "ApplyServerSide", "ApplyStdin", "CreateStdin",
+		"CreateToken", "Delete", "PatchMerge", "RolloutRestart",
 	}
-	if len(ops) != 8 {
-		t.Fatalf("the operation list says %d; update the name of this test with it", len(ops))
+	got := WriterOperations()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("Writer's operations are %v; this test expects %v. Adding one is a decision "+
+			"about what cluster-write MEANS, so it should show up as a change here rather "+
+			"than as a new argv somewhere.", got, want)
 	}
 }
 
@@ -265,5 +278,40 @@ func TestDeniedIsExportedAndRefuses(t *testing.T) {
 	}
 	if _, err := Denied().ApplyStdin("x", "y"); err == nil {
 		t.Error("Denied().ApplyStdin succeeded")
+	}
+}
+
+// TestWriterOperationCountMatchesTheProse pins the header's census against the
+// interface.
+//
+// THE COUNT DRIFTED BY TWO AND FIVE SENTENCES CARRIED IT. `ApplyStdin` and
+// `CreateStdin` were added to Writer with their own arguments recorded on each
+// method, and the header above, two comments in capability.go, the Handles field
+// doc and the refusal message all went on saying "six". Every one of them read
+// correct on its own, which is why nothing looked.
+//
+// So the prose is checked rather than trusted. The refusal message is DERIVED from
+// WriterOperations now, so it cannot drift at all; this covers the sentences that
+// are genuinely prose and have to state a number to be worth reading.
+func TestWriterOperationCountMatchesTheProse(t *testing.T) {
+	ops := WriterOperations()
+	if len(ops) != 8 {
+		t.Fatalf("Writer offers %d operations (%v), and writer.go's header says eight. "+
+			"An operation was added or removed without the census above it moving — update "+
+			"both, because a header that miscounts the interface below it is how the "+
+			"refusal message came to name six of eight.", len(ops), ops)
+	}
+	// PermitsWrite is the interrogation, not a mutation: a caller told to call it
+	// "instead of assembling an argv" would be told to ask a question.
+	for _, op := range ops {
+		if op == "PermitsWrite" {
+			t.Error("PermitsWrite is listed as a mutation a refused caller should use instead")
+		}
+	}
+	if got := strings.Join(ops, ", "); !strings.Contains(got, "ApplyStdin") ||
+		!strings.Contains(got, "CreateStdin") {
+		t.Errorf("the derived operation list is %q — the two stdin operations are the ones "+
+			"the seam-based census missed, so their absence here means the derivation broke, "+
+			"not that they were removed", got)
 	}
 }

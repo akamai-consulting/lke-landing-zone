@@ -1,11 +1,11 @@
 package capability
 
-// Writer is what `cluster-write` actually entitles a binding to: six named
+// Writer is what `cluster-write` actually entitles a binding to: eight named
 // operations, not "any kubectl verb that mutates".
 //
-// THE SIX ARE MEASURED, NOT INVENTED. Every mutating call site in
+// THE SHAPES ARE MEASURED, NOT INVENTED. Every mutating call site in
 // internal/extensions was listed before this file was written — seventeen of them
-// across eight packages — and they collapse into six shapes:
+// across eight packages — and they collapsed into six shapes:
 //
 //	annotate <kind> <name> <k=v> --overwrite        5   argo refresh ×4, kyverno stamp ×1
 //	delete <kind> <target> --ignore-not-found       4   ephemeral job/workflow/namespace
@@ -14,10 +14,23 @@ package capability
 //	create token <sa> --duration=<d>                1   login smoke
 //	apply --server-side -f <manifest>               1   kyverno policy
 //
+// TWO MORE ARRIVED AFTER IT, AND THE CENSUS IS WHY THEY WERE MISSING. It counted
+// Deps SEAMS, and both of these reach exec.Command directly to pipe a manifest to
+// stdin, so neither appeared in a seam-based count at all:
+//
+//	apply -f - (manifest on stdin)                  2   assert-network's probe ns, broad-pat drill
+//	create -f - (manifest on stdin)                 1   assert-platform's health Workflow
+//
+// KEEP THE COUNT AND THE INTERFACE IN STEP. This header said "six" for both
+// additions, and so did three sentences in capability.go and the refusal message
+// Permits() hands a caller — which told a developer needing ApplyStdin to use one
+// of six operations that did not include it. A count restated in five places and
+// checked in none is the shape TestWriterOperationCountMatchesTheProse now closes.
+//
 // WHY THIS IS TIGHTER THAN A VERB CHECK. `cluster-write` used to mean any
 // mutating kubectl subcommand: `drain`, `taint`, `exec ... -- sh -c`, `delete
-// namespace` on anything. It now means these six shapes with these arguments. Four
-// of the eight writers are `assert-*` extensions whose entire mutation is
+// namespace` on anything. It now means these eight shapes with these arguments.
+// Four of the eight writers are `assert-*` extensions whose entire mutation is
 // "refresh an Argo app" or "delete the fixture I just created", and after this
 // they are structurally incapable of anything else.
 //
@@ -36,10 +49,41 @@ package capability
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
+
+// WriterOperations names the mutations this handle offers, DERIVED FROM THE
+// INTERFACE rather than written down again.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// A RESTATED COUNT DRIFTED BY TWO AND NOTHING LOOKED. `ApplyStdin` and
+// `CreateStdin` landed after the census above, and five sentences went on saying
+// "six" — including the refusal Permits() hands a caller, which named six of the
+// eight and so told a developer needing ApplyStdin to use an operation that was
+// not on the list. The advice was wrong in the direction that sends someone back
+// to the raw seam the whole layer exists to close.
+//
+// So the message is built from reflect.Type.Method, which cobra-free Go gives us
+// for nothing: adding an operation adds it to the error, and there is no second
+// copy to forget. PermitsWrite is excluded because it is the interrogation, not a
+// mutation — a caller told to "call PermitsWrite instead of assembling an argv"
+// would be told to ask a question rather than do the work.
+// ─────────────────────────────────────────────────────────────────────────────
+func WriterOperations() []string {
+	t := reflect.TypeOf((*Writer)(nil)).Elem()
+	out := make([]string, 0, t.NumMethod())
+	for i := 0; i < t.NumMethod(); i++ {
+		if name := t.Method(i).Name; name != "PermitsWrite" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Writer is the mutating half of a cluster grant. A binding that did not declare
 // cluster-write receives one whose every method refuses.

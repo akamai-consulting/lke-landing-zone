@@ -255,7 +255,7 @@ func (c cluster) Permits(args ...string) error {
 		// binding declared. Writes go through the named operations on Writer, which
 		// is the whole point of the granular pass: `cluster-write` used to mean "any
 		// kubectl mutation", including `drain`, `exec` and `delete namespace`. It now
-		// means six specific shapes, and a reviewer sees Annotate/Delete/PatchMerge
+		// means the eight specific shapes writer.go measured, and a reviewer sees Annotate/Delete/PatchMerge
 		// in the diff rather than an argv they have to parse.
 		return c.deny(v)
 	}
@@ -266,9 +266,8 @@ func (c cluster) Permits(args ...string) error {
 
 func (c cluster) deny(v string) error {
 	return fmt.Errorf("capability: kubectl %s is a mutation and cannot go through a cluster read handle — "+
-		"declare %q and call the named operation on Writer (Annotate, Delete, PatchMerge, "+
-		"RolloutRestart, CreateToken, ApplyServerSide) instead of assembling an argv",
-		v, extension.ClusterWrite)
+		"declare %q and call the named operation on Writer (%s) instead of assembling an argv",
+		v, extension.ClusterWrite, strings.Join(WriterOperations(), ", "))
 }
 
 // hasDryRun reports whether KUBECTL was given a dry-run flag — which means the
@@ -336,7 +335,8 @@ type Handles struct {
 	// Cluster READS. It is read-only for every binding, including one holding
 	// cluster-write — mutations do not go through an argv at all.
 	Cluster Cluster
-	// Writer is the six named mutations, present-and-refusing without cluster-write.
+	// Writer is the named mutations (WriterOperations lists them), present-and-refusing
+	// without cluster-write.
 	Writer Writer
 	// Secrets READS OpenBao, for a binding declaring secret-read or secret-custody.
 	// Its Get returns a VERDICT rather than a bool: a refusal is Unknown, never
