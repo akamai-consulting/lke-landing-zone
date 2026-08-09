@@ -887,10 +887,24 @@ template-manifest-check:
 # Assert instance-template/.template-managed.lock still matches the template-owned
 # .github/ files it covers. Editing a llz-*.yml body without re-running
 # `llz ci managed-fresh --write` would ship a lock that every instance fails on,
-# so catch it here instead. It still uses the two-branch --root trick the target
-# above retired: managed-fresh is NOT a driven gate (its Deps are assembled in
-# package main — see undrivenGates in registry/gates.go), so it is still called as
-# a bare verb and still has to compensate for the two LLZ_CI branches by hand.
+# so catch it here instead. managed-fresh is NOT a driven gate (its Deps are
+# assembled in the CLI layer — see undrivenGates in registry/gates.go), so unlike
+# the target above it is called as a bare verb rather than through `gates --only`.
+#
+# IT NO LONGER COMPENSATES FOR TWO BRANCHES, AND HAD STOPPED NEEDING TO. This
+# comment used to say it "still has to compensate for the two LLZ_CI branches by
+# hand", and the call passed `--root` TWICE — the repo-root spelling in $(1) and
+# the re-based one in $(2) — working only because pflag takes the last. Both
+# branches of the macro now `cd $(GO_DIR)` and run the same argv, so there are no
+# longer two spellings to reconcile; the first --root was dead weight that only
+# looked load-bearing. Anyone "cleaning up" the duplicate by deleting the SECOND
+# one would have pointed the gate at an instance-template directory UNDER the Go
+# module — the recipe cds to $(GO_DIR) first — which does not exist.
+#
+# (That sentence originally spelled the non-existent path out, and
+# source-ref-guard flagged it: the guard resolves `tools/`-prefixed literals and
+# cannot tell an illustration from a claim. Rephrasing is the fix; an ignore-list
+# would be a place to bury real breakage.)
 #
 # FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
 # the WORKING TREE's scaffold against the WORKING TREE's lock, so it must run the
@@ -899,7 +913,7 @@ template-manifest-check:
 # verb on the PR that introduces it.
 managed-lock-check: export LLZ_FORCE_SOURCE := 1
 managed-lock-check:
-	$(call LLZ_CI,managed-fresh --root instance-template,--root ../instance-template)
+	$(call LLZ_CI,managed-fresh --root ../instance-template,)
 
 # Assert every restatement of a tool version agrees with the Dockerfile ARG block
 # (the declared single source of truth): the build-images matrix, lint.yml's
