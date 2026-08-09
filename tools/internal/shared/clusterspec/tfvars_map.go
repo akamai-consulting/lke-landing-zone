@@ -7,11 +7,11 @@ import (
 )
 
 // tfvars_map.go is the pure spec→tfvars field mapping. Each function returns the
-// ordered assignments for one Terraform root; the renderer (cmd/llz/render.go)
+// ordered assignments for one Terraform root; the renderer (internal/extensions/lifecycle/render)
 // applies them onto the root's terraform.tfvars.example with setHCLField
 // (set-or-append). Keeping the mapping here — returning already-formatted HCL
 // right-hand sides — makes it unit-testable without touching the filesystem,
-// and keeps the cmd/llz renderer a thin apply loop.
+// and keeps that renderer a thin apply loop.
 //
 // An assignment is emitted only when the spec PROVIDES the value: required
 // fields always, optional strings when non-empty, optional bools (*bool) when

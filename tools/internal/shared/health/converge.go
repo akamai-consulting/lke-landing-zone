@@ -2,7 +2,7 @@ package health
 
 // converge.go ports the per-iteration decision of converge.sh — the poll loop
 // that runs the health check until the cluster converges or the budget is spent.
-// The loop's timing/orchestration lives in cmd/llz; this is the exit-code → action
+// The loop's timing/orchestration lives in internal/cli; this is the exit-code → action
 // mapping it branches on.
 
 // ConvergeAction is what the converge loop does after one health-check run.

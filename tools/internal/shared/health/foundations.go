@@ -9,7 +9,7 @@ import (
 // foundations.go ports check-cluster-health.sh sections 0a–0e: node Ready/pressure,
 // unexpected taints, stuck-Terminating namespaces, APIService availability, the
 // required-CRD set, and the StorageClass default-class rule. The kubectl get calls
-// live in cmd/llz; these are the pure classifications over the parsed JSON.
+// live in internal/cli; these are the pure classifications over the parsed JSON.
 
 // ── Nodes (0a) ───────────────────────────────────────────────────────────────
 

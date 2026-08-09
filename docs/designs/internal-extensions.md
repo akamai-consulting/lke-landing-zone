@@ -924,7 +924,7 @@ The cost is real and is stated in `deps.go`: an installed seam is global mutable
 restore it, and two callers cannot hold different `Deps` at once. Nothing needs that today — one
 binary, one cluster per invocation — **but "nothing needs it today" is the sentence that precedes an
 action ABI.** An ABI would hand each binding its own handle at dispatch, which is precisely what
-package-level installation cannot do. `cmd/llz/ci_converge.go` is the hand-written version of that
+package-level installation cannot do. `tools/internal/cli/ci_converge.go` is the hand-written version of that
 dispatch, and it is the strongest argument for the real thing that these fourteen extractions have
 produced.
 
@@ -1046,11 +1046,14 @@ The property it protects is the same one `internal/kubectlprobe` protects for ku
 failure and an empty result are different answers.** "We could not ask" reading as "the lane is dead"
 sends an operator after a healthy reconciler.
 
-**A guard that now points across the boundary.** `TestReconcileFlagLaneTableMatchesReconcileGo` reads
-`reconcile.go` to check that the flag names and lane names have not drifted apart. That file is still
-package `main`'s, so the test reads it at `../../cmd/llz/reconcile.go` — and when `reconciler-runtime`
-is extracted, a loud failure here is the **correct** outcome. A coupling guard that silently stops
-finding its subject is worse than one that breaks.
+**A guard that points across a package boundary.** `TestReconcileFlagLaneTableMatchesReconcileGo` reads
+`reconcile.go` to check that the flag names and lane names have not drifted apart. It was written when
+that file was package `main`'s, reading it at a path under `cmd/llz`, and the note here said a loud
+failure would be the **correct** outcome once `reconciler-runtime` was extracted. That extraction has
+since happened and the prediction held: the guard broke, the path moved with its subject to
+`tools/internal/extensions/lifecycle/reconciler/reconcile.go`, and it is still a cross-package source
+scan. A coupling guard that silently stops finding its subject is worse than one that breaks — which
+is why the failure was the design and not an accident.
 
 ### What `assert-registry` cost — nothing, and that is the finding
 

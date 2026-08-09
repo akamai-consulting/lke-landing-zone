@@ -271,7 +271,7 @@ func Run(secretNS, secretName, registry, repo string, settle, interval time.Dura
 
 	// The Secret READ is inside the settle loop, not before it. It is written by
 	// ESO from secret/harbor/robot, which the harbor-robot-provisioner CronJob
-	// seeds only AFTER Harbor's registry is serving — internal/health/allowlists.go
+	// seeds only AFTER Harbor's registry is serving — internal/shared/health/allowlists.go
 	// documents it as deferred on a fresh bootstrap and explicitly says it must not
 	// pin the convergence gate. Reading once, first, made this gate fail on exactly
 	// the window that file says to expect.

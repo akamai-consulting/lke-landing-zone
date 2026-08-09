@@ -5,7 +5,7 @@ package bootstrapcluster
 //
 // LINODE_DNS_TOKEN is genuinely optional: `llz tokens` offers it with "Enter to
 // skip", the requirement table marks it not-required, the quickstart says the
-// cluster still bootstraps, and internal/health/allowlists.go expects external-dns
+// cluster still bootstraps, and internal/shared/health/allowlists.go expects external-dns
 // to be degraded without it. That design is fine.
 //
 // What was missing is that nobody SAYS so. The workflow substitutes a literal

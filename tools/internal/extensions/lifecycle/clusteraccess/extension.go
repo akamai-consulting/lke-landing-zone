@@ -40,7 +40,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // credentials that the platform MINTS (seeding) or REPLACES (rotation) — both of
 // which happen to a cluster that already works. It had never been shown the
 // bootstrap credential: the one the CLOUD issues at provisioning time, which is
-// the reason a cluster can be seeded at all. See internal/extension/validate.go
+// the reason a cluster can be seeded at all. See internal/shared/extension/validate.go
 // for the row and the argument; this is the second grantStates widening, and like
 // the first (cloud-mutate at `operating`) it was made against shipping code that
 // could not otherwise be described.

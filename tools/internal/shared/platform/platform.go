@@ -1,9 +1,10 @@
 // Package platform holds the well-known names this platform's own resources
 // carry: namespaces, annotations, and the objects llz creates and then reads back.
 //
-// THEY ARE FACTS, NOT CAPABILITIES, and that phrasing is lifted from
-// internal/extensions/reconciler/names.go, which had already made the argument and
-// then drawn the wrong conclusion from it: "the same call baoread.Namespace and
+// THEY ARE FACTS, NOT CAPABILITIES, and that phrasing is lifted from a names.go
+// the reconciler extension used to carry — it is gone, absorbed into this package,
+// which is the point. It had already made the argument and then drawn the wrong
+// conclusion from it: "the same call baoread.Namespace and
 // docsguard's DeliveredDocs got. Four packages need to agree on them ... the only
 // way two callers can disagree about what a ConfigMap is called is if there are
 // two copies of the name." Correct -- and it then placed them "with the RECONCILER

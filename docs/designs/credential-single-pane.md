@@ -104,7 +104,7 @@ lead-time alerts above ensure that never lapses silently.
 
 ## Code touch-points
 
-`internal/tokeninv/inventory.go` (writer) · `cmd/llz/reconcile_tokens.go` (reader) +
+`tools/internal/extensions/assertions/tokeninv/inventory.go` (writer) · `tools/internal/extensions/lifecycle/reconciler/reconcile_tokens.go` (reader) +
 `--reconcile-token-inventory` · `components/llzReconciler/…/rbac.yaml` (ConfigMap get) ·
 `components/observability/{cert-manager-servicemonitor,cert-manager-allow-metrics,
 credential-inventory-dashboard,prometheus-rules/credential-alerts}.yaml` ·

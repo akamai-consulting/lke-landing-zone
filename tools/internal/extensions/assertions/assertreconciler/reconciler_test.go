@@ -309,12 +309,18 @@ func TestLanesFromDeploymentArgs(t *testing.T) {
 // renamed on one side only, the gate silently stops demanding it — the exact
 // failure mode the whole per-lane check exists to catch, one level up.
 //
-// THE PATH IS RELATIVE TO THIS PACKAGE AND POINTS ACROSS THE EXTRACTION BOUNDARY.
-// reconcile.go is still package main's — `reconciler-runtime` has not been
-// extracted yet — so the guard reads it where it lives. When that extraction
-// happens this path moves with it, and a hard failure here is the correct
-// outcome: a coupling guard that silently stops finding its subject is worse than
-// one that breaks loudly.
+// THE PATH IS RELATIVE TO THIS PACKAGE AND POINTS ACROSS A PACKAGE BOUNDARY.
+// This comment used to say reconcile.go was "still package main's" and that a hard
+// failure here would be the correct outcome once `reconciler-runtime` was
+// extracted. That extraction happened, the const below moved with its subject, and
+// the comment kept describing the world before it — a doc comment asserting the
+// opposite of the line beneath it, which is the one thing a reader cannot check
+// against anything.
+//
+// The reasoning it recorded was right and is worth keeping as a standing fact: a
+// coupling guard that silently stops finding its subject is worse than one that
+// breaks loudly, so this reads the file rather than a copy of its contents, and a
+// move breaks it on purpose.
 func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 	const reconcileGo = "../../lifecycle/reconciler/reconcile.go"
 	src, err := os.ReadFile(reconcileGo)

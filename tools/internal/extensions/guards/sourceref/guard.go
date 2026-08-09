@@ -74,6 +74,41 @@ import (
 //     is why none of this surfaced under the first prefix.
 //
 // The 68 that survived those rules were real, and are fixed.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// A KNOWN, MEASURED BLIND SPOT: MODULE-RELATIVE PATHS. Every prefix here is
+// repo-root-relative, so a reference written relative to `tools/` — `cmd/llz/x.go`,
+// `internal/health/allowlists.go` — is not a candidate at all. It is invisible
+// rather than resolved-and-clean, which is the worse of the two failures: the
+// summary line says every reference resolves while these are not counted.
+//
+// It hid a real cluster. After the CLI tree moved to `internal/cli` and the
+// extensions were re-filed under assertions/ guards/ lifecycle/, eleven live
+// present-tense claims pointed at files that no longer exist — five health headers
+// saying "the kubectl orchestration lives in cmd/llz", promote's own declaration
+// contradicting itself six lines apart, "See internal/extension/validate.go" — and
+// this guard reported 1,128 references all resolving over them.
+//
+// A ROW IS NOT EARNED YET, AND THE MEASUREMENT IS WHY, not caution. Counted across
+// docs/ and tools/:
+//
+//	`internal/…`   148 candidates, 116 unresolved — but the bare `internal/<pkg>`
+//	               form is now SHORTHAND for a package that lives at
+//	               internal/shared/<pkg> or internal/extensions/<bucket>/<pkg>.
+//	               Most of the 116 are prose naming a package, not a false claim
+//	               about a file, and a row would demand ~116 edits that mostly make
+//	               the prose longer without making it truer.
+//	`cmd/llz/…`     23 unresolved, and almost all are "moved here from X" notes —
+//	               the class the docs doctrine explicitly says to KEEP, because an
+//	               operator upgrading an older tree searches for the thing that
+//	               vanished. A guard reporting those would be fighting the rule.
+//
+// So the shape a row needs is a way to tell a LIVE claim from a historical one,
+// and nothing here can read tense. That is the modelling this prefix set had to do
+// twice already (render-time artifacts, prose wearing a path's clothes) and it is
+// not done for this class. The gap is written down at its measured size so the
+// next person meets a known number rather than an unexamined green.
+// ────────────────────────────────────────────────────────────────────────────
 var guardedPrefixes = []string{"tools", "kubernetes-charts", "docs", "platform-apl",
 	"template-scripts", "instance-template", "terraform-modules", "dockerfiles"}
 

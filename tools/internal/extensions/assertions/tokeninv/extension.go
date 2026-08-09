@@ -52,7 +52,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // doc comment said so), and a check that only READS credentials was therefore
 // unrepresentable — not mis-described, impossible. The grant was split:
 // `secret-read` for reading credential material or its metadata, `secret-custody`
-// for placing it. See internal/extension/extension.go for the argument.
+// for placing it. See internal/shared/extension/extension.go for the argument.
 //
 // So no `grantStates` row was widened after all. That is the better outcome: the
 // ceiling was not too tight, the vocabulary was too coarse, and widening the row

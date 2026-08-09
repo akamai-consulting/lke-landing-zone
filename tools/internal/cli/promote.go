@@ -5,7 +5,7 @@ package cli
 //
 // Every field is a READ of the instance repo. What the extension does that is not
 // a read — writing .github/workflows/promote.yml — it does directly, and the
-// declaration says so with `write-repo`. See internal/promote/extension.go for why
+// declaration says so with `write-repo`. See internal/extensions/lifecycle/promote/extension.go for why
 // that grant had to be invented rather than approximated with `own-paths`.
 
 import (

@@ -7,7 +7,7 @@ import (
 
 // readiness.go holds the predicates for the two cluster readiness gates:
 // assert-loki-bootstrapped.sh (Loki Ready + S3-backed) and wait-for-harbor.sh
-// (the Harbor workloads to roll out). The kubectl orchestration lives in cmd/llz.
+// (the Harbor workloads to roll out). The kubectl orchestration lives in internal/cli.
 
 // LokiPodReady reports whether a Loki pod is Ready: phase Running/Succeeded with
 // every container ready — the inverse of assert-loki-bootstrapped.sh's not_ready

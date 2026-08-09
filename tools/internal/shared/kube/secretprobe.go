@@ -23,7 +23,7 @@ import (
 )
 
 // Exec captures a command's stdout. A package var so tests drive these helpers
-// without a cluster; cmd/llz installs the real one.
+// without a cluster; internal/cli installs the real one.
 var Exec = func(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).Output()
 }

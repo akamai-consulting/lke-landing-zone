@@ -6,7 +6,7 @@ package health
 // `date -d` and `curl | grep`. Keeping it here (side-effect free, like the rest
 // of internal/health) makes every threshold edge the shell silently got wrong —
 // off-by-one days, missing-header vs unparseable, already-expired vs over-policy
-// — a unit test. cmd/llz wires kubectl / HTTP to these.
+// — a unit test. internal/cli wires kubectl / HTTP to these.
 
 import (
 	"strings"

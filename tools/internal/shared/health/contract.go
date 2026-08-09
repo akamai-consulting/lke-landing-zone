@@ -3,7 +3,7 @@
 // testable Go. This file is the convergence contract itself: the accumulator that
 // every per-resource check appends to, and the exit-code/verdict it resolves to.
 // The per-resource classification predicates (pods, certs, Argo apps, CNPG, jobs,
-// …) live alongside it and feed a Report; the kubectl orchestration lives in cmd/llz.
+// …) live alongside it and feed a Report; the kubectl orchestration lives in internal/cli.
 package health
 
 // Verdict is the convergence-contract outcome.
