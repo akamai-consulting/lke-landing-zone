@@ -799,13 +799,33 @@ LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
 # the whole of what those targets are allowed to know.
 #
 # ONE PROCESS INSTEAD OF THIRTEEN. With LLZ_FORCE_SOURCE=1 each collapsed target
-# rebuilt the binary; this pays that once.
+# rebuilt the binary; this pays that once — and it has to PAY it, which the
+# collapse dropped.
+#
+# THE DRIVER MUST RUN THE WORKING TREE'S GATE SET, NOT THE INSTALLED BINARY'S.
+# Eight single-gate targets below carry LLZ_FORCE_SOURCE for a reason each states
+# in its own words: a prebuilt binary is built from the merge-base and does not
+# have the verb on the PR that introduces it. The AGGREGATE has that property
+# over the whole set — an installed llz runs the gates IT knows, so a PR adding
+# or changing one is judged by the binary that predates it, silently and with a
+# clean result.
+#
+# It is not hypothetical: an installed v0.0.39 on this machine answers `unknown
+# command "gates"`, and LLZ_CI's dirty-tree detection does not cover it — that
+# detects an UNCOMMITTED tools/, and a PR's gate changes are committed.
+llz-gates: export LLZ_FORCE_SOURCE := 1
 llz-gates: export RENDER_DIR := $(RENDER_DIR)
 llz-gates: render-charts
 	$(call LLZ_CI,gates,)
 
 # CI job entrypoints — one target per lint.yml container job.
-lint-k8s: $(LINT_K8S) shellcheck
+# llz-gates IS NAMED HERE EXPLICITLY, not folded into LINT_K8S, and the
+# distinction is load-bearing: LINT_K8S is the CHART-tool list the recipe below
+# runs on a kubernetes-charts change, while the gate suite must run whenever this
+# job runs at all. Collapsing them once already removed the gates from CI
+# entirely — `make lint-k8s` is the only entry point any CI job calls, so a gate
+# absent from this line is a gate that exists, passes review, and never runs.
+lint-k8s: $(LINT_K8S) shellcheck llz-gates
 lint-tf: $(LINT_TF) template-manifest-check managed-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
