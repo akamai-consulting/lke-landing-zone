@@ -253,6 +253,11 @@ func loadBudgetConfig(repo capability.Repo, path string) (budgetConfig, error) {
 	if len(cfg.Categories) == 0 {
 		return cfg, fmt.Errorf("budget config %s defines no categories", path)
 	}
+	// The comments are not in the parse, so the ledger is judged from the raw
+	// bytes here — the one place both are in hand. See ledger.go.
+	if err := ledgerError(path, checkLedger(string(b))); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 

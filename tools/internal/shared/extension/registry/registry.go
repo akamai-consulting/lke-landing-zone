@@ -199,4 +199,16 @@ func Lookup(name string) (extension.Extension, bool) {
 // than the operator. That is the property worth keeping as the set grows: the
 // registry is where "all of them are legal" can be asserted once, instead of each
 // package remembering to assert it about itself.
+//
+// AND A TEST IS ITS ONLY CALLER, WHICH IS THE DESIGN RATHER THAN AN OMISSION. The
+// three ceiling tables in validate.go are a BUILD-TIME ceiling, not a runtime one:
+// nothing consults them while a gate or a transition is running, and nothing
+// should. A declaration is written by hand, compiled in, and cannot change between
+// builds, so the moment to reject an illegal one is before it ships — re-checking
+// at startup would spend work on an answer that could not have changed and would
+// give an operator an error about a developer's mistake.
+//
+// Worth stating because the alternative reading is available and wrong: an unused
+// exported Validate() looks like wiring somebody forgot, and the honest version of
+// "we only lint this" is cheaper than the next reader deciding to "fix" it.
 func Validate() []error { return extension.ValidateSet(All()) }

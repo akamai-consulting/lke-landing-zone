@@ -37,47 +37,61 @@ explaining the failure mode each one prevents.
    must not drop the package below its floor. Test the pure decision function,
    not the cobra glue.
 
-3. **Makefile target is thin glue** using the `LLZ_CI` macro:
+3. **Join the CI set with a REGISTRY edit, not a Makefile edit.** Add a row to
+   `Gates()` in `tools/internal/shared/extension/registry/gates.go` and the
+   command to `tools/internal/cli/ci.go`. That is the whole of it: `llz ci gates`
+   drives whatever the declarations say, and `make llz-gates` is how CI calls it.
+
+   > Thirteen per-guard targets were collapsed into `llz-gates` precisely because
+   > the Makefile and the registry each held a list of which guards exist, and the
+   > registry's drifted. Do not add your guard to `LINT_K8S` or `LINT_TF` — it is
+   > already in the CI set the moment the registry row lands. The Makefile block
+   > above `llz-gates` explains this; read it before adding a target.
+
+   Two fields exist for the unusual cases: `Flag`/`Subtree` when the gate takes
+   its tree on something other than `--root`, and `NewWithTree` when it needs the
+   live cobra tree (only `docs-guard` does — run through plain `New()` its command
+   is parentless and its largest check silently passes over nothing).
+
+4. **Add a target only for `--only` iteration**, and only carrying Makefile
+   knowledge the driver cannot hold:
 
    ```make
+   my-new-guard: export LLZ_FORCE_SOURCE := 1
    my-new-guard:
-   	$(call LLZ_CI,my-new-guard,--root ..)
+   	$(call LLZ_CI,gates --only my-new-guard,)
    ```
 
-   `$(1)` is the verb plus any args spelled from the REPO ROOT; `$(2)` is the
-   same args re-based for the from-source branch, which runs one level down in
-   `tools/`. Both get passed and the last `--root` wins — that apparent duplicate
-   is load-bearing, so don't "simplify" it away.
+   Set `LLZ_FORCE_SOURCE := 1` when the guard compares the working tree against
+   ITSELF — the prebuilt image binary is built from the merge-base and will not
+   even have your verb on the PR that introduces it (`managed-lock-check`,
+   `version-pins-check`, `docs-guard`, `source-ref-guard` are the models). Add a
+   `: render-charts` prerequisite if it reads rendered chart output, and hard-fail
+   on a missing rendered tree rather than passing green over a corpus it never saw.
 
-   **Do not hand-roll `if command -v llz`.** The macro carries logic a bare
-   fallback does not: it detects an uncommitted `tools/` tree and builds from
-   source, because otherwise the installed binary answers for code you did not
-   write. Set `LLZ_FORCE_SOURCE := 1` on the target when the guard compares the
-   working tree against ITSELF — the prebuilt image binary is built from the
-   merge-base and will not even have your verb on the PR that introduces it
-   (`managed-lock-check` and `version-pins-check` are the models).
+   **Do not hand-roll `if command -v llz`.** The `LLZ_CI` macro detects an
+   uncommitted `tools/` tree and builds from source, because otherwise the
+   installed binary answers for code you did not write.
 
-   Add a comment block above it explaining the FAILURE MODE it prevents and the
-   PR/issue where it bit (the "scars as defaults" convention in `AGENTS.md`).
-   If it inspects rendered chart output, depend on `render-charts` — and make the
-   guard hard-fail on a missing rendered tree rather than passing green over a
-   corpus it never saw.
-
-4. **Wire it into the right group** in the Makefile: `LINT_K8S` (runs in the CI
-   `kubernetes` container job) or `LINT_TF` (the `terraform` container job).
-   Guards needing a git base ref to diff against (like `chart-version-guard`)
-   stay OUT of these groups and get their own workflow — the CI lint containers
-   have no base ref.
+   Add a comment block above the target explaining the FAILURE MODE it prevents
+   and the PR/issue where it bit (the "scars as defaults" convention in
+   `AGENTS.md`). A guard that needs a git base ref to diff against (like
+   `chart-version-guard`) stays out of the driver and gets its own workflow — the
+   CI lint containers have no base ref.
 
 5. **Declare it**: add a `.PHONY` entry, a `help:` line, and — if it gets its
    own workflow — follow `.github/workflows/AGENTS.md` (SHA-pinned `uses:`,
    explicit `permissions:` block per job, GitHub-hosted runners).
 
 6. **Wire it into the change-aware `lint` recipe** so it runs on the diffs it
-   cares about. A guard that only exists in a group nothing triggers is a gate
-   nothing invokes — `docs-guard` shipped that way, tested and wired into
-   `make lint`, while the `paths:` filter matched no Markdown, so the one change
-   class it was built for could not run it.
+   cares about. This is the step the registry does NOT do for you, and skipping it
+   is the likeliest way to ship a gate nobody runs: `llz-gates` is reached from
+   that recipe only on a `kubernetes-charts/` change, so a guard whose corpus is
+   Markdown or Go needs its own `grep -qE` line invoking the `--only` target.
+
+   `docs-guard` shipped exactly that way — tested and wired into `make lint`,
+   while the `paths:` filter matched no Markdown, so the one change class it was
+   built for could not run it.
 
 7. **Verify** with `make <my-new-guard>` locally, then `make lint` (the
    authoritative gate — must exit 0), and `make coverage`.
@@ -97,7 +111,8 @@ full doctrine.
 - [ ] Go verb + unit tests in `tools/` (`gofmt -w`, `go vet`, `go test ./...` clean)
 - [ ] Makefile target using `$(call LLZ_CI,…)` + failure-mode comment
 - [ ] Fail-closed arms tested: empty corpus, malformed input, unreadable path
-- [ ] Added to `LINT_K8S` / `LINT_TF` (or its own workflow, with rationale)
+- [ ] Row in `registry/gates.go` + command in `internal/cli/ci.go` (or its own
+      workflow, with rationale) — NOT a `LINT_K8S` / `LINT_TF` entry
 - [ ] Reachable from the change-aware `lint` recipe for the paths it guards
 - [ ] `.PHONY` + `help:` entries
 - [ ] `make lint` and `make coverage` exit 0

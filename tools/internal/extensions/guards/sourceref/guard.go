@@ -37,16 +37,47 @@ import (
 
 // guardedPrefixes are the trees whose path literals are resolved.
 //
-// ONE ENTRY, AND THE NARROWNESS IS MEASURED RATHER THAN TIMID. `tools/` is the
-// tree under active decomposition — 60 extension packages and counting — so it is
-// where a reference goes stale, and every one of the ~70 rotted references that
-// motivated this guard named it. The other top-level trees were scanned during
-// development and are quiet, which is an argument for adding them later against a
-// clean run, not for adding them now on the same evidence that already showed
-// them clean.
+// `tools/` is the tree under active decomposition — 60 extension packages and
+// counting — so it is where a reference goes stale, and every one of the ~90
+// rotted references that motivated this guard named it. `kubernetes-charts/` is
+// here because it measured genuinely clean, and a ratchet is what keeps it that
+// way; nothing was wrong with it.
 //
-// Broadening is one entry per tree; nothing else in this file is prefix-aware.
-var guardedPrefixes = []string{"tools"}
+// ────────────────────────────────────────────────────────────────────────────
+// THE OTHER FIVE TREES ARE NOT HERE, AND "ADD A PREFIX" IS NOT WHAT IT COSTS.
+//
+// An earlier version of this comment claimed they "were scanned during
+// development and are quiet". That was never measured — it was inferred, in a
+// file whose whole subject is unverified claims about the repo. Measured, with
+// trimRef's trailing-hyphen rule already applied:
+//
+//	docs 35    platform-apl 33    template-scripts 14
+//	instance-template 6    terraform-modules 3    dockerfiles 3
+//
+// TWO CLASSES BLOCK THEM, and neither is answerable with an ignore-list — see
+// this file's header for why that door stays shut:
+//
+//  1. RENDER-TIME ARTIFACTS. `docs/README.md` is referenced 21 times and does not
+//     exist here BY DESIGN: `deliver-docs` writes it into a rendered instance,
+//     and the docs skill says in as many words never to create one. Every one of
+//     those references is correct. Shipping that prefix without modelling this
+//     would tell 21 authors to fix working prose, which is how a guard earns its
+//     deletion. docs-guard already carries the notion — renderTimeArtifact — so
+//     the fix is to share it rather than reinvent it.
+//
+//  2. ILLUSTRATIVE PATHS. Nobody writes a `tools/`-shaped path to mean "some
+//     file", so the class never appeared under this prefix. One tree over it is
+//     everywhere: capability/repo.go explains what a scan root does to a
+//     finding's name using invented platform-apl paths, and the plaintext guard's
+//     tests do the same. They are examples, not claims, and no rule available
+//     here separates the two.
+//
+// So the remaining five are a design slice, not a config change: solve (1) by
+// sharing docs-guard's render-time set, and (2) by deciding whether an example
+// path earns a convention — as `pkg's Symbol` did for the symbol half — or
+// whether those trees are simply out of scope. Nothing else in this file is
+// prefix-aware; the cost is entirely in those two answers.
+var guardedPrefixes = []string{"tools", "kubernetes-charts"}
 
 // refExpr matches a guarded path literal, with the character BEFORE it captured
 // so the boundary rule below can judge it.
@@ -164,11 +195,11 @@ func Run(root string) error {
 		return fmt.Errorf("source-ref-guard: %d file(s) scanned but not one %s/ path "+
 			"literal found — this repo documents itself constantly, so zero means the "+
 			"extraction is broken, not that the docs are path-free",
-			rep.Scanned, guardedPrefixes[0])
+			rep.Scanned, strings.Join(guardedPrefixes, "/, "))
 	}
 
 	fmt.Printf("source-ref-guard: %d %s/ path reference(s) across %d file(s) all resolve.\n",
-		rep.Refs, guardedPrefixes[0], rep.Scanned)
+		rep.Refs, strings.Join(guardedPrefixes, "/, "), rep.Scanned)
 	return nil
 }
 
@@ -272,11 +303,23 @@ func isRegexFragment(line string, start, end int) bool {
 }
 
 // trimRef strips the trailing punctuation a path collects from prose — the `.`
-// ending a sentence, the `/` ending a directory, the `-` ending a hyphenated
-// clause. It cannot damage a real path: none of the three is legal as the last
-// character of a file this repo contains, and `.go` ends in `o`.
+// ending a sentence and the `/` ending a directory. Neither is legal as the last
+// character of a file this repo contains, and `.go` ends in `o`, so nothing real
+// is damaged.
+//
+// A TRAILING `-` IS NOT TRIMMED, IT DISQUALIFIES. An earlier draft trimmed it
+// alongside the other two, which was fine for `the tools/cmd/llz/ tree-` and
+// wrong for every long hyphenated filename a paragraph wraps mid-word:
+// `docs/designs/team-scoped-credentials.md` broken across lines yields
+// `docs/designs/team-scoped-`, and trimming turned that into a confident claim
+// about a file nobody wrote. Returning "" skips it instead. A wrapped path is
+// genuinely unverifiable from one line, and the honest response to unverifiable
+// is to say nothing rather than to invent the half that is missing.
 func trimRef(s string) string {
-	return strings.TrimRight(s, "./-")
+	if strings.HasSuffix(s, "-") {
+		return ""
+	}
+	return strings.TrimRight(s, "./")
 }
 
 // resolves reports whether a path literal names something in the tree. A literal

@@ -5,9 +5,14 @@ package firewall
 // by .github/workflows/release.yml and .github/workflows/terraform.yml so the
 // two pipelines cannot drift.
 //
-// Seeds the in-cluster state required by the custom firewall-controller
-// to reconcile the node-pool Linode Cloud Firewall
-// in place:
+// Seeds the in-cluster state required by the custom firewall-controller to
+// reconcile the node-pool Linode Cloud Firewall in place. THAT CONTROLLER IS NOT
+// IN THIS REPO: f3b3bcb extracted the EAA/internal-CIDR firewall feature to a
+// private one, so this lane's consumer is deployed from outside the landing zone
+// and there is nothing here to read. Said plainly because the alternative is a
+// reader searching the tree for it, which is where the note that used to sit here
+// pointed them — at a tools/ directory that never existed.
+//
 //  1. Linode API Secret (kube-system/linode, key=token).
 //  2. linode-internal-cidr-firewall-config ConfigMap, with LINODE_FIREWALL_ID
 //     (the TF node_firewall_id) and optionally LKE_CLUSTER_ID.

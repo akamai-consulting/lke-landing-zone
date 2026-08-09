@@ -89,11 +89,27 @@ func TestExtractRefsTrimsTrailingProsePunctuation(t *testing.T) {
 		{"it lives in tools/internal/cli.", "tools/internal/cli"},
 		{"see tools/internal/cli/commands.go.", "tools/internal/cli/commands.go"},
 		{"under tools/internal/extensions/guards/", "tools/internal/extensions/guards"},
-		{"the tools/cmd/llz/ tree-", "tools/cmd/llz"},
 	} {
 		got := extractRefs("f.md", tc.in)
 		if len(got) != 1 || got[0].Ref != tc.want {
 			t.Errorf("%q: want %q, got %v", tc.in, tc.want, got)
+		}
+	}
+}
+
+// A paragraph that wraps mid-filename leaves a trailing hyphen. An earlier draft
+// trimmed it alongside `.` and `/`, which turned half a path into a confident
+// claim about a file nobody wrote — `tools/internal/shared/team-scoped-` reported
+// as missing while `team-scoped-credentials.md` sat there. Skipped instead: a
+// wrapped path is unverifiable from one line, and inventing the missing half is
+// worse than saying nothing.
+func TestExtractRefsSkipsAPathWrappedMidHyphen(t *testing.T) {
+	for _, in := range []string{
+		"the source is tools/internal/shared/team-scoped-",
+		"tools/cmd/llz-",
+	} {
+		if got := extractRefs("f.md", in); len(got) != 0 {
+			t.Errorf("%q: a wrapped path must be skipped, got %v", in, got)
 		}
 	}
 }
