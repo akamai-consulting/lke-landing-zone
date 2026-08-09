@@ -373,6 +373,20 @@ func TestNamedWriteOperationsRefuseAFlagAsAParameter(t *testing.T) {
 	if _, err := w.Delete("ns", "pod", "-A"); err == nil {
 		t.Error("Delete accepted -A")
 	}
+	// AN EMPTY SELECTOR MATCHES EVERYTHING — `--all` in another spelling, and it
+	// went straight through the allowlist added to stop `--all`. Permitting a flag
+	// means permitting its value, and the value is where the narrowing lives.
+	for _, sel := range [][]string{
+		{"-l", ""}, {"--selector="}, {"-l", "   "}, {"-l", "--all"},
+	} {
+		if _, err := w.Delete("ns", "pod", sel...); err == nil {
+			t.Errorf("Delete accepted the non-narrowing selector %v — that deletes every pod "+
+				"in the namespace", sel)
+		}
+		if _, err := w.Delete("", "namespace", sel...); err == nil {
+			t.Errorf("Delete accepted %v for namespaces — every namespace in the cluster", sel)
+		}
+	}
 	// The same class in the positional parameters of the other operations.
 	if _, err := w.Annotate("ns", "pod", "--all", "k=v"); err == nil {
 		t.Error("Annotate accepted --all as a name")
@@ -405,6 +419,9 @@ func TestNamedWriteOperationsRefuseAFlagAsAParameter(t *testing.T) {
 		}},
 		{"a selector delete", func() ([]byte, error) {
 			return w.Delete("ns", "pod", "-l", "app=x")
+		}},
+		{"the attached selector form", func() ([]byte, error) {
+			return w.Delete("ns", "pod", "--selector=app=x")
 		}},
 		{"converge's refresh annotation", func() ([]byte, error) {
 			return w.Annotate("argocd", "application", "app", "argocd.argoproj.io/refresh=hard")

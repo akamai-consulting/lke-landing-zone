@@ -150,6 +150,30 @@ var (
 	deleteFlagPrefixes = []string{"--selector=", "--wait=", "--timeout="}
 )
 
+// checkSelector refuses the selector values that are not narrowing.
+//
+// AN EMPTY SELECTOR MATCHES EVERY OBJECT, which is `--all` spelled differently and
+// was reachable straight through the allowlist that had just been added to stop
+// `--all`. `kubectl delete namespace -l ""` removes every namespace in the
+// cluster. Permitting a FLAG means permitting its VALUE, and the value is where
+// the narrowing was supposed to live.
+//
+// A value beginning with `-` is refused too: it is a flag that arrived in the
+// value position, either because the caller forgot the selector or because the
+// flag is trying to reach the argv sideways.
+func checkSelector(kind, sel string) error {
+	if strings.TrimSpace(sel) == "" {
+		return fmt.Errorf("capability: Delete got an EMPTY selector for %s, which matches every "+
+			"one of them — that is `--all` in another spelling, and it is the outcome both the "+
+			"empty-target guard and the flag allowlist exist to refuse", kind)
+	}
+	if strings.HasPrefix(sel, "-") {
+		return fmt.Errorf("capability: Delete got %q where a selector expression belongs — a "+
+			"flag in the value position is not a narrowing", sel)
+	}
+	return nil
+}
+
 // checkDeleteTargets walks the variadic, allowing the earned flags and their
 // values and requiring everything else to be a plain name.
 func checkDeleteTargets(kind string, target []string) error {
@@ -162,10 +186,18 @@ func checkDeleteTargets(kind string, target []string) error {
 			if i+1 >= len(target) {
 				return fmt.Errorf("capability: Delete got %q with no value", t)
 			}
-			i++ // the selector expression is data, whatever it looks like
+			if err := checkSelector(kind, target[i+1]); err != nil {
+				return err
+			}
+			i++
 			continue
 		}
 		if hasAnyPrefix(t, deleteFlagPrefixes) {
+			if sel, ok := strings.CutPrefix(t, "--selector="); ok {
+				if err := checkSelector(kind, sel); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		return fmt.Errorf("capability: Delete refuses the flag %q. It permits a name, a selector "+
