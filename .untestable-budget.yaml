@@ -148,7 +148,7 @@ categories:
     # Ratcheted 545 → 471 when check-template-manifest.sh moved
     # into `llz ci template-manifest`, then 471 → 420 when
     # stamp-template-version.sh moved into
-    # `llz ci stamp-template-version`: remaining shell is 408, so keep ~3%
+    # `stamp-template-version`: remaining shell is 408, so keep ~3%
     # headroom and do not let the retired checkers creep back as shell.
     #
     # Ratcheted 420 → 375 when linting-and-validation/

@@ -69,6 +69,7 @@ var censusExempt = map[string]string{
 	// rows for one verb would make TestEveryExtensionCommandIsWiredIn assert the
 	// same name twice and report coverage it does not have.
 	"docsguard.DocsGuardCmdFor": "the tree-aware constructor for docs-guard, whose plain form is listed",
+	"sourceref.SymbolsCmdFor":   "the tree-aware constructor for symbol-ref-guard, whose plain form is listed",
 }
 
 func TestWiringTableNamesEveryExposedConstructor(t *testing.T) {

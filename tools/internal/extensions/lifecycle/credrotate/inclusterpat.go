@@ -21,7 +21,7 @@ package credrotate
 //     skipped; the next monthly rotation converges the path to a narrow token.)
 //
 //   llz ci rotate-incluster-pat  — the monthly rotation step
-//     (llz-secret-rotation.yml, replaces the retired `llz ci propagate-pat`).
+//     (llz-secret-rotation.yml, replaces the retired `propagate-pat`).
 //     Mints a fresh narrow PAT per region IN the per-region job — the token
 //     never crosses a job boundary and never touches a GitHub secret (the old
 //     propagate flow had to round-trip the broad PAT through the GHA secret
@@ -206,7 +206,7 @@ func RunRotateInClusterPAT() error {
 // secret-propagator GitHub-OIDC (jwt) role — a short-lived, per-run,
 // repo-bound token (NOT a long-lived AppRole secret_id, and NOT root). The
 // payload rides stdin so the token never appears in argv / ps / kubectl audit
-// logs. Lifted verbatim from the retired `llz ci propagate-pat`.
+// logs. Lifted verbatim from the retired `propagate-pat`.
 func secretPropagatorKVPut(region string, fields map[string]string) error {
 	ghRepo := os.Getenv("GITHUB_REPOSITORY")
 	if ghRepo == "" {

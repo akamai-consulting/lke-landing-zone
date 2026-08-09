@@ -71,6 +71,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
@@ -101,20 +103,28 @@ var testExpr = regexp.MustCompile(`(^|[^A-Za-z0-9_.])(Test[A-Z][A-Za-z0-9_]*)`)
 // SymbolReport is what a run examined. Exported for the same reason Report is:
 // the coverage numbers are what separate a real green from a broken corpus.
 type SymbolReport struct {
-	Packages int // packages whose exported surface was indexed
-	Symbols  int // exported identifiers in the table
-	Tests    int // test functions indexed from _test.go
-	Targets  int // make rules indexed from the Makefile
-	Scanned  int // files read
-	Refs     int // pkg.Symbol references judged
-	TestRefs int // bare test-function citations judged
-	MakeRefs int // `make <target>` citations judged
-	Findings []Finding
+	Packages      int      // packages whose exported surface was indexed
+	Symbols       int      // exported identifiers in the table
+	Tests         int      // test functions indexed from _test.go
+	Targets       int      // make rules indexed from the Makefile
+	Verbs         int      // `llz ci` subcommands in the live tree
+	Scanned       int      // files read
+	Refs          int      // pkg.Symbol references judged
+	TestRefs      int      // bare test-function citations judged
+	MakeRefs      int      // `make <target>` citations judged
+	VerbRefs      int      // `llz ci <verb>` citations judged
+	ADRRefs       int      // `ADR NNNN` citations judged
+	IndexFindings []string // ADR index vs directory disagreements
+	Findings      []Finding
 }
 
 // RunSymbols scans root and fails when a reference names a symbol its package
-// does not export.
-func RunSymbols(root string) error {
+// does not export, a test that does not exist, a make target that is not
+// declared, or an `llz ci` verb the tree does not carry.
+//
+// `tree` is the LIVE cobra root, threaded from the command constructor for the
+// ci-verb half. Nil disables that half rather than failing it — see ciVerbs.
+func RunSymbols(root string, tree *cobra.Command) error {
 	repo := capability.RepoForGate(Extension(), root)
 
 	table, err := symbolTable(repo)
@@ -132,12 +142,20 @@ func RunSymbols(root string) error {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
+	verbs := ciVerbs(tree)
+
+	adrs, err := readADRs(repo)
+	if err != nil {
+		return fmt.Errorf("symbol-ref-guard: %w", err)
+	}
+
 	files, err := corpus(repo)
 	if err != nil {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
-	rep := SymbolReport{Packages: len(table), Tests: len(tests), Targets: len(targets)}
+	rep := SymbolReport{Packages: len(table), Tests: len(tests), Targets: len(targets), Verbs: len(verbs)}
+	rep.IndexFindings = checkADRIndex(adrs)
 	for _, syms := range table {
 		rep.Symbols += len(syms)
 	}
@@ -191,6 +209,23 @@ func RunSymbols(root string) error {
 					})
 				}
 			}
+			for _, m := range adrCiteExpr.FindAllStringSubmatchIndex(ln.text, -1) {
+				rep.ADRRefs++
+				if d := adrCitationFinding(adrs, rel, ln.text, m); d != "" {
+					rep.Findings = append(rep.Findings, Finding{File: rel, Line: ln.num, Ref: "ADR:" + d})
+				}
+			}
+			for _, m := range ciCiteExpr.FindAllStringSubmatchIndex(ln.text, -1) {
+				if len(verbs) == 0 {
+					continue // no `ci` group in this tree; nothing to judge against
+				}
+				rep.VerbRefs++
+				if cited := citedCIVerb(ln.text, m[2], m[3]); !ciVerbKnown(verbs, cited) {
+					rep.Findings = append(rep.Findings, Finding{
+						File: rel, Line: ln.num, Ref: "llz ci " + cited,
+					})
+				}
+			}
 		}
 	}
 
@@ -201,6 +236,17 @@ func RunSymbols(root string) error {
 		return rep.Findings[i].Line < rep.Findings[j].Line
 	})
 	for _, f := range rep.Findings {
+		if strings.HasPrefix(f.Ref, "ADR:") {
+			fmt.Printf("::error file=%s,line=%d::%s\n", f.File, f.Line, strings.TrimPrefix(f.Ref, "ADR:"))
+			continue
+		}
+		if strings.HasPrefix(f.Ref, "llz ci ") {
+			fmt.Printf("::error file=%s,line=%d::`%s` is not a verb this binary carries — a runbook "+
+				"step that answers `unknown command` fails at the worst moment. Name the verb that "+
+				"exists, or, if the sentence is about a RETIRED one, drop the `llz ci` prefix and "+
+				"name it bare so it stops reading as something to run\n", f.File, f.Line, f.Ref)
+			continue
+		}
 		if strings.HasPrefix(f.Ref, "make ") {
 			fmt.Printf("::error file=%s,line=%d::the Makefile declares no `%s` rule — a runbook "+
 				"step that cannot run is worse than no step, and this repo's docs and skills "+
@@ -219,9 +265,13 @@ func RunSymbols(root string) error {
 			"the symbol was renamed or moved; name the one that exists now\n",
 			f.File, f.Line, f.Ref, strings.SplitN(f.Ref, ".", 2)[0])
 	}
-	if len(rep.Findings) > 0 {
-		return fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s)",
-			len(rep.Findings), countFiles(rep.Findings))
+	for _, d := range rep.IndexFindings {
+		fmt.Printf("::error file=%s::%s\n", adrIndexPath, d)
+	}
+	if len(rep.Findings)+len(rep.IndexFindings) > 0 {
+		return fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s), "+
+			"%d ADR index disagreement(s)",
+			len(rep.Findings), countFiles(rep.Findings), len(rep.IndexFindings))
 	}
 
 	// FAIL CLOSED ON THREE AXES, one more than the path guard, because this one
@@ -257,10 +307,19 @@ func RunSymbols(root string) error {
 			"of habit, so zero means the extraction is broken", rep.Scanned, rep.Tests)
 	}
 
-	fmt.Printf("symbol-ref-guard: %d symbol, %d test and %d make reference(s) across %d file(s) "+
-		"all resolve (%d package(s), %d exported symbol(s), %d test(s), %d target(s) indexed).\n",
-		rep.Refs, rep.TestRefs, rep.MakeRefs, rep.Scanned,
-		rep.Packages, rep.Symbols, rep.Tests, rep.Targets)
+	// The ADR axis takes the same gating as the test and make ones: a tree with no
+	// index cannot answer the question, so zero citations there is correct rather
+	// than broken.
+	if len(adrs.Rows) > 0 && rep.ADRRefs == 0 {
+		return fmt.Errorf("symbol-ref-guard: %d file(s) scanned against an ADR index of %d "+
+			"row(s) but not one `ADR NNNN` citation found — this repo cites its decisions "+
+			"constantly, so zero means the extraction is broken", rep.Scanned, len(adrs.Rows))
+	}
+
+	fmt.Printf("symbol-ref-guard: %d symbol, %d test, %d make, %d ci-verb and %d ADR reference(s) "+
+		"across %d file(s) all resolve (%d package(s), %d symbol(s), %d test(s), %d target(s), "+
+		"%d verb(s) indexed).\n", rep.Refs, rep.TestRefs, rep.MakeRefs, rep.VerbRefs, rep.ADRRefs,
+		rep.Scanned, rep.Packages, rep.Symbols, rep.Tests, rep.Targets, rep.Verbs)
 	return nil
 }
 

@@ -481,7 +481,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 
 	// The `bao kv put secret/…` seeding lives in the reusable workflow BODIES
 	// (the per-instance bootstrap-*.yml are thin callers with no seeds) and in
-	// `llz ci provision-harbor-robots` (ci_harbor.go, parsed by the Go-aware
+	// `llz ci seed-standby-harbor-robots` (ci_harbor.go, parsed by the Go-aware
 	// collector). See templatization-plan.md §"Keeping instances in sync".
 	seededPaths, seededFields, err := collectSeeded(repo, []string{
 		guardkit.RepoPath(repo, ".github/workflows/llz-bootstrap-openbao.yml"),

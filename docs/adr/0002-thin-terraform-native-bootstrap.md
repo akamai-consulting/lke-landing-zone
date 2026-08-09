@@ -28,7 +28,7 @@ Terraform in this repo did two very different jobs under one roof:
 
 The second job fought Terraform's model hardest. Its providers were bootstrapped
 from a kubeconfig read mid-apply out of the cluster workspace's remote state; its
-destroy path needed `terraform state rm` surgery (`llz ci tf-untrack`) to avoid
+destroy path needed `terraform state rm` surgery (`tf-untrack`) to avoid
 `helm uninstall` hanging on finalizers and to handle the cluster-already-gone
 case; and its `lifecycle { ignore_changes }` blocks existed precisely to hand
 ownership of ACLs/firewall/pool off to in-cluster controllers after day-0. The
@@ -88,7 +88,7 @@ Supporting decisions (see the PR's plan for the full rationale):
   `diagnose-argocd` on failure.
 - **Removed:** `terraform-iac-bootstrap/cluster-bootstrap`,
   `llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
-  tfroot, and the now-dead `llz ci tf-untrack` + `internal/terraform/untrack.go`.
+  tfroot, and the now-dead `tf-untrack` + `internal/terraform/untrack.go`.
   The offline apl-values var-contract guard (`llz ci validate-apl-values`) now
   checks against the Go `bootstrapValuePlaceholders` constant instead of parsing
   the deleted `main.tf`.

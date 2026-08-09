@@ -5,7 +5,7 @@
 // IT CAME OUT OF internal/extensions/configreadiness, which is the COMMAND that
 // reports on all this. Four peers imported that extension and what doctor and
 // onboard wanted was this model -- Requirement, LiveState, Satisfied,
-// E2ERequirements -- not the `llz ci env-readiness` verb.
+// E2ERequirements -- not the `env-readiness` verb.
 //
 // IT COULD NOT MOVE UNTIL ONE COMMIT AGO. ReportReadiness renders the validity
 // column, which meant this file referenced tokeninv's TokenValidity and so could not

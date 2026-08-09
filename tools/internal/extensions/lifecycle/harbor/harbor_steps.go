@@ -1,7 +1,7 @@
 package harbor
 
 // ci_harbor_steps.go — the shared helper left behind by the retired Harbor CI
-// steps. `llz ci harbor-port-forward`, `harbor-ensure-project` and
+// steps. `harbor-port-forward`, `harbor-ensure-project` and
 // `harbor-smoke` were REMOVED along with the workflow's `harbor` job: the
 // active-path provisioning runs IN-CLUSTER as the harbor-robot-provisioner
 // CronJob (`llz ci harbor-provisioner`, ci_harbor_provisioner.go), which talks

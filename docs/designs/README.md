@@ -34,7 +34,7 @@ doing its job. Links are still checked.
 |---|---|
 | [credential-single-pane](credential-single-pane.md) | One Prometheus/Grafana view of every credential — CI tokens and certificates — with alerts that fire before expiry. Runs as the `credential-single-pane` job in `llz-scheduled-checks.yml`. |
 | [day2-incluster-health](day2-incluster-health.md) | kubectl-free health verb + on-demand WorkflowTemplate, so day-2 health does not need a kubeconfig on the operator's machine (#203). |
-| [e2e-instrumentation](e2e-instrumentation.md) | Phase timing for the e2e lane, so "where did the time go?" is a query rather than log archaeology (`llz ci phase-timing`). |
+| [e2e-instrumentation](e2e-instrumentation.md) | Phase timing for the e2e lane, so "where did the time go?" is a query rather than log archaeology (`llz ci collect-timing`). |
 | [linode-credential-rotator](linode-credential-rotator.md) | In-cluster ownership of the Linode object-storage key lifecycle; default-on fleet-wide. |
 | [linode-pat-dns-consolidation](linode-pat-dns-consolidation.md) | Collapsing the Linode PAT and DNS-token surface. Phases A and B both landed. |
 | [apl-core-values-branch-isolation](apl-core-values-branch-isolation.md) | Isolating the apl-core values branch so an instance's values tree cannot be clobbered by the operator's push. |

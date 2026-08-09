@@ -38,7 +38,7 @@ import (
 
 // ObjencDeps is a VAR, not a func, so a test can swap the whole capability set —
 // the same seam pattern package main already uses for its kubectl and Linode
-// clients. `llz ci readiness` drives objenc's registry-CA check, and its tests
+// clients. `readiness` drives objenc's registry-CA check, and its tests
 // used to stub a package-level objEncKubectl that is now a Deps field.
 var ObjencDeps = func() Deps {
 	h := capability.For(seedBinding())

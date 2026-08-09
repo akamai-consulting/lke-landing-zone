@@ -347,7 +347,7 @@ The raft `retry_join` pod-FQDN SAN requirement is satisfied by the `dnsNames` in
 
 ### Removed: the OTel Collector serving-TLS bootstrap seed
 
-The `llz ci gen-bootstrap-tls` step that used to hand-seed
+The `gen-bootstrap-tls` step that used to hand-seed
 `platform-otel-collector-tls` here (a throwaway runner-generated CA + cert, replaced
 in-place by the custom-ca issuer later) has been REMOVED — the same anti-pattern the
 `openbao-tls` seed removal fixed. The cert is now issued from FIRST boot by the stable,

@@ -1,6 +1,6 @@
 # E2E timing instrumentation — make "where did the time go?" a query
 
-**Status:** Shipped — phase timing landed as `llz ci phase-timing`. The questions
+**Status:** Shipped — phase timing landed as `llz ci collect-timing`. The questions
 below are now answerable from the emitted timings rather than by hand-reading a
 run's log timestamps.
 

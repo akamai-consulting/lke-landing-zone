@@ -7,7 +7,7 @@
 // docsguard's DeliveredDocs got. Four packages need to agree on them ... the only
 // way two callers can disagree about what a ConfigMap is called is if there are
 // two copies of the name." Correct -- and it then placed them "with the RECONCILER
-// rather than with `llz ci firewall`", which answers WHICH EXTENSION when the
+// rather than with `firewall`", which answers WHICH EXTENSION when the
 // answer is NEITHER. A name four packages must agree on is substrate.
 //
 // The rule for adding here: it is a string that two or more packages must spell

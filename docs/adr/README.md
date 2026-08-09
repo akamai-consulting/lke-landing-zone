@@ -11,7 +11,7 @@ command/flag check for exactly that reason, and still checks the links.)
 
 | # | Decision | Date | Status |
 |---|---|---|---|
-| 0001 | *Reserved* — PAT rotation locus | — | **Not written.** Cited by 0007, 0009, 0012 as the "where does the credential live" blast-radius framing |
+| [0001](0001-pat-rotation-locus.md) | PAT rotation locus: where a credential lives decides its blast radius | 2026-07-28 | Accepted |
 | [0002](0002-thin-terraform-native-bootstrap.md) | Thin Terraform: the in-cluster bootstrap runs natively, not as a TF workspace | 2026-07-15 | Accepted |
 | [0003](0003-vendor-actions-and-bodies-into-instances.md) | Vendor reusable workflow bodies + composite actions into each instance | 2026-07-16 | Accepted |
 | [0004](0004-decouple-openbao-write-identity-from-cluster-access.md) | Decouple the OpenBao write identity from cluster access | 2026-07-21 | Accepted |

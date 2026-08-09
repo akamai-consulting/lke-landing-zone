@@ -1288,7 +1288,13 @@ categories:
     #                       `llz extension list` is on the unclaimed-command ratchet
     #                       (commands_claimed_test.go) and its real home is an
     #                       extension. When it moves, this comes back down.
-    budget: 1920
+    #   1,922 / 113 files  +2 for `pin-coherence`: an import and an AddCommand.
+    #                       It was registered in the GATES table only, so
+    #                       `llz ci pin-coherence` — the invocation its own doc
+    #                       comment named — answered `unknown command`, while all
+    #                       fifteen sibling driven gates sat in both. Found by the
+    #                       ci-verb half of source-ref-guard on its first run.
+    budget: 1922
     exact: true
     include:
       - "tools/internal/cli/*.go"

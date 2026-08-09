@@ -33,7 +33,7 @@ per §7 before promotion past lab.
 >   nodebalancers/account).
 > - `llz ci mint-bootstrap-pat` seeds the first token at bootstrap
 >   (skip-if-present, rotated_at-stamped); `llz ci bao-seed-all` no longer
->   seeds the path; `llz ci propagate-pat` is retired.
+>   seeds the path; `propagate-pat` is retired.
 **Item:** resolves **tier-2** of
 [in-cluster Linode credential rotator](linode-credential-rotator.md) (the
 dual-domain `LINODE_API_TOKEN`), using the "cert-manager reads the narrow PAT's
@@ -72,7 +72,7 @@ Secret. It is:
   `buildRotationTable`),
 - **seeded** at bootstrap (`bao-seed-all`, from `LINODE_DNS_TOKEN`),
 - read by **nothing that solves DNS-01** — its only remaining consumer is the
-  `llz ci wait` bootstrap gate. The issuer file says so outright: *"it is no
+  `llz ci wait-apl-pipeline` bootstrap gate. The issuer file says so outright: *"it is no
   longer read by a landing-zone webhook."*
 
 **Consequence:** the rotator is rotating a dead token while the token that
@@ -92,7 +92,7 @@ nodebalancers:rw events:read account:read_write`) that is **dual-domain**:
 
 - **Out-of-cluster:** Terraform/CI use it for everything (cluster, VPC,
   firewall, object-storage buckets, …). It is rotated by CI
-  (`secret-rotation.yml` → `llz ci propagate-pat` → each region's OpenBao).
+  (`secret-rotation.yml` → `propagate-pat` → each region's OpenBao).
 - **In-cluster:** ESO syncs it to `secret/linode/api-token`, read by the
   **volume-labeler** (needs `volumes:rw`) and used as the **minting
   credential** by the rotator / `mint-bootstrap-objkeys` / `temp-objkey`
@@ -146,7 +146,7 @@ DNS sub-token entirely.
 
 CI/Terraform-only. It is **no longer ESO-synced into any cluster**
 (`secret/linode/api-token`'s in-cluster consumers all move to the narrow PAT).
-It keeps its CI rotation in `secret-rotation.yml`, but `llz ci propagate-pat`
+It keeps its CI rotation in `secret-rotation.yml`, but `propagate-pat`
 (which pushes it *into* clusters' OpenBao) is deleted.
 
 ---
@@ -221,7 +221,7 @@ Once landed (Phase A always; Phase B when open question #1 resolves):
 - **Phase A (decoupled, no apl-core dependency):** the vestigial Path B —
   `secret/certmanager/dns01`, the rotator's `dns-token` table entry, its
   `bao-seed-all` seed, the `dns01-solver-token` ExternalSecret, and the
-  `llz ci wait` gate on that Secret (re-point the gate at a real DNS-01
+  `llz ci wait-apl-pipeline` gate on that Secret (re-point the gate at a real DNS-01
   readiness signal, or drop it). Pure cleanup; nothing that solves DNS-01
   reads Path B.
 - **Phase B (gated on §4):**
@@ -229,7 +229,7 @@ Once landed (Phase A always; Phase B when open question #1 resolves):
     injection in cluster-bootstrap (replaced by the ESO-synced narrow PAT);
   - `secret/linode/api-token`'s in-cluster ESO sync + all in-cluster reads of
     the broad PAT;
-  - `llz ci propagate-pat` and the broad-PAT push into clusters;
+  - `propagate-pat` and the broad-PAT push into clusters;
   - the in-cluster half of the `secret-rotation.yml` PAT rotation — leaving
     only the `TF_STATE_*` OBJ key (tier-3, circular, stays) and, per §5, an
     optional broad-PAT-mints-narrow-PAT step.

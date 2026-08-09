@@ -277,7 +277,7 @@ var gates = []Gate{
 	{Extension: "guard-cosign-subject", New: cosignguard.Cmd},
 	{Extension: "guard-monitoring-labels", New: monitoringlabel.Cmd},
 	{Extension: "guard-source-refs", New: sourceref.Cmd},
-	{Extension: "guard-source-refs", New: sourceref.SymbolsCmd},
+	{Extension: "guard-source-refs", NewWithTree: sourceref.SymbolsCmdFor},
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},
 	{Extension: "mtls-wiring", New: mtlsguard.Cmd},

@@ -4,7 +4,7 @@ package tokeninv
 // token-inventory writer (ci_token_inventory.go) and token validation
 // (token_validate.go).
 //
-// These used to live inside `llz ci gh-pat-expiry` and `llz ci cred-audit` — the
+// These used to live inside `gh-pat-expiry` and `cred-audit` — the
 // per-provider expiry probe verbs. Those verbs were superseded by the
 // credential single-pane flow (token-inventory measures every CI token and
 // writes the ConfigMap the in-cluster reconciler re-exposes as

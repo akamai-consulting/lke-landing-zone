@@ -77,8 +77,8 @@ A token with no expiry, a lifetime > 90 days, or one already expired surfaces as
 a firing alert through Alertmanager rather than only as a red job — the cluster
 is the single pane, so the same breach pages the same way whether CI ran or not.
 
-> The former per-provider probe verbs (`llz ci cred-audit`,
-> `llz ci gh-pat-expiry`) were retired once this flow subsumed them; their
+> The former per-provider probe verbs (`cred-audit`,
+> `gh-pat-expiry`) were retired once this flow subsumed them; their
 > measurement lives in `token-inventory` and their reporting in `alert-eval`.
 
 ### Rotating `LINODE_API_TOKEN` (automated — `secret-rotation.yml`)

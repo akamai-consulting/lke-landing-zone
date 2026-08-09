@@ -27,7 +27,7 @@ import (
 // non-empty), keeping the value off argv. gh resolves auth + repo from the
 // ambient GH_TOKEN/GH_REPO — the same contract the shell scripts ran under.
 //
-// ghEnv == "" is the REPO-level write, not a missing argument: `llz ci harbor`
+// ghEnv == "" is the REPO-level write, not a missing argument: `harbor`
 // writes repo secrets and the OpenBao lanes write environment ones, and one
 // function serves both because the only difference is two argv elements.
 func Set(name, ghEnv, value string) error {

@@ -7,7 +7,22 @@ package sourceref
 
 import "github.com/spf13/cobra"
 
-func SymbolsCmd() *cobra.Command {
+// SymbolsCmd builds the verb for the live CLI, where cmd.Root() is the real tree
+// because main parented it.
+func SymbolsCmd() *cobra.Command { return symbolsCmd(nil) }
+
+// SymbolsCmdFor supplies the tree as DATA, for the driver, which runs each gate
+// PARENTLESS — and a parentless command's Root() is itself. docs-guard's header
+// records what that costs: it validated 868 invocations against a tree of one and
+// reported clean. The ci-verb half here would do the same, indexing zero verbs and
+// skipping every citation.
+//
+// Resolving cmd.Root() at CONSTRUCTION would be the same bug one step earlier: the
+// ci group is not attached to the root until main finishes wiring, so the tree
+// captured would be empty. It is read inside RunE instead.
+func SymbolsCmdFor(tree *cobra.Command) *cobra.Command { return symbolsCmd(tree) }
+
+func symbolsCmd(tree *cobra.Command) *cobra.Command {
 	var root string
 	c := &cobra.Command{
 		Use:   "symbol-ref-guard",
@@ -29,7 +44,15 @@ func SymbolsCmd() *cobra.Command {
 			"guard cannot see a third party's source, so a finding would only ever mean\n" +
 			"'not vendored here'.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return RunSymbols(root) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The injected tree wins; falling back to cmd.Root() keeps the live CLI
+			// behaviour identical.
+			t := tree
+			if t == nil {
+				t = cmd.Root()
+			}
+			return RunSymbols(root, t)
+		},
 	}
 	c.Flags().StringVar(&root, "root", ".", "repository root to scan")
 	return c

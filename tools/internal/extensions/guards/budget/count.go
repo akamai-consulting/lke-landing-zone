@@ -17,7 +17,7 @@ package budget
 //	countGoLogicLines              non-blank, non-`//` lines of Go (ADR 0014)
 //
 // Two rules recur and are worth stating once. A SINGLE logical line is glue, not
-// logic — it is exactly what a converted step looks like (`llz ci foo`), so
+// logic — it is exactly what a converted step looks like (`llz ci <verb>`), so
 // counting it would penalise the conversions the untestable-loc gate exists to
 // encourage. And a backslash-continued command counts once, so wrapping a long
 // tool call across physical lines costs nothing.
@@ -47,7 +47,7 @@ func countRunBlockLines(content string) int {
 		rest := strings.TrimSpace(m[3])
 		isBlock := rest == "" || rest[0] == '|' || rest[0] == '>'
 		if !isBlock {
-			// Single-line command (`run: llz ci foo`) is tool-invocation glue,
+			// Single-line command (`run: llz ci <verb>`) is tool-invocation glue,
 			// not embedded logic — it's exactly what a converted step looks
 			// like, so counting it would penalize the conversions this gate
 			// exists to encourage. Only multi-line `run:` blocks (which hold
@@ -56,7 +56,7 @@ func countRunBlockLines(content string) int {
 		}
 		// Block scalar: count LOGICAL lines of the body until the indentation
 		// returns to <= the run: directive's own indent. Backslash-continued
-		// commands count once — a `llz ci foo --a \ --b \ --c` invocation that
+		// commands count once — a `llz ci <verb> --a \ --b \ --c` invocation that
 		// wraps across physical lines is one tool call (glue), the same shape a
 		// converted step takes, so counting each wrapped line would penalize the
 		// conversions this gate rewards.

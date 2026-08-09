@@ -29,7 +29,7 @@ package tokenprobe
 // GitHub exposes only secret NAMES, not values, so a secret configured ONLY on
 // the repo (never gathered locally) cannot be probed here — those are reported as
 // "set on GitHub (value not readable locally)". The in-CI counterpart, where the
-// secret IS in the environment, is `llz ci gh-pat-expiry` (GitHub PATs).
+// secret IS in the environment, is `gh-pat-expiry` (GitHub PATs).
 
 import (
 	"context"

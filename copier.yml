@@ -140,7 +140,7 @@ _tasks:
   # so any release that touches a comment would land conflict markers in
   # 1000-line workflow YAML (the invalid-YAML failure mode _skip_if_exists above
   # documents from the gsap-apl v0.0.24 upgrade). Carrying maintainer comments
-  # is the cheap side of that trade. (The former `llz ci strip-comments` verb
+  # is the cheap side of that trade. (The former `strip-comments` verb
   # was removed with the task.)
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial

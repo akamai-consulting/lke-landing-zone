@@ -76,7 +76,7 @@ const (
 	// neither presence nor absence is a finding. Measured when present (the age is
 	// real and worth seeing); silent when not.
 	//
-	// This is the Harbor robot pair. `llz ci seed-harbor-standby` returns early
+	// This is the Harbor robot pair. `llz ci seed-standby-harbor-robots` returns early
 	// with "HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet published — the active
 	// peer's harbor-robot-provisioner CronJob sets them once Harbor is up", so a
 	// STANDBY peer, and any deployment before Harbor first comes up, does not have
