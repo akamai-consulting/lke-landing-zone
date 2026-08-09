@@ -62,9 +62,25 @@ var grantHandleMarkers = map[string][]string{
 	// ever used and is not how a constant is spelled. Assigning the handle to a
 	// local first (`c := h.Cloud`) reads as unbacked, which is the safe direction —
 	// an entry gets demanded rather than waived.
+	// `capability.For` WAS LISTED FOR BOTH MUTATING KUBE/SECRET ROWS AND IT IS NOT A
+	// MARKER FOR EITHER. It is how a binding acquires ALL of its handles, so its
+	// presence says a package took SOMETHING — not that it took the one being
+	// checked. That is the `.Cloud` defect one row up in a second costume: a marker
+	// broader than the claim reports the paydown as already done.
+	//
+	// It cost exactly one entry, which is the useful part of the measurement.
+	// identity-plane's only capability line is
+	// `capability.For(configBinding()).BaoAdmin` — the OpenBao ADMIN surface, not a
+	// Writer — and that single occurrence of the string credited it with backing
+	// `cluster-write` too. Removing the marker moved it into the list below, where
+	// the other twenty-one already sat.
+	//
+	// Each row now names handles that ONLY that grant yields. `.Forge` appears twice
+	// deliberately: the forge is gated by three grants and a repo-secret write really
+	// is custody (see forge.go).
 	"CloudMutate":   {"capability.CloudFor", ".Forge", ".Cloud."},
-	"SecretCustody": {".Custodian", ".Forge", ".BaoAdmin", "capability.For"},
-	"ClusterWrite":  {".Writer", "capability.KubeFor", "capability.KubeAPI", "capability.For"},
+	"SecretCustody": {".Custodian", ".Forge", ".BaoAdmin"},
+	"ClusterWrite":  {".Writer", "capability.KubeFor", "capability.KubeAPI"},
 	"WriteRepo":     {"capability.RepoFor", "capability.RepoAt", "capability.Repo"},
 }
 
@@ -82,18 +98,24 @@ var unbackedGrants = map[string]bool{
 	"firewall/ClusterWrite":          true,
 	"gameday/ClusterWrite":           true,
 	"harbor/CloudMutate":             true,
-	"kyverno/ClusterWrite":           true,
-	"openbao/CloudMutate":            true,
-	"openbao/ClusterWrite":           true,
-	"openbao/SecretCustody":          true,
-	"reconcilelanes/CloudMutate":     true,
-	"reconcilelanes/SecretCustody":   true,
-	"reconciler/ClusterWrite":        true,
-	"reconciler/SecretCustody":       true,
-	"releasepublish/CloudMutate":     true,
-	"statepassphrase/CloudMutate":    true,
-	"statepassphrase/SecretCustody":  true,
-	"teardown/ClusterWrite":          true,
+	// SURFACED BY REMOVING THE `capability.For` MARKER, not by new code. This package
+	// reaches the cluster through the kubectlprobe seam (counted at 1 in
+	// allowedSeamCalls) and takes only .BaoAdmin from capability.For, so its
+	// cluster-write has no visible Writer. It was never backed; the marker said it
+	// was.
+	"identityconfig/ClusterWrite":   true,
+	"kyverno/ClusterWrite":          true,
+	"openbao/CloudMutate":           true,
+	"openbao/ClusterWrite":          true,
+	"openbao/SecretCustody":         true,
+	"reconcilelanes/CloudMutate":    true,
+	"reconcilelanes/SecretCustody":  true,
+	"reconciler/ClusterWrite":       true,
+	"reconciler/SecretCustody":      true,
+	"releasepublish/CloudMutate":    true,
+	"statepassphrase/CloudMutate":   true,
+	"statepassphrase/SecretCustody": true,
+	"teardown/ClusterWrite":         true,
 }
 
 func TestUnbackedGrantsAreRatcheted(t *testing.T) {
