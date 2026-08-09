@@ -190,7 +190,7 @@ func (g Gate) args(root string) []string {
 // IT IS A DECLARED LIST BECAUSE THE PROSE VERSION DRIFTED.
 //
 // This was a paragraph naming twelve gates, above a comment asserting that
-// "TestUndrivenGatesAreNamedInTheSource prints the live numbers on every run, so
+// "TestUndrivenGatesMatchTheModel prints the live numbers on every run, so
 // this comment cannot quietly drift away from the model". It drifted anyway: the
 // prose still said "6 are driven" and listed seven gates as undriven that were
 // sitting in the table immediately below it.

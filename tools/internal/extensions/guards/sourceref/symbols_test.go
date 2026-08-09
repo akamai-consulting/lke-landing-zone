@@ -77,7 +77,7 @@ func TestRunSymbolsFailsOnASymbolThePackageDoesNotExport(t *testing.T) {
 	if err == nil {
 		t.Fatal("a symbol the package does not export must fail")
 	}
-	if !strings.Contains(err.Error(), "1 stale symbol reference") {
+	if !strings.Contains(err.Error(), "1 stale reference") {
 		t.Errorf("the error should count findings, got %v", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestCommentsInGoFilesAreScanned(t *testing.T) {
 	if err == nil {
 		t.Fatal("a stale reference in a Go comment must fail — that is where this rot lives")
 	}
-	if !strings.Contains(err.Error(), "stale symbol reference") {
+	if !strings.Contains(err.Error(), "stale reference") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -204,5 +204,123 @@ func TestUnparseableGoFailsRatherThanSkipping(t *testing.T) {
 	})
 	if err := RunSymbols(root); err == nil {
 		t.Fatal("unparseable Go must fail the run, not drop the file")
+	}
+}
+
+// ── test-name citations ─────────────────────────────────────────────────────
+
+// The class this half exists for. A citation names the mechanism that keeps a
+// claim true — "TestX fails the build if they drift" — so when the test is
+// renamed and the sentence is not, it still reads as a guarantee with nothing
+// behind it. Two live instances sat in PRODUCTION source.
+func TestRunSymbolsFailsOnACitedTestThatDoesNotExist(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go":      "package p\nfunc F() {}\n",
+		"tools/p/p_test.go": "package p\nimport \"testing\"\nfunc TestGrantStatesTableIsPinned(t *testing.T) {}\n",
+		"docs/a.md":         "`p.F` is pinned; notice TestGrantStatesIsPinned.\n",
+	})
+	err := RunSymbols(root)
+	if err == nil {
+		t.Fatal("a citation to a test that does not exist must fail")
+	}
+	if !strings.Contains(err.Error(), "1 stale reference") {
+		t.Errorf("expected one finding, got %v", err)
+	}
+}
+
+func TestRunSymbolsPassesACitedTestThatExists(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go":      "package p\nfunc F() {}\n",
+		"tools/p/p_test.go": "package p\nimport \"testing\"\nfunc TestGrantStatesTableIsPinned(t *testing.T) {}\n",
+		"docs/a.md":         "`p.F` is pinned; notice TestGrantStatesTableIsPinned.\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("a citation to a real test must resolve: %v", err)
+	}
+}
+
+// Test files are READ for their function names and never SCANNED for citations:
+// a test's fixtures invent names freely, so its text is not a claim about the
+// repo while its function names are what everything else points at.
+func TestTestFilesAreIndexedButNotScanned(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go": "package p\nfunc F() {}\n",
+		// The fixture cites a test that does not exist. Scanning this file would
+		// make the guard fail on its own test corpus.
+		"tools/p/p_test.go": "package p\nimport \"testing\"\n// fixture cites TestNoSuchThingAnywhere\nfunc TestReal(t *testing.T) {}\n",
+		"docs/a.md":         "`p.F`, covered by TestReal.\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("a citation inside a _test.go file must not be judged: %v", err)
+	}
+}
+
+// A paragraph breaking a long test name across lines leaves a prefix, with or
+// without a hyphen. Both live instances came from one config file. Reporting them
+// would flag correct prose; the rule needs the line to END there AND a longer
+// real test to exist, so a complete citation at a line break still resolves.
+func TestCitationWrappedAcrossLinesIsSkipped(t *testing.T) {
+	// Each body carries one COMPLETE citation as well, so the run has a test
+	// reference to judge; without it the TestRefs==0 arm fires and the wrap is
+	// never reached.
+	for _, body := range []string{
+		"a guard (TestSeedTargetsAreReserved-\n  Namespaces) covers it, as does\n" +
+			"TestGlobalFlagsAreParsedBeforeRunE. `p.F`\n",
+		"the comment explaining it. TestGlobalFlagsAreParsedBefore\n  RunE, alongside\n" +
+			"TestSeedTargetsAreReservedNamespaces. `p.F`\n",
+	} {
+		root := writeTree(t, map[string]string{
+			"tools/p/p.go": "package p\nfunc F() {}\n",
+			"tools/p/p_test.go": "package p\nimport \"testing\"\n" +
+				"func TestSeedTargetsAreReservedNamespaces(t *testing.T) {}\n" +
+				"func TestGlobalFlagsAreParsedBeforeRunE(t *testing.T) {}\n",
+			"docs/a.md": body,
+		})
+		if err := RunSymbols(root); err != nil {
+			t.Errorf("a wrapped citation must be skipped, not reported: %v", err)
+		}
+	}
+}
+
+// The other half of the wrap rule: a citation that merely SHARES a prefix with a
+// real test, mid-line, is stale and must still be caught.
+func TestPrefixOfARealTestIsStillCaughtMidLine(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go":      "package p\nfunc F() {}\n",
+		"tools/p/p_test.go": "package p\nimport \"testing\"\nfunc TestGuardExemptsItselfByDirectory(t *testing.T) {}\n",
+		"docs/a.md":         "`p.F` — TestGuardExemptsItself fails if a real file stops matching.\n",
+	})
+	if err := RunSymbols(root); err == nil {
+		t.Fatal("a stale prefix citation mid-line must be caught")
+	}
+}
+
+// `Test` must be followed by an uppercase letter, which is what keeps ordinary
+// words out of the extraction.
+func TestOrdinaryWordsAreNotCitations(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go":      "package p\nfunc F() {}\n",
+		"tools/p/p_test.go": "package p\nimport \"testing\"\nfunc TestReal(t *testing.T) {}\n",
+		"docs/a.md":         "Testing this, we Tested it; the Tests pass. `p.F`, see TestReal.\n",
+	})
+	if err := RunSymbols(root); err != nil {
+		t.Fatalf("Testing/Tested/Tests are not citations: %v", err)
+	}
+}
+
+// Zero citations across a real corpus means testExpr broke, not that the repo
+// stopped naming its tests.
+func TestRunSymbolsFailsWhenNoTestCitationIsExtracted(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"tools/p/p.go":      "package p\nfunc F() {}\n",
+		"tools/p/p_test.go": "package p\nimport \"testing\"\nfunc TestReal(t *testing.T) {}\n",
+		"docs/a.md":         "`p.F` and nothing else.\n",
+	})
+	err := RunSymbols(root)
+	if err == nil {
+		t.Fatal("zero test citations must fail")
+	}
+	if !strings.Contains(err.Error(), "not one test citation") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

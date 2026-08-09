@@ -213,6 +213,20 @@ func countFiles(fs []Finding) int {
 
 // corpus returns every scannable file, repo-relative and sorted.
 func corpus(repo capability.Repo) ([]string, error) {
+	return walk(repo, func(name string) bool { return scannable(name) })
+}
+
+// testCorpus returns every `_test.go` file. Test files are NOT scanned — see
+// scannable — but they are READ, to index the test names prose cites as evidence.
+// Indexing and scanning are different questions about the same file, and this
+// guard answers them oppositely: a test's fixtures may name anything, while its
+// FUNCTION NAMES are part of the vocabulary the rest of the repo points at.
+func testCorpus(repo capability.Repo) ([]string, error) {
+	return walk(repo, func(name string) bool { return strings.HasSuffix(name, "_test.go") })
+}
+
+// walk returns every file under the tree whose basename satisfies keep.
+func walk(repo capability.Repo, keep func(string) bool) ([]string, error) {
 	var out []string
 	err := repo.WalkDir(".", func(p string, d fs.DirEntry, err error) error {
 		// FAIL, don't skip — swallowing a walk error drops part of the tree while
@@ -231,7 +245,7 @@ func corpus(repo capability.Repo) ([]string, error) {
 			}
 			return nil
 		}
-		if scannable(d.Name()) {
+		if keep(d.Name()) {
 			out = append(out, p)
 		}
 		return nil

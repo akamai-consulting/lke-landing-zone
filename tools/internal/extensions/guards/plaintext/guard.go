@@ -530,7 +530,7 @@ func Run(root string) error {
 // examined count above zero).
 // guardOwnDir is the path fragment identifying this package's own source. Kept as
 // a single constant so the self-exemption and the registry's own keys cannot drift
-// apart; TestGuardExemptsItself fails if a real file here stops matching it.
+// apart; TestGuardExemptsItselfByDirectory fails if a real file here stops matching it.
 const guardOwnDir = "tools/internal/extensions/guards/plaintext/"
 
 func plaintextScanDirs(repo capability.Repo) []string {

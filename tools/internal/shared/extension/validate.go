@@ -149,7 +149,7 @@ var grantStates = map[Grant][]State{
 	// has followed for both earlier widenings is that a state earns its place by an
 	// extraction that needed it, not by seeming plausible. When promote-pipeline's
 	// write moves in, `promoted` can be argued then, and there is a test that will
-	// notice: TestGrantStatesIsPinned.
+	// notice: TestGrantStatesTableIsPinned.
 	//
 	// Note this is also the first row whose states are all OUTSIDE the mutating
 	// middle of the lifecycle. The other three rows start at `provisioned` — you

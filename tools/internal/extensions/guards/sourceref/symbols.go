@@ -90,13 +90,23 @@ import (
 // family has been renamed still fails.
 var symExpr = regexp.MustCompile(`(^|[^A-Za-z0-9_.])([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_*]*)`)
 
+// testExpr matches a cited Go test function. Bare, not `pkg.`-qualified: prose
+// names a test the way `go test -run` does, and the citation carries no package.
+//
+// `Test` followed by an UPPERCASE letter is the Go convention and is what keeps
+// ordinary words out — `Testing`, `Tested` and `Tests` all fail the second
+// character. The leading boundary is the same lookbehind stand-in refExpr uses.
+var testExpr = regexp.MustCompile(`(^|[^A-Za-z0-9_.])(Test[A-Z][A-Za-z0-9_]*)`)
+
 // SymbolReport is what a run examined. Exported for the same reason Report is:
 // the coverage numbers are what separate a real green from a broken corpus.
 type SymbolReport struct {
 	Packages int // packages whose exported surface was indexed
 	Symbols  int // exported identifiers in the table
+	Tests    int // test functions indexed from _test.go
 	Scanned  int // files read
 	Refs     int // pkg.Symbol references judged
+	TestRefs int // bare test-function citations judged
 	Findings []Finding
 }
 
@@ -110,12 +120,17 @@ func RunSymbols(root string) error {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
+	tests, err := testNames(repo)
+	if err != nil {
+		return fmt.Errorf("symbol-ref-guard: %w", err)
+	}
+
 	files, err := corpus(repo)
 	if err != nil {
 		return fmt.Errorf("symbol-ref-guard: %w", err)
 	}
 
-	rep := SymbolReport{Packages: len(table)}
+	rep := SymbolReport{Packages: len(table), Tests: len(tests)}
 	for _, syms := range table {
 		rep.Symbols += len(syms)
 	}
@@ -146,6 +161,18 @@ func RunSymbols(root string) error {
 					})
 				}
 			}
+			for _, m := range testExpr.FindAllStringSubmatchIndex(ln.text, -1) {
+				name := ln.text[m[4]:m[5]]
+				if wrappedTestName(ln.text, m[5], name, tests) {
+					continue
+				}
+				rep.TestRefs++
+				if !symbolKnown(tests, name) {
+					rep.Findings = append(rep.Findings, Finding{
+						File: rel, Line: ln.num, Ref: name,
+					})
+				}
+			}
 		}
 	}
 
@@ -156,12 +183,19 @@ func RunSymbols(root string) error {
 		return rep.Findings[i].Line < rep.Findings[j].Line
 	})
 	for _, f := range rep.Findings {
+		if !strings.Contains(f.Ref, ".") {
+			fmt.Printf("::error file=%s,line=%d::no test named %s exists — a citation like this "+
+				"claims a mechanism keeps something true, so a renamed one leaves the sentence "+
+				"reading as a guarantee with nothing behind it. Name the test that runs today\n",
+				f.File, f.Line, f.Ref)
+			continue
+		}
 		fmt.Printf("::error file=%s,line=%d::%s is not exported by any package named %q — "+
 			"the symbol was renamed or moved; name the one that exists now\n",
 			f.File, f.Line, f.Ref, strings.SplitN(f.Ref, ".", 2)[0])
 	}
 	if len(rep.Findings) > 0 {
-		return fmt.Errorf("symbol-ref-guard: %d stale symbol reference(s) across %d file(s)",
+		return fmt.Errorf("symbol-ref-guard: %d stale reference(s) across %d file(s)",
 			len(rep.Findings), countFiles(rep.Findings))
 	}
 
@@ -182,11 +216,59 @@ func RunSymbols(root string) error {
 			"pkg.Symbol reference found — this repo's headers cite their own API constantly, "+
 			"so zero means the extraction is broken", rep.Scanned, rep.Symbols)
 	}
+	// The test axis needs no empty-INDEX arm: an empty `tests` map makes every
+	// citation unknown and the run floods with findings rather than going quiet,
+	// which is the failure mode the other arms are built to prevent. Zero
+	// CITATIONS is the silent one, and it is what a broken testExpr looks like.
+	//
+	// GATED ON HAVING INDEXED ANY, which is not belt-and-braces. A tree with no
+	// test files has nothing to cite, and zero is then the correct answer rather
+	// than a broken one — an instance repo carries this binary's docs and none of
+	// its tests. Firing there would make the guard refuse the trees it is pointed
+	// at second.
+	if rep.Tests > 0 && rep.TestRefs == 0 {
+		return fmt.Errorf("symbol-ref-guard: %d file(s) scanned against %d test(s) but not one "+
+			"test citation found — this repo names the test that keeps a claim true as a matter "+
+			"of habit, so zero means the extraction is broken", rep.Scanned, rep.Tests)
+	}
 
-	fmt.Printf("symbol-ref-guard: %d symbol reference(s) across %d file(s) all resolve "+
-		"(%d package(s), %d exported symbol(s) indexed).\n",
-		rep.Refs, rep.Scanned, rep.Packages, rep.Symbols)
+	fmt.Printf("symbol-ref-guard: %d symbol and %d test reference(s) across %d file(s) all resolve "+
+		"(%d package(s), %d exported symbol(s), %d test(s) indexed).\n",
+		rep.Refs, rep.TestRefs, rep.Scanned, rep.Packages, rep.Symbols, rep.Tests)
 	return nil
+}
+
+// wrappedTestName reports whether a citation is the first half of a test name a
+// paragraph broke across lines, rather than a stale one.
+//
+// TWO CONDITIONS, AND BOTH ARE REQUIRED. The line must END at the citation —
+// immediately, or after the hyphen a wrap leaves behind — and a longer real test
+// must start with what was cited. Either alone is too loose: plenty of correct
+// citations sit at end of line, and plenty of stale ones are prefixes of
+// something real. Together they describe exactly the shape a wrap makes.
+//
+// Both live instances came from the same file four hundred lines apart, one
+// broken on a hyphen and one broken with no hyphen at all, its remaining four
+// characters beginning the next line. It is the bug trimRef already carries, one
+// identifier over — long names and wrapped prose produce it wherever they meet.
+// (Neither is quoted here: this guard reads its own source, and it has already
+// flagged two earlier headers for illustrating a defect too faithfully.)
+//
+// A COMPLETE CITATION AT END OF LINE LOSES NOTHING: it resolves on its own, so it
+// never reaches the prefix test. What this forgives is narrow — a genuinely stale
+// citation that is both a prefix of a real test and sits at a line break — and
+// that is the right trade against reporting every wrapped name in the repo.
+func wrappedTestName(line string, end int, name string, tests map[string]bool) bool {
+	rest := strings.TrimRight(line[end:], " \t")
+	if rest != "" && rest != "-" {
+		return false
+	}
+	for known := range tests {
+		if len(known) > len(name) && strings.HasPrefix(known, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // symbolKnown reports whether sym names something the package exports. A `*`
@@ -234,6 +316,48 @@ func scannableLines(rel string, data []byte) ([]line, error) {
 	for _, g := range f.Comments {
 		for _, c := range g.List {
 			out = append(out, line{num: fset.Position(c.Pos()).Line, text: c.Text})
+		}
+	}
+	return out, nil
+}
+
+// testNames indexes every Go test function in the tree, flat and unqualified.
+//
+// FLAT, BECAUSE THAT IS HOW THEY ARE CITED. A symbol reference carries its
+// package and is judged against it; a test citation carries nothing — prose names
+// a test the way `go test -run` does, and the reader's next move is to grep for
+// it. So the question this answers is the reader's: does anything by this name
+// exist. Scoping it per package would reject a correct citation written from a
+// neighbouring file, which is most of them.
+//
+// IT READS THE FILES scannable() REFUSES TO SCAN, and the asymmetry is deliberate
+// — see testCorpus. A test's fixtures invent paths and symbols freely, so its
+// TEXT is not a claim about the repo; its function NAMES are, because everything
+// else points at them.
+func testNames(repo capability.Repo) (map[string]bool, error) {
+	files, err := testCorpus(repo)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, rel := range files {
+		data, err := repo.ReadFile(rel)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rel, err)
+		}
+		f, err := parser.ParseFile(fset, rel, data, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rel, err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil {
+				continue
+			}
+			if strings.HasPrefix(fn.Name.Name, "Test") {
+				out[fn.Name.Name] = true
+			}
 		}
 	}
 	return out, nil

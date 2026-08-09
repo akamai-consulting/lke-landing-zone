@@ -165,8 +165,9 @@ else is removable** — the remaining workarounds are confirmed load-bearing on 
 - **Bug fixed, not a simplification:** the `gitea` component in
   `tools/internal/shared/clusterspec/components.go` lacked `DefaultDisabled`, so
   `llz render` would flip the committed `gitea: { enabled: false }` back to `true`
-  on every spec instance (silently re-enabling Gitea on v6). Fixed + regression
-  test (`TestRenderValues_GiteaDisabledByDefault`).
+  on every spec instance (silently re-enabling Gitea on v6). Fixed; the
+  regression test written alongside it has since been folded into the clusterspec
+  overlay suite, where `DefaultDisabled` is exercised today.
 
 **Compatibility check — SOPS removal + SealedSecrets manifests dir (INVESTIGATED
 2026-07-03, no blocker).** v6 deletes `kms.sops` and the operator writes
