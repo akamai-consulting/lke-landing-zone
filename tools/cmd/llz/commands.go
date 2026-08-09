@@ -3,12 +3,10 @@ package main
 import (
 	"fmt"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
@@ -16,10 +14,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/newinstance"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 )
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
@@ -46,7 +46,7 @@ func statusArgv() [][]string {
 }
 
 func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
-	return envadd.Run(g.DryRun, name, o)
+	return environments.Run(g.DryRun, name, o)
 }
 
 func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {

@@ -5,7 +5,7 @@
 - Deciders: platform / LLZ maintainers
 - Related: [`docs/designs/team-scoped-credentials.md`](../designs/team-scoped-credentials.md),
   [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
-  [`tools/internal/extensions/identityconfig/openbao_configure.go`](../../tools/internal/extensions/identityconfig/openbao_configure.go)
+  [`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go)
 
 ## Context
 
@@ -107,6 +107,6 @@ review, and the shipped code is authoritative where it diverges:
   token deliberately minted for OpenBao login is accepted — not any otomi-realm
   id_token that merely carries the `groups` claim.
 
-See [`tools/internal/extensions/identityconfig/openbao_configure.go`](../../tools/internal/extensions/identityconfig/openbao_configure.go),
-[`tools/internal/extensions/identityconfig/keycloak_configure.go`](../../tools/internal/extensions/identityconfig/keycloak_configure.go),
+See [`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go),
+[`tools/internal/extensions/lifecycle/identityconfig/keycloak_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/keycloak_configure.go),
 and [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).

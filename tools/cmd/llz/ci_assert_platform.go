@@ -9,7 +9,7 @@ package main
 // cluster and where an instance repo keeps its spec.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )

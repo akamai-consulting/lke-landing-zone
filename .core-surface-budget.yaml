@@ -3,7 +3,7 @@
 # WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
 # WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
 # WHAT A BREACH TELLS YOU:                   budget.CoreSurfaceRemedy, in
-#                                            tools/internal/extensions/budget/remedy.go
+#                                            tools/internal/extensions/guards/budget/remedy.go
 #
 # This file is the operational half of that: the number, and the rule for
 # changing it. The argument lives in the ADR and is not repeated here.
@@ -1047,6 +1047,31 @@ categories:
 #        attempt -- the trap this campaign already had on record -- and deleted a
 #        helper that was in use. Reverted whole, then redone with a go/ast pruner
 #        that cannot be confused by a brace in a comment or a backtick block.
+#   95th: sub-divide extensions/, verbs out   1,869 -> 1,866 (-3)
+#        THE SMALLEST PAYDOWN OF THE CAMPAIGN, and package main is not the point
+#        of the change -- internal/extensions is. 69 packages were filed by what
+#        they ARE (capabilities 7 / lifecycle 23 / assertions 15 / guards 15) and
+#        nine CLI verbs left for internal/verbs, losing their declarations: nobody
+#        ships an instance with `lint` disabled or enables `llz new`.
+#        THE 3 LINES ARE IMPORT LINES cmd/llz no longer needs. That is the whole
+#        effect here, and it is worth recording that a 102-file import rewrite
+#        moved this number by three: the budget measures package main, and by this
+#        point package main is thin enough that re-organising everything ELSE
+#        barely touches it. Read a near-zero delta here as the gate saying the
+#        change was not about core surface, not as the change being small.
+#        WHAT DID MOVE is the coupling ratchet: extension -> extension edges fell
+#        30 -> 14, and all fifteen banked belong to the three composite verbs
+#        (onboard 6, lint 5, upgrade 4). Half that graph was commands composing
+#        capabilities, which is not the defect the ratchet exists to catch.
+#        EIGHT GUARDS BROKE ON DEPTH and every one broke loudly -- four corpus
+#        guards refused an empty scan, the Exec-seam guard fataled at "0 packages
+#        matched, the pattern has drifted", and seedspecial`s Kyverno test names
+#        this exact trap in its own comment before springing it. Two are fixed
+#        structurally rather than by counting `..`: the Exec-seam guard now WALKS
+#        for package dirs, and rawexec_test takes the second-to-last path segment
+#        -- it had been silently counting per BUCKET, collapsing nine packages
+#        into two rows and calling every allowlist entry stale.
+#
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1151,7 +1176,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1869
+    budget: 1866
     exact: true
     include:
       - "tools/cmd/llz/*.go"

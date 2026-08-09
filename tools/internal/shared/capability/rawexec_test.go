@@ -61,9 +61,16 @@ func TestNoNewRawKubectlExec(t *testing.T) {
 			return err
 		}
 		if n := len(re.FindAll(b, -1)); n > 0 {
-			// .../extensions/<pkg>/file.go
+			// .../extensions/<bucket>/<pkg>/file.go — the PACKAGE is the unit this
+			// guard counts, so take the second-to-last segment rather than the
+			// first. It used to take the first, which was the package while the
+			// tree was flat; sub-dividing into capabilities/ lifecycle/ assertions/
+			// guards/ silently made it count per BUCKET, collapsing nine packages
+			// into two rows and reporting every allowlist entry as gone. A path
+			// index is only as stable as the layout it assumes.
 			rel, _ := filepath.Rel(root, path)
-			got[strings.Split(filepath.ToSlash(rel), "/")[0]] += n
+			seg := strings.Split(filepath.ToSlash(rel), "/")
+			got[seg[len(seg)-2]] += n
 		}
 		return nil
 	})

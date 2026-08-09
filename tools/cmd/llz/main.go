@@ -18,25 +18,20 @@ import (
 	"fmt"
 	"os"
 
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
@@ -44,6 +39,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/lint"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/newinstance"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/upgrade"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -63,7 +63,7 @@ func init() {
 	// envadd regenerates promote.yml after adding an environment, but the WRITE
 	// stays here: internal/promote declares transition:promoted[read-repo] and its
 	// own guard refuses a write path, and write-repo is not legal at `promoted`.
-	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
+	environments.SyncPromoteWorkflow = syncPromoteWorkflow
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
 	upgrade.SustainDeps = sustainDeps
 	lint.SustainDeps = sustainDeps

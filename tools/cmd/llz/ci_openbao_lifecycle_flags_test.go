@@ -12,13 +12,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/spf13/cobra"
 )
 
 func TestOpenbaoLifecycleCmdsRequireRegion(t *testing.T) {
-	for _, mk := range []func() *cobra.Command{baolifecycle.BaoInitCmd, baolifecycle.BaoRegenRootCmd, identityconfig.BaoConfigureCmd} {
+	for _, mk := range []func() *cobra.Command{openbao.BaoInitCmd, openbao.BaoRegenRootCmd, identityconfig.BaoConfigureCmd} {
 		cmd := mk()
 		cmd.SetArgs(nil)
 		cmd.SilenceUsage, cmd.SilenceErrors = true, true

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 )
 
 // The flag-set tests for `llz openbao`, which stay with the command tree.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 

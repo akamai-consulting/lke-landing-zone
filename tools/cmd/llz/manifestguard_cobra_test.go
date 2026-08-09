@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 )
 
 // An absolute --render-dir must survive the --root join: filepath.Join(".",

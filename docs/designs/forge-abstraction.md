@@ -40,7 +40,7 @@ until that gate opens (§Open questions).
 [instance-slimming.md](instance-slimming.md), [../secrets.md](../secrets.md),
 [../adr/0003-vendor-actions-and-bodies-into-instances.md](../adr/0003-vendor-actions-and-bodies-into-instances.md),
 `tools/internal/shared/validate/validate.go`, `tools/cmd/llz/gh_secrets_native.go`,
-`tools/internal/extensions/identityconfig/openbao_configure.go`, `tools/internal/shared/clusterspec/kustomize.go`.
+`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`, `tools/internal/shared/clusterspec/kustomize.go`.
 
 > This is a design PR (no code). It exists because the obvious version of the change
 > — "add a `forge` switch and branch on it" — walks into three non-obvious realities

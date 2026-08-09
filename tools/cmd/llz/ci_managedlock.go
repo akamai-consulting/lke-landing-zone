@@ -17,7 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 )
 

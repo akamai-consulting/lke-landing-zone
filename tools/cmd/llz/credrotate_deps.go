@@ -8,7 +8,7 @@ package main
 // on the package side and the writer stays here.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 )
 

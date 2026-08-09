@@ -22,81 +22,66 @@ package registry
 import (
 	"sort"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/argodiag"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertidentity"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertnetwork"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobjstore"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertregistry"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsuite"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/branchpolicy"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/budget"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartpublish"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/clusteraccess"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/cosignguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/coverageguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credcoverage"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/database"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/firewall"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/gameday"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/harbor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/meshegress"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/monitoringlabel"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mtlsguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mutate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/phasetiming"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/plaintext"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/releasepublish"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/seedspecial"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/versionpins"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/wavehealth"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/workflowshells"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertregistry"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/volumes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/workflowshells"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/assertobjstore"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/bootstrapcluster"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/branchpolicy"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/brownfield"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/chartpublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/clusteraccess"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/database"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/deliverdocs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/firewall"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/gameday"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/harbor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/kyverno"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -108,7 +93,6 @@ import (
 var declarations = []func() extension.Extension{
 	assertobs.Extension,
 	assertsecrets.Extension,
-	argodiag.Extension,
 	assertidentity.Extension,
 	assertobjstore.Extension,
 	deliverdocs.Extension,
@@ -123,9 +107,7 @@ var declarations = []func() extension.Extension{
 	clusteraccess.Extension,
 	configreadiness.Extension,
 	converge.Extension,
-	baoca.Extension,
-	baoseed.Extension,
-	baolifecycle.Extension,
+	openbao.Extension,
 	harbor.Extension,
 	identityconfig.Extension,
 	reconciler.Extension,
@@ -140,29 +122,19 @@ var declarations = []func() extension.Extension{
 	cosignguard.Extension,
 	monitoringlabel.Extension,
 	workflowshells.Extension,
-	instanceresolve.Extension,
 	firewall.Extension,
-	openbao.Extension,
 	reachability.Extension,
 	branchpolicy.Extension,
-	envdef.Extension,
 	buildpreflight.Extension,
-	selfupgrade.Extension,
 	templatecommit.Extension,
-	onboard.Extension,
 	render.Extension,
-	upgrade.Extension,
-	newinstance.Extension,
 	pincoherence.Extension,
-	lint.Extension,
-	envadd.Extension,
+	environments.Extension,
 	credcoverage.Extension,
 	credrotate.PATExtension,
 	credrotate.ObjKeyExtension,
 	database.Extension,
-	envtopology.Extension,
 	docsguard.Extension,
-	doctor.Extension,
 	healthsla.Extension,
 	tofudriver.Extension,
 	tokeninv.Extension,
@@ -171,8 +143,6 @@ var declarations = []func() extension.Extension{
 	gameday.Extension,
 	kyverno.Extension,
 	manifestguard.Extension,
-	mutate.Extension,
-	phasetiming.Extension,
 	plaintext.Extension,
 	promote.Extension,
 	releasepublish.Extension,

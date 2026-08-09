@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/lint"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op

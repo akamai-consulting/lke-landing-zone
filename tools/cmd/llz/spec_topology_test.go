@@ -11,7 +11,7 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 )
 

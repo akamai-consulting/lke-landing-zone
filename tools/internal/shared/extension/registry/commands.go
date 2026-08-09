@@ -30,58 +30,48 @@ package registry
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/argodiag"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertidentity"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertnetwork"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobjstore"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertregistry"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/atrest"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoca"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/bootstrapcluster"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/budget"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/chartpublish"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/clusteraccess"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credcoverage"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/database"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/gameday"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/harbor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/mutate"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/phasetiming"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/plaintext"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/releasepublish"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/seedspecial"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tofudriver"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/upgrade"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertregistry"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/assertobjstore"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/atrest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/bootstrapcluster"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/chartpublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/clusteraccess"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/database"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/deliverdocs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/gameday"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/harbor"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/healthsla"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/kyverno"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 )
 
 // Command pairs an extension name with one constructor it owns.
@@ -95,7 +85,6 @@ type Command struct {
 func Commands() []Command { return append([]Command(nil), commands...) }
 
 var commands = []Command{
-	{"argodiag", argodiag.DiagnoseArgoCDCmd},
 	{"assertidentity", assertidentity.CertificatesCmd},
 	{"assertidentity", assertidentity.TeamLoginSmokeCmd},
 	{"assertnetwork", assertnetwork.AdmissionEnforcementCmd},
@@ -128,17 +117,6 @@ var commands = []Command{
 	{"assertsecrets", assertsecrets.OpenbaoAuditCmd},
 	{"assertsecrets", assertsecrets.RotationHealthCmd},
 	{"atrest", atrest.AtRestGuardCmd},
-	{"baoca", baoca.ExtractOpenbaoCACmd},
-	{"baoca", baoca.ProvisionPeerCACmd},
-	{"baolifecycle", baolifecycle.BaoBreakglassCmd},
-	{"baolifecycle", baolifecycle.BaoEnsureReadyCmd},
-	{"baolifecycle", baolifecycle.BaoInitCmd},
-	{"baolifecycle", baolifecycle.BaoRegenRootCmd},
-	{"baolifecycle", baolifecycle.RegenRootCmd},
-	{"baoseed", baoseed.BaoSeedAllCmd},
-	{"baoseed", baoseed.BaoSeedCmd},
-	{"baoseed", baoseed.BaoSeedSealKeyCmd},
-	{"baoseed", baoseed.SeedBroadPATCmd},
 	{"bootstrapcluster", bootstrapcluster.BootstrapClusterCmd},
 	{"bootstrapcluster", bootstrapcluster.PrepareAplUpgradeCmd},
 	{"budget", budget.CoreSurfaceCmd},
@@ -174,14 +152,14 @@ var commands = []Command{
 	{"database", database.SeedDBAdminCmd},
 	{"deliverdocs", deliverdocs.DeliverDocsCmd},
 	{"docsguard", docsguard.DocsGuardCmd},
-	{"envtopology", envtopology.EditCmd},
-	{"envtopology", envtopology.ListCmd},
-	{"envtopology", envtopology.NetworkCmd},
-	{"envtopology", envtopology.PeerCmd},
-	{"envtopology", envtopology.ResolveCmd},
-	{"envtopology", envtopology.RoleCmd},
-	{"envtopology", envtopology.SetCmd},
-	{"envtopology", envtopology.SpecCmd},
+	{"environments", environments.EditCmd},
+	{"environments", environments.ListCmd},
+	{"environments", environments.NetworkCmd},
+	{"environments", environments.PeerCmd},
+	{"environments", environments.ResolveCmd},
+	{"environments", environments.RoleCmd},
+	{"environments", environments.SetCmd},
+	{"environments", environments.SpecCmd},
 	{"gameday", gameday.WedgeGamedayCmd},
 	{"harbor", harbor.HarborProvisionerCmd},
 	{"harbor", harbor.SeedStandbyHarborRobotsCmd},
@@ -195,30 +173,27 @@ var commands = []Command{
 	{"identityconfig", identityconfig.PinKeycloakGatewayAliasCmd},
 	{"identityconfig", identityconfig.UsersAddCmd},
 	{"kyverno", kyverno.ApplyKyvernoPolicyCmd},
-	{"lint", lint.CheckCmd},
-	{"lint", lint.FmtCmd},
-	{"lint", lint.HooksCmd},
-	{"lint", lint.LintCmd},
-	{"lint", lint.PrecommitCmd},
-	{"lint", lint.ValidateCmd},
 	{"manifestguard", manifestguard.AplSchemaValidateCmd},
 	{"manifestguard", manifestguard.ArgoCDRenderedAppsCmd},
 	{"manifestguard", manifestguard.DroppedAPIVersionsCmd},
 	{"manifestguard", manifestguard.PlaceholderGuardCmd},
-	{"mutate", mutate.MutateCmd},
 	{"objenc", objenc.AssertObjEncryptionCmd},
 	{"objenc", objenc.ObjProxyCmd},
 	{"objenc", objenc.SeedSSECKeyCmd},
-	{"onboard", onboard.DoctorCmd},
-	{"onboard", onboard.SecretsCmd},
-	{"onboard", onboard.TokensCmd},
+	{"openbao", openbao.BaoBreakglassCmd},
+	{"openbao", openbao.BaoEnsureReadyCmd},
+	{"openbao", openbao.BaoInitCmd},
+	{"openbao", openbao.BaoRegenRootCmd},
+	{"openbao", openbao.BaoSeedAllCmd},
+	{"openbao", openbao.BaoSeedCmd},
+	{"openbao", openbao.BaoSeedSealKeyCmd},
+	{"openbao", openbao.ExtractOpenbaoCACmd},
 	{"openbao", openbao.OpenBaoLoginCmd},
 	{"openbao", openbao.OpenbaoCmd},
 	{"openbao", openbao.OpenbaoLoginCmd},
-	{"phasetiming", phasetiming.CollectImagePullsCmd},
-	{"phasetiming", phasetiming.CollectTimingCmd},
-	{"phasetiming", phasetiming.PhaseMarkCmd},
-	{"phasetiming", phasetiming.PhaseReportCmd},
+	{"openbao", openbao.ProvisionPeerCACmd},
+	{"openbao", openbao.RegenRootCmd},
+	{"openbao", openbao.SeedBroadPATCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
 	{"reachability", reachability.VerifyCmd},
 	{"reconciler", reconciler.AssertVolumeEncryptionCmd},
@@ -231,7 +206,6 @@ var commands = []Command{
 	{"render", render.RenderCmd},
 	{"seedspecial", seedspecial.AuditPVCStorageClassCmd},
 	{"seedspecial", seedspecial.ResolveHarborURLCmd},
-	{"selfupgrade", selfupgrade.SelfUpdateCmd},
 	{"statepassphrase", statepassphrase.RotateStatePassphraseCmd},
 	{"teardown", teardown.DrainObjBucketsCmd},
 	{"teardown", teardown.ReapCmd},
@@ -248,8 +222,6 @@ var commands = []Command{
 	{"tokeninv", tokeninv.RotationPlanCmd},
 	{"tokeninv", tokeninv.TokenInventoryCmd},
 	{"tokeninv", tokeninv.ValidateTokensCmd},
-	{"upgrade", upgrade.UpgradeCmd},
-	{"upgrade", upgrade.UpgradeTestCmd},
 	{"wavehealth", wavehealth.DependencyGuardCmd},
 	{"wavehealth", wavehealth.HealthGuardCmd},
 }

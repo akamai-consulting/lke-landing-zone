@@ -45,36 +45,20 @@ import (
 // allowedEdges is the measured extension -> extension import set. Every line here
 // is a package that should probably be split; none is an endorsement.
 var allowedEdges = map[string]bool{
-	"assertobs -> objenc":            true,
-	"assertsecrets -> assertobs":     true,
-	"configreadiness -> teardown":    true,
-	"database -> tofudriver":         true,
-	"envadd -> configreadiness":      true,
-	"envadd -> render":               true,
-	"envtopology -> promote":         true,
-	"lint -> configreadiness":        true,
-	"lint -> manifestguard":          true,
-	"lint -> pincoherence":           true,
-	"lint -> render":                 true,
-	"lint -> sustain":                true,
-	"onboard -> branchpolicy":        true,
-	"onboard -> configreadiness":     true,
-	"onboard -> doctor":              true,
-	"onboard -> reachability":        true,
-	"onboard -> statepassphrase":     true,
-	"onboard -> templatecommit":      true,
-	"openbao -> baolifecycle":        true,
-	"reconciler -> credrotate":       true,
-	"reconciler -> reconcilelanes":   true,
-	"reconciler -> volumes":          true,
-	"seedspecial -> identityconfig":  true,
-	"teardown -> credrotate":         true,
-	"templatecommit -> pincoherence": true,
-	"templatecommit -> versionpins":  true,
-	"upgrade -> render":              true,
-	"upgrade -> selfupgrade":         true,
-	"upgrade -> sustain":             true,
-	"upgrade -> templatecommit":      true,
+	"assertobs -> objenc":             true,
+	"assertsecrets -> assertobs":      true,
+	"configreadiness -> teardown":     true,
+	"database -> tofudriver":          true,
+	"environments -> configreadiness": true,
+	"environments -> render":          true,
+	"environments -> promote":         true,
+	"reconciler -> credrotate":        true,
+	"reconciler -> reconcilelanes":    true,
+	"reconciler -> volumes":           true,
+	"seedspecial -> identityconfig":   true,
+	"teardown -> credrotate":          true,
+	"templatecommit -> pincoherence":  true,
+	"templatecommit -> versionpins":   true,
 }
 
 // extensionEdges returns the DIRECT, non-test imports between extensions. Non-test
@@ -95,18 +79,34 @@ func extensionEdges(t *testing.T) []string {
 		if len(f) == 0 || !strings.HasPrefix(f[0], pfix) {
 			continue
 		}
-		self := strings.TrimPrefix(f[0], pfix)
+		self := extensionName(strings.TrimPrefix(f[0], pfix))
 		for _, dep := range f[1:] {
 			if !strings.HasPrefix(dep, pfix) {
 				continue
 			}
-			if to := strings.TrimPrefix(dep, pfix); to != self {
+			if to := extensionName(strings.TrimPrefix(dep, pfix)); to != self {
 				edges = append(edges, self+" -> "+to)
 			}
 		}
 	}
 	sort.Strings(edges)
 	return edges
+}
+
+// extensionName drops the BUCKET segment, so an edge reads `openbao -> credrotate`
+// rather than `lifecycle/openbao -> lifecycle/credrotate`.
+//
+// The buckets (capabilities / lifecycle / assertions / guards) say what KIND of
+// thing a package is; they are not part of its identity, and an extension that
+// moves between them is the same extension. Keeping the bucket in the edge name
+// would mean re-classifying one package churned every allowedEdges line that
+// mentioned it -- a ratchet failing for a reason that has nothing to do with
+// coupling, which is how a ratchet gets deleted.
+func extensionName(rel string) string {
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		return rel[i+1:]
+	}
+	return rel
 }
 
 func TestNoNewExtensionToExtensionImports(t *testing.T) {

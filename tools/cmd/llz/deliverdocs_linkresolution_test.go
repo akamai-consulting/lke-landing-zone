@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/deliverdocs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/deliverdocs"
 )
 
 // THREE resolvers interpret a Markdown link path in this codebase — the guard's

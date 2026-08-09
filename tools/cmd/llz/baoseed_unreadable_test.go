@@ -4,7 +4,7 @@ package main
 // test find.
 //
 // They lived in bao_read_test.go, whose subject is the OpenBao read classifier —
-// but they drive baoseed.RunSeed and the objkey mint paths, which are package main's.
+// but they drive openbao.RunSeed and the objkey mint paths, which are package main's.
 // The filename named the module they exercise THROUGH, not the code they test. Two
 // of the five tests in that file were about the classifier; three were about its
 // callers.
@@ -21,8 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
 
@@ -38,7 +39,7 @@ func TestBaoSeedRefusesToWriteOnUnreadablePath(t *testing.T) {
 	baoread.KVPut = func(string, map[string]string) error { wrote = true; return nil }
 	t.Cleanup(func() { baoread.KVPut = prevPut })
 
-	err := baoseed.RunSeed(baoseed.Opts{
+	err := openbao.RunSeed(openbao.Opts{
 		Path:          "secret/grafana/admin",
 		FieldSpecs:    []string{"password=gen:hex:16"},
 		SkipIfPresent: "password",

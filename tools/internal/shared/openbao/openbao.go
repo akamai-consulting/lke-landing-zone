@@ -738,7 +738,7 @@ func warmUp(base string) error {
 
 // ── PARSERS FOR `bao status` / `bao token lookup` OUTPUT ─────────────────────
 //
-// Both came from internal/extensions/baolifecycle, under a heading that already
+// Both came from internal/extensions/openbao, under a heading that already
 // said what they were: "pure parse helpers (unit-tested)". Reading OpenBao's JSON
 // is this package's subject; regenerating a root token is a lifecycle capability,
 // and identity-config and reachability were each importing that whole capability

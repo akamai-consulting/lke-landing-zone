@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 )
 
 // ci_openbao_lifecycle_test.go — the flag-set tests that came back with the
@@ -17,13 +17,13 @@ func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
 		t.Error("dry-run must not exec")
 		return "", "", nil
 	})
-	if err := baolifecycle.RunEnsureReady(true, "primary", time.Second, time.Second); err != nil {
+	if err := openbao.RunEnsureReady(true, "primary", time.Second, time.Second); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	if err := baolifecycle.RunEnsureReady(false, "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
+	if err := openbao.RunEnsureReady(false, "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Errorf("missing region = %v, want --region error", err)
 	}
-	if c := baolifecycle.BaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {
+	if c := openbao.BaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {
 		t.Errorf("Use = %q, want bao-ensure-ready", c.Use)
 	}
 }
@@ -34,7 +34,7 @@ func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
 // Bootstrap tells the operator to delete OPENBAO_ROOT_TOKEN once the run is done
 // (and `llz status` nags until they do), so every RE-RUN of bootstrap-openbao
 // arrives with no token. The regen gate used to require a NON-EMPTY token, which
-// made baolifecycle.RunRegenRootCI's own "No OPENBAO_ROOT_TOKEN set — regenerating via
+// made openbao.RunRegenRootCI's own "No OPENBAO_ROOT_TOKEN set — regenerating via
 // quorum" branch unreachable: the run reported available=false, silently skipped
 // configure and every seed, and failed ~20 minutes later at the converge gate
 // blaming unconverged apps. With the recovery quorum present, regenerate.

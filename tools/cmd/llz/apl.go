@@ -5,12 +5,12 @@ package main
 // is "an extension owns its own command", not "every constructor leaves".
 //
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/identityconfig"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
 	"github.com/spf13/cobra"
 )
 

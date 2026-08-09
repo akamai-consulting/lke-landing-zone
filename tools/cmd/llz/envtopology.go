@@ -9,8 +9,8 @@ package main
 // reach this extension's copy too.
 
 import (
-	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"

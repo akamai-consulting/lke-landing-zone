@@ -4,8 +4,8 @@ package main
 // extension (internal/assertobs).
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )

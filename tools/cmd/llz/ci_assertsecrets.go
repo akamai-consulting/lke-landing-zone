@@ -6,8 +6,9 @@ package main
 import (
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertsecrets"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
@@ -22,7 +23,7 @@ func installAssertSecretsDeps() {
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		BroadPATSeedEnabled: func(lz *clusterspec.LandingZone, region string) bool {
-			return baoseed.BroadPATSeedEnabled(lz, region)
+			return openbao.BroadPATSeedEnabled(lz, region)
 		},
 		WaitJobTerminal: func(ns, name string, budget, interval time.Duration) (bool, bool) {
 			return assertsecrets.WaitJobTerminal(ns, name, budget, interval)

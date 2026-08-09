@@ -10,13 +10,13 @@ package main
 import (
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 )
 
 // stubBaoSeedKV stubs baoread.ExecFn for bao-seed runs: `kv get` of presentPath/
 // presentField returns presentValue; every `kv put` is recorded.
 func TestBaoSeedCmdFlagWiring(t *testing.T) {
-	c := baoseed.BaoSeedCmd()
+	c := openbao.BaoSeedCmd()
 	for _, f := range []string{"path", "field", "skip-if-present", "on-missing",
 		"on-missing-standby", "missing-note", "missing-note-standby",
 		"missing-annotation", "summary-on-seed", "seeded-message"} {

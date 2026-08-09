@@ -41,7 +41,7 @@ long-lived **Linode-issued** credential out of CI and into the cluster.
 **Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob
 (`platform-apl/components/volumeLabeler/`), `internal/linode` (rotation primitives),
 `credentials_pat.go` / `credentials_objkey.go` (existing orchestration), the
-`secret-propagator` OpenBao policy (`tools/internal/extensions/identityconfig/openbao_configure.go`).
+`secret-propagator` OpenBao policy (`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`).
 
 ## Problem
 

@@ -10,7 +10,7 @@ package main
 // interface it has to keep.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
