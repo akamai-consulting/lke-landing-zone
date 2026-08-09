@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
@@ -37,13 +38,19 @@ func withSeedNamespace(t *testing.T, present bool) {
 	t.Helper()
 	orig := cigate.NewDeps
 	cigate.NewDeps = func() cigate.Deps {
+		kube := func(args ...string) (string, bool) {
+			if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+				return "", present
+			}
+			return "", true
+		}
 		return cigate.Deps{
-			Kubectl: func(args ...string) (string, bool) {
-				if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
-					return "", present
-				}
-				return "", true
-			},
+			Kubectl: kube,
+			// Granted from this extension's own binding and routed to the same fake,
+			// so the hard-refresh path is exercised rather than refused.
+			Writer: capability.WithExec(Extension().Bindings[0],
+				func(_ string, args ...string) ([]byte, error) { out, _ := kube(args...); return []byte(out), nil },
+				func(_ string, args ...string) string { out, _ := kube(args...); return out }).Writer,
 			Now:   time.Now,
 			Sleep: func(time.Duration) {},
 		}

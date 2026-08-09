@@ -10,6 +10,7 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
@@ -19,6 +20,9 @@ import (
 // fixture bug in production form.
 func installAssertPlatformDeps() {
 	assertplatform.Install(assertplatform.Deps{
+		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
+		// exactly what assertplatform's binding declared, not whatever an argv can express.
+		Writer:       capability.For(assertplatform.MutatingBinding()).Writer,
 		ExecCombined: execCombined,
 		Exec:         execOutput,
 		LoadSpec:     func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },

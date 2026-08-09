@@ -1,5 +1,10 @@
 package assertreconciler
 
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+)
+
 // Deps carries what this package cannot reach for itself.
 //
 // TWO OF THESE FIELDS ARE THE COUPLING THE CATALOG PREDICTED. It listed this
@@ -14,14 +19,19 @@ package assertreconciler
 // `reconciler-runtime` is extracted, these two seams are the interface it has to
 // keep.
 type Deps struct {
-	// Exec captures a command's stdout. The classified cluster reads go through
-	// internal/kubectlprobe; this is for the calls wanting raw output.
-	Exec func(name string, args ...string) ([]byte, error)
-
-	// ExecCombined runs a command returning stdout+stderr as one string, ignoring
-	// exit status. Used for the node-scheduling diagnostics, where the tool's own
+	// Cluster is the kubectl handle, SCOPED BY THIS EXTENSION'S DECLARED GRANTS.
+	//
+	// It replaces the `Exec func(name string, args ...string)` pair that used to
+	// live here. Those were a general process-runner: they could invoke `bao`,
+	// `linode-cli` or `kubectl delete` regardless of what the binding declared, so
+	// this extension's two `cluster-read` grants constrained nothing at all. Both
+	// bindings here are read-only, and this handle now enforces that — a `delete`
+	// through it returns a refusal naming the grant it would need, before the
+	// process starts.
+	//
+	// Combined() is kept for the node-scheduling diagnostics, where the tool's own
 	// error text IS the finding and an error-gated read would discard it.
-	ExecCombined func(name string, args ...string) string
+	Cluster capability.Cluster
 
 	// WithPrometheus opens a query session against the in-cluster Prometheus and
 	// hands the callback a getter. Owned by the observability verbs — this package
@@ -37,8 +47,9 @@ type Deps struct {
 // non-nil — the action-ABI rule the earlier extractions paid for: hand zero
 // values that work.
 var deps = Deps{
-	Exec:         func(string, ...string) ([]byte, error) { return nil, nil },
-	ExecCombined: func(string, ...string) string { return "" },
+	// A binding with no grants yields a handle that refuses everything, which is
+	// the right default: an un-installed Deps must not silently read a cluster.
+	Cluster: capability.For(extension.Binding{}).Cluster,
 	WithPrometheus: func(string, func(func(string) ([]byte, error)) error) error {
 		return nil
 	},

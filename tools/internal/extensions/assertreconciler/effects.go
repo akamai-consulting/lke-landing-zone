@@ -244,18 +244,18 @@ func sortedMapKeys(m map[string]string) []string {
 // effectReaders are the kubectl reads each sub-check needs, seamed for tests.
 var (
 	readStorageClasses = func() ([]byte, error) {
-		return deps.Exec("kubectl", "get", "storageclass", "-o", "json")
+		return deps.Cluster.Run("get", "storageclass", "-o", "json")
 	}
 	// --ignore-not-found is load-bearing: it makes ABSENT (exit 0, empty stdout)
 	// distinguishable from UNREADABLE (non-zero exit). Without it both arrive as
 	// "exit status 1" and the check cannot tell a cluster whose writer has never
 	// run from one where the read is broken.
 	readTokenInventory = func(ns string) ([]byte, error) {
-		return deps.Exec("kubectl", "-n", ns, "get", "configmap", tokenInventoryConfigMap,
+		return deps.Cluster.Run("-n", ns, "get", "configmap", tokenInventoryConfigMap,
 			"--ignore-not-found", "-o", "json")
 	}
 	readFirewallConfig = func() ([]byte, error) {
-		return deps.Exec("kubectl", "-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName, "-o", "json")
+		return deps.Cluster.Run("-n", "kube-system", "get", "configmap", deps.FirewallConfigMapName, "-o", "json")
 	}
 )
 

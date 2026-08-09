@@ -21,14 +21,11 @@ package assertsecrets
 // not (it is wired behind the assert_loki e2e gate, which only release-e2e sets).
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
@@ -79,7 +76,7 @@ func runAssertBroadPATRotation(region string) error {
 	}
 
 	// Fresh Job; drop a prior exercise Job first so re-runs are clean.
-	caps.ExecCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
+	func() string { _, _ = caps.W().Delete(broadPATRotatorNS, "job", broadPATRotatorE2EJob); return "" }()
 	if out, err := kubectlApplyStdin(jobJSON); err != nil {
 		return fmt.Errorf("create rotation Job (ROTATE_AFTER_DAYS=0): %w\n%s", err, out)
 	}
@@ -183,15 +180,14 @@ func e2eRotationJobJSON(cronJobJSON []byte) ([]byte, error) {
 }
 
 // kubectlApplyStdin applies a manifest via `kubectl apply -f -` (stdin), returning
-// combined output. Local helper — the assert file drives raw exec, not a deps seam.
+// combined output, through this extension's declared cluster-write grant.
 var kubectlApplyStdin = func(manifest []byte) (string, error) {
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
-	cmd.Stdin = bytes.NewReader(manifest)
-	out, ok := cigate.RunCombined(cmd)
-	if !ok {
-		return out, fmt.Errorf("kubectl apply failed")
-	}
-	return out, nil
+	// THROUGH THE DECLARED GRANT. The comment above this used to end "Local helper
+	// — the assert file drives raw exec, not a deps seam", which was an accurate
+	// description of a bypass: raw exec is exactly where a mutation goes when it
+	// does not want to be seen by a seam, whether or not anyone intended that.
+	out, err := caps.W().ApplyStdin(string(manifest), "llz-broad-pat")
+	return string(out), err
 }
 
 // broadPATJobLogs fetches the exercise pods' logs by POD NAME (current + previous),

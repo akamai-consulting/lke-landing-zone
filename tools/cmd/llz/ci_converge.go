@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
@@ -37,6 +38,9 @@ import (
 // from ci.go before any verb runs.
 func installConvergeDeps(g globalOpts) {
 	converge.Install(converge.Deps{
+		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
+		// exactly what converge's binding declared, not whatever an argv can express.
+		Writer:       capability.For(converge.Extension().Bindings[0]).Writer,
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		Summary:      ghaout.Append,

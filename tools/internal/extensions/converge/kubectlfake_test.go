@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
@@ -102,10 +103,20 @@ func capture(t *testing.T, target **os.File, fn func()) string {
 // established, is a hang rather than a failure.
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
-	orig, origProbe := deps.Exec, kubectlprobe.Exec
+	orig, origProbe, origWriter := deps.Exec, kubectlprobe.Exec, deps.Writer
 	deps.Exec = fn
 	kubectlprobe.Exec = fn
-	t.Cleanup(func() { deps.Exec, kubectlprobe.Exec = orig, origProbe })
+	// AND the Writer, granted from THIS EXTENSION'S OWN BINDING. The package
+	// default is a denied writer, so without this every mutating lane under test
+	// fails with a permission error instead of exercising its logic — which is the
+	// enforcement working, and is also why the grant is taken from the declaration
+	// rather than handed out freely: a test cannot give itself more than converge
+	// declared.
+	deps.Writer = capability.WithExec(Extension().Bindings[0], fn,
+		func(string, ...string) string { return "" }).Writer
+	t.Cleanup(func() {
+		deps.Exec, kubectlprobe.Exec, deps.Writer = orig, origProbe, origWriter
+	})
 }
 
 // TestMain zeroes the probe retry delay for the whole package.

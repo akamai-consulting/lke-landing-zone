@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
 
@@ -38,6 +40,11 @@ import (
 // dispatch time, which is precisely the thing package-level installation cannot
 // do. See docs/designs/internal-extension-model.md.
 type Deps struct {
+	// Writer is the six named cluster mutations, scoped by this extension's
+	// declared grants. The mutating calls here used to be assembled as an argv on
+	// the general exec seam, which could equally have run `delete namespace` or
+	// `exec ... -- sh -c`.
+	Writer capability.Writer
 	// Exec captures a command's stdout. The classified cluster reads go through
 	// internal/kubectlprobe, which owns its own seam; this is for the calls that
 	// need raw output or a non-probe verb (rollout restart, annotate, patch, wait).
@@ -91,6 +98,8 @@ type Deps struct {
 // that forgets Install gets working behaviour rather than a nil-func panic —
 // the action-ABI lesson from the earlier extractions: hand zero values that work.
 var deps = Deps{
+	// Refuses until installed: an un-installed Deps must not mutate a cluster.
+	Writer:                       capability.For(extension.Binding{}).Writer,
 	Exec:                         func(name string, args ...string) ([]byte, error) { return exec.Command(name, args...).Output() },
 	Summary:                      realGHAAppend,
 	StripOversizedCRDLastApplied: func() []string { return nil },
@@ -127,4 +136,15 @@ func realGHAAppend(envVar string, lines ...string) error {
 	defer f.Close()
 	_, err = f.WriteString(strings.Join(lines, "\n") + "\n")
 	return err
+}
+
+// W returns the Writer, or a refusing one if the field was never populated. A
+// Deps built as a struct literal has a nil interface there, and a nil interface
+// method call is a panic rather than the permission fault the denied handle
+// exists to produce.
+func (d Deps) W() capability.Writer {
+	if d.Writer == nil {
+		return capability.Denied()
+	}
+	return d.Writer
 }

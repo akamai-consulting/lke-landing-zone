@@ -1078,6 +1078,20 @@ categories:
     # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
     # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
     #
+    # 1857 -> 1869. TWELVE LINES, AND THEY ARE THE POINT OF THE CHANGE. Five
+    # installers in cmd/llz now build their extension's cluster Writer from a NAMED
+    # binding — `capability.For(assertnetwork.MutatingBinding()).Writer` — instead
+    # of handing over a general exec seam. Three lines of that is the comment
+    # saying so, which belongs at the wiring site: this is the file where a
+    # reviewer can see what each extension was granted, and a bare
+    # `Writer: capability.For(x)` would say nothing about why THAT binding.
+    #
+    # This is package main doing the one job the model always gave it — deciding
+    # what each extension receives — and it is the first time that decision has had
+    # any consequence. Shrinking it would mean moving the grant resolution into the
+    # extensions, which is exactly backwards: an extension that chooses its own
+    # capabilities has not been granted anything.
+    #
     # 1856 -> 1857. One import line. The two firewall names moved from
     # internal/extensions/reconciler to internal/shared/platform, and the two
     # cmd/llz files that use them still import `reconciler` for other things, so
@@ -1137,7 +1151,7 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1857
+    budget: 1869
     exact: true
     include:
       - "tools/cmd/llz/*.go"

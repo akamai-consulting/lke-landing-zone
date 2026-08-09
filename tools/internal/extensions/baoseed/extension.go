@@ -51,9 +51,19 @@ func Extension() extension.Extension {
 		Short:  "place credential material into OpenBao, and never overwrite a path it could not read",
 		Always: true,
 		Bindings: []extension.Binding{{
-			Kind:   extension.Transition,
-			State:  extension.Seeded,
-			Grants: []extension.Grant{extension.ReadRepo, extension.ClusterRead, extension.SecretCustody},
+			Kind:  extension.Transition,
+			State: extension.Seeded,
+			Grants: []extension.Grant{
+				extension.ReadRepo, extension.ClusterRead, extension.SecretCustody,
+				// cluster-write WAS TRUE AND UNDECLARED. The seal-key wait forces a hard
+				// refresh on the parent Application when it wedges on a transient fetch
+				// error — an annotate, on a live cluster, from a binding whose grant line
+				// said read-only. The capability layer surfaced it the moment the write
+				// stopped going through a general exec seam; nothing before that could
+				// have. It is legitimate (the namespace this seeds INTO does not exist
+				// until that refresh lands) and it belongs on this transition.
+				extension.ClusterWrite,
+			},
 		}},
 	}
 }

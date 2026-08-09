@@ -11,13 +11,22 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 func installAssertReconcilerDeps() {
+	// THE HANDLE IS BUILT FROM THE DECLARATION, not handed a general exec. Both of
+	// assert-reconciler's bindings are `assertion:operating[cluster-read]`, so the
+	// handle it receives refuses every write verb — which is what its grant line
+	// has always claimed and, until this, did not do.
+	//
+	// Bindings()[0] rather than the extension: grants are per-binding so that an
+	// extension holding a read assertion and a write transition cannot use the
+	// transition's grant from inside the assertion. Both bindings here are
+	// identical; a package whose bindings DIFFER must install per lane.
 	assertreconciler.Install(assertreconciler.Deps{
-		Exec:                  execOutput,
-		ExecCombined:          execCombined,
+		Cluster:               capability.For(assertreconciler.Extension().Bindings[0]).Cluster,
 		FirewallConfigMapName: platform.FirewallConfigMapName,
 	})
 }

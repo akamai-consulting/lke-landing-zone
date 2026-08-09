@@ -91,7 +91,7 @@ func assertArgoApp(d cigate.Deps, namespace, app, parent string, within time.Dur
 		// is safe, but don't hammer): the previous fetch already failed by the time the
 		// ComparisonError is visible, so we're kicking a new attempt, not interrupting one.
 		if health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
-			d.Kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			d.W().Annotate(namespace, "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, cigate.FirstLine(cerr))
 			lastRefresh = d.Now()
 		}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -23,11 +24,18 @@ func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (strin
 	t.Helper()
 	now := time.Unix(0, 0)
 	calls := 0
+	kube := func(args ...string) (string, bool) {
+		calls++
+		return script(calls, args)
+	}
 	return cigate.Deps{
-		Kubectl: func(args ...string) (string, bool) {
-			calls++
-			return script(calls, args)
-		},
+		Kubectl: kube,
+		// Granted from this extension's own binding and routed to the same fake, so
+		// the hard-refresh path is exercised rather than refused — and so a test
+		// cannot hand itself a write openbao-seed did not declare.
+		Writer: capability.WithExec(Extension().Bindings[0],
+			func(_ string, args ...string) ([]byte, error) { out, _ := kube(args...); return []byte(out), nil },
+			func(_ string, args ...string) string { out, _ := kube(args...); return out }).Writer,
 		Now: func() time.Time { return now },
 		Sleep: func(d time.Duration) {
 			if d <= 0 {

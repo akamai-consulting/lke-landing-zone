@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // TestEvalReconcilerGaugeBlamesTheRightThing pins the message split: an absent
@@ -86,13 +88,15 @@ func TestRunAssertReconcilerHealthy(t *testing.T) {
 // stubExecCombined records every deps.ExecCombined call and returns reply, so a failed
 // assertion's diagnostic dump can be exercised without shelling real kubectl.
 func stubExecCombined(t *testing.T, reply string) *[][]string {
-	orig := deps.ExecCombined
-	t.Cleanup(func() { deps.ExecCombined = orig })
+	orig := deps.Cluster
+	t.Cleanup(func() { deps.Cluster = orig })
 	var calls [][]string
-	deps.ExecCombined = func(name string, args ...string) string {
-		calls = append(calls, append([]string{name}, args...))
-		return reply
-	}
+	deps.Cluster = capability.WithExec(Extension().Bindings[0],
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(name string, args ...string) string {
+			calls = append(calls, append([]string{name}, args...))
+			return reply
+		}).Cluster
 	return &calls
 }
 

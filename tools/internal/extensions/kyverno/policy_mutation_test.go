@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
@@ -14,8 +15,20 @@ func recordingDeps(f *fakeKubectl, step time.Duration) (cigate.Deps, *[]time.Dur
 	var slept []time.Duration
 	return cigate.Deps{
 		Kubectl: f.run,
-		Now:     now,
-		Sleep:   func(d time.Duration) { slept = append(slept, d) },
+		// Granted from this extension's own binding and routed to the same fake:
+		// kyverno's policy install is a real cluster-write and the fixture has to
+		// model that, without being able to grant itself more than the declaration.
+		Writer: capability.WithExec(Extension().Bindings[0],
+			func(_ string, args ...string) ([]byte, error) {
+				out, ok := f.run(args...)
+				if !ok {
+					return []byte(out), errKubectlFailed
+				}
+				return []byte(out), nil
+			},
+			func(_ string, args ...string) string { out, _ := f.run(args...); return out }).Writer,
+		Now:   now,
+		Sleep: func(d time.Duration) { slept = append(slept, d) },
 	}, &slept
 }
 

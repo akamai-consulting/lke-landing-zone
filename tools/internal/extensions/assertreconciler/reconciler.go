@@ -103,7 +103,7 @@ func lanesFromDeploymentArgs(args []string) []string {
 // than an empty set: an empty expected set would make this gate pass having
 // demanded nothing, which is the vacuous pass the whole battery refuses.
 var enabledReconcilerLanes = func(namespace string) ([]string, error) {
-	out, err := deps.Exec("kubectl", "-n", namespace, "get", "deploy", "llz-reconciler",
+	out, err := deps.Cluster.Run("-n", namespace, "get", "deploy", "llz-reconciler",
 		"-o", "jsonpath={.spec.template.spec.containers[*].args}")
 	if err != nil {
 		return nil, fmt.Errorf("reading llz-reconciler Deployment args: %w", err)
@@ -433,7 +433,7 @@ func leaseLeaderFresh(raw []byte, now time.Time, maxAge time.Duration) (holder s
 // leader holds it. A kubectl error (NotFound / no access) is treated as not-live,
 // so a missing Lease fails closed. Swappable for tests.
 var reconcilerLeaseLive = func(namespace string, now time.Time) (holder string, live bool) {
-	out, err := deps.Exec("kubectl", "-n", namespace, "get", "lease", reconcilerLeaseName, "-o", "json")
+	out, err := deps.Cluster.Run("-n", namespace, "get", "lease", reconcilerLeaseName, "-o", "json")
 	if err != nil {
 		return "", false
 	}
@@ -472,7 +472,7 @@ func dumpReconcilerDiagnostics(namespace string) {
 			[]string{"-n", namespace, "describe", "pods", "-l", "app.kubernetes.io/name=llz-reconciler"}},
 	}
 	for _, d := range dumps {
-		out := strings.TrimRight(deps.ExecCombined("kubectl", d.args...), "\n")
+		out := strings.TrimRight(deps.Cluster.Combined(d.args...), "\n")
 		if out == "" {
 			out = "(no output)"
 		}

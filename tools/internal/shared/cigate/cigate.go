@@ -24,6 +24,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 // Runner runs one kubectl invocation (KUBECONFIG already wired by the
@@ -36,9 +39,22 @@ type Runner func(args ...string) (string, bool)
 // identical copy, to the point that one call site had to write
 // `kyvernoDeps(NewDepsFor(…))` to convert between them.
 type Deps struct {
+	// Kubectl READS. It was a general runner — any argv, including `delete` and
+	// `exec` — shared by five of the eight extensions in this tree that mutate a
+	// cluster, which meant one seam handed the same power to a read-only assertion
+	// and to a deliberate fault injector.
+	//
+	// It stays a Runner rather than becoming capability.Cluster because these five
+	// packages thread it through dozens of helpers by value; the READ half is
+	// unchanged and the WRITE half moved to Writer below, which is where the
+	// enforcement lives.
 	Kubectl Runner
-	Now     func() time.Time
-	Sleep   func(time.Duration)
+	// Writer is the six named mutations, scoped by the binding's declared grants.
+	// A gate that declared no cluster-write receives one that refuses, so the
+	// mutation cannot be assembled as an argv and slipped past the declaration.
+	Writer capability.Writer
+	Now    func() time.Time
+	Sleep  func(time.Duration)
 }
 
 // Kubectl builds the kubectl runner for the gate seams. kubeconfig == ""
@@ -93,9 +109,39 @@ var NewDeps = func() Deps { return NewDepsFor("") }
 func NewDepsFor(kubeconfig string) Deps {
 	return Deps{
 		Kubectl: Kubectl(kubeconfig),
-		Now:     time.Now,
-		Sleep:   time.Sleep,
+		// DENIED BY DEFAULT. A gate that mutates has to say so at its construction
+		// site via GrantedBy, which makes granting greppable: `grep -rn GrantedBy`
+		// lists every place in the tree that hands out cluster-write.
+		Writer: capability.For(extension.Binding{}).Writer,
+		Now:    time.Now,
+		Sleep:  time.Sleep,
 	}
+}
+
+// W returns d's Writer, or a refusing one if the field was never populated.
+//
+// Call sites use d.W() rather than d.Writer for one reason: a Deps built as a
+// struct LITERAL — which every test in this tree does — has a nil interface
+// there, and a nil interface method call is a panic rather than a permission
+// fault. The whole point of the denied handle is that an ungranted capability
+// fails as a refusal you can read; a nil deref would undo that at exactly the
+// call sites least likely to be exercised.
+func (d Deps) W() capability.Writer {
+	if d.Writer == nil {
+		return capability.Denied()
+	}
+	return d.Writer
+}
+
+// GrantedBy scopes d's Writer to what b declared.
+//
+// It takes a BINDING rather than an extension because grants are per-binding: an
+// extension holding a read assertion and a write transition must not be able to
+// mutate from inside the assertion. Callers pass the specific binding their lane
+// runs under.
+func (d Deps) GrantedBy(b extension.Binding) Deps {
+	d.Writer = capability.For(b).Writer
+	return d
 }
 
 // PollUntil calls cond immediately, then every interval until it returns true or

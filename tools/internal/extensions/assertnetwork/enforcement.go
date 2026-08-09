@@ -57,7 +57,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -334,14 +333,16 @@ spec:
 // ── cluster I/O (seamed) ─────────────────────────────────────────────────────
 
 var (
+	// THROUGH THE DECLARED GRANT, not a raw exec. This call is why the first
+	// capability census undercounted: it never touched a Deps seam, so a
+	// seam-based count saw an extension that only reads while it was creating a
+	// namespace and a probe pod.
 	applyProbeManifest = func(manifest string) (string, error) {
-		cmd := exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(manifest)
-		out, err := cmd.CombinedOutput()
+		out, err := deps.W().ApplyStdin(manifest, "llz-net-probe")
 		return string(out), err
 	}
 	deleteProbeNamespace = func(ns string) {
-		_ = deps.ExecCombined("kubectl", "delete", "namespace", ns, "--ignore-not-found", "--wait=false")
+		_, _ = deps.W().Delete("", "namespace", ns, "--wait=false")
 	}
 	waitProbePod = func(ns string, timeout time.Duration) error {
 		_, err := deps.Exec("kubectl", "-n", ns, "wait", "--for=jsonpath={.status.phase}=Succeeded",

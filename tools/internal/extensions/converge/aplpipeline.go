@@ -108,7 +108,7 @@ func runCIWaitAplPipeline() error {
 	}
 	defer cleanup()
 
-	return waitAplPipeline(aplPipelineStages(), cigate.NewDepsFor(kubeconfig))
+	return waitAplPipeline(aplPipelineStages(), cigate.NewDepsFor(kubeconfig).GrantedBy(Extension().Bindings[0]))
 }
 
 func waitAplPipeline(stages []aplWaitStage, d cigate.Deps) error {

@@ -37,7 +37,7 @@ func WedgeGamedayCmd() *cobra.Command {
 			"converge-only fast-path reuses one).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return Run(cigate.NewDeps(), Opts{
+			return Run(cigate.NewDeps().GrantedBy(Extension().Bindings[0]), Opts{
 				ESRef:     externalSecret,
 				TargetApp: targetApp,
 				Namespace: namespace,

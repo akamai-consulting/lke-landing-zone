@@ -1,5 +1,10 @@
 package assertidentity
 
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+)
+
 // Deps carries what this package cannot reach for itself.
 //
 // A note on the literals: keycloak.NS/Realm/AdminSecret moved into
@@ -12,6 +17,11 @@ package assertidentity
 // client. It could not be injected, because this package defines METHODS on it —
 // so it had to become internal/keycloak instead. See extension.go.
 type Deps struct {
+	// Writer is the six named cluster mutations, scoped by this extension's
+	// declared grants. The mutating calls here used to be assembled as an argv on
+	// the general exec seam, which could equally have run `delete namespace` or
+	// `exec ... -- sh -c`.
+	Writer capability.Writer
 	// Exec captures a command's stdout.
 	Exec func(name string, args ...string) ([]byte, error)
 
@@ -42,6 +52,8 @@ type Deps struct {
 
 // caps is the installed capability set; defaults are non-nil and harmless.
 var caps = Deps{
+	// Refuses until installed: an un-installed Deps must not mutate a cluster.
+	Writer:             capability.For(extension.Binding{}).Writer,
 	Exec:               func(string, ...string) ([]byte, error) { return nil, nil },
 	SecretField:        func(string, string, string) string { return "" },
 	ManagedDomain:      func() string { return "" },
@@ -73,4 +85,15 @@ func containsString(hay []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// W returns the Writer, or a refusing one if the field was never populated. A
+// Deps built as a struct literal has a nil interface there, and a nil interface
+// method call is a panic rather than the permission fault the denied handle
+// exists to produce.
+func (d Deps) W() capability.Writer {
+	if d.Writer == nil {
+		return capability.Denied()
+	}
+	return d.Writer
 }

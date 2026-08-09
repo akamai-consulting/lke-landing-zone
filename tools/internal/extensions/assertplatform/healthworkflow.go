@@ -22,9 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -128,9 +126,10 @@ var (
 // json, manifest over stdin) and returns the created object's JSON. Seamed for
 // tests. Interactive-style call site (pipes stdin), like firewallKubectlFn.
 var submitHealthWorkflowFn = func(namespace, manifest string) ([]byte, error) {
-	cmd := exec.Command("kubectl", "-n", namespace, "create", "-f", "-", "-o", "json")
-	cmd.Stdin = strings.NewReader(manifest)
-	return cmd.Output()
+	// CreateStdin rather than ApplyStdin, and the difference is load-bearing:
+	// `create` FAILS on an existing object where `apply` reconciles it, and the
+	// retry loop below reads that failure as "a submission is already in flight".
+	return deps.W().CreateStdin(namespace, manifest)
 }
 
 // runCIAssertHealthWorkflow returns nil on Succeeded/skipped and an error on
@@ -157,8 +156,9 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 
 	// Reap any prior e2e probe Workflows first: on a REUSED cluster a Failed one
 	// lingers and (even with converge now ignoring them) is just noise. Best-effort.
-	deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow",
-		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running", "--ignore-not-found")
+	// --ignore-not-found is applied by Delete itself.
+	_, _ = deps.W().Delete(namespace, "workflow",
+		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running")
 
 	for attempt := 1; ; attempt++ {
 		out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
@@ -187,7 +187,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 			if attempt < healthRetryAttempts && healthTransientOnly(logs) {
 				fmt.Printf("::warning::assert-health-workflow: %s/%s failed with 0 hard-failed (in-progress only — cluster still settling); retrying in %s…\n",
 					namespace, name, healthRetryPause)
-				deps.ExecCombined("kubectl", "-n", namespace, "delete", "workflow", name, "--ignore-not-found")
+				_, _ = deps.W().Delete(namespace, "workflow", name)
 				time.Sleep(healthRetryPause)
 				continue
 			}

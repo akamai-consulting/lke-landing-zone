@@ -1,10 +1,12 @@
 package assertplatform
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
@@ -15,11 +17,25 @@ func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (strin
 	t.Helper()
 	now := time.Unix(0, 0)
 	calls := 0
+	kube := func(args ...string) (string, bool) {
+		calls++
+		return script(calls, args)
+	}
 	return cigate.Deps{
-		Kubectl: func(args ...string) (string, bool) {
-			calls++
-			return script(calls, args)
-		},
+		Kubectl: kube,
+		// The Writer routes to the SAME fake and is granted from this extension's
+		// own binding. Both halves matter: without the grant the hard-refresh lane
+		// fails with a permission error instead of being exercised, and without the
+		// routing it would shell out to a real kubectl mid-test.
+		Writer: capability.WithExec(MutatingBinding(),
+			func(_ string, args ...string) ([]byte, error) {
+				out, ok := kube(args...)
+				if !ok {
+					return []byte(out), errKubectl
+				}
+				return []byte(out), nil
+			},
+			func(_ string, args ...string) string { out, _ := kube(args...); return out }).Writer,
 		Now: func() time.Time { return now },
 		Sleep: func(d time.Duration) {
 			if d <= 0 {
@@ -222,3 +238,6 @@ func TestAssertArgoAppRetryingParentWaitsForDeadline(t *testing.T) {
 		t.Fatalf("want deadline error for retrying parent, got %v", err)
 	}
 }
+
+// errKubectl marks a non-zero exit for the Writer fake above.
+var errKubectl = errors.New("kubectl exited non-zero")

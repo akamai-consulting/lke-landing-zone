@@ -237,7 +237,7 @@ func runConverge(budget, interval, retryDelay int) error {
 // if the restart doesn't take.
 func realignArgocdRedis() {
 	fmt.Fprintln(os.Stderr, "::warning::argocd-redis auth split (WRONGPASS/NOAUTH) detected — restarting argocd-redis to re-read the current password")
-	if out, err := deps.Exec("kubectl", "-n", "argocd", "rollout", "restart", "deploy/argocd-redis"); err != nil {
+	if out, err := deps.W().RolloutRestart("argocd", "deploy/argocd-redis"); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::argocd-redis rollout restart failed (%v): %s\n", err, strings.TrimSpace(string(out)))
 		return
 	}

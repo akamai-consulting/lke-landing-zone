@@ -65,7 +65,7 @@ func Run() error {
 	}
 	defer cleanup()
 
-	return Apply(o, cigate.NewDepsFor(kubeconfig))
+	return Apply(o, cigate.NewDepsFor(kubeconfig).GrantedBy(Extension().Bindings[0]))
 }
 
 func kyvernoOptsFromEnv(getenv func(string) string) (Opts, error) {
@@ -138,9 +138,15 @@ func Apply(o Opts, d cigate.Deps) error {
 		return nil
 	}
 
-	out, ok := d.Kubectl("apply", "--server-side", "--force-conflicts",
-		"--field-manager="+o.fieldManager, "-f", o.policyManifest)
+	// ApplyServerSide is the NAMED escape hatch: applying a manifest is close to
+	// unrestricted in permission terms, so it is the one operation a reviewer can
+	// grep for rather than an argv indistinguishable from a `get`.
+	raw, applyErr := d.W().ApplyServerSide(o.policyManifest, o.fieldManager)
+	out, ok := string(raw), applyErr == nil
 	if !ok {
+		if out == "" {
+			out = applyErr.Error()
+		}
 		if health.IsWebhookRace(out) {
 			warn(firstNonEmpty(o.webhookRaceWarning,
 				"Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."))
@@ -187,12 +193,12 @@ func retrofitKyvernoConfigMap(o Opts, d cigate.Deps) {
 	}
 	// A changing annotation value guarantees a real UPDATE (admission fires).
 	annotation := "llz.akamai.com/kyverno-retrofit=" + strconv.FormatInt(d.Now().Unix(), 10)
-	if _, ok := d.Kubectl("-n", ns, "annotate", "configmap", o.retrofitConfigMap, annotation, "--overwrite"); ok {
+	if _, err := d.W().Annotate(ns, "configmap", o.retrofitConfigMap, annotation); err == nil {
 		notice(fmt.Sprintf("retrofit: kicked pre-existing %s/%s through admission so %s mutates it.",
 			ns, o.retrofitConfigMap, policyName(o.policyManifest)))
 	}
 	if o.retrofitRollout != "" {
-		if _, ok := d.Kubectl("-n", ns, "rollout", "restart", "deploy/"+o.retrofitRollout); ok {
+		if _, err := d.W().RolloutRestart(ns, "deploy/"+o.retrofitRollout); err == nil {
 			notice(fmt.Sprintf("retrofit: rolled %s/deploy/%s to reload the mutated config.", ns, o.retrofitRollout))
 		}
 	}

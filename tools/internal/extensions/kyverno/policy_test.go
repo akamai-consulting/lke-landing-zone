@@ -1,11 +1,13 @@
 package kyverno
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
@@ -129,7 +131,22 @@ func fakeClock(step time.Duration) (func() time.Time, *time.Duration) {
 
 func testDeps(f *fakeKubectl, step time.Duration) cigate.Deps {
 	now, _ := fakeClock(step)
-	return cigate.Deps{Kubectl: f.run, Now: now, Sleep: func(time.Duration) {}}
+	return cigate.Deps{
+		Kubectl: f.run,
+		// Granted from this extension's own binding and routed to the same fake:
+		// kyverno's policy install is a real cluster-write and the fixture has to
+		// model that, without being able to grant itself more than the declaration.
+		Writer: capability.WithExec(Extension().Bindings[0],
+			func(_ string, args ...string) ([]byte, error) {
+				out, ok := f.run(args...)
+				if !ok {
+					return []byte(out), errKubectlFailed
+				}
+				return []byte(out), nil
+			},
+			func(_ string, args ...string) string { out, _ := f.run(args...); return out }).Writer,
+		Now: now, Sleep: func(time.Duration) {},
+	}
 }
 
 func TestApplyKyvernoPolicy(t *testing.T) {
@@ -332,3 +349,6 @@ func TestPolicyName(t *testing.T) {
 		t.Errorf("missing manifest should fall back to the basename, got %q", got)
 	}
 }
+
+// errKubectlFailed marks a non-zero exit for the Writer fakes above.
+var errKubectlFailed = errors.New("kubectl exited non-zero")
