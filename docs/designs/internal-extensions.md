@@ -1,9 +1,15 @@
 # Design: the internal-extension catalog — every file in package `main`, assigned once
 
-**Status:** **Proposed** — analysed, not built. Nothing in the tree depends on this catalog; it is
-planning input for [ADR 0014](../adr/0014-core-surface-budget.md) (the core-surface budget) and
-issue #10 / issue #399 (the extension framework), and not a commitment to a final extension list.
-What it *is* is a measurement: what decomposition is available, and in what order.
+**Status:** **Built out** — this catalog was the planning input for [ADR
+0014](../adr/0014-core-surface-budget.md) (the core-surface budget) and issue #10 / issue #399, and
+the decomposition it proposed has since **shipped as 62 extensions**. It is no longer a proposal, and
+it was never a commitment to a final list: the set overtook the ~57 candidates counted here.
+
+It remains load-bearing as the **derivation** the model rests on — `tools/internal/shared/extension`
+cites it as the source of the state vocabulary (the groups all 214 files were assigned to), and
+[the model doc](internal-extension-model.md) cites it as its evidence. What it *is* is a measurement,
+taken once: what decomposition was available, and in what order. **Its numbers are a snapshot of
+2026-08-03 and are not maintained** — `llz extension list` is the current set.
 
 **Measured:** 2026-08-03, against `feat/core-surface-budget` (214 non-test files, 41,709 logic
 lines). Line counts are `llz ci core-surface --verbose`, so they are the same numbers the budget
@@ -2621,8 +2627,13 @@ thing that defines it.
 
 ### What none of them proves
 
-Nothing is loaded, dispatched or disabled through the model. All six still run because `ci.go` and
-the reconciler register them, and every declaration is inert.
+*(Written when six extensions existed and the model drove nothing. Both halves have since been
+overtaken: `registry/gates.go` dispatches 24 gate bindings, `registry/enablement.go` disables from
+`spec.components`, and `shared/capability` turns a grant into a handle. See the model doc's status
+block — kept here because what the six proved is still what they proved.)*
+
+At the time of writing: nothing was loaded, dispatched or disabled through the model. All six ran
+because `ci.go` and the reconciler registered them, and every declaration was inert.
 
 **Now exercised:** all four binding kinds (`gate`, `assertion`, `invariant`, `transition`);
 multi-binding extensions and named bindings, up to four on one extension; six of seven grants

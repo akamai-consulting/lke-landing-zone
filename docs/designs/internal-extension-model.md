@@ -1,8 +1,42 @@
 # Design: the internal extension model — bindings and grants
 
-**Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
-bindings, grants and their validation) in `tools/internal/shared/extension`. Phase 2 is the first ten
-extensions: `guard-budgets` (`tools/internal/extensions/guards/budget`), `guard-docs` (`tools/internal/extensions/guards/docsguard`),
+**Status:** **Partial** — Phases 1 and 2 landed, and Phase 2's acceptance criterion (a binding that
+RUNS from the registry) with them. Phase 1 is the declaration model (states, bindings, grants and
+their validation) in `tools/internal/shared/extension`. Phase 2 is **62 extensions across 61
+packages** — the set is not enumerated here, because a list beside the code it describes is the
+hand-maintained second copy this design exists to avoid. `llz extension list --verbose` is the
+listing, and it derives the package path from each declaration's constructor rather than
+transcribing it.
+
+**THE DECLARATIONS ARE NO LONGER INERT**, which is the sentence this block carried for far too long
+after it stopped being true. Three consumers read them today, and only one is dispatch:
+
+| consumer | what it does with a declaration |
+|---|---|
+| `registry/gates.go` | **RUNS** gate bindings — 24 of them. `llz ci gates` drives the whole set from the table there; `make llz-gates` is how CI calls it |
+| `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 10 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in package `main`'s tree |
+| `shared/capability` | builds the **handles** a binding's grants entitle it to — `capability.For`, `CloudFor`, `RepoForGate`. The grant IS the handle, so a binding declaring nothing is handed nothing |
+
+**Exactly one of the four kinds dispatches from the registry.** Gates do. Assertions and transitions
+are hand-wired into the cobra tree in `cmd/llz`; invariants are scheduled by the in-cluster
+reconciler. So `Kind` is a real constraint for the validator and a real dispatch key for one kind,
+and saying so plainly beats a reader inferring otherwise from the model's symmetry.
+
+Still absent: the action ABI, the YAML manifest, the remote half, and **the driver** — nothing
+evaluates a required set and names a state. Phase 1 replaces the `kind: check|tool` capability
+ceiling from PR #15 (closed); the rest of that design is not contradicted here, only re-sequenced,
+and is tracked in issue #399.
+
+**ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded`, the group
+the old ceiling banned by omission — **ALL NINE grants**, both values of `Always`, multi-binding
+extensions, named bindings, `Incomplete` and the `grantStates` table are exercised against real code,
+and [the closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is
+structural rather than incidental.
+
+<details>
+<summary>The first extensions, in the order they were extracted (historical)</summary>
+
+`guard-budgets` (`tools/internal/extensions/guards/budget`), `guard-docs` (`tools/internal/extensions/guards/docsguard`),
 `posture-at-rest` (`tools/internal/extensions/lifecycle/atrest`), `assert-storage` (`tools/internal/extensions/assertions/volumes`) and
 `reconcile-actions` (`tools/internal/extensions/lifecycle/reconcilelanes`) `teardown` (`tools/internal/extensions/lifecycle/teardown`) and
 `template-sustain` (`tools/internal/extensions/assertions/sustain`) and `import-brownfield` (`tools/internal/extensions/lifecycle/brownfield`) and
@@ -38,16 +72,13 @@ extensions: `guard-budgets` (`tools/internal/extensions/guards/budget`), `guard-
 (both in `tools/internal/extensions/lifecycle/credrotate` — the first package to declare two) and `database-provisioner`
 (`tools/internal/extensions/lifecycle/database`, holding `assert-database` as its third binding) and `openbao-seed`
 (`tools/internal/extensions/lifecycle/openbao`) and `openbao-peer-ca`
-(`tools/internal/extensions/lifecycle/openbao`) declare themselves, `tools/internal/shared/extension/registry` collects and validates the compiled-in set,
-and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
-all forty-five still run because `ci.go` and the reconciler register them, and the declarations are inert.
-**ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,
-named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
-closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
-rather than incidental. The action
-ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
-the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that design is not
-contradicted here, only re-sequenced, and is tracked in issue #399.
+(`tools/internal/extensions/lifecycle/openbao`).
+
+These paths were accurate when each was extracted and are **not** maintained — `llz extension list
+--verbose` derives the current one. The list stops here because it stopped being the whole set long
+before it stopped being edited.
+
+</details>
 
 **The VOCABULARY was wrong once, and it took three extractions in a row to prove it.**
 `secret-custody` was a single word documented as *"read or write credential material"*. `cluster-access`
@@ -55,16 +86,23 @@ WRITES a kubeconfig (custody); `health-sla` READS `updated_time` with the root t
 under protest); `token-inventory` READS every pipeline credential and mutates nothing — and that one
 was **inexpressible**, because a gate permits `read-repo` alone and an assertion permits read grants
 only, which `secret-custody` was not. The grant was split into `secret-read` (reading credential
-material or its metadata; read-only) and `secret-custody` (placing it; mutating). **This is the model's
-only vocabulary ADDITION**, as against two `grantStates` widenings, and the distinction it draws is the
-one a reviewer actually wants: *"this could leak a secret"* versus *"this decides what the secret is"*.
+material or its metadata; read-only) and `secret-custody` (placing it; mutating). This was the model's
+**first** vocabulary change and the only one for a long stretch; `write-repo` is the second and so far
+last (see below). The distinction it draws is the one a reviewer actually wants: *"this could leak a
+secret"* versus *"this decides what the secret is"*.
 
-Note what did NOT happen: no `grantStates` row was widened. The ceiling was not too tight, the
-vocabulary was too coarse — and widening the row would have let every credential-reading check in the
-repo claim a mutating grant.
+Note what did NOT happen *here*: no `grantStates` row was widened for it. The ceiling was not too
+tight, the vocabulary was too coarse — and widening the row would have let every credential-reading
+check in the repo claim a mutating grant.
 
-**The ceiling has been wrong twice, at opposite ends of the lifecycle, and both times an
-extraction of shipping code found it.** The second: `secret-custody` was legal at `seeded` and
+> **The sections below are chronological strata**, each written when its extraction found the defect,
+> and each keeps the count that was true at the time. The running total is one table:
+> [the widenings](#the-ceiling-restated-as-rules) — **four widenings plus one whole row added** —
+> and that table is the one pinned by `TestDesignDocGrantStatesMatchesTheCode`. Trust it over any
+> count in the prose.
+
+**The ceiling was wrong at both ends of the lifecycle, and each time an extraction of shipping code
+found it.** The second: `secret-custody` was legal at `seeded` and
 `operating` only, which made `cluster-access` — it fetches the cloud-issued **cluster-admin
 kubeconfig**, the one human-facing credential per cluster — inexpressible. The row had only ever seen
 credentials the platform *mints* or *replaces*, both of which happen to a cluster that already works,
@@ -72,7 +110,7 @@ so it quietly meant "custody begins once there is a platform to hold it". `provi
 Note the symmetry: the first widening added a state at the **end** of the lifecycle, this one at the
 **start**, and neither was predictable by reading the catalog. The first:
 
-**The ceiling was wrong once, and the fourth extension found it.** `grantStates` did not list
+**The FIRST widening, found by the fourth extension.** `grantStates` did not list
 `operating` as a legal state for `cloud-mutate`, which made two shipping reconciler lanes — they run
 in-pod, continuously, and mutate Linode Volumes — inexpressible. The row was added with the argument
 recorded beside it and the whole table pinned by a test. Refusing it was not the conservative choice:
@@ -210,8 +248,9 @@ flowchart LR
 
     G["🚧 <b>gate</b><br/><i>files in, findings out</i>"] -.->|before| S1
     G -.->|before| S2
-    A["🔍 <b>assertion</b><br/><i>evidence a state holds</i>"] -.->|"any spine state"| S5
+    A["🔍 <b>assertion</b><br/><i>evidence a state holds</i>"] -.->|"ANY state —<br/>spine or recurring"| S5
     A -.-> S6
+    A -.-> RECUR
     I["♾️ <b>invariant</b><br/><i>holds continuously</i>"] -.-> S7
     S7 ==>|"transition"| RECUR
 ```
@@ -230,7 +269,7 @@ flowchart TB
     end
 
     T -->|"every state except<br/>verified and operating"| ST["state"]
-    A -->|"any spine state"| ST
+    A -->|"any state, including<br/>promoted / upgraded / destroyed"| ST
     I -->|"operating only"| ST
     GA -->|"scaffolded, configured"| ST
 ```
@@ -330,8 +369,11 @@ An extension may carry **several bindings**, which is how the catalog's stronges
 gets expressed: `harbor-provisioner` ↔ `assert-registry`, `database-provisioner` ↔
 `assert-database`, `keycloak-provisioner` ↔ `assert-identity`, `reconciler-runtime` ↔
 `assert-reconciler`. A capability and its assertion enable and disable together; making them one
-extension with two bindings removes the possibility of them drifting out of step, and takes the
-count from ~57 toward ~49.
+extension with two bindings removes the possibility of them drifting out of step. The catalog
+predicted this would pull the count from ~57 down toward ~49; it did not — the set is **62**, because
+extraction kept finding capabilities the catalog had folded into a neighbour. Pairing did its job
+(`database-provisioner` carries `assert-database` as a third binding rather than existing twice); the
+population simply turned out larger than the survey.
 
 ### Grants
 
@@ -396,15 +438,31 @@ checked. It had `cloud-mutate` at five states when the code allowed six, describ
 the half of the ceiling that governs the dangerous grants, in a document whose whole purpose is to
 say what the ceiling is.
 
-**THE ACTION ABI IS NOW THE BINDING CONSTRAINT.** Fourteen extractions have not needed one; the
-fourteenth showed why the next ones will. `converge` is 2,476 lines whose call tree runs six or seven
-frames from entry point to the leaf that shells out, so its capabilities are INSTALLED once
+**THE ACTION ABI: THE ARGUMENT FOR ONE WEAKENED AFTER GATES SHIPPED, and this section records both
+halves rather than picking a winner.**
+
+*The case FOR, made by the fourteenth extraction.* `converge` is 2,476 lines whose call tree runs six
+or seven frames from entry point to the leaf that shells out, so its capabilities are INSTALLED once
 (`converge.Install`) rather than threaded as a parameter the way every earlier extension does. That
 works, and its cost is stated in the package: an installed seam is global mutable state, tests must
 restore it, and two callers cannot hold different capability sets at once. An action ABI would hand
-each binding its own handle at dispatch time — which is exactly the thing package-level installation
-cannot do. `cmd/llz/ci_converge.go` is the hand-written version of that dispatch, and it is the
-clearest specification of the ABI these extractions have produced. Issue #399 sequences it.
+each binding its own handle at dispatch time — exactly the thing package-level installation cannot
+do. `cmd/llz/ci_converge.go` is the hand-written version of that dispatch.
+
+*The case AGAINST, made by the first dispatch that actually shipped.* `registry/gates.go` drives 24
+gate bindings and needs no ABI: each binding acquires its capability by looking **itself** up from
+its own declaration at the point of use (`capability.RepoForGate` and the accessors beside it), and
+the driver passes nothing but flags. Self-service turned out to do something a dispatcher cannot —
+`teardown` narrows itself to a read-only handle from `--dry-run` at RUNTIME, after flags are parsed,
+where a `Run func(Handles) error` must choose the handle before. One of the three cases that looked
+like it needed dispatch (`template-sustain`) dissolved into a package-placement problem instead.
+
+So the open question is no longer *"when will something need `Handles` delivered through dispatch"*
+but ***"does anything, given self-service works"***. The honest remaining candidates are the cases
+self-service demonstrably cannot serve: a lane that must be handed a NARROWED capability by something
+other than itself, and an auditor needing a central record of what was handed out. That is a smaller
+question than the one deferred here, and it should be answered before an ABI is built rather than by
+building one. Read `registry/gates.go`'s header before starting. Issue #399 sequences it.
 
 **The escape hatch is re-modelling, not an exception list.** The catalog contains exactly two
 entries that break the assertion rule, and flags both itself: `assert-storage` holds `cloud-mutate`
@@ -417,18 +475,19 @@ catalog-sample test in exactly that shape.
 ## Anatomy of an extension
 
 An extension is a Go value. It declares an identity, where it attaches, and — per attachment — what
-it may touch. That is the whole surface today; there is no manifest, no action, no registry yet (see
+it may touch. There is a registry (`tools/internal/shared/extension/registry`) that collects,
+validates and — for gate bindings — **runs** them. There is still no manifest and no action ABI (see
 [What is deliberately absent](#what-is-deliberately-absent)).
 
 ```mermaid
 flowchart LR
     subgraph EXT["🧩 Extension"]
         direction TB
-        N["<b>Name</b> — kebab-case, unique<br/><b>Short</b> — one line for <b>llz extension list</b><br/><b>Always</b> — ships enabled everywhere?"]
+        N["<b>Name</b> — kebab-case, unique<br/><b>Short</b> — one line for <b>llz extension list</b><br/><b>Always</b> — the enabled DEFAULT<br/><b>Component</b> — the spec.components toggle it follows<br/><b>Incomplete[]</b> — what it does NOT yet declare"]
         subgraph BS["Bindings — at least one"]
             direction TB
-            B1["<b>Binding</b><br/>Kind + State<br/>Grants[]"]
-            B2["<b>Binding</b><br/>Kind + State<br/>Grants[]"]
+            B1["<b>Binding</b><br/>Kind + State<br/>Requires (optional precondition)<br/>Name (disambiguates repeats)<br/>Grants[]"]
+            B2["<b>Binding</b><br/>Kind + State<br/>Requires (optional precondition)<br/>Name (disambiguates repeats)<br/>Grants[]"]
         end
     end
     B1 --> V{{"Validate()<br/>judges each binding<br/>on its OWN grants"}}
@@ -503,7 +562,8 @@ That pair was once *unsatisfiable*: one rule demanded `secret-custody`, another 
 ## What is deliberately absent
 
 **The action ABI.** How an extension's Go entry point receives a cluster client, a credential handle
-or a render context is not defined here. There is no consumer yet, and freezing the signature before
+or a render context is not defined here. No consumer needs one yet — the one driver that ships
+(`registry/gates.go`) lets each binding fetch its own handle instead, see above — and freezing the signature before
 the first real extension needs it is how the wrong ABI gets locked in. `converge` (the acid test) and `import-brownfield` (the biggest movable block) are the two that
 should drive its shape, which is why issue #399 sequences them early rather than last.
 
@@ -518,11 +578,14 @@ do nothing.
 minority (29 of 57) and can be added when one of them is actually externalised; adding it now would
 mean designing the schema against zero external extensions.
 
-**The registry, loader, ordering and enablement.** The next slice. The catalog sizes it: ~45–55
-internal extensions, so `llz extension list` and the loader must be built for dozens. `Always` is a
-**default**, not a constant: `llz ci assert-suite` is called from three places in
-`instance-template/`, so an instance with no object storage must be able to turn `assert-objstore`
-off in its own configuration rather than by taking a different build.
+**The loader and ordering** — but *not* the registry or enablement, which **landed** and are
+described in the status block above. The catalog sized this at ~45–55 internal extensions and the set
+is now 62, so anything built here is built for dozens. `Always` is a **default**, not a constant:
+`llz ci assert-suite` is called from three places in `instance-template/`, so an instance with no
+object storage must be able to turn `assert-objstore` off in its own configuration rather than by
+taking a different build — `registry.EnabledFor` is what delivers that today, and 10 extensions name
+the component they follow. What is still missing is **ordering** (nothing sequences bindings against
+each other) and a **loader** (every declaration is compiled in; none is read from anywhere).
 
 **The driver, and what advances the last two spine states.** Five of the seven are entered by acting;
 `verified` and `operating` are not, and naming them is the driver's job. Two decisions already

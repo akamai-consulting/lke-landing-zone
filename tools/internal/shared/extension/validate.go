@@ -151,11 +151,13 @@ var grantStates = map[Grant][]State{
 	// write moves in, `promoted` can be argued then, and there is a test that will
 	// notice: TestGrantStatesTableIsPinned.
 	//
-	// Note this is also the first row whose states are all OUTSIDE the mutating
-	// middle of the lifecycle. The other three rows start at `provisioned` — you
-	// cannot mutate a cluster or a cloud before one exists. Repo writes are the
-	// opposite shape: they happen when the REPO changes, which is before any
-	// substrate exists and again when the template moves under it.
+	// Note this row also reaches EARLIER than any other. `cluster-write` and
+	// `secret-custody` start at `provisioned` — you cannot mutate a cluster or hold a
+	// platform credential before one exists — and `cloud-mutate` reaches back one
+	// further, to `configured`. Repo writes are the opposite shape: they happen when
+	// the REPO changes, which is before any substrate exists and again when the
+	// template moves under it, so this is the only row that holds `scaffolded`.
+	//
 	// FOURTH WIDENING: `configured`, and it took two extractions to earn.
 	//
 	// The row read repo writes as bracketing the lifecycle — the instance is
@@ -449,11 +451,13 @@ func bindingHas(b Binding, g Grant) bool {
 // cross-cutting rule that names are unique, since the name is how an operator
 // enables, disables and refers to one.
 //
-// It has no production caller yet, and that is expected rather than an oversight:
-// this whole package is the declaration model with the registry deliberately
-// deferred (see the package doc). Uniqueness is genuinely a set-level rule — no
-// single Extension can detect it — so it belongs here rather than being invented
-// alongside the loader, and it is the entry point that loader will call.
+// registry.Validate is its caller, and a TEST is what calls that — which is the
+// design rather than an oversight, for the reason spelled out there: the three
+// ceiling tables are a BUILD-TIME ceiling, and a compiled-in declaration cannot
+// change between builds, so the moment to reject an illegal one is before it ships.
+//
+// Uniqueness is genuinely a set-level rule — no single Extension can detect it — so
+// it belongs here rather than in the registry that happens to hold the set.
 func ValidateSet(exts []Extension) []error {
 	var errs []error
 	seen := map[string]int{}

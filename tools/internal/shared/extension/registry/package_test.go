@@ -4,7 +4,7 @@ package registry
 //
 // THE NAME IS THE ONLY HANDLE A READER HAS. Every error message, gate exemption
 // and ratchet entry in this tree names the EXTENSION — `posture-plaintext`,
-// `assert-storage`, `import-brownfield` — and for fifteen of the sixty-two the
+// `assert-storage`, `import-brownfield` — and for thirty-one of the sixty-two the
 // package is called something else entirely (guards/plaintext, assertions/volumes,
 // lifecycle/brownfield). Package() is what closes that, so a Package() that
 // silently returned "" for some extension would leave exactly the readers it was
@@ -90,4 +90,24 @@ func TestSomeExtensionNamesDifferFromTheirPackage(t *testing.T) {
 			"question left to answer and the listing should drop it")
 	}
 	t.Logf("%d of %d extensions live in a package whose name differs from theirs", differ, len(All()))
+
+	// THE COUNT IS PINNED BECAUSE IT WAS ONLY EVER LOGGED, and that is exactly how it
+	// rotted. Three comments quote this number to justify Package()'s existence — and
+	// all three said "fifteen" while this test was measuring thirty-one and printing
+	// it to a log nobody reads. A number measured but not compared is not a
+	// measurement, it is a footnote.
+	//
+	// Bumping it is fine and expected; updating the three sites below in the same
+	// commit is the point. They are the whole population — `grep -rn "of the
+	// sixty-two"` finds them.
+	const documented = 31 // registry.go (Package), package_test.go (above), cli/extension.go (listVerbose)
+	if differ != documented {
+		t.Errorf("%d extensions differ from their package name; the comments justifying Package() say %d.\n"+
+			"\tUpdate all three together — registry.go's Package doc, this file's header, and "+
+			"cli/extension.go's listVerbose comment — then bump `documented` here.", differ, documented)
+	}
+	if total := len(All()); total != 62 {
+		t.Errorf("the registry holds %d extensions; the same three comments say sixty-two. "+
+			"Same rule: update the prose with the set.", total)
+	}
 }

@@ -89,8 +89,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
-// declarations is the built-in set. One line per extension; the catalog
-// (docs/designs/internal-extensions.md) sizes the other 49.
+// declarations is the built-in set — 62 extensions from 61 packages (credrotate
+// declares two). The catalog (docs/designs/internal-extensions.md) is what sized
+// it, and the set has since overtaken the ~57 candidates that catalog counted.
 //
 // Listed in import order, NOT declaration order — All sorts by name, so the order
 // here carries no meaning and nobody has to maintain one.
@@ -226,7 +227,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// fifteen of the sixty-two: `assert-storage` lives in assertions/volumes,
+// thirty-one of the sixty-two — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

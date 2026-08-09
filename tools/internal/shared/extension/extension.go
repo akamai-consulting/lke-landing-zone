@@ -34,10 +34,16 @@ const (
 // continuing to satisfy its invariants — neither is somewhere an extension moves
 // the platform to, which is why bindableStates gives Transition no way to target
 // them. What follows is that ADVANCING past `converged` is the driver's job, not
-// an extension's: the driver evaluates the required set and names the state. That
-// division has no code yet (this package is wired to nothing) and it is the first
-// thing the driver slice has to get right, because if extensions could declare
+// an extension's: the driver evaluates the required set and names the state. NO
+// DRIVER EXISTS YET — nothing evaluates a required set or names a state — and it is
+// the first thing that slice has to get right, because if extensions could declare
 // "verified reached" the core would no longer own what success means.
+//
+// Note what this is NOT saying. The package is no longer wired to nothing: gate
+// bindings dispatch from registry/gates.go, enablement resolves from
+// spec.components, and shared/capability turns a grant into a handle (see the
+// package doc). What is absent is specifically the thing that ADVANCES the
+// lifecycle, which is a different question from whether a declaration is consumed.
 var lifecycle = []State{Scaffolded, Configured, Provisioned, Seeded, Converged, Verified, Operating}
 
 var recurring = []State{Promoted, Upgraded, Destroyed}
@@ -61,6 +67,18 @@ func validState(s State) bool {
 
 // BindingKind is HOW an extension attaches to a state. The four kinds are the
 // distinct shapes the catalog found; nothing in package main needed a fifth.
+//
+// ONE CANDIDATE FOR A FIFTH IS OPEN, and it is recorded here so the sentence above
+// is not read as settled. A DIAGNOSTIC fits none of the four: `argocd-diagnostics`
+// reads a failing platform, prints it for a human, always exits 0 by design, and
+// runs precisely when `converged` did NOT hold — which is the opposite of an
+// assertion, whose whole content is evidence a state DOES hold. It ships declared
+// as an assertion with an Incomplete note saying so. `doctor-probes` and
+// `phase-timing` are the same shape and are where the argument should be made; the
+// bar is this model's usual one — a declaration that is impossible rather than
+// merely awkward, and two independent cases. The question the kind would have to
+// answer is already sharp: does a diagnostic attach to a state, or to the FAILURE
+// of one? See docs/designs/internal-extension-model.md.
 type BindingKind string
 
 const (
