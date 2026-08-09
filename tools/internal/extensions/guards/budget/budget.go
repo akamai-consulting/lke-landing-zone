@@ -8,9 +8,16 @@ package budget
 // and they push in OPPOSITE directions:
 //
 //	llz ci untestable-loc  (.untestable-budget.yaml)  caps logic that cannot be
-//	                       unit-tested; its remedy is "move it INTO tools/cmd/llz".
-//	llz ci core-surface    (.core-surface-budget.yaml) caps how much lands in that
-//	                       one package; its remedy is "move it OUT" (ADR 0014).
+//	                       unit-tested; its remedy is "move it INTO unit-tested Go
+//	                       under tools/internal".
+//	llz ci core-surface    (.core-surface-budget.yaml) caps the CLI wiring layer
+//	                       (tools/internal/cli) and, separately, the six-line
+//	                       tools/cmd/llz entry point; its remedy is "move it OUT"
+//	                       of the layer that only wires commands up (ADR 0014).
+//
+// BOTH NOW NAME tools/internal, WHICH IS NOT A COLLISION — see remedy.go's header
+// for why the axes are still opposite (language vs. layer) and for the bug that
+// wording it as one axis produced.
 //
 // That opposition is why the remedy is configuration rather than a constant, and
 // why the two keep separate config files and separate commands: a single gate
@@ -19,11 +26,11 @@ package budget
 // Everything here is deliberately gate-neutral. A third budget should need a
 // config file, a counter and a command — not a fork of this file.
 //
-// IT LIVES OUTSIDE PACKAGE MAIN BECAUSE ITS OWN GATE SAID SO. `llz ci
-// core-surface` counts Go logic in tools/cmd/llz and prescribes exactly this
-// move; running the gate on itself and then taking its advice is the cheapest
+// IT LIVES OUTSIDE THE WIRING LAYER BECAUSE ITS OWN GATE SAID SO. `llz ci
+// core-surface` counts the Go logic in tools/internal/cli and prescribes exactly
+// this move; running the gate on itself and then taking its advice is the cheapest
 // available proof that the advice is followable. The two cobra commands stay in
-// package main — a flag set and a remedy string each — and everything with a
+// the wiring layer — a flag set and a remedy string each — and everything with a
 // test moved here. See docs/designs/internal-extensions.md, which lists
 // `guard-budgets` as the first extraction for this reason.
 
@@ -47,12 +54,13 @@ import (
 // files (install/glue scripts with no real logic) from every category so the
 // budget reflects only convertible logic.
 //
-// TWO GATES SHARE THIS ENGINE, AND THEY PUSH IN OPPOSITE DIRECTIONS.
+// TWO GATES SHARE THIS ENGINE, AND THEY PUSH ALONG DIFFERENT AXES.
 // .untestable-budget.yaml caps logic that CANNOT be unit-tested, and its remedy
-// is "move it into tools/cmd/llz". .core-surface-budget.yaml caps how much lands
-// in that one package, and its remedy is "move it OUT" (ADR 0014). The scan, the
-// tally and the ratchet doctrine are identical; only the remedy sentence differs,
-// which is why Remedy is config and not a constant.
+// is "move it into unit-tested Go under tools/internal" — a LANGUAGE axis.
+// .core-surface-budget.yaml caps the CLI wiring layer, and its remedy is "move it
+// OUT of the layer that only wires commands up" (ADR 0014) — a LAYER axis. The
+// scan, the tally and the ratchet doctrine are identical; only the remedy sentence
+// differs, which is why Remedy is config and not a constant.
 type budgetConfig struct {
 	Categories map[string]budgetCategory `json:"categories"`
 	Exclude    []string                  `json:"exclude,omitempty"`

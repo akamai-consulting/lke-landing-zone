@@ -5,10 +5,22 @@ package budget
 //
 // A budget gate's OUTPUT IS ITS PRODUCT: the number only teaches if the message
 // beside it says what to do, and the two gates that share this engine want
-// OPPOSITE things done. untestable-loc says "move the logic into tools/cmd/llz";
-// core-surface says "move it out" (ADR 0014). One message saying both would be a
-// riddle, so the remedy travels with the gate and the engine only substitutes
-// `{config}` into it.
+// OPPOSITE things done. untestable-loc says "move the logic into unit-tested Go";
+// core-surface says "move it out of the wiring layer" (ADR 0014). One message
+// saying both would be a riddle, so the remedy travels with the gate and the
+// engine only substitutes `{config}` into it.
+//
+// THEY BOTH NAME tools/internal NOW, AND THAT IS NOT THE COLLISION IT LOOKS LIKE.
+// Both remedies used to be phrased against package main — untestable-loc pointing
+// IN, core-surface pointing OUT — and that opposition was the whole reason they
+// are two constants. The move emptied tools/cmd/llz to six lines, which retired
+// the destination untestable-loc was naming without retiring the gate: it went on
+// telling operators to move logic into a package the OTHER gate caps at six lines
+// exactly, so following one message failed the other. The axes are still
+// opposite; they are just no longer opposite about the same directory.
+// untestable-loc is about the LANGUAGE (bash → Go, anywhere testable);
+// core-surface is about the LAYER (out of internal/cli, into a package that owns
+// the concern). A file can satisfy both, and before this it could not.
 //
 // `{config}` is a placeholder rather than a %s verb because the alternative remedy
 // comes from YAML, where a stray % would turn into a format error.
@@ -17,7 +29,8 @@ package budget
 // absolute — the budget never goes up — because the logic it counts has somewhere
 // unambiguously better to be.
 const UntestableRemedy = "Move the logic into unit-tested Go " +
-	"(tools/cmd/llz), or — for genuine install/glue with no logic — add the file to " +
+	"(tools/internal/<pkg> — NOT tools/cmd/llz, which core-surface caps at six lines), " +
+	"or — for genuine install/glue with no logic — add the file to " +
 	"`exclude:` in {config} with a justification. Do NOT raise the budget to make this pass."
 
 // CoreSurfaceRemedy is `llz ci core-surface`'s guidance, and the ONLY copy of it:

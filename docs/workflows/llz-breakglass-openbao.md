@@ -7,7 +7,7 @@ so the job runs self-contained with no cross-repo checkout. An instance ships a
 ~65-line caller stub (`breakglass-openbao.yml`) that owns the `workflow_dispatch`
 trigger surface and vendors this body. The whole break-glass flow — validate,
 revoke/rotate/regenerate, and RSA-OAEP-encrypt — is **one unit-tested Go verb**,
-`llz ci bao-breakglass` (`tools/cmd/llz/ci_bao_breakglass.go`, itself layered on
+`llz ci bao-breakglass` (`tools/internal/extensions/lifecycle/openbao/ci_bao_breakglass.go`, itself layered on
 `llz ci bao-regen-root`); it and `llz ci bao-status` are baked into `vars.TF_IMAGE`,
 so the reusable is just cluster-access + that one verb + artifact upload. See
 `docs/adr/0003-vendor-actions-and-bodies-into-instances.md` for the

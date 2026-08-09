@@ -122,19 +122,36 @@ func TestCoreSurfaceFailsOverBudgetAndPassesUnder(t *testing.T) {
 }
 
 // The remedy is the reason this gate is not just a category in
-// .untestable-budget.yaml: the two gates push in opposite directions, so a
-// breach here must not tell the reader to move logic INTO tools/cmd/llz.
-func TestCoreSurfaceRemedyPointsOutOfPackageMain(t *testing.T) {
-	if strings.Contains(UntestableRemedy, "internal") {
-		t.Error("the untestable-loc remedy should point INTO tools/cmd/llz")
+// .untestable-budget.yaml: the two gates push along different axes, and the
+// engine substitutes only `{config}`, so each must carry its own guidance.
+//
+// THIS TEST USED TO PIN THE BUG. It asserted that UntestableRemedy contains
+// "tools/cmd/llz" and does NOT contain "internal" — correct while package main
+// was where logic went, and a lock on stale advice once the move emptied that
+// package to six lines. A gate that tells an operator to do the thing another
+// gate fails them for is worse than a silent one, because they act on it. What
+// is worth pinning is not a destination string but the property: neither remedy
+// may send a reader into a package the other one caps.
+func TestNeitherRemedySendsReaderIntoTheCappedEntrypoint(t *testing.T) {
+	// cmd-llz-entrypoint is `exact: true` at 6 in .core-surface-budget.yaml, so
+	// naming it as a DESTINATION is always wrong. UntestableRemedy may still
+	// mention it, but only to steer away — hence the negative phrasing check.
+	if strings.Contains(UntestableRemedy, "tools/cmd/llz") &&
+		!strings.Contains(UntestableRemedy, "NOT tools/cmd/llz") {
+		t.Errorf("untestable-loc must not name tools/cmd/llz as a destination; got %q", UntestableRemedy)
 	}
-	if !strings.Contains(UntestableRemedy, "tools/cmd/llz") {
-		t.Error("the untestable-loc remedy names tools/cmd/llz as the destination")
+	if !strings.Contains(UntestableRemedy, "tools/internal") {
+		t.Errorf("untestable-loc should name tools/internal as the destination; got %q", UntestableRemedy)
 	}
 	for _, want := range []string{"tools/internal", "extension", "{config}"} {
 		if !strings.Contains(CoreSurfaceRemedy, want) {
 			t.Errorf("core-surface remedy should mention %q; got %q", want, CoreSurfaceRemedy)
 		}
+	}
+	// The two must remain distinguishable — one message for both gates was the
+	// riddle remedy.go exists to avoid.
+	if UntestableRemedy == CoreSurfaceRemedy {
+		t.Error("the two gates' remedies must differ; the engine only substitutes {config}")
 	}
 }
 

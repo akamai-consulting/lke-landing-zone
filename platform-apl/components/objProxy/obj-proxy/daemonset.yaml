@@ -12,7 +12,7 @@
 # on that node: no cross-node hop for large layer transfers, and a failure is
 # scoped to one node's workloads rather than to everything at once.
 #
-# dnsPolicy: Default IS LOAD-BEARING — see PROPERTY 1 in tools/cmd/llz/objproxy.go.
+# dnsPolicy: Default IS LOAD-BEARING — see PROPERTY 1 in tools/internal/extensions/lifecycle/objenc/proxy.go.
 # Clients reach this pod because CoreDNS rewrites the endpoint hostname to the
 # Service below. The proxy dials THAT SAME HOSTNAME upstream, so if it resolved
 # through cluster DNS it would resolve to itself and every request would loop.

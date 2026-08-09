@@ -82,7 +82,10 @@ stale in the direction that reads as headroom you do not have.
 cd tools && go run ./cmd/llz ci untestable-loc --verbose   # per-file breakdown
 ```
 
-The fix is to move the logic into `tools/cmd/llz` as a tested verb. Genuine
+The fix is to move the logic into `tools/internal/` as a tested verb (an
+extension package under `internal/extensions/`, or `internal/shared/` if it is
+genuinely shared) — not into `tools/cmd/llz`, which is a six-line entry point
+budgeted by `cmd-llz-entrypoint`. Genuine
 install/glue with no logic worth testing goes in `exclude:` **with a one-line
 justification** — that is the sanctioned escape, not a budget bump.
 
@@ -91,7 +94,7 @@ paid inside the same change so the net was still a ratchet down. That is the bar
 
 > **Do not write a new helper as a shell or Python script.** The first cut of one
 > recent helper was a 74-line Python script and failed this gate on its first CI
-> run; the gate's own message says the fix is to move it into `tools/cmd/llz`.
+> run; the gate's own message says the fix is to move it into Go under `tools/internal/`.
 > Note the output is `used / budget` — a category reading `0 / 60` has **no
 > Python in the tree**, which is the state to preserve, not 60 lines of room to
 > spend.

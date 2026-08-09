@@ -8,7 +8,7 @@ promotion.
 [apl-overlay-obj-native.md](apl-overlay-obj-native.md),
 [../adr/0005-managed-app-platform.md](../adr/0005-managed-app-platform.md),
 `tools/internal/shared/clusterspec/aplversion.go`,
-`tools/cmd/llz/ci_prepare_apl_upgrade.go`.
+`tools/internal/extensions/lifecycle/bootstrapcluster/prepare_apl_upgrade.go`.
 
 ## Why
 

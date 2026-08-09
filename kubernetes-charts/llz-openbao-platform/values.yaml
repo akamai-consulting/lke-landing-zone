@@ -358,7 +358,8 @@ openbao:
           # in ipAddresses (templates/openbao-tls-cert.yaml), so in-pod callers
           # VERIFY the server against /openbao/tls/ca.crt instead of running
           # VAULT_SKIP_VERIFY=true. That retires the last skip-verify in the
-          # codebase — see `baoEnv` in tools/cmd/llz/openbao.go.
+          # codebase — see tools/internal/shared/openbao/openbao.go, where the only
+          # remaining InsecureSkipVerify is the loopback port-forward client.
           #
           # NO cluster_address here: raft peer traffic belongs on the network
           # listener above (8201), and a second cluster_address is a config error.

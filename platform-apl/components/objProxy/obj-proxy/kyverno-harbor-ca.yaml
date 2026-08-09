@@ -35,7 +35,7 @@
 # correct even if a future image moves its trust store into one of them.
 #
 # HOW IT REACHES THE CLUSTER. Argo, as part of the objProxy component — NOT the
-# tools/cmd/llz/manifests/ directory its siblings live in. Those are applied by
+# tools/internal/extensions/lifecycle/bootstrapcluster/manifests/ directory its siblings live in. Those are applied by
 # `llz ci apply-kyverno-policy`, and that command is invoked by NOTHING: no
 # workflow, no Terraform, and bootstrap-cluster does not call it in-process despite
 # the comment in ci.go saying it does. Putting this there would have shipped a

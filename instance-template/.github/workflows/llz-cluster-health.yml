@@ -166,7 +166,7 @@ jobs:
       # stream back out of Loki is the only check that can tell those apart.
       #
       # The delivery/enforcement gates come in as ONE call to `llz ci assert-suite`,
-      # which owns the lane table (tools/cmd/llz/ci_assert_suite.go). They belong on
+      # which owns the lane table (tools/internal/extensions/assertions/assertsuite/suite.go). They belong on
       # this day-2 path as much as on the e2e one — a collector that stops shipping
       # next month is exactly what a scheduled check should catch — and routing them
       # through the suite means this workflow never has to be edited again when a

@@ -294,7 +294,7 @@ jobs:
           }
 
       # The whole in-cluster bootstrap in one command — see
-      # tools/cmd/llz/ci_bootstrap_cluster.go. Idempotent, so a re-run is safe.
+      # tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go. Idempotent, so a re-run is safe.
       - name: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
         if: inputs.bootstrap_cluster
         env:
@@ -429,7 +429,7 @@ jobs:
 
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic seed from the bootstrapSeeds() table in
-      # tools/cmd/llz/ci_bao_seed_all.go — add new seeds THERE, not as steps here.
+      # tools/internal/extensions/lifecycle/openbao/seedall.go — add new seeds THERE, not as steps here.
       # A missing source defers per its table mode; a kv-put failure aborts the
       # rest. HA_ROLE drives the github-dispatch-token standby skip;
       # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
@@ -778,8 +778,9 @@ jobs:
       # Release-e2e only (assert_loki=true); normal instance bootstraps skip it.
       #
       # The lane table, the parallel fan-out, the per-lane ::group:: capture and the
-      # pass/fail verdict all live in `llz ci assert-suite` (tools/cmd/llz/
-      # ci_assert_suite.go), not here. This used to be ~40 lines of inline bash
+      # pass/fail verdict all live in `llz ci assert-suite`
+      # (tools/internal/extensions/assertions/assertsuite/suite.go), not here.
+      # This used to be ~40 lines of inline bash
       # implementing a job runner in YAML: it was the only untested part of the
       # battery, its lane list was written TWICE (once to run, once to collect) so a
       # lane could run and never be able to fail the step, and the list shipped

@@ -35,7 +35,7 @@ usage() { sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p;}' "$0"; }
 # is how the toolchain split hid: CI resolved HashiCorp Terraform from the image
 # while a developer with both installed resolved terraform too — and a developer
 # with only tofu silently tested something else entirely. Same order as llz's
-# tfBin() (tools/cmd/llz/tfbin.go) so a script and llz can never disagree about
+# tfBin() (tools/internal/shared/tfbin/tfbin.go) so a script and llz can never disagree about
 # which binary runs against a given state file.
 #
 # `terraform` stays as a FALLBACK for adopters mid-migration whose runners still

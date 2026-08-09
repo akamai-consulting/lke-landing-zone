@@ -85,7 +85,7 @@ Three measured facts make this small enough to trust on the write path:
    requests — and only those — are de-chunked and re-signed, because the framing
    headers are inside `SignedHeaders` and cannot be removed without it. The
    property above still holds for every other request. See
-   `tools/cmd/llz/objproxy_resign.go`; the capability is off unless `--creds-file`
+   `tools/internal/extensions/lifecycle/objenc/proxy_resign.go`; the capability is off unless `--creds-file`
    is given, applies only to that framing, and re-signs as the **same access key
    the client used**, refusing any other. It is the one place the proxy holds a
    credential, which is a real increase in what a compromised proxy could do and
@@ -180,14 +180,14 @@ Secrets from its own namespace, so it cannot live beside the proxy.
 
 | Path | What |
 |---|---|
-| `tools/cmd/llz/objproxy_inject.go` | injection rules (pure, unit-tested) |
-| `tools/cmd/llz/objproxy.go` | `llz obj-proxy` — TLS in, streamed proxy out |
+| `tools/internal/extensions/lifecycle/objenc/proxy_inject.go` | injection rules (pure, unit-tested) |
+| `tools/internal/extensions/lifecycle/objenc/proxy.go` | `llz obj-proxy` — TLS in, streamed proxy out |
 | `platform-apl/components/objProxy/` | DaemonSet, Service, Certificate, ExternalSecret, NetworkPolicy |
 | `.../obj-proxy/coredns-rewrite.yaml` | the on switch — **not** in the kustomization |
 | `.../obj-proxy/ca-trust.yaml` | CA bundle, issued into `harbor` |
 | `.../obj-proxy/kyverno-harbor-ca.yaml` | Pod mutation — in the COMPONENT, see below |
-| `tools/cmd/llz/ci_seed_ssec_key.go` | `llz ci seed-ssec-key` — generate-once |
-| `tools/cmd/llz/ci_assert_obj_encryption.go` | `llz ci assert-obj-encryption` |
+| `tools/internal/extensions/lifecycle/objenc/seed_key.go` | `llz ci seed-ssec-key` — generate-once |
+| `tools/internal/extensions/lifecycle/objenc/assert.go` | `llz ci assert-obj-encryption` |
 
 The Kyverno policy lives in the **component**, not in `tools/internal/extensions/lifecycle/bootstrapcluster/manifests/`
 with its siblings. Those are applied by `llz ci apply-kyverno-policy`, and that

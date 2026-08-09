@@ -46,7 +46,7 @@ OWN content. A `Degraded` resource then fails only its own App.
 > or validation error degrades the ApplicationSet itself and thus platform-bootstrap's
 > health rollup. The operator-triggerable causes are directory names that yield an
 > invalid Application/namespace, which `llz render`/`llz doctor` reject at render time
-> (`tools/cmd/llz/custom_layout.go`). That render-time gate is weaker than the VAP-style
+> (`tools/internal/shared/instanceresolve/custom_layout.go`). That render-time gate is weaker than the VAP-style
 > admission enforcement this document argues for elsewhere — a direct commit bypasses it.
 > Closing that gap is open work. See docs/extending-llz.md.
 

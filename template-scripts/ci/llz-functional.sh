@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # llz-functional.sh — functional test of the built `llz` binary: drive it the way
 # an adopter does and assert on real behaviour, not mocked argv. Complements the
-# in-process unit tests (tools/cmd/llz/*_test.go, which stub the shell-out) and
+# in-process unit tests (tools/internal/**/*_test.go, which stub the shell-out) and
 # scaffold-render-check.sh (which already covers `llz env add`).
 #
 # Two sections:

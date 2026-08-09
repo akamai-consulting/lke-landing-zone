@@ -134,7 +134,7 @@ If you find yourself writing any of these, stop and reconsider:
 
 ## See also
 
-- `tools/cmd/llz/ci_bootstrap_cluster.go` — the native bootstrap command: header comment + the ordered flow (the `waitAplPipeline` gate raced against the two Kyverno policies).
+- `tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go` — the native bootstrap command: header comment + the ordered flow (the `waitAplPipeline` gate raced against the two Kyverno policies).
 - `tools/internal/extensions/lifecycle/converge/aplpipeline.go` — the loud readiness gate (`aplPipelineStages` + the existence-poll → condition-wait state machine).
 - ``llz ci health`` — header comment + the `MODE_*` constants + the helper functions that classify a resource into `0/1/2`.
 - `instance-template/.github/workflows/bootstrap-openbao.yml` — header comment + the Branch A / Branch B / Re-configure mode selector, which is the same `0/1/2` shape applied to OpenBao seal state.

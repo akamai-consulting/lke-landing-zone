@@ -107,7 +107,7 @@ jobs:
   # build-images.yml only ever pushes :latest and :sha-<SHA> (the llz image has no
   # static `version` in its matrix). Nothing published :vX.Y.Z — so an instance
   # pinned to a release rendered ghcr.io/…/llz:v0.0.28 into its carved apps and
-  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/cmd/llz/render.go).
+  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/internal/extensions/lifecycle/render/render.go).
   #
   # RETAG rather than rebuild: the sha- image for this commit is the artifact
   # release-e2e already validated, so pointing the version tag at the same

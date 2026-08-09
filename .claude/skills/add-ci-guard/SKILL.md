@@ -21,7 +21,12 @@ explaining the failure mode each one prevents.
 ## The pattern, step by step
 
 1. **Decision logic lives in Go, never in bash.** Implement the check as a new
-   `llz ci <verb>` subcommand in `tools/cmd/llz/` (the `ci` subtree). The
+   `llz ci <verb>` subcommand in its own guard package under
+   `tools/internal/extensions/guards/<name>/`, registered in
+   `tools/internal/cli/ci.go`. The package declares itself in `extension.go` with
+   a **gate** binding — `read-repo` and nothing else, which is what makes the gate
+   kind legal. (It does **not** go in `tools/cmd/llz`: that package is a six-line
+   entry point budgeted by `cmd-llz-entrypoint`.) The
    `untestable-loc-check` gate exists precisely to force this — inline
    workflow/Makefile shell logic is budgeted by `.untestable-budget.yaml` and
    budgets only ratchet DOWN. Read `tools/AGENTS.md` first: stdlib-first

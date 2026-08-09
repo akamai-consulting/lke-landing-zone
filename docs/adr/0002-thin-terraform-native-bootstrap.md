@@ -4,9 +4,9 @@
 - Date: 2026-07-15
 - Deciders: platform / LLZ maintainers
 - Related: `docs/architecture/convergence-contract.md`,
-  `tools/cmd/llz/ci_bootstrap_cluster.go`,
+  `tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go`,
   `tools/internal/extensions/lifecycle/converge/aplpipeline.go`,
-  `tools/cmd/llz/ci_kyverno.go`
+  `tools/internal/extensions/lifecycle/kyverno/policy.go`
 
 ## Context
 
@@ -42,7 +42,7 @@ imperative building blocks it leaned on already lived in Go
 native `llz ci bootstrap-cluster` command driven from CI.** ArgoCD/apl-core own
 everything day-2 (they already did, post-seed).
 
-`llz ci bootstrap-cluster` (`tools/cmd/llz/ci_bootstrap_cluster.go`) is a faithful
+`llz ci bootstrap-cluster` (`tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go`) is a faithful
 port of the retired workspace, in the same exec-seam style as the rest of `llz ci`:
 read the live coredns ClusterIP, inject the four secrets-only runtime placeholders
 into the committed apl-values, server-side-apply the block-storage StorageClass +

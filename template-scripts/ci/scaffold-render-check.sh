@@ -66,7 +66,8 @@ INSTANCE="$ROOT/instance-template"
 # That debris is not harmless — the template-manifest gate walks the FILESYSTEM
 # (the CI container has no usable git), so leftover scaffold files make
 # `make template-manifest-check` fail locally while CI, on a clean checkout, passes.
-# Keep in step with tfRoots in tools/cmd/llz/scaffold.go, plus cluster-bootstrap.
+# Keep in step with instancelayout.Roots in
+# tools/internal/shared/instancelayout/instancelayout.go, plus cluster-bootstrap.
 GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/cluster/$ENV_NAME.tfvars"
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"

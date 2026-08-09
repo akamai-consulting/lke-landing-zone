@@ -8,7 +8,7 @@ name: llz-breakglass-openbao (reusable)
 # Fronts the recovery quorum for one deployment. A root token is ephemeral (bootstrap
 # mints, uses, and REVOKES it); the recovery keys survive and authorize
 # `operator generate-root`. The whole flow is ONE unit-tested Go verb —
-# `llz ci bao-breakglass` (tools/cmd/llz/ci_bao_breakglass.go) — not inline shell,
+# `llz ci bao-breakglass` (tools/internal/extensions/lifecycle/openbao/ci_bao_breakglass.go) — not inline shell,
 # exposing three operator actions:
 #   generate  regenerate a root token via the quorum, return it ENCRYPTED
 #   rotate    revoke the current root token first, then regenerate + return a fresh one
@@ -158,7 +158,7 @@ jobs:
       # The whole break-glass flow — validate inputs, (revoke/rotate) kill the
       # current root token, (revoke) delete the stored secret, (generate/rotate)
       # regenerate via the quorum and RSA-OAEP-encrypt the token to the operator's
-      # key — is ONE unit-tested Go verb (tools/cmd/llz/ci_bao_breakglass.go), not
+      # key — is ONE unit-tested Go verb (tools/internal/extensions/lifecycle/openbao/ci_bao_breakglass.go), not
       # inline shell. Running it in a single process is also what lets it read the
       # regenerated token straight from its own env (no cross-step $GITHUB_ENV
       # hand-off for a static `env:` to shadow). It writes the ciphertext to

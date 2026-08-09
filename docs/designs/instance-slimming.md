@@ -4,7 +4,7 @@
 this doc specifies — but see **Re-ranking (measured)** below: the largest single
 win is not in Lever 2.
 **Relates to:** `docs/designs/cross-org-reuse-pattern.md` (#201/#202 — why the
-reusable bodies are instance-local), `tools/cmd/llz/commands.go` (`runUpgrade`).
+reusable bodies are instance-local), `tools/internal/verbs/upgrade/upgrade.go` (`upgrade.Run`).
 
 ## Problem
 

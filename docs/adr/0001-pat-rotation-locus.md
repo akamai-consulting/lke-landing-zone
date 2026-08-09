@@ -68,7 +68,7 @@ each region's OpenBao, never crossing a job boundary or a GitHub secret.
 
 To keep the narrow PAT rotating on schedule after `create-linode-pat` was deleted,
 the monthly rotation leg now routes to `run-pat-propagate-only` (see
-`llz ci rotation-plan` / `tools/cmd/llz/ci_rotation_plan.go`): the narrow re-mint
+`llz ci rotation-plan` / `tools/internal/extensions/assertions/tokeninv/rotationplan.go`): the narrow re-mint
 runs monthly against whatever broad token the env secret currently holds (kept
 current by `broadPatRotator`'s env-secret publish), decoupled from — and no longer
 gated on — an in-CI broad-PAT create.

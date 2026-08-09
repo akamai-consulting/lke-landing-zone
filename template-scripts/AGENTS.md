@@ -3,7 +3,8 @@
 Shell + Python helpers for the landing-zone template. The heavy
 per-environment operational logic (bootstrap, cluster health, openbao ops,
 terraform orchestration, app deploy) lives in the llz CLI
-([../tools/cmd/llz/](../tools/cmd/llz/) — the former repo-root
+([../tools/](../tools/) — `cmd/llz` is the entry point, the logic lives under
+`internal/`; the former repo-root
 `instance-scripts/` were assimilated into it). It is template-INTERNAL (like
 `.github/actions`): the reusable `llz-*` workflows check the template out into
 `_llz-template/` and build llz from there (the install-llz action), so

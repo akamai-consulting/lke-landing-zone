@@ -203,7 +203,7 @@ func runCIWaveHealthGuard(root string) error {
 				f.file, f.groupKind, f.name, f.wave, f.rule.overrideKey)
 			continue
 		}
-		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in AllowedKinds (ci_wave_health_guard.go) with the override key, or register it with a documented reason it cannot wedge.\n",
+		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in AllowedKinds (guards/wavehealth/health.go) with the override key, or register it with a documented reason it cannot wedge.\n",
 			f.file, f.groupKind, f.name, f.wave, f.groupKind)
 	}
 	if failed {

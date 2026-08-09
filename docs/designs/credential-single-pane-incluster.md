@@ -141,7 +141,7 @@ without Alertmanager receivers wired. Keep them.
   modeled on `platform-apl/components/broadPatRotator/`.
 - `tools/internal/shared/clusterspec/components.go` — register `tokenInventory` (DependsOn
   `externalSecrets` + `llzReconciler`, `DefaultDisabled`, CarvedApp wave 5).
-- `tools/cmd/llz/ci_bao_seed_all.go` + `ci_openbao_configure.go` (`policyPlatformCI`) — only
+- `tools/internal/extensions/lifecycle/openbao/seedall.go` + `ci_openbao_configure.go` (`policyPlatformCI`) — only
   if decision (1) is to vault `APL_VALUES_REPO_TOKEN`.
 - `.github/workflows/llz-scheduled-checks.yml` — retire the `credential-single-pane` job
   **only after** per-instance adoption.

@@ -94,7 +94,7 @@ jobs:
 
       # The package/push/sign loop — the immutability + re-sign guard, digest
       # parsing, and transient-failure retry — is unit-tested Go
-      # (tools/cmd/llz/ci_publish_charts.go). This step is glue: helm/cosign are on
+      # (tools/internal/extensions/lifecycle/releasepublish/publish_charts.go). This step is glue: helm/cosign are on
       # PATH (installed above) and `helm registry login` already ran.
       - name: Package + push + sign charts
         env:
