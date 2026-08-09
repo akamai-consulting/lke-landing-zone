@@ -134,15 +134,21 @@ var grantStates = map[Grant][]State{
 	// added since this table was written (see the Grant block in extension.go for
 	// why it took four cases).
 	//
-	// The two states are the two moments `deliver-docs` runs, and it runs at both
-	// by construction: copier invokes it from `_tasks`, which fire on render
-	// (`llz new` → scaffolded) and on `copier update` (→ upgraded). Its own
+	// THE ROW SHIPPED WITH TWO STATES AND HAS THREE; read this block as strata, and
+	// `configured` is the later one (see FOURTH WIDENING below). The paragraph that
+	// follows is about the original pair, and it said "the two states" and "nothing
+	// else is listed" for a while after the third arrived — a comment contradicting
+	// itself in reading order, above a table a reader is checking it against.
+	//
+	// `scaffolded` and `upgraded` are the two moments `deliver-docs` runs, and it
+	// runs at both by construction: copier invokes it from `_tasks`, which fire on
+	// render (`llz new` → scaffolded) and on `copier update` (→ upgraded). Its own
 	// repointInstanceRootLinks comment is about the second — the walk is gated on
 	// template ownership precisely because on update it runs against a LIVE
 	// instance holding files that are none of the template's business.
 	//
-	// NOTHING ELSE IS LISTED, and the omissions are deliberate rather than
-	// pending. `promoted` looks obvious — promote-pipeline generates
+	// NOTHING BEYOND THOSE THREE IS LISTED, and the omissions are deliberate rather
+	// than pending. `promoted` looks obvious — promote-pipeline generates
 	// .github/workflows/promote.yml — but that extension does not hold this grant:
 	// its rendering is pure and its os.WriteFile stayed in internal/cli, so adding
 	// the state would list a row no shipping code exercises. The rule this table

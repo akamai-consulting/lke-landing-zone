@@ -447,7 +447,8 @@ type Run struct {
 	// and a flag change had to find both. Routing them through `--only` leaves one.
 	//
 	// The affordance those targets provided is real and the driver could not
-	// replace it: iterating on ONE guard means running one guard, not nineteen.
+	// replace it: iterating on ONE guard means running one guard, not the whole
+	// table (24 rows, pinned by TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string
 	// Toggles are the instance's component toggles, for enablement.
@@ -557,9 +558,18 @@ func RunGates(tree *cobra.Command, r Run, out, errOut io.Writer) error {
 
 // GatesCmd is `llz ci gates` — run every gate the registry declares AND can drive.
 //
-// It lives here rather than in cmd/llz for the reason the whole campaign exists:
-// package main is the one package that cannot be imported or tested from outside,
-// and a driver that only main can call is a driver only main can test.
+// It lives here rather than in the CLI layer, and the reason has CHANGED since it
+// was written. It used to say "package main is the one package that cannot be
+// imported or tested from outside, and a driver that only main can call is a driver
+// only main can test". That was ADR 0014's ground 1, and ADR 0014's own amendment
+// retires it: the tree moved to internal/cli, which is an ordinary importable,
+// testable package, so untestability is no longer what is being avoided.
+//
+// What survives is ground 2, and it is enough. internal/cli is the WIRING layer and
+// wiring is all it may hold; a driver that reads the registry, resolves enablement
+// and decides what runs is not wiring. Saying so is weaker than the untestability
+// argument and is written down as weaker, for the reason the ADR gives — a ratchet
+// whose reason has quietly changed is a ratchet people stop believing.
 func GatesCmd() *cobra.Command {
 	var root, only string
 	c := &cobra.Command{

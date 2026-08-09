@@ -1,11 +1,25 @@
 // Package registry collects the extensions compiled into this binary.
 //
-// It is the smallest thing that can be called a registry, and deliberately so.
-// There is no loader, no YAML manifest, no enable/disable resolution and no remote
-// half — docs/designs/internal-extension-model.md records why each is absent, and
-// issue #399 sequences them. What exists here is the one function everything else
-// will eventually be built around: "which extensions are there, and are their
-// declarations legal?"
+// It started as the smallest thing that could be called a registry — All() and
+// Validate(), answering "which extensions are there, and are their declarations
+// legal?" — and it has since grown the two consumers that make a declaration
+// load-bearing:
+//
+//	gates.go       RUNS gate bindings. `llz ci gates` drives the whole set.
+//	enablement.go  RESOLVES an instance's enabled set from spec.components, which
+//	               gates.go and the assert battery both skip on.
+//
+// THIS PARAGRAPH USED TO SAY THERE WAS "no enable/disable resolution", and it went
+// on saying it after enablement.go landed beside it in this same package. A package
+// doc that contradicts a file next to it is worse than no package doc: the model's
+// own doc.go and internal-extension-model.md both list enablement as a live
+// consumer, so a reader who trusted this one was told the framework was more inert
+// than it is.
+//
+// STILL ABSENT, and these are the real ones: no loader, no YAML manifest, no remote
+// half, and no DRIVER — nothing evaluates a required set and names a lifecycle
+// state. docs/designs/internal-extension-model.md records why each is absent, and
+// issue #399 sequences them.
 //
 // EACH EXTENSION DECLARES ITSELF IN ITS OWN PACKAGE and this file only names them.
 // The alternative — a central table transcribing every extension's bindings and
@@ -240,8 +254,13 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the
-// code. This closes that without moving sixty-one packages and rotting the paths
-// named in thirty-one documents.
+// code. This closes that without moving sixty-one packages and rotting every
+// document that names one — 29 files under docs/ cite an internal/extensions path.
+//
+// (That second number was written as "thirty-one documents" for a while, borrowed
+// from the name/package count in the sentence above it. The two are unrelated, and
+// only the first is pinned — which is the footnote-not-measurement shape gates.go
+// names, appearing inside the comment that names it.)
 //
 // The bucket (assertions/ guards/ lifecycle/) is deliberately kept in the string.
 // It predicts neither the binding kind nor the name — guards/ holds

@@ -18,11 +18,19 @@ package registry
 //
 // THAT AMBIGUITY IS THE WHOLE DEFECT, and it is why this is a ratchet rather than
 // a fix. `Component: ""` is a LEGITIMATE answer for several — the declaration
-// model names four opt-in extensions that should not be given one (import-brownfield
-// is a one-time adoption path, wedge-gameday and dev-mutation-testing are not about
-// the platform, release-publish runs template-repo-side), and inventing a component
-// so a checkbox exists would be worse than the gap. So the entries below are NOT a
+// model names the four opt-in extensions that should not be given one
+// (import-brownfield is a one-time adoption path, wedge-gameday is not about the
+// platform, release-publish runs template-repo-side, and database-provisioner
+// follows spec.databases rather than a component), and inventing a component so a
+// checkbox exists would be worse than the gap. So the entries below are NOT a
 // claim of fifty-two omissions. They are the population nobody has ruled on.
+//
+// THAT SENTENCE NAMED `dev-mutation-testing` FOR AS LONG AS THE ONE IT WAS COPIED
+// FROM DID, and no such extension is registered. Two files asserting the same
+// unregistered name is not two witnesses; it is one claim written twice.
+// TestComponentlessExtensionsAreRatcheted below measures the population, which is
+// why the COUNT stayed right while the membership was wrong — a ratchet over names
+// does not read the prose above it.
 //
 // WHAT THE RATCHET BUYS, precisely: a NEW extension cannot join the list. Its
 // author has to either name the component it follows or add a line here, and

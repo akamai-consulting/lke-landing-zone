@@ -113,13 +113,22 @@ const (
 // NAME DISAMBIGUATES REPEATED ATTACHMENTS, and exists because the same reasoning
 // that moved grants onto Binding applies one level further down. `operating` is
 // the only state an invariant may attach to, so without a name an extension could
-// hold exactly one invariant — and reconcile-actions is SEVEN of them (ES-store
-// recovery, OpenBao, tokens, apl-overlay, argo-nudge, sc-demote,
-// linode-token-wait) whose needs genuinely differ: the token restorers place
+// hold exactly one invariant — and reconcile-actions is EIGHT lanes, five of them
+// declared here (linode-creds, sc-demote, argo-nudge, es-store-recovery,
+// openbao-gauges) and three named in its Incomplete notes (tokens, apl-overlay,
+// apl-overlay-wait). Their needs genuinely differ: the token restorers place
 // credential material, sc-demote only writes to the cluster. Collapsed into one
 // binding their grants widen to the union, which is precisely the over-granting
 // that scoping grants per binding was introduced to prevent. Optional: a single
 // attachment needs no name, and two of the same kind:state do.
+//
+// THIS SENTENCE SAID SEVEN AND LISTED `linode-token-wait` AMONG THEM, which the
+// declaration it describes refutes in so many words: "linode-token-wait is NOT
+// missing: it is a watch wrapper belonging to the runtime, and the catalog counting
+// it among the seven invariants is a miscount". The model's own doc was carrying
+// the miscount an extension had already found and written down — the shape worth
+// noticing being that the correction lived in the declaration and the error lived
+// in the prose describing declarations, so neither reader met both.
 // REQUIRES IS THE PRECONDITION AXIS, and it is the third word this model has
 // gained. State says what a binding ESTABLISHES; Requires says what must ALREADY
 // HOLD for it to run. Until now only the first was expressible, and three
@@ -192,15 +201,32 @@ func (b Binding) String() string {
 // take, it declares what it TOUCHES and the validator decides whether its
 // bindings permit that.
 //
-// ON THE CATALOG'S GRANT DISTRIBUTION — no grant held by a majority of the 57
-// candidates — READ IT AS A DESIGN INTUITION, NOT A MEASUREMENT. The assignments
-// were authored in the same pass that invented this vocabulary, so the spread
-// reports the author's judgement rather than an independent property of package
-// main. It is a reason to think the axis is discriminating; it is not evidence,
-// and it cannot become evidence until extensions declare their own grants and the
-// distribution is observed instead of assigned. The same caution applies to
-// "nothing in package main needed a fifth binding kind" on BindingKind: the
-// catalog was built with four in mind.
+// ON THE CATALOG'S GRANT DISTRIBUTION — the catalog reported no grant held by a
+// majority of its 57 candidates, and called that what a scoping model looks like
+// when it discriminates rather than relabels. It was authored in the same pass that
+// invented this vocabulary, so it reported the author's judgement rather than a
+// property of package main, and said so: it "cannot become evidence until
+// extensions declare their own grants and the distribution is OBSERVED instead of
+// assigned".
+//
+// THAT CONDITION HAS BEEN MET, AND THE OBSERVATION DOES NOT AGREE. 62 extensions
+// now declare their own grants. Measured (registry.All, per extension):
+//
+//	read-repo 42/62 · cluster-read 23 · cloud-mutate 17 · cloud-read 16 ·
+//	cluster-write 16 · secret-custody 12 · secret-read 9 · write-repo 5 ·
+//	own-paths 1
+//
+// `read-repo` is held by a MAJORITY — two thirds — so the headline claim is false
+// once tested against the thing it named as its own test. Honour the test rather
+// than the conclusion: what survives is narrower and still worth having. The eight
+// grants that COST something spread thinly and discriminate well; `read-repo` is
+// close to universal and therefore carries little scoping information on its own,
+// which is exactly why its capability had to be a FENCE around a root rather than a
+// yes/no (see shared/capability/repo.go).
+//
+// The same caution — not the same refutation — still applies to "nothing in package
+// main needed a fifth binding kind" on BindingKind: the catalog was built with four
+// in mind, and no comparable observation has been made.
 type Grant string
 
 const (
@@ -398,11 +424,23 @@ type Extension struct {
 	// LaneDecl), so the plumbing is not what is missing; the argument is.
 	//
 	// EMPTY IS NOT "ALWAYS ON". Four of the seven opt-in extensions have no
-	// component and should not be given one: import-brownfield is a one-time
-	// adoption path, wedge-gameday and dev-mutation-testing are not about the
-	// platform at all, and release-publish runs template-repo-side. Enablement for
-	// those is a question this field does not answer, and answering it here would
+	// component and should not be given one, and the four are import-brownfield (a
+	// one-time adoption path), wedge-gameday (not about the platform at all),
+	// release-publish (runs template-repo-side) and database-provisioner. Enablement
+	// for those is a question this field does not answer, and answering it here would
 	// mean inventing a component that exists only to be a checkbox.
+	//
+	// database-provisioner IS THE ONE THAT NEEDED CHECKING RATHER THAN ASSERTING.
+	// This list used to name `dev-mutation-testing` in its place — an extension the
+	// registry does not contain and never has, so the fourth slot was justified by a
+	// declaration nobody could look up while the real occupant went unexamined. It
+	// belongs here for a different reason from the other three: it IS about the
+	// platform, and its enablement genuinely does follow configuration — just not
+	// `spec.components`, which has no database entry. It follows `spec.databases`,
+	// and pointing Component at a component that does not exist is precisely what
+	// EnabledFor refuses (rule 3). TestEveryComponentLinkResolves is what would have
+	// caught the reverse mistake; nothing checks an extension name in PROSE, which is
+	// how this one survived into a test file's header as well.
 	Component string
 	// Bindings is where it attaches and, per binding, what it may touch. At least
 	// one.
@@ -412,8 +450,8 @@ type Extension struct {
 	// an extension that declares its whole surface.
 	//
 	// IT EXISTS BECAUSE TWO EXTRACTIONS ARRIVED PARTIAL AND THE MODEL COULD NOT SAY
-	// SO. `reconcile-actions` declares four invariants while four more of its lanes
-	// are still in internal/cli; `template-sustain` declares the half that does not
+	// SO. `reconcile-actions` declares five invariants while three more of its lanes
+	// sit undeclared in the reconciler package next door; `template-sustain` declares the half that does not
 	// touch `.template-manifest`, which ADR 0014 pins as permanently core. Both
 	// read as COMPLETE — nothing distinguished "has four bindings" from "has eight,
 	// four of which have not moved" — and an extension that silently under-declares

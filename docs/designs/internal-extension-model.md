@@ -18,7 +18,7 @@ after it stopped being true. Three consumers read them today, and only one is di
 | `shared/capability` | builds the **handles** a binding's grants entitle it to — `capability.For`, `CloudFor`, `RepoForGate`. The grant IS the handle, so a binding declaring nothing is handed nothing |
 
 **Exactly one of the four kinds dispatches from the registry.** Gates do. Assertions and transitions
-are hand-wired into the cobra tree in `cmd/llz`; invariants are scheduled by the in-cluster
+are hand-wired into the cobra tree in `tools/internal/cli`; invariants are scheduled by the in-cluster
 reconciler. So `Kind` is a real constraint for the validator and a real dispatch key for one kind,
 and saying so plainly beats a reader inferring otherwise from the model's symmetry.
 
@@ -118,8 +118,8 @@ a ceiling that makes a continuously-running cloud mutator inexpressible does not
 stops it being written down, which is `→ seeded` banned-by-omission recurring inside the half of the
 ceiling built to fix banning-by-omission.
 
-**FIXED by the seventh extension:** that an extension is PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
-lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
+**FIXED by the seventh extension:** that an extension is PARTIAL. `reconcile-actions` declares five invariants and reads as complete, while three more of its
+lanes sit undeclared in the reconciler package next door — the same failure shape as banning by omission, since the reader cannot tell
 what is missing. `template-sustain` was the second independent case, so `Extension.Incomplete` now exists and both partial declarations say what they are missing.
 
 **A FOURTH thing the model cannot say, found by the twenty-ninth extension:** there is no binding
@@ -380,16 +380,34 @@ population simply turned out larger than the survey.
 `read-repo` · `cloud-read` · `cluster-read` · `secret-read` · `write-repo` · `cluster-write` ·
 `cloud-mutate` · `secret-custody` · `own-paths`
 
-The vocabulary is closed. [The catalog](internal-extensions.md) records how it distributes across all
-57 candidates, and no grant is held by a majority — which is what a scoping model looks like when it
-discriminates rather than relabels.
+The vocabulary is closed. [The catalog](internal-extensions.md) recorded how it distributed across
+its 57 candidates and found no grant held by a majority — which it read as what a scoping model looks
+like when it discriminates rather than relabels. It also said that spread was **a design intuition,
+not a measurement**: the grants were assigned in the same pass that invented the vocabulary, so it
+reported the author's judgement about package `main`, and it "cannot become evidence until extensions
+declare their own grants and the distribution is *observed* rather than assigned".
 
-**Read that as a design intuition, not a measurement.** The grants were assigned in the same pass
-that invented the vocabulary, so the spread reports the author's judgement about package `main`, not
-an independent property of it. It is a reason to believe the axis discriminates; it is not evidence,
-and it cannot become evidence until extensions declare their own grants and the distribution is
-*observed* rather than assigned. The same caution applies to "nothing in package `main` needed a
-fifth binding kind": the catalog was built with four in mind.
+**That condition has since been met, and the observation disagrees.** 62 extensions now declare their
+own grants. Measured against the live registry, per extension:
+
+| grant | extensions | | grant | extensions |
+|---|---|---|---|---|
+| `read-repo` | **42 / 62** | | `cluster-write` | 16 |
+| `cluster-read` | 23 | | `secret-custody` | 12 |
+| `cloud-mutate` | 17 | | `secret-read` | 9 |
+| `cloud-read` | 16 | | `write-repo` | 5 |
+| | | | `own-paths` | 1 |
+
+`read-repo` is held by two thirds of the set, so the headline claim is false against the very test the
+caveat named. Honouring the test rather than the conclusion leaves something narrower and still
+useful: the grants that **cost** something spread thinly and discriminate well, while `read-repo` is
+close to universal and carries little scoping information by itself — which is precisely why its
+capability had to be a **fence around a root** rather than a yes/no (see
+`tools/internal/shared/capability/repo.go`). The counts are pinned by
+`TestHandleHeaderCensusesMatchTheRegistry`.
+
+The same caution — not the same refutation — still applies to "nothing in package `main` needed a
+fifth binding kind": the catalog was built with four in mind, and no comparable observation exists.
 
 ### The ceiling, restated as rules
 
@@ -408,7 +426,7 @@ Plus the structural rules: kebab-case unique names, at least one binding, closed
 duplicate bindings or grants.
 
 **Repeated attachments carry a name.** `operating` is the only state an invariant may attach to, so
-without one an extension could hold exactly a single invariant — and `reconcile-actions` is seven,
+without one an extension could hold exactly a single invariant — and `reconcile-actions` is eight lanes,
 whose needs genuinely differ (the token restorers place credential material; the storage-class
 demoter only writes to the cluster). Collapsing them into one binding widens its grants to the union,
 which is the over-granting that scoping grants *per binding* was introduced to prevent. The name is
@@ -447,7 +465,7 @@ or seven frames from entry point to the leaf that shells out, so its capabilitie
 works, and its cost is stated in the package: an installed seam is global mutable state, tests must
 restore it, and two callers cannot hold different capability sets at once. An action ABI would hand
 each binding its own handle at dispatch time — exactly the thing package-level installation cannot
-do. `cmd/llz/ci_converge.go` is the hand-written version of that dispatch.
+do. `tools/internal/cli/ci_converge.go` is the hand-written version of that dispatch.
 
 *The case AGAINST, made by the first dispatch that actually shipped.* `registry/gates.go` drives 24
 gate bindings and needs no ABI: each binding acquires its capability by looking **itself** up from
