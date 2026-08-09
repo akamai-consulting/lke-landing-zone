@@ -847,3 +847,180 @@ func TestEveryLocalLintTargetIsReachableFromCI(t *testing.T) {
 			"directly — delete the entries; a stale exemption hides the next real gap.", stale)
 	}
 }
+
+// A CI JOB THAT DOES NOT REBUILD llz MUST RUN ONLY FORCED-SOURCE GATES.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// THE MACRO PREFERS A BINARY THAT IS NOT THE ONE UNDER REVIEW.
+//
+// LLZ_CI takes `llz` from PATH whenever the working tree is clean and one is
+// installed, and only builds from source when LLZ_FORCE_SOURCE is set. That is
+// right for a developer — it is fast, and the banner says which binary answered.
+// In CI it is a trap: the ci-tofu and ci-kubernetes images BAKE an llz at
+// image-build time, so a clean checkout plus a baked binary means the PATH branch
+// runs the MERGE-BASE llz against the PR's tree.
+//
+// Both container jobs run .github/actions/setup-llz. The kubernetes job passes
+// install-path: /usr/local/bin/llz, which overwrites the baked binary with one
+// built from the PR — so its gates are safe whichever branch they take. The
+// terraform job passes NO install-path: it installs the Go toolchain only, and
+// `llz` on PATH stays the image's. Everything it runs must therefore force source.
+//
+// `template-manifest-check` did not, sitting one paragraph above
+// managed-lock-check's comment stating the rule verbatim: "LLZ_CI's PATH-first
+// default would use the prebuilt image binary — which is built from the merge-base
+// and therefore doesn't even have this verb on the PR that introduces it". On a PR
+// changing the classification logic it validated the new scaffold with the old
+// rules, and said nothing.
+//
+// This asserts the rule instead of relying on the next author reading the
+// neighbouring comment.
+// ────────────────────────────────────────────────────────────────────────────
+func TestContainerJobsRunThePRsLlz(t *testing.T) {
+	root := filepath.FromSlash("../../../../../")
+	mkRaw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	wfRaw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "lint.yml"))
+	if err != nil {
+		t.Fatalf("reading lint.yml: %v", err)
+	}
+	mk, wf := string(mkRaw), string(wfRaw)
+	flat := regexp.MustCompile(`\\\n\s*`).ReplaceAllString(mk, " ")
+
+	forced := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^([a-z0-9-]+): export LLZ_FORCE_SOURCE`).FindAllStringSubmatch(mk, -1) {
+		forced[m[1]] = true
+	}
+	if len(forced) == 0 {
+		t.Fatal("no target exports LLZ_FORCE_SOURCE — the convention this checks is gone, or " +
+			"the parse is wrong; either way this guard would pass over everything")
+	}
+
+	// Targets whose recipe calls the LLZ_CI macro.
+	usesMacro := map[string]bool{}
+	var cur string
+	for _, line := range strings.Split(mk, "\n") {
+		if m := regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9._-]*):(?:[^=]|$)`).FindStringSubmatch(line); m != nil {
+			cur = m[1]
+		}
+		if strings.Contains(line, "$(call LLZ_CI") && cur != "" {
+			usesMacro[cur] = true
+		}
+	}
+	if len(usesMacro) == 0 {
+		t.Fatal("found no `$(call LLZ_CI` targets — the macro was renamed and this guard is vacuous")
+	}
+
+	varOf := func(n string) []string {
+		m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + ` :?= (.*)$`).FindStringSubmatch(flat)
+		if m == nil {
+			return nil
+		}
+		return strings.Fields(m[1])
+	}
+	var closure func(string, map[string]bool)
+	closure = func(t string, seen map[string]bool) {
+		if seen[t] {
+			return
+		}
+		seen[t] = true
+		m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(t) + `: (.*)$`).FindStringSubmatch(flat)
+		if m == nil {
+			return
+		}
+		for _, tok := range strings.Fields(m[1]) {
+			if strings.HasPrefix(tok, "$(") && strings.HasSuffix(tok, ")") {
+				for _, v := range varOf(tok[2 : len(tok)-1]) {
+					closure(v, seen)
+				}
+				continue
+			}
+			closure(tok, seen)
+		}
+	}
+
+	// Each job block, and whether it rebuilds llz onto PATH. Split line-wise: Go's
+	// RE2 has no lookahead, and a job header is simply a 2-space-indented key.
+	jobHeader := regexp.MustCompile(`^  ([a-z0-9][a-z0-9_-]*):\s*$`)
+	var blocks []string
+	var curBlk []string
+	for _, line := range strings.Split(wf, "\n") {
+		if jobHeader.MatchString(line) {
+			if len(curBlk) > 0 {
+				blocks = append(blocks, strings.Join(curBlk, "\n"))
+			}
+			curBlk = []string{line}
+			continue
+		}
+		if len(curBlk) > 0 {
+			curBlk = append(curBlk, line)
+		}
+	}
+	if len(curBlk) > 0 {
+		blocks = append(blocks, strings.Join(curBlk, "\n"))
+	}
+
+	var examined int
+	for _, b := range blocks {
+		name := jobHeader.FindStringSubmatch(strings.SplitN(b, "\n", 2)[0])
+		if name == nil || !strings.Contains(b, "runs-on") {
+			continue
+		}
+		// ONLY CONTAINER JOBS. The hazard is a BAKED llz on PATH, and only the
+		// ci-tofu / ci-kubernetes images carry one. A plain ubuntu-latest runner has
+		// no llz at all, so LLZ_CI's `command -v llz` fails there and the macro
+		// builds from source whatever the target declares — flagging those would be
+		// crying wolf, and a guard people learn to ignore stops being one. (The
+		// first cut did exactly that, on go-tests' two budget targets.)
+		if !strings.Contains(b, "container:") {
+			continue
+		}
+		// COMMENTS STRIPPED BEFORE MATCHING, and that is not tidiness. The first cut
+		// tested the raw block for "install-path" — and the comment added to the
+		// terraform job EXPLAINING that it passes no install-path contains the
+		// phrase, so the job read as one that rebuilds llz and was skipped. A
+		// matcher that answers to prose about the code instead of the code is the
+		// `.Cloud` vs `.Cloud.` defect in unbacked_test.go, one file over.
+		code := b
+		if lines := strings.Split(b, "\n"); true {
+			kept := lines[:0]
+			for _, l := range lines {
+				if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+					kept = append(kept, l)
+				}
+			}
+			code = strings.Join(kept, "\n")
+		}
+		if !strings.Contains(code, "setup-llz") || strings.Contains(code, "install-path:") {
+			continue // no llz, or it rebuilt one from this PR
+		}
+		b = code
+		for _, m := range regexp.MustCompile(`run: make ([a-z0-9-]+)`).FindAllStringSubmatch(b, -1) {
+			examined++
+			seen := map[string]bool{}
+			closure(m[1], seen)
+			var unforced []string
+			for tgt := range seen {
+				if usesMacro[tgt] && !forced[tgt] {
+					unforced = append(unforced, tgt)
+				}
+			}
+			sort.Strings(unforced)
+			if len(unforced) > 0 {
+				t.Errorf("lint.yml job %q runs `make %s` and does NOT rebuild llz (no install-path "+
+					"on setup-llz), so `llz` on PATH is the one baked into the container image at "+
+					"image-build time. These targets reach the LLZ_CI macro without exporting "+
+					"LLZ_FORCE_SOURCE, so they validate this PR's tree with the MERGE-BASE binary: "+
+					"%v.\n\tEither export LLZ_FORCE_SOURCE on each, or give the job's setup-llz an "+
+					"install-path so the binary is this PR's.", name[1], m[1], unforced)
+			}
+		}
+	}
+	if examined == 0 {
+		t.Fatal("no lint.yml job matched `setup-llz without install-path` + `run: make …` — the " +
+			"workflow was restructured and this guard now checks nothing")
+	}
+	t.Logf("checked %d `make` entry point(s) in jobs that do not rebuild llz", examined)
+}

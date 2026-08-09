@@ -514,7 +514,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go (source llz for template-manifest gate)
+      # Toolchain only, deliberately: no install-path, so `llz` on PATH stays the
+      # binary baked into ci-tofu. Every LLZ_CI target this job reaches therefore
+      # has to export LLZ_FORCE_SOURCE — at-rest-guard, managed-lock-check and
+      # template-manifest-check all do, and TestContainerJobsRunThePRsLlz pins it.
+      # (This step used to be named "source llz for template-manifest gate", which
+      # asserted an intent the Makefile did not implement: that target was the one
+      # target here NOT forcing source, so it ran the merge-base binary.)
+      - name: Set up Go (the forced-source gates below compile llz from this PR)
         uses: ./.github/actions/setup-llz
 
       - name: tflint + checkov + validate instance roots

@@ -863,6 +863,24 @@ lint-tf: $(LINT_TF) tf-fmt-check template-manifest-check managed-lock-check
 # walking up for a `.git`, which is the same answer from either branch, so there is
 # nothing left to compensate for. The subtree (instance-template) is declared in
 # registry/gates.go beside the gate it belongs to.
+# FROM SOURCE, for exactly the reason spelled out on managed-lock-check below —
+# and this target sat directly above that paragraph without obeying it.
+#
+# It classifies the WORKING TREE's instance-template/ scaffold against the WORKING
+# TREE's .template-manifest, so it must run the working tree's llz. LLZ_CI's
+# PATH-first branch takes an `llz` from PATH whenever the tree is clean, and in the
+# `terraform` CI job that llz is the one BAKED INTO ci-tofu at image-build time:
+# the terraform job runs .github/actions/setup-llz with NO install-path, so it
+# installs the Go toolchain and does not rebuild the binary. Its two neighbours in
+# lint-tf (at-rest-guard, managed-lock-check) force source and are the real reason
+# that toolchain is there; this one silently used the merge-base binary.
+#
+# The failure modes differ in the worst way. On a PR that ADDS or renames this
+# gate the stale binary knows no such gate and `--only` fails loudly. On a PR that
+# CHANGES the classification logic it passes, having validated the new scaffold
+# with the old rules — which is the shape this whole macro's PATH branch exists to
+# warn about.
+template-manifest-check: export LLZ_FORCE_SOURCE := 1
 template-manifest-check:
 	$(call LLZ_CI,gates --only template-manifest,)
 
