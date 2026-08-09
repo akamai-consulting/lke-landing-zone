@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
@@ -27,7 +28,8 @@ type removalRule struct {
 // blank lines and `#` comments ignored). A missing file → (nil, nil): an older
 // instance simply has nothing to remove.
 func readTemplateRemovals(path string) ([]removalRule, error) {
-	b, err := os.ReadFile(path)
+	repo, rel := capability.RepoContaining(readBinding(), path)
+	b, err := repo.ReadFile(rel)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

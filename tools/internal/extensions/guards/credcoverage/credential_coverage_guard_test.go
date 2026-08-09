@@ -115,7 +115,7 @@ func TestCredentialCoverageGuardIgnoresSecretsInherit(t *testing.T) {
 	dir := filepath.Join(writeWorkflows(t, map[string]string{
 		"a.yml": "jobs:\n  call:\n    uses: ./.github/workflows/x.yml\n    secrets: inherit\n",
 	}), "instance-template", ".github", "workflows")
-	got, n, err := collectWorkflowSecretRefs(dir)
+	got, n, err := collectWorkflowSecretRefs(ccRepo(dir), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCredentialCoverageGuardIgnoresWholeLineComments(t *testing.T) {
 		"a.yml": "# historical note: this used to read ${{ secrets.RETIRED_TOKEN }}\n" +
 			"env:\n  X: ${{ secrets.GITHUB_TOKEN }}\n",
 	}), "instance-template", ".github", "workflows")
-	got, _, err := collectWorkflowSecretRefs(dir)
+	got, _, err := collectWorkflowSecretRefs(ccRepo(dir), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestCredentialCoverageGuardKeepsUsagesAfterAnInlineHash(t *testing.T) {
 	dir := filepath.Join(writeWorkflows(t, map[string]string{
 		"a.yml": "steps:\n  - run: echo \"# banner\" && use ${{ secrets.GHCR_READ_TOKEN }}\n",
 	}), "instance-template", ".github", "workflows")
-	got, _, err := collectWorkflowSecretRefs(dir)
+	got, _, err := collectWorkflowSecretRefs(ccRepo(dir), ".")
 	if err != nil {
 		t.Fatal(err)
 	}

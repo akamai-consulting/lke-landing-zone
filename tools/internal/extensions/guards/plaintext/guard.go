@@ -42,12 +42,13 @@ package plaintext
 
 import (
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
@@ -473,8 +474,9 @@ func shortInClusterURL(code string) (string, bool) {
 }
 
 func Run(root string) error {
-	dirs := plaintextScanDirs(root)
-	findings, examined, err := collectPlaintextFindings(root, dirs)
+	repo := capability.RepoForGate(Extension(), root)
+	dirs := plaintextScanDirs(repo)
+	findings, examined, err := collectPlaintextFindings(repo, dirs)
 	if err != nil {
 		return err
 	}
@@ -531,23 +533,23 @@ func Run(root string) error {
 // apart; TestGuardExemptsItself fails if a real file here stops matching it.
 const guardOwnDir = "tools/internal/extensions/guards/plaintext/"
 
-func plaintextScanDirs(root string) []string {
-	dirs := guardwalk.PlatformTreeDirs(root)
-	dirs = append(dirs, guardkit.RepoPath(root, "kubernetes-charts"), guardkit.RepoPath(root, "tools"))
+func plaintextScanDirs(repo capability.Repo) []string {
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	dirs = append(dirs, guardkit.RepoPath(repo, "kubernetes-charts"), guardkit.RepoPath(repo, "tools"))
 	return dirs
 }
 
-func collectPlaintextFindings(root string, dirs []string) ([]plaintextFinding, int, error) {
+func collectPlaintextFindings(repo capability.Repo, dirs []string) ([]plaintextFinding, int, error) {
 	var out []plaintextFinding
 	examined := 0
 	for _, dir := range dirs {
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		err := repo.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil // a missing tree is requireCorpus's problem, not a walk error
 			}
-			if info.IsDir() {
+			if d.IsDir() {
 				// Vendored/generated trees say nothing about what we ship.
-				if b := info.Name(); b == "vendor" || b == "rendered" || b == "coverage" || b == ".git" {
+				if b := d.Name(); b == "vendor" || b == "rendered" || b == "coverage" || b == ".git" {
 					return filepath.SkipDir
 				}
 				return nil
@@ -574,12 +576,12 @@ func collectPlaintextFindings(root string, dirs []string) ([]plaintextFinding, i
 			if !isYAML && !isGo {
 				return nil
 			}
-			b, rerr := os.ReadFile(path)
+			b, rerr := repo.ReadFile(path)
 			if rerr != nil {
 				return rerr
 			}
 			examined++
-			rel := relForKey(root, path)
+			rel := relForKey(path)
 			out = append(out, scanPlaintext(rel, string(b), isGo)...)
 			return nil
 		})
@@ -827,19 +829,13 @@ func goSymbolFor(lines []string, idx int) string {
 
 // relForKey renders a repo-relative, slash-separated path for registry keys, so
 // a key is identical whether the guard runs from the repo root or from tools/.
-func relForKey(root, path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.ToSlash(path)
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return filepath.ToSlash(path)
-	}
-	rel, err := filepath.Rel(rootAbs, abs)
-	if err != nil {
-		return filepath.ToSlash(path)
-	}
+//
+// IT NO LONGER HAS TO DERIVE THE RELATIVE PATH — the reader is fenced to the root
+// and hands back paths already expressed under it, so the three-step
+// Abs/Abs/Rel dance (and its three separate failure fallbacks) is gone. What
+// remains is the part that was never about the filesystem.
+func relForKey(path string) string {
+	rel := path
 	// Canonicalise across the two layouts esRepoPath resolves. In an instance
 	// checkout the same trees sit under instance-template/, so without this strip
 	// every registry key would carry that prefix in one layout and not the other —

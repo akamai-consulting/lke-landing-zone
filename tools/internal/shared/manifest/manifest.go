@@ -14,8 +14,10 @@ package manifest
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,16 +129,20 @@ type copierProtect struct {
 // Only runs when copier.yml is found next to the scaffold root (the template
 // repo); in an instance (no copier.yml) it is a no-op, since there is nothing to
 // keep consistent there.
-func (m Manifest) checkCopierFencing(files []string, errOut io.Writer) error {
+// checkCopierFencing reads copier.yml from the scaffold root's PARENT, which is
+// why a caller fencing this must root at the repository and not at the scaffold:
+// a reader fenced at instance-template/ would refuse ../copier.yml and the check
+// would silently become the "no copier config" no-op below.
+func (m Manifest) checkCopierFencing(r fileReader, files []string, errOut io.Writer) error {
 	copierPath := filepath.Join(filepath.Dir(m.Root), "copier.yml")
-	if !fileExists(copierPath) {
-		if alt := filepath.Join(filepath.Dir(m.Root), "copier.yaml"); fileExists(alt) {
+	if !existsVia(r, copierPath) {
+		if alt := filepath.Join(filepath.Dir(m.Root), "copier.yaml"); existsVia(r, alt) {
 			copierPath = alt
 		} else {
 			return nil // instance context (or no copier config) — nothing to check
 		}
 	}
-	data, err := os.ReadFile(copierPath)
+	data, err := r.ReadFile(copierPath)
 	if err != nil {
 		return fmt.Errorf("template-manifest: read %s: %w", copierPath, err)
 	}
@@ -262,12 +268,34 @@ func fencedClassNames() string {
 	return strings.Join(names, "|")
 }
 
-func Load(root string) (Manifest, error) {
+// fileReader is every call this package makes against the disk, named so one body
+// serves a fenced caller and an unfenced one. capability.Repo satisfies it
+// structurally — no adapter and no second copy of the parser, which is how the
+// guard and the verbs stay guaranteed to read a manifest the same way.
+type fileReader interface {
+	ReadFile(string) ([]byte, error)
+	Stat(string) (os.FileInfo, error)
+	WalkDir(string, fs.WalkDirFunc) error
+}
+
+// osReader is the unfenced reader, for callers outside the capability model:
+// internal/verbs (which declares no bindings by design) and cmd/llz.
+type osReader struct{}
+
+func (osReader) ReadFile(p string) ([]byte, error)         { return os.ReadFile(p) }
+func (osReader) Stat(p string) (os.FileInfo, error)        { return os.Stat(p) }
+func (osReader) WalkDir(p string, fn fs.WalkDirFunc) error { return filepath.WalkDir(p, fn) }
+
+// Load reads .template-manifest, unfenced. See osReader for who that is for.
+func Load(root string) (Manifest, error) { return LoadFrom(osReader{}, root) }
+
+// LoadFrom is Load through a caller's own reader.
+func LoadFrom(r fileReader, root string) (Manifest, error) {
 	if root == "" {
 		switch {
-		case fileExists(filepath.FromSlash("instance-template/.template-manifest")):
+		case existsVia(r, filepath.FromSlash("instance-template/.template-manifest")):
 			root = "instance-template"
-		case fileExists(".template-manifest"):
+		case existsVia(r, ".template-manifest"):
 			root = "."
 		default:
 			return Manifest{}, fmt.Errorf("template-manifest: .template-manifest not found (looked in instance-template/ and .)")
@@ -279,14 +307,13 @@ func Load(root string) (Manifest, error) {
 		manifestPath = ".template-manifest"
 	}
 
-	f, err := os.Open(manifestPath)
+	raw, err := r.ReadFile(manifestPath)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("template-manifest: read %s: %w", manifestPath, err)
 	}
-	defer f.Close()
 
 	m := Manifest{Root: root, path: filepath.ToSlash(manifestPath)}
-	s := bufio.NewScanner(f)
+	s := bufio.NewScanner(bytes.NewReader(raw))
 	lineNo := 0
 	for s.Scan() {
 		lineNo++
@@ -321,9 +348,13 @@ func (m Manifest) Classify(rel string) string {
 	return hit
 }
 
-func ScaffoldFiles(root string) ([]string, error) {
+// ScaffoldFiles lists the scaffold, unfenced. See osReader.
+func ScaffoldFiles(root string) ([]string, error) { return ScaffoldFilesFrom(osReader{}, root) }
+
+// ScaffoldFilesFrom is ScaffoldFiles through a caller's own reader.
+func ScaffoldFilesFrom(r fileReader, root string) ([]string, error) {
 	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err := r.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -348,14 +379,15 @@ func ScaffoldFiles(root string) ([]string, error) {
 	return files, nil
 }
 
+// existsVia is fileExists through a reader.
+func existsVia(r fileReader, p string) bool {
+	_, err := r.Stat(p)
+	return err == nil
+}
+
 func ValidClass(s string) bool {
 	_, ok := LookupClass(s)
 	return ok
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // Run is `llz ci template-manifest`'s body, and it lives HERE rather than with the
@@ -365,10 +397,16 @@ func fileExists(path string) bool {
 // layering. The extension keeps the command and the declaration; the report is
 // part of what a manifest can tell you about itself.
 func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
+	return RunFrom(osReader{}, root, classifyPath, listClass, out, errOut)
+}
+
+// RunFrom is Run through a caller's own reader — the door template-manifest's
+// gate goes through.
+func RunFrom(r fileReader, root, classifyPath, listClass string, out, errOut io.Writer) error {
 	if classifyPath != "" && listClass != "" {
 		return fmt.Errorf("template-manifest: use only one of --classify or --list")
 	}
-	m, err := Load(root)
+	m, err := LoadFrom(r, root)
 	if err != nil {
 		return err
 	}
@@ -383,7 +421,7 @@ func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
 		return nil
 	}
 
-	files, err := ScaffoldFiles(m.Root)
+	files, err := ScaffoldFilesFrom(r, m.Root)
 	if err != nil {
 		return err
 	}
@@ -421,7 +459,7 @@ func Run(root, classifyPath, listClass string, out, errOut io.Writer) error {
 		fmt.Fprintf(errOut, "Add a rule for each (%s) — see the header in %s.\n", ClassNames(), m.path)
 		return fmt.Errorf("template-manifest: %d unclassified scaffold file(s)", len(unclassified))
 	}
-	if err := m.checkCopierFencing(files, errOut); err != nil {
+	if err := m.checkCopierFencing(r, files, errOut); err != nil {
 		return err
 	}
 	var tally []string

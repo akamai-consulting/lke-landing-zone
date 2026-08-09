@@ -23,6 +23,7 @@ package monitoringlabel
 import (
 	"fmt"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -81,7 +82,12 @@ func Run(roots []string) error {
 }
 
 func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelFinding, examined int, err error) {
-	examined, err = guardwalk.Walk(roots, func(path string, raw []byte) error {
+	// THIS GUARD IS THE ODD ONE OUT AMONG THE FIFTEEN: its `--root` is a LIST of
+	// directories to scan, where its thirteen siblings take one repository root.
+	// RepoContainingAll fences all of them under one reader, which is what keeps
+	// two scan roots from producing colliding finding names.
+	r, dirs := capability.RepoContainingAll(gateBinding(), roots)
+	examined, err = guardwalk.Walk(r, dirs, func(path string, raw []byte) error {
 		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d monitoringDoc) bool { return monitoringGuardKinds[d.Kind] }) {
 			if doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
 				findings = append(findings, monitoringLabelFinding{file: path, kind: doc.Kind, name: doc.Metadata.Name})

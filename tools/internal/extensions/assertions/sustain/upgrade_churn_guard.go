@@ -26,10 +26,12 @@ package sustain
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // churnPattern is one banned shape plus the reason, so a failure explains the
@@ -93,10 +95,11 @@ var churnGuardInstanceRoots = []string{
 // the template repo (identified by instance-template/), an instance (identified by
 // copier's answers file), or neither — in which case there is nothing to guard.
 func churnGuardScope() (roots []string, instance bool) {
-	if fi, err := os.Stat("instance-template"); err == nil && fi.IsDir() {
+	repo := capability.RepoAt(readBinding(), ".")
+	if fi, err := repo.Stat("instance-template"); err == nil && fi.IsDir() {
 		return churnGuardRoots, false
 	}
-	if _, err := os.Stat(".copier-answers.yml"); err == nil {
+	if _, err := repo.Stat(".copier-answers.yml"); err == nil {
 		return churnGuardInstanceRoots, true
 	}
 	return nil, false
@@ -105,13 +108,14 @@ func churnGuardScope() (roots []string, instance bool) {
 // StepUpgradeChurnGuard fails the lint gate when a banned pattern is present in the
 // delivered surface — about to ship it (template repo) or carrying it (instance).
 func StepUpgradeChurnGuard(_ Deps) error {
+	repo := capability.RepoAt(readBinding(), ".")
 	roots, instance := churnGuardScope()
 	if roots == nil {
 		return nil // neither a template repo nor an instance — nothing to guard
 	}
 	var hits []string
 	for _, root := range roots {
-		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		err := repo.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil //nolint:nilerr // a missing optional root is not this check's concern
 			}
@@ -120,7 +124,7 @@ func StepUpgradeChurnGuard(_ Deps) error {
 			if strings.HasSuffix(p, ".copier-answers.yml") {
 				return nil
 			}
-			data, err := os.ReadFile(p)
+			data, err := repo.ReadFile(p)
 			if err != nil || len(data) == 0 {
 				return nil //nolint:nilerr // unreadable/empty — skip, as the marker scan does
 			}

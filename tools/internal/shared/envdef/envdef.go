@@ -11,6 +11,7 @@ package envdef
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,7 +147,34 @@ spec:
 // identity the flags don't carry (clusterLabel, bootstrap.name) is derived from
 // the instance name; unset optional fields are omitted so they inherit
 // spec.defaults. k8sVersion/nodePool are written only when overridden by a flag.
+// fileWriter is the one write this package makes. capability.RepoWriter satisfies
+// it structurally, so a caller holding write-repo composes without this package
+// importing the capability layer.
+type fileWriter interface {
+	MkdirAll(string, fs.FileMode) error
+	WriteFile(string, []byte, fs.FileMode) error
+}
+
+// osWriter is the unfenced writer, for callers outside the capability model
+// (internal/verbs declares no bindings by design).
+type osWriter struct{}
+
+func (osWriter) MkdirAll(p string, m fs.FileMode) error { return os.MkdirAll(p, m) }
+func (osWriter) WriteFile(p string, b []byte, m fs.FileMode) error {
+	return os.WriteFile(p, b, m)
+}
+
+// WriteEnvDefinition writes environments/<env>.yaml unfenced. See osWriter.
 func WriteEnvDefinition(path, name string, o Opts, instanceName string) error {
+	return WriteEnvDefinitionVia(osWriter{}, path, name, o, instanceName)
+}
+
+// WriteEnvDefinitionVia is WriteEnvDefinition through a caller's own writer.
+//
+// It exists because `llz env add` reached this function while its binding
+// declared read-repo ALONE — a write laundered through a shared package, which
+// is why the extension's own tests could believe only `definition` wrote.
+func WriteEnvDefinitionVia(w fileWriter, path, name string, o Opts, instanceName string) error {
 	label := instanceName + "-" + name
 	role := OrElse(o.HARole, "standalone")
 
@@ -215,10 +243,10 @@ spec:
 	b.WriteString("  # components omitted → all default-enabled except dns. Add a components:\n")
 	b.WriteString("  # block to toggle or size them (see docs/landing-zone-spec.md).\n")
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := w.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return w.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // HAGroupMissingRole returns the HA role (active|standby) still missing from

@@ -15,19 +15,19 @@ import (
 // and reports the same green as a full pass, which is the empty-corpus bug this
 // package exists to prevent.
 func TestPlatformTreeDirs(t *testing.T) {
-	got := PlatformTreeDirs("/repo")
+	got := PlatformTreeDirs(reader("/repo"))
 	if len(got) != 3 {
 		t.Fatalf("want all three shared manifest roots, got %v", got)
 	}
 	for _, want := range []string{
-		filepath.Join("/repo", "platform-apl", "manifest"),
+		filepath.Join("platform-apl", "manifest"),
 		// manifest-secret-store is the one that was MISSING. It is a real deployed
 		// unit with its own llz-secret-store Application, and it holds the two
 		// ClusterSecretStores every ExternalSecret in the repo binds to — so while
 		// it was absent the four guards sharing these roots never opened it. This
 		// extraction also found the function's own header still saying "two".
-		filepath.Join("/repo", "platform-apl", "manifest-secret-store"),
-		filepath.Join("/repo", "platform-apl", "components"),
+		filepath.Join("platform-apl", "manifest-secret-store"),
+		filepath.Join("platform-apl", "components"),
 	} {
 		var found bool
 		for _, g := range got {
@@ -49,10 +49,11 @@ func TestPlatformTreeDirs(t *testing.T) {
 	}
 }
 
-// An empty root is the ambient-cwd case every guard hits when run from the repo
-// itself. It must produce usable relative paths, not paths with a leading slash.
+// The roots are REPO-RELATIVE whatever the reader is fenced at — that is the
+// point of routing them through the reader. An absolute path here would be one
+// the fence refuses, so this pins that the two agree.
 func TestPlatformTreeDirsRelativeRoot(t *testing.T) {
-	for _, g := range PlatformTreeDirs("") {
+	for _, g := range PlatformTreeDirs(reader("")) {
 		if filepath.IsAbs(g) {
 			t.Errorf("PlatformTreeDirs(\"\") returned an absolute path %q — run from the repo "+
 				"root the paths must stay relative", g)

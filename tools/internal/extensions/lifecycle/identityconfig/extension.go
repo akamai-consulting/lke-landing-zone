@@ -73,3 +73,15 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// configBinding returns the transition whose secret-custody scopes this package's
+// OpenBao admin operations. By name, not by index — database-provisioner's
+// namedBinding records why at greater length.
+func configBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == "identity-config" {
+			return b
+		}
+	}
+	panic("identity-plane: no binding named identity-config — the BaoAdmin handle is built from it")
+}

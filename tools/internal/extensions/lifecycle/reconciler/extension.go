@@ -82,3 +82,19 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// cloudBinding is the binding a Linode call is made under, chosen by NAME because
+// this extension declares several with DIFFERENT cloud permissions.
+//
+// THE RULE IS THE NARROWEST BINDING THAT COVERS WHAT THE CALL ACTUALLY DOES, and
+// it is applied by reading the HTTP verb rather than the function name. `discover_firewall.go` calls ListVPCSubnets — a GET — so it takes
+// `cidr-firewall`, the read invariant, not the one that also holds cloud-mutate.
+func cloudBinding(name string) extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic("llz-reconciler: no binding named " + name + " — its Linode client is built from one, " +
+		"so its absence is a wiring bug")
+}

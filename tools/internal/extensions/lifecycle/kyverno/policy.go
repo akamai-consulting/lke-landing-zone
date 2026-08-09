@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"sigs.k8s.io/yaml"
@@ -227,7 +228,11 @@ func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
 // metadata.name; that only re-enters the old behaviour, which is no worse.
 func policyName(manifest string) string {
 	fallback := strings.TrimSuffix(filepath.Base(manifest), ".yaml")
-	raw, err := os.ReadFile(manifest)
+	// Fenced at the tree containing the manifest: the path arrives from the
+	// caller, absolute in tests and relative in production, and RepoContaining
+	// relates the two forms rather than refusing one of them.
+	repo, rel := capability.RepoContaining(repoBinding(), manifest)
+	raw, err := repo.ReadFile(rel)
 	if err != nil {
 		return fallback
 	}

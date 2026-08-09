@@ -13,7 +13,6 @@ package credcoverage
 // and asserts that ALL of them are extracted.
 
 import (
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -42,7 +41,7 @@ func TestCollectSeededBaoSeedMultipleFields(t *testing.T) {
 		`            --field ca_key=env:KEY`,
 	}, "\n"))
 
-	paths, fields, err := collectSeeded([]string{filepath.Join(root, "bootstrap.yml")})
+	paths, fields, err := collectSeeded(ccRepo(root), []string{"bootstrap.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +73,7 @@ func seedTwo() {
 	})
 }
 `)
-	paths, fields, err := collectSeededGo(filepath.Join(root, "ci_seed_special.go"))
+	paths, fields, err := collectSeededGo(ccRepo(root), "ci_seed_special.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +112,7 @@ func provision() {
 	})
 }
 `)
-	paths, fields, err := collectSeededGo(filepath.Join(root, "ci_harbor_provisioner.go"))
+	paths, fields, err := collectSeededGo(ccRepo(root), "ci_harbor_provisioner.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +144,7 @@ func lokiObjectStoreFields() map[string]string {
 	}
 }
 `)
-	paths, fields, err := collectSeededGo(filepath.Join(root, "ci_rotate_linode_creds.go"))
+	paths, fields, err := collectSeededGo(ccRepo(root), "ci_rotate_linode_creds.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +168,7 @@ func seed() {
 	_ = baoKVPutFn("secret/plain/one", map[string]string{"only": v})
 }
 `)
-	paths, fields, err = collectSeededGo(filepath.Join(root, "no_rotation.go"))
+	paths, fields, err = collectSeededGo(ccRepo(root), "no_rotation.go")
 	if err != nil {
 		t.Fatal(err)
 	}

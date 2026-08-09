@@ -67,11 +67,11 @@ func TestMatchedCountsSelectedFilesNotScoringFiles(t *testing.T) {
 		"categories:\n  core:\n    kind: go-logic\n    budget: 0\n    include:\n      - \"tools/cmd/llz/*.go\"\n",
 		map[string]string{"tools/cmd/llz/a.go": "// comments only\n// so the tally is zero\n"})
 
-	cfg, err := loadBudgetConfig(filepath.Join(root, "b.yaml"))
+	cfg, err := loadBudgetConfig(gRepo(root), "b.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := scanBudgetCategories(root, cfg)
+	results, err := scanBudgetCategories(gRepo(root), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

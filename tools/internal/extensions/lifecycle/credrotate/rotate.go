@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // SetSecret writes a GitHub secret, scoped to an environment when env != "".
@@ -107,8 +107,10 @@ func WriteRotatedSecret(name, value string, deployments []string) error {
 // Client constructors as package vars so the commands are exercisable without
 // network access (same seam pattern as newKubeconfigClient / newACLClient).
 var (
-	NewPATClient    = func(token string) PATAPI { return linode.NewClient(token, 30*time.Second) }
-	NewObjKeyClient = func(token string) ObjKeyAPI { return linode.NewClient(token, 30*time.Second) }
+	NewPATClient    = func(token string) PATAPI { return capability.CloudFor(patCloudBinding()).Client(token, 30*time.Second) }
+	NewObjKeyClient = func(token string) ObjKeyAPI {
+		return capability.CloudFor(objKeyCloudBinding()).Client(token, 30*time.Second)
+	}
 )
 
 // PATAPI is the slice of the Linode client the PAT rotation uses.

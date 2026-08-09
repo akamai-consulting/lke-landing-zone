@@ -44,7 +44,7 @@ func SetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := yamledit.EditSpecFile(envFile, func(doc *yaml.Node) error {
+			if err := yamledit.EditSpecFileVia(specEditor("set"), envFile, func(doc *yaml.Node) error {
 				for _, a := range assigns {
 					if err := yamledit.SetSpecPath(doc, a[0], a[1]); err != nil {
 						return err

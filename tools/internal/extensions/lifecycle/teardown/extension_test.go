@@ -1,8 +1,10 @@
 package teardown
 
 import (
+	"net/http"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -70,5 +72,67 @@ func TestBothBindingsAreIndividuallyExpressible(t *testing.T) {
 		if errs := one.Validate(); len(errs) > 0 {
 			t.Errorf("%s cannot be declared on its own: %v", b, errs)
 		}
+	}
+}
+
+// A DRY RUN MUST NOT BE ABLE TO DELETE, ENFORCED RATHER THAN TRUSTED.
+//
+// Until now that property rested on one early `return` inside Deleter's closure —
+// the only thing between `--dry-run` and a destroyed cluster. The binding
+// selector puts a second, independent refusal at the transport, so this asserts
+// the selector actually narrows rather than merely being called.
+func TestTheDryRunBindingCannotDelete(t *testing.T) {
+	read := cloudBinding(false)
+	if err := capability.CloudFor(read).Permits(http.MethodDelete); err == nil {
+		t.Error("the non-mutating binding permits DELETE — a dry run could destroy through it")
+	}
+	if err := capability.CloudFor(read).Permits(http.MethodGet); err != nil {
+		t.Errorf("the non-mutating binding must still LIST, or a dry run cannot report: %v", err)
+	}
+
+	// And the mutating one must actually be able to, or `--yes` is broken.
+	if err := capability.CloudFor(cloudBinding(true)).Permits(http.MethodDelete); err != nil {
+		t.Errorf("the mutating binding cannot DELETE: %v", err)
+	}
+}
+
+// SELECTION MAY ONLY NARROW, and this compares EFFECTIVE PERMISSION rather than
+// the grant lists — which is the level the property actually lives at.
+//
+// The first version of this test compared the two Grants slices and failed: the
+// assertion declares `cloud-read` and the transition declares `cloud-mutate`
+// WITHOUT it, so read looked like a grant the wide binding lacked. It is not —
+// cloud-mutate implies cloud-read, exactly as cluster-write implies cluster-read.
+// Comparing the literal lists tested a proxy for the property and got the wrong
+// answer about a correct declaration.
+//
+// The rule that keeps the model's guarantee intact now that a binding can be
+// chosen at runtime: for EVERY method the narrow binding permits, the wide one
+// must permit it too. The maximum a code path may do stays static and readable
+// from the declaration; the flag subtracts from it and never adds. If that ever
+// stopped holding, "narrowing" would be "swapping" and reading the declaration
+// would stop bounding the behaviour.
+func TestTheRuntimeSelectionOnlyEverNarrows(t *testing.T) {
+	wide := capability.CloudFor(cloudBinding(true))
+	narrow := capability.CloudFor(cloudBinding(false))
+
+	read, mutate := capability.ClassifiedMethods()
+	for _, m := range append(append([]string{}, read...), mutate...) {
+		if narrow.Permits(m) == nil && wide.Permits(m) != nil {
+			t.Errorf("the non-mutating binding permits %s and the mutating one does not — "+
+				"selection must SUBTRACT permission, never swap it", m)
+		}
+	}
+
+	// And it must genuinely subtract something, or the selector is decorative.
+	var subtracted bool
+	for _, m := range mutate {
+		if wide.Permits(m) == nil && narrow.Permits(m) != nil {
+			subtracted = true
+		}
+	}
+	if !subtracted {
+		t.Error("the two bindings permit the same methods — the runtime selection buys nothing, " +
+			"and a dry run is back to being protected only by Deleter's early return")
 	}
 }

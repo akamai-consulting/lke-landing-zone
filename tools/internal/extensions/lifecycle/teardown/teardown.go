@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/preflight"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
@@ -38,8 +39,12 @@ type teardownClient interface {
 	DeleteResourcePath(ctx context.Context, path string) error
 }
 
-var newTeardownClient = func(token string) teardownClient {
-	return linode.NewClient(token, 60*time.Second)
+// newTeardownClient takes `mutating` because its three callers differ: RunCapture
+// only lists, while RunForceDelete and RunDeleteVPC delete unconditionally. One
+// factory handing all three a delete-capable client would make the read-only one
+// indistinguishable from the destroying ones at the transport.
+var newTeardownClient = func(token string, mutating bool) teardownClient {
+	return capability.CloudFor(cloudBinding(mutating)).Client(token, 60*time.Second)
 }
 
 // Force-delete cluster verify/retry knobs (overridable in tests). A wedged LKE-E
@@ -238,7 +243,9 @@ func RunCapture(d Deps, region, tfDir string) error {
 	if err != nil {
 		return err
 	}
-	client := newTeardownClient(token)
+	// RunCapture only LISTS — ClustersWithLabel, ListNodePools,
+	// ListVolumes — so it takes the read-only assertion binding.
+	client := newTeardownClient(token, false)
 	ctx := context.Background()
 
 	clusterID := ""
@@ -349,7 +356,8 @@ func RunForceDelete(d Deps, region, tfDir string) error {
 	if err != nil {
 		return err
 	}
-	client := newTeardownClient(token)
+	// RunForceDelete DELETEs the cluster, unconditionally.
+	client := newTeardownClient(token, true)
 	ctx := context.Background()
 	confirm := d.Confirm()
 	if !confirm {
@@ -476,7 +484,8 @@ func RunDeleteVPC(d Deps, region, tfDir, clusterID string, attempts, retryDelay 
 	if err != nil {
 		return err
 	}
-	client := newTeardownClient(token)
+	// RunDeleteVPC DELETEs the VPC and its subnets, unconditionally.
+	client := newTeardownClient(token, true)
 	ctx := context.Background()
 	clusterID = firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID"))
 

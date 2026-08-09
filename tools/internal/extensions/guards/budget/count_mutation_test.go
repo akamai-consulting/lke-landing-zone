@@ -55,7 +55,7 @@ func TestScanUntestableOrderingAndBreakdown(t *testing.T) {
 		"alpha-scripts":  {Kind: "script", Budget: 9, Include: []string{"scripts/**/*.sh"}},
 	}}
 
-	results, err := scanBudgetCategories(root, cfg)
+	results, err := scanBudgetCategories(gRepo(root), cfg)
 	if err != nil {
 		t.Fatalf("scanBudgetCategories: %v", err)
 	}

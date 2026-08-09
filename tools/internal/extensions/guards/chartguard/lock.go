@@ -18,6 +18,8 @@ import (
 	"sort"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // chartDep is one entry of a Chart.yaml `dependencies:` / Chart.lock list.
@@ -40,11 +42,16 @@ type chartLockResult struct {
 }
 
 func RunLockDrift(root string, dirs []string, out io.Writer) error {
+	repo := capability.RepoForGate(Extension(), root)
 	total := 0
 	for _, dir := range dirs {
-		full := filepath.Join(root, dir)
-		chartYAML, chartErr := os.ReadFile(filepath.Join(full, "Chart.yaml"))
-		lockRaw, lockErr := os.ReadFile(filepath.Join(full, "Chart.lock"))
+		// A missing file is a legitimate answer here — an unlocked chart is the
+		// finding — so both errors stay soft. The fence's refusal arrives the same
+		// way, which is acceptable only because the chart dir is a POSITIONAL the
+		// caller supplies: a path outside the tree is a mistyped argument, and it
+		// already reports as "no Chart.yaml" today.
+		chartYAML, chartErr := repo.ReadFile(filepath.Join(dir, "Chart.yaml"))
+		lockRaw, lockErr := repo.ReadFile(filepath.Join(dir, "Chart.lock"))
 
 		var chartPtr, lockPtr *string
 		if chartErr == nil {

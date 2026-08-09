@@ -48,3 +48,19 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// cloudBinding is the binding this package reaches Linode through — the one
+// carrying a cloud grant. Looked up rather than reconstructed, following objenc's
+// seedBinding: handles belong to a BINDING, and an extension with several must
+// not hand back the union.
+func cloudBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.CloudRead || g == extension.CloudMutate {
+				return b
+			}
+		}
+	}
+	panic("cloud-firewall-bootstrap: no binding carries a cloud grant — the Linode client is built from " +
+		"one, so its absence is a wiring bug")
+}

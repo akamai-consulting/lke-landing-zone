@@ -51,6 +51,21 @@ RETRY := template-scripts/ci/with-retry.sh
 # authority, so a fixture on the other side could only reimplement the
 # classification it is meant to be checking. Same shape as docsguard above. The
 # tests did not go anywhere — `go test -coverprofile` credits them to cmd/llz.
+# A `#` COMMENT CANNOT GO INSIDE THIS LIST. The entries are backslash-continued,
+# and a comment consumes the rest of its line INCLUDING the continuation — so an
+# annotation next to one floor silently truncates every floor after it. That is
+# not hypothetical: annotating internal/shared/capability dropped the list from
+# 119 entries to 100, and `make coverage` went GREEN because the packages it
+# stopped knowing about were the ones it stopped checking. Per-floor reasoning
+# goes here, above the assignment.
+#
+# internal/shared/capability=94 was LOWERED from 95, the one sanctioned reason
+# being that code MOVED IN: capability.RelTo and resolveEvenIfAbsent came from
+# deliverdocs' local relTo, bringing their defensive fallbacks with them
+# (filepath.Abs failing; filepath.Rel refusing two paths resolveEvenIfAbsent has
+# already made absolute). Those branches are unreachable on a real filesystem, so
+# recording the transfer is more honest than a test that cannot fail.
+# deliverdocs rose 92 -> 93 in the same commit — the other half of the move.
 COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/extensions/lifecycle/brownfield=80 \
@@ -87,7 +102,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/credcoverage=87 \
 	internal/extensions/assertions/configreadiness=39 \
 	internal/shared/instancelayout=55 \
-	internal/shared/yamledit=87 \
+	internal/shared/yamledit=89 \
 	internal/shared/kubectlprobe=77 \
 	internal/shared/tfbin=90 \
 	internal/shared/preflight=95 \
@@ -99,13 +114,13 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/tokeninv=67 \
 	internal/shared/terraform=95 \
 	internal/extensions/assertions/volumes=85 \
-	internal/extensions/guards/wavehealth=74 \
+	internal/extensions/guards/wavehealth=82 \
 	internal/extensions/lifecycle/tofudriver=25 \
 	internal/extensions/assertions/assertobs=67 \
 	internal/extensions/assertions/assertsecrets=63 \
 	internal/shared/keycloak=49 \
 	internal/extensions/assertions/assertidentity=24 \
-	internal/extensions/lifecycle/deliverdocs=88 \
+	internal/extensions/lifecycle/deliverdocs=93 \
 	internal/verbs/argodiag=81 \
 	internal/extensions/guards/plaintext=89 \
 	internal/extensions/lifecycle/chartpublish=54 \
@@ -122,7 +137,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/render=56 \
 	internal/verbs/upgrade=24 \
 	internal/verbs/newinstance=79 \
-	internal/extensions/guards/pincoherence=87 \
+	internal/extensions/guards/pincoherence=94 \
 	internal/verbs/lint=36 \
 	internal/shared/copier=68 \
 	internal/verbs/onboard=12 \
@@ -131,7 +146,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/buildpreflight=90 \
 	internal/extensions/lifecycle/branchpolicy=31 \
 	internal/extensions/assertions/reachability=33 \
-	internal/extensions/lifecycle/firewall=66 \
+	internal/extensions/lifecycle/firewall=68 \
 	internal/extensions/guards/meshegress=51 \
 	internal/extensions/guards/coverageguard=74 \
 	internal/extensions/guards/cosignguard=72 \
@@ -151,7 +166,7 @@ COVERAGE_MINS := \
 	internal/shared/gitcmd=95 \
 	internal/shared/envdef=52 \
 	internal/shared/charty=95 \
-	internal/shared/capability=95 \
+	internal/shared/capability=94 \
 	internal/shared/ghapi=88 \
 	internal/shared/templateid=79 \
 	internal/extensions/lifecycle/bootstrapcluster=61 \
@@ -160,7 +175,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/mtlsguard=89 \
 	internal/extensions/guards/versionpins=83 \
 	internal/extensions/assertions/assertsuite=70 \
-	internal/extensions/guards/templatemanifest=74 \
+	internal/extensions/guards/templatemanifest=93 \
 	internal/shared/ghcli=42 \
 	internal/extensions/lifecycle/reconciler=70 \
 	internal/shared/ghgitdata=78 \
@@ -211,6 +226,9 @@ help:
 	@echo "  helm-lint-real-values  hard dep-build + namespaced render of the OpenBao chart (lint --strict is helm-lint-charts' job)"
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
 	@echo "  chart-guards    run BOTH chart guards (version bump + Argo pin realignment) — a bump needs both"
+	@echo "  llz-gates       ALL of them at once — every gate binding the extension registry"
+	@echo "                  declares and can drive (20 commands, one process). This is what"
+	@echo "                  lint-k8s runs; the individual targets below remain for running one."
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
@@ -743,12 +761,40 @@ actions-lint:
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate wave-health-guard mtls-wiring-guard plaintext-guard credential-coverage-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check placeholder-guard \
-            externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
-            cosign-subject-guard \
+# THIRTEEN TARGETS COLLAPSED INTO `llz-gates`. Every one of them was a separate
+# `llz ci <verb>` shell-out that the extension registry already knows how to run,
+# so the Makefile and the registry each held a list of which guards exist — and
+# the registry's list drifted (its own comment claimed 6 driven gates when there
+# were 13, naming seven as undriven that were in the table above it).
+#
+# `llz ci gates` is now the single source of that truth. The gates it drives are
+# whatever the declarations say, so adding a guard is a registry edit rather than
+# a registry edit plus a Makefile edit that someone forgets.
+#
+# WHAT DID NOT MOVE, and cannot: k8s-lint (kube-linter), k8s-validate
+# (kubeconform), the three helm-lint targets, and prom-rules-check — which needs
+# promtool on PATH and is an ASSERTION binding rather than a gate. External tools
+# are not gates and the driver has no business pretending otherwise.
+LINT_K8S := k8s-lint k8s-validate llz-gates prom-rules-check \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
 LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
+
+# llz-gates: every gate binding the extension registry declares AND can drive.
+#
+# render-charts is a prerequisite because five of the collapsed guards had it
+# individually (k8s-lint, argocd-rendered-apps-check, placeholder-guard,
+# mesh-egress-guard, monitoring-label-guard) — the chart-shipped NetworkPolicies
+# and the openbao ServiceMonitor are only real YAML once rendered. The driver has
+# no notion of per-gate prerequisites, so the requirement is hoisted here: it must
+# hold for the whole set, and running it unnecessarily costs a render nobody
+# minds.
+#
+# ONE PROCESS INSTEAD OF THIRTEEN. With LLZ_FORCE_SOURCE=1 each collapsed target
+# rebuilt the binary; this pays that once.
+llz-gates: export RENDER_DIR := $(RENDER_DIR)
+llz-gates: render-charts
+	$(call LLZ_CI,gates,)
 
 # CI job entrypoints — one target per lint.yml container job.
 lint-k8s: $(LINT_K8S) shellcheck

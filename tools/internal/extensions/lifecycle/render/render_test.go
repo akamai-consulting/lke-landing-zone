@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
@@ -63,7 +64,12 @@ func renderAndWrite(t *testing.T, lz *clusterspec.LandingZone, envs []string, tf
 	if err != nil {
 		t.Fatalf("renderTargets: %v", err)
 	}
-	if err := writeTargets(targets, tfDir, "", false); err != nil {
+	// The tests pass ABSOLUTE trees under t.TempDir() where production passes the
+	// relative ones instancelayout.Detect() returns, so the fence goes at their
+	// common root. Built from the extension's own binding, so a test cannot hand
+	// itself a writer the declaration would not have produced.
+	fenceRoot := filepath.Dir(tfDir)
+	if err := writeTargets(capability.RepoWriterAt(renderBinding(), fenceRoot), fenceRoot, targets, tfDir, "", false); err != nil {
 		t.Fatalf("writeTargets: %v", err)
 	}
 }

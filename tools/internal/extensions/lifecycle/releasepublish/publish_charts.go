@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
@@ -95,7 +96,8 @@ func parseHelmPushDigest(out string) string {
 
 // chartDirs returns the sorted subdirectories of root that contain a Chart.yaml.
 func chartDirs(root string) ([]string, error) {
-	entries, err := os.ReadDir(root)
+	repo, rel := capability.RepoContaining(repoBinding(), root)
+	entries, err := repo.ReadDir(rel)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +107,7 @@ func chartDirs(root string) ([]string, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		if _, statErr := os.Stat(filepath.Join(dir, "Chart.yaml")); statErr == nil {
+		if _, statErr := repo.Stat(filepath.Join(rel, e.Name(), "Chart.yaml")); statErr == nil {
 			dirs = append(dirs, dir)
 		}
 	}

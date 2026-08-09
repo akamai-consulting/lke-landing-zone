@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -34,7 +35,9 @@ type volumeLabeler interface {
 }
 
 // relabelLinodeFn opens the Linode client. Seamed for tests.
-var relabelLinodeFn = func(token string) volumeLabeler { return linode.NewClient(token, 30*time.Second) }
+var relabelLinodeFn = func(token string) volumeLabeler {
+	return capability.CloudFor(cloudBinding("volume-labels")).Client(token, 30*time.Second)
+}
 
 func Relabel(ctx context.Context, d Deps) error {
 	regionShort := os.Getenv("REGION_SHORT")

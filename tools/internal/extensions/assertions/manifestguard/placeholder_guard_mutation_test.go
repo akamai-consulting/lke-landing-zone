@@ -3,6 +3,8 @@ package manifestguard
 import (
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // Rendered charts concatenate every template, so a single manifest can carry a
@@ -15,7 +17,7 @@ func TestCollectPlaceholderFindingsScansLinesPastTheScannerDefault(t *testing.T)
 	long := strings.Repeat("a", 200*1024) // ~200KB on one line, no newline inside
 	writeManifest(t, dir, "big.yaml", "host: "+placeholderHost+"\ndata: "+long+"\ntrailer: ok\n")
 
-	findings, examined, err := collectPlaceholderFindings([]string{dir})
+	findings, examined, err := collectPlaceholderFindings(capability.RepoAt(renderedManifestsBinding(), dir), []string{"."})
 	if err != nil {
 		t.Fatalf("a %d-byte line must fit the scan buffer, got %v", len(long), err)
 	}

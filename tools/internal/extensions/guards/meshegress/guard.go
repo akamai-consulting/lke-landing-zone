@@ -26,9 +26,8 @@ package meshegress
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -117,11 +116,12 @@ type meFinding struct {
 }
 
 func Run(root string) error {
-	if err := requireRenderedCharts(root); err != nil {
+	repo := capability.RepoForGate(Extension(), root)
+	if err := requireRenderedCharts(repo); err != nil {
 		return err
 	}
-	dirs := meshEgressScanDirs(root)
-	all, examined, err := collectMeshEgressFindings(dirs)
+	dirs := meshEgressScanDirs(repo)
+	all, examined, err := collectMeshEgressFindings(repo, dirs)
 	if err != nil {
 		return err
 	}
@@ -166,8 +166,8 @@ func Run(root string) error {
 // Rendering resolves both problems at once: `make render-charts` materializes the
 // charts with values applied, so the namespace is a literal and the file is real
 // YAML. That is the same tree k8s-lint and k8s-validate already consume.
-func meshEgressScanDirs(root string) []string {
-	return append(guardwalk.PlatformTreeDirs(root), filepath.Join(root, renderedChartsDir))
+func meshEgressScanDirs(repo capability.Repo) []string {
+	return append(guardwalk.PlatformTreeDirs(repo), renderedChartsDir)
 }
 
 // renderedChartsDir mirrors the Makefile's RENDER_DIR default. The two must agree;
@@ -181,9 +181,9 @@ const renderedChartsDir = "rendered"
 // chart-shipped policies are ONLY visible after rendering, running without a
 // rendered tree would silently return to the exact blind spot this change closes —
 // and it would do so quietly, on a machine where someone forgot a make target.
-func requireRenderedCharts(root string) error {
-	dir := filepath.Join(root, renderedChartsDir)
-	if _, err := os.Stat(dir); err != nil {
+func requireRenderedCharts(repo capability.Repo) error {
+	dir := renderedChartsDir
+	if _, err := repo.Stat(dir); err != nil {
 		return fmt.Errorf("mesh-egress-guard: no rendered charts at %s — the first-party charts' "+
 			"NetworkPolicies are only visible once rendered (their templates/ dirs are skipped, and "+
 			"their target namespaces are Helm values). Run `make render-charts` first, or `make "+
@@ -195,8 +195,8 @@ func requireRenderedCharts(root string) error {
 // collectMeshEgressFindings walks the dirs and flags every NetworkPolicy egress
 // whose namespaceSelector targets a meshStrictNamespaces entry from a different
 // source namespace.
-func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined int, err error) {
-	examined, err = guardwalk.Walk(dirs, func(path string, raw []byte) error {
+func collectMeshEgressFindings(repo capability.Repo, dirs []string) (findings []meFinding, examined int, err error) {
+	examined, err = guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
 		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d meDoc) bool { return d.Kind == "NetworkPolicy" }) {
 			for _, e := range doc.Spec.Egress {
 				for _, to := range e.To {

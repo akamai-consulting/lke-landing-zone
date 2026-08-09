@@ -28,14 +28,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // TempObjkeyLinodeClient is a seam for tests.
 var TempObjkeyLinodeClient = func(token string) LinodeAPI {
-	return linode.NewClient(token, 30*time.Second)
+	return capability.CloudFor(objKeyCloudBinding()).Client(token, 30*time.Second)
 }
 
 func RunTempObjkeyCreate(region, endpoint, bucketsCSV string) error {

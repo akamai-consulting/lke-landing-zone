@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
@@ -150,7 +152,11 @@ func GithubToken() string {
 			return t
 		}
 	}
-	out, err := execOutput("gh", "auth", "token", "--hostname", "github.com")
+	// THROUGH THE DECLARATION. This asked an unconstrained process launcher for a
+	// token; the binding declares cloud-read, and capability.Forge classifies
+	// `gh auth token` as a read and permits exactly that. A `gh secret set` from
+	// here would now be refused rather than merely unexpected.
+	out, err := capability.For(pinBinding()).Forge.Run("auth", "token", "--hostname", "github.com")
 	if err != nil {
 		return ""
 	}

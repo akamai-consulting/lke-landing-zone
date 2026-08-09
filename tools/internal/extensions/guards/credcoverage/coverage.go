@@ -41,12 +41,14 @@ package credcoverage
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
@@ -185,14 +187,15 @@ func credMeasuredByName() map[string]credCoverage {
 }
 
 func runCICredentialCoverageGuard(root string) error {
-	dir := guardkit.RepoPath(root, filepath.Join("instance-template", ".github", "workflows"))
+	repo := capability.RepoForGate(Extension(), root)
+	dir := guardkit.RepoPath(repo, filepath.Join("instance-template", ".github", "workflows"))
 	// An instance IS the scaffold's contents, so the same trees sit at the root
 	// there. esRepoPath resolves the template layout; this is the instance one.
-	if _, err := os.Stat(dir); err != nil {
-		dir = guardkit.RepoPath(root, filepath.Join(".github", "workflows"))
+	if _, err := repo.Stat(dir); err != nil {
+		dir = guardkit.RepoPath(repo, filepath.Join(".github", "workflows"))
 	}
 
-	used, examined, err := collectWorkflowSecretRefs(dir)
+	used, examined, err := collectWorkflowSecretRefs(repo, dir)
 	if err != nil {
 		return err
 	}
@@ -265,20 +268,20 @@ func classifyCredentialCoverage(used []string, w io.Writer) (unmeasured, stale [
 
 // collectWorkflowSecretRefs returns the sorted, de-duplicated set of secret names
 // referenced across the workflows in dir, plus the number of files read.
-func collectWorkflowSecretRefs(dir string) ([]string, int, error) {
+func collectWorkflowSecretRefs(repo capability.Repo, dir string) ([]string, int, error) {
 	set := map[string]bool{}
 	examined := 0
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := repo.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // a missing tree is requireCorpus's problem, not a walk error
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 		if ext := strings.ToLower(filepath.Ext(path)); ext != ".yml" && ext != ".yaml" {
 			return nil
 		}
-		b, err := os.ReadFile(path)
+		b, err := repo.ReadFile(path)
 		if err != nil {
 			return err
 		}

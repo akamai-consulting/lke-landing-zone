@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // kubeconfigClient is the slice of the Linode client fetch-kubeconfig needs,
@@ -28,7 +28,9 @@ type kubeconfigClient interface {
 	GetKubeconfig(ctx context.Context, clusterID uint64) (string, error)
 }
 
-var newKubeconfigClient = func(token string) kubeconfigClient { return linode.NewClient(token, 30*time.Second) }
+var newKubeconfigClient = func(token string) kubeconfigClient {
+	return capability.CloudFor(cloudBinding()).Client(token, 30*time.Second)
+}
 
 type FetchOpts struct {
 	Ref          ClusterRef

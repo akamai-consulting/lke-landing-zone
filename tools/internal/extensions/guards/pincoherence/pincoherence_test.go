@@ -1,10 +1,13 @@
 package pincoherence
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 func writeAnswers(t *testing.T, dir, body string) {
@@ -72,5 +75,73 @@ func TestAssertPinCoherenceUnparseable(t *testing.T) {
 	writeAnswers(t, dir, "_commit: [unterminated\n")
 	if err := Assert(dir); err != nil {
 		t.Fatalf("expected a silent pass on an unparseable answers file, got %v", err)
+	}
+}
+
+// The gate runs END TO END through its own command, which is how the registry
+// drives it. Assert had tests; the flag set and the reader it builds did not, and
+// the reader is the half that can refuse the file the guard exists to read.
+func TestCmdRunsThroughTheFence(t *testing.T) {
+	root := t.TempDir()
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, ".copier-answers.yml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	run := func() error {
+		c := Cmd()
+		c.SetArgs([]string{"--root", root})
+		c.SilenceUsage, c.SilenceErrors = true, true
+		c.SetOut(io.Discard)
+		c.SetErr(io.Discard)
+		return c.Execute()
+	}
+
+	// Skew: the two pins name different releases.
+	write("_commit: v1.2.3\nllz_version: v1.2.4\n")
+	err := run()
+	if err == nil {
+		t.Fatal("a skewed pin pair must fail the gate")
+	}
+	if !strings.Contains(err.Error(), "template pin skew") {
+		t.Errorf("the error should name the skew, got: %v", err)
+	}
+
+	// Agreement, and the three silent cases: identical pins, a non-release pin,
+	// and no answers file at all.
+	for _, body := range []string{
+		"_commit: v1.2.3\nllz_version: v1.2.3\n",
+		"_commit: main\nllz_version: v1.2.3\n",
+	} {
+		write(body)
+		if err := run(); err != nil {
+			t.Errorf("%q must pass: %v", body, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, ".copier-answers.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err != nil {
+		t.Errorf("no answers file is not an instance, so not a finding: %v", err)
+	}
+}
+
+// The reader comes from the DECLARATION. A guard that could mint its own binding
+// would be granting itself the capability.
+func TestGateBindingComesFromTheDeclaration(t *testing.T) {
+	b := gateBinding()
+	if b.Kind != extension.Gate {
+		t.Errorf("gateBinding returned a %s binding, want a gate", b.Kind)
+	}
+	var hasRead bool
+	for _, g := range b.Grants {
+		if g == extension.ReadRepo {
+			hasRead = true
+		}
+	}
+	if !hasRead {
+		t.Errorf("the gate binding does not declare read-repo, so the guard could not read at all: %v", b.Grants)
 	}
 }

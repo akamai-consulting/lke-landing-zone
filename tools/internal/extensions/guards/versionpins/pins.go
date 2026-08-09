@@ -25,14 +25,16 @@ package versionpins
 // making the pin more honest. Agreement is the property worth gating.
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
@@ -106,15 +108,16 @@ type pinSite struct {
 func (s pinSite) ok() bool { return s.got == s.want }
 
 func Run(root string, verbose bool, out, errOut io.Writer) error {
-	args, err := loadVersionAuthority(root)
+	repo := capability.RepoForGate(Extension(), root)
+	args, err := loadVersionAuthority(repo)
 	if err != nil {
 		return err
 	}
-	files, err := versionScanFiles(root)
+	files, err := versionScanFiles(repo)
 	if err != nil {
 		return err
 	}
-	sites, err := collectPinSites(root, files, args)
+	sites, err := collectPinSites(repo, files, args)
 	if err != nil {
 		return err
 	}
@@ -153,9 +156,8 @@ func Run(root string, verbose bool, out, errOut io.Writer) error {
 }
 
 // loadVersionAuthority reads the Dockerfile ARG block into name -> version.
-func loadVersionAuthority(root string) (map[string]string, error) {
-	path := filepath.Join(root, filepath.FromSlash(versionAuthorityFile))
-	data, err := os.ReadFile(path)
+func loadVersionAuthority(repo capability.Repo) (map[string]string, error) {
+	data, err := repo.ReadFile(filepath.FromSlash(versionAuthorityFile))
 	if err != nil {
 		return nil, fmt.Errorf("version-pins: read %s: %w", versionAuthorityFile, err)
 	}
@@ -171,13 +173,13 @@ func loadVersionAuthority(root string) (map[string]string, error) {
 
 // versionScanFiles walks scanRoots for text files that may restate a version.
 // Test files are excluded: a fixture legitimately pins a made-up version.
-func versionScanFiles(root string) ([]string, error) {
+func versionScanFiles(repo capability.Repo) ([]string, error) {
 	var files []string
 	for _, r := range scanRoots {
-		start := filepath.Join(root, filepath.FromSlash(r))
-		err := filepath.WalkDir(start, func(path string, d os.DirEntry, err error) error {
+		start := filepath.FromSlash(r)
+		err := repo.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				if os.IsNotExist(err) {
+				if errors.Is(err, fs.ErrNotExist) {
 					return nil // an optional root (Makefile, template-scripts) may be absent
 				}
 				return err
@@ -197,11 +199,9 @@ func versionScanFiles(root string) ([]string, error) {
 			case strings.HasSuffix(name, ".yml"), strings.HasSuffix(name, ".yaml"),
 				strings.HasSuffix(name, ".go"), strings.HasSuffix(name, ".sh"),
 				strings.HasPrefix(name, "Dockerfile"), name == "Makefile":
-				rel, err := filepath.Rel(root, path)
-				if err != nil {
-					return err
-				}
-				files = append(files, filepath.ToSlash(rel))
+				// Already repo-relative: the reader expresses everything under
+				// its own root.
+				files = append(files, filepath.ToSlash(path))
 			}
 			return nil
 		})
@@ -213,10 +213,10 @@ func versionScanFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func collectPinSites(root string, files []string, args map[string]string) ([]pinSite, error) {
+func collectPinSites(repo capability.Repo, files []string, args map[string]string) ([]pinSite, error) {
 	var sites []pinSite
 	for _, rel := range files {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		data, err := repo.ReadFile(filepath.FromSlash(rel))
 		if err != nil {
 			return nil, fmt.Errorf("version-pins: read %s: %w", rel, err)
 		}

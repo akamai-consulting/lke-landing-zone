@@ -25,11 +25,11 @@ spec:
   target:
     name: linode-api-token
 `
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml":     wdFmt(wdReconcilerDeploy, "", ""), // wave 0, refs linode-api-token
 		"llzReconciler/externalsecret.yaml": es,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,11 +87,11 @@ spec:
   target:
     name: shared-token
 `
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"harbor/consumer.yaml":     workload, // carved App llz-harbor, wave 5
 		"llzReconciler/store.yaml": es,       // carved App llz-reconciler, wave 5
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}

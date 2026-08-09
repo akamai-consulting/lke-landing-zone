@@ -1,10 +1,14 @@
 package deliverdocs
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
 func TestRunDeliverDocs(t *testing.T) {
@@ -193,5 +197,111 @@ func TestDeliverDocsHealsPermalinksLeftPinnedByAnOlderDelivery(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "quickstart.md"))
 	if strings.Contains(string(b), "v0.0.33") {
 		t.Errorf("healing re-pinned the link instead of floating it: %s", b)
+	}
+}
+
+// THE WRITER COMES FROM THE DECLARATION, and it is the write-repo binding
+// specifically — not the union of an extension that also holds read-only ones.
+func TestDeliverBindingCarriesWriteRepo(t *testing.T) {
+	b := deliverBinding()
+	var hasWrite bool
+	for _, g := range b.Grants {
+		if g == extension.WriteRepo {
+			hasWrite = true
+		}
+	}
+	if !hasWrite {
+		t.Fatalf("deliverBinding returned a binding without write-repo (%v) — the prune and the "+
+			"rewrites would be refused", b.Grants)
+	}
+}
+
+// A PATH THAT CANNOT BE RELATED TO THE FENCE IS REFUSED, NOT WRITTEN. relTo hands
+// an unrelatable path back untouched precisely so the writer says no; the danger
+// would be silently retargeting it somewhere inside the tree.
+func TestAWriteOutsideTheFenceIsRefused(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	w := capability.RepoWriterAt(deliverBinding(), root)
+
+	if err := w.WriteFile(filepath.Join(outside, "README.md"), []byte("x"), 0o644); err == nil {
+		t.Fatal("an absolute path outside the tree was written")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "README.md")); err == nil {
+		t.Error("the file landed outside the fence")
+	}
+}
+
+// Run over a docs tree with a relative root and an absolute docs dir — the
+// spelling mix that made filepath.Rel fail and refused every legitimate write.
+func TestRunAcceptsAMixOfRelativeAndAbsoluteRoots(t *testing.T) {
+	base := t.TempDir()
+	docs := filepath.Join(base, "docs")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docs, "quickstart.md"), []byte("# q\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	// Absolute --docs, relative --root: the two flags are independent and callers
+	// mix them.
+	if err := Run(docs, "acme", "v1", ".", ""); err != nil {
+		t.Fatalf("Run with mixed path spellings: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docs, "README.md")); err != nil {
+		t.Errorf("the pointer README was not written: %v", err)
+	}
+}
+
+// The verb runs END TO END through its own command, which is how `llz ci
+// deliver-docs` and the copier render step reach it. The flag set had no test at
+// all, so a renamed flag or a mis-defaulted --docs would have shipped.
+func TestDeliverDocsCmdRunsAndPrunes(t *testing.T) {
+	base := t.TempDir()
+	docs := filepath.Join(base, "docs")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"quickstart.md":    "# q\n",
+		"adopter-guide.md": "# internal, pruned\n",
+	} {
+		if err := os.WriteFile(filepath.Join(docs, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := DeliverDocsCmd()
+	c.SetArgs([]string{"--docs", docs, "--org", "acme", "--ref", "v1.2.3", "--root", base})
+	c.SilenceUsage, c.SilenceErrors = true, true
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	if err := c.Execute(); err != nil {
+		t.Fatalf("deliver-docs: %v", err)
+	}
+
+	// The operator doc survives, the internal one is pruned, and the pointer is
+	// written and version-pinned.
+	if _, err := os.Stat(filepath.Join(docs, "quickstart.md")); err != nil {
+		t.Errorf("a delivered doc was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docs, "adopter-guide.md")); !os.IsNotExist(err) {
+		t.Errorf("a non-delivered doc survived the prune: %v", err)
+	}
+	readme, err := os.ReadFile(filepath.Join(docs, "README.md"))
+	if err != nil {
+		t.Fatalf("pointer README: %v", err)
+	}
+	if !strings.Contains(string(readme), "v1.2.3") || !strings.Contains(string(readme), "acme") {
+		t.Errorf("the pointer is not pinned to the org/ref it was given:\n%s", readme)
 	}
 }

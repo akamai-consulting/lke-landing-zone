@@ -81,3 +81,52 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// cloudBinding returns the binding a Linode call runs under: the destroying
+// transition when the call may actually delete, the read-only assertion when it
+// cannot.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// THE SELECTION IS A RUNTIME VALUE, WHICH IS NEW, AND IT MAY ONLY NARROW.
+//
+// Everywhere else in this tree a call site belongs to one binding and you can
+// read the declaration to know what that code may do. Here four of the six sites
+// are gated on `--yes`/`--dry-run`: the reapers build one client and then either
+// delete through it or print "would DELETE" and return, and which of those
+// happens is not knowable from the call site.
+//
+// The rule that keeps the model's guarantee intact is that `mutating` can only
+// ever pick the WEAKER binding. The maximum a code path may do is still static
+// and still readable from the declaration — the transition's cloud-mutate — and
+// the flag can subtract from it but never add. A reader asking "what is the worst
+// this can do" gets the same answer as before; a reader asking "what can it do
+// right now" gets a better one.
+//
+// WHAT IT BUYS, and it is specific rather than tidiness. `--dry-run` not deleting
+// is currently enforced by ONE early `return` inside Deleter's closure. That
+// closure is the only thing between a dry run and a destroyed cluster. Selecting
+// the read binding puts a second, independent refusal at the transport, so a bug
+// in that `if` is caught by the fence rather than by an operator reading the
+// aftermath.
+//
+// EARLIER NOTES IN THIS TREE SAID THIS WAS BLOCKED, and they were wrong on the
+// facts. They claimed `runCIReapVolumes(…, requireEmpty)` served both bindings
+// through one function. It does not: `--require-empty` adds a verification pass
+// AFTER the sweep and never suppresses a delete, and the assertion has its own
+// entry point (RunAssertNoOrphans) whose client comes from a Deps seam. The six
+// construction sites are all transition-side. What is genuinely runtime-varying
+// is only whether a given reap run deletes at all.
+// ────────────────────────────────────────────────────────────────────────────
+func cloudBinding(mutating bool) extension.Binding {
+	want := extension.Assertion
+	if mutating {
+		want = extension.Transition
+	}
+	for _, b := range Extension().Bindings {
+		if b.Kind == want {
+			return b
+		}
+	}
+	panic("teardown: no " + string(want) + " binding — the Linode client is built " +
+		"from one, so its absence is a wiring bug")
+}

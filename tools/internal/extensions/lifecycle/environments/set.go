@@ -61,7 +61,7 @@ func specSetCmd() *cobra.Command {
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
 			}
-			if err := yamledit.EditSpecFile(lzPath, func(doc *yaml.Node) error {
+			if err := yamledit.EditSpecFileVia(specEditor("set"), lzPath, func(doc *yaml.Node) error {
 				for _, a := range assigns {
 					if err := yamledit.SetSpecPath(doc, a[0], a[1]); err != nil {
 						return err
@@ -108,7 +108,7 @@ func networkAddCmd() *cobra.Command {
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
 			}
-			if err := yamledit.EditSpecFile(lzPath, func(doc *yaml.Node) error {
+			if err := yamledit.EditSpecFileVia(specEditor("set"), lzPath, func(doc *yaml.Node) error {
 				return yamledit.SetSpecPath(doc, "networks."+name+".region", region)
 			}, func(b []byte) error { _, e := clusterspec.Decode(b); return e }); err != nil {
 				return err

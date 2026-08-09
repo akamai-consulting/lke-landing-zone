@@ -41,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 )
@@ -72,7 +73,7 @@ type ClusterRef struct {
 
 // Seams (overridden in tests).
 var (
-	newACLClient   = func(token string) aclClient { return linode.NewClient(token, 30*time.Second) }
+	newACLClient   = func(token string) aclClient { return capability.CloudFor(cloudBinding()).Client(token, 30*time.Second) }
 	aclRetryDelay  = 3 * time.Second
 	aclMaxAttempts = 4
 	// aclSleep backs off between ACL read-modify-write retries. The jitter

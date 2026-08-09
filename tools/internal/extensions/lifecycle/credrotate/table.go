@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
@@ -50,9 +51,11 @@ type LinodeAPI interface {
 }
 
 var (
-	NewLinodeClient = func(token string) LinodeAPI { return linode.NewClient(token, 30*time.Second) }
-	NewBaoStore     = openLinodeRotatorBaoStore
-	Now             = func() time.Time { return time.Now() }
+	NewLinodeClient = func(token string) LinodeAPI {
+		return capability.CloudFor(objKeyCloudBinding()).Client(token, 30*time.Second)
+	}
+	NewBaoStore = openLinodeRotatorBaoStore
+	Now         = func() time.Time { return time.Now() }
 )
 
 // CredEntry is one rotated credential. fields maps the minted material to the

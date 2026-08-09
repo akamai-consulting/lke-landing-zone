@@ -10,6 +10,7 @@ package teardown
 import (
 	"context"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 )
@@ -82,4 +83,18 @@ func (d Deps) KubectlFor(kubeconfigPath string) Kubectl {
 	return func(args ...string) (string, bool) {
 		return d.Combined(kubeconfigPath, args...)
 	}
+}
+
+// ReadOnlyClientFromEnv is the client the orphan GATE runs on, and it is exported
+// so package main can populate Deps.Client without learning which binding to ask
+// for. Deps.Client has exactly one consumer — RunAssertNoOrphans — and the
+// extension's own header is emphatic about why: "a gate that could clean up would
+// be able to make its own verdict true."
+//
+// That was previously a claim about the interface (OrphanGateScanner exposes no
+// delete method) and about discipline. It is now also enforced at the transport:
+// this client's policy refuses every mutating HTTP method, so the assertion could
+// not delete even if handed a wider interface.
+func ReadOnlyClientFromEnv() (*linode.Client, context.Context, error) {
+	return capability.CloudFor(cloudBinding(false)).FromEnv()
 }

@@ -8,6 +8,7 @@ package yamledit
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,20 +22,67 @@ import (
 // break every subsequent spec command. parse is the strict decoder for the file's
 // kind (rejects unknown fields). On failure it restores the original bytes and
 // returns a clear, reverted error.
+// Editor is the read/write pair this package needs. capability.Repo and
+// capability.RepoWriter satisfy the halves structurally, so a fenced caller
+// composes them without this package importing the capability layer.
+type Editor interface {
+	ReadFile(string) ([]byte, error)
+	WriteFile(string, []byte, fs.FileMode) error
+}
+
+// osEditor is the unfenced pair, for callers outside the capability model —
+// internal/verbs, which declares no bindings by design.
+type osEditor struct{}
+
+func (osEditor) ReadFile(p string) ([]byte, error)                 { return os.ReadFile(p) }
+func (osEditor) WriteFile(p string, b []byte, m fs.FileMode) error { return os.WriteFile(p, b, m) }
+
+type splitEditor struct {
+	r interface{ ReadFile(string) ([]byte, error) }
+	w interface {
+		WriteFile(string, []byte, fs.FileMode) error
+	}
+}
+
+func (s splitEditor) ReadFile(p string) ([]byte, error) { return s.r.ReadFile(p) }
+func (s splitEditor) WriteFile(p string, b []byte, m fs.FileMode) error {
+	return s.w.WriteFile(p, b, m)
+}
+
+// FencedEditor pairs a reader and a writer into the editor this package takes.
+func FencedEditor(r interface {
+	ReadFile(string) ([]byte, error)
+}, w interface {
+	WriteFile(string, []byte, fs.FileMode) error
+}) Editor {
+	return splitEditor{r: r, w: w}
+}
+
+// EditSpecFile edits a spec unfenced. See osEditor for who that is for.
 func EditSpecFile(path string, mutate func(*yaml.Node) error, parse func([]byte) error) error {
-	orig, err := os.ReadFile(path)
+	return EditSpecFileVia(osEditor{}, path, mutate, parse)
+}
+
+// EditSpecFileVia is EditSpecFile through a caller's own reader/writer.
+//
+// THE ROLLBACK IS WHY THE FENCE MATTERS MORE HERE THAN FOR A PLAIN WRITE. If the
+// edit does not parse, the original bytes are written back — so a fence covering
+// the edit but not the restore could leave a poisoned spec behind on the failure
+// path, which is the one nobody exercises.
+func EditSpecFileVia(e Editor, path string, mutate func(*yaml.Node) error, parse func([]byte) error) error {
+	orig, err := e.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	if err := EditYAMLFile(path, mutate); err != nil {
+	if err := EditYAMLFileVia(e, path, mutate); err != nil {
 		return err
 	}
-	edited, err := os.ReadFile(path)
+	edited, err := e.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	if perr := parse(edited); perr != nil {
-		_ = os.WriteFile(path, orig, 0o644) // roll back — never leave a poisoned file
+		_ = e.WriteFile(path, orig, 0o644) // roll back — never leave a poisoned file
 		return fmt.Errorf("change rejected — %s left unchanged: %s\n  (check the path against `llz env show` / docs/landing-zone-spec.md)",
 			filepath.Base(path), CleanFieldErr(perr))
 	}
@@ -66,8 +114,14 @@ func IsPerEnvPath(dotted string) bool {
 
 // EditYAMLFile loads path as a YAML document, hands the document node to mutate,
 // and writes it back with 2-space indent (matching the authored files).
+// EditYAMLFile edits a YAML file unfenced. See osEditor.
 func EditYAMLFile(path string, mutate func(doc *yaml.Node) error) error {
-	b, err := os.ReadFile(path)
+	return EditYAMLFileVia(osEditor{}, path, mutate)
+}
+
+// EditYAMLFileVia is EditYAMLFile through a caller's own reader/writer.
+func EditYAMLFileVia(e Editor, path string, mutate func(doc *yaml.Node) error) error {
+	b, err := e.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -88,7 +142,7 @@ func EditYAMLFile(path string, mutate func(doc *yaml.Node) error) error {
 		return err
 	}
 	_ = enc.Close()
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return e.WriteFile(path, buf.Bytes(), 0o644)
 }
 
 // SetSpecPath sets spec.<dotted> = value in a parsed document, creating any

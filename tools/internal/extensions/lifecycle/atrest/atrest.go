@@ -59,12 +59,13 @@ package atrest
 import (
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/shquote"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
@@ -267,7 +268,7 @@ type atRestFinding struct {
 	registrable bool
 }
 
-func collectAtRestFindings(root string, dirs []string) ([]atRestFinding, int, error) {
+func collectAtRestFindings(repo capability.Repo, dirs []string) ([]atRestFinding, int, error) {
 	var out []atRestFinding
 	examined := 0
 	// Directories that configure a backend, and whether they declare encryption.
@@ -275,12 +276,12 @@ func collectAtRestFindings(root string, dirs []string) ([]atRestFinding, int, er
 	rootBackendFile := map[string]string{}
 
 	for _, dir := range dirs {
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		err := repo.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil // a missing tree is requireCorpus's problem
 			}
-			if info.IsDir() {
-				if b := info.Name(); b == ".terraform" || b == ".git" {
+			if d.IsDir() {
+				if b := d.Name(); b == ".terraform" || b == ".git" {
 					return filepath.SkipDir
 				}
 				return nil
@@ -288,12 +289,14 @@ func collectAtRestFindings(root string, dirs []string) ([]atRestFinding, int, er
 			if filepath.Ext(path) != ".tf" {
 				return nil
 			}
-			b, err := os.ReadFile(path)
+			b, err := repo.ReadFile(path)
 			if err != nil {
 				return err
 			}
 			examined++
-			rel := relFromRoot(root, path)
+			// Already repo-relative: the reader is fenced to the root and hands
+			// back paths expressed under it.
+			rel := filepath.ToSlash(path)
 			body := string(b)
 			dirKey := filepath.Dir(path)
 
@@ -420,14 +423,11 @@ func firstMatchLine(body string, re *regexp.Regexp) (int, bool) {
 	return 0, false
 }
 
-// relFromRoot renders a scanned path the way the registry keys it: repo-relative
-// with forward slashes, so a key reads as something a reviewer can go open.
-func relFromRoot(root, path string) string {
-	if r, err := filepath.Rel(root, path); err == nil {
-		return filepath.ToSlash(r)
-	}
-	return filepath.ToSlash(path)
-}
+// relFromRoot is GONE, and its absence is the point: it rendered a scanned path
+// repo-relative with forward slashes so a registry key read as something a
+// reviewer could open. The read-repo reader is fenced to the root and hands back
+// paths already in that shape, so the derivation — and the two failure fallbacks
+// under it, which silently keyed a finding on an absolute path — has no caller.
 
 // stripHCLNoise returns a parallel slice of lines with block comments, line
 // comments and quoted strings blanked out, for brace counting only. Indices line
@@ -490,8 +490,8 @@ type Findings struct {
 
 // Scan walks dirs for Terraform and reports every resource that is not encrypted
 // at rest, plus every registry entry that no longer matches anything.
-func Scan(root string, dirs []string) (Findings, error) {
-	f, examined, err := collectAtRestFindings(root, dirs)
+func Scan(repo capability.Repo, dirs []string) (Findings, error) {
+	f, examined, err := collectAtRestFindings(repo, dirs)
 	return Findings{Residuals: f, Examined: examined}, err
 }
 
@@ -551,10 +551,10 @@ func Report(out io.Writer, f Findings) error {
 // do — a raw join silently resolves to a non-existent path in the instance layout,
 // and a missing tree is tolerated by the walk, so the guard would scan less than
 // it appears to.
-func ScanDirs(root string) []string {
+func ScanDirs(repo capability.Repo) []string {
 	return []string{
-		guardkit.RepoPath(root, filepath.Join("tools", "internal", "shared", "tfroots", "roots")),
-		guardkit.RepoPath(root, "terraform-modules"),
+		guardkit.RepoPath(repo, filepath.Join("tools", "internal", "shared", "tfroots", "roots")),
+		guardkit.RepoPath(repo, "terraform-modules"),
 	}
 }
 
@@ -566,8 +566,9 @@ func ScanDirs(root string) []string {
 // which would have split these tests across a package boundary for no reason but
 // where a helper happened to live.
 func Run(out io.Writer, root string) error {
-	dirs := ScanDirs(root)
-	f, err := Scan(root, dirs)
+	repo := capability.RepoAt(atRestBinding(), root)
+	dirs := ScanDirs(repo)
+	f, err := Scan(repo, dirs)
 	if err != nil {
 		return err
 	}

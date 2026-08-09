@@ -10,8 +10,8 @@ package extension
 
 import "testing"
 
-// grantStates is judgement transcribed, and FOUR extensions have now changed it —
-// three widenings and one added row. Pin the whole table: a change should be an
+// grantStates is judgement transcribed, and FIVE extensions have now changed it —
+// four widenings and one added row. Pin the whole table: a change should be an
 // argued edit to this test and its comment, not a quiet one that nothing notices.
 // All four arrived the same way — an extraction of code that already shipped and
 // could not be described — so treat a failure here as evidence about the table,
@@ -24,18 +24,37 @@ import "testing"
 //     was added to are NOT therefore negotiable — `scaffolded` and `configured`
 //     have no cloud to mutate, and a cloud-mutating binding at `verified` is an
 //     assertion that changes what it measures.
+//
 //   - secret-custody gained `provisioned` (eleventh, `cluster-access`). Correct:
 //     the cluster-admin kubeconfig is issued by the cloud at provisioning time and
 //     holding it is what MAKES seeding possible. The states it was NOT given still
 //     matter — custody at `scaffolded` or `configured` would mean a credential
 //     exists before anything has been built to issue one, which is the shape of a
 //     hardcoded secret rather than a fetched one.
+//
 //   - write-repo was ADDED (twenty-eighth, `deliver-docs`) — the first new row
 //     rather than a widened one, and the first whose states sit entirely OUTSIDE
 //     the mutating middle. `scaffolded` and `upgraded` are the two moments copier
 //     runs, which is the only reason a repo write happens at all. It holds exactly
 //     the states one shipping extension proved and not the `promoted` that looks
 //     obvious; see the row's comment.
+//
+//   - write-repo gained `configured` (thirty-fifth, the read-repo/write-repo
+//     capability extraction). Correct, and like cloud-mutate's `configured` it
+//     took TWO independent extensions rather than one: `environments`
+//     (`llz spec set` / `llz env set` edit landingzone.yaml and
+//     environments/<env>.yaml) and `render` (writes the rendered tree). Both were
+//     transition:configured holding read-repo ALONE, so both declarations said
+//     they only read while shipping code that wrote.
+//
+//     The row had bracketed the lifecycle — created, then upgraded — treating
+//     everything between as reading a tree somebody else authored. That is the
+//     same misreading of `configured` the entry below corrects for cloud-mutate:
+//     it is not a passive moment, it is the state whose content IS authoring the
+//     instance's files. Note what did NOT follow: `provisioned` and later stay
+//     barred, because a process writing the instance repo after a cluster exists
+//     is configuring out of order.
+//
 //   - cloud-mutate gained `configured` (thirty-first, `chart-publish`). Correct,
 //     and it took two extractions to earn: env-topology wrote the same binding for
 //     a GitHub branch-policy PUT, was refused by this row, and moved the file back
@@ -48,7 +67,7 @@ func TestGrantStatesTableIsPinned(t *testing.T) {
 		SecretCustody: {Provisioned, Seeded, Operating},
 		CloudMutate:   {Configured, Provisioned, Seeded, Converged, Operating, Destroyed},
 		ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
-		WriteRepo:     {Scaffolded, Upgraded},
+		WriteRepo:     {Scaffolded, Configured, Upgraded},
 	}
 	if len(grantStates) != len(want) {
 		t.Fatalf("grantStates has %d rows, want %d — only the MUTATING grants belong here; "+

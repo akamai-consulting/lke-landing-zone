@@ -49,13 +49,15 @@ package docsguard
 // The guard buys back the mechanical half so review attention can go to the rest.
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -138,9 +140,9 @@ var docsGuardSkipDir = map[string]bool{
 	"worktrees": true,
 }
 
-func markdownFiles(root string) ([]string, error) {
+func markdownFiles(repo capability.Repo) ([]string, error) {
 	var out []string
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err := repo.WalkDir(".", func(p string, d fs.DirEntry, err error) error {
 		// FAIL, don't skip. Swallowing a walk error (a permission bit, a broken
 		// symlink) drops part of the tree while the run still prints "N file(s)
 		// OK" — a false green, which is the exact defect this guard exists to
@@ -152,7 +154,7 @@ func markdownFiles(root string) ([]string, error) {
 			// NEVER skip the root itself — it is routinely passed as "." or "..",
 			// whose basename would match a name-based rule and skip the entire
 			// walk, reporting a clean "0 files OK" while checking nothing.
-			if p == root {
+			if p == "." {
 				return nil
 			}
 			if docsGuardSkipDir[d.Name()] {
@@ -161,8 +163,9 @@ func markdownFiles(root string) ([]string, error) {
 			return nil
 		}
 		if strings.HasSuffix(p, ".md") {
-			rel, _ := filepath.Rel(root, p)
-			out = append(out, rel)
+			// Already repo-relative — the reader expresses everything under its
+			// own root, so the filepath.Rel that derived this is gone.
+			out = append(out, p)
 		}
 		return nil
 	})
@@ -182,11 +185,11 @@ type docFile struct {
 
 // loadDocs reads every file, returning the readable ones and a finding per
 // failure. It never returns a partial set silently.
-func loadDocs(root string, files []string) ([]docFile, []Finding) {
+func loadDocs(repo capability.Repo, files []string) ([]docFile, []Finding) {
 	docs := make([]docFile, 0, len(files))
 	var bad []Finding
 	for _, rel := range files {
-		data, err := os.ReadFile(filepath.Join(root, rel))
+		data, err := repo.ReadFile(rel)
 		if err != nil {
 			bad = append(bad, Finding{
 				File: rel, Line: 0, Kind: "unreadable",
@@ -469,8 +472,8 @@ type wfInputs struct {
 	dispatch bool
 }
 
-func checkDocWorkflowInputs(root string, docs []docFile, n *Scanned) ([]Finding, error) {
-	wfs, err := loadWorkflowInputs(root)
+func checkDocWorkflowInputs(repo capability.Repo, docs []docFile, n *Scanned) ([]Finding, error) {
+	wfs, err := loadWorkflowInputs(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -533,16 +536,16 @@ func checkDocWorkflowInputs(root string, docs []docFile, n *Scanned) ([]Finding,
 // terraform.yml`). A basename collision between the template's own workflows and
 // the instance-template's is resolved toward the instance, since that is the repo
 // an operator dispatches against.
-func loadWorkflowInputs(root string) (map[string]*wfInputs, error) {
+func loadWorkflowInputs(repo capability.Repo) (map[string]*wfInputs, error) {
 	out := map[string]*wfInputs{}
 	dirs := []string{
-		filepath.Join(root, ".github", "workflows"),
-		filepath.Join(root, "instance-template", ".github", "workflows"),
+		filepath.Join(".github", "workflows"),
+		filepath.Join("instance-template", ".github", "workflows"),
 	}
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+		entries, err := repo.ReadDir(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, fs.ErrNotExist) {
 				continue // a repo without one of these is fine
 			}
 			// Anything else (a permission bit) would silently drop every
@@ -553,7 +556,7 @@ func loadWorkflowInputs(root string) (map[string]*wfInputs, error) {
 			if e.IsDir() || (!strings.HasSuffix(e.Name(), ".yml") && !strings.HasSuffix(e.Name(), ".yaml")) {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			data, err := repo.ReadFile(filepath.Join(dir, e.Name()))
 			if err != nil {
 				return nil, err
 			}
@@ -649,7 +652,7 @@ func parseWorkflowDispatchInputs(data []byte) (*wfInputs, error) {
 
 var docsGuardLinkRe = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
 
-func checkDocLinks(root string, docs []docFile, n *Scanned) []Finding {
+func checkDocLinks(repo capability.Repo, docs []docFile, n *Scanned) []Finding {
 	var out []Finding
 	for _, d := range docs {
 		rel := d.rel
@@ -701,20 +704,32 @@ func checkDocLinks(root string, docs []docFile, n *Scanned) []Finding {
 				}
 				resolved := filepath.Clean(filepath.Join(base, path))
 				// A rendered instance has NOTHING above its root, so a link that
-				// climbs past it is dead there however it resolves here. Catch it
-				// before the existence probes: filepath.Join(root, "../x") walks
-				// out of the repo and can land on a same-named directory by pure
-				// coincidence — which is how `../../platform-apl/` from
-				// apl-values/README.md passed while being dead in every instance.
+				// climbs past it is dead there however it resolves here. That is
+				// how `../../platform-apl/` from apl-values/README.md passed while
+				// being dead in every instance.
+				//
+				// THE REASON FOR THIS CHECK CHANGED, AND IT STILL EARNS ITS PLACE.
+				// It used to be a SAFETY check as well: pathExists did
+				// os.Stat(filepath.Join(root, p)), so a climbing link wandered out
+				// of the repo and could match a same-named directory by pure
+				// coincidence. The read-repo fence closed that — pathExists now
+				// refuses anything outside the tree rather than resolving it.
+				//
+				// What the fence does NOT do is produce this FINDING. It would
+				// answer "does not exist", and the guard would report a broken
+				// link rather than the specific, actionable one: the link climbs
+				// above the instance root and needs an absolute template URL.
+				// Deleting this because "the fence handles it" would trade a
+				// precise diagnostic for a vague one.
 				if rendered && strings.HasPrefix(resolved, "..") {
 					out = append(out, Finding{File: rel, Line: i + 1, Kind: "link",
 						Detail: fmt.Sprintf("%s climbs above the instance root — dead in a rendered instance; use an absolute template URL", target)})
 					continue
 				}
-				if pathExists(filepath.Join(root, resolved)) {
+				if pathExists(repo, resolved) {
 					continue
 				}
-				if rendered && pathExists(filepath.Join(root, scaffoldDirName, resolved)) {
+				if rendered && pathExists(repo, filepath.Join(scaffoldDirName, resolved)) {
 					continue // template-owned; renders into the instance beside this file
 				}
 				if rendered && renderTimeArtifact[filepath.ToSlash(resolved)] {
@@ -725,8 +740,8 @@ func checkDocLinks(root string, docs []docFile, n *Scanned) []Finding {
 			}
 		}
 	}
-	out = append(out, checkSelfRepoLinks(root, docs, n)...)
-	out = append(out, checkDeliveredDocLinks(root, docs, n)...)
+	out = append(out, checkSelfRepoLinks(repo, docs, n)...)
+	out = append(out, checkDeliveredDocLinks(repo, docs, n)...)
 	out = append(out, checkDocTOCs(docs, n)...)
 	return out
 }
@@ -894,7 +909,7 @@ var selfRepoBlobRe = regexp.MustCompile(
 // guard could not see, because it only ever looked at relative links. An absolute
 // URL into our own tree is just as checkable as a relative one, and is exactly what
 // docs use for source that is NOT delivered locally.
-func checkSelfRepoLinks(root string, docs []docFile, n *Scanned) []Finding {
+func checkSelfRepoLinks(repo capability.Repo, docs []docFile, n *Scanned) []Finding {
 	var out []Finding
 	for _, d := range docs {
 		for i, line := range strings.Split(d.body, "\n") {
@@ -904,11 +919,11 @@ func checkSelfRepoLinks(root string, docs []docFile, n *Scanned) []Finding {
 					continue
 				}
 				n.SelfLinks++
-				if pathExists(filepath.Join(root, filepath.FromSlash(sm[1]))) {
+				if pathExists(repo, filepath.FromSlash(sm[1])) {
 					continue
 				}
 				detail := fmt.Sprintf("%s does not exist in this repo", sm[1])
-				if alt := filepath.Join(scaffoldDirName, filepath.FromSlash(sm[1])); pathExists(filepath.Join(root, alt)) {
+				if alt := filepath.Join(scaffoldDirName, filepath.FromSlash(sm[1])); pathExists(repo, alt) {
 					detail += fmt.Sprintf(" — did you mean %s? (the scaffold lives under %s/ in the TEMPLATE repo, even though it renders to the instance root)", filepath.ToSlash(alt), scaffoldDirName)
 				}
 				out = append(out, Finding{File: d.rel, Line: i + 1, Kind: "self-link", Detail: detail})
@@ -923,7 +938,7 @@ func checkSelfRepoLinks(root string, docs []docFile, n *Scanned) []Finding {
 // sibling runbook is fine; one that links a doc `deliver-docs` prunes is fine too
 // (the rewrite repoints it) — but only if the rewrite can SEE it, which is what
 // the audit found it could not do from the instance root.
-func checkDeliveredDocLinks(root string, docs []docFile, n *Scanned) []Finding {
+func checkDeliveredDocLinks(repo capability.Repo, docs []docFile, n *Scanned) []Finding {
 	var out []Finding
 	delivered := func(rel string) bool {
 		if !strings.HasPrefix(rel, "docs/") {
@@ -967,7 +982,7 @@ func checkDeliveredDocLinks(root string, docs []docFile, n *Scanned) []Finding {
 				// Inside docs/: either still delivered (relative link works) or
 				// pruned (deliver-docs repoints it). Only a target that exists in
 				// NEITHER is broken.
-				if !pathExists(filepath.Join(root, resolved)) {
+				if !pathExists(repo, resolved) {
 					out = append(out, Finding{File: rel, Line: i + 1, Kind: "delivered-link",
 						Detail: fmt.Sprintf("%s does not exist", target)})
 				}
@@ -1022,27 +1037,28 @@ func (r Report) Scope() string {
 // second-implementation-of-a-shared-rule bug this package already has scars from.
 // The catalog's "36 of 57 candidates need in-process Go" is this, concretely.
 func Run(root string, opts Options, rootCmd *cobra.Command) (Report, error) {
-	files, err := markdownFiles(root)
+	repo := capability.RepoForGate(Extension(), root)
+	files, err := markdownFiles(repo)
 	if err != nil {
 		return Report{}, err
 	}
 	// Read once. An unreadable file becomes a FINDING here rather than a silent
 	// skip in each of the three checks below — a guard that cannot read a doc must
 	// not report that it checked it.
-	docs, findings := loadDocs(root, files)
+	docs, findings := loadDocs(repo, files)
 	rep := Report{Findings: findings, Read: len(docs), Total: len(files)}
 	if !opts.SkipCommands {
 		rep.Findings = append(rep.Findings, checkDocCommands(docs, rootCmd, &rep.Scanned)...)
 	}
 	if !opts.SkipWorkflows {
-		f, err := checkDocWorkflowInputs(root, docs, &rep.Scanned)
+		f, err := checkDocWorkflowInputs(repo, docs, &rep.Scanned)
 		if err != nil {
 			return rep, err
 		}
 		rep.Findings = append(rep.Findings, f...)
 	}
 	if !opts.SkipLinks {
-		rep.Findings = append(rep.Findings, checkDocLinks(root, docs, &rep.Scanned)...)
+		rep.Findings = append(rep.Findings, checkDocLinks(repo, docs, &rep.Scanned)...)
 	}
 	sort.Slice(rep.Findings, func(i, j int) bool {
 		if rep.Findings[i].File != rep.Findings[j].File {

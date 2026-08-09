@@ -35,9 +35,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // lkeAdminAPI is the slice of the Linode client the rotation uses, seamed for
@@ -47,7 +47,9 @@ type lkeAdminAPI interface {
 	DeleteKubeconfig(ctx context.Context, clusterID uint64) error
 }
 
-var newLKEAdminClient = func(token string) lkeAdminAPI { return linode.NewClient(token, 30*time.Second) }
+var newLKEAdminClient = func(token string) lkeAdminAPI {
+	return capability.CloudFor(patCloudBinding()).Client(token, 30*time.Second)
+}
 
 func isEnterprise(k8sVersion string) bool {
 	return strings.Contains(k8sVersion, "+lke")

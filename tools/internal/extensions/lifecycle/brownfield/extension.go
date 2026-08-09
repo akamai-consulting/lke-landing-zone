@@ -69,3 +69,19 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// cloudReadBinding is the scaffolded transition, which holds cloud-read. Looked
+// up by KIND AND STATE because neither binding here is named.
+//
+// enrichFromLinode only reads — it decorates an import report with what the
+// account already has — so it takes this one rather than the provisioned
+// transition that holds cloud-mutate for actually adopting the substrate.
+func cloudReadBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition && b.State == extension.Scaffolded {
+			return b
+		}
+	}
+	panic("import-brownfield: no transition:scaffolded binding — enrichFromLinode " +
+		"builds its Linode client from it, so its absence is a wiring bug")
+}

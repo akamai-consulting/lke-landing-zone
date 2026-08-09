@@ -70,7 +70,6 @@ var seamCall = regexp.MustCompile(
 // interactive and long-lived cases the Writer's one-shot []byte shape cannot
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
-	"assertobjstore":  3,
 	"assertsecrets":   2,
 	"clusteraccess":   1,
 	"healthsla":       1,
@@ -80,7 +79,6 @@ var allowedSeamCalls = map[string]int{
 	"reconciler":      1,
 	"seedspecial":     1,
 	"statepassphrase": 1,
-	"templatecommit":  1,
 }
 
 // baoSeamCall matches a direct call to one of OpenBao's process seams. KVPut and
@@ -101,13 +99,10 @@ var baoSeamCall = regexp.MustCompile(
 // binding already, so the change is to take capability.For(b).Secrets / .Custodian
 // instead of reaching for the package var.
 var allowedBaoSeamCalls = map[string]int{
-	"credrotate":     6,
-	"database":       7,
-	"harbor":         2,
-	"healthsla":      1,
-	"identityconfig": 3,
-	"openbao":        21,
-	"reachability":   1,
+	"credrotate":   6,
+	"healthsla":    1,
+	"openbao":      21,
+	"reachability": 1,
 }
 
 func TestNoNewBaoSeamCalls(t *testing.T) {

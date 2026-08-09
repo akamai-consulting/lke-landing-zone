@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
@@ -120,8 +121,9 @@ type mtlsFinding struct {
 }
 
 func Run(root string) error {
-	dirs := guardwalk.PlatformTreeDirs(root)
-	findings, examined, err := collectMTLSWiringFindings(dirs)
+	repo := capability.RepoForGate(Extension(), root)
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	findings, examined, err := collectMTLSWiringFindings(repo, dirs)
 	if err != nil {
 		return err
 	}
@@ -140,10 +142,10 @@ func Run(root string) error {
 	return nil
 }
 
-func collectMTLSWiringFindings(dirs []string) ([]mtlsFinding, int, error) {
+func collectMTLSWiringFindings(repo capability.Repo, dirs []string) ([]mtlsFinding, int, error) {
 	// Pass 1: every Secret a Certificate creates, keyed namespace/secretName.
 	certSecrets := map[string]bool{}
-	if _, err := guardwalk.Walk(dirs, func(_ string, raw []byte) error {
+	if _, err := guardwalk.Walk(repo, dirs, func(_ string, raw []byte) error {
 		for _, c := range guardwalk.DecodeDocs(string(raw), func(c certDoc) bool { return c.Kind == "Certificate" }) {
 			certSecrets[c.Metadata.Namespace+"/"+c.Spec.SecretName] = true
 		}
@@ -153,7 +155,7 @@ func collectMTLSWiringFindings(dirs []string) ([]mtlsFinding, int, error) {
 	}
 
 	var findings []mtlsFinding
-	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
+	examined, err := guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
 		for _, d := range guardwalk.DecodeDocs(string(raw), func(d mtlsPodDoc) bool { return d.Kind != "" }) {
 			findings = append(findings, checkMTLSWiring(path, d, certSecrets)...)
 		}

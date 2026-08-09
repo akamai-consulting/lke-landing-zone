@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/preflight"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
@@ -59,7 +60,7 @@ func runCIPreflight(o preflightOpts) error {
 		}
 	}
 
-	client := linode.NewClient(token, 60*time.Second)
+	client := capability.CloudFor(cloudBinding()).Client(token, 60*time.Second)
 	ctx := context.Background()
 
 	fmt.Println(color.Bold(fmt.Sprintf("================ Linode account preflight (region: %s) ================", orAll(o.region))))

@@ -67,3 +67,19 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// cloudBinding is the binding this package reaches Linode through. There is
+// exactly one, carrying cloud-read AND cloud-mutate — fetching the cluster-admin
+// kubeconfig reads, and setting the control-plane ACL writes — so there is no
+// choice to get wrong here. Looked up rather than reconstructed all the same.
+func cloudBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.CloudRead || g == extension.CloudMutate {
+				return b
+			}
+		}
+	}
+	panic("cluster-access: no binding carries a cloud grant — the Linode client is " +
+		"built from one, so its absence is a wiring bug")
+}

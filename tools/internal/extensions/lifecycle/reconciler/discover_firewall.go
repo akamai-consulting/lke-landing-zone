@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
@@ -63,7 +64,7 @@ type firewallDiscoverer interface {
 }
 
 var newFirewallDiscoverer = func(token string) firewallDiscoverer {
-	return linode.NewClient(token, 60*time.Second)
+	return capability.CloudFor(cloudBinding("cidr-firewall")).Client(token, 60*time.Second)
 }
 
 // resolveFirewallInputs walks the Linode API from the node's instance ID to the

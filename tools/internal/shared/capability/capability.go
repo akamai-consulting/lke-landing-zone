@@ -48,6 +48,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
@@ -260,6 +261,11 @@ type Handles struct {
 	Secrets Secrets
 	// Custodian PLACES secret material, for secret-custody only.
 	Custodian Custodian
+	// BaoAdmin is OpenBao's NON-KV surface: policy, auth, token, operator and
+	// status. Reads need secret-read or secret-custody; anything changing who may
+	// reach what needs secret-custody. See baoadmin.go for why it is not a seventh
+	// grant.
+	BaoAdmin BaoAdminHandle
 	// Forge is the `gh` CLI, gated by THREE grants rather than two: reads need
 	// cloud-read or read-repo, changes need cloud-mutate, and setting a repository
 	// secret needs secret-custody. See forge.go for why that split is not invented.
@@ -291,8 +297,10 @@ func For(b extension.Binding) Handles {
 	}
 	sec, cust := secretHandles(b)
 	fg := forgeHandle(b)
+	ba := baoAdminHandle(b, baoread.ExecFn)
 	if !read && !write {
-		return Handles{Cluster: deniedCluster{}, Writer: w, Secrets: sec, Custodian: cust, Forge: fg}
+		return Handles{Cluster: deniedCluster{}, Writer: w, Secrets: sec,
+			Custodian: cust, Forge: fg, BaoAdmin: ba}
 	}
 	return Handles{
 		Cluster:   cluster{exec: kubectlprobe.Exec, comb: kubectlprobe.Combined},
@@ -300,6 +308,7 @@ func For(b extension.Binding) Handles {
 		Secrets:   sec,
 		Custodian: cust,
 		Forge:     fg,
+		BaoAdmin:  ba,
 	}
 }
 

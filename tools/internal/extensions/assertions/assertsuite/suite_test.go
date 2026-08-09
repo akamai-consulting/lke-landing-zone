@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -44,7 +45,7 @@ func suiteNow() func() time.Time {
 func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 	calls := seamLaneRunner(t, map[string]int{"b": 3})
 	l := Lane{Name: "x", Gating: true, Steps: [][]string{{"a"}, {"b"}, {"c"}}}
-	res := runLane(l, suiteNow())
+	res := runLane(l, suiteNow(), nil)
 
 	if res.ExitCode != 3 || !res.Failed {
 		t.Fatalf("expected the lane to fail with the step's code, got %+v", res)
@@ -61,7 +62,7 @@ func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 // `|| true`, now expressed as data rather than shell.
 func TestRunLaneReportOnlyNeverGates(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"diag": 1})
-	res := runLane(Lane{Name: "d", Gating: false, Steps: [][]string{{"diag"}}}, suiteNow())
+	res := runLane(Lane{Name: "d", Gating: false, Steps: [][]string{{"diag"}}}, suiteNow(), nil)
 	if res.ExitCode != 1 {
 		t.Errorf("the exit code must still be recorded, got %d", res.ExitCode)
 	}
@@ -80,7 +81,7 @@ func TestRunAssertSuiteLanesRunsEveryLaneAndPreservesOrder(t *testing.T) {
 		{Name: "two", Gating: true, Steps: [][]string{{"b"}}},
 		{Name: "three", Gating: true, Steps: [][]string{{"c"}}},
 	}
-	results := runAssertSuiteLanes(lanes, suiteNow())
+	results := runAssertSuiteLanes(lanes, suiteNow(), nil)
 
 	if len(results) != 3 {
 		t.Fatalf("expected one result per lane, got %d", len(results))
@@ -108,7 +109,7 @@ func TestEveryFailingGatingLaneReachesTheVerdict(t *testing.T) {
 		{Name: "bad", Gating: true, Steps: [][]string{{"boom"}}},
 		{Name: "report", Gating: false, Steps: [][]string{{"diag"}}},
 	}
-	results := runAssertSuiteLanes(lanes, suiteNow())
+	results := runAssertSuiteLanes(lanes, suiteNow(), nil)
 	failed := failedLaneNames(results)
 
 	if len(failed) != 1 || failed[0] != "bad" {
@@ -234,4 +235,90 @@ func TestAppendLaneSummariesIsBestEffort(t *testing.T) {
 	appendLaneSummaries([]laneResult{{Lane: Lane{SummaryTitle: "x"}, Output: "y"}})
 	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "nope", "deep", "summary.md"))
 	appendLaneSummaries([]laneResult{{Lane: Lane{SummaryTitle: "x"}, Output: "y"}})
+}
+
+// A SKIPPED LANE IS NOT A PASSING LANE, and this is the assertion the whole skip
+// state exists for.
+//
+// Before it, lanes that "skip clean when the component is disabled" did so by
+// EXITING 0, and laneResult had nowhere to record that. A lane that ran nothing
+// was indistinguishable from one that proved something, and the battery's closing
+// line counted DECLARED gating lanes — so a run that skipped three still announced
+// that all of them passed. That is the vacuous-green shape this file's header was
+// written to kill, reappearing one level up.
+func TestASkippedLaneDoesNotRunAndIsNotAPass(t *testing.T) {
+	// ATOMIC BECAUSE THE LANES RUN CONCURRENTLY. runAssertSuiteLanes starts one
+	// goroutine per lane, so the seam installed here is called from several at
+	// once — `ran++` is a data race, and the race detector fails the build on it.
+	// The counter is also the test's assertion, so the unsynchronised read could
+	// report the wrong number rather than merely being unclean.
+	var ran atomic.Int64
+	prev := runLaneFn
+	runLaneFn = func([]string) (string, int) { ran.Add(1); return "", 0 }
+	t.Cleanup(func() { runLaneFn = prev })
+
+	lanes := []Lane{
+		{Name: "registry", Gating: true, Extension: "assert-registry", Steps: [][]string{{"x"}}},
+		{Name: "always", Gating: true, Steps: [][]string{{"y"}}},
+	}
+	disabled := func(ext string) (string, bool) {
+		if ext == "assert-registry" {
+			return "component harbor disabled", true
+		}
+		return "", false
+	}
+
+	res := runAssertSuiteLanes(lanes, suiteNow(), disabled)
+
+	if n := ran.Load(); n != 1 {
+		t.Errorf("%d lanes executed, want 1 — the disabled lane must not run at all, not run "+
+			"and self-report", n)
+	}
+	if !res[0].Skipped {
+		t.Error("the disabled lane is not marked Skipped — without the state it is reported " +
+			"exactly like a lane that passed")
+	}
+	if res[0].Failed {
+		t.Error("a skipped lane is marked Failed — not running is not failing, and conflating " +
+			"them would fail batteries for instances that legitimately lack a component")
+	}
+	if res[0].SkipReason == "" {
+		t.Error("no SkipReason — an operator asking why a lane is missing should not have to guess")
+	}
+	if res[1].Skipped {
+		t.Error("a lane with no Extension was skipped — empty must mean always run")
+	}
+	if n := countGatingSkipped(res); n != 1 {
+		t.Errorf("countGatingSkipped = %d, want 1 — this is what stops the closing line "+
+			"claiming a skipped lane passed", n)
+	}
+	if got := skippedLaneNames(res); len(got) != 1 || got[0] != "registry" {
+		t.Errorf("skippedLaneNames = %v, want [registry]", got)
+	}
+}
+
+// A nil resolver must run everything. An uninstalled seam that skipped lanes would
+// silence the battery wherever the wiring was forgotten — the dangerous direction.
+func TestNoResolverRunsEveryLane(t *testing.T) {
+	// Atomic for the reason above: this test runs BOTH lanes, so both goroutines
+	// hit the seam. This is the one the race detector actually caught.
+	var ran atomic.Int64
+	prev := runLaneFn
+	runLaneFn = func([]string) (string, int) { ran.Add(1); return "", 0 }
+	t.Cleanup(func() { runLaneFn = prev })
+
+	lanes := []Lane{
+		{Name: "a", Gating: true, Extension: "assert-registry", Steps: [][]string{{"x"}}},
+		{Name: "b", Gating: true, Extension: "obj-encryption", Steps: [][]string{{"y"}}},
+	}
+	res := runAssertSuiteLanes(lanes, suiteNow(), nil)
+	if n := ran.Load(); n != 2 {
+		t.Errorf("%d lanes ran with a nil resolver, want 2 — no enablement source means run "+
+			"everything, never skip everything", n)
+	}
+	for _, r := range res {
+		if r.Skipped {
+			t.Errorf("%s skipped with no resolver installed", r.Lane.Name)
+		}
+	}
 }

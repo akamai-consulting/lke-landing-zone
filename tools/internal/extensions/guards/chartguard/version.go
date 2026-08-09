@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
@@ -70,10 +71,11 @@ func RunVersionGuard(d Deps, base, root string) error {
 			"fetch the base commit (actions/checkout needs fetch-depth: 0 or an explicit base fetch)", base, err)
 	}
 
+	repo := capability.RepoForGate(Extension(), root)
 	var failed []string
 	for _, dir := range dirs {
 		// New version from the working tree; "" when the chart was removed.
-		newVer := charty.ChartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
+		newVer := charty.ChartVersion(readFileOrEmpty(repo, filepath.Join(dir, "Chart.yaml")))
 		// Old version from the base; "" when the chart is new. Safe to discard the
 		// error now that the base ref itself is known good.
 		oldRaw, _ := d.GitOutput(root, "show", base+":"+dir+"/Chart.yaml")
@@ -156,8 +158,8 @@ func splitLines(s string) []string {
 
 // readFileOrEmpty returns the file's contents, or "" if it cannot be read (e.g.
 // the chart was deleted by the change under review).
-func readFileOrEmpty(path string) string {
-	b, err := os.ReadFile(path)
+func readFileOrEmpty(repo capability.Repo, path string) string {
+	b, err := repo.ReadFile(path)
 	if err != nil {
 		return ""
 	}

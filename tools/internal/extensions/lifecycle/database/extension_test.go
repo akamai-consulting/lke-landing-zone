@@ -133,3 +133,25 @@ func TestRotationDeclaresOperatingAsItsPrecondition(t *testing.T) {
 			rotate.State, extension.Seeded)
 	}
 }
+
+// The two `seeded` transitions must stay addressable BY NAME, because each lane's
+// OpenBao handle is built from its own binding. If a name goes stale the panic in
+// namedBinding fires at run time; this is what keeps that unreachable.
+func TestNamedBindingsResolveForBothLanes(t *testing.T) {
+	for _, n := range []string{"seed-admin", "rotate-admin"} {
+		b := namedBinding(n)
+		if b.Name != n {
+			t.Fatalf("namedBinding(%q) returned %q", n, b.Name)
+		}
+		var custody bool
+		for _, g := range b.Grants {
+			if g == extension.SecretCustody {
+				custody = true
+			}
+		}
+		if !custody {
+			t.Errorf("%s no longer declares secret-custody — its KVPut is built from this "+
+				"binding, so the write would be refused at run time", n)
+		}
+	}
+}

@@ -19,9 +19,9 @@ package sustain
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
@@ -52,7 +52,7 @@ func ResolveTemplateVersion(d Deps) TemplateVersion {
 	// A legacy instance still carrying the retired stamp: use it to fill any gap,
 	// so `llz drift` keeps working there right up until `llz upgrade` deletes it.
 	if tv.TemplateRepo == "" || tv.TemplateSHA == "" || tv.TemplateRef == "" {
-		if b, err := os.ReadFile(".template-version"); err == nil {
+		if b, err := capability.RepoAt(readBinding(), ".").ReadFile(".template-version"); err == nil {
 			var prev TemplateVersion
 			if json.Unmarshal(b, &prev) == nil {
 				tv.TemplateRepo = firstNonEmpty(tv.TemplateRepo, prev.TemplateRepo)

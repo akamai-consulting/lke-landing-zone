@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 func TestCountRunBlockLines(t *testing.T) {
@@ -376,7 +378,7 @@ func TestScanUntestable_EndToEnd(t *testing.T) {
 		Exclude: []string{"scripts/install-*.sh"},
 	}
 
-	results, err := scanBudgetCategories(root, cfg)
+	results, err := scanBudgetCategories(gRepo(root), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +412,7 @@ func TestLoadUntestableBudget(t *testing.T) {
 	if err := os.WriteFile(p, []byte("categories:\n  sh:\n    kind: script\n    budget: 5\n    include: [\"*.sh\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadBudgetConfig(p)
+	cfg, err := loadBudgetConfig(gRepo(filepath.Dir(p)), filepath.Base(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,13 +420,13 @@ func TestLoadUntestableBudget(t *testing.T) {
 		t.Errorf("unexpected parse: %+v", cfg.Categories["sh"])
 	}
 
-	if _, err := loadBudgetConfig(filepath.Join(root, "nope.yaml")); err == nil {
+	if _, err := loadBudgetConfig(gRepo(root), "nope.yaml"); err == nil {
 		t.Error("expected error for missing config")
 	}
 
 	empty := filepath.Join(root, "empty.yaml")
 	_ = os.WriteFile(empty, []byte("exclude: []\n"), 0o644)
-	if _, err := loadBudgetConfig(empty); err == nil {
+	if _, err := loadBudgetConfig(gRepo(filepath.Dir(empty)), filepath.Base(empty)); err == nil {
 		t.Error("expected error for config with no categories")
 	}
 }
@@ -583,4 +585,11 @@ func TestCountMakefileRecipeLinesFreesDocumentation(t *testing.T) {
 	if got := countMakefileRecipeLines(writes); got != 2 {
 		t.Errorf("redirecting echos must count, got %d, want 2", got)
 	}
+}
+
+// gRepo is the reader a real run gets, fenced to a fixture tree. Built from the
+// EXTENSION so a test cannot hand itself a reader the declaration would not have
+// produced — the rule capability.WithExec follows for the same reason.
+func gRepo(root string) capability.Repo {
+	return capability.RepoForGate(Extension(), root)
 }

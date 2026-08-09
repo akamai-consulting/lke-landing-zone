@@ -15,9 +15,13 @@ package docsguard
 // deliberate: an authority with one consumer is a constant, an authority with two
 // is a package.
 
-import "os"
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
-func pathExists(p string) bool {
-	_, err := os.Stat(p)
+// pathExists asks THROUGH THE FENCE. It took a joined absolute path and called
+// os.Stat; a link target that climbed out of the tree ("../../etc/passwd") would
+// therefore be reported as existing, and the guard would call the link valid on
+// the strength of a file no instance carries.
+func pathExists(repo capability.Repo, p string) bool {
+	_, err := repo.Stat(p)
 	return err == nil
 }

@@ -78,3 +78,21 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// cloudBinding is `inputs-resolve`, the assertion whose job is asking Linode
+// whether the spec's region, node type and object-storage cluster resolve.
+//
+// BOTH cloud-bearing bindings here hold cloud-read and NOTHING else, so the
+// permission is identical whichever is chosen and no over-granting is possible.
+// It is named anyway: the binding is the unit the model reasons about, and a
+// reader tracing "which declaration permits this call" should land on the one
+// whose description matches what the call does.
+func cloudBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == "inputs-resolve" {
+			return b
+		}
+	}
+	panic("config-readiness: no assertion:inputs-resolve binding — the Linode " +
+		"preflight builds its client from it, so its absence is a wiring bug")
+}

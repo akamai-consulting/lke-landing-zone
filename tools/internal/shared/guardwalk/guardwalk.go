@@ -2,7 +2,11 @@
 // YAML under a set of roots, decode the documents that matter, and sort the
 // findings so two runs over the same tree print the same thing.
 //
-// TEN GUARDS CALL Walk. The catalog names guard_walk.go as one of the "shared
+// NINE PACKAGES CALL Walk or CollectPaths — seven guards plus manifestguard and
+// assertobs, which are assertions rather than guards. (The header said "ten
+// guards" from the extensions/shared split until it was re-counted; the number
+// had drifted with the tree, and the buckets were never all guards.) The catalog
+// names guard_walk.go as one of the "shared
 // libraries every extension links" and says outright that it belongs in
 // tools/internal/* rather than in any one extension — this is that move, made when
 // the fourth gate extraction (guard-charts) needed it and the count made the case
@@ -30,14 +34,26 @@ package guardwalk
 // exactly why they were worth collapsing rather than patching in three places:
 // with five copies, the next divergence is a matter of time.
 
+// THE WALK IS WHERE THE read-repo FENCE BECOMES REAL FOR THE GUARDS. Converting
+// it converts most of the bucket at once (see the count above) — and unlike
+// the other four capabilities, `read-repo` had no seam to intercept: its callers
+// used os.ReadFile directly, 124 times across 40 packages. This function is the
+// closest thing to one that existed, which is why it is the first customer.
+//
+// Every caller now supplies the capability.Repo its BINDING entitles it to, and
+// the dirs it passes are repo-relative rather than joined onto a root — so the
+// paths a guard prints are repo-relative too. That is a fix as well as a
+// consequence: the ::error file=… annotations used to carry `../platform-apl/…`,
+// which GitHub cannot anchor to a file.
+
 import (
 	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 	"gopkg.in/yaml.v3"
 )
@@ -53,14 +69,21 @@ var manifestExts = []string{".yaml", ".yml"}
 // where a given tree may legitimately be absent. An empty RESULT is still a
 // failure — that is requireCorpus's job, not this walk's.
 //
+// A dir OUTSIDE THE TREE is not the same thing and is not skipped. The fence
+// returns ErrOutsideRepo rather than a not-exist error precisely so that the two
+// cannot be confused here: an absent tree is a layout this guard tolerates, and a
+// guard pointed out of the repository is a defect that must be loud rather than
+// quietly walked over. This is why the skip matches on fs.ErrNotExist rather than
+// on "Stat failed".
+//
 // templates/ is skipped: Helm template dirs hold Go-templated YAML ("{{ ... }}"),
 // which is not a manifest and parses as garbage.
-func Walk(dirs []string, fn func(path string, raw []byte) error) (examined int, err error) {
+func Walk(r capability.Repo, dirs []string, fn func(path string, raw []byte) error) (examined int, err error) {
 	for _, dir := range dirs {
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		if _, statErr := r.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
 			continue
 		}
-		walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		walkErr := r.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -73,7 +96,7 @@ func Walk(dirs []string, fn func(path string, raw []byte) error) (examined int, 
 			if !hasExt(path) {
 				return nil
 			}
-			raw, readErr := os.ReadFile(path)
+			raw, readErr := r.ReadFile(path)
 			if readErr != nil {
 				return readErr
 			}
@@ -97,9 +120,9 @@ func Walk(dirs []string, fn func(path string, raw []byte) error) (examined int, 
 // read "no files" as the clean skip-or-succeed case, so returning nil on an
 // unreadable subtree would turn a partial scan into a silent color.Green — the walk
 // aborting is exactly when the corpus looks emptiest.
-func CollectPaths(dirs []string) ([]string, error) {
+func CollectPaths(r capability.Repo, dirs []string) ([]string, error) {
 	var paths []string
-	_, err := Walk(dirs, func(path string, _ []byte) error {
+	_, err := Walk(r, dirs, func(path string, _ []byte) error {
 		paths = append(paths, path)
 		return nil
 	})
@@ -162,7 +185,7 @@ func SortFindings[T any](findings []T, key func(T) (file, secondary string)) {
 	})
 }
 
-// SEVEN non-test callers across the guard family plus internal/credcoverage.
+// SEVEN non-test callers, all of them guards.
 // It is the manifest-roots half of the same question Walk answers — where does
 // this repo keep the YAML a guard must scan — so it belongs beside it rather
 // than in whichever extension happened to be extracted first.
@@ -175,8 +198,8 @@ func SortFindings[T any](findings []T, key func(T) (file, secondary string)) {
 // It said "two" until this extraction, while the body had returned three since
 // manifest-secret-store was added — the header was not updated with the fix it
 // documents below. Caught by writing the function's first direct test.
-func PlatformTreeDirs(root string) []string {
-	p := guardkit.RepoPath(root, "platform-apl")
+func PlatformTreeDirs(r capability.Repo) []string {
+	p := guardkit.RepoPath(r, "platform-apl")
 	// manifest-secret-store is a real deployed unit — ci_bootstrap_cluster_manifests
 	// gives it its own llz-secret-store Application ("path":
 	// "platform-apl/manifest-secret-store") — and it holds the two

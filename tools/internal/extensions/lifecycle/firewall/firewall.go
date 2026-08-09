@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
@@ -56,7 +57,7 @@ var KubectlFn = func(stdin string, args ...string) error {
 // the Linode API. Seamed so tests exercise resolveFirewallInputsIntoEnv without a
 // live account.
 var ResolveFn = func(token string, labels tf.Labels) (firewallID, clusterID string, err error) {
-	client := linode.NewClient(token, 60*time.Second)
+	client := capability.CloudFor(cloudBinding()).Client(token, 60*time.Second)
 	ctx := context.Background()
 
 	fws, err := client.ListFirewalls(ctx)

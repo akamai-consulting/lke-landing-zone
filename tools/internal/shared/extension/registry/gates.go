@@ -38,13 +38,39 @@ package registry
 // costs one line and renaming it breaks the build rather than a test three weeks
 // later.
 //
-// WHAT THIS DEFERS, deliberately: nothing here delivers a capability to anything.
-// A gate holds `read-repo`, and reading the repo is what a process does by
-// existing. The first binding kind that needs `capability.Handles` delivered
-// through dispatch is an assertion or a transition, and that is where the ABI
-// question becomes real — with converge and import-brownfield as the cases the
-// design doc nominates. This slice proves the registry can DRIVE; it does not
-// claim to have answered how it hands anything over.
+// WHAT THIS DEFERRED, AND WHAT HAPPENED INSTEAD.
+//
+// This paragraph used to say "nothing here delivers a capability to anything. A
+// gate holds `read-repo`, and reading the repo is what a process does by
+// existing" — and predicted that the first binding kind needing
+// `capability.Handles` delivered through dispatch would be an assertion or a
+// transition, which is where the ABI question would become real.
+//
+// BOTH HALVES ARE NOW FALSE, and the second is the interesting one.
+//
+// Reading the repo is no longer what a process does by existing: `read-repo` has
+// a handle, and every gate here is fenced to a tree. So gates DO consume a
+// capability. But they acquire it WITHOUT AN ABI — each binding looks itself up
+// from its own declaration at the point of use (capability.RepoForGate, and the
+// cloudBinding/repoBinding accessors beside it), and this driver still passes
+// nothing but flags.
+//
+// Self-service turned out to have a property a dispatcher could not offer.
+// teardown selects its binding from `--yes`/`--dry-run` at RUNTIME, narrowing
+// itself to a read-only handle on a dry run; a `Run func(Handles) error` would
+// have had to choose the handle before the flags were parsed. An ABI would have
+// foreclosed that.
+//
+// So the open question is no longer "when will something need Handles delivered
+// through dispatch" but "does anything, given self-service works". The honest
+// candidates are the cases self-service demonstrably cannot serve: a lane that
+// must be handed a NARROWED capability by something other than itself, an
+// auditor that needs a central record of what was handed out, and
+// `template-sustain`, whose command is undriveable because its Deps are
+// assembled in package main (see undrivenGates).
+//
+// That is a smaller question than the one deferred here, and it should be
+// answered before an ABI is built rather than by building one.
 // ────────────────────────────────────────────────────────────────────────────
 
 import (
@@ -57,6 +83,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
@@ -65,6 +92,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
@@ -80,63 +108,145 @@ type Gate struct {
 	Extension string
 	New       func() *cobra.Command
 	Args      []string
+	// NewWithTree, when set, is used instead of New and receives the LIVE cobra
+	// tree as a value. It exists for gates that inspect the command set.
+	//
+	// THE DRIVER SILENTLY DISABLED A CHECK WITHOUT IT. docs-guard validates every
+	// documented `llz …` invocation against the tree; run through New() the command
+	// is PARENTLESS, its Root() is itself, and 868 invocations resolved against a
+	// tree of one — all skipped, reported clean. `gates: 8 ran, all clean` while one
+	// of the eight checked nothing, which is the vacuous-green shape this driver
+	// refuses everywhere else, introduced by the driver.
+	//
+	// PARENTING IT IS NOT THE FIX. Attaching the command to the real root before
+	// Execute() recurses forever: cobra's Execute() on a parented command delegates
+	// to Root().ExecuteC(), re-running `llz ci gates` from os.Args. The tree must
+	// arrive as data.
+	NewWithTree func(tree *cobra.Command) *cobra.Command
 }
 
-// gates is every gate binding this binary can RUN, as opposed to merely describe.
+// new returns the runnable command, preferring the tree-aware constructor.
+func (g Gate) new(tree *cobra.Command) *cobra.Command {
+	if g.NewWithTree != nil {
+		return g.NewWithTree(tree)
+	}
+	return g.New()
+}
+
+// undrivenGates is every declared gate this binary does NOT drive, and why.
 //
-// IT IS DELIBERATELY NOT THE WHOLE SET. Measured: 18 extensions declare a gate
-// binding and 6 are driven here. The other 12 are still invoked only by the
-// Makefile, one `llz ci <verb>` shell-out each:
+// ────────────────────────────────────────────────────────────────────────────
+// IT IS A DECLARED LIST BECAUSE THE PROSE VERSION DRIFTED.
 //
-//	guard-cosign-subject   guard-coverage        guard-manifests
-//	guard-monitoring-labels guard-workflow-shells mesh-egress
-//	mtls-wiring            pin-coherence         template-manifest
-//	template-sustain       token-inventory       version-pins
+// This was a paragraph naming twelve gates, above a comment asserting that
+// "TestUndrivenGatesAreNamedInTheSource prints the live numbers on every run, so
+// this comment cannot quietly drift away from the model". It drifted anyway: the
+// prose still said "6 are driven" and listed seven gates as undriven that were
+// sitting in the table immediately below it.
 //
-// Converting them is mechanical, and listing them here before they are wired would
-// be a table that lies. TestUndrivenGatesAreNamedInTheSource prints the live
-// numbers on every run, so this comment cannot quietly drift away from the model —
-// and it tells you to delete this note when the gap closes.
+// The test could not have caught it. It only LOGGED the live numbers and asserted
+// nothing about the source, so the property its own docstring claimed was never
+// checked — and the direction it missed is the one that matters: a gate moving
+// from undriven to DRIVEN leaves a stale name behind, and a stale name reads as
+// remaining work that is already done.
+//
+// So the list is data, and TestUndrivenGatesMatchTheModel compares it to the live
+// set in BOTH directions — the same shape as allowedRawKubectl and the in-degree
+// ratchet. Driving a gate now fails the build until its entry is deleted, which is
+// how the paydown gets banked instead of rotting.
+// ────────────────────────────────────────────────────────────────────────────
 //
 // The gap MATTERS because of how the driver reads when it is wrong: `gates: N ran,
 // all clean` looks identical to a full pass. That is the vacuous-green shape every
 // corpus guard in this tree already refuses, arriving one level up.
+var undrivenGates = map[string]string{
+	// NOT DRIVEABLE, found by the driver failing rather than by anyone reasoning
+	// about it: `check-coverage` takes a coverprofile path and the whole
+	// per-package floor list as positionals. That is Makefile knowledge, and the
+	// floors live in COVERAGE_MINS precisely so they can be overridden per
+	// invocation.
+	//
+	// That is a constraint on what "driveable" means, not an oversight: a gate
+	// whose SUBJECT is chosen by the caller needs the caller. Whether the model
+	// should let a binding declare its own corpus is a real question and is not
+	// answered here — one case does not meet the two-case bar this repo uses for
+	// changing the vocabulary.
+	"guard-coverage": "check-coverage takes the coverprofile and the per-package floor list as positionals — Makefile knowledge",
+
+	// NOT A REPO-SCANNING GATE. token-inventory's gate binding is `rotation-plan`,
+	// which reads EVENT/CRON/SCOPE/CONFIRM/REASON/*_APPLY from the environment and
+	// maps a GitHub Actions dispatch onto the step outputs the rotation jobs gate
+	// on. Driving it from a file-in/findings-out driver would run a workflow router
+	// with no workflow around it — it would fail on the unknown scope, or worse,
+	// pass having routed nothing.
+	"token-inventory": "the rotation-plan gate routes a GitHub Actions dispatch from the environment, not the tree",
+
+	// ITS COMMAND IS STILL IN PACKAGE MAIN. `llz ci managed-fresh` is built from
+	// sustainDeps(), one of main's fifteen Deps assemblers, and cmd/llz's own
+	// header records why it stays there: a command that needs main to assemble its
+	// capability's Deps cannot live on the other side of that assembly. The
+	// registry is in internal/shared and cannot import main, so this is blocked on
+	// moving the DI layer, not on writing a flag set.
+	"template-sustain": "llz ci managed-fresh is assembled from main's sustainDeps(), which internal/shared cannot reach",
+}
+
+// gates is every gate binding this binary can RUN, as opposed to merely describe.
 //
-// TWO GATES ARE NOT DRIVEABLE, both found by the driver failing rather than by
-// anyone reasoning about it. `check-coverage` takes a coverprofile path and the
-// whole per-package floor list as positionals — that is Makefile knowledge, and
-// the floors live in COVERAGE_MINS precisely so they can be overridden per
-// invocation. And `chart-lock-drift` takes a chart directory as a POSITIONAL
-// — the Makefile passes $(OPENBAO_CHART) — and the registry has no way to know
-// which charts an instance has. Supplying it here would put instance knowledge in
-// the model.
-//
-// That is a constraint on what "driveable" means, not an oversight: a gate whose
-// SUBJECT is chosen by the caller needs the caller. Whether the model should let a
-// binding declare its own corpus is a real question and is not answered here — one
-// case does not meet the two-case bar this repo uses for changing the vocabulary.
+// `chart-lock-drift` is absent for the same not-driveable reason as
+// `guard-coverage` above — it takes a chart directory as a POSITIONAL (the
+// Makefile passes $(OPENBAO_CHART)) and the registry has no way to know which
+// charts an instance has. It is not in undrivenGates because its EXTENSION,
+// guard-charts, is driven for its other binding; the gap is per-command, and the
+// model's unit here is the extension.
 var gates = []Gate{
-	{"guard-budgets", budget.CoreSurfaceCmd, []string{"--root", ".."}},
-	{"guard-budgets", budget.UntestableLOCCmd, []string{"--root", ".."}},
-	{"guard-charts", chartguard.ChartPinGuardCmd, []string{"--root", ".."}},
-	{"posture-credential-coverage", credcoverage.CoverageGuardCmd, []string{"--root", ".."}},
-	{"guard-docs", docsguard.DocsGuardCmd, []string{"--root", ".."}},
-	{"posture-plaintext", plaintext.PlaintextGuardCmd, []string{"--root", ".."}},
-	{"wave-health", wavehealth.DependencyGuardCmd, []string{"--root", ".."}},
-	{"wave-health", wavehealth.HealthGuardCmd, []string{"--root", ".."}},
+	{"guard-budgets", budget.CoreSurfaceCmd, []string{"--root", ".."}, nil},
+	{"guard-budgets", budget.UntestableLOCCmd, []string{"--root", ".."}, nil},
+	{"guard-charts", chartguard.ChartPinGuardCmd, []string{"--root", ".."}, nil},
+	{"posture-credential-coverage", credcoverage.CoverageGuardCmd, []string{"--root", ".."}, nil},
+	// The SECOND command of the same gate binding, and its absence was a hole of
+	// exactly the shape this driver exists to close: the extension counted as
+	// "driven" on the strength of one of its two checks, so `gates: N ran, all
+	// clean` covered credential COVERAGE while the ExternalSecret path
+	// cross-validation ran only from the Makefile. guard-manifests contributes
+	// three commands for the same reason — the unit the model names is the
+	// binding, not the command.
+	{"posture-credential-coverage", credcoverage.ExternalSecretPathsCmd, []string{"--root", ".."}, nil},
+	{"guard-docs", nil, []string{"--root", ".."}, docsguard.DocsGuardCmdFor},
+	{"posture-plaintext", plaintext.PlaintextGuardCmd, []string{"--root", ".."}, nil},
+	{"wave-health", wavehealth.DependencyGuardCmd, []string{"--root", ".."}, nil},
+	{"wave-health", wavehealth.HealthGuardCmd, []string{"--root", ".."}, nil},
 
 	// EIGHT MORE, converted from Makefile targets. Each was one `llz ci <verb>`
 	// shell-out; the args are the ones the Makefile passed, carried over verbatim
 	// rather than guessed.
-	{"guard-cosign-subject", cosignguard.Cmd, []string{"--root", ".."}},
-	{"guard-monitoring-labels", monitoringlabel.Cmd, []string{"--root", ".."}},
-	{"guard-workflow-shells", workflowshells.Cmd, []string{"--dir", "../.github/workflows"}},
-	{"mesh-egress", meshegress.Cmd, []string{"--root", ".."}},
-	{"mtls-wiring", mtlsguard.Cmd, []string{"--root", ".."}},
-	{"version-pins", versionpins.Cmd, []string{"--root", ".."}},
+	{"guard-cosign-subject", cosignguard.Cmd, []string{"--root", ".."}, nil},
+	{"guard-monitoring-labels", monitoringlabel.Cmd, []string{"--root", ".."}, nil},
+	{"guard-workflow-shells", workflowshells.Cmd, []string{"--dir", "../.github/workflows"}, nil},
+	{"mesh-egress", meshegress.Cmd, []string{"--root", ".."}, nil},
+	{"mtls-wiring", mtlsguard.Cmd, []string{"--root", ".."}, nil},
+	{"version-pins", versionpins.Cmd, []string{"--root", ".."}, nil},
 	// template-manifest scans the SCAFFOLD, not the repo — its subject is what an
 	// instance receives, so its root is instance-template rather than `..`.
-	{"template-manifest", templatemanifest.Cmd, []string{"--root", "../instance-template"}},
+	{"template-manifest", templatemanifest.Cmd, []string{"--root", "../instance-template"}, nil},
+
+	// guard-manifests is THREE commands under one gate binding
+	// (`gate:scaffolded[read-repo]`, named "rendered-manifests"). All three read
+	// the rendered tree, which mesh-egress already requires, so the driver's
+	// standing assumption that `make render-charts` has run is unchanged.
+	{"guard-manifests", manifestguard.DroppedAPIVersionsCmd, []string{"--root", ".."}, nil},
+	{"guard-manifests", manifestguard.ArgoCDRenderedAppsCmd, []string{"--root", ".."}, nil},
+	{"guard-manifests", manifestguard.PlaceholderGuardCmd, []string{"--root", ".."}, nil},
+
+	// pin-coherence had no *cobra.Command at all — only `Assert(dir)`, called from
+	// verbs/lint and from assert-image-fresh. It was undriveable for want of a flag
+	// set rather than for any reason of substance, which a prose list of "the other
+	// twelve" hid by putting it beside the two that genuinely cannot be driven.
+	//
+	// The TEMPLATE repo has no .copier-answers.yml, so this is silent here by
+	// design and only speaks in an instance. That is not vacuous-green: the gate's
+	// whole subject is a fact that exists only in an instance, and Assert
+	// distinguishes "no instance" from "pins disagree".
+	{"pin-coherence", pincoherence.Cmd, []string{"--root", ".."}, nil},
 }
 
 // Gates returns the runnable gates, sorted so output does not depend on the order
@@ -174,7 +284,7 @@ func GateBindings() map[string][]extension.Binding {
 // teaches people to run the gates as late as possible. Collecting them costs
 // nothing here because a gate reaches no cluster and cannot leave the tree in a
 // half-changed state.
-func RunGates(out, errOut io.Writer, toggles map[string]clusterspec.ComponentToggle) error {
+func RunGates(tree *cobra.Command, out, errOut io.Writer, toggles map[string]clusterspec.ComponentToggle) error {
 	// ENABLEMENT IS LOAD-BEARING HERE, AND THIS IS WHERE IT STARTS. A gate is the
 	// harmless case: skipping one runs fewer checks, which is visible in the
 	// output and reversible by a toggle. Skipping an assert lane or a transition
@@ -199,7 +309,7 @@ func RunGates(out, errOut io.Writer, toggles map[string]clusterspec.ComponentTog
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", g.Extension, why))
 			continue
 		}
-		c := g.New()
+		c := g.new(tree)
 		c.SetArgs(g.Args)
 		c.SetOut(out)
 		c.SetErr(errOut)
@@ -237,7 +347,9 @@ func GatesCmd() *cobra.Command {
 		Long: "Runs each `gate` binding from the extension registry rather than from a\n" +
 			"hardcoded list. A gate is file-in, findings-out: the validator permits it\n" +
 			"`read-repo` and nothing else, so none of these reaches a cluster, a cloud\n" +
-			"or a credential.\n\n" +
+			"or a credential — and that is now enforced at runtime rather than only\n" +
+			"declared: each gate reads through a handle fenced to the tree it was\n" +
+			"pointed at, so a path outside the repository is refused rather than read.\n\n" +
 			"Not every declared gate is driven here yet — `llz extension list` shows the\n" +
 			"declared set, and the ones still invoked only by the Makefile are named in\n" +
 			"registry/gates.go.",
@@ -265,7 +377,7 @@ func GatesCmd() *cobra.Command {
 			if ok && lz != nil {
 				toggles = lz.Spec.Defaults.Components
 			}
-			return RunGates(c.OutOrStdout(), c.ErrOrStderr(), toggles)
+			return RunGates(c.Root(), c.OutOrStdout(), c.ErrOrStderr(), toggles)
 		},
 	}
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
@@ -149,7 +150,11 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
-	if err := envdef.WriteEnvDefinition(envFile, name, o, instanceName); err != nil {
+	// Through `add`'s OWN binding, not `definition`'s. The two both write
+	// environments/<env>.yaml, and borrowing the other's grant is exactly the
+	// union this extension split into four bindings to avoid.
+	if err := envdef.WriteEnvDefinitionVia(
+		capability.RepoWriterAt(specWriteBinding("add"), "."), envFile, name, o, instanceName); err != nil {
 		return fmt.Errorf("write %s: %w", envFile, err)
 	}
 	fmt.Printf("  %s  %s\n", color.Green("created"), envFile)

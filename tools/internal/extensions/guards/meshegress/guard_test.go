@@ -5,10 +5,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
-// meWrite drops NetworkPolicy manifests into a temp components dir.
-func meWrite(t *testing.T, files map[string]string) []string {
+// meRepo is the reader a real run gets, fenced to a temp tree. Built from the
+// EXTENSION rather than hand-rolled so a test cannot grant itself more than the
+// declaration allows — the same rule capability.WithExec follows.
+func meRepo(t *testing.T, root string) capability.Repo {
+	t.Helper()
+	return capability.RepoForGate(Extension(), root)
+}
+
+// meWrite drops NetworkPolicy manifests into a temp components dir and returns
+// the reader plus the scan dirs, which are now RELATIVE to the reader's root.
+func meWrite(t *testing.T, files map[string]string) (capability.Repo, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	comp := filepath.Join(dir, "components")
@@ -21,7 +32,7 @@ func meWrite(t *testing.T, files map[string]string) []string {
 			t.Fatal(err)
 		}
 	}
-	return []string{filepath.Join(dir, "platform-apl", "manifest"), comp}
+	return meRepo(t, dir), []string{filepath.Join("platform-apl", "manifest"), "components"}
 }
 
 func meNetpol(name, ns, targetNS string) string {
@@ -45,10 +56,10 @@ spec:
 // The harbor-reconciler regression: a NetworkPolicy in llz-reconciler egressing to
 // the STRICT-mesh harbor namespace → one finding.
 func TestMeshEgressFlagsCrossMeshToHarbor(t *testing.T) {
-	dirs := meWrite(t, map[string]string{
+	repo, dirs := meWrite(t, map[string]string{
 		"llzReconciler/network-policy.yaml": meNetpol("llz-reconciler", "llz-reconciler", "harbor"),
 	})
-	f, _, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +74,10 @@ func TestMeshEgressFlagsCrossMeshToHarbor(t *testing.T) {
 // Same-namespace egress (harbor's own robot-provisioner CronJob → harbor-core) is
 // in-mesh and must NOT flag.
 func TestMeshEgressAllowsSameNamespace(t *testing.T) {
-	dirs := meWrite(t, map[string]string{
+	repo, dirs := meWrite(t, map[string]string{
 		"harbor/harbor-robot-provisioner/network-policy.yaml": meNetpol("harbor-robot-provisioner-egress", "harbor", "harbor"),
 	})
-	f, _, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,10 +88,10 @@ func TestMeshEgressAllowsSameNamespace(t *testing.T) {
 
 // Egress to a non-mesh namespace (e.g. llz-openbao) is fine.
 func TestMeshEgressAllowsNonMeshTarget(t *testing.T) {
-	dirs := meWrite(t, map[string]string{
+	repo, dirs := meWrite(t, map[string]string{
 		"llzReconciler/network-policy.yaml": meNetpol("llz-reconciler", "llz-reconciler", "llz-openbao"),
 	})
-	f, _, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +105,15 @@ func TestMeshEgressAllowsNonMeshTarget(t *testing.T) {
 // their target namespaces are Helm values. Pointing at kubernetes-charts/ instead
 // is the plausible wrong fix, so this pins the right one.
 func TestMeshEgressScanDirsIncludeRenderedCharts(t *testing.T) {
+	repo := meRepo(t, t.TempDir())
 	var rendered bool
-	for _, d := range meshEgressScanDirs("/repo") {
+	for _, d := range meshEgressScanDirs(repo) {
 		if filepath.Base(d) == renderedChartsDir {
 			rendered = true
 		}
 	}
 	if !rendered {
-		t.Fatalf("the rendered chart tree must be scanned; got %v", meshEgressScanDirs("/repo"))
+		t.Fatalf("the rendered chart tree must be scanned; got %v", meshEgressScanDirs(repo))
 	}
 }
 
@@ -121,14 +133,14 @@ func TestMeshEgressRenderedDirMatchesMakefile(t *testing.T) {
 // A missing rendered tree is a hard error, never a quiet pass. Without this the
 // guard reports the same color.Green whether or not it saw the chart policies.
 func TestMeshEgressRequiresRenderedTree(t *testing.T) {
-	if err := requireRenderedCharts(t.TempDir()); err == nil {
+	if err := requireRenderedCharts(meRepo(t, t.TempDir())); err == nil {
 		t.Fatal("a missing rendered tree must fail, not pass color.Green")
 	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, renderedChartsDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := requireRenderedCharts(dir); err != nil {
+	if err := requireRenderedCharts(meRepo(t, dir)); err != nil {
 		t.Fatalf("a present rendered tree must pass: %v", err)
 	}
 }
@@ -144,7 +156,8 @@ func TestMeshEgressFlagsRenderedChartPolicy(t *testing.T) {
 		[]byte(meNetpol("runner-egress", "llz-cert-automation", "harbor")), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fs, examined, err := collectMeshEgressFindings(meshEgressScanDirs(dir))
+	repo := meRepo(t, dir)
+	fs, examined, err := collectMeshEgressFindings(repo, meshEgressScanDirs(repo))
 	if err != nil {
 		t.Fatal(err)
 	}

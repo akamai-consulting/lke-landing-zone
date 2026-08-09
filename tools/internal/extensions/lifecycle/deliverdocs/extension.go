@@ -83,3 +83,18 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// deliverBinding is the transition this verb writes through. Looked up rather
+// than reconstructed, following objenc's seedBinding: the handles belong to a
+// BINDING, and an extension with several must not hand back the union.
+func deliverBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.WriteRepo {
+				return b
+			}
+		}
+	}
+	panic("deliver-docs: no write-repo binding — pruning and rewriting the docs " +
+		"tree builds its writer from one, so its absence is a wiring bug")
+}

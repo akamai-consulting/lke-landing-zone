@@ -49,3 +49,24 @@ func TestRefusesToGuessAnEndpoint(t *testing.T) {
 			"catches what verify-object-storage misses")
 	}
 }
+
+// EVERY CLUSTER CALL HERE IS A READ, and the handle is what enforces it. The
+// binding declares cluster-read and no cluster-write; if a mutating kubectl verb
+// ever appears it will be refused at run time rather than quietly succeeding, and
+// this is what says that is the intent.
+func TestTheClusterHandleIsReadOnly(t *testing.T) {
+	c := objstoreCluster()
+	if err := c.Permits("-n", "x", "get", "secret", "y", "-o", "json"); err != nil {
+		t.Errorf("a `get` was refused: %v", err)
+	}
+	for _, argv := range [][]string{
+		{"-n", "x", "delete", "secret", "y"},
+		{"-n", "x", "apply", "-f", "-"},
+		{"-n", "x", "patch", "secret", "y", "-p", "{}"},
+	} {
+		if err := c.Permits(argv...); err == nil {
+			t.Errorf("kubectl %v was permitted — this lane's only cluster access is looking; "+
+				"its WRITE is to object storage over S3, which cloud-mutate covers", argv)
+		}
+	}
+}

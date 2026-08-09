@@ -14,28 +14,32 @@ package workflowshells
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 func Run(dir string) error {
-	entries, err := os.ReadDir(dir)
+	repo, rel := capability.RepoContaining(workflowShellsBinding(), dir)
+	entries, err := repo.ReadDir(rel)
 	if err != nil {
 		return fmt.Errorf("check-workflow-shells: %w", err)
 	}
 	var violations []string
+	var examined int
 	for _, e := range entries {
 		if e.IsDir() || (!strings.HasSuffix(e.Name(), ".yml") && !strings.HasSuffix(e.Name(), ".yaml")) {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		data, err := repo.ReadFile(filepath.Join(rel, e.Name()))
 		if err != nil {
 			return fmt.Errorf("check-workflow-shells: %w", err)
 		}
+		examined++
 		violations = append(violations, scanWorkflowShells(e.Name(), data)...)
 	}
 	sort.Strings(violations)
@@ -45,7 +49,19 @@ func Run(dir string) error {
 	if len(violations) > 0 {
 		return fmt.Errorf("check-workflow-shells: %d container job(s) can fall back to /bin/sh — add `defaults:\\n  run:\\n    shell: bash` (a `set -o pipefail` step otherwise runs under dash and fails)", len(violations))
 	}
-	fmt.Println("check-workflow-shells: every container job declares a bash shell default.")
+	// REFUSE AN EMPTY CORPUS, the rule plaintext-guard states and this guard was
+	// the last driven one not keeping: "a guard that had nothing to check reports
+	// the same green as one that checked everything, so this fails instead."
+	//
+	// It matters most HERE, because the subject is a directory passed in. Pointed
+	// at a path that does not hold workflows — a moved .github/, a wrong --dir, a
+	// driver arg carried over from a different tree — this printed "every container
+	// job declares a bash shell default" over zero jobs.
+	if examined == 0 {
+		return fmt.Errorf("check-workflow-shells: no workflow YAML under %q — a guard that "+
+			"examined nothing cannot report that everything is fine. Check --dir", dir)
+	}
+	fmt.Printf("check-workflow-shells: every container job declares a bash shell default (%d workflow(s)).\n", examined)
 	return nil
 }
 

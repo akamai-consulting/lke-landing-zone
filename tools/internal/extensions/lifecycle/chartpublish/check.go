@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 )
 
@@ -207,7 +208,11 @@ func underAny(p string, markers []string) bool {
 
 func scanPublishPins(root string) ([]publishPin, error) {
 	var pins []publishPin
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	// Fenced at the tree it was told to scan, and the walk starts at its own
+	// root: the caller supplies `root` as an absolute path in tests and a
+	// relative one in production, and capability.RepoContaining relates the two.
+	repo, rel := capability.RepoContaining(repoBinding(), root)
+	err := repo.WalkDir(rel, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -232,7 +237,7 @@ func scanPublishPins(root string) ([]publishPin, error) {
 		if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
-		b, rerr := os.ReadFile(path)
+		b, rerr := repo.ReadFile(path)
 		if rerr != nil {
 			return rerr
 		}

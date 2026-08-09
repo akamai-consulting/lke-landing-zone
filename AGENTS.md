@@ -153,13 +153,18 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
 1. `gofmt -w .` in `tools/`; `tofu fmt` any `.tf` files you changed.
 2. `go vet ./...` in `tools/`.
 3. `go test ./...` in `tools/` for any code you touched.
-4. **`make lint` — the authoritative final gate; fix every issue until it exits
+4. `make test-race` — CI runs it and **nothing else in this list does**. `go test
+   ./...`, `make lint`, `staticcheck`, `coverage` and `core-surface-check` all
+   pass over a data race. One in `assertsuite` failed this deterministically
+   while every other gate was green, and survived five pushes because nobody ran
+   the target.
+5. **`make lint` — the authoritative final gate; fix every issue until it exits
    0.** It is change-aware (keys off `git diff HEAD`) and covers everything you
    touched: Go (`gofmt`/`go vet`), `shellcheck`, Terraform (`tofu fmt`,
    `tflint`, `checkov`), Kubernetes (`kube-linter`, `kubeconform`), Helm
    (`helm lint --strict`), and `actionlint` for `.github/workflows/*.yml`.
    (`make LINT_ALL=1 lint` runs every check unconditionally.)
-5. **If you changed behavior, name the gate that would catch it regressing** — in
+6. **If you changed behavior, name the gate that would catch it regressing** — in
    the PR body, in one line. If the honest answer is "none", write the gate
    ([docs/e2e-gates.md](docs/e2e-gates.md)); if the behavior genuinely doesn't
    need one (refactor, docs, a statically-decidable invariant already in

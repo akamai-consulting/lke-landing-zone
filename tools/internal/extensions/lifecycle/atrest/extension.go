@@ -56,3 +56,16 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// atRestBinding is the invariant this gate reads through. It declares exactly one
+// binding, but it is looked up rather than reconstructed so that adding a second
+// one cannot silently widen what the scan may read.
+func atRestBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Invariant {
+			return b
+		}
+	}
+	panic("posture-at-rest: no invariant binding — the scan builds its read-repo " +
+		"reader from it, so its absence is a wiring bug")
+}

@@ -86,3 +86,21 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// cloudBinding is the binding a Linode call is made under, chosen by NAME because
+// this extension declares several with DIFFERENT cloud permissions.
+//
+// THE RULE IS THE NARROWEST BINDING THAT COVERS WHAT THE CALL ACTUALLY DOES, and
+// it is applied by reading the HTTP verb rather than the function name. `RunCITFImport` and `HealFirewallCollision` both sit in mutating code paths and
+// both call only ListVPCs/ListVPCSubnets/ListFirewalls/GetKubeconfig — GETs. They
+// take `plan`, the read assertion, not `import` or `apply`. Naming them for the
+// path they run in would have handed two read-only calls the grant that destroys.
+func cloudBinding(name string) extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic("tofu-driver: no binding named " + name + " — its Linode client is built from one, " +
+		"so its absence is a wiring bug")
+}

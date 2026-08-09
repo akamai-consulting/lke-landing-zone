@@ -36,3 +36,14 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// coverageBinding is the gate binding this guard reads its coverprofile through.
+func coverageBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Gate {
+			return b
+		}
+	}
+	panic("guard-coverage: no gate binding — reading the coverprofile builds its " +
+		"read-repo reader from it, so its absence is a wiring bug")
+}

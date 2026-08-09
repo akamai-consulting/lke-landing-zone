@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -54,7 +55,7 @@ func runCIVerifyObjectStorage(region string) error {
 	if err != nil {
 		return err
 	}
-	buckets, err := linode.NewClient(token, 30*time.Second).ListObjectStorageBuckets(context.Background())
+	buckets, err := capability.CloudFor(cloudBinding()).Client(token, 30*time.Second).ListObjectStorageBuckets(context.Background())
 	if err != nil {
 		// Transient API hiccup / auth page / non-JSON body — don't block the
 		// bootstrap on a parsing edge case; the mint + seed steps below still run.

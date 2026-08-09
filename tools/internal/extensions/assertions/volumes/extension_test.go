@@ -98,3 +98,35 @@ func TestTheReconcilerLanesCanDeclareWhatTheyDo(t *testing.T) {
 		}
 	}
 }
+
+// THE TWO MUTATING SITES MUST GET MUTATING BINDINGS, AND THE READ ASSERTION MUST
+// NEVER GAIN ONE. This package is the clean case of the rule the cloud conversion
+// runs on — the narrowest binding that covers what the call actually does —
+// because both of its Linode writes are genuine PUTs (UpdateVolume,
+// UpdateVolumeLabel) and its third binding only looks.
+func TestCloudBindingsMatchWhatEachCallDoes(t *testing.T) {
+	for _, name := range []string{"volume-tags", "volume-labels"} {
+		b := cloudBinding(name)
+		if !hasGrant(b, extension.CloudMutate) {
+			t.Errorf("%s must hold cloud-mutate — it PUTs to /v4/volumes, and without the grant "+
+				"the handle would refuse the write at the wire", name)
+		}
+	}
+
+	// The read assertion is the binding a careless choice would arm.
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Assertion && hasGrant(b, extension.CloudMutate) {
+			t.Errorf("the %q assertion holds cloud-mutate — an assertion that can change what it "+
+				"measures can make its own verdict true", b.Name)
+		}
+	}
+}
+
+func hasGrant(b extension.Binding, g extension.Grant) bool {
+	for _, have := range b.Grants {
+		if have == g {
+			return true
+		}
+	}
+	return false
+}

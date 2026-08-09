@@ -89,3 +89,17 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// renderedManifestsBinding is the gate binding the two rendered-tree guards read
+// through. Looked up rather than reconstructed, following the same rule as
+// objenc's seedBinding: the handles belong to a BINDING, and an extension with
+// several must not hand back the union.
+func renderedManifestsBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Gate {
+			return b
+		}
+	}
+	panic("guard-manifests: no gate binding — the rendered-manifest guards build " +
+		"their read-repo reader from it, so its absence is a wiring bug")
+}

@@ -39,7 +39,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 )
 
@@ -72,7 +72,9 @@ var unwedgeResolveKubeconfigFn = func(d Deps, region string) (b64 string, found 
 		return "", false, err
 	}
 	label := vars.ClusterLabel
-	client := linode.NewClient(token, 60*time.Second)
+	// Reads only: it looks the cluster up and pulls a kubeconfig so the unwedge can
+	// act INSIDE the cluster. Nothing here deletes through the Linode API.
+	client := capability.CloudFor(cloudBinding(false)).Client(token, 60*time.Second)
 	ctx := context.Background()
 	ids, err := client.ClustersWithLabel(ctx, label)
 	if err != nil {

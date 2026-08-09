@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // writeTFRoot lays out a Terraform tree under the path atRestScanDirs resolves.
@@ -52,7 +54,7 @@ func TestAtRestGuardAcceptsAnEncryptedRoot(t *testing.T) {
 	})
 	// Every real registry entry is now stale against this synthetic tree, which is
 	// its own (correct) failure — assert on the findings instead.
-	findings, examined, err := collectAtRestFindings(root, ScanDirs(root))
+	findings, examined, err := collectAtRestFindings(atRestRepo(root), ScanDirs(atRestRepo(root)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +263,7 @@ func TestAtRestGuardStillSeesLeveredResourcesAfterABucket(t *testing.T) {
 // until they say what lands in it and what would retire the entry.
 func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
 	root := "../../../../.." // tools/cmd/llz -> repo root, as TestAtRestGuardPassesOnThisRepo
-	findings, _, err := collectAtRestFindings(root, ScanDirs(root))
+	findings, _, err := collectAtRestFindings(atRestRepo(root), ScanDirs(atRestRepo(root)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,4 +285,10 @@ func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
 	if seen == 0 {
 		t.Fatal("scanned no buckets at all — the guard would report green over them")
 	}
+}
+
+// atRestRepo is the reader a real scan gets, fenced to a fixture tree, built from
+// the extension's own invariant binding.
+func atRestRepo(root string) capability.Repo {
+	return capability.RepoAt(atRestBinding(), root)
 }

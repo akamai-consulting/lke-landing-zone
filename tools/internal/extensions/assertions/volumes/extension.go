@@ -98,3 +98,19 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// cloudBinding is the binding a Linode call is made under, chosen by NAME because
+// this extension declares several with DIFFERENT cloud permissions.
+//
+// THE RULE IS THE NARROWEST BINDING THAT COVERS WHAT THE CALL ACTUALLY DOES, and
+// it is applied by reading the HTTP verb rather than the function name. Both sites PUT (UpdateVolume, UpdateVolumeLabel), so both take a cloud-mutate
+// invariant — and the two invariants are distinct, so each takes its own.
+func cloudBinding(name string) extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic("assert-volumes: no binding named " + name + " — its Linode client is built from one, " +
+		"so its absence is a wiring bug")
+}

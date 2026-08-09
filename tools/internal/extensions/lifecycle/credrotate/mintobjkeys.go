@@ -37,15 +37,15 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // MintObjkeysLinodeClient is a seam for tests.
 var MintObjkeysLinodeClient = func(token string) LinodeAPI {
-	return linode.NewClient(token, 30*time.Second)
+	return capability.CloudFor(objKeyCloudBinding()).Client(token, 30*time.Second)
 }
 
 func RunMintBootstrapObjkeys(region string) error {

@@ -14,8 +14,28 @@ red one actually means.
 
 ```bash
 cd tools && gofmt -w . && go vet ./... && go test ./...   # anything Go
+make test-race                                             # NOT covered by the above
 make lint                                                  # the real gate
 ```
+
+**`make test-race` is the one CI runs that nothing else here does.** It is a step
+of CI's "Go tests + coverage" job (`Makefile` target `test-race`), and it is
+covered by *none* of `go test ./...`, `make lint`, `make staticcheck`,
+`make coverage` or `make core-surface-check`. Skipping it is not theoretical: a
+data race in `assertsuite` — `ran++` from the goroutine `runAssertSuiteLanes`
+starts per lane — failed it **deterministically** (5/5) while `go test ./...` was
+green, and stayed red across five consecutive pushes on
+`feat/first-internal-extension` because everything anyone actually ran passed. A
+handoff doc recorded that branch as "CI green" on the strength of it.
+
+Two lessons, both cheap:
+
+- Run it whenever you touch anything that installs a package-level seam a
+  concurrent caller reaches. A bare counter in a test double is the usual shape;
+  use `atomic.Int64` or a mutex.
+- **Do not take "CI is green" on trust**, from a handoff or from a green check
+  list. Confirm the *Lint* workflow specifically:
+  `gh run list --branch <branch> --json workflowName,conclusion,headSha`.
 
 `make lint` is **change-aware** — it keys off `git diff HEAD` and runs a different
 subset per diff. Two consequences worth internalising:

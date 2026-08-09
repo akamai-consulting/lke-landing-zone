@@ -23,8 +23,10 @@ package credcoverage
 // policy-covered, non-zero otherwise.
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -83,18 +86,18 @@ var (
 // ONE definition, used by both the walk and the requireCorpus report: they were
 // two separate literals, and the walk's copy is the one that decided coverage
 // while the reported list said something else.
-func esScanDirs(root, renderDir string) []string {
+func esScanDirs(repo capability.Repo, renderDir string) []string {
 	return []string{
-		guardkit.RepoPath(root, "platform-apl"),
-		guardkit.RepoPath(root, "apl-values"),
-		filepath.Join(root, filepath.FromSlash(renderDir)),
+		guardkit.RepoPath(repo, "platform-apl"),
+		guardkit.RepoPath(repo, "apl-values"),
+		filepath.FromSlash(renderDir),
 	}
 }
 
 // collectExternalSecretRefs returns {(remoteRef.key, property): [file, …]} from
 // every YAML manifest under apl-values/ and the rendered chart output, skipping
 // vendored chart subtrees (/charts/).
-func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int, error) {
+func collectExternalSecretRefs(repo capability.Repo, renderDir string) (map[esRef][]string, int, error) {
 	refs := map[esRef][]string{}
 	// collectManifestPaths is the walk the tree-scanning guards share; it also
 	// matches *.yml, which this hand-rolled copy dropped — an ExternalSecret saved
@@ -103,14 +106,24 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int,
 	// The walk error is returned, not dropped: requireCorpus only asserts
 	// examined > 0, so a walk that broke PARTWAY still yields a non-empty corpus
 	// and would pass the gate having validated only the files it reached.
-	sources, walkErr := guardwalk.CollectPaths(esScanDirs(root, renderDir))
+	sources, walkErr := guardwalk.CollectPaths(repo, esScanDirs(repo, renderDir))
 	examined := 0
 	for _, f := range sources {
 		if strings.Contains(filepath.ToSlash(f), "/charts/") {
 			continue
 		}
 		examined++
-		b, _ := os.ReadFile(f)
+		// The error is no longer discarded. It was `b, _ := os.ReadFile(f)`, which
+		// made an unreadable source indistinguishable from one containing no
+		// ExternalSecret — the file was counted as examined and contributed no
+		// refs, so the guard vouched for paths it never read. That is the same
+		// vacuous-green shape requireCorpus exists to catch, one level down, and
+		// it is exactly what surfaced when the fence changed these paths: every
+		// read failed, every file "had no ExternalSecret", and the guard passed.
+		b, readErr := repo.ReadFile(f)
+		if readErr != nil {
+			return nil, examined, fmt.Errorf("reading %s: %w", f, readErr)
+		}
 		text := string(b)
 		if !strings.Contains(text, "kind: ExternalSecret") {
 			continue
@@ -125,11 +138,9 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int,
 			if m := esPropertyRx.FindStringSubmatch(lookahead); m != nil {
 				ref.prop, ref.hasProp = m[1], true
 			}
-			relf, err := filepath.Rel(root, f)
-			if err != nil {
-				relf = f
-			}
-			refs[ref] = append(refs[ref], filepath.ToSlash(relf))
+			// Already repo-relative: the reader hands back paths expressed under
+			// its own root, so the filepath.Rel that used to derive this is gone.
+			refs[ref] = append(refs[ref], filepath.ToSlash(f))
 		}
 	}
 	// examined counts files actually READ (post /charts/ filter), not files found.
@@ -153,7 +164,7 @@ var (
 // source files. Matches both `kv put secret/<path>` (any bao wrapper: bao, llz
 // openbao exec, $BAO, …) and the `llz ci bao-seed --path secret/<path>` step;
 // backslash line continuations are joined first so multi-line puts/seeds parse.
-func collectSeeded(sources []string) (map[string]bool, map[string]map[string]bool, error) {
+func collectSeeded(repo capability.Repo, sources []string) (map[string]bool, map[string]map[string]bool, error) {
 	paths := map[string]bool{}
 	fields := map[string]map[string]bool{}
 	addField := func(path, name string) {
@@ -163,7 +174,7 @@ func collectSeeded(sources []string) (map[string]bool, map[string]map[string]boo
 		fields[path][name] = true
 	}
 	for _, src := range sources {
-		b, err := os.ReadFile(src)
+		b, err := repo.ReadFile(src)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read seeding source: %w", err)
 		}
@@ -238,9 +249,9 @@ var (
 // that call indirectly as harborRobotSpec kvPath: literals (every spec is
 // seeded at the single baoKVPutFn(spec.kvPath, …) call site, so those paths
 // share its field set).
-func collectSeededGo(src string) (map[string]bool, map[string]map[string]bool, error) {
-	b, err := os.ReadFile(src)
-	if os.IsNotExist(err) {
+func collectSeededGo(repo capability.Repo, src string) (map[string]bool, map[string]map[string]bool, error) {
+	b, err := repo.ReadFile(src)
+	if errors.Is(err, fs.ErrNotExist) {
 		// A scanned source may be absent (a thin instance checkout, or a renamed
 		// file). Skip it rather than crash: any seed it held simply goes
 		// undetected and surfaces as the validator's normal "not seeded" error.
@@ -361,8 +372,8 @@ type esPolicy = map[string]map[string]map[string]bool
 // UNIONed, not overwritten: the file collectively grants the strongest set, so a
 // path read+listed by platform-ci stays covered even if secret-propagator also
 // grants it read-only.
-func collectPolicyPaths(path string) (esPolicy, error) {
-	b, err := os.ReadFile(path)
+func collectPolicyPaths(repo capability.Repo, path string) (esPolicy, error) {
+	b, err := repo.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read policy source: %w", err)
 	}
@@ -445,6 +456,7 @@ func esUniqueSortedFiles(props []esPropFiles) []string {
 }
 
 func runCIExternalSecretPaths(root string, w io.Writer) error {
+	repo := capability.RepoForGate(Extension(), root)
 	// The landing-zone template ships its ExternalSecrets AS charts, so the refs
 	// to validate live in the rendered chart output (template-scripts/ci/
 	// render-charts.sh → $RENDER_DIR), not only a raw apl-values/ tree. Both are
@@ -454,8 +466,8 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// coverage while this one only decided what requireCorpus reported, and they
 	// disagreed — platform-apl, where the concrete remoteRef keys live, was in
 	// neither. See esScanDirs.
-	esDirs := esScanDirs(root, renderDir)
-	refs, examined, walkErr := collectExternalSecretRefs(root, renderDir)
+	esDirs := esScanDirs(repo, renderDir)
+	refs, examined, walkErr := collectExternalSecretRefs(repo, renderDir)
 	if walkErr != nil {
 		return fmt.Errorf("externalsecret-paths: scanning manifests: %w", walkErr)
 	}
@@ -471,8 +483,8 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// (the per-instance bootstrap-*.yml are thin callers with no seeds) and in
 	// `llz ci provision-harbor-robots` (ci_harbor.go, parsed by the Go-aware
 	// collector). See docs/templatization-plan.md §"Keeping instances in sync".
-	seededPaths, seededFields, err := collectSeeded([]string{
-		guardkit.RepoPath(root, ".github/workflows/llz-bootstrap-openbao.yml"),
+	seededPaths, seededFields, err := collectSeeded(repo, []string{
+		guardkit.RepoPath(repo, ".github/workflows/llz-bootstrap-openbao.yml"),
 	})
 	if err != nil {
 		return err
@@ -503,7 +515,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		// `bao kv put` step in a workflow, only here.
 		"tools/internal/extensions/lifecycle/objenc/seed_key.go",
 	} {
-		goPaths, goFields, err := collectSeededGo(guardkit.RepoPath(root, goSrc))
+		goPaths, goFields, err := collectSeededGo(repo, guardkit.RepoPath(repo, goSrc))
 		if err != nil {
 			return err
 		}
@@ -521,7 +533,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	}
 
 	policyPaths := map[string]esPolicy{}
-	if policyPaths[esBaoConfigureLabel], err = collectPolicyPaths(guardkit.RepoPath(root, esBaoConfigurePath)); err != nil {
+	if policyPaths[esBaoConfigureLabel], err = collectPolicyPaths(repo, guardkit.RepoPath(repo, esBaoConfigurePath)); err != nil {
 		return err
 	}
 
@@ -589,7 +601,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 
 	// Phase-1 invariant of docs/designs/secrets-before-apps.md: every
 	// OpenBao-bound ExternalSecret/PushSecret bounds its propagation window.
-	errors += checkESRefreshIntervals(root, w)
+	errors += checkESRefreshIntervals(repo, w)
 
 	if errors > 0 {
 		fmt.Fprintf(w, "\n%d ExternalSecret ref(s) failed seed or policy validation.\n", errors)
@@ -628,11 +640,11 @@ func esParseRefreshInterval(s string) (time.Duration, error) {
 // inspected: every ES/PushSecret in these trees binds the openbao(-push)
 // ClusterSecretStores, and a future non-OpenBao ES would deserve the same
 // propagation bound anyway.
-func checkESRefreshIntervals(root string, w io.Writer) int {
+func checkESRefreshIntervals(repo capability.Repo, w io.Writer) int {
 	errors := 0
 	// The shared walk (*.yaml AND *.yml, absent dirs skipped): a PushSecret saved
 	// as *.yml was exempt from the propagation bound under the hand-rolled copy.
-	if _, walkErr := guardwalk.Walk(guardwalk.PlatformTreeDirs(root), func(p string, b []byte) error {
+	if _, walkErr := guardwalk.Walk(repo, guardwalk.PlatformTreeDirs(repo), func(p string, b []byte) error {
 		for _, doc := range strings.Split(string(b), "\n---") {
 			if !esKindRx.MatchString(doc) {
 				continue

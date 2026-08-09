@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -44,8 +45,9 @@ type phFinding struct {
 }
 
 func RunPlaceholderGuard(renderDir string) error {
-	dirs := []string{renderDir}
-	findings, examined, err := collectPlaceholderFindings(dirs)
+	repo, dir := capability.RepoContaining(renderedManifestsBinding(), renderDir)
+	dirs := []string{dir}
+	findings, examined, err := collectPlaceholderFindings(repo, dirs)
 	if err != nil {
 		return err
 	}
@@ -69,9 +71,9 @@ func RunPlaceholderGuard(renderDir string) error {
 // placeholder host, with its 1-indexed line number (so the ::error annotation
 // lands on the offending line in the PR diff — something the `grep -rn` this
 // replaced printed but could not annotate).
-func collectPlaceholderFindings(dirs []string) ([]phFinding, int, error) {
+func collectPlaceholderFindings(repo capability.Repo, dirs []string) ([]phFinding, int, error) {
 	var findings []phFinding
-	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
+	examined, err := guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
 		sc := bufio.NewScanner(bytes.NewReader(raw))
 		// Rendered charts concatenate every template, so a single file can be
 		// large; the default 64KB token limit would error on one long line.

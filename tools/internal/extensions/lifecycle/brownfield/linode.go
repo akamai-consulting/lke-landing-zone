@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
@@ -79,7 +80,7 @@ func enrichFromLinode(token string, clusterID uint64, contextName string) (*impo
 	if token == "" {
 		return nil, "no Linode token (set --linode-token or LINODE_API_TOKEN) — skipping Linode enrichment"
 	}
-	client := linode.NewClient(token, 60*time.Second)
+	client := capability.CloudFor(cloudReadBinding()).Client(token, 60*time.Second)
 	ctx := context.Background()
 
 	clusters, err := client.ListClusters(ctx)

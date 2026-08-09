@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
+	"github.com/spf13/cobra"
 )
 
 // ── workflow_dispatch input parsing ──────────────────────────────────────────
@@ -207,8 +211,8 @@ func TestCheckDocWorkflowInputs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, "docs/run.md", tc.body)
-			docs, _ := loadDocs(root, []string{"docs/run.md"})
-			got, err := checkDocWorkflowInputs(root, docs, &Scanned{})
+			docs, _ := loadDocs(gRepo(root), []string{"docs/run.md"})
+			got, err := checkDocWorkflowInputs(gRepo(root), docs, &Scanned{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -287,7 +291,9 @@ func repoRootForDocsGuard(t *testing.T) string {
 		t.Fatal(err)
 	}
 	for i := 0; i < 6; i++ {
-		if pathExists(filepath.Join(dir, "copier.yml")) && pathExists(filepath.Join(dir, "docs")) {
+		// Probing THROUGH a reader fenced at the candidate: the search walks
+		// upward, so each candidate is its own tree.
+		if r := gRepo(dir); pathExists(r, "copier.yml") && pathExists(r, "docs") {
 			return dir
 		}
 		dir = filepath.Dir(dir)
@@ -317,7 +323,7 @@ func TestMarkdownFiles_SkipsArtifactsButKeepsDotGithub(t *testing.T) {
 	writeMD(t, root, "rendered/out/README.md", "[w](nope.md)")
 	writeMD(t, root, "vendor/v/README.md", "[v](nope.md)")
 
-	files, err := markdownFiles(root)
+	files, err := markdownFiles(gRepo(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +366,7 @@ func TestMarkdownFiles_RootPassedAsDotIsNotSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range []string{".", "./"} {
-		files, err := markdownFiles(r)
+		files, err := markdownFiles(gRepo(r))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -373,7 +379,7 @@ func TestMarkdownFiles_RootPassedAsDotIsNotSkipped(t *testing.T) {
 	if err := os.Chdir(filepath.Join(root, "docs")); err != nil {
 		t.Fatal(err)
 	}
-	files, err := markdownFiles("..")
+	files, err := markdownFiles(gRepo(".."))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,11 +392,11 @@ func TestMarkdownFiles_RootPassedAsDotIsNotSkipped(t *testing.T) {
 // like the production path (load once, then check) instead of re-reading.
 func checkDeliveredDocLinksFrom(t *testing.T, root string, rels ...string) []Finding {
 	t.Helper()
-	docs, bad := loadDocs(root, rels)
+	docs, bad := loadDocs(gRepo(root), rels)
 	if len(bad) != 0 {
 		t.Fatalf("fixture unreadable: %v", bad)
 	}
-	return checkDeliveredDocLinks(root, docs, &Scanned{})
+	return checkDeliveredDocLinks(gRepo(root), docs, &Scanned{})
 }
 
 // A guard that cannot READ a doc must not report that it checked it. Every
@@ -410,7 +416,7 @@ func TestLoadDocs_UnreadableFileIsAFindingNotASilentSkip(t *testing.T) {
 		t.Skip("running as root — mode 0000 is still readable")
 	}
 
-	docs, bad := loadDocs(root, []string{"docs/fine.md", "docs/locked.md"})
+	docs, bad := loadDocs(gRepo(root), []string{"docs/fine.md", "docs/locked.md"})
 	if len(docs) != 1 || docs[0].rel != filepath.Join("docs", "fine.md") {
 		t.Errorf("readable docs = %+v, want just docs/fine.md", docs)
 	}
@@ -442,7 +448,7 @@ func TestMarkdownFiles_WalkErrorFailsClosed(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
 
-	if _, err := markdownFiles(root); err == nil {
+	if _, err := markdownFiles(gRepo(root)); err == nil {
 		t.Error("markdownFiles swallowed a walk error — it must fail closed, not under-cover silently")
 	}
 }
@@ -576,11 +582,11 @@ func TestCheckDocLinks_InstanceTemplateIsJudgedAsRendered(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, tc.rel, tc.body)
-			docs, bad := loadDocs(root, []string{tc.rel})
+			docs, bad := loadDocs(gRepo(root), []string{tc.rel})
 			if len(bad) != 0 {
 				t.Fatalf("fixture unreadable: %v", bad)
 			}
-			got := checkDocLinks(root, docs, &Scanned{})
+			got := checkDocLinks(gRepo(root), docs, &Scanned{})
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no findings, got %v", got)
@@ -646,11 +652,11 @@ func TestCheckSelfRepoLinks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, "docs/probe.md", tc.body)
-			docs, bad := loadDocs(root, []string{"docs/probe.md"})
+			docs, bad := loadDocs(gRepo(root), []string{"docs/probe.md"})
 			if len(bad) != 0 {
 				t.Fatalf("fixture unreadable: %v", bad)
 			}
-			got := checkSelfRepoLinks(root, docs, &Scanned{})
+			got := checkSelfRepoLinks(gRepo(root), docs, &Scanned{})
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no findings, got %v", got)
@@ -836,11 +842,11 @@ func TestCheckDocLinks_RootRelativeLinksResolveFromTheRoot(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, tc.rel, tc.body)
-			docs, bad := loadDocs(root, []string{tc.rel})
+			docs, bad := loadDocs(gRepo(root), []string{tc.rel})
 			if len(bad) != 0 {
 				t.Fatalf("fixture unreadable: %v", bad)
 			}
-			got := checkDocLinks(root, docs, &Scanned{})
+			got := checkDocLinks(gRepo(root), docs, &Scanned{})
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("a valid root-relative link was reported: %v", got)
@@ -973,3 +979,36 @@ func TestGithubAnchor_MatchesGithubSlugger(t *testing.T) {
 // A mermaid node label is a caption, not a shell line. The quickstart's
 // lifecycle diagram has a node reading `llz doctor --env`, whose closing `"]`
 // the tokeniser folded into the flag and reported as `--env]`.
+
+// THE TREE ARRIVES AS DATA, NOT AS A PARENT, and this is what pins it.
+//
+// `llz ci gates` runs this guard PARENTLESS, where cmd.Root() is the command
+// itself — a tree of one, against which 868 documented invocations resolved to
+// nothing and were all skipped, reported clean. Parenting it to the real root is
+// not the fix: cobra's Execute() on a parented command delegates to
+// Root().ExecuteC() and recurses forever.
+func TestDocsGuardCmdForUsesTheInjectedTree(t *testing.T) {
+	tree := &cobra.Command{Use: "llz"}
+	tree.AddCommand(&cobra.Command{Use: "render"})
+
+	c := DocsGuardCmdFor(tree)
+	if c.Root() == tree {
+		t.Fatal("the command is PARENTED to the tree — that is what recurses; it must stay " +
+			"parentless and hold the tree as a value")
+	}
+	if c.Root() != c {
+		t.Errorf("expected a parentless command, got root %q", c.Root().Name())
+	}
+	// The plain constructor keeps the live-CLI behaviour: no tree, falls back to
+	// cmd.Root() at run time.
+	if DocsGuardCmd() == nil {
+		t.Error("DocsGuardCmd() returned nil")
+	}
+}
+
+// gRepo is the reader a real run gets, fenced to a fixture tree. Built from the
+// EXTENSION so a test cannot hand itself a reader the declaration would not have
+// produced — the rule capability.WithExec follows for the same reason.
+func gRepo(root string) capability.Repo {
+	return capability.RepoForGate(Extension(), root)
+}

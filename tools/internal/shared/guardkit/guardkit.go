@@ -1,7 +1,11 @@
 // Package guardkit is the scaffolding every file-scanning guard shares: WHERE its
 // corpus is, and whether it actually examined one.
 //
-// Eight guards resolve their roots and check their corpus the same way, and while
+// TEN PACKAGES resolve their roots and check their corpus the same way — seven
+// guards, two assertions (manifestguard, assertobs) and one lifecycle extension
+// (atrest) — plus guardwalk itself. (This said "eight guards" from the
+// extensions/shared split; re-counted rather than carried forward, since the
+// point of the sentence is the DUPLICATION the count evidences.) While
 // both rules lived in package main each was one file's private helper that the
 // others happened to call. That is the shape this repo keeps paying for — two
 // copies of a rule agreeing by accident — so the extraction of `posture-at-rest`
@@ -40,21 +44,34 @@ package guardkit
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // RepoPath resolves a repo-relative path, tolerating the template layout
 // where the instance content (bootstrap workflows, apl-values) lives under
 // instance-template/ rather than at the repo root.
-func RepoPath(root, rel string) string {
-	direct := filepath.Join(root, filepath.FromSlash(rel))
-	if _, err := os.Stat(direct); err == nil {
+//
+// IT TAKES THE READER RATHER THAN THE ROOT, and that is the whole shape of the
+// read-repo fence arriving in the guards. It used to take a root string and hand
+// back a path joined onto it — which every caller then passed to os.ReadFile, so
+// the "where is this tree" answer and the "may I read there" question were never
+// asked in the same place. The reader is now the only thing that knows the root,
+// so the returned path is REPO-RELATIVE and is only usable through the handle
+// that produced it. A path that cannot be read without the fence cannot be read
+// around it.
+//
+// The probe itself goes through the handle too, so a layout question about a
+// directory outside the tree is refused rather than answered.
+func RepoPath(r capability.Repo, rel string) string {
+	direct := filepath.FromSlash(rel)
+	if _, err := r.Stat(direct); err == nil {
 		return direct
 	}
-	nested := filepath.Join(root, "instance-template", filepath.FromSlash(rel))
-	if _, err := os.Stat(nested); err == nil {
+	nested := filepath.Join("instance-template", filepath.FromSlash(rel))
+	if _, err := r.Stat(nested); err == nil {
 		return nested
 	}
 	return direct

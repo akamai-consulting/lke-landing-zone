@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -37,7 +38,10 @@ func RunReap(dryRun, yes bool, o ReapOpts) error {
 		return fmt.Errorf("set LINODE_API_TOKEN (or LINODE_TOKEN) to a Linode PAT (read_write to delete, read_only for a dry-run)")
 	}
 	confirm := yes && !dryRun
-	client := linode.NewClient(token, 60*time.Second)
+	// NARROWED BY THE FLAGS. `confirm` is exactly the condition under which the
+	// Deleter closure will actually issue a DELETE; when it is false this run can
+	// only list, so it gets the binding that can only list.
+	client := capability.CloudFor(cloudBinding(confirm)).Client(token, 60*time.Second)
 	ctx := context.Background()
 
 	// `--region` here is a LINODE region (us-ord), unlike almost every `llz ci`

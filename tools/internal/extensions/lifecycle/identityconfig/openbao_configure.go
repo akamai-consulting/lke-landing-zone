@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
@@ -804,7 +806,15 @@ func RunBaoConfigure(dryRun bool, region string) error {
 	// baoExec keeps stdout/stderr separate and pins -c openbao, so kubectl's
 	// "Defaulted container" warning cannot poison the JSON (the bash needed
 	// mktemp redirection for this).
-	lookupOut, lookupErr, err := baoread.ExecFn(pod, token, "", "token", "lookup", "-format=json")
+	// THROUGH THE DECLARATION. These three reached an unconstrained `bao` launcher,
+	// so the binding's secret-custody was a claim with nothing behind it. The handle
+	// classifies each argv: `token lookup` and `audit list` are reads, and the
+	// configure steps below (policy write / auth enable / secrets enable) are admin
+	// operations that need custody — which this binding declares and a read-only one
+	// would not. `bao kv …` is unreachable through it by construction, so the
+	// fail-closed verdict Secrets/Custodian provide cannot be spelled around.
+	bao := capability.For(configBinding()).BaoAdmin
+	lookupOut, lookupErr, err := bao.Run(pod, token, "", "token", "lookup", "-format=json")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::OPENBAO_ROOT_TOKEN on %s is invalid (token lookup failed). Likely revoked by a prior bootstrap run or OpenBao was re-initialized. Regenerate root via 'bao operator generate-root' (quorum required) and re-seed the infra-%s environment secret.\n", region, region)
 		for _, l := range strings.Split(strings.TrimSpace(firstNonEmpty(lookupErr, lookupOut)), "\n") {
@@ -819,7 +829,7 @@ func RunBaoConfigure(dryRun bool, region string) error {
 	fmt.Printf("OPENBAO_ROOT_TOKEN preflight on %s OK — proceeding.\n", region)
 
 	for _, step := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
-		out, errOut, err := baoread.ExecFn(pod, token, step.stdin, step.args...)
+		out, errOut, err := bao.Run(pod, token, step.stdin, step.args...)
 		if err != nil {
 			if step.fatal {
 				return fmt.Errorf("%s: %s", step.desc, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -832,7 +842,7 @@ func RunBaoConfigure(dryRun bool, region string) error {
 		fmt.Printf("%s: done\n", step.desc)
 	}
 
-	auditOut, _, _ := baoread.ExecFn(pod, token, "", "audit", "list")
+	auditOut, _, _ := bao.Run(pod, token, "", "audit", "list")
 	if auditFileDeviceActive(auditOut) {
 		fmt.Println("audit device file/ active (declared in chart values).")
 	} else {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 func writeManifest(t *testing.T, dir, name, body string) {
@@ -63,7 +65,7 @@ func TestPlaceholderGuardFailsOnMissingRenderDir(t *testing.T) {
 func TestCollectPlaceholderFindingsReportsLineNumbers(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, "c.yaml", "a: 1\nb: placeholder.example.com\nc: 3\nd: x.placeholder.example.com\n")
-	findings, examined, err := collectPlaceholderFindings([]string{dir})
+	findings, examined, err := collectPlaceholderFindings(capability.RepoAt(renderedManifestsBinding(), dir), []string{"."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,7 @@ func TestCollectPlaceholderFindingsReportsLineNumbers(t *testing.T) {
 func TestPlaceholderGuardScansYmlToo(t *testing.T) {
 	dir := t.TempDir()
 	writeManifest(t, dir, "c.yml", "host: placeholder.example.com\n")
-	findings, _, err := collectPlaceholderFindings([]string{dir})
+	findings, _, err := collectPlaceholderFindings(capability.RepoAt(renderedManifestsBinding(), dir), []string{"."})
 	if err != nil {
 		t.Fatal(err)
 	}

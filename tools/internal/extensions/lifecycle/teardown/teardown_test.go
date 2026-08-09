@@ -84,7 +84,7 @@ func withTeardown(t *testing.T, fake *fakeTeardownClient, tfvars string) (string
 	t.Setenv("GITHUB_ENV", ghaEnv)
 	t.Setenv("LINODE_TOKEN", "tok")
 	prev := newTeardownClient
-	newTeardownClient = func(string) teardownClient { return fake }
+	newTeardownClient = func(string, bool) teardownClient { return fake }
 	prevSleep := teardownSleep
 	teardownSleep = func(time.Duration) {} // force-delete retries don't wait in tests
 	t.Cleanup(func() { newTeardownClient = prev; teardownSleep = prevSleep })

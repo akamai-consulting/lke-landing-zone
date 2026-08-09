@@ -86,6 +86,27 @@ func Extension() extension.Extension {
 				State:  extension.Scaffolded,
 				Grants: []extension.Grant{extension.ReadRepo},
 			},
+			{
+				// THE `--write` HALF, AND IT HAD NO BINDING AT ALL. `llz ci
+				// managed-fresh --write` regenerates .template-managed.lock — it
+				// os.WriteFiles the scaffold's digests — while this extension
+				// declared read-repo on two bindings and nothing else. The
+				// declaration said it never changed the tree, and it did.
+				//
+				// It could not be corrected by adding the grant to either existing
+				// binding, and the validator says why in its own words: a gate
+				// permits only read-repo, and "an assertion permits only read
+				// grants … if it must mutate, declare the mutating half as its own
+				// transition binding". This is that binding.
+				//
+				// `scaffolded` because what the lock records is a property of the
+				// scaffold as shipped, which is also where the gate that checks it
+				// sits.
+				Kind:   extension.Transition,
+				Name:   "lock-refresh",
+				State:  extension.Scaffolded,
+				Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
+			},
 		},
 		Incomplete: []string{
 			"transition:upgraded[own-paths] — the copier restore/overwrite pass " +
@@ -96,4 +117,33 @@ func Extension() extension.Extension {
 				"the GitHub API and the copier-update smoke gate, both still in package main",
 		},
 	}
+}
+
+// readBinding and writeBinding are the two doors this package's file access goes
+// through.
+//
+// Every binding here declares read-repo, and the two read-only ones declare
+// nothing else — so which is chosen cannot widen anything, and readBinding takes
+// the gate because the managed-fresh CHECK is the gate. The write is different:
+// only `lock-refresh` carries write-repo, and borrowing it for a read would hand
+// the check the power to rewrite the lock it is verifying, which is the
+// make-your-own-verdict-true shape the model exists to prevent.
+func readBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Gate {
+			return b
+		}
+	}
+	panic("template-sustain: no gate binding — the scaffold is read through one, " +
+		"so its absence is a wiring bug")
+}
+
+func writeBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == "lock-refresh" {
+			return b
+		}
+	}
+	panic("template-sustain: no transition:lock-refresh binding — `--write` builds " +
+		"its writer from it, so its absence is a wiring bug")
 }

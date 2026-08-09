@@ -63,3 +63,15 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// seedBinding returns the transition whose secret-custody scopes the OpenBao
+// writes below. By kind and state, not by index — obj-encryption's seedBinding
+// records why.
+func seedBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition && b.State == extension.Seeded {
+			return b
+		}
+	}
+	panic("harbor-provisioner: no transition:seeded binding — the custody handle is built from it")
+}

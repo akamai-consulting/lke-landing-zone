@@ -73,3 +73,17 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// promRulesBinding is the assertion the rules walk reads through. Looked up by
+// NAME rather than by kind: this extension declares three bindings and two of
+// them are not read-repo, so reconstructing it would hand back a wider set than
+// the declaration allows.
+func promRulesBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Assertion && b.Name == "prom-rules" {
+			return b
+		}
+	}
+	panic("assert-observability: no assertion:prom-rules binding — the rules walk " +
+		"builds its read-repo reader from it, so its absence is a wiring bug")
+}

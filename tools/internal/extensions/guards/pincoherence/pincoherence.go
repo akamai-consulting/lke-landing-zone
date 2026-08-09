@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // exactReleaseTag matches ONLY a bare release tag (v1.2.3). It is deliberately
@@ -43,7 +44,12 @@ var exactReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // release tags for the one template pin. Silent (nil) when there is no instance
 // there, when either pin is absent, or when either is not an exact release tag.
 func Assert(dir string) error {
-	a, err := answers.Read(dir)
+	// Through the gate's own reader: this guard's only disk access is the answers
+	// file, and until now it reached it via answers.Read's unfenced path — the
+	// last hole in the guards bucket after capability.Repo landed, and one the
+	// raw-read ratchet could not see because the call is in another package.
+	repo, rel := capability.RepoContaining(gateBinding(), dir)
+	a, err := answers.ReadFrom(repo, rel)
 	if err != nil || a == nil {
 		return nil //nolint:nilerr // no readable answers file — not an instance; other steps report that
 	}

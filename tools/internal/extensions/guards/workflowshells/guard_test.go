@@ -1,6 +1,8 @@
 package workflowshells
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,5 +104,33 @@ jobs:
 				t.Errorf("violation message should explain the sh fallback: %q", got[0])
 			}
 		})
+	}
+}
+
+// AN EMPTY DIRECTORY IS NOT A PASS. This guard's subject is a path handed in, so
+// a moved .github/, a wrong --dir, or a driver arg carried over from another tree
+// all present as "nothing to check" — and it used to print "every container job
+// declares a bash shell default" over zero jobs.
+func TestRunRefusesADirectoryWithNoWorkflows(t *testing.T) {
+	err := Run(t.TempDir())
+	if err == nil {
+		t.Fatal("an empty directory reported clean — a guard that examined nothing cannot " +
+			"say everything is fine")
+	}
+	if !strings.Contains(err.Error(), "no workflow YAML") {
+		t.Errorf("error %q does not say the corpus was empty, so a reader would hunt for a "+
+			"violation that does not exist", err)
+	}
+}
+
+// And a directory holding only non-workflow files is the same case: entries exist,
+// none is YAML, so `examined` is still zero.
+func TestRunRefusesADirectoryWithNoYAML(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(dir); err == nil {
+		t.Error("a directory with no YAML reported clean")
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
@@ -42,6 +43,29 @@ import (
 // that is meaningless if it runs against a different set than this verb ships.
 
 func Run(dir, org, ref, root, templateRoot string) error {
+	// FENCED AT THE INSTANCE ROOT, not at the docs dir. This verb writes in two
+	// places: it prunes and rewrites docs/, and repointInstanceRootLinks rewrites
+	// links across the whole instance tree. docs/ sits under root for both callers
+	// (copier passes `--docs docs --root .`; e2e passes `--docs
+	// .e2e-instance/docs --root .e2e-instance`), so root is the smallest fence
+	// that covers every write.
+	//
+	// templateRoot is deliberately outside it. That is a different checkout the
+	// verb only READS, to ask whether a link target exists upstream — not
+	// something write-repo should reach.
+	// An EMPTY root means the caller is only pruning docs/ — repointInstanceRootLinks
+	// is gated on templateRoot and never runs in that shape. Fencing at "" would
+	// make filepath.Rel fail on every path and refuse every write, so the docs dir
+	// is the tree in that case. It is still a real fence, just a tighter one.
+	fenceRoot := root
+	if fenceRoot == "" {
+		fenceRoot = dir
+	}
+	w := capability.RepoWriterAt(deliverBinding(), fenceRoot)
+	// capability.RelTo, not filepath.Rel: --docs and --root are independent flags
+	// whose spellings callers mix, and the macOS /var alias makes the naive form
+	// produce a ../.. chain out of the tree. See its header.
+	relTo := func(p string) string { return capability.RelTo(fenceRoot, p) }
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read docs dir %s: %w", dir, err)
@@ -51,23 +75,23 @@ func Run(dir, org, ref, root, templateRoot string) error {
 		if platform.DeliveredDocs[e.Name()] {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+		if err := w.RemoveAll(relTo(filepath.Join(dir, e.Name()))); err != nil {
 			return fmt.Errorf("prune %s: %w", e.Name(), err)
 		}
 		removed = append(removed, e.Name())
 	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(docsPointer(org, ref)), 0o644); err != nil {
+	if err := w.WriteFile(relTo(filepath.Join(dir, "README.md")), []byte(docsPointer(org, ref)), 0o644); err != nil {
 		return fmt.Errorf("write docs/README.md: %w", err)
 	}
 	// Kept docs still link to now-referenced ones (e.g. quickstart → secrets.md).
 	// Rewrite those dead relative links to the template URL so they stay clickable;
 	// links to docs that ARE still present stay relative.
-	if err := repointReferencedLinks(dir, org); err != nil {
+	if err := repointReferencedLinks(w, relTo, dir, org); err != nil {
 		return fmt.Errorf("repoint doc links: %w", err)
 	}
 	repointed := 0
 	if templateRoot != "" {
-		if repointed, err = repointInstanceRootLinks(root, dir, templateRoot, org); err != nil {
+		if repointed, err = repointInstanceRootLinks(w, relTo, root, dir, templateRoot, org); err != nil {
 			return fmt.Errorf("repoint instance-root links: %w", err)
 		}
 	}
@@ -111,7 +135,7 @@ const templateScaffoldSubdir = "instance-template"
 // does not own is exactly what .template-manifest exists to prevent. Gating on
 // "the template ships this path under instance-template/" bounds the blast radius
 // to the files copier itself rendered, with no denylist to keep current.
-func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, error) {
+func repointInstanceRootLinks(w capability.RepoWriter, relTo func(string) string, root, docsDir, templateRoot, org string) (int, error) {
 	if org == "" {
 		org = "akamai-consulting"
 	}
@@ -178,7 +202,7 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 			}, org)
 		total += n
 		if n > 0 {
-			return os.WriteFile(p, []byte(out), 0o644)
+			return w.WriteFile(relTo(p), []byte(out), 0o644)
 		}
 		return nil
 	})
@@ -300,7 +324,7 @@ const referencedDocsBranch = "main"
 // repointReferencedLinks rewrites, in every kept .md, the relative links that
 // point to a doc no longer present (a referenced one) so they target the template
 // URL. Links to still-present docs stay relative.
-func repointReferencedLinks(dir, org string) error {
+func repointReferencedLinks(w capability.RepoWriter, relTo func(string) string, dir, org string) error {
 	if org == "" {
 		org = "akamai-consulting"
 	}
@@ -339,7 +363,7 @@ func repointReferencedLinks(dir, org string) error {
 			fileDir = ""
 		}
 		if out := rewriteDocLinks(string(data), fileDir, present, org); out != string(data) {
-			return os.WriteFile(p, []byte(out), 0o644)
+			return w.WriteFile(relTo(p), []byte(out), 0o644)
 		}
 		return nil
 	})

@@ -73,12 +73,29 @@ func TestEditAndReadStaySeparate(t *testing.T) {
 	}
 }
 
-// THE MERGE'S LOAD-BEARING ASSERTION. `definition` is the only binding holding
-// `write-repo`, and folding it into `add` would hand the topology READER
-// permission to write landingzone.yaml. That is the over-granting argument
-// `reconcile-actions` made when it split into four, and it is the whole reason
-// three extensions became four named bindings rather than one.
-func TestDefinitionKeepsItsWriteGrantToItself(t *testing.T) {
+// THE READER MUST NOT INHERIT THE WRITER, which is the over-granting argument
+// `reconcile-actions` made when it split into four and the whole reason three
+// extensions became four named bindings.
+//
+// ITS MEMBERSHIP WAS WRONG, and this is the correction. The test used to assert
+// that `add` and `set` held no write-repo either, on the belief that "the writes
+// belong to `definition`". They do not:
+//
+//   - `set`  — llz spec set / llz env set edit landingzone.yaml and
+//     environments/<env>.yaml through yamledit.EditSpecFile.
+//   - `add`  — llz env add writes environments/<env>.yaml through
+//     envdef.WriteEnvDefinition (add.go), which os.WriteFiles it.
+//
+// Both writes are LAUNDERED THROUGH A SHARED PACKAGE, which is why a test reading
+// only this package's own source could believe otherwise — the same blind spot
+// the read fence hit with answers and manifest. Two declarations said "reads
+// only" while shipping code that wrote, and nothing noticed because nothing
+// consulted the declaration until write-repo grew a handle.
+//
+// So the property survives and the list shrinks to the one binding it was always
+// about: `topology` is an ASSERTION — reading which deployments exist changes
+// nothing, and it is the binding a union would silently arm.
+func TestTheTopologyReaderNeverGainsTheWriteGrant(t *testing.T) {
 	byName := bindings(t)
 
 	def := byName["definition"]
@@ -90,11 +107,21 @@ func TestDefinitionKeepsItsWriteGrantToItself(t *testing.T) {
 		t.Error("definition must hold write-repo: it creates landingzone.yaml and writes " +
 			"environments/<env>.yaml, which is the file-in-a-working-tree case the grant exists for")
 	}
-	for _, n := range []string{"add", "set", "topology"} {
-		if hasGrant(byName[n], extension.WriteRepo) {
-			t.Errorf("%s holds write-repo — it must not. The writes belong to `definition`; "+
-				"widening these would make the union say every env verb can write the spec", n)
+
+	// The two that DO write must say so. Dropping the grant here would restore the
+	// false declaration this test was corrected for.
+	for _, n := range []string{"add", "set"} {
+		if !hasGrant(byName[n], extension.WriteRepo) {
+			t.Errorf("%s must hold write-repo — it writes the spec (envdef.WriteEnvDefinition / "+
+				"yamledit.EditSpecFile), and a binding that writes while declaring read-only is "+
+				"the exact defect the grant vocabulary exists to make visible", n)
 		}
+	}
+
+	if hasGrant(byName["topology"], extension.WriteRepo) {
+		t.Error("topology holds write-repo — it must not. It is an assertion that lists what " +
+			"exists; handing it the write grant is the union this extension split into four " +
+			"bindings to avoid")
 	}
 }
 

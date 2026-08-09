@@ -84,11 +84,11 @@ func TestCoreSurfaceExcludesTestsAndInternal(t *testing.T) {
 		"tools/cmd/llz/.core-notes":  "ignored\n",
 		".core-surface-budget-x.yml": "ignored\n",
 	})
-	cfg, err := loadBudgetConfig(filepath.Join(root, ".core-surface-budget.yaml"))
+	cfg, err := loadBudgetConfig(gRepo(root), ".core-surface-budget.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := scanBudgetCategories(root, cfg)
+	results, err := scanBudgetCategories(gRepo(root), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestBudgetGateUsesConfigRemedy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "b.yaml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := loadBudgetConfig(filepath.Join(root, "b.yaml"))
+	parsed, err := loadBudgetConfig(gRepo(root), "b.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +175,11 @@ func TestUnknownKindIsAnError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := loadBudgetConfig(filepath.Join(root, "b.yaml"))
+	parsed, err := loadBudgetConfig(gRepo(root), "b.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scanBudgetCategories(root, parsed); err == nil {
+	if _, err := scanBudgetCategories(gRepo(root), parsed); err == nil {
 		t.Error("unknown kind must fail the scan")
 	} else if !strings.Contains(err.Error(), "go-logic") {
 		t.Errorf("the error should list go-logic among valid kinds, got %v", err)

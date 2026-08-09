@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
@@ -66,7 +67,7 @@ func RunInventory(ctx context.Context, d Deps, namespace, name string, maxDays, 
 		linodeToken: linodeToken,
 		secretEnv:   secretScopeForRegion(os.Getenv("REGION")),
 		secretProbe: secretAgeProbe,
-		newLinode:   func(t string) CredLister { return linode.NewClient(t, 30*time.Second) },
+		newLinode:   func(t string) CredLister { return capability.CloudFor(cloudBinding()).Client(t, 30*time.Second) },
 		region:      os.Getenv("REGION"),
 		now:         time.Now(),
 		maxDays:     maxDays,

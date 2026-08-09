@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
@@ -49,14 +50,14 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-18"
 `)
-	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || !got[0].allowed {
 		t.Fatalf("NetworkPolicy with override present: want 1 allowed finding, got %+v", got)
 	}
-	got, _, err = collectWaveHealthFindings([]string{dir}, "# no overrides")
+	got, _, err = collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, "# no overrides")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +78,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "-5"
 `
 	dir := writeWaveGuardFixture(t, "cert.yaml", negative)
-	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ metadata:
 `,
 	} {
 		dir := writeWaveGuardFixture(t, "cert.yaml", doc)
-		got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+		got, _, err := collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, waveGuardValuesAllOverrides)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +127,7 @@ metadata:
     argocd.argoproj.io/hook: PostSync
 `
 	dir := writeWaveGuardFixture(t, "job.yaml", hookJob)
-	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "-9"
 `
 	dir = writeWaveGuardFixture(t, "job.yaml", plainJob)
-	got, _, err = collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err = collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-15"
 `)
-	got, _, err := collectWaveHealthFindings([]string{dir}, "# no overrides needed")
+	got, _, err := collectWaveHealthFindings(capability.RepoForGate(Extension(), dir), []string{"."}, "# no overrides needed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,8 @@ func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	findings, examined, err := collectWaveHealthFindings(guardwalk.PlatformTreeDirs(root), waveGuardValuesAllOverrides)
+	whRepo := capability.RepoForGate(Extension(), root)
+	findings, examined, err := collectWaveHealthFindings(whRepo, guardwalk.PlatformTreeDirs(whRepo), waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatalf("an absent tree is skipped, not a walk error: %v", err)
 	}

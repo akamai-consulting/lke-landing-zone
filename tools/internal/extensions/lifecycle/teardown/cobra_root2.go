@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -174,7 +175,10 @@ func runCIReapVolumes(g cliopts.Opts, env, region, volumeIDs, tagMustInclude str
 	if requireEmpty && volumeIDs == "" {
 		return fmt.Errorf("--require-empty needs --volume-ids (the precise set whose disappearance is verified)")
 	}
-	client, ctx, err := linode.ClientFromEnv()
+	// Narrowed by the flags: same condition Deleter uses to decide whether a
+	// DELETE is issued at all, so a dry run cannot reach the destructive verbs
+	// even if that closure is wrong.
+	client, ctx, err := capability.CloudFor(cloudBinding(g.Yes && !g.DryRun)).FromEnv()
 	if err != nil {
 		return err
 	}
@@ -228,7 +232,10 @@ func runCIReapNodeBalancers(g cliopts.Opts, clusterID, region string, attempts, 
 	if requireEmpty && clusterID == "" {
 		return fmt.Errorf("--require-empty needs --cluster-id (the scoped set whose disappearance is verified)")
 	}
-	client, ctx, err := linode.ClientFromEnv()
+	// Narrowed by the flags: same condition Deleter uses to decide whether a
+	// DELETE is issued at all, so a dry run cannot reach the destructive verbs
+	// even if that closure is wrong.
+	client, ctx, err := capability.CloudFor(cloudBinding(g.Yes && !g.DryRun)).FromEnv()
 	if err != nil {
 		return err
 	}
@@ -283,7 +290,10 @@ func runCIReapObjKeys(g cliopts.Opts, env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required")
 	}
-	client, ctx, err := linode.ClientFromEnv()
+	// Narrowed by the flags: same condition Deleter uses to decide whether a
+	// DELETE is issued at all, so a dry run cannot reach the destructive verbs
+	// even if that closure is wrong.
+	client, ctx, err := capability.CloudFor(cloudBinding(g.Yes && !g.DryRun)).FromEnv()
 	if err != nil {
 		return err
 	}

@@ -156,7 +156,40 @@ var grantStates = map[Grant][]State{
 	// cannot mutate a cluster or a cloud before one exists. Repo writes are the
 	// opposite shape: they happen when the REPO changes, which is before any
 	// substrate exists and again when the template moves under it.
-	WriteRepo: {Scaffolded, Upgraded},
+	// FOURTH WIDENING: `configured`, and it took two extractions to earn.
+	//
+	// The row read repo writes as bracketing the lifecycle — the instance is
+	// created (`scaffolded`), and the template later moves under it (`upgraded`) —
+	// with everything between treated as reading a tree somebody else wrote. That
+	// is the same misreading cloud-mutate's `configured` widening corrects one row
+	// up: "resolve some inputs, touch nothing". Configuring an instance is not a
+	// passive moment. It is the state whose whole content is AUTHORING the
+	// instance's own files.
+	//
+	// TWO INDEPENDENT SHIPPING CASES, which is the bar, and they are in different
+	// extensions rather than two commands of one:
+	//
+	//   - `environments` — `llz spec set` and `llz env set` edit landingzone.yaml
+	//     and environments/<env>.yaml through yamledit.EditSpecFile. Their bindings
+	//     are transition:configured, and they held read-repo ALONE: the declaration
+	//     said they only read, and they did not.
+	//   - `render` — `llz render` writes the rendered values and manifests into the
+	//     instance repo (writeTargets → os.WriteFile). One binding,
+	//     transition:configured, read-repo alone, and its entire job is to produce
+	//     files.
+	//
+	// Both were found the same way the earlier widenings were: by extracting a
+	// capability that already shipped and watching the ceiling refuse code that had
+	// been running for months. Neither could be fixed by declaring the grant — the
+	// row forbade it — so the honest options were to widen here, to move the writes
+	// under a `scaffolded` binding they do not belong to, or to leave two
+	// declarations saying something false. The third is what the model exists to
+	// prevent.
+	//
+	// `provisioned` and later stay ABSENT deliberately. Once a cluster exists, a
+	// process writing the instance repo is doing configuration out of order, and
+	// the reconciler lanes that run then write to the CLUSTER, not the tree.
+	WriteRepo: {Scaffolded, Configured, Upgraded},
 }
 
 // `Operating` was ADDED to CloudMutate by the fourth extension, and the row is

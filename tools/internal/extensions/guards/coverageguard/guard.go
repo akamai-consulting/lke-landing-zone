@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // covThreshold is one `<pkg-suffix>=<min>` gate. MinStr preserves the operator's
@@ -41,7 +43,8 @@ func Run(profile string, args []string, out io.Writer) error {
 	if profile == "" {
 		return fmt.Errorf("--profile (path to the Go coverprofile) is required")
 	}
-	raw, err := os.ReadFile(profile)
+	repo, rel := capability.RepoContaining(coverageBinding(), profile)
+	raw, err := repo.ReadFile(rel)
 	if err != nil {
 		return fmt.Errorf("coverage: profile not found: %s", profile)
 	}

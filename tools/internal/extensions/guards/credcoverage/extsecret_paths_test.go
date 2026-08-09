@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"time"
 )
 
@@ -58,7 +60,7 @@ func TestCollectExternalSecretRefs(t *testing.T) {
 	// It now shares walkManifests with the other tree-scanning guards.
 	fixWrite(t, root, "apl-values/env/wrong-ext.yml", esFixtureExternalSecret)
 
-	refs, _, _ := collectExternalSecretRefs(root, "rendered")
+	refs, _, _ := collectExternalSecretRefs(ccRepo(root), "rendered")
 	bothExts := []string{"apl-values/env/secrets.yaml", "apl-values/env/wrong-ext.yml"}
 	want := map[esRef][]string{}
 	want[esRef{key: "grafana/admin", prop: "user", hasProp: true}] = bothExts
@@ -80,7 +82,7 @@ func TestCollectSeeded(t *testing.T) {
 		`            tls_crt="$CRT"`,
 		`          echo done`,
 	}, "\n"))
-	paths, fields, err := collectSeeded([]string{filepath.Join(root, "bootstrap.yml")})
+	paths, fields, err := collectSeeded(ccRepo(root), []string{"bootstrap.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func TestCollectSeeded(t *testing.T) {
 		t.Errorf("otel fields = %v", fields["otel/ingress"])
 	}
 
-	if _, _, err := collectSeeded([]string{filepath.Join(root, "absent.yml")}); err == nil {
+	if _, _, err := collectSeeded(ccRepo(root), []string{"absent.yml"}); err == nil {
 		t.Error("a missing seeding source must be an error")
 	}
 }
@@ -114,7 +116,7 @@ func TestCollectSeededBaoSeed(t *testing.T) {
 		`            --on-missing skip \`,
 		`            --field token=env:OPENBAO_SECRETS_WRITE_TOKEN`,
 	}, "\n"))
-	paths, fields, err := collectSeeded([]string{filepath.Join(root, "bootstrap.yml")})
+	paths, fields, err := collectSeeded(ccRepo(root), []string{"bootstrap.yml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +150,7 @@ func seed() {
 	}
 }
 `)
-	paths, fields, err := collectSeededGo(filepath.Join(root, "ci_harbor.go"))
+	paths, fields, err := collectSeededGo(ccRepo(root), "ci_harbor.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +180,7 @@ func TestCollectPolicyPaths(t *testing.T) {
 		`}`,
 		`path "unrelated/data/x" { capabilities = ["read"] }`,
 	}, "\n")+"`\n")
-	got, err := collectPolicyPaths(filepath.Join(root, "configure.go"))
+	got, err := collectPolicyPaths(ccRepo(root), "configure.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +388,7 @@ func TestCheckESRefreshIntervals(t *testing.T) {
 	fixWrite(t, root, "platform-apl/components/x/notes.yaml",
 		"kind: ConfigMap\nmetadata:\n  name: unrelated\n")
 	var buf bytes.Buffer
-	if got := checkESRefreshIntervals(root, &buf); got != 0 {
+	if got := checkESRefreshIntervals(ccRepo(root), &buf); got != 0 {
 		t.Fatalf("compliant tree: %d errors\n%s", got, buf.String())
 	}
 
@@ -396,7 +398,7 @@ func TestCheckESRefreshIntervals(t *testing.T) {
 	fixWrite(t, root, "platform-apl/components/bad/push.yaml",
 		"kind: PushSecret\nspec:\n  updatePolicy: Replace\n")
 	buf.Reset()
-	if got := checkESRefreshIntervals(root, &buf); got != 2 {
+	if got := checkESRefreshIntervals(ccRepo(root), &buf); got != 2 {
 		t.Fatalf("violating tree: %d errors, want 2\n%s", got, buf.String())
 	}
 	for _, want := range []string{"exceeds the 5m0s propagation bound", "declares no refreshInterval"} {
@@ -419,4 +421,11 @@ func TestESParseRefreshInterval(t *testing.T) {
 	if _, err := esParseRefreshInterval("often"); err == nil {
 		t.Error("non-duration must error")
 	}
+}
+
+// ccRepo is the reader a real run gets, fenced to a fixture tree. Built from the
+// EXTENSION so a test cannot hand itself a reader the declaration would not have
+// produced — the rule capability.WithExec follows for the same reason.
+func ccRepo(root string) capability.Repo {
+	return capability.RepoForGate(Extension(), root)
 }

@@ -44,3 +44,15 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// gateBinding is the binding this guard reads through, looked up rather than
+// reconstructed so a second binding cannot silently widen what it may read.
+func gateBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Gate {
+			return b
+		}
+	}
+	panic("template-manifest: no gate binding — the scaffold scan builds its " +
+		"read-repo reader from it, so its absence is a wiring bug")
+}

@@ -26,6 +26,7 @@ package sustain
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -35,6 +36,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
@@ -120,7 +122,7 @@ func lockableFiles(scaffoldRoot string, files []string) (sums map[string]string,
 		if rel == ManagedLockPath {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(scaffoldRoot, filepath.FromSlash(rel)))
+		data, err := capability.RepoAt(readBinding(), scaffoldRoot).ReadFile(filepath.FromSlash(rel))
 		if err != nil {
 			return nil, nil, fmt.Errorf("managed-fresh: read %s: %w", rel, err)
 		}
@@ -215,21 +217,31 @@ func writeManagedLock(scaffoldRoot string, lockable []string, lockPath string, o
 	for _, rel := range sortedKeys(sums) {
 		fmt.Fprintf(&b, "%s  %s\n", sums[rel], rel)
 	}
-	if err := os.WriteFile(lockPath, []byte(b.String()), 0o644); err != nil {
+	// THE ONE WRITE, and through the ONE binding that declares write-repo. Using
+	// readBinding() here would hand the managed-fresh check the power to rewrite
+	// the lock it verifies.
+	wrepo, wrel := capability.RepoContainingWriter(writeBinding(), lockPath)
+	if err := wrepo.WriteFile(wrel, []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("managed-fresh: write %s: %w", lockPath, err)
 	}
 	fmt.Fprintf(out, "managed-fresh: wrote %s (%d file(s))\n", lockPath, len(sums))
 	return nil
 }
 
+// ReadManagedLock reads the digest list through the fence. It takes a PATH
+// rather than a root because both callers already have one built, and its tests
+// pass an absolute temp file — RepoContaining accepts either.
 func ReadManagedLock(path string) (map[string]string, error) {
-	f, err := os.Open(path)
+	repo, rel := capability.RepoContaining(readBinding(), path)
+	// ReadFile rather than os.Open: the reader deliberately exposes no Open, so
+	// that every path into the tree is one the fence has judged. The lock is a
+	// digest list — a few hundred lines — so holding it in memory costs nothing.
+	raw, err := repo.ReadFile(rel)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	sums := map[string]string{}
-	s := bufio.NewScanner(f)
+	s := bufio.NewScanner(bytes.NewReader(raw))
 	lineNo := 0
 	for s.Scan() {
 		lineNo++
@@ -249,8 +261,12 @@ func ReadManagedLock(path string) (map[string]string, error) {
 	return sums, nil
 }
 
+// sha256File hashes one file THROUGH THE FENCE. Its caller joins scaffoldRoot on
+// already, so the path arrives absolute-or-relative depending on the caller's
+// spelling — RepoContaining relates the two rather than refusing one.
 func sha256File(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	repo, rel := capability.RepoContaining(readBinding(), path)
+	data, err := repo.ReadFile(rel)
 	if err != nil {
 		return "", err
 	}
@@ -273,6 +289,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // fileExists reports whether path exists. Pure, localised — package main keeps
 // its copy for the manifest machinery ADR 0014 pins as core.
 func fileExists(path string) bool {
-	_, err := os.Stat(path)
+	repo, rel := capability.RepoContaining(readBinding(), path)
+	_, err := repo.Stat(rel)
 	return err == nil
 }

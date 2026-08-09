@@ -29,6 +29,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -86,8 +87,8 @@ func extractBareGroups(data []byte) ([]byte, error) {
 // isPrometheusRule reports whether a manifest is a PrometheusRule CRD. Used only
 // on the walked (directory) path, so a mixed component tree contributes its rules
 // without its Deployment/ServiceMonitor tripping the kind check.
-func isPrometheusRule(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+func isPrometheusRule(repo capability.Repo, path string) (bool, error) {
+	data, err := repo.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
@@ -113,8 +114,8 @@ var promtoolCheckRules = func(path string) error {
 
 // checkRuleCRD validates one PrometheusRule CRD: extract spec.groups, write the
 // bare form to a tempfile, and run promtool against it.
-func checkRuleCRD(path string) error {
-	data, err := os.ReadFile(path)
+func checkRuleCRD(repo capability.Repo, path string) error {
+	data, err := repo.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -149,8 +150,8 @@ func checkRuleCRD(path string) error {
 // skip-clean "nothing to validate" case, so an unreadable subtree that aborted
 // the walk would be indistinguishable from an absent rules dir — a real
 // PrometheusRule would go unvalidated and the guard would still print success.
-func walkPromRuleFiles(dir string) ([]string, error) {
-	return guardwalk.CollectPaths([]string{dir})
+func walkPromRuleFiles(repo capability.Repo, dir string) ([]string, error) {
+	return guardwalk.CollectPaths(repo, []string{dir})
 }
 
 // runCICheckPromRules validates the explicit file args, or — when none are
@@ -158,31 +159,49 @@ func walkPromRuleFiles(dir string) ([]string, error) {
 // absent (an instance overlay that removed the observability component).
 // rulesDir tolerates both repo layouts via esRepoPath: apl-values/ at the root
 // (an instance) or under instance-template/ (this template repo).
-func runCICheckPromRules(rulesDirs []string, files []string, w io.Writer) error {
+// ruleFile is one file to validate, paired with THE READER THAT CAN READ IT.
+//
+// The two sources of files are fenced to different trees: a walked file is
+// expressed under the rules-dir's own root, while an explicit --file argument is
+// whatever path the operator typed at their shell. Carrying one reader for both
+// would mean picking a root that is correct for one of them, and the other's
+// reads would fail — or worse, resolve somewhere else.
+type ruleFile struct {
+	repo capability.Repo
+	path string
+}
+
+func runCICheckPromRules(rulesDirs []string, fileArgs []string, w io.Writer) error {
+	var files []ruleFile
+	for _, f := range fileArgs {
+		repo, rel := capability.RepoContaining(promRulesBinding(), f)
+		files = append(files, ruleFile{repo, rel})
+	}
 	if len(files) == 0 {
 		present := 0
 		for _, dir := range rulesDirs {
+			repo, rel := capability.RepoContaining(promRulesBinding(), dir)
 			if !filepath.IsAbs(dir) {
-				dir = guardkit.RepoPath(".", dir)
+				rel = guardkit.RepoPath(repo, rel)
 			}
-			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-				fmt.Fprintf(w, "check-prom-rules: %s absent — skipping that root\n", dir)
+			if info, err := repo.Stat(rel); err != nil || !info.IsDir() {
+				fmt.Fprintf(w, "check-prom-rules: %s absent — skipping that root\n", rel)
 				continue
 			}
 			present++
-			walked, walkErr := walkPromRuleFiles(dir)
+			walked, walkErr := walkPromRuleFiles(repo, rel)
 			if walkErr != nil {
 				// Not the skip case: the dir exists and the walk broke partway, so an
 				// empty or short list means "could not read", not "nothing to check".
 				return fmt.Errorf("check-prom-rules: scanning %s: %w", dir, walkErr)
 			}
 			for _, f := range walked {
-				isRule, err := isPrometheusRule(f)
+				isRule, err := isPrometheusRule(repo, f)
 				if err != nil {
 					return fmt.Errorf("check-prom-rules: reading %s: %w", f, err)
 				}
 				if isRule {
-					files = append(files, f)
+					files = append(files, ruleFile{repo, f})
 				}
 			}
 		}
@@ -201,12 +220,12 @@ func runCICheckPromRules(rulesDirs []string, files []string, w io.Writer) error 
 	}
 	failed := 0
 	for _, f := range files {
-		if err := checkRuleCRD(f); err != nil {
-			fmt.Fprintf(w, "::error file=%s::%v\n", f, err)
+		if err := checkRuleCRD(f.repo, f.path); err != nil {
+			fmt.Fprintf(w, "::error file=%s::%v\n", f.path, err)
 			failed++
 			continue
 		}
-		fmt.Fprintf(w, "ok: %s\n", f)
+		fmt.Fprintf(w, "ok: %s\n", f.path)
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d PrometheusRule file(s) failed validation", failed)

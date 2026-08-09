@@ -42,12 +42,12 @@ package cosignguard
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -81,18 +81,22 @@ func extractCosignSubjects(body string) []cosignSubjectRef {
 func Run(root string) error {
 	var refs []cosignSubjectRef
 
-	dirs := guardwalk.PlatformTreeDirs(root)
-	examined, err := guardwalk.Walk(dirs, func(path string, b []byte) error {
+	// Named `repo` rather than `r`: the two loops below already bind `r` to a
+	// cosignSubjectRef, and a reader shadowed by a finding is the shape of bug
+	// this whole conversion is supposed to avoid.
+	repo := capability.RepoForGate(Extension(), root)
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	examined, err := guardwalk.Walk(repo, dirs, func(path string, b []byte) error {
 		found := extractCosignSubjects(string(b))
 		if len(found) == 0 {
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
+		// The walk already yields repo-relative paths — the reader is fenced to
+		// the root, so everything it hands back is expressed under it. This used
+		// to re-derive that with filepath.Rel(root, path), which is now not just
+		// redundant but wrong: Rel("..", "platform-apl/x") climbs out.
 		for _, f := range found {
-			f.File = rel
+			f.File = path
 			refs = append(refs, f)
 		}
 		return nil
@@ -136,7 +140,7 @@ func Run(root string) error {
 
 	var missing []cosignSubjectRef
 	for _, r := range refs {
-		if _, statErr := os.Stat(filepath.Join(root, ".github", "workflows", r.Workflow)); statErr != nil {
+		if _, statErr := repo.Stat(filepath.Join(".github", "workflows", r.Workflow)); statErr != nil {
 			missing = append(missing, r)
 		}
 	}

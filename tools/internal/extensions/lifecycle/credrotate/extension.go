@@ -96,3 +96,26 @@ func ObjKeyExtension() extension.Extension {
 		}},
 	}
 }
+
+// patCloudBinding and objKeyCloudBinding are the two cloud-bearing bindings this
+// package declares — one per extension, since credential-pat and
+// credential-objkey are separate declarations that happen to share a directory.
+//
+// BOTH hold cloud-mutate and nothing else, so no choice here can over-grant. They
+// are still kept apart: a reader asking which declaration permits a given DELETE
+// should land on the credential it actually rotates, and folding them would make
+// the answer "one of these two".
+func patCloudBinding() extension.Binding    { return cloudBindingOf(PATExtension()) }
+func objKeyCloudBinding() extension.Binding { return cloudBindingOf(ObjKeyExtension()) }
+
+func cloudBindingOf(e extension.Extension) extension.Binding {
+	for _, b := range e.Bindings {
+		for _, g := range b.Grants {
+			if g == extension.CloudRead || g == extension.CloudMutate {
+				return b
+			}
+		}
+	}
+	panic(e.Name + ": no binding carries a cloud grant — its Linode client is built " +
+		"from one, so its absence is a wiring bug")
+}

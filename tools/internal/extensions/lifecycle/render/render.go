@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
@@ -154,7 +155,17 @@ func Run(dryRun bool, env string, tfvarsOnly, check, diff bool) error {
 	//   - the shared-VPC (spec.networks) and per-env tfvars;
 	//   - unless --tfvars-only, the committed apl-values artifacts.
 	// filepathRel is relative to the instance root for both tfDir and aplDir targets.
-	if err := writeTargets(targets, tfDir, relPrefix, dryRun); err != nil {
+	// Through the extension's own writer. `llz render` runs from the instance root,
+	// and every target is under it — the TF roots, the tfvars and the apl-values
+	// artifacts. A target that resolved outside is a bug in the path arithmetic,
+	// and the fence is what turns that from a file written somewhere unexpected
+	// into an error naming the path.
+	// `.` is the instance root: instancelayout.Detect() returns tfDir/aplDir
+	// relative to the working directory, so every target is already expressed
+	// under it. A target that resolves outside is a bug in the path arithmetic,
+	// and the fence turns that from a file written somewhere unexpected into an
+	// error naming the path.
+	if err := writeTargets(capability.RepoWriterAt(renderBinding(), "."), ".", targets, tfDir, relPrefix, dryRun); err != nil {
 		return err
 	}
 	// The instance-wide ACME contact is no longer written into the (now remotely-
@@ -169,16 +180,17 @@ func Run(dryRun bool, env string, tfvarsOnly, check, diff bool) error {
 // writeTargets writes a renderTargets set to disk (creating parents), in sorted path
 // order so the action log is deterministic — or, on --dry-run, just prints what it
 // would write.
-func writeTargets(targets map[string]string, tfDir, relPrefix string, dryRun bool) error {
+func writeTargets(w capability.RepoWriter, fenceRoot string, targets map[string]string, tfDir, relPrefix string, dryRun bool) error {
 	for _, dst := range slices.Sorted(maps.Keys(targets)) {
 		if dryRun {
 			WouldRenderPath(relPrefix, filepathRel(tfDir, dst))
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		rel := capability.RelTo(fenceRoot, dst)
+		if err := w.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(dst, []byte(targets[dst]), 0o644); err != nil {
+		if err := w.WriteFile(rel, []byte(targets[dst]), 0o644); err != nil {
 			return err
 		}
 		RenderedPath(relPrefix, filepathRel(tfDir, dst))

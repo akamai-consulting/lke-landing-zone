@@ -30,6 +30,7 @@ package budget
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/pathglob"
 )
 
@@ -157,11 +159,12 @@ func Run(gate, root, configPath string, verbose bool, defaultRemedy string) erro
 // START of a line — which is why that file keeps its logic in pure functions over
 // injected io.Writers. This one now does too.
 func RunTo(gate, root, configPath string, verbose bool, defaultRemedy string, out, errOut io.Writer) error {
-	cfg, err := loadBudgetConfig(filepath.Join(root, configPath))
+	repo := capability.RepoForGate(Extension(), root)
+	cfg, err := loadBudgetConfig(repo, configPath)
 	if err != nil {
 		return err
 	}
-	results, err := scanBudgetCategories(root, cfg)
+	results, err := scanBudgetCategories(repo, cfg)
 	if err != nil {
 		return err
 	}
@@ -230,9 +233,9 @@ func RunTo(gate, root, configPath string, verbose bool, defaultRemedy string, ou
 	return nil
 }
 
-func loadBudgetConfig(path string) (budgetConfig, error) {
+func loadBudgetConfig(repo capability.Repo, path string) (budgetConfig, error) {
 	var cfg budgetConfig
-	b, err := os.ReadFile(path)
+	b, err := repo.ReadFile(path)
 	if err != nil {
 		return cfg, fmt.Errorf("read budget config %s: %w", path, err)
 	}
@@ -247,14 +250,14 @@ func loadBudgetConfig(path string) (budgetConfig, error) {
 
 // scanBudgetCategories walks the repo once and tallies each category. Returns results
 // sorted by category name for stable output.
-func scanBudgetCategories(root string, cfg budgetConfig) ([]categoryResult, error) {
+func scanBudgetCategories(repo capability.Repo, cfg budgetConfig) ([]categoryResult, error) {
 	// Collect candidate files per category by walking once and matching globs.
 	perCat := map[string][]string{}
 	for name := range cfg.Categories {
 		perCat[name] = nil
 	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	walkErr := repo.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -266,11 +269,9 @@ func scanBudgetCategories(root string, cfg budgetConfig) ([]categoryResult, erro
 			}
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
+		// Already repo-relative — the reader is fenced to the root and expresses
+		// everything under it, so the filepath.Rel that derived this is gone.
+		rel := filepath.ToSlash(path)
 		if pathglob.MatchAny(cfg.Exclude, rel) {
 			return nil
 		}
@@ -294,7 +295,7 @@ func scanBudgetCategories(root string, cfg budgetConfig) ([]categoryResult, erro
 		r := categoryResult{name: name, kind: cat.Kind, budget: cat.Budget,
 			matched: len(perCat[name]), allowEmpty: cat.AllowEmpty, exact: cat.Exact}
 		for _, rel := range perCat[name] {
-			b, err := os.ReadFile(filepath.Join(root, rel))
+			b, err := repo.ReadFile(rel)
 			if err != nil {
 				return nil, err
 			}

@@ -33,11 +33,11 @@ func TestGatesAreDrivenByTheRegistryNotAList(t *testing.T) {
 				"table must reference the MODEL: an entry for an extension that does not "+
 				"declare a gate is a hardcoded call wearing the registry's name.", g.Extension)
 		}
-		if g.New == nil {
+		if g.New == nil && g.NewWithTree == nil {
 			t.Errorf("%s has a nil constructor", g.Extension)
 			continue
 		}
-		if c := g.New(); c == nil || c.Name() == "" {
+		if c := g.new(nil); c == nil || c.Name() == "" {
 			t.Errorf("%s's constructor produced no runnable command", g.Extension)
 		}
 	}
@@ -66,28 +66,78 @@ func TestEveryDrivenGateIsReadRepoOnly(t *testing.T) {
 // driver that quietly covers half its subject is worse than one that says so —
 // the reader sees `gates: N ran, all clean` and concludes the gates are green.
 //
-// This test never fails on the gap. It fails if the gap is UNDOCUMENTED, so the
-// number in the source comment cannot drift away from the number in the model.
-func TestUndrivenGatesAreNamedInTheSource(t *testing.T) {
+// THIS TEST REPLACES ONE THAT CHECKED NOTHING. Its predecessor logged the live
+// numbers and asserted nothing, while its docstring claimed the source comment
+// "cannot drift away from the model". The comment drifted: it still said six
+// gates were driven when thirteen were, and named seven as undriven that were in
+// the table directly below it.
+//
+// So this compares undrivenGates to the live set in BOTH directions. The second
+// direction is the one the old test could never have had: a gate that becomes
+// DRIVEN leaves a stale entry behind, and a stale entry reads as remaining work
+// that is already done — which is how the previous drift went unnoticed through
+// eight conversions.
+func TestUndrivenGatesMatchTheModel(t *testing.T) {
 	driven := map[string]bool{}
 	for _, g := range Gates() {
 		driven[g.Extension] = true
 	}
-	var undriven []string
+	live := map[string]bool{}
 	for name := range GateBindings() {
 		if !driven[name] {
-			undriven = append(undriven, name)
+			live[name] = true
 		}
 	}
-	sort.Strings(undriven)
+
+	var missing, stale []string
+	for name := range live {
+		if _, ok := undrivenGates[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	for name, why := range undrivenGates {
+		if !live[name] {
+			stale = append(stale, name)
+		}
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("undrivenGates[%q] has no reason — an entry without one is indistinguishable "+
+				"from an oversight, which is exactly what this list exists to tell apart", name)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+
+	if len(missing) > 0 {
+		t.Errorf("declared gate(s) neither driven nor listed: %s. Either add them to the gates "+
+			"table, or add them to undrivenGates with the reason they cannot be driven — an "+
+			"undriven gate nobody wrote down is one `gates: N ran, all clean` silently omits",
+			strings.Join(missing, ", "))
+	}
+	if len(stale) > 0 {
+		t.Errorf("undrivenGates still names %s, but %s driven now — DELETE the entr%s in this "+
+			"commit. A stale name reads as work still to do and is how the prose version of this "+
+			"list came to claim six driven gates when there were thirteen",
+			strings.Join(stale, ", "),
+			map[bool]string{true: "they are", false: "it is"}[len(stale) > 1],
+			map[bool]string{true: "ies", false: "y"}[len(stale) > 1])
+	}
 
 	t.Logf("declared gate extensions: %d, driven: %d, undriven: %v",
-		len(GateBindings()), len(driven), undriven)
+		len(GateBindings()), len(driven), keysOf(live))
 
-	if len(undriven) == 0 {
-		t.Log("every declared gate is now driven — delete the `deliberately not the whole " +
-			"set` note in gates.go, and this test with it")
+	if len(live) == 0 {
+		t.Log("every declared gate is now driven — delete undrivenGates, the note above it " +
+			"in gates.go, and this test with them")
 	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RunGates must COLLECT failures rather than stop at the first, and must say how
@@ -99,13 +149,13 @@ func TestRunGatesReportsEveryFailureNotJustTheFirst(t *testing.T) {
 	t.Cleanup(func() { gates = orig })
 
 	gates = []Gate{
-		{"a", failingCmd("one"), nil},
-		{"b", failingCmd("two"), nil},
-		{"c", okCmd(), nil},
+		{"a", failingCmd("one"), nil, nil},
+		{"b", failingCmd("two"), nil, nil},
+		{"c", okCmd(), nil, nil},
 	}
 
 	var out, errOut bytes.Buffer
-	err := RunGates(&out, &errOut, nil)
+	err := RunGates(nil, &out, &errOut, nil)
 	if err == nil {
 		t.Fatal("RunGates returned nil with two failing gates")
 	}
@@ -125,10 +175,10 @@ func TestRunGatesReportsEveryFailureNotJustTheFirst(t *testing.T) {
 func TestRunGatesReportsTheCountOnSuccess(t *testing.T) {
 	orig := gates
 	t.Cleanup(func() { gates = orig })
-	gates = []Gate{{"a", okCmd(), nil}, {"b", okCmd(), nil}}
+	gates = []Gate{{"a", okCmd(), nil, nil}, {"b", okCmd(), nil, nil}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(&out, &errOut, nil); err != nil {
+	if err := RunGates(nil, &out, &errOut, nil); err != nil {
 		t.Fatalf("RunGates failed on clean gates: %v", err)
 	}
 	if !strings.Contains(out.String(), "2 ran") {
@@ -165,13 +215,13 @@ func TestRunGatesSkipsADisabledExtension(t *testing.T) {
 	// wave-health follows no component, so pick one that does. obj-encryption is
 	// not a gate, so borrow its NAME for a synthetic entry: what is under test is
 	// the driver's skip logic keyed on the resolver, not the guard behind it.
-	gates = []Gate{{"obj-encryption", okCmd(), nil}, {"guard-docs", okCmd(), nil}}
+	gates = []Gate{{"obj-encryption", okCmd(), nil, nil}, {"guard-docs", okCmd(), nil, nil}}
 
 	off := false
 	toggles := map[string]clusterspec.ComponentToggle{"objProxy": {Enabled: &off}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(&out, &errOut, toggles); err != nil {
+	if err := RunGates(nil, &out, &errOut, toggles); err != nil {
 		t.Fatalf("RunGates failed: %v", err)
 	}
 	got := out.String()
@@ -195,7 +245,7 @@ func TestRunGatesSkipsADisabledExtension(t *testing.T) {
 func TestGatesCmdRunsTheDriver(t *testing.T) {
 	orig := gates
 	t.Cleanup(func() { gates = orig })
-	gates = []Gate{{"guard-docs", okCmd(), nil}}
+	gates = []Gate{{"guard-docs", okCmd(), nil, nil}}
 
 	c := GatesCmd()
 	if c.Use != "gates" || c.Short == "" {
@@ -216,5 +266,55 @@ func TestGatesCmdRunsTheDriver(t *testing.T) {
 		t.Errorf("output %q — with no instance spec every gate must still run; treating a "+
 			"missing spec as `nothing enabled` would silence the whole suite in the one "+
 			"place these gates matter most", out.String())
+	}
+}
+
+// THE DRIVER MUST GIVE A TREE-INSPECTING GATE THE REAL TREE.
+//
+// docs-guard validates every documented `llz …` invocation against the cobra
+// tree. Run through a plain constructor the command is PARENTLESS and its Root()
+// is itself, so it resolved 868 invocations against a tree of one, skipped all of
+// them, and reported clean — `gates: 8 ran, all clean` with one of the eight
+// checking nothing.
+//
+// Asserted on the CONSTRUCTOR rather than by running docs-guard, because running
+// it here would scan the whole repo in a unit test. What can go wrong is the
+// wiring: a Gate that needs the tree losing NewWithTree, or the driver stopping
+// passing it.
+func TestATreeInspectingGateReceivesTheTree(t *testing.T) {
+	var got *cobra.Command
+	orig := gates
+	t.Cleanup(func() { gates = orig })
+
+	want := &cobra.Command{Use: "llz"}
+	gates = []Gate{{
+		Extension: "guard-docs",
+		Args:      nil,
+		NewWithTree: func(tree *cobra.Command) *cobra.Command {
+			got = tree
+			return okCmd()()
+		},
+	}}
+
+	var out, errOut bytes.Buffer
+	if err := RunGates(want, &out, &errOut, nil); err != nil {
+		t.Fatalf("RunGates failed: %v", err)
+	}
+	if got == nil {
+		t.Fatal("the gate was built with no tree — docs-guard would fall back to its own " +
+			"Root(), which is itself, and silently check nothing")
+	}
+	if got != want {
+		t.Errorf("the gate received %v, not the tree the driver was given", got)
+	}
+}
+
+// Every gate must be buildable. A table entry with neither constructor would
+// panic at run time, and the driver is the last place that should discover it.
+func TestEveryGateHasAConstructor(t *testing.T) {
+	for _, g := range Gates() {
+		if g.New == nil && g.NewWithTree == nil {
+			t.Errorf("%s has neither New nor NewWithTree", g.Extension)
+		}
 	}
 }

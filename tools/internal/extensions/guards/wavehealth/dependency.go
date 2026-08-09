@@ -45,9 +45,11 @@ package wavehealth
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
@@ -126,8 +128,9 @@ type wdInversion struct {
 }
 
 func runCIWaveDependencyGuard(root string) error {
-	dirs := guardwalk.PlatformTreeDirs(root)
-	inversions, examined, err := collectWaveDependencyInversions(dirs)
+	repo := capability.RepoForGate(Extension(), root)
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	inversions, examined, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		return err
 	}
@@ -156,7 +159,7 @@ func runCIWaveDependencyGuard(root string) error {
 // sync-wave (Argo orders a single App's resources by it); across Applications by the
 // App-LEVEL wave (a carved App's content cannot sync before the app-of-apps creates
 // the App, and sibling Apps sync with no cross-App health gate). See the file header.
-func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined int, err error) {
+func collectWaveDependencyInversions(repo capability.Repo, dirs []string) (_ []wdInversion, examined int, err error) {
 	type res struct {
 		file, app        string
 		resWave, appWave int
@@ -172,7 +175,7 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 	}
 	var workloads []workload
 
-	examined, err = guardwalk.Walk(dirs, func(path string, raw []byte) error {
+	examined, err = guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
 		app, appWave := wdOwningApp(path) // same for every doc in a file
 		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d wdDoc) bool { return d.Kind != "" }) {
 			r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
@@ -281,18 +284,23 @@ func wdOwningApp(path string) (string, int) {
 // wdComponentOf resolves the clusterspec component a manifest path belongs to by its
 // platform-apl/components/<name>/ segment. ok=false for the shared base / any path not
 // under a component dir.
+// IT MATCHES A PATH SEGMENT, NOT THE SUBSTRING "/components/". The substring form
+// required a parent segment before `components`, so it silently declined to match
+// a path that BEGINS with it — every resource landed in the default
+// platform-bootstrap App and every cross-App inversion went unreported. That was
+// invisible while the walk handed out absolute paths and surfaced the moment the
+// read-repo fence made them repo-relative. Nothing about which App owns a
+// manifest depends on how many directories sit above the tree.
 func wdComponentOf(path string) (clusterspec.Component, bool) {
-	const marker = "/components/"
-	i := strings.LastIndex(path, marker)
-	if i < 0 {
-		return clusterspec.Component{}, false
+	segs := strings.Split(filepath.ToSlash(path), "/")
+	// Last match wins, as the LastIndex form did: a nested components/ dir is the
+	// more specific answer.
+	for i := len(segs) - 2; i >= 0; i-- {
+		if segs[i] == "components" {
+			return clusterspec.LookupComponent(segs[i+1])
+		}
 	}
-	rest := path[i+len(marker):]
-	name := rest
-	if j := strings.IndexByte(rest, '/'); j >= 0 {
-		name = rest[:j]
-	}
-	return clusterspec.LookupComponent(name)
+	return clusterspec.Component{}, false
 }
 
 // wdSyncWave reads the argocd sync-wave annotation, defaulting to 0 (Argo's

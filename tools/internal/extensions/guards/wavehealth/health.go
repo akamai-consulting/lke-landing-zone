@@ -25,11 +25,11 @@ package wavehealth
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
@@ -172,14 +172,15 @@ type waveHealthFinding struct {
 }
 
 func runCIWaveHealthGuard(root string) error {
-	aplDir := guardkit.RepoPath(root, "apl-values")
+	repo := capability.RepoForGate(Extension(), root)
+	aplDir := guardkit.RepoPath(repo, "apl-values")
 	valuesPath := filepath.Join(aplDir, "values.yaml")
-	valuesRaw, err := os.ReadFile(valuesPath)
+	valuesRaw, err := repo.ReadFile(valuesPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
 	}
-	dirs := guardwalk.PlatformTreeDirs(root)
-	findings, examined, err := collectWaveHealthFindings(dirs, string(valuesRaw))
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	findings, examined, err := collectWaveHealthFindings(repo, dirs, string(valuesRaw))
 	if err != nil {
 		return err
 	}
@@ -216,12 +217,12 @@ func runCIWaveHealthGuard(root string) error {
 // negative-wave resource against AllowedKinds + the values overrides.
 // It also returns how many manifest files were read, which the caller must gate
 // on (requireCorpus) — an empty corpus is a failure, not a pass.
-func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFinding, int, error) {
+func collectWaveHealthFindings(repo capability.Repo, dirs []string, values string) ([]waveHealthFinding, int, error) {
 	var findings []waveHealthFinding
 	// walkManifests also brings the missing-directory tolerance this guard alone
 	// lacked — it used to hard-error on a layout its three siblings skipped — and
 	// the *.yml extension it alone would have ignored.
-	examined, err := guardwalk.Walk(dirs, func(path string, raw []byte) error {
+	examined, err := guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
 		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d waveHealthDoc) bool { return d.Kind != "" }) {
 			f, ok := classifyWaveHealthDoc(path, doc, values)
 			if ok {

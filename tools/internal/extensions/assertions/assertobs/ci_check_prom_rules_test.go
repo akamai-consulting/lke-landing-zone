@@ -113,9 +113,13 @@ func TestRunCICheckPromRulesPass(t *testing.T) {
 	if len(*seen) != 1 || (*seen)[0] == "" {
 		t.Errorf("promtool should run once on a tempfile, got %v", *seen)
 	}
-	if !strings.Contains(out.String(), "ok: "+rule) {
+	// The reported path is fenced-relative now: the reader is rooted at the tree
+	// CONTAINING the rules dir, so a finding names the dir the operator pointed at
+	// plus the file under it, rather than an absolute machine path.
+	if !strings.Contains(out.String(), "ok: "+filepath.Join(filepath.Base(dir), "rules.yaml")) {
 		t.Errorf("missing ok line:\n%s", out.String())
 	}
+	_ = rule
 }
 
 func TestRunCICheckPromRulesPromtoolFails(t *testing.T) {
@@ -186,7 +190,7 @@ func TestRunCICheckPromRulesWalkSelectsByKind(t *testing.T) {
 	if len(*seen) != 1 {
 		t.Errorf("promtool should run once (the one PrometheusRule), ran %d times", len(*seen))
 	}
-	if !strings.Contains(out.String(), "ok: "+rule) {
+	if !strings.Contains(out.String(), "ok: "+filepath.Join(filepath.Base(dir), filepath.Base(rule))) {
 		t.Errorf("missing ok line for the rule file:\n%s", out.String())
 	}
 }

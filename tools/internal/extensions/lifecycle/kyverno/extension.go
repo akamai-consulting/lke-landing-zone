@@ -62,9 +62,30 @@ func Extension() extension.Extension {
 		Short:  "apply a Kyverno ClusterPolicy and wait until it is actually enforcing",
 		Always: true,
 		Bindings: []extension.Binding{{
-			Kind:   extension.Transition,
-			State:  extension.Converged,
-			Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
+			Kind:  extension.Transition,
+			State: extension.Converged,
+			// `read-repo` IS A CORRECTION. policyName() reads the policy manifest
+			// off disk to pull metadata.name out of it, and the binding claimed
+			// only the two cluster grants — so the declaration said this never
+			// touched the tree, and it did. Found by censusing which packages read
+			// files against which declare it.
+			Grants: []extension.Grant{extension.ReadRepo, extension.ClusterRead, extension.ClusterWrite},
 		}},
 	}
+}
+
+// repoBinding is the binding this package reads the tree through. Every binding
+// here declares read-repo and nothing that differs, so no choice can widen
+// anything; it is looked up rather than reconstructed all the same, following
+// objenc's seedBinding.
+func repoBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.ReadRepo {
+				return b
+			}
+		}
+	}
+	panic("kyverno-policies: no binding declares read-repo — the tree is read through one, so " +
+		"its absence is a wiring bug")
 }

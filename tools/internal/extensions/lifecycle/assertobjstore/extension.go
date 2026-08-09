@@ -18,7 +18,10 @@ package assertobjstore
 // can tell them apart speaks S3 at the endpoint the CONSUMER uses, with the
 // credential the CONSUMER holds — which means writing.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+)
 
 // Extension is the `assert-objstore` declaration.
 //
@@ -70,4 +73,44 @@ func Extension() extension.Extension {
 			Grants: []extension.Grant{extension.ClusterRead, extension.SecretRead, extension.CloudMutate},
 		}},
 	}
+}
+
+// objstoreCluster is this package's cluster handle, built from the declaration
+// rather than from a package var.
+//
+// EVERY CALL THROUGH IT IS A `get`. The binding declares cluster-read and no
+// cluster-write, so the handle permits reads and refuses mutations — which is the
+// grant made real rather than described. The lane's WRITE is to object storage,
+// over S3, which is what `cloud-mutate` on the same binding covers; nothing it
+// does to the cluster is more than looking.
+//
+// Reached through a function rather than stored, so the seam is read at call time
+// — the capture bug this campaign has on record.
+func objstoreCluster() capability.Cluster { return capability.For(roundtripBinding()).Cluster }
+
+// roundtripBinding returns the transition whose grants scope the reads above. By
+// kind and state, not by index — database-provisioner's namedBinding records why.
+func roundtripBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Transition && b.State == extension.Converged {
+			return b
+		}
+	}
+	panic("assert-objstore: no transition:converged binding — the cluster handle is built from it")
+}
+
+// cloudBinding is the binding this package reaches Linode through — the one
+// carrying a cloud grant. Looked up rather than reconstructed, following objenc's
+// seedBinding: handles belong to a BINDING, and an extension with several must
+// not hand back the union.
+func cloudBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.CloudRead || g == extension.CloudMutate {
+				return b
+			}
+		}
+	}
+	panic("assert-objstore: no binding carries a cloud grant — the Linode client is built from " +
+		"one, so its absence is a wiring bug")
 }

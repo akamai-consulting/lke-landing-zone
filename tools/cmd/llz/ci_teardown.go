@@ -37,7 +37,9 @@ import (
 
 func teardownDeps() teardown.Deps {
 	return teardown.Deps{
-		Client:         linode.ClientFromEnv,
+		// The orphan gate's client, refusing every mutating verb at the
+		// transport. See teardown.ReadOnlyClientFromEnv.
+		Client:         teardown.ReadOnlyClientFromEnv,
 		Token:          linode.TokenFromEnv,
 		Exec:           execOutput,
 		TempKubeconfig: cigate.WriteTempKubeconfig,

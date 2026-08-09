@@ -5,7 +5,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
+
+// reader is the fenced reader RepoPath now takes. A bare read-repo binding is
+// what every gate declares, so it is what these tests exercise.
+func reader(root string) capability.Repo {
+	return capability.RepoAt(extension.Binding{
+		Kind:   extension.Gate,
+		State:  extension.Scaffolded,
+		Grants: []extension.Grant{extension.ReadRepo},
+	}, root)
+}
 
 // RepoPath's whole job is that the SAME relative path resolves in two layouts:
 // the template repo, where trees sit at the root, and a rendered instance, where
@@ -21,19 +34,19 @@ func TestRepoPathResolvesEitherLayout(t *testing.T) {
 	}
 
 	mk("terraform-modules")
-	if got, want := RepoPath(root, "terraform-modules"), filepath.Join(root, "terraform-modules"); got != want {
+	if got, want := RepoPath(reader(root), "terraform-modules"), "terraform-modules"; got != want {
 		t.Errorf("template layout: RepoPath = %q, want %q", got, want)
 	}
 
 	mk("instance-template/platform-apl")
-	if got, want := RepoPath(root, "platform-apl"), filepath.Join(root, "instance-template", "platform-apl"); got != want {
+	if got, want := RepoPath(reader(root), "platform-apl"), filepath.Join("instance-template", "platform-apl"); got != want {
 		t.Errorf("instance layout: RepoPath = %q, want %q", got, want)
 	}
 
 	// Neither exists: return the direct join so the CALLER's missing-tree handling
 	// runs. Returning the nested path instead would make every "not found" message
 	// name a directory the reader has never heard of.
-	if got, want := RepoPath(root, "nowhere"), filepath.Join(root, "nowhere"); got != want {
+	if got, want := RepoPath(reader(root), "nowhere"), "nowhere"; got != want {
 		t.Errorf("absent: RepoPath = %q, want the direct join %q", got, want)
 	}
 }
@@ -48,7 +61,7 @@ func TestRepoPathPrefersTheDirectTree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, want := RepoPath(root, "platform-apl"), filepath.Join(root, "platform-apl"); got != want {
+	if got, want := RepoPath(reader(root), "platform-apl"), "platform-apl"; got != want {
 		t.Errorf("RepoPath = %q, want the direct tree %q", got, want)
 	}
 }
@@ -68,5 +81,15 @@ func TestRequireCorpusFailsClosedOnZero(t *testing.T) {
 	}
 	if err := RequireCorpus("some-guard", 1, dirs); err != nil {
 		t.Errorf("one examined file is a corpus: %v", err)
+	}
+}
+
+// A reader that may not read resolves NOTHING, and returns the direct path rather
+// than the instance-template one — the layout probe cannot run, so the honest
+// answer is the caller's own spelling, whose subsequent read will refuse and say
+// why. Returning the nested guess would name a directory that was never checked.
+func TestRepoPathWithoutTheGrantDoesNotGuessTheLayout(t *testing.T) {
+	if got, want := RepoPath(capability.DeniedRepo(), "platform-apl"), "platform-apl"; got != want {
+		t.Errorf("RepoPath = %q, want %q", got, want)
 	}
 }

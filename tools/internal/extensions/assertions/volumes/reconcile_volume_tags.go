@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -119,7 +120,7 @@ type tagReconcileClient interface {
 
 // tagReconcileLinodeFn opens the Linode client. Seamed for tests.
 var tagReconcileLinodeFn = func(token string) tagReconcileClient {
-	return linode.NewClient(token, 60*time.Second)
+	return capability.CloudFor(cloudBinding("volume-tags")).Client(token, 60*time.Second)
 }
 
 type reconcileTagsResult struct{ healed, ok, missing, errors int }

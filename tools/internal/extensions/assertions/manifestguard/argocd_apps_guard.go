@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
@@ -48,14 +49,15 @@ type argoSource struct {
 func RunArgoCDRenderedApps(renderDir string, out io.Writer) error {
 	// collectManifestPaths (shared with the other tree-scanning guards) also picks
 	// up *.yml, which this hand-rolled walk ignored.
-	files, err := guardwalk.CollectPaths([]string{renderDir})
+	repo, dir := capability.RepoContaining(renderedManifestsBinding(), renderDir)
+	files, err := guardwalk.CollectPaths(repo, []string{dir})
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("argocd-rendered-apps: no rendered manifests under %s/ — run 'make render-charts' first", renderDir)
 	}
 
 	apps, problems := 0, 0
 	for _, f := range files {
-		raw, readErr := os.ReadFile(f)
+		raw, readErr := repo.ReadFile(f)
 		if readErr != nil {
 			return fmt.Errorf("reading %s: %w", f, readErr)
 		}

@@ -68,6 +68,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -89,8 +91,10 @@ const (
 // Seams for tests.
 var (
 	dbAdminNow          = func() time.Time { return time.Now() }
-	dbAdminLinodeClient = func(token string) dbAdminAPI { return linode.NewClient(token, 60*time.Second) }
-	dbAdminSleep        = func(d time.Duration) { time.Sleep(d) }
+	dbAdminLinodeClient = func(token string) dbAdminAPI {
+		return capability.CloudFor(cloudBinding("rotate-admin")).Client(token, 60*time.Second)
+	}
+	dbAdminSleep = func(d time.Duration) { time.Sleep(d) }
 )
 
 // dbAdminAPI is the slice of the Linode client the rotator needs.
@@ -176,7 +180,7 @@ func rotateOneDBAdmin(ctx context.Context, api dbAdminAPI, t dbAdminTarget) erro
 	if err != nil {
 		return err
 	}
-	oldPassword, verdict := baoread.KVGetFieldOK(t.path, "password")
+	oldPassword, verdict := capability.For(namedBinding("rotate-admin")).Secrets.Get(t.path, "password")
 	if verdict == baoread.Unknown {
 		return baoread.ErrReadUnknown(t.path, "password", "rotate the admin credential for database cluster "+t.name)
 	}
@@ -210,7 +214,7 @@ func rotateOneDBAdmin(ctx context.Context, api dbAdminAPI, t dbAdminTarget) erro
 	fields["username"] = creds.Username
 	fields["password"] = creds.Password
 	fields["rotated_at"] = strconv.FormatInt(dbAdminNow().Unix(), 10)
-	if err := baoread.KVPut(t.path, fields); err != nil {
+	if err := capability.For(namedBinding("rotate-admin")).Custodian.Put(t.path, fields); err != nil {
 		return dbAdminLostCredentialErr(t, fmt.Errorf("write %s: %w", t.path, err))
 	}
 	return nil
@@ -228,7 +232,7 @@ var dbAdminCarriedFields = []string{"endpoint", "port", "ca", "sslmode"}
 func readDBAdminCarriedFields(path, name string) (map[string]string, error) {
 	out := make(map[string]string, len(dbAdminCarriedFields)+3)
 	for _, f := range dbAdminCarriedFields {
-		v, verdict := baoread.KVGetFieldOK(path, f)
+		v, verdict := capability.For(namedBinding("rotate-admin")).Secrets.Get(path, f)
 		switch verdict {
 		case baoread.Unknown:
 			return nil, baoread.ErrReadUnknown(path, f, "rotate the admin credential for database cluster "+name)
@@ -313,7 +317,7 @@ func dbAdminTargets(afterDays int, rotateNow bool) ([]dbAdminTarget, error) {
 	out := make([]dbAdminTarget, 0, len(names))
 	for _, name := range names {
 		t := dbAdminTarget{name: name, id: ids[name], path: dbAdminSeedRoot + name, ageDays: -1}
-		stamp, verdict := baoread.KVGetFieldOK(t.path, "rotated_at")
+		stamp, verdict := capability.For(namedBinding("rotate-admin")).Secrets.Get(t.path, "rotated_at")
 		if verdict == baoread.Unknown {
 			return nil, baoread.ErrReadUnknown(t.path, "rotated_at", "decide whether database cluster "+name+" is due for rotation")
 		}

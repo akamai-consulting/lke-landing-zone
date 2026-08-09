@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -131,21 +133,21 @@ func RunSeedDBAdmin(region string) error {
 		// An unreadable path is NOT an absent one — writing over a live credential
 		// we failed to read is indistinguishable from a successful rotation, so
 		// fail closed.
-		existingEndpoint, verdict := baoread.KVGetFieldOK(path, "endpoint")
+		existingEndpoint, verdict := capability.For(namedBinding("seed-admin")).Secrets.Get(path, "endpoint")
 		if verdict == baoread.Unknown {
 			return baoread.ErrReadUnknown(path, "endpoint", "seed the admin credential for database cluster "+name)
 		}
 		switch {
 		case existingEndpoint == "":
 			fields["rotated_at"] = stamp
-			if err := baoread.KVPut(path, fields); err != nil {
+			if err := capability.For(namedBinding("seed-admin")).Custodian.Put(path, fields); err != nil {
 				return fmt.Errorf("seed %s: %w", path, err)
 			}
 			seeded = append(seeded, name)
 			fmt.Printf("%s: seeded %s (%s).\n", name, path, c.Endpoint)
 		case existingEndpoint != c.Endpoint:
 			fields["rotated_at"] = stamp
-			if err := baoread.KVPut(path, fields); err != nil {
+			if err := capability.For(namedBinding("seed-admin")).Custodian.Put(path, fields); err != nil {
 				return fmt.Errorf("update %s: %w", path, err)
 			}
 			updated = append(updated, name)

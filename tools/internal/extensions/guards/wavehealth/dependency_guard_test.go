@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // wdWrite drops a manifest into a temp component dir and returns the dir list
 // collectWaveDependencyInversions expects.
-func wdWrite(t *testing.T, files map[string]string) []string {
+func wdWrite(t *testing.T, files map[string]string) (capability.Repo, []string) {
 	t.Helper()
 	dir := t.TempDir()
 	comp := filepath.Join(dir, "components")
@@ -22,7 +25,10 @@ func wdWrite(t *testing.T, files map[string]string) []string {
 			t.Fatal(err)
 		}
 	}
-	return []string{filepath.Join(dir, "platform-apl", "manifest"), comp}
+	// Dirs are RELATIVE to the reader's root now: the reader is what knows where
+	// the tree is, and a path it did not produce is one it will refuse.
+	return capability.RepoForGate(Extension(), dir),
+		[]string{filepath.Join("platform-apl", "manifest"), "components"}
 }
 
 const wdReconcilerDeploy = `apiVersion: apps/v1
@@ -59,11 +65,11 @@ spec:
 // The #163 bug: a wave-0 Deployment (no annotation) with a hard secretKeyRef on
 // a wave-5 ExternalSecret's Secret → one inversion.
 func TestWaveDependencyInversionDetected(t *testing.T) {
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml":     wdFmt(wdReconcilerDeploy, "", ""), // no sync-wave → wave 0
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +83,12 @@ func TestWaveDependencyInversionDetected(t *testing.T) {
 
 // The fix: Deployment at wave 6 (> the ES's wave 5) → no inversion.
 func TestWaveDependencyOrderedOK(t *testing.T) {
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, `  annotations:
     argocd.argoproj.io/sync-wave: "6"`, ""),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,11 +100,11 @@ func TestWaveDependencyOrderedOK(t *testing.T) {
 // An optional reference doesn't block pod start, so it's not a wedge even at an
 // earlier wave.
 func TestWaveDependencyOptionalSkipped(t *testing.T) {
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml":     wdFmt(wdReconcilerDeploy, "", "\n                  optional: true"),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,12 +116,12 @@ func TestWaveDependencyOptionalSkipped(t *testing.T) {
 // Same wave (workload == ES) is allowed: both apply in the same wave, so the
 // Secret can be produced; only a STRICTLY later ES wave wedges.
 func TestWaveDependencySameWaveOK(t *testing.T) {
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, `  annotations:
     argocd.argoproj.io/sync-wave: "5"`, ""),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +133,11 @@ func TestWaveDependencySameWaveOK(t *testing.T) {
 // A Secret with no ExternalSecret in the tree (e.g. statically seeded / apl-core
 // managed) is not this guard's concern → no false positive.
 func TestWaveDependencyNoMatchingES(t *testing.T) {
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, "", ""),
 		// no ExternalSecret for linode-api-token
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +160,11 @@ spec:
   target:
     name: linode-api-token
 `
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, "", ""),
 		"other/externalsecret.yaml":     otherNsES,
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,11 +212,11 @@ spec:
   target:
     name: harbor-robot-token
 `
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"externalSecrets/needs-secret.yaml": xWorkload, // carved App wave -10
 		"harbor/es.yaml":                    xES,       // carved App wave 5
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,11 +266,11 @@ spec:
   target:
     name: shared-token
 `
-	dirs := wdWrite(t, map[string]string{
+	repo, dirs := wdWrite(t, map[string]string{
 		"harbor/consumer.yaml":       workload, // carved App wave 5
 		"externalSecrets/store.yaml": es,       // carved App wave -10
 	})
-	inv, _, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,4 +282,68 @@ spec:
 func wdFmt(tmpl, annotations, optional string) string {
 	// tmpl has two %s: the metadata block (annotations) and the trailing optional.
 	return fmt.Sprintf(tmpl, annotations, optional)
+}
+
+// wdTree writes a fixture under the REAL platform-apl layout, so
+// runCIWaveDependencyGuard resolves its own roots the way a live run does.
+// wdWrite cannot serve here: it puts components/ at the tree root, which is fine
+// for the collector under test but not for the guard that locates the trees.
+func wdTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(root, "platform-apl", "components", name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// The guard's own entry point had no test — the collector beneath it did, and the
+// two are not the same thing: locating the roots, gating on the corpus and
+// turning inversions into a non-zero exit all live up here. Running it end to end
+// is also what exercises the read-repo reader the way `llz ci gates` does.
+func TestWaveDependencyGuardEndToEnd(t *testing.T) {
+	t.Run("clean tree passes", func(t *testing.T) {
+		root := wdTree(t, map[string]string{
+			// Workload at wave 10, its ExternalSecret at 5 — correctly ordered.
+			"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, `  annotations:
+    argocd.argoproj.io/sync-wave: "10"`, ""),
+			"llzReconciler/es.yaml": wdReconcilerES,
+		})
+		if err := runCIWaveDependencyGuard(root); err != nil {
+			t.Errorf("a correctly ordered tree must pass: %v", err)
+		}
+	})
+
+	t.Run("inversion fails", func(t *testing.T) {
+		// Workload at the default wave 0, ExternalSecret at 5: the #163 wedge.
+		root := wdTree(t, map[string]string{
+			"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, "", ""),
+			"llzReconciler/es.yaml":         wdReconcilerES,
+		})
+		err := runCIWaveDependencyGuard(root)
+		if err == nil {
+			t.Fatal("a workload gating a wave before its ExternalSecret must fail the guard")
+		}
+		if !strings.Contains(err.Error(), "inversion") {
+			t.Errorf("the error should name the inversion, got: %v", err)
+		}
+	})
+
+	t.Run("empty corpus fails", func(t *testing.T) {
+		// The sibling guards' shared contract: a guard that examined nothing must
+		// not report the same green as one that examined everything.
+		err := runCIWaveDependencyGuard(t.TempDir())
+		if err == nil {
+			t.Fatal("an empty corpus must fail")
+		}
+		if !strings.Contains(err.Error(), "examined 0 manifest files") {
+			t.Errorf("the error should name the empty corpus, got: %v", err)
+		}
+	})
 }

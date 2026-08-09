@@ -33,3 +33,15 @@ func Extension() extension.Extension {
 		}},
 	}
 }
+
+// workflowShellsBinding is the gate binding this guard reads through, looked up
+// rather than reconstructed so a second binding cannot silently widen it.
+func workflowShellsBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Kind == extension.Gate {
+			return b
+		}
+	}
+	panic("guard-workflow-shells: no gate binding — the scan builds its read-repo " +
+		"reader from it, so its absence is a wiring bug")
+}

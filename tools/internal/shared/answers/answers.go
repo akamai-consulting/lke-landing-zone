@@ -15,6 +15,8 @@
 package answers
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,13 +62,48 @@ func PinnedTemplateRef() string {
 	return TemplateRefFromStamp()
 }
 
+// fileReader is the one call this package makes against the disk, named so the
+// same body can serve a fenced caller and an unfenced one.
+//
+// capability.Repo satisfies it structurally — no adapter, no import, and no risk
+// of the two paths drifting, because there is only one path. That is the whole
+// reason ReadFrom is not a second copy of Read: a duplicated parse is how the two
+// halves of a guard come to disagree about what a file means.
+type fileReader interface {
+	ReadFile(string) ([]byte, error)
+}
+
+// osReader is the unfenced reader, for the callers outside the capability model.
+type osReader struct{}
+
+func (osReader) ReadFile(p string) ([]byte, error) { return os.ReadFile(p) }
+
 // Read loads .copier-answers.yml from dir (use "." for the current
 // instance). Returns nil with no error when the file is absent — callers treat a
 // missing File file as "not inside an instance yet".
-func Read(dir string) (*File, error) {
-	b, err := os.ReadFile(filepath.Join(dir, ".copier-answers.yml"))
+//
+// UNFENCED, AND THAT IS NOT AN OVERSIGHT. Its callers are internal/verbs — the
+// CLI's own surface, which declares no bindings at all and is held to that by
+// shared/extension/verbs_test.go — plus envdef. A verb scaffolds and resolves
+// trees that are not "the repo" (`llz new` writes one that does not exist yet),
+// so there is no root to fence it to and a grant it could never hold. Extensions
+// use ReadFrom.
+func Read(dir string) (*File, error) { return readFrom(osReader{}, dir) }
+
+// ReadFrom is Read through a caller's own reader, so an extension's read of the
+// answers file is bounded by the same fence as the rest of its tree. Takes a
+// capability.Repo in practice; the narrow interface keeps this package from
+// importing the capability layer it sits beside.
+func ReadFrom(r fileReader, dir string) (*File, error) { return readFrom(r, dir) }
+
+func readFrom(r fileReader, dir string) (*File, error) {
+	b, err := r.ReadFile(filepath.Join(dir, ".copier-answers.yml"))
 	if err != nil {
-		if os.IsNotExist(err) {
+		// errors.Is rather than os.IsNotExist: a FENCED reader refusing a path
+		// outside its tree must NOT read as "no answers file here", which every
+		// caller treats as "not inside an instance" and shrugs off. A refusal and
+		// an absence are different answers, and only one of them is benign.
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err

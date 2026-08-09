@@ -76,3 +76,19 @@ func Extension() extension.Extension {
 		},
 	}
 }
+
+// repoBinding is the binding this package reads the tree through. Every binding
+// here declares read-repo and nothing that differs, so no choice can widen
+// anything; it is looked up rather than reconstructed all the same, following
+// objenc's seedBinding.
+func repoBinding() extension.Binding {
+	for _, b := range Extension().Bindings {
+		for _, g := range b.Grants {
+			if g == extension.ReadRepo {
+				return b
+			}
+		}
+	}
+	panic("release-publish: no binding declares read-repo — the tree is read through one, so " +
+		"its absence is a wiring bug")
+}

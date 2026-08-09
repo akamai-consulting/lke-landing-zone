@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // TestScanPlaintextShapes pins the four shapes the scanner claims to detect.
@@ -136,6 +138,14 @@ func repoRootForGuardTest(t *testing.T) string {
 	return root
 }
 
+// guardRepoForTest is the reader a real run gets. Built from the EXTENSION rather
+// than hand-rolled, so a test cannot hand itself a reader the declaration would
+// not have produced.
+func guardRepoForTest(t *testing.T, root string) capability.Repo {
+	t.Helper()
+	return capability.RepoForGate(Extension(), root)
+}
+
 // TestScanPlaintextGoServiceURL is the regression test for the guard's worst
 // blind spot. The first revision `continue`d after the InsecureSkipVerify check,
 // and its comment-stripper treated the "//" in "http://" as a comment start —
@@ -262,8 +272,8 @@ func TestScanPlaintextLocatorNeverEmpty(t *testing.T) {
 // TestScanPlaintextKeysAreUniquePerFile guards the same property on the real
 // tree: no two findings in one file may share a key.
 func TestScanPlaintextKeysAreUniquePerFile(t *testing.T) {
-	root := repoRootForGuardTest(t)
-	findings, _, err := collectPlaintextFindings(root, plaintextScanDirs(root))
+	repo := guardRepoForTest(t, repoRootForGuardTest(t))
+	findings, _, err := collectPlaintextFindings(repo, plaintextScanDirs(repo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,19 +295,12 @@ func TestScanPlaintextKeysAreUniquePerFile(t *testing.T) {
 // layout and not the other — so running the guard against an instance reported
 // the entire tree as unregistered AND every registry entry as stale.
 func TestRelForKeyIsLayoutStable(t *testing.T) {
-	dir := t.TempDir()
-	nested := filepath.Join(dir, "instance-template", "platform-apl", "x.yaml")
-	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	flat := filepath.Join(dir, "platform-apl", "x.yaml")
-	if err := os.MkdirAll(filepath.Dir(flat), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := relForKey(dir, nested), "platform-apl/x.yaml"; got != want {
+	// The reader hands relForKey a repo-relative path, so the two layouts are
+	// exactly the two shapes it can now receive.
+	if got, want := relForKey("instance-template/platform-apl/x.yaml"), "platform-apl/x.yaml"; got != want {
 		t.Errorf("nested layout: relForKey = %q, want %q", got, want)
 	}
-	if got, want := relForKey(dir, flat), "platform-apl/x.yaml"; got != want {
+	if got, want := relForKey("platform-apl/x.yaml"), "platform-apl/x.yaml"; got != want {
 		t.Errorf("flat layout: relForKey = %q, want %q", got, want)
 	}
 }
@@ -703,8 +706,9 @@ func TestScanDefaultedSchemeReportsFileRelativeLines(t *testing.T) {
 // add a drift gate, and this test states the fact so a future reader does not
 // mistake "no findings" for "not wired up".
 func TestDefaultedSchemeIsLatentOnThisTree(t *testing.T) {
-	dirs := plaintextScanDirs("../../../../..")
-	findings, examined, err := collectPlaintextFindings("../../../../..", dirs)
+	repo := guardRepoForTest(t, "../../../../..")
+	dirs := plaintextScanDirs(repo)
+	findings, examined, err := collectPlaintextFindings(repo, dirs)
 	if err != nil {
 		t.Fatal(err)
 	}

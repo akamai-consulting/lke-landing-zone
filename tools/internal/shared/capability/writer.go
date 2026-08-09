@@ -49,7 +49,20 @@ type Writer interface {
 	// Delete removes a resource, with --ignore-not-found. target may be a name or
 	// a `-l selector` pair supplied as two arguments.
 	Delete(ns, kind string, target ...string) ([]byte, error)
-	// PatchMerge applies a merge patch.
+	// PatchMerge applies a JSON MERGE patch (`--type merge`), not a strategic one.
+	//
+	// THE DISTINCTION IS NOT COSMETIC and it has already blocked one conversion.
+	// identity-plane patches a StatefulSet's `hostAliases` with `--type=strategic`,
+	// where the API server merges LIST ENTRIES by key; a JSON merge patch REPLACES
+	// the whole list. Routing that call through here would have looked like a
+	// refactor and silently changed what the patch does to a list, which is the
+	// worst shape a "mechanical" conversion can take.
+	//
+	// So a caller needing strategic merge is NOT a caller that should be squeezed
+	// through this operation. It stays on the raw seam and stays counted by the
+	// bypass ratchet, until someone adds PatchStrategic with a test that pins the
+	// list semantics — one case is not yet enough to know whether the right answer
+	// is a second operation or a patch-type argument on this one.
 	PatchMerge(ns, kind, name, patchJSON string) ([]byte, error)
 	// RolloutRestart rolls a workload (target is e.g. "deploy/argocd-redis").
 	RolloutRestart(ns, target string) ([]byte, error)

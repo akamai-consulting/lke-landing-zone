@@ -13,6 +13,7 @@ import (
 
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfbin"
@@ -98,7 +99,7 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 	}
 	// Token first, so a missing credential still reports before a missing tfvars
 	// file — the order this verb has always failed in.
-	client, ctx, err := linode.ClientFromEnv()
+	client, ctx, err := capability.CloudFor(cloudBinding("plan")).FromEnv()
 	if err != nil {
 		return err
 	}
@@ -340,7 +341,7 @@ func HealFirewallCollision(g cliopts.Opts, applyLog, varFile string, applyExit i
 	}
 	label := tf.ResolveFirewallLabel(tf.ParseTFVars(string(content)))
 
-	client := linode.NewClient(token, 60*time.Second)
+	client := capability.CloudFor(cloudBinding("plan")).Client(token, 60*time.Second)
 	fws, err := client.ListFirewalls(context.Background())
 	if err != nil {
 		return fmt.Errorf("list firewalls: %w", err)

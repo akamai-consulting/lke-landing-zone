@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
@@ -69,7 +70,8 @@ type pinMismatch struct {
 }
 
 func RunPinGuard(root string) error {
-	local, err := loadLocalChartVersions(root)
+	repo := capability.RepoForGate(Extension(), root)
+	local, err := loadLocalChartVersions(repo)
 	if err != nil {
 		return fmt.Errorf("reading kubernetes-charts versions: %w", err)
 	}
@@ -80,10 +82,12 @@ func RunPinGuard(root string) error {
 		// templates/ (which hold Go-templated `chart: {{ ... }}` values, not literal
 		// pins), and matches both YAML extensions. Walked one root at a time so a
 		// failure still names the root it was scanning.
-		if _, walkErr := guardwalk.Walk([]string{filepath.Join(root, sub)}, func(path string, b []byte) error {
+		if _, walkErr := guardwalk.Walk(repo, []string{sub}, func(path string, b []byte) error {
 			if pins := extractChartPins(string(b)); len(pins) > 0 {
-				rel, _ := filepath.Rel(root, path)
-				byFile[filepath.ToSlash(rel)] = pins
+				// Already repo-relative: the reader is fenced to the root, so it
+				// hands back paths expressed under it. The filepath.Rel that used
+				// to derive this is now not merely redundant but wrong.
+				byFile[filepath.ToSlash(path)] = pins
 			}
 			return nil
 		}); walkErr != nil {
@@ -146,8 +150,8 @@ func extractChartPins(content string) []chartPin {
 // loadLocalChartVersions maps each first-party chart's name to its Chart.yaml
 // version by reading kubernetes-charts/<dir>/Chart.yaml. Keyed on the chart's
 // declared `name:` (the value pins reference), not the directory.
-func loadLocalChartVersions(root string) (map[string]string, error) {
-	entries, err := os.ReadDir(filepath.Join(root, "kubernetes-charts"))
+func loadLocalChartVersions(repo capability.Repo) (map[string]string, error) {
+	entries, err := repo.ReadDir("kubernetes-charts")
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +160,7 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		raw := readFileOrEmpty(filepath.Join(root, "kubernetes-charts", e.Name(), "Chart.yaml"))
+		raw := readFileOrEmpty(repo, filepath.Join("kubernetes-charts", e.Name(), "Chart.yaml"))
 		if raw == "" {
 			continue
 		}

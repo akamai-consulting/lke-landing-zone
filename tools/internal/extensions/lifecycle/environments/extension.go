@@ -32,7 +32,11 @@ package environments
 // the declaration. The distinction matters when reading an import list, because
 // before the merge the same identifier meant either one depending on the file.
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/yamledit"
+)
 
 // Extension is the `environments` declaration.
 //
@@ -87,16 +91,28 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 			},
 			{
+				// `write-repo` for the same correction as `set` below: add.go
+				// writes environments/<env>.yaml through
+				// envdef.WriteEnvDefinition. The write was laundered through a
+				// shared package, so this package's own tests could not see it.
 				Kind:   extension.Transition,
 				Name:   "add",
 				State:  extension.Configured,
-				Grants: []extension.Grant{extension.ReadRepo},
+				Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 			},
 			{
+				// `write-repo` HERE IS A CORRECTION, not a widening for
+				// convenience. `llz spec set` and `llz env set` edit
+				// landingzone.yaml and environments/<env>.yaml through
+				// yamledit.EditSpecFile — they have always written. The binding
+				// said read-repo alone, so the declaration was false, and it went
+				// unnoticed because nothing consulted it until write-repo grew a
+				// handle. grantStates refused `write-repo` at `configured` until
+				// this and `render` supplied the two cases that widened it.
 				Kind:   extension.Transition,
 				Name:   "set",
 				State:  extension.Configured,
-				Grants: []extension.Grant{extension.ReadRepo},
+				Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 			},
 			{
 				Kind:   extension.Assertion,
@@ -106,4 +122,28 @@ func Extension() extension.Extension {
 			},
 		},
 	}
+}
+
+// specWriteBinding is the binding a spec edit writes through, chosen by NAME
+// because this extension declares four and three of them differ in what they may
+// do. Looked up rather than reconstructed, following objenc's seedBinding: the
+// handles belong to a BINDING, and an extension with several must not hand back
+// the union — which is the property TestTheTopologyReaderNeverGainsTheWriteGrant
+// exists to keep.
+func specWriteBinding(name string) extension.Binding {
+	for _, b := range Extension().Bindings {
+		if b.Name == name {
+			return b
+		}
+	}
+	panic("environments: no binding named " + name + " — the spec writes build their " +
+		"writer from it, so its absence is a wiring bug")
+}
+
+// specEditor is the fenced reader/writer pair the spec edits go through, fenced
+// at the INSTANCE ROOT: `llz spec set` and `llz env set` edit landingzone.yaml and
+// environments/<env>.yaml, both under the working directory.
+func specEditor(bindingName string) yamledit.Editor {
+	b := specWriteBinding(bindingName)
+	return yamledit.FencedEditor(capability.RepoAt(b, "."), capability.RepoWriterAt(b, "."))
 }

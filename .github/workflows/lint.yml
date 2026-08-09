@@ -139,8 +139,9 @@ jobs:
       - name: Add /usr/local/bin to PATH
         run: echo "PATH=/usr/local/bin:${PATH}" >> "$GITHUB_ENV"
 
-      # `make lint-k8s` runs `externalsecret-paths-check`, which calls `llz ci
-      # externalsecret-paths`. The published ci-kubernetes image bakes llz
+      # `make lint-k8s` runs `llz-gates`, which is `llz ci gates` — the whole
+      # declared gate set in one process, replacing the thirteen individual
+      # `llz ci <verb>` shell-outs this job used to make. The published ci-kubernetes image bakes llz
       # (dockerfiles/Dockerfile (ci-kubernetes target)), but a PR that changes tools/ runs
       # before that image is rebuilt — and the image carries no Go toolchain, so
       # the Makefile's `go run` fallback can't fire either. Set up Go and build
