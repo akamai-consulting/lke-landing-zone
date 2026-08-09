@@ -43,6 +43,33 @@ import (
 // the bootstrap window. Cheap: a file/env read, no API call.
 var linodeTokenPollInterval = 15 * time.Second
 
+// linodeTokenPollBegan is called once this wrapper has SEEN the token absent and
+// committed to polling for it. Production installs nothing; it exists so a test can
+// order itself against a decision made on another goroutine.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// IT FIXES A FLAKE THAT LOOKED LIKE A SLOW MACHINE, and the shape is worth naming
+// because a timing test that fails on its own deadline invites exactly the wrong
+// fix (raise the deadline).
+//
+// waitForLinodeTokenThenKick early-returns when the token is ALREADY present —
+// the steady state, where the wrapper must cost a live cluster nothing. Its test
+// reproduces the bootstrap ordering by seeding the token part-way through, and
+// nothing sequenced that write against the goroutine's own first check. Win the
+// race and the poller is polling, sees the arrival, kicks. Lose it and the poller
+// reads the token the test just wrote, concludes it is not needed, and returns
+// WITHOUT KICKING — after which the test waits out its full 3s deadline and fails
+// claiming the wrapper never noticed the arrival.
+//
+// Confirmed rather than guessed: delaying this function's first check by 50ms makes
+// the test fail every time, with the same message and the same ~3s.
+//
+// RAISING THE DEADLINE WOULD HAVE MADE IT WORSE. The losing path never kicks at
+// all, so a longer wait converts a fast flake into a slow one and the suite keeps
+// passing on the strength of a race it wins most of the time.
+// ────────────────────────────────────────────────────────────────────────────
+var linodeTokenPollBegan = func() {}
+
 // withLinodeTokenWait wraps a lane's watch so that, while the in-cluster Linode
 // token is still absent, the lane is ALSO kicked on a short timer — and, crucially,
 // once more at the moment the token first appears. After that the wrapper is inert
@@ -72,6 +99,10 @@ func waitForLinodeTokenThenKick(ctx context.Context, onEvent func()) {
 	}
 	t := time.NewTicker(linodeTokenPollInterval)
 	defer t.Stop()
+	// AFTER the absent-check and the ticker, so a waiter is guaranteed that a
+	// token appearing from here on is seen by the loop below rather than by the
+	// early return above.
+	linodeTokenPollBegan()
 	for {
 		select {
 		case <-ctx.Done():

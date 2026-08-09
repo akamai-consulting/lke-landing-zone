@@ -27,6 +27,16 @@ func TestWithLinodeTokenWait_KicksWhenTokenArrives(t *testing.T) {
 	withFastTokenPoll(t)
 	t.Setenv("LINODE_TOKEN", "") // absent, as on a cold bootstrap
 
+	// THE ORDERING IS ESTABLISHED, NOT RACED. The poller early-returns when the
+	// token is already there, so seeding it before the poller's first check makes
+	// the poller decide it is not needed and return WITHOUT kicking — the test then
+	// waits out its whole deadline and blames the wrapper. `began` is closed once
+	// the poller has seen the token absent and entered its loop, which is the only
+	// point after which a write is guaranteed to be observed by the loop.
+	began := make(chan struct{})
+	prevBegan := linodeTokenPollBegan
+	linodeTokenPollBegan = func() { close(began) }
+
 	var kicks int32
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -38,10 +48,29 @@ func TestWithLinodeTokenWait_KicksWhenTokenArrives(t *testing.T) {
 		<-ctx.Done()
 		return nil
 	}
-	go func() { _ = withLinodeTokenWait(inner)(ctx, func() { atomic.AddInt32(&kicks, 1) }) }()
+	// done lets the cleanup below restore the seam only after the wrapper's
+	// goroutines are gone, so the restore cannot race their read of it.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = withLinodeTokenWait(inner)(ctx, func() { atomic.AddInt32(&kicks, 1) })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		linodeTokenPollBegan = prevBegan
+	})
 
 	// The one inner event lands while the token is missing.
 	waitForToken(t, func() bool { return atomic.LoadInt32(&kicks) >= 1 }, "inner watch event")
+
+	// And the poller is committed to polling before the credential exists.
+	select {
+	case <-began:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the token poller never entered its loop — it took the already-present " +
+			"early return, which means the token was set before it looked")
+	}
 	before := atomic.LoadInt32(&kicks)
 
 	// The credential finally shows up — the moment nothing used to notice.
