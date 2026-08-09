@@ -49,6 +49,9 @@ package capability_test
 // ────────────────────────────────────────────────────────────────────────────
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -170,49 +173,282 @@ func TestNoNewRawFilesystemReadsInGuards(t *testing.T) {
 // So the constructors that take a binding from a DECLARATION (RepoForGate,
 // RepoContaining with a looked-up binding) are the sanctioned door, and a
 // hand-built extension.Binding inside guards/ is not.
+// ────────────────────────────────────────────────────────────────────────────
+// IT CHECKED THE CALL AND NOW IT CHECKS THE LITERAL, WHICH IS THE ONLY VERSION
+// THAT CAN HOLD.
+//
+// The rule used to be spelled as an alternation over the constructors that take a
+// binding: `capability\.(RepoAt|KubeFor|CloudFor|For)\(\s*extension\.Binding\{`.
+// An audit probed it against every shape a minted capability can take and it
+// caught ONE of seven:
+//
+//	capability.For(extension.Binding{Grants: …})            caught
+//	capability.RepoWriterAt(extension.Binding{Grants: …})   MISSED  ← a write handle
+//	capability.RepoContainingWriter(…)                      MISSED  ← a write handle
+//	capability.RepoContaining / RepoContainingAll(…)        MISSED
+//	capability.WithExec(extension.Binding{Grants: …}, …)    MISSED
+//	b := extension.Binding{Grants: …}; capability.For(b)    MISSED
+//
+// Twenty-four live call sites use constructors that were outside the alternation,
+// and the two WRITE constructors were both among them. Worse than the coverage was
+// the shape: an alternation has to be extended every time this package grows a
+// constructor, and nothing makes anyone do it — the guard silently narrows as the
+// thing it guards gets wider.
+//
+// THE LAST ROW IS THE ONE THAT SETTLES IT. Splitting the literal onto its own line
+// defeats any pattern anchored on the CALL, however many constructors it lists.
+// So the rule moved to the literal: a populated `extension.Binding{…}` outside a
+// declaration is a capability someone granted themselves, wherever it is later
+// passed. That is one rule instead of a list, it needs no maintenance when a
+// constructor lands, and it is strictly wider than what it replaces.
+//
+// AN EMPTY LITERAL IS THE OPPOSITE OF A BYPASS AND MUST NOT MATCH.
+// `capability.For(extension.Binding{})` grants NOTHING — it is the refusing
+// default several Deps sets install so an un-installed seam cannot mutate a
+// cluster. Six packages use it exactly that way. The dangerous shape is a
+// POPULATED literal, so the check requires something inside the braces.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// AND THE EXEMPTION IS STRUCTURAL, BECAUSE BY-FILENAME WAS A HOLE YOU COULD PARK
+// IN.
+//
+// The first version of this rule skipped `extension.go` and scanned everything
+// else, on the reasoning that extension.go is where a declaration is SUPPOSED to
+// live. A follow-up audit planted this in a real guard package's extension.go and
+// the suite stayed green:
+//
+//	func sneakyBinding() extension.Binding {
+//	    return extension.Binding{Kind: extension.Transition, State: extension.Seeded,
+//	        Grants: []extension.Grant{extension.ClusterWrite, extension.SecretCustody}}
+//	}
+//
+// A transition granting cluster-write and secret-custody, in no declaration, in
+// the one file the guard agreed not to look at. And that file is the WORST one to
+// exempt wholesale: all thirty-four binding accessors — seedBinding, laneBinding,
+// repoBinding — already live there, so a constructed binding sits among a crowd of
+// looked-up ones and reads exactly like them.
+//
+// So the exemption is no longer a path. A populated binding literal is legal only
+// inside a function whose result type is `extension.Extension` — the declaration
+// constructor itself, which is the thing `llz extension list` reads and Validate()
+// judges. Every accessor returns `extension.Binding` and gets its value by
+// ranging over `Extension().Bindings`, so all thirty-four stay legal and a
+// thirty-fifth that CONSTRUCTS one does not.
+//
+// It is go/ast rather than a regex because the question is now about scope rather
+// than text, and commands_census_test.go already established that shape next door:
+// derive both sides, transcribe neither.
+// ────────────────────────────────────────────────────────────────────────────
+
+// mintedBindingsIn returns, for one parsed file, the position of every populated
+// binding literal that is NOT inside a declaration constructor.
+//
+// It covers both spellings: `extension.Binding{…}` written out, and the elements
+// of `[]extension.Binding{{…},{…}}`, whose types are elided and which would
+// otherwise be invisible to a check keyed on the literal's own type.
+func mintedBindingsIn(fset *token.FileSet, f *ast.File) []string {
+	// The declaration constructors, by source range: a function whose result type
+	// is `extension.Extension`. Anything inside one of these is the declaration.
+	type span struct{ from, to token.Pos }
+	var declarations []span
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Type.Results == nil {
+			continue
+		}
+		for _, res := range fn.Type.Results.List {
+			if isExtensionType(res.Type, "Extension") {
+				declarations = append(declarations, span{fn.Pos(), fn.End()})
+			}
+		}
+	}
+	inDeclaration := func(p token.Pos) bool {
+		for _, s := range declarations {
+			if p >= s.from && p < s.to {
+				return true
+			}
+		}
+		return false
+	}
+
+	var out []string
+	report := func(p token.Pos) {
+		if !inDeclaration(p) {
+			out = append(out, fset.Position(p).String())
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok || lit.Type == nil {
+			return true
+		}
+		switch {
+		case isExtensionType(lit.Type, "Binding"):
+			// `extension.Binding{}` is the refusing default and grants nothing.
+			if len(lit.Elts) > 0 {
+				report(lit.Pos())
+			}
+		case isBindingSlice(lit.Type):
+			// The elements carry no type of their own, so they are judged here.
+			for _, e := range lit.Elts {
+				if el, ok := e.(*ast.CompositeLit); ok && len(el.Elts) > 0 {
+					report(el.Pos())
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isExtensionType reports whether e is the selector `extension.<name>`.
+func isExtensionType(e ast.Expr, name string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != name {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "extension"
+}
+
+// isBindingSlice reports whether e is `[]extension.Binding`.
+func isBindingSlice(e ast.Expr) bool {
+	arr, ok := e.(*ast.ArrayType)
+	return ok && arr.Len == nil && isExtensionType(arr.Elt, "Binding")
+}
+
 func TestGuardsDoNotMintTheirOwnBindings(t *testing.T) {
 	root := filepath.FromSlash("../../extensions")
-	// EVERY HANDLE CONSTRUCTOR, NOT JUST RepoAt.
-	//
-	// This checked RepoAt alone and scanned guards/ alone, which was right when
-	// read-repo was the only fenced grant and the guards were its only customer.
-	// Both facts changed: capability now hands out cluster, cloud, secret, forge,
-	// bao and in-cluster-API handles, and the newest customer is the reconcile
-	// daemon's lanes under lifecycle/.
-	//
-	// A binding built at the call site is not a declared one, whichever handle it
-	// opens — the point of `capability.X(<binding>)` is that the binding came FROM
-	// Extension(), so the reach a reader sees in `llz extension list` is the reach
-	// the code actually has. An inline literal is the one-line bypass the model was
-	// corrected to prevent, and it would look identical to a legitimate call.
-	//
-	// AN EMPTY LITERAL IS THE OPPOSITE OF A BYPASS AND MUST NOT MATCH.
-	// `capability.For(extension.Binding{})` grants NOTHING — it is the refusing
-	// default several Deps sets install so an un-installed seam cannot mutate a
-	// cluster. Six packages use it exactly that way. The dangerous shape is a
-	// POPULATED literal, which is a capability the call site granted itself, so the
-	// pattern requires something inside the braces.
-	mintsBinding := regexp.MustCompile(
-		`capability\.(RepoAt|KubeFor|CloudFor|For)\(\s*extension\.Binding\{\s*[A-Za-z]`)
 
+	var scanned int
+	fset := token.NewFileSet()
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
 		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			t.Fatalf("parsing %s: %v", path, perr)
 		}
-		if mintsBinding.Match(b) {
-			t.Errorf("%s builds a capability handle from a binding it constructed inline. Look "+
-				"the binding up from Extension() instead (capability.RepoForGate, or an accessor "+
-				"like objenc's seedBinding or reconcilelanes' laneBinding) — a capability minted "+
-				"at the call site is not a declared one.", path)
+		scanned++
+		for _, at := range mintedBindingsIn(fset, f) {
+			t.Errorf("%s builds an extension.Binding with fields set, outside any function that "+
+				"returns an extension.Extension. Look the binding up from Extension() instead "+
+				"(capability.RepoForGate, or an accessor like objenc's seedBinding or "+
+				"reconcilelanes' laneBinding, both of which RANGE over Extension().Bindings) — a "+
+				"capability minted at the call site has been through neither Validate() nor `llz "+
+				"extension list`, so the reach a reviewer sees is not the reach the code has.", at)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk: %v", err)
+	}
+	// A guard that walked an empty tree reports the same green as one that read
+	// every file — the vacuity rule this package applies everywhere else.
+	if scanned == 0 {
+		t.Fatal("parsed no sources under internal/extensions — the tree moved and this guard " +
+			"has been vacuous since it did")
+	}
+	// The rule is only meaningful if declarations EXIST to be exempted; if none
+	// parsed as such, every real declaration would be reported and someone would
+	// weaken the rule rather than read it.
+	if len(All62Declarations(t, root, fset)) == 0 {
+		t.Fatal("no function returning extension.Extension was found — the exemption has stopped " +
+			"matching declarations, and the next run would flag all sixty-two of them")
+	}
+}
+
+// All62Declarations counts the declaration constructors the exemption recognises.
+// Exported-looking name kept deliberately verbose: it is a corpus check, not an
+// API.
+func All62Declarations(t *testing.T, root string, fset *token.FileSet) []string {
+	t.Helper()
+	var out []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Type.Results == nil {
+				continue
+			}
+			for _, res := range fn.Type.Results.List {
+				if isExtensionType(res.Type, "Extension") {
+					out = append(out, path+":"+fn.Name.Name)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	return out
+}
+
+// THE RULE PASSES ON A CLEAN TREE BY CONSTRUCTION, so prove it discriminates
+// against synthetic sources — every shape the regex it replaced was probed with
+// and missed, plus the one the FILENAME exemption let through.
+func TestTheMintedBindingDetectorFires(t *testing.T) {
+	const preamble = "package x\n\n"
+	for _, tc := range []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"the shape the first rule caught",
+			`func f() { h := capability.For(extension.Binding{Grants: g}) }`, true},
+		{"a write handle the first rule missed",
+			`func f() { w := capability.RepoWriterAt(extension.Binding{Grants: g}, root) }`, true},
+		{"the other write handle",
+			`func f() { w, _ := capability.RepoContainingWriter(extension.Binding{Grants: g}, p) }`, true},
+		{"the test seam, which also takes a binding",
+			`func f() { h := capability.WithExec(extension.Binding{Grants: g}, e, c) }`, true},
+		{"the two-line form no call-anchored rule can see",
+			"func f() {\n\tb := extension.Binding{Kind: extension.Transition}\n\th := capability.For(b)\n}", true},
+		// THE ONE THE FILENAME EXEMPTION LET THROUGH. Transcribed from the probe
+		// that found it: a constructed binding in a function returning a Binding,
+		// sitting in extension.go among thirty-four accessors that look theirs up.
+		{"a minted binding in an accessor, which extension.go used to hide",
+			"func sneakyBinding() extension.Binding {\n\treturn extension.Binding{" +
+				"Kind: extension.Transition, Grants: g}\n}", true},
+		{"a package-level binding var, inside no function at all",
+			`var sneaky = extension.Binding{Kind: extension.Transition, Grants: g}`, true},
+		{"a slice of bindings outside a declaration",
+			"func f() []extension.Binding {\n\treturn []extension.Binding{{Kind: extension.Gate}}\n}", true},
+
+		{"the refusing empty default",
+			`func f() { _ = capability.For(extension.Binding{}).Writer }`, false},
+		{"a binding looked up from the declaration",
+			`func f() { h := capability.For(seedBinding()) }`, false},
+		{"an accessor that RANGES over the declaration",
+			"func seedBinding() extension.Binding {\n\tfor _, b := range Extension().Bindings {\n\t\t" +
+				"return b\n\t}\n\tpanic(\"none\")\n}", false},
+		// The declaration itself, in both spellings, must be legal wherever it is.
+		{"the declaration constructor",
+			"func Extension() extension.Extension {\n\treturn extension.Extension{Name: \"x\",\n\t\t" +
+				"Bindings: []extension.Binding{{Kind: extension.Gate, Grants: g}}}\n}", false},
+		{"a second declaration constructor on one extension",
+			"func PATExtension() extension.Extension {\n\treturn extension.Extension{\n\t\t" +
+				"Bindings: []extension.Binding{{Kind: extension.Transition}}}\n}", false},
+		{"an empty slice of bindings",
+			`func f() { _ = []extension.Binding{} }`, false},
+	} {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "probe.go", preamble+tc.src, 0)
+		if err != nil {
+			t.Fatalf("%s: parsing the probe source: %v", tc.name, err)
+		}
+		got := len(mintedBindingsIn(fset, f)) > 0
+		if got != tc.want {
+			t.Errorf("%s: flagged=%v want %v — src:\n%s", tc.name, got, tc.want, tc.src)
+		}
 	}
 }
 
