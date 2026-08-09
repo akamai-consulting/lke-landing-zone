@@ -283,6 +283,15 @@ func Grants() []Grant {
 // here and secret-custody is not: that is the whole content of the split.
 var readOnly = map[Grant]bool{ReadRepo: true, CloudRead: true, ClusterRead: true, SecretRead: true}
 
+// IsReadOnly reports whether a grant observes without changing anything.
+//
+// Exported so shared/capability can apply the ASSERTION blanket rule when it builds
+// handles, rather than keeping a second copy of which grants mutate. Two copies of
+// this list is the failure shape this repo has been burned by most: the validator
+// would refuse a mutating assertion at build time while the handle layer handed one
+// out, and each would look right on its own.
+func IsReadOnly(g Grant) bool { return readOnly[g] }
+
 func validGrant(g Grant) bool {
 	for _, k := range Grants() {
 		if k == g {

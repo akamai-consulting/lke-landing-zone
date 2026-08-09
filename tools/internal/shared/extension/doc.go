@@ -92,9 +92,18 @@
 // validates a declaration before using it, because the declarations are
 // compiled-in Go values that cannot arrive malformed after the build. The
 // consequence is worth being explicit about: the three ceiling tables constrain
-// what anyone may WRITE, not what the binary will DO. capability.For reads a
-// binding's grants directly and never asks whether the binding is legal. See
-// registry.Validate for the longer form.
+// what anyone may WRITE, not what the binary will DO. See registry.Validate for
+// the longer form.
+//
+// WITH ONE EXCEPTION, AND IT IS THE HALF THAT NEEDS NO TABLE. capability.For
+// applies the two BLANKET rules — a gate reaches files alone, an assertion holds
+// read grants only — when it builds the handles, so a binding that contradicts its
+// own kind is handed the NARROWER capability rather than the wider one. That is
+// not the ceiling arriving at runtime: bindableStates and grantStates are keyed on
+// a STATE and stay a build-time lint for the reason above, while a kind's blanket
+// rule is a property of the kind alone and costs a switch. It closes the gap
+// between "what may be declared" and "what a declaration gets", in the direction
+// that fails safe.
 //
 // BOUNDARY RULE. This package must not import cmd/llz (it is a library and must
 // not depend upward) and must not import a concrete cloud (internal/linode) — the

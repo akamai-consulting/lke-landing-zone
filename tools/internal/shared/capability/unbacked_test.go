@@ -47,7 +47,22 @@ import (
 // the Custodian OR the forge's repo-secret path OR OpenBao's admin surface — and
 // missing one would manufacture a finding rather than record one.
 var grantHandleMarkers = map[string][]string{
-	"CloudMutate":   {"capability.CloudFor", ".Forge"},
+	// `.Cloud.` JOINED THIS ROW WHEN Handles GAINED THE FIELD, and the TRAILING DOT
+	// is load-bearing rather than tidy.
+	//
+	// Written as `.Cloud` it matched `extension.CloudMutate` and
+	// `extension.CloudRead` — the GRANT CONSTANTS, in the very declaration this
+	// check reads to decide whether the grant is declared. Every package holding
+	// cloud-mutate therefore contained its own evidence of backing it, and the row
+	// went from 8 findings to 2 by asserting a tautology. A marker that matches the
+	// declaration instead of the code is worse than a missing marker: it reports
+	// the paydown as already done.
+	//
+	// `.Cloud.` is a field access followed by a method, which is how the handle is
+	// ever used and is not how a constant is spelled. Assigning the handle to a
+	// local first (`c := h.Cloud`) reads as unbacked, which is the safe direction —
+	// an entry gets demanded rather than waived.
+	"CloudMutate":   {"capability.CloudFor", ".Forge", ".Cloud."},
 	"SecretCustody": {".Custodian", ".Forge", ".BaoAdmin", "capability.For"},
 	"ClusterWrite":  {".Writer", "capability.KubeFor", "capability.KubeAPI", "capability.For"},
 	"WriteRepo":     {"capability.RepoFor", "capability.RepoAt", "capability.Repo"},

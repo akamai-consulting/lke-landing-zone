@@ -212,6 +212,15 @@ func Lookup(name string) (extension.Extension, bool) {
 // at startup would spend work on an answer that could not have changed and would
 // give an operator an error about a developer's mistake.
 //
+// THE TABLES, NOT THE KINDS. That distinction was added when capability.For began
+// applying the gate and assertion BLANKET rules as it builds handles, and it is
+// what keeps the paragraph above true rather than merely old. A table lookup needs
+// a state and answers a question about where a binding sits in the lifecycle;
+// re-running one at startup is the wasted work described above. A kind's blanket
+// rule needs nothing but the kind, and enforcing it where the handle is built is
+// how a declaration that never reached this function still cannot contradict
+// itself. See the package doc in shared/extension.
+//
 // Worth stating because the alternative reading is available and wrong: an unused
 // exported Validate() looks like wiring somebody forgot, and the honest version of
 // "we only lint this" is cheaper than the next reader deciding to "fix" it.

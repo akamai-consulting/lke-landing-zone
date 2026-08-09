@@ -14,7 +14,30 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
+// binding builds a fixture that is a LEGAL declaration for the grants it is given.
+//
+// IT USED TO HARDCODE `Kind: Assertion` FOR EVERY GRANT, and that only went
+// unnoticed because For() ignored Kind. Half the fixtures in this file were
+// therefore assertions holding cluster-write, secret-custody or cloud-mutate —
+// declarations Validate() refuses outright — so the adversarial tests below were
+// proving that a handle constrains an argv, using a binding the model would never
+// have let anyone write.
+//
+// Now that For() applies the assertion blanket rule, those fixtures narrow to
+// nothing and the tests fail. The fix is not to bypass the rule: it is for a
+// fixture to be the kind its grants imply, which is what a real declaration has to
+// be. A write test gets a transition; a read test still gets an assertion, so the
+// read-only path is still exercised through the kind that constrains hardest.
 func binding(grants ...extension.Grant) extension.Binding {
+	for _, g := range grants {
+		if !extension.IsReadOnly(g) {
+			// `seeded` is the state grantStates permits every mutating grant at, so
+			// one fixture kind serves cluster-write, secret-custody and cloud-mutate
+			// alike. secret-custody is additionally REQUIRED there, which a fixture
+			// declaring it satisfies and the others do not need.
+			return extension.Binding{Kind: extension.Transition, State: extension.Seeded, Grants: grants}
+		}
+	}
 	return extension.Binding{Kind: extension.Assertion, State: extension.Converged, Grants: grants}
 }
 
