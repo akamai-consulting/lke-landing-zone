@@ -31,7 +31,13 @@ const UntestableRemedy = "Move the logic into unit-tested Go " +
 // where a reviewer sees it next to the code that caused it. Telling authors never
 // to raise it — untestable-loc's doctrine — would be wrong here, and would get the
 // gate deleted rather than obeyed.
-const CoreSurfaceRemedy = "Package main grew (ADR 0014). Prefer to shrink it: extract to " +
+//
+// IT NO LONGER SAYS "package main", because the tree is not there any more. The
+// budget's subject is tools/internal/cli — the wiring layer — and the remedy has to
+// name what a reader should actually do, which is get logic out of the layer whose
+// only job is construction. Saying "package main" would send them to a six-line
+// stub and read as a gate nobody maintains.
+const CoreSurfaceRemedy = "The CLI wiring layer grew (ADR 0014). Prefer to shrink it: extract to " +
 	"tools/internal/<pkg> (ADR 0013), move the capability out to an extension (issue #10), " +
 	"or delete what is dead. If the growth is intended, update the number in {config} in THIS " +
-	"commit and say in the message why the code belongs in package main."
+	"commit and say in the message why the code belongs in the layer that only wires commands up."

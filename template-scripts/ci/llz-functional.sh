@@ -139,7 +139,7 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     # comparison. Without the strip, `split(".") | map(tonumber)` would ERROR on
     # a tag like v1.2.3-hotfix rather than rank it, so the filter and the key
     # have to move together. The reduce keeps the FIRST of equal cores (gh lists
-    # newest first), which is what latestLLZTag does and what a `sort_by | last`
+    # newest first), which is what llzver.LatestLLZTag does and what a `sort_by | last`
     # would silently invert — see TestLatestLLZTagTieKeepsFirst.
     # shellcheck disable=SC2016  # $r is a jq variable; it must NOT expand in the shell.
     TAG="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq \

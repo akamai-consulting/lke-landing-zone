@@ -64,10 +64,16 @@ package registry
 // So the open question is no longer "when will something need Handles delivered
 // through dispatch" but "does anything, given self-service works". The honest
 // candidates are the cases self-service demonstrably cannot serve: a lane that
-// must be handed a NARROWED capability by something other than itself, an
-// auditor that needs a central record of what was handed out, and
-// `template-sustain`, whose command is undriveable because its Deps are
-// assembled in package main (see undrivenGates).
+// must be handed a NARROWED capability by something other than itself, and an
+// auditor that needs a central record of what was handed out.
+//
+// `template-sustain` USED TO BE THE THIRD, and losing it is evidence about the
+// question rather than a detail. Its command was undriveable because its Deps were
+// assembled in package main, which internal/shared cannot import — so it read as a
+// case needing dispatch to hand it something. It was not. Moving the assembler to
+// cli/deps made it an ordinary row in the table below, and the driver still passes
+// nothing but flags. One of the three candidates for an ABI turned out to be a
+// package-placement problem wearing an ABI's clothes.
 //
 // That is a smaller question than the one deferred here, and it should be
 // answered before an ABI is built rather than by building one.
@@ -76,11 +82,14 @@ package registry
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	clideps "github.com/akamai-consulting/lke-landing-zone/tools/internal/cli/deps"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
@@ -102,12 +111,18 @@ import (
 )
 
 // Gate is one runnable gate: which extension declared it, and the command that IS
-// it. Args are the fixed flags the driver supplies, because a gate reads a tree
-// and the driver is what knows where the tree is.
+// it. The driver supplies the subject tree, because a gate reads files and the
+// driver is what knows where the repository is.
+//
+// FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
+// ROW, and the change is not cosmetic — see repoRoot below for the defect that
+// literal carried. What it also bought is that the table now states only what is
+// UNUSUAL about a row: eighteen of nineteen gates read the repository root through
+// `--root`, so eighteen rows say nothing about their subject at all, and the two
+// that differ say so in the field that differs.
 type Gate struct {
 	Extension string
 	New       func() *cobra.Command
-	Args      []string
 	// NewWithTree, when set, is used instead of New and receives the LIVE cobra
 	// tree as a value. It exists for gates that inspect the command set.
 	//
@@ -123,6 +138,12 @@ type Gate struct {
 	// to Root().ExecuteC(), re-running `llz ci gates` from os.Args. The tree must
 	// arrive as data.
 	NewWithTree func(tree *cobra.Command) *cobra.Command
+	// Flag is the flag this gate takes its subject tree on. Empty means `--root`,
+	// which is what every gate but one uses.
+	Flag string
+	// Subtree is the path UNDER the repository root this gate is pointed at. Empty
+	// — the usual case — means the repository root itself.
+	Subtree string
 }
 
 // new returns the runnable command, preferring the tree-aware constructor.
@@ -131,6 +152,35 @@ func (g Gate) new(tree *cobra.Command) *cobra.Command {
 		return g.NewWithTree(tree)
 	}
 	return g.New()
+}
+
+// args points the gate at its subject, relative to the caller's working directory.
+//
+// RELATIVE, NOT ABSOLUTE, and deliberately. The guards print the paths they found
+// findings in, and CI reads those paths; handing them an absolute root would
+// re-spell every finding in the output and every `::error file=` annotation with
+// it. From `tools/` this yields exactly the `..` the Makefile has always passed,
+// so the conversion changes no output at all — it changes only what happens when
+// the caller is standing somewhere else.
+//
+// The absolute path is the fallback for the case filepath.Rel cannot express (a
+// different volume on Windows). A correct absolute root beats a relative one that
+// does not exist.
+func (g Gate) args(root string) []string {
+	flag := g.Flag
+	if flag == "" {
+		flag = "--root"
+	}
+	dir := root
+	if g.Subtree != "" {
+		dir = filepath.Join(root, g.Subtree)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, dir); err == nil {
+			dir = rel
+		}
+	}
+	return []string{flag, dir}
 }
 
 // undrivenGates is every declared gate this binary does NOT drive, and why.
@@ -180,14 +230,6 @@ var undrivenGates = map[string]string{
 	// with no workflow around it — it would fail on the unknown scope, or worse,
 	// pass having routed nothing.
 	"token-inventory": "the rotation-plan gate routes a GitHub Actions dispatch from the environment, not the tree",
-
-	// ITS COMMAND IS STILL IN PACKAGE MAIN. `llz ci managed-fresh` is built from
-	// sustainDeps(), one of main's fifteen Deps assemblers, and cmd/llz's own
-	// header records why it stays there: a command that needs main to assemble its
-	// capability's Deps cannot live on the other side of that assembly. The
-	// registry is in internal/shared and cannot import main, so this is blocked on
-	// moving the DI layer, not on writing a flag set.
-	"template-sustain": "llz ci managed-fresh is assembled from main's sustainDeps(), which internal/shared cannot reach",
 }
 
 // gates is every gate binding this binary can RUN, as opposed to merely describe.
@@ -199,10 +241,10 @@ var undrivenGates = map[string]string{
 // guard-charts, is driven for its other binding; the gap is per-command, and the
 // model's unit here is the extension.
 var gates = []Gate{
-	{"guard-budgets", budget.CoreSurfaceCmd, []string{"--root", ".."}, nil},
-	{"guard-budgets", budget.UntestableLOCCmd, []string{"--root", ".."}, nil},
-	{"guard-charts", chartguard.ChartPinGuardCmd, []string{"--root", ".."}, nil},
-	{"posture-credential-coverage", credcoverage.CoverageGuardCmd, []string{"--root", ".."}, nil},
+	{Extension: "guard-budgets", New: budget.CoreSurfaceCmd},
+	{Extension: "guard-budgets", New: budget.UntestableLOCCmd},
+	{Extension: "guard-charts", New: chartguard.ChartPinGuardCmd},
+	{Extension: "posture-credential-coverage", New: credcoverage.CoverageGuardCmd},
 	// The SECOND command of the same gate binding, and its absence was a hole of
 	// exactly the shape this driver exists to close: the extension counted as
 	// "driven" on the strength of one of its two checks, so `gates: N ran, all
@@ -210,32 +252,32 @@ var gates = []Gate{
 	// cross-validation ran only from the Makefile. guard-manifests contributes
 	// three commands for the same reason — the unit the model names is the
 	// binding, not the command.
-	{"posture-credential-coverage", credcoverage.ExternalSecretPathsCmd, []string{"--root", ".."}, nil},
-	{"guard-docs", nil, []string{"--root", ".."}, docsguard.DocsGuardCmdFor},
-	{"posture-plaintext", plaintext.PlaintextGuardCmd, []string{"--root", ".."}, nil},
-	{"wave-health", wavehealth.DependencyGuardCmd, []string{"--root", ".."}, nil},
-	{"wave-health", wavehealth.HealthGuardCmd, []string{"--root", ".."}, nil},
+	{Extension: "posture-credential-coverage", New: credcoverage.ExternalSecretPathsCmd},
+	{Extension: "guard-docs", NewWithTree: docsguard.DocsGuardCmdFor},
+	{Extension: "posture-plaintext", New: plaintext.PlaintextGuardCmd},
+	{Extension: "wave-health", New: wavehealth.DependencyGuardCmd},
+	{Extension: "wave-health", New: wavehealth.HealthGuardCmd},
 
 	// EIGHT MORE, converted from Makefile targets. Each was one `llz ci <verb>`
-	// shell-out; the args are the ones the Makefile passed, carried over verbatim
-	// rather than guessed.
-	{"guard-cosign-subject", cosignguard.Cmd, []string{"--root", ".."}, nil},
-	{"guard-monitoring-labels", monitoringlabel.Cmd, []string{"--root", ".."}, nil},
-	{"guard-workflow-shells", workflowshells.Cmd, []string{"--dir", "../.github/workflows"}, nil},
-	{"mesh-egress", meshegress.Cmd, []string{"--root", ".."}, nil},
-	{"mtls-wiring", mtlsguard.Cmd, []string{"--root", ".."}, nil},
-	{"version-pins", versionpins.Cmd, []string{"--root", ".."}, nil},
+	// shell-out; the flags are the ones the Makefile passed, carried over rather
+	// than guessed.
+	{Extension: "guard-cosign-subject", New: cosignguard.Cmd},
+	{Extension: "guard-monitoring-labels", New: monitoringlabel.Cmd},
+	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
+	{Extension: "mesh-egress", New: meshegress.Cmd},
+	{Extension: "mtls-wiring", New: mtlsguard.Cmd},
+	{Extension: "version-pins", New: versionpins.Cmd},
 	// template-manifest scans the SCAFFOLD, not the repo — its subject is what an
-	// instance receives, so its root is instance-template rather than `..`.
-	{"template-manifest", templatemanifest.Cmd, []string{"--root", "../instance-template"}, nil},
+	// instance receives, so its subtree is instance-template rather than the root.
+	{Extension: "template-manifest", New: templatemanifest.Cmd, Subtree: "instance-template"},
 
 	// guard-manifests is THREE commands under one gate binding
 	// (`gate:scaffolded[read-repo]`, named "rendered-manifests"). All three read
 	// the rendered tree, which mesh-egress already requires, so the driver's
 	// standing assumption that `make render-charts` has run is unchanged.
-	{"guard-manifests", manifestguard.DroppedAPIVersionsCmd, []string{"--root", ".."}, nil},
-	{"guard-manifests", manifestguard.ArgoCDRenderedAppsCmd, []string{"--root", ".."}, nil},
-	{"guard-manifests", manifestguard.PlaceholderGuardCmd, []string{"--root", ".."}, nil},
+	{Extension: "guard-manifests", New: manifestguard.DroppedAPIVersionsCmd},
+	{Extension: "guard-manifests", New: manifestguard.ArgoCDRenderedAppsCmd},
+	{Extension: "guard-manifests", New: manifestguard.PlaceholderGuardCmd},
 
 	// pin-coherence had no *cobra.Command at all — only `Assert(dir)`, called from
 	// verbs/lint and from assert-image-fresh. It was undriveable for want of a flag
@@ -246,7 +288,85 @@ var gates = []Gate{
 	// design and only speaks in an instance. That is not vacuous-green: the gate's
 	// whole subject is a fact that exists only in an instance, and Assert
 	// distinguishes "no instance" from "pins disagree".
-	{"pin-coherence", pincoherence.Cmd, []string{"--root", ".."}, nil},
+	{Extension: "pin-coherence", New: pincoherence.Cmd},
+
+	// UNBLOCKED BY MOVING THE DI LAYER, not by writing a flag set. This entry sat
+	// in undrivenGates reading "llz ci managed-fresh is assembled from main's
+	// sustainDeps(), which internal/shared cannot reach" — the gate was ordinary,
+	// the ASSEMBLY was in the one package nothing may import. sustainDeps is
+	// cli/deps.Sustain now, so the driver assembles the same value the CLI does.
+	//
+	// Its subject is the SCAFFOLD, like template-manifest: managed-fresh compares
+	// instance-template's digest-locked files against the lock the template shipped.
+	{Extension: "template-sustain", New: clideps.ManagedFreshCmd, Subtree: "instance-template"},
+}
+
+// repoMarker is what makes a directory the repository root.
+//
+// `.git` AND NOTHING ELSE, because the driver must answer the same question in two
+// different trees: this template repo, and an instance repo rendered from it. A
+// template-repo file (`.core-surface-budget.yaml`, `instance-template/`) would find
+// the root here and fail in an instance; an instance file (`.copier-answers.yml`)
+// does the reverse. `.git` is the one marker both have, and it is also the marker
+// that means what the fence needs it to mean — the boundary of the checkout the
+// operator asked about.
+//
+// It is matched as a NAME, not as a directory: `git worktree` and submodules write
+// `.git` as a FILE holding a gitdir pointer, and a worktree of this repo is exactly
+// where someone runs the gates.
+const repoMarker = ".git"
+
+// ErrNoRepoRoot is the refusal when the walk reaches the filesystem root.
+var ErrNoRepoRoot = fmt.Errorf("no %s found in any parent directory", repoMarker)
+
+// repoRoot walks up from start looking for the repository root.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// IT REPLACED A HARDCODED `..`, WHICH WAS A DEFECT AND NOT A CWD ARTIFACT.
+//
+// Every row of the table above used to pass `--root ".."` literally. That is
+// correct from `tools/` — which is where the Makefile's LLZ_CI macro puts you, so
+// `make llz-gates` was always right — and it is wrong from the repository root,
+// which is the natural place to type the command. There, `..` is the PARENT OF THE
+// REPOSITORY, and the suite silently changes subject:
+//
+//	llz ci gates            # from the repo root, before this change
+//	guard-docs/docs-guard: docs-guard: 388 finding(s) across 908 file(s)
+//
+// 908 Markdown files, spanning every sibling checkout on the machine. It reported
+// findings against repositories it was never pointed at.
+//
+// THE EMPTY-CORPUS RULE ALREADY CAUGHT EIGHTEEN OF THE NINETEEN, which is worth
+// stating because it is the reason this looked survivable. Pointed at the wrong
+// tree the other gates find nothing to read and fail closed by design. docs-guard
+// is the exception for a structural reason rather than an oversight: its corpus is
+// `**/*.md`, which is non-empty in almost any directory, so a wrong root produces a
+// full-looking run over the wrong subject. Fail-closed-on-vacuity cannot save a
+// guard whose subject exists everywhere.
+//
+// AND IT IS THE FENCE'S BLIND SPOT, which is the sharper half. `read-repo` now has
+// a handle and every gate reads through it, so a path outside the tree is refused
+// rather than read — but the fence is rooted at whatever `--root` says. It cannot
+// tell a repository from its parent. A correct fence around the wrong tree reads as
+// protection and is not, so the root has to be resolved rather than assumed.
+// ────────────────────────────────────────────────────────────────────────────
+func repoRoot(start string) (string, error) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", start, err)
+	}
+	for {
+		if _, err := os.Lstat(filepath.Join(dir, repoMarker)); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		// filepath.Dir is its own fixed point at the root, which is the only
+		// termination condition that holds on every platform.
+		if parent == dir {
+			return "", fmt.Errorf("locating the repository root from %s: %w", start, ErrNoRepoRoot)
+		}
+		dir = parent
+	}
 }
 
 // Gates returns the runnable gates, sorted so output does not depend on the order
@@ -276,23 +396,91 @@ func GateBindings() map[string][]extension.Binding {
 	return out
 }
 
-// RunGates runs every gate the registry can drive, in order, and reports which
-// failed.
+// Run selects and points the gate suite.
+//
+// A STRUCT RATHER THAN FOUR MORE PARAMETERS, because Root and Only are both
+// strings and adjacent: a caller that transposed them would point the whole suite
+// at a directory named after a gate, and get a corpus failure rather than anything
+// that reads like the mistake it was.
+type Run struct {
+	// Root is the repository every gate reads under. Required — see repoRoot for
+	// why the driver resolves it rather than assuming a working directory.
+	Root string
+	// Only, when set, narrows the suite to the gates whose EXTENSION or COMMAND
+	// name matches. Empty runs everything.
+	//
+	// IT EXISTS SO THE MAKEFILE NEVER HAS TO KNOW A GATE'S FLAGS AGAIN. Thirteen
+	// single-guard targets used to restate the `llz ci <verb> --root ..` the table
+	// above already holds, so every gate had two spellings of its own invocation
+	// and a flag change had to find both. Routing them through `--only` leaves one.
+	//
+	// The affordance those targets provided is real and the driver could not
+	// replace it: iterating on ONE guard means running one guard, not nineteen.
+	// This is that, with the flags coming from the model.
+	Only string
+	// Toggles are the instance's component toggles, for enablement.
+	Toggles map[string]clusterspec.ComponentToggle
+}
+
+// selected returns the gates this run covers, or an error if Only matched none.
+//
+// A NON-MATCHING FILTER IS A FAILURE, NOT AN EMPTY RUN. `--only wave-helth` would
+// otherwise run nothing and report `0 ran, all clean` — the vacuous-green shape
+// this driver refuses everywhere else, reachable by a typo.
+func (r Run) selected(tree *cobra.Command) ([]Gate, error) {
+	all := Gates()
+	if r.Only == "" {
+		return all, nil
+	}
+	var kept []Gate
+	for _, g := range all {
+		if g.Extension == r.Only || g.new(tree).Name() == r.Only {
+			kept = append(kept, g)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("--only %q matches no driven gate: name an extension (%s) or one of "+
+			"its commands, which `llz extension list` and registry/gates.go both show",
+			r.Only, strings.Join(gateExtensions(), ", "))
+	}
+	return kept, nil
+}
+
+// gateExtensions names the driven extensions once, sorted, for the error above.
+func gateExtensions() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, g := range Gates() {
+		if !seen[g.Extension] {
+			seen[g.Extension] = true
+			out = append(out, g.Extension)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RunGates runs the selected gates, in order, and reports which failed. Every gate
+// reads under r.Root (or under its declared Subtree), and nothing reads outside it.
 //
 // IT DOES NOT STOP AT THE FIRST FAILURE. A gate driver that aborts makes a
 // contributor fix one finding, re-run, and meet the next — which is the loop that
 // teaches people to run the gates as late as possible. Collecting them costs
 // nothing here because a gate reaches no cluster and cannot leave the tree in a
 // half-changed state.
-func RunGates(tree *cobra.Command, out, errOut io.Writer, toggles map[string]clusterspec.ComponentToggle) error {
+func RunGates(tree *cobra.Command, r Run, out, errOut io.Writer) error {
+	selected, err := r.selected(tree)
+	if err != nil {
+		return err
+	}
 	// ENABLEMENT IS LOAD-BEARING HERE, AND THIS IS WHERE IT STARTS. A gate is the
 	// harmless case: skipping one runs fewer checks, which is visible in the
 	// output and reversible by a toggle. Skipping an assert lane or a transition
 	// would be a behaviour change hiding inside a config value, which is why the
 	// resolver landed inert and is being made real one kind at a time.
 	skip := map[string]string{}
-	if toggles != nil {
-		res, err := EnabledFor(toggles)
+	if r.Toggles != nil {
+		res, err := EnabledFor(r.Toggles)
 		if err != nil {
 			return err
 		}
@@ -304,13 +492,13 @@ func RunGates(tree *cobra.Command, out, errOut io.Writer, toggles map[string]clu
 	}
 
 	var failed, skipped []string
-	for _, g := range Gates() {
+	for _, g := range selected {
 		if why, off := skip[g.Extension]; off {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", g.Extension, why))
 			continue
 		}
 		c := g.new(tree)
-		c.SetArgs(g.Args)
+		c.SetArgs(g.args(r.Root))
 		c.SetOut(out)
 		c.SetErr(errOut)
 		// A gate's cobra command prints its own findings; silencing usage keeps a
@@ -331,7 +519,7 @@ func RunGates(tree *cobra.Command, out, errOut io.Writer, toggles map[string]clu
 	if len(failed) > 0 {
 		return fmt.Errorf("%d gate(s) failed:\n\t%s", len(failed), strings.Join(failed, "\n\t"))
 	}
-	fmt.Fprintf(out, "gates: %d ran, %d skipped, all clean\n", len(Gates())-len(skipped), len(skipped))
+	fmt.Fprintf(out, "gates: %d ran, %d skipped, all clean\n", len(selected)-len(skipped), len(skipped))
 	return nil
 }
 
@@ -341,7 +529,8 @@ func RunGates(tree *cobra.Command, out, errOut io.Writer, toggles map[string]clu
 // package main is the one package that cannot be imported or tested from outside,
 // and a driver that only main can call is a driver only main can test.
 func GatesCmd() *cobra.Command {
-	return &cobra.Command{
+	var root, only string
+	c := &cobra.Command{
 		Use:   "gates",
 		Short: "run every gate binding the registry declares (read-repo only, no cluster)",
 		Long: "Runs each `gate` binding from the extension registry rather than from a\n" +
@@ -350,11 +539,29 @@ func GatesCmd() *cobra.Command {
 			"or a credential — and that is now enforced at runtime rather than only\n" +
 			"declared: each gate reads through a handle fenced to the tree it was\n" +
 			"pointed at, so a path outside the repository is refused rather than read.\n\n" +
+			"The tree is the repository this is run from, located by walking up for a\n" +
+			"`.git`, so the suite reads the same files from any working directory.\n" +
+			"Pass --root to point it somewhere else.\n\n" +
+			"--only <extension|command> runs a single guard while iterating on it,\n" +
+			"with the same flags the whole suite would have given it. It is an error\n" +
+			"for --only to match nothing, so a typo cannot report a clean run.\n\n" +
 			"Not every declared gate is driven here yet — `llz extension list` shows the\n" +
 			"declared set, and the ones still invoked only by the Makefile are named in\n" +
 			"registry/gates.go.",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
+			// RESOLVED, NOT ASSUMED, and it FAILS rather than falling back to the
+			// working directory. A gate suite that silently changes its subject
+			// based on where it was invoked is worse than one that refuses to run:
+			// the fallback's failure mode is a full-looking run over the wrong
+			// tree, which is precisely what the hardcoded `..` produced.
+			if root == "" {
+				found, err := repoRoot(".")
+				if err != nil {
+					return fmt.Errorf("%w — run this inside a checkout, or pass --root", err)
+				}
+				root = found
+			}
 			// NO SPEC MEANS RUN EVERYTHING, and that is not a fallback — it is the
 			// template repo, where these gates guard the code that produces
 			// instances and there is no instance whose components could excuse
@@ -377,7 +584,11 @@ func GatesCmd() *cobra.Command {
 			if ok && lz != nil {
 				toggles = lz.Spec.Defaults.Components
 			}
-			return RunGates(c.Root(), c.OutOrStdout(), c.ErrOrStderr(), toggles)
+			return RunGates(c.Root(), Run{Root: root, Only: only, Toggles: toggles},
+				c.OutOrStdout(), c.ErrOrStderr())
 		},
 	}
+	c.Flags().StringVar(&root, "root", "", "repository root to run the gates against (default: the enclosing checkout)")
+	c.Flags().StringVar(&only, "only", "", "run just this gate, by extension or command name")
+	return c
 }

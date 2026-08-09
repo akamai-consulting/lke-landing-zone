@@ -21,11 +21,11 @@ GO_DIR := tools
 RETRY := template-scripts/ci/with-retry.sh
 
 # Per-package minimum statement coverage, as <pkg-suffix>=<percent> entries.
-# pkg-suffix matches the END of a Go import path (cmd/llz -> .../tools/cmd/llz).
+# pkg-suffix matches the END of a Go import path (internal/cli -> .../tools/internal/cli).
 # `make coverage` fails the build if any listed package drops below its floor.
 # It's a ratchet: bump a floor UP as that package's coverage improves, never
 # down.
-# Override on the CLI, e.g. `make coverage COVERAGE_MINS="cmd/llz=20"`.
+# Override on the CLI, e.g. `make coverage COVERAGE_MINS="internal/cli=20"`.
 #
 # THESE ARE PACKAGE-LOCAL NUMBERS, and extraction can move one a long way without
 # a test being deleted. internal/docsguard measures 74% here and 93% with
@@ -50,7 +50,27 @@ RETRY := template-scripts/ci/with-retry.sh
 # table locks, and ADR 0014 pins that table to main as the single ownership
 # authority, so a fixture on the other side could only reimplement the
 # classification it is meant to be checking. Same shape as docsguard above. The
-# tests did not go anywhere — `go test -coverprofile` credits them to cmd/llz.
+# tests did not go anywhere — `go test -coverprofile` credited them to cmd/llz.
+#
+# cmd/llz=48 IS GONE, REPLACED BY internal/cli=71, and this is the "code MOVED out"
+# case rather than a lowering. The whole command tree left package main for
+# tools/internal/cli; the 79 test files went with it, and the floor went UP because
+# the number this target prints did (48 -> 71.4). internal/cli/deps=41 is the
+# assembly layer split out of it so the gate driver could reach sustainDeps.
+#
+# WHAT IS LEFT IN cmd/llz IS DELIBERATELY UNGATED HERE. It is six lines whose whole
+# content is `func main() { os.Exit(cli.Main()) }`, and os.Exit is the one thing a
+# test cannot observe — a floor over it could only ever be 0 or a lie. Three
+# stronger gates cover that package instead, and none of them is a percentage:
+# `cmd-llz-entrypoint` in .core-surface-budget.yaml pins it at exactly six lines,
+# and entrypoint_boundary_test.go refuses any import but internal/cli, a second
+# file, or a main that stops calling cli.Main.
+#
+# The docsguard and sustain notes above are now HISTORY rather than live
+# constraints: both said their tests had to stay in package main because only main
+# could build the cobra tree. internal/cli is an ordinary package, so that is no
+# longer true for anything — but neither floor is raised here on that argument
+# alone, because no test has actually moved yet. Raise them when one does.
 # A `#` COMMENT CANNOT GO INSIDE THIS LIST. The entries are backslash-continued,
 # and a comment consumes the rest of its line INCLUDING the continuation — so an
 # annotation next to one floor silently truncates every floor after it. That is
@@ -67,7 +87,8 @@ RETRY := template-scripts/ci/with-retry.sh
 # recording the transfer is more honest than a test that cannot fail.
 # deliverdocs rose 92 -> 93 in the same commit — the other half of the move.
 COVERAGE_MINS := \
-	cmd/llz=48 \
+	internal/cli=71 \
+	internal/cli/deps=41 \
 	internal/extensions/lifecycle/brownfield=80 \
 	internal/extensions/guards/budget=86 \
 	internal/extensions/guards/chartguard=70 \
@@ -526,21 +547,14 @@ helm-lint-real-values: helm-repos
 		-n llz-openbao >/dev/null
 
 argocd-rendered-apps-check: render-charts
-	$(call LLZ_CI,argocd-rendered-apps --render-dir $(RENDER_DIR),--root ..)
-
-# placeholder-guard: reject unsubstituted placeholder.example.com hostnames in the
-# rendered manifests. Was nine lines of inline recipe bash hand-rolling the
-# empty-corpus assertion and the tree walk the guard framework already owns
-# (requireCorpus + walkManifests) — the last un-unit-tested guard in LINT_K8S.
-placeholder-guard: render-charts
-	$(call LLZ_CI,placeholder-guard --render-dir $(RENDER_DIR),--root ..)
+	$(call LLZ_CI,gates --only argocd-rendered-apps,)
 
 # externalsecret-paths-check: `llz ci externalsecret-paths` (the native port of
 # the former validate-externalsecret-paths.py). Uses the PATH llz when present
 # (the CI images bake it); otherwise builds from source via the Go toolchain.
 externalsecret-paths-check: export RENDER_DIR := $(RENDER_DIR)
 externalsecret-paths-check: render-charts
-	$(call LLZ_CI,externalsecret-paths,--root ..)
+	$(call LLZ_CI,gates --only externalsecret-paths,)
 
 # wave-health-guard: `llz ci wave-health-guard` — the PR #142 wedge-class gate.
 # Argo sync waves gate on per-resource health; a health-checked kind at a
@@ -549,7 +563,7 @@ externalsecret-paths-check: render-charts
 # platform-apl/manifest/ + platform-apl/components/ must be health-inert or
 # backed by a resource.customizations.health override in apl-values/values.yaml.
 wave-health-guard:
-	$(call LLZ_CI,wave-health-guard,--root ..)
+	$(call LLZ_CI,gates --only wave-health-guard,)
 
 # mtls-wiring-guard: `llz ci mtls-wiring-guard` — asserts that a pod declaring
 # OPENBAO_ADDR mounts the TLS material inClusterBaoHTTPClient() reads, that every
@@ -557,7 +571,7 @@ wave-health-guard:
 # stays deleted. Exists because dropping the client-cert mount used to pass every
 # other gate while leaving the pod unable to reach OpenBao (ADR 0010).
 mtls-wiring-guard:
-	$(call LLZ_CI,mtls-wiring-guard,--root ..)
+	$(call LLZ_CI,gates --only mtls-wiring-guard,)
 
 # plaintext-guard: `llz ci plaintext-guard` — the drift gate on UNENCRYPTED
 # in-cluster hops (docs/adr/0010-in-cluster-mtls.md). Every `scheme: http`
@@ -568,7 +582,7 @@ mtls-wiring-guard:
 # owner. Unregistered hits fail; so do registry entries whose hop is gone, so the
 # list cannot rot into a rubber stamp.
 plaintext-guard:
-	$(call LLZ_CI,plaintext-guard,--root ..)
+	$(call LLZ_CI,gates --only plaintext-guard,)
 
 # credential-coverage-guard: `llz ci credential-coverage-guard` — the drift gate on
 # credential OBSERVABILITY. Every `secrets.NAME` an instance workflow consumes must
@@ -584,7 +598,7 @@ plaintext-guard:
 # the merge-base (so it lacks this verb on the PR that introduces it).
 credential-coverage-guard: export LLZ_FORCE_SOURCE := 1
 credential-coverage-guard:
-	$(call LLZ_CI,credential-coverage-guard,--root ..)
+	$(call LLZ_CI,gates --only credential-coverage-guard,)
 
 # at-rest-guard: `llz ci at-rest-guard` — the drift gate on ENCRYPTION AT REST for
 # Terraform-declared resources (docs/adr/0007-terraform-state-encryption.md). Every
@@ -602,16 +616,6 @@ at-rest-guard: export LLZ_FORCE_SOURCE := 1
 at-rest-guard:
 	$(call LLZ_CI,at-rest-guard,--root ..)
 
-# wave-dependency-guard: `llz ci wave-dependency-guard` — the #163 wedge-class gate.
-# Argo sync waves gate on per-resource health, so a Deployment/StatefulSet/DaemonSet
-# that hard-references a Secret produced by a LATER-wave ExternalSecret can never go
-# Healthy — it wedges the platform-bootstrap sync and starves every later-wave
-# ExternalSecret in it (in #163 the wave-0 reconciler Deployment took harbor +
-# loki's wave-5 object-store secrets down). A workload's wave must exceed the wave
-# of every ExternalSecret whose Secret it hard-depends on (optional refs exempt).
-wave-dependency-guard:
-	$(call LLZ_CI,wave-dependency-guard,--root ..)
-
 # mesh-egress-guard: `llz ci mesh-egress-guard` — the harbor-reconciler mesh class.
 # apl-core runs platform namespaces (harbor) under Istio STRICT mTLS; a pod OUTSIDE
 # that mesh can't reach a Service inside it (dropped at the sidecar, not by
@@ -624,31 +628,7 @@ wave-dependency-guard:
 # namespaces are Helm values), and the guard hard-fails on a missing rendered tree
 # rather than passing green over a corpus it never saw.
 mesh-egress-guard: render-charts
-	$(call LLZ_CI,mesh-egress-guard,--root ..)
-
-# monitoring-label-guard: `llz ci monitoring-label-guard` — the #175 day-2-blind
-# class. apl-core's Prometheus selects ServiceMonitors / PodMonitors /
-# PrometheusRules by {prometheus: system}; a CR without the label is silently
-# ignored (metrics unscraped / rules unloaded / alerts never firing) — a class
-# promtool and kube-linter both pass. #175 was 5 CRs missing the label, blinding
-# the whole day-2 signal, undetectable except on a live cluster. Scans the
-# rendered chart output too (the openbao ServiceMonitor is a chart template), so
-# it depends on render-charts.
-monitoring-label-guard: render-charts
-	$(call LLZ_CI,monitoring-label-guard,--root ..)
-
-# dropped-apiversions-check: `llz ci dropped-apiversions` — no manifest may declare
-# an apiVersion apl-core's bundled operators no longer serve. `llz lint` runs the
-# same scan at pre-commit, but no CI job invokes `llz lint`, and a developer's
-# installed llz can lag the tree — so the gate needs its own CI entry point.
-# Covers platform-apl/, which nothing else validates against real CRDs: k8s-lint,
-# k8s-validate and the kind dry-run all read $(RENDER_DIR), built from
-# kubernetes-charts/*/ only. That blind spot is how llz-cidr-firewall's
-# ExternalSecret shipped on external-secrets.io/v1beta1 after apl-core v6 stopped
-# serving it. Filesystem walk (this job runs in the ci-kubernetes container, where
-# git against the mounted checkout fails), so no render dependency.
-dropped-apiversions-check:
-	$(call LLZ_CI,dropped-apiversions,--root ..)
+	$(call LLZ_CI,gates --only mesh-egress-guard,)
 
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
@@ -656,10 +636,10 @@ dropped-apiversions-check:
 # untestable shell into CI. Pure Go + a config file, so it runs anywhere (no
 # rendered charts needed). Budgets ratchet DOWN as code is converted.
 untestable-loc-check:
-	$(call LLZ_CI,untestable-loc,--root ..)
+	$(call LLZ_CI,gates --only untestable-loc,)
 
 # core-surface-check: the counterweight to untestable-loc-check (ADR 0014). That
-# gate names tools/cmd/llz as the destination for converted logic but caps
+# gate names the llz CLI as the destination for converted logic but caps
 # nothing there, so package main accretes — 236 non-test files, 130 of them
 # ci_*.go. This one budgets the destination: Go logic lines in package main,
 # from .core-surface-budget.yaml. Satisfy it by extracting to
@@ -672,7 +652,7 @@ untestable-loc-check:
 # second; splitting the condition would have cost recipe lines in a category with
 # one line of headroom left, to save nothing measurable.
 core-surface-check:
-	$(call LLZ_CI,core-surface,--root ..)
+	$(call LLZ_CI,gates --only core-surface,)
 
 # chart-guards: the two halves of "I changed a chart" — run them together.
 # Bumping a Chart.yaml version is only half the job: the bump leaves every Argo
@@ -691,14 +671,6 @@ core-surface-check:
 chart-guards: export LLZ_FORCE_SOURCE := 1
 chart-guards: chart-version-guard chart-pin-guard
 
-# cosign-subject-guard: assert every Kyverno keyless `subject:` that names a
-# GitHub Actions workflow still resolves to a workflow that exists. Keyless
-# signing derives the cert subject from the workflow PATH, so renaming the
-# signing workflow silently invalidates every signature the policy accepts —
-# and that surfaces as pods failing admission in downstream clusters, not here.
-cosign-subject-guard:
-	cd $(GO_DIR) && go run ./cmd/llz ci cosign-subject-guard --root ..
-
 # chart-pin-guard: assert every Argo CD first-party chart pin (apl-values
 # targetRevision + llz-argo-bootstrap-apps component version) matches the chart's
 # local kubernetes-charts/<chart>/Chart.yaml version. A pin the registry never
@@ -706,7 +678,7 @@ cosign-subject-guard:
 # support-plane app (llz-openbao namespace never created) and times out the
 # OpenBao bootstrap. Decision logic is unit-tested Go; this is thin glue.
 chart-pin-guard:
-	$(call LLZ_CI,chart-pin-guard,--root ..)
+	$(call LLZ_CI,gates --only chart-pin-guard,)
 
 # chart-version-guard: assert every chart whose directory changed vs the base ref
 # bumped its Chart.yaml `version:`. publish-charts.yml publishes immutably (it only
@@ -771,10 +743,38 @@ actions-lint:
 # whatever the declarations say, so adding a guard is a registry edit rather than
 # a registry edit plus a Makefile edit that someone forgets.
 #
+# ──────────────────────────────────────────────────────────────────────────────
+# THE COLLAPSE WAS ONLY HALF DONE, AND THIS IS THE OTHER HALF.
+#
+# Removing those targets from LINT_K8S/LINT_TF left the targets THEMSELVES in
+# place, each still spelling out its own `llz ci <verb> --root ..`. So every gate
+# still had two invocations — the driver's and the Makefile's — and a flag change
+# had two places to land. Thirteen of them had no caller left at all, which is
+# worse than a duplicate: an invocation nobody runs cannot disagree loudly.
+#
+# TWO JOBS WERE BEING CONFLATED. A gate target used to mean both "this is in the
+# CI set" and "run just this one while I iterate on it". The driver took the first
+# and could not take the second, because it runs all nineteen.
+#
+# So the second job is now `llz ci gates --only <extension|command>`: one guard,
+# with the flags coming from the model rather than from a second copy here. Every
+# surviving target is one line of that. What a target still carries is Makefile
+# knowledge the driver has no business holding — a render-charts prerequisite, an
+# LLZ_FORCE_SOURCE export — and nothing else.
+#
+# TARGETS WITH NO CALLER AND NO CITATION WERE DELETED (placeholder-guard,
+# wave-dependency-guard, monitoring-label-guard, dropped-apiversions-check,
+# cosign-subject-guard). Their prose lived here and in the extension declaration
+# that owns the guard; the declaration is the copy that cannot drift from the code,
+# so this file stopped being a second catalogue of what the guards are for. Add a
+# target back only when something NAMES it — a workflow step, or a guard's own
+# remediation message — and make it a `--only` line when you do.
+#
 # WHAT DID NOT MOVE, and cannot: k8s-lint (kube-linter), k8s-validate
 # (kubeconform), the three helm-lint targets, and prom-rules-check — which needs
 # promtool on PATH and is an ASSERTION binding rather than a gate. External tools
 # are not gates and the driver has no business pretending otherwise.
+# ──────────────────────────────────────────────────────────────────────────────
 LINT_K8S := k8s-lint k8s-validate llz-gates prom-rules-check \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
@@ -782,13 +782,17 @@ LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
 
 # llz-gates: every gate binding the extension registry declares AND can drive.
 #
-# render-charts is a prerequisite because five of the collapsed guards had it
-# individually (k8s-lint, argocd-rendered-apps-check, placeholder-guard,
-# mesh-egress-guard, monitoring-label-guard) — the chart-shipped NetworkPolicies
-# and the openbao ServiceMonitor are only real YAML once rendered. The driver has
-# no notion of per-gate prerequisites, so the requirement is hoisted here: it must
-# hold for the whole set, and running it unnecessarily costs a render nobody
-# minds.
+# render-charts is a prerequisite because several of the collapsed guards had it
+# individually (k8s-lint, argocd-rendered-apps, placeholder-guard, mesh-egress,
+# monitoring-label) — the chart-shipped NetworkPolicies and the openbao
+# ServiceMonitor are only real YAML once rendered. The driver has no notion of
+# per-gate prerequisites, so the requirement is hoisted here: it must hold for the
+# whole set, and running it unnecessarily costs a render nobody minds.
+#
+# THE SAME HOIST IS WHY A `--only` TARGET STILL CARRIES ITS OWN PREREQUISITE. The
+# driver cannot know that mesh-egress needs a rendered tree and core-surface does
+# not, so a single-guard target keeps the `: render-charts` it always had. That is
+# the whole of what those targets are allowed to know.
 #
 # ONE PROCESS INSTEAD OF THIRTEEN. With LLZ_FORCE_SOURCE=1 each collapsed target
 # rebuilt the binary; this pays that once.
@@ -802,18 +806,23 @@ lint-tf: $(LINT_TF) template-manifest-check managed-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
-# Both branches need a --root, and they need DIFFERENT ones (the source branch
-# runs from $(GO_DIR), one level down). $(1) carries the repo-root spelling and
-# $(2) appends the re-based one, so the source branch passes --root twice and the
-# LAST occurrence wins — pflag's documented behaviour, verified. Don't "fix" the
-# apparent duplicate: dropping either one breaks one of the two branches.
+# THE TWO-ROOT TRICK IS GONE, and this is the target it was written for. Both
+# LLZ_CI branches needed a --root and needed DIFFERENT ones, so $(1) carried the
+# repo-root spelling, $(2) appended the re-based one, and the source branch passed
+# --root twice relying on pflag's last-wins. The driver resolves the root by
+# walking up for a `.git`, which is the same answer from either branch, so there is
+# nothing left to compensate for. The subtree (instance-template) is declared in
+# registry/gates.go beside the gate it belongs to.
 template-manifest-check:
-	$(call LLZ_CI,template-manifest,--root ../instance-template)
+	$(call LLZ_CI,gates --only template-manifest,)
 
 # Assert instance-template/.template-managed.lock still matches the template-owned
 # .github/ files it covers. Editing a llz-*.yml body without re-running
 # `llz ci managed-fresh --write` would ship a lock that every instance fails on,
-# so catch it here instead. Same two-branch --root trick as above (last wins).
+# so catch it here instead. It still uses the two-branch --root trick the target
+# above retired: managed-fresh is NOT a driven gate (its Deps are assembled in
+# package main — see undrivenGates in registry/gates.go), so it is still called as
+# a bare verb and still has to compensate for the two LLZ_CI branches by hand.
 #
 # FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
 # the WORKING TREE's scaffold against the WORKING TREE's lock, so it must run the
@@ -835,7 +844,7 @@ managed-lock-check:
 # merge-base (so it lacks this verb on the PR that introduces it).
 version-pins-check: export LLZ_FORCE_SOURCE := 1
 version-pins-check:
-	$(call LLZ_CI,version-pins --root .,--root ..)
+	$(call LLZ_CI,gates --only version-pins,)
 
 # docs-guard runs on a DOC change, yes — but also on a CLI or workflow-input
 # change, which is what actually causes doc rot. A renamed flag makes a doc wrong
@@ -858,7 +867,7 @@ version-pins-check:
 # an OLD CLI, which is the exact drift this is meant to catch.
 docs-guard: export LLZ_FORCE_SOURCE := 1
 docs-guard:
-	$(call LLZ_CI,docs-guard,--root ..)
+	$(call LLZ_CI,gates --only docs-guard,)
 
 lint:
 	@set -e; \
@@ -884,7 +893,7 @@ lint:
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^platform-apl/|^tools/cmd/llz/ci_bootstrap_cluster\.go$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
+	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^platform-apl/|^tools/internal/extensions/lifecycle/bootstrapcluster/.*\.go$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
 		$(MAKE) --no-print-directory wave-health-guard scaffold-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \
@@ -899,10 +908,10 @@ lint:
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
 		$(MAKE) --no-print-directory actions-lint; \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$|^tools/cmd/llz/.*\.go$$|^\.core-surface-budget\.yaml$$'; then \
+	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$|^tools/internal/cli/.*\.go$$|^\.core-surface-budget\.yaml$$'; then \
 		$(MAKE) --no-print-directory untestable-loc-check core-surface-check; \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/cmd/llz/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
+	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/internal/cli/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
 		$(MAKE) --no-print-directory docs-guard; \
 	fi
 
@@ -1022,7 +1031,7 @@ test:
 # own name rather than as a confusing coverage failure, and so the ordinary
 # `go test` path stays fast.
 #
-# LLZ_EXPECT_RACE=1 arms the canary in cmd/llz/racegate_test.go: it asserts the
+# LLZ_EXPECT_RACE=1 arms the canary in internal/cli/racegate_test.go: it asserts the
 # binary really was built with -race. Without it, a step that silently lost the
 # flag would still report green while detecting nothing — the same failure shape
 # as a mutation run that reports 100% because it never spawned a test process.
@@ -1096,7 +1105,7 @@ deadcode:
 FUZZTIME ?= 60s
 fuzz:
 	@set -e; cd $(GO_DIR); \
-	for pkg in ./cmd/llz ./internal/terraform; do \
+	for pkg in ./internal/cli ./internal/terraform; do \
 	  for t in $$(go test $$pkg -list 'Fuzz.*' | grep '^Fuzz'); do \
 	    echo "── $$pkg $$t ($(FUZZTIME))"; \
 	    go test $$pkg -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME); \

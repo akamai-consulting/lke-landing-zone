@@ -34,7 +34,7 @@ func TestEveryDrivenGateFailsOnAnEmptyCorpus(t *testing.T) {
 		var out bytes.Buffer
 		c.SetOut(&out)
 		c.SetErr(&out)
-		c.SetArgs(emptyCorpusArgs(g.Args, empty))
+		c.SetArgs(emptyCorpusArgs(g, empty))
 		c.SilenceUsage, c.SilenceErrors = true, true
 
 		if err := c.Execute(); err == nil {
@@ -85,15 +85,21 @@ func TestEveryDrivenGateFailsOnAnEmptyCorpus(t *testing.T) {
 	}
 }
 
-// emptyCorpusArgs rewrites whatever names the gate's subject so it points at an
-// empty tree. Gates take `--root` or `--dir`; a gate that grows a third spelling
-// will show up as an unexpected pass rather than being silently skipped.
-func emptyCorpusArgs(args []string, dir string) []string {
-	out := append([]string(nil), args...)
-	for i := 0; i < len(out)-1; i++ {
-		if out[i] == "--root" || out[i] == "--dir" {
-			out[i+1] = dir
-		}
+// emptyCorpusArgs points the gate at an empty tree, on whatever flag it declares.
+//
+// IT IGNORES Subtree DELIBERATELY. A gate reading `instance-template` under an
+// empty root would be handed a path that does not exist, which several guards
+// report as a read error rather than as an empty corpus — a different failure, and
+// not the one under test. The empty DIRECTORY is the subject here.
+//
+// It reads Gate.Flag rather than scanning a built argv for `--root`/`--dir`, which
+// is what it used to do. That scan silently skipped any gate whose subject flag it
+// did not recognise, so a third spelling would have been counted as an unexpected
+// pass — the vacuous shape this test exists to catch, in the test itself.
+func emptyCorpusArgs(g Gate, dir string) []string {
+	flag := g.Flag
+	if flag == "" {
+		flag = "--root"
 	}
-	return out
+	return []string{flag, dir}
 }

@@ -3,6 +3,9 @@ package registry
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -149,13 +152,13 @@ func TestRunGatesReportsEveryFailureNotJustTheFirst(t *testing.T) {
 	t.Cleanup(func() { gates = orig })
 
 	gates = []Gate{
-		{"a", failingCmd("one"), nil, nil},
-		{"b", failingCmd("two"), nil, nil},
-		{"c", okCmd(), nil, nil},
+		{Extension: "a", New: failingCmd("one")},
+		{Extension: "b", New: failingCmd("two")},
+		{Extension: "c", New: okCmd()},
 	}
 
 	var out, errOut bytes.Buffer
-	err := RunGates(nil, &out, &errOut, nil)
+	err := RunGates(nil, Run{Root: "."}, &out, &errOut)
 	if err == nil {
 		t.Fatal("RunGates returned nil with two failing gates")
 	}
@@ -175,10 +178,10 @@ func TestRunGatesReportsEveryFailureNotJustTheFirst(t *testing.T) {
 func TestRunGatesReportsTheCountOnSuccess(t *testing.T) {
 	orig := gates
 	t.Cleanup(func() { gates = orig })
-	gates = []Gate{{"a", okCmd(), nil, nil}, {"b", okCmd(), nil, nil}}
+	gates = []Gate{{Extension: "a", New: okCmd()}, {Extension: "b", New: okCmd()}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(nil, &out, &errOut, nil); err != nil {
+	if err := RunGates(nil, Run{Root: "."}, &out, &errOut); err != nil {
 		t.Fatalf("RunGates failed on clean gates: %v", err)
 	}
 	if !strings.Contains(out.String(), "2 ran") {
@@ -191,18 +194,26 @@ func TestRunGatesReportsTheCountOnSuccess(t *testing.T) {
 // measures the guards; what is under test here is the DRIVER's behaviour when a
 // gate fails, which no real guard can be made to do on demand without breaking the
 // tree it scans.
+//
+// BOTH DECLARE `--root`, because the driver now points every gate at the resolved
+// repository root and a synthetic gate that accepted no flags would make the whole
+// driver suite pass against a code path the real gates never take.
 func failingCmd(msg string) func() *cobra.Command {
 	return func() *cobra.Command {
-		return &cobra.Command{
+		c := &cobra.Command{
 			Use:  "gate-" + msg,
 			RunE: func(*cobra.Command, []string) error { return errors.New(msg) },
 		}
+		c.Flags().String("root", "", "repository root")
+		return c
 	}
 }
 
 func okCmd() func() *cobra.Command {
 	return func() *cobra.Command {
-		return &cobra.Command{Use: "ok", RunE: func(*cobra.Command, []string) error { return nil }}
+		c := &cobra.Command{Use: "ok", RunE: func(*cobra.Command, []string) error { return nil }}
+		c.Flags().String("root", "", "repository root")
+		return c
 	}
 }
 
@@ -215,13 +226,13 @@ func TestRunGatesSkipsADisabledExtension(t *testing.T) {
 	// wave-health follows no component, so pick one that does. obj-encryption is
 	// not a gate, so borrow its NAME for a synthetic entry: what is under test is
 	// the driver's skip logic keyed on the resolver, not the guard behind it.
-	gates = []Gate{{"obj-encryption", okCmd(), nil, nil}, {"guard-docs", okCmd(), nil, nil}}
+	gates = []Gate{{Extension: "obj-encryption", New: okCmd()}, {Extension: "guard-docs", New: okCmd()}}
 
 	off := false
 	toggles := map[string]clusterspec.ComponentToggle{"objProxy": {Enabled: &off}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(nil, &out, &errOut, toggles); err != nil {
+	if err := RunGates(nil, Run{Root: ".", Toggles: toggles}, &out, &errOut); err != nil {
 		t.Fatalf("RunGates failed: %v", err)
 	}
 	got := out.String()
@@ -245,7 +256,7 @@ func TestRunGatesSkipsADisabledExtension(t *testing.T) {
 func TestGatesCmdRunsTheDriver(t *testing.T) {
 	orig := gates
 	t.Cleanup(func() { gates = orig })
-	gates = []Gate{{"guard-docs", okCmd(), nil, nil}}
+	gates = []Gate{{Extension: "guard-docs", New: okCmd()}}
 
 	c := GatesCmd()
 	if c.Use != "gates" || c.Short == "" {
@@ -289,7 +300,6 @@ func TestATreeInspectingGateReceivesTheTree(t *testing.T) {
 	want := &cobra.Command{Use: "llz"}
 	gates = []Gate{{
 		Extension: "guard-docs",
-		Args:      nil,
 		NewWithTree: func(tree *cobra.Command) *cobra.Command {
 			got = tree
 			return okCmd()()
@@ -297,7 +307,7 @@ func TestATreeInspectingGateReceivesTheTree(t *testing.T) {
 	}}
 
 	var out, errOut bytes.Buffer
-	if err := RunGates(want, &out, &errOut, nil); err != nil {
+	if err := RunGates(want, Run{Root: "."}, &out, &errOut); err != nil {
 		t.Fatalf("RunGates failed: %v", err)
 	}
 	if got == nil {
@@ -316,5 +326,174 @@ func TestEveryGateHasAConstructor(t *testing.T) {
 		if g.New == nil && g.NewWithTree == nil {
 			t.Errorf("%s has neither New nor NewWithTree", g.Extension)
 		}
+	}
+}
+
+// ── the repository root ───────────────────────────────────────────────────────
+
+// THE DEFECT THIS REPLACED, PINNED. Every gate row used to pass `--root ".."`
+// literally, which is the repository root from `tools/` (where the Makefile's
+// LLZ_CI macro puts you) and the PARENT OF THE REPOSITORY from anywhere else. Run
+// from the repo root, docs-guard reported 388 findings across 908 Markdown files
+// spanning every sibling checkout on the machine.
+//
+// So the property is: the same tree, from any working directory.
+func TestTheSubjectIsTheRepositoryFromAnyDirectory(t *testing.T) {
+	root := t.TempDir()
+	// Lstat, not Stat, is what the walk uses — so a plain file is a legal marker
+	// here, which is also what `git worktree` and submodules actually write.
+	if err := os.WriteFile(filepath.Join(root, repoMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "tools", "internal", "shared")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, start := range []string{root, filepath.Join(root, "tools"), deep} {
+		got, err := repoRoot(start)
+		if err != nil {
+			t.Fatalf("repoRoot(%s): %v", start, err)
+		}
+		// EvalSymlinks because t.TempDir is under /var on darwin, which is a
+		// symlink to /private/var — comparing the raw strings would fail for a
+		// reason that has nothing to do with the walk.
+		want, _ := filepath.EvalSymlinks(root)
+		gotResolved, _ := filepath.EvalSymlinks(got)
+		if gotResolved != want {
+			t.Errorf("from %s the driver would run against %s, not the repository %s — "+
+				"a gate suite that changes subject with the working directory reports "+
+				"findings against trees it was never pointed at", start, got, root)
+		}
+	}
+}
+
+// IT FAILS RATHER THAN FALLING BACK. A fallback to the working directory has
+// exactly the failure mode the hardcoded `..` had: a full-looking run over the
+// wrong tree. Refusing is the only answer that cannot be mistaken for a pass.
+func TestNoRepositoryIsRefusedNotDefaulted(t *testing.T) {
+	// A temp dir with no marker, and t.TempDir is not inside a checkout.
+	if _, err := repoRoot(t.TempDir()); !errors.Is(err, ErrNoRepoRoot) {
+		t.Errorf("repoRoot outside a checkout returned %v — it must refuse, because the "+
+			"alternative is a gate suite that silently scans whatever it happens to "+
+			"be standing in", err)
+	}
+}
+
+// The Makefile has always run these from `tools/` with `--root ..`, and the
+// conversion must not re-spell a single path: the guards print the paths they
+// found findings in, and CI reads them. From `tools/` the driver must still say
+// exactly `..`.
+func TestTheMakefileInvocationIsByteIdentical(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := repoRoot(cwd)
+	if err != nil {
+		t.Fatalf("this test must run inside the checkout: %v", err)
+	}
+	tools := filepath.Join(root, "tools")
+	t.Chdir(tools)
+
+	for _, tc := range []struct {
+		name string
+		gate Gate
+		want []string
+	}{
+		{"the usual gate", Gate{Extension: "guard-budgets"}, []string{"--root", ".."}},
+		{"a subtree gate", Gate{Extension: "template-manifest", Subtree: "instance-template"},
+			[]string{"--root", "../instance-template"}},
+		{"a gate with its own flag", Gate{Extension: "guard-workflow-shells", Flag: "--dir", Subtree: ".github/workflows"},
+			[]string{"--dir", "../.github/workflows"}},
+	} {
+		got := tc.gate.args(root)
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%s: args = %v, want %v — the Makefile passed the second spelling for "+
+				"years and the guards' output is relative to it", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Every row must be expressible without a literal path. A row that grew one would
+// be the hardcoded `..` coming back under another name.
+func TestNoGateCarriesAnAbsoluteOrEscapingSubtree(t *testing.T) {
+	for _, g := range Gates() {
+		if filepath.IsAbs(g.Subtree) {
+			t.Errorf("%s declares an absolute subtree %q — a subtree is a path UNDER the "+
+				"repository root, and an absolute one escapes the fence the root exists to set",
+				g.Extension, g.Subtree)
+		}
+		if g.Subtree != "" && strings.Contains(filepath.Clean(g.Subtree), "..") {
+			t.Errorf("%s declares subtree %q, which leaves the repository", g.Extension, g.Subtree)
+		}
+	}
+}
+
+// ── --only ───────────────────────────────────────────────────────────────────
+
+// THE MAKEFILE USED TO HOLD THE SECOND COPY. Thirteen single-guard targets each
+// restated the `llz ci <verb> --root ..` the gate table already holds, so a flag
+// change had two places to land and one of them was found by hand. `--only` is how
+// those targets keep their affordance — run ONE guard while iterating on it —
+// without keeping their own spelling of it.
+//
+// So the property is: selecting one gate runs that gate and no others, whether the
+// caller names the extension or the command.
+func TestOnlyNarrowsTheSuiteByEitherName(t *testing.T) {
+	orig := gates
+	t.Cleanup(func() { gates = orig })
+	gates = []Gate{
+		{Extension: "guard-docs", New: namedCmd("docs-guard")},
+		{Extension: "wave-health", New: namedCmd("wave-health-guard")},
+		{Extension: "wave-health", New: namedCmd("wave-dependency-guard")},
+	}
+
+	for _, tc := range []struct {
+		only string
+		want int
+	}{
+		{"guard-docs", 1},        // by extension, one command
+		{"wave-health", 2},       // by extension, both its commands
+		{"wave-health-guard", 1}, // by command, just that one
+		{"", 3},                  // unfiltered
+	} {
+		var out, errOut bytes.Buffer
+		if err := RunGates(nil, Run{Root: ".", Only: tc.only}, &out, &errOut); err != nil {
+			t.Fatalf("--only %q: %v", tc.only, err)
+		}
+		if want := fmt.Sprintf("%d ran", tc.want); !strings.Contains(out.String(), want) {
+			t.Errorf("--only %q ran %q, want %q — the filter selected the wrong set, and a "+
+				"Makefile target routed through it would silently check something else",
+				tc.only, strings.TrimSpace(out.String()), want)
+		}
+	}
+}
+
+// A TYPO MUST NOT REPORT A CLEAN RUN. `--only wave-helth` selecting nothing and
+// printing `0 ran, all clean` is the vacuous-green shape this driver refuses
+// everywhere else, reachable from a Makefile target with a stale name — which is
+// exactly the drift routing them through here is meant to end.
+func TestOnlyMatchingNothingIsAnError(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := RunGates(nil, Run{Root: ".", Only: "wave-helth"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("--only with a name that matches no gate returned nil — a mistyped target " +
+			"would report a clean run having checked nothing")
+	}
+	if !strings.Contains(err.Error(), "wave-helth") {
+		t.Errorf("error %q does not name what failed to match", err)
+	}
+	if strings.Contains(out.String(), "all clean") {
+		t.Errorf("output %q announced a clean run for a selection that matched nothing", out.String())
+	}
+}
+
+// namedCmd is a synthetic gate with a chosen command name, for the selector tests.
+func namedCmd(name string) func() *cobra.Command {
+	return func() *cobra.Command {
+		c := &cobra.Command{Use: name, RunE: func(*cobra.Command, []string) error { return nil }}
+		c.Flags().String("root", "", "repository root")
+		return c
 	}
 }

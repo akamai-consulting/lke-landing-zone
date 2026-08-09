@@ -28,11 +28,17 @@
 # only inside glob and regex string literals, where a naive scanner would swallow
 # the rest of the file.
 #
-# SCOPE. Non-test Go directly under tools/cmd/llz — package main, the one package
-# that cannot be imported, cannot be unit-tested from outside, and has no boundary
-# of its own. tools/internal/** is NOT counted: code that moved there has already
-# done the thing this gate asks for. Tests are excluded outright, because they are
-# what this repo wants more of.
+# SCOPE. Non-test Go in the two packages that make up the CLI's own footprint:
+# tools/internal/cli (the command tree) with tools/internal/cli/deps (the assembly
+# layer), and tools/cmd/llz (the entry point). The rest of tools/internal/** is NOT
+# counted: code that moved there has already done the thing this gate asks for.
+# Tests are excluded outright, because they are what this repo wants more of.
+#
+# THE SCOPE USED TO BE "package main" AND THAT WAS DOING TWO JOBS. It named a
+# language property (this cannot be imported or tested) and a location (the CLI
+# lives here). The tree moved to internal/cli so the first job could stop being
+# true; the second is what these globs now track. Read cli-wiring-layer's header
+# for what the budget means once the untestability argument is gone.
 #
 # NO `remedy:` KEY, deliberately. The breach guidance lives only in
 # budget.CoreSurfaceRemedy: when it lived in both places the YAML copy silently
@@ -40,7 +46,35 @@
 # for a gate that needs to override the default; this one does not.
 
 categories:
-  cmd-llz-package-main:
+  # ── THE SUBJECT MOVED, AND THE ARGUMENT CHANGED WITH IT ──────────────────────
+  #
+  # This category was `cmd-llz-package-main` and measured tools/cmd/llz. The whole
+  # command tree now lives in tools/internal/cli, so the glob follows it — but the
+  # JUSTIFICATION is not the same one, and pretending otherwise would be the
+  # dishonest half of this move.
+  #
+  # ADR 0014 capped package main because package main CANNOT BE IMPORTED. That is a
+  # language rule, not a convention, and it is why this ratchet has driven sixty
+  # extractions: code in there was untestable from outside, full stop. internal/cli
+  # is an ordinary package. It can be imported and tested, so the property the
+  # budget defended is now satisfied by construction and the budget cannot claim it.
+  #
+  # WHAT THE BUDGET MEANS NOW: internal/cli is the WIRING layer, and wiring is all
+  # it may hold. That is weaker than "untestable" and it is stated plainly rather
+  # than dressed up — a ratchet whose reason has quietly changed is a ratchet people
+  # stop believing. The number is what keeps the pressure on the ~920 lines that are
+  # commands rather than wiring (ci_teardown, import, promote, apl_app, ext,
+  # ci_guards, ci_gen_toc, build_watch, ci_build_failure_summary) and belong in
+  # extensions.
+  #
+  # cli/deps IS INCLUDED, and that is not tidiness. If the assembly layer were
+  # unbudgeted, moving code one directory down would be a free escape hatch from
+  # this line — the exact shape of paydown-by-relabelling that `exact: true` exists
+  # to refuse. One number covers the CLI's whole footprint.
+  #
+  # See also cmd-llz-entrypoint below, which is what makes the move irreversible.
+  # ─────────────────────────────────────────────────────────────────────────────
+  cli-wiring-layer:
     kind: go-logic
     # 38,364 logic lines across 202 non-test files, 113 of them ci_*.go.
     #
@@ -1224,10 +1258,43 @@ categories:
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1889
+    #   1,898 / 113 files  THE MOVE OUT OF package main. tools/cmd/llz became a
+    #                       six-line stub and the tree became tools/internal/cli,
+    #                       with the Deps assemblers in tools/internal/cli/deps so
+    #                       the registry could reach them (which is what took
+    #                       `template-sustain` out of undrivenGates). +9 against the
+    #                       1,889 this line held as package main: a package clause,
+    #                       an import block and an exported Sustain wrapper, which is
+    #                       the whole cost of the split. NOT a paydown and not
+    #                       claimed as one — the same code, in a package that can be
+    #                       imported.
+    budget: 1898
+    exact: true
+    include:
+      - "tools/internal/cli/*.go"
+      - "tools/internal/cli/deps/*.go"
+
+  # ── THE FLOOR THAT MAKES THE MOVE IRREVERSIBLE ───────────────────────────────
+  #
+  # tools/cmd/llz holds the two things that genuinely cannot live anywhere else:
+  # the `main` symbol, and the os.Exit that must not run inside a testable
+  # function. Six lines.
+  #
+  # WITHOUT THIS, THE MOVE DECAYS. Nothing in Go stops the next command from being
+  # added here, and the argument for putting it here is always the same small one
+  # ("it's just the entry point"). An exact budget of six means the first line that
+  # arrives fails the gate and has to argue for itself in a commit message.
+  #
+  # It is `exact` in both directions like its sibling, which also means a genuine
+  # shrink has to be banked. There is not much left to shrink.
+  cmd-llz-entrypoint:
+    kind: go-logic
+    budget: 6
     exact: true
     include:
       - "tools/cmd/llz/*.go"
 
 exclude:
   - "tools/cmd/llz/*_test.go"
+  - "tools/internal/cli/*_test.go"
+  - "tools/internal/cli/deps/*_test.go"

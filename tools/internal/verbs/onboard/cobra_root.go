@@ -27,7 +27,7 @@ func TokensCmd() *cobra.Command {
 	var env, cluster, bucket, repo string
 	c := &cobra.Command{
 		Use:   "tokens",
-		Short: "provision wizard: create state bucket/key, onboard.Gather PATs, push",
+		Short: "provision wizard: create state bucket/key, gather PATs, push",
 		Long: "Idempotently provisions an instance's credentials: creates the Terraform-\n" +
 			"state OBJ bucket + a scoped key (Linode API), generates the ArgoCD deploy\n" +
 			"key, gathers GitHub PATs, computes image vars, writes .llz/*.env, and pushes.\n" +
@@ -62,7 +62,7 @@ func SecretsCmd() *cobra.Command {
 	s := &cobra.Command{Use: "secrets", Short: "gather + push instance credentials"}
 	s.AddCommand(
 		&cobra.Command{
-			Use: "onboard.Gather", Short: "paste-everything token wizard (links + .llz/*.env)",
+			Use: "gather", Short: "paste-everything token wizard (links + .llz/*.env)",
 			Args: cobra.NoArgs,
 			RunE: func(_ *cobra.Command, _ []string) error { return Gather(globalOpts(), ".") },
 		},

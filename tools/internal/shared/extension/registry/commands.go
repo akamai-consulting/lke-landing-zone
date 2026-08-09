@@ -37,6 +37,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertreconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
@@ -45,10 +46,19 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/workflowshells"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/assertobjstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/atrest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/bootstrapcluster"
@@ -59,6 +69,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/database"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/deliverdocs"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/gameday"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/harbor"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/healthsla"
@@ -116,6 +127,7 @@ var commands = []Command{
 	{"assertsecrets", assertsecrets.KickHarborProvisionerCmd},
 	{"assertsecrets", assertsecrets.OpenbaoAuditCmd},
 	{"assertsecrets", assertsecrets.RotationHealthCmd},
+	{"assertsuite", assertsuite.Cmd},
 	{"atrest", atrest.AtRestGuardCmd},
 	{"bootstrapcluster", bootstrapcluster.BootstrapClusterCmd},
 	{"bootstrapcluster", bootstrapcluster.PrepareAplUpgradeCmd},
@@ -124,6 +136,8 @@ var commands = []Command{
 	{"chartguard", chartguard.ChartLockDriftCmd},
 	{"chartguard", chartguard.ChartPinGuardCmd},
 	{"chartguard", chartguard.ChartVersionGuardCmd},
+	{"cosignguard", cosignguard.Cmd},
+	{"coverageguard", coverageguard.Cmd},
 	{"chartpublish", chartpublish.ChartPublishCheckCmd},
 	{"clusteraccess", clusteraccess.FetchKubeconfigCmd},
 	{"clusteraccess", clusteraccess.FetchKubeconfigStateCmd},
@@ -160,6 +174,7 @@ var commands = []Command{
 	{"environments", environments.RoleCmd},
 	{"environments", environments.SetCmd},
 	{"environments", environments.SpecCmd},
+	{"firewall", firewall.Cmd},
 	{"gameday", gameday.WedgeGamedayCmd},
 	{"harbor", harbor.HarborProvisionerCmd},
 	{"harbor", harbor.SeedStandbyHarborRobotsCmd},
@@ -177,6 +192,9 @@ var commands = []Command{
 	{"manifestguard", manifestguard.ArgoCDRenderedAppsCmd},
 	{"manifestguard", manifestguard.DroppedAPIVersionsCmd},
 	{"manifestguard", manifestguard.PlaceholderGuardCmd},
+	{"meshegress", meshegress.Cmd},
+	{"monitoringlabel", monitoringlabel.Cmd},
+	{"mtlsguard", mtlsguard.Cmd},
 	{"objenc", objenc.AssertObjEncryptionCmd},
 	{"objenc", objenc.ObjProxyCmd},
 	{"objenc", objenc.SeedSSECKeyCmd},
@@ -195,11 +213,13 @@ var commands = []Command{
 	{"openbao", openbao.RegenRootCmd},
 	{"openbao", openbao.SeedBroadPATCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
+	{"pincoherence", pincoherence.Cmd},
 	{"reachability", reachability.VerifyCmd},
 	{"reconciler", reconciler.AssertVolumeEncryptionCmd},
 	{"reconciler", reconciler.DiscoverFirewallCmd},
 	{"reconciler", reconciler.ReconcileVolumeTagsCmd},
 	{"reconciler", reconciler.RelabelVolumesCmd},
+	{"reconciler", reconciler.Cmd},
 	{"releasepublish", releasepublish.PinInstanceImagesCmd},
 	{"releasepublish", releasepublish.PublishChartsCmd},
 	{"render", render.EnvVPCCmd},
@@ -212,6 +232,7 @@ var commands = []Command{
 	{"teardown", teardown.ReapNodeBalancersCmd},
 	{"teardown", teardown.ReapObjKeysCmd},
 	{"teardown", teardown.ReapVolumesCmd},
+	{"templatemanifest", templatemanifest.Cmd},
 	{"templatecommit", templatecommit.AssertAdopterPinCmd},
 	{"templatecommit", templatecommit.AssertImageFreshCmd},
 	{"tofudriver", tofudriver.DestroyCmd},
@@ -222,6 +243,8 @@ var commands = []Command{
 	{"tokeninv", tokeninv.RotationPlanCmd},
 	{"tokeninv", tokeninv.TokenInventoryCmd},
 	{"tokeninv", tokeninv.ValidateTokensCmd},
+	{"versionpins", versionpins.Cmd},
+	{"workflowshells", workflowshells.Cmd},
 	{"wavehealth", wavehealth.DependencyGuardCmd},
 	{"wavehealth", wavehealth.HealthGuardCmd},
 }

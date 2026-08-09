@@ -1,6 +1,8 @@
 # ADR 0014 — The core-surface budget: cap the destination, not just the source
 
-Status: **accepted**, implemented (`llz ci core-surface`, `.core-surface-budget.yaml`).
+Status: **accepted**, implemented (`llz ci core-surface`, `.core-surface-budget.yaml`);
+**amended 2026-08-08** — the budget's subject moved to `tools/internal/cli`, see
+[Amendment](#amendment-2026-08-08-the-subject-moved-and-one-of-the-two-arguments-went-with-it) at the end.
 Date: 2026-08-03
 Relates: [ADR 0013](0013-llz-as-apl-cli.md) (the inward decomposition this gate
 pushes toward); issue #10 / PR #15 (the extension framework);
@@ -331,3 +333,43 @@ a second fence appearing, not a bug fix.
   why the number carries **no** headroom: at ~590 lines/day any margin large enough
   to avoid nuisance failures is also large enough to pre-approve a week of
   unexamined growth.
+
+## Amendment (2026-08-08): the subject moved, and one of the two arguments went with it
+
+This ADR budgets `tools/cmd/llz`, package `main`, on **two** grounds that it did
+not distinguish at the time:
+
+1. that package cannot be imported, so its contents cannot be unit-tested from
+   outside — a language rule; and
+2. the CLI lives there, so it is where converted logic accretes — a location.
+
+The command tree has since moved to `tools/internal/cli` (with the Deps
+assemblers in `tools/internal/cli/deps`, so the extension registry can reach
+them — which is what took `template-sustain` out of `undrivenGates`).
+`tools/cmd/llz` is now a six-line entry point holding the `main` symbol and the
+`os.Exit` that must not run inside a testable function.
+
+**Ground 1 no longer applies, and the budget does not claim it.** `internal/cli`
+is an ordinary package: importable, testable, and now carrying the tests that had
+to be written in `package main` because only `main` could build the cobra tree
+(`command_wiring_test.go` chief among them). What survives is ground 2, stated
+plainly in `.core-surface-budget.yaml`: `internal/cli` is the **wiring** layer,
+and wiring is all it may hold. That is a weaker argument than untestability and
+is written down as weaker, because a ratchet whose reason has quietly changed is
+a ratchet people stop believing.
+
+Two mechanisms replace what ground 1 was doing:
+
+- `cmd-llz-entrypoint`, an exact budget of **6** on `tools/cmd/llz`, so the
+  package cannot re-accrete one reasonable-looking line at a time; and
+- `entrypoint_boundary_test.go`, which refuses any import there but
+  `internal/cli`, a second file, or a `main` that stops calling `cli.Main`. The
+  budget counts lines; that test counts **directions**, and the direction is the
+  property the move was for.
+
+`internal/cli/deps` is inside the same budget category deliberately. If the
+assembly layer were unbudgeted, moving code one directory down would be a free
+paydown — relabelling, not decomposition, which `exact: true` exists to refuse.
+
+The decision below stands. Only its subject and the first of its two arguments
+have changed.
