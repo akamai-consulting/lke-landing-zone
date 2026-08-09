@@ -17,9 +17,26 @@ import (
 
 const extCommandsFile = ".llz/commands.yaml"
 
-// extCommand is one operator-defined command. argv is run verbatim (extra args
-// the operator passes on the CLI are appended), so it behaves like a shell alias
-// with --dry-run support.
+// extCommand is one operator-defined command. argv is run verbatim (extra args the
+// operator passes on the CLI are appended), so it behaves like a shell alias.
+//
+// IT DOES NOT HAVE --dry-run SUPPORT, WHICH THIS COMMENT CLAIMED FOR A LONG TIME.
+// The RunE below passes cliopts.Global.DryRun to proc.RunEcho, which reads like it
+// works and cannot: DisableFlagParsing is set, so cobra hands this command EVERY
+// remaining token — including a global flag typed BEFORE the subcommand — and root
+// never parses one. `llz --dry-run smoke` therefore runs the command for real.
+// Measured, not reasoned: the probe script wrote its file both ways.
+//
+// The dryRun argument is kept rather than replaced with a literal false, because
+// the value is the honest source of truth for "did the operator ask for a dry run"
+// and hard-coding false would make a future fix silently no-op. What is fixed is
+// the CLAIM, which is what an operator was relying on.
+//
+// THE SECOND HALF IS THE ONE THAT BITES, and nothing documented it: the global flag
+// is not ignored, it is APPENDED TO THE OPERATOR'S ARGV. `llz --dry-run smoke` runs
+// `sh -c '…' --dry-run`. A script with strict flag parsing fails on an argument its
+// author never passed; a lenient one runs for real while the operator believes they
+// dry-ran it. docs/extending-llz.md says so now.
 type extCommand struct {
 	Name  string   `json:"name"`
 	Short string   `json:"short"`

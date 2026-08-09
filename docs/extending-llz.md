@@ -47,9 +47,26 @@ llz psql --db readonly    # extra args are appended to argv: ./hack/psql.sh --db
 
 - **Arg passthrough.** Everything you type after the command name is appended to
   `argv` verbatim, so a command behaves like a smart alias — flags included. This
-  mirrors the built-in `drift` / `env add` commands. Because flag parsing is off,
-  `llz`'s own flags (like `--dry-run`) are **not** applied to these commands; rely
-  on your command's own flags instead.
+  mirrors the built-in `drift` / `env add` commands.
+- **`llz`'s own flags do not apply, and they are not discarded either.** Flag
+  parsing is off for these commands, so `llz` hands your `argv` *every* remaining
+  token — including a global flag typed **before** the command name. `--dry-run`,
+  `--yes` and `-y` are therefore **appended to your command** rather than acted on:
+
+  ```bash
+  llz --dry-run smoke     # runs: bash hack/smoke.sh --dry-run   ← and it REALLY RUNS
+  llz smoke --dry-run     # runs: bash hack/smoke.sh --dry-run   ← identical
+  llz -y smoke            # runs: bash hack/smoke.sh -y
+  ```
+
+  Both positions behave the same, and both execute. **There is no dry-run for an
+  operator-defined command.** Two consequences worth designing around: a script
+  that rejects unknown flags fails on an argument you did not mean to pass, and one
+  that ignores them runs for real while the invocation *looks* like a rehearsal.
+
+  A `--` separator is **not** consumed either — `llz smoke -- --dry-run` appends
+  both tokens, so your script receives a literal `--`. If you want a rehearsal
+  mode, give your own script its own flag and pick a name `llz` does not use.
 - **Built-ins win.** An entry whose `name` collides with a built-in command (e.g.
   `lint`, `build`, `tokens`) is skipped with a warning — you can't shadow them.
 - **Malformed entries are skipped** (empty `name` or `argv`) with a warning, not a
