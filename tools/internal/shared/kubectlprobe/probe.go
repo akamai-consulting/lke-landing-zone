@@ -71,8 +71,8 @@ import (
 // IT ATTACHES STDERR TO THE ERROR, AND THAT USED TO LIVE IN PACKAGE MAIN. This
 // body was `execOutput` in cmd/llz/exec.go, and an init() there overwrote this
 // var with it at startup — so the wrapper was present in the llz binary and
-// absent everywhere else, including in every test of the eleven packages that
-// delegate here. ErrText survived that split because it reads ee.Stderr off the
+// absent everywhere else, including in every test of the (then eleven, now
+// thirty-nine) packages that delegate here. ErrText survived that split because it reads ee.Stderr off the
 // *exec.ExitError itself; what did not survive is the MESSAGE, which is what a
 // caller wrapping with %w actually prints:
 //
@@ -108,8 +108,12 @@ import (
 // NOTE THE NAME IS WRONG, TOO. This runs whatever binary it is given — kubectl,
 // gh, bao, tofu, ssh-keyscan — as the comment above already says. It is the tree's
 // general process seam and four extensions use it purely for `gh`. Renaming it
-// touches 66 production and 70 test references, so it has not been done; read
-// "kubectlprobe" as where it started rather than what it is.
+// touches several hundred references across ~39 packages — it was 66 production
+// and 70 test when that was first measured and is well past double that now, which
+// is the direction this number only ever moves — so it has not been done; read
+// "kubectlprobe" as where it started rather than what it is. The count is left
+// approximate deliberately: an exact one here would be re-rotting by the next
+// extraction, and the decision it supports turns on the order of magnitude.
 var Exec = func(name string, args ...string) ([]byte, error) {
 	out, err := exec.Command(name, args...).Output()
 	if err == nil {
@@ -363,7 +367,8 @@ func EffectiveKubeconfig() string {
 
 // Out is Exec with the binary fixed to kubectl and the bytes stringified.
 //
-// Three lines with four callers across three packages, and it lived in
+// Three lines with nine callers across six packages (four across three when it
+// moved), and it lived in
 // cmd/llz/verify.go — a file about the `llz verify` command, which is not what a
 // kubectl-shaped exec helper is about. It is here so those callers cannot drift
 // about whether the error or the output wins.

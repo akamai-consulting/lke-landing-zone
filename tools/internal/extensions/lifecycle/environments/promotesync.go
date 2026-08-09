@@ -1,6 +1,6 @@
 package environments
 
-// deps.go — the one edge this package could not bring with it.
+// promotesync.go — the one edge this package could not bring with it.
 
 // SyncPromoteWorkflow regenerates promote.yml after an environment is added.
 //

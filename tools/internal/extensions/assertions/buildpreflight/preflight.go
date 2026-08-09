@@ -1,6 +1,6 @@
 package buildpreflight
 
-// build_preflight.go — check that the deployment exists WHERE THE BUILD LOOKS.
+// preflight.go — check that the deployment exists WHERE THE BUILD LOOKS.
 //
 // `llz build` is a `gh workflow run terraform.yml` dispatch: GitHub runs the
 // workflow from the repo's default branch, and the job renders the tfvars from

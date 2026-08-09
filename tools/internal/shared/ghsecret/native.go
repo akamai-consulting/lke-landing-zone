@@ -1,6 +1,6 @@
 package ghsecret
 
-// gh_secrets_native.go — thin, env-sourced adapter over internal/forge's
+// native.go — thin, env-sourced adapter over internal/forge's
 // GitHubSecretWriter (which holds the sealed-box REST logic). These wrappers
 // preserve the signatures the in-cluster callers use — the harbor-robot
 // provisioner (repo secrets + existence probe) and the broad-PAT rotator (env

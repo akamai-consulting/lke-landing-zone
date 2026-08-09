@@ -1,6 +1,6 @@
 package docsguard
 
-// ci_gen_toc.go — `llz ci gen-toc`: insert or refresh the delimited table of
+// toc.go — `llz ci gen-toc`: insert or refresh the delimited table of
 // contents in a long Markdown document.
 //
 // WHY THIS IS GO AND NOT A SCRIPT. It shipped first as a 74-line Python script,

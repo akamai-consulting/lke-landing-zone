@@ -1,6 +1,6 @@
 package objenc
 
-// s3_ssec_probe.go — is this object actually encrypted?
+// probe.go — is this object actually encrypted?
 //
 // THE TRICK, and why this needs no key. An SSE-C object cannot be read without its
 // key: Linode answers a keyless GET/HEAD with 400. So a HEAD carrying NO SSE-C

@@ -1,6 +1,6 @@
 package manifestguard
 
-// ci_dropped_apiversions.go — `llz ci dropped-apiversions`, the CI face of the
+// cobra_dropped_apiversions.go — `llz ci dropped-apiversions`, the CI face of the
 // dropped-apiVersion guard that `llz lint` also runs at pre-commit.
 //
 // It needs its own CI entry point because NO CI job invokes `llz lint` / `llz

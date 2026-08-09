@@ -22,12 +22,29 @@ package registry
 // when spec.components.objProxy is enabled" and nothing but that comment linked
 // them.
 //
-// WHAT IT DELIBERATELY DOES NOT DO. It does not disable anything. Nothing
-// dispatches on the result yet beyond `llz ci gates` and the list display, and a
-// resolver that silently stopped running an assert lane would be a behaviour change
-// hiding inside a refactor. This answers "which extensions does this instance
-// have?"; making the answer load-bearing everywhere is the next slice, and the
-// gates driver is where it starts because a gate can be skipped harmlessly.
+// WHAT DISPATCHES ON IT, which is no longer nothing. This header used to say "it
+// does not disable anything", and that was true for exactly as long as the gates
+// driver took to land:
+//
+//   - `llz ci gates` SKIPS a gate whose extension is disabled (gates.go's RunGates
+//     consults EnabledFor and reports the skip in its count, so `24 ran, 0 skipped`
+//     distinguishes a full pass from a narrowed one).
+//   - the assert battery skips a LANE the same way, joined in
+//     internal/cli/assertsuite_enablement.go because assertsuite cannot ask the
+//     registry without a cycle.
+//   - `llz extension list` shows the declared default, not the resolved set — it
+//     must work in a checkout with no spec.
+//
+// THE SKIP IS SAFE IN ONE DIRECTION ONLY, and both consumers take the same side:
+// every failure path answers RUN IT. No spec, an unreadable spec, an unresolvable
+// registry — the lane runs. A battery that fell silent because it could not read a
+// file would report a green run over nothing, which is the vacuous-green shape this
+// tree refuses everywhere. Refusing to skip is the safe direction here, exactly
+// inverse to the seeder rule where refusing to WRITE is.
+//
+// WHAT IS STILL NOT LOAD-BEARING: transitions and invariants. Neither consults
+// this — a disabled extension's transition still runs if something calls it, and
+// the reconciler schedules its lanes without asking. That is the remaining slice.
 
 import (
 	"fmt"

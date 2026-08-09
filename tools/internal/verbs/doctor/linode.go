@@ -1,6 +1,6 @@
 package doctor
 
-// doctor_linode.go — the one thing `llz doctor` never asked: can this LINODE
+// linode.go — the one thing `llz doctor` never asked: can this LINODE
 // ACCOUNT actually build what the spec describes?
 //
 // doctor is billed as the single "am I ready to build?" gate, but every check it

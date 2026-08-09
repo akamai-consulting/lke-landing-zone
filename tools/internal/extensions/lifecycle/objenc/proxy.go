@@ -1,6 +1,6 @@
 package objenc
 
-// objproxy.go — `llz obj-proxy`, the in-cluster S3 gateway that makes Linode
+// proxy.go — `llz obj-proxy`, the in-cluster S3 gateway that makes Linode
 // Object Storage encrypted at rest for writers that cannot ask for it themselves.
 //
 // See objproxy_inject.go for WHY this shape (SSE-C header injection, no

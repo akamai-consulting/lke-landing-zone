@@ -1,6 +1,6 @@
 package docsguard
 
-// ci_docs_guard.go — `llz ci docs-guard`: fail CI when the docs describe a CLI,
+// docsguard.go — `llz ci docs-guard`: fail CI when the docs describe a CLI,
 // a workflow, or a repo layout that no longer exists.
 //
 // WHY THIS EXISTS. A full audit of the 104 Markdown files found 30 defects, and

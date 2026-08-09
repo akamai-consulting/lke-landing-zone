@@ -1,6 +1,6 @@
 package objenc
 
-// objproxy_inject.go — the SSE-C header injection rules, as a pure function.
+// proxy_inject.go — the SSE-C header injection rules, as a pure function.
 //
 // WHY THIS EXISTS AT ALL. Linode Object Storage implements exactly one
 // server-side encryption mode, SSE-C (measured: SSE-S3 is 400 InvalidArgument and

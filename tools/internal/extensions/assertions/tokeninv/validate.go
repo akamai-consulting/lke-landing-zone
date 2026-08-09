@@ -1,6 +1,6 @@
 package tokeninv
 
-// ci_validate_tokens.go — `llz ci validate-tokens`: the CI counterpart of the
+// validate.go — `llz ci validate-tokens`: the CI counterpart of the
 // local `llz doctor` validity probe. It reads each pipeline credential from the
 // ENVIRONMENT (where CI injects the repo/infra-<env> secrets) and actively probes
 // it, so a set-but-dead token — the GHCR_READ_TOKEN 403 that failed a run

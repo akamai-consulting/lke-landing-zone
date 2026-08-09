@@ -1,6 +1,6 @@
 package doctor
 
-// doctor_token_table.go — the two halves of the old token_validate.go that did
+// token_table.go — the two halves of the old token_validate.go that did
 // NOT go to internal/tokeninv.
 //
 // They read the same credentials, which is why they were filed together, but

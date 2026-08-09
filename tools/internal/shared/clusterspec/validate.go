@@ -85,7 +85,7 @@ var reservedTeamNames = map[string]bool{
 // identityconfig's TestSystemSecretNamespacesCoverPolicyPaths, which lives beside
 // the policies so it can read the unexported consts directly and which also fails
 // if a NEW `const policy… =` appears without being added to its list. A second
-// test, cmd/llz/seedroots_test.go, holds the same line from the seed-root side.
+// test, internal/cli/seedroots_test.go, holds the same line from the seed-root side.
 // SystemSecretNamespaces is EXPORTED so those tests can reach it; drift here is a
 // team-claimable privilege escalation, so it is guarded from both directions.
 var SystemSecretNamespaces = map[string]bool{

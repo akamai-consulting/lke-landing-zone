@@ -1,6 +1,6 @@
 package tokeninv
 
-// token_capability.go — AUTHORIZATION probing, the layer above the VALIDITY
+// capability.go — AUTHORIZATION probing, the layer above the VALIDITY
 // probe in token_validate.go. Validity answers "does this credential
 // authenticate?"; capability answers "is it scoped to do the one job it exists
 // for?" Those are different questions, and the gap between them is a real scar:

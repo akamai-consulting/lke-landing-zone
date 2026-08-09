@@ -1,6 +1,6 @@
 package identityconfig
 
-// ci_openbao_configure.go — `llz ci bao-configure`, the native port of
+// openbao_configure.go — `llz ci bao-configure`, the native port of
 // configure-openbao.sh: root-token preflight, KV v2 mount, Kubernetes +
 // GitHub-OIDC auth, policies, roles, and the audit-device verify. Idempotent
 // like the bash (enables tolerate "already enabled", writes upsert), so

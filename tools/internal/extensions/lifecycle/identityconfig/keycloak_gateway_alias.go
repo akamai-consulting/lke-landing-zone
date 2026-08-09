@@ -1,6 +1,6 @@
 package identityconfig
 
-// ci_keycloak_gateway_alias.go — `llz ci pin-keycloak-gateway-alias`.
+// keycloak_gateway_alias.go — `llz ci pin-keycloak-gateway-alias`.
 //
 // OpenBao validates team-login tokens against Keycloak's realm JWKS, and that
 // fetch must be over VERIFIED TLS because it carries signing keys (ADR 0010).

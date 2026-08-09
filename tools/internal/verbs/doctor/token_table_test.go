@@ -1,6 +1,6 @@
 package doctor
 
-// doctor_token_table_test.go — the half of token_validate_test.go that stayed,
+// token_table_test.go — the half of token_validate_test.go that stayed,
 // because ProbeTokenValidities did: it is keyed by the wizard's `envreq.Requirement`
 // and renders `llz doctor`'s table, not a CI verdict.
 

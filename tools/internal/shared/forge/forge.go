@@ -84,7 +84,7 @@ type OIDCConfig struct {
 
 // SecretWriter is the CI secret plane. Implemented by all four forges, by very
 // different means: the GitHub family seals values with a libsodium box and PUTs
-// them (see cmd/llz/gh_secrets_native.go); GitLab POSTs a plaintext masked
+// them (see internal/shared/ghsecret); GitLab POSTs a plaintext masked
 // CI/CD variable. Wired per-phase.
 type SecretWriter interface {
 	SetRepoSecret(name, value string) error

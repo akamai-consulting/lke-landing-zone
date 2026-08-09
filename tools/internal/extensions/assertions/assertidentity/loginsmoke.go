@@ -1,6 +1,6 @@
 package assertidentity
 
-// ci_keycloak_smoke.go — `llz ci team-login-smoke`, an END-TO-END validation of
+// loginsmoke.go — `llz ci team-login-smoke`, an END-TO-END validation of
 // the team-scoped OpenBao write path, browser-free. It exercises the exact chain
 // that is otherwise only E2E-gated: apl-core provisions the `team-<name>` group +
 // realm role → a member's OIDC token carries `groups: [team-<name>]` → OpenBao's

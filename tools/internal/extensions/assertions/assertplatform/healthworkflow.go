@@ -1,6 +1,6 @@
 package assertplatform
 
-// ci_assert_health_workflow.go — `llz ci assert-health-workflow`: the e2e gate
+// healthworkflow.go — `llz ci assert-health-workflow`: the e2e gate
 // that proves the day-2 clusterHealthWorkflow component actually RUNS, not just
 // that its manifests synced. Enabling the component makes converge validate the
 // DEPLOY path (Kyverno admits the WorkflowTemplate/CronWorkflow/RBAC CRs, Argo

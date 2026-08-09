@@ -1,6 +1,6 @@
 package openbao
 
-// deps.go — what the OpenBao seeders cannot reach for themselves.
+// seed_deps.go — what the OpenBao seeders cannot reach for themselves.
 //
 // TWO SEAMS OUT OF ELEVEN MEASURED SYMBOLS. The three-clause rule removed the
 // rest: `appendGHAFile`, `maskGHA` and `maskGHALines` are printers (localised

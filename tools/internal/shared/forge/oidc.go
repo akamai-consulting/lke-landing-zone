@@ -1,6 +1,6 @@
 package forge
 
-// ci_github_oidc.go — mint a GitHub Actions OIDC JWT for OpenBao's jwt auth
+// oidc.go — mint a GitHub Actions OIDC JWT for OpenBao's jwt auth
 // method. Replaces the long-lived AppRole secret_id (stashed in GitHub Actions
 // secrets and rotated in-cluster via `gh secret set`) with a short-lived,
 // per-run, repo-bound token: the workflow declares `permissions: id-token: write`

@@ -73,9 +73,10 @@ var chartValuesFiles = []string{
 }
 
 // EXPORTED because the scaffolding path groups these for operator output:
-// cmd/llz/scaffold.go collapses findings sharing a token AND a remedy. The
-// grouping is presentation and stayed in the CLI; the finding itself is this
-// package's model.
+// environments.GroupFindings (lifecycle/environments/add.go) collapses findings
+// sharing a token AND a remedy. The grouping is PRESENTATION and lives with the
+// command that prints it; the finding itself is this package's model. It used to
+// be cmd/llz/scaffold.go, which is where the split was first drawn.
 type Finding struct {
 	File     string
 	Line     int

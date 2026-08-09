@@ -1,6 +1,6 @@
 package reconciler
 
-// ci_volumes.go — the three storage commands, reduced to flag sets.
+// volumes.go — the three storage commands, reduced to flag sets.
 //
 // Everything they do is `assert-storage` and lives in tools/internal/extensions/assertions/volumes. What
 // stays here is the four capabilities that package is HANDED (volumes.Deps) and

@@ -1,6 +1,6 @@
 package deliverdocs
 
-// ci_deliver_docs.go — `llz ci deliver-docs`: shrink an instance's copied-in
+// deliver.go — `llz ci deliver-docs`: shrink an instance's copied-in
 // docs/ to the day-to-day operator set (quickstart + runbooks + playbooks) and
 // REFERENCE the rest at the (public) template repo, version-pinned to this
 // instance. The full architecture/spec/design docs don't need to live in every

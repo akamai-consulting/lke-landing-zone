@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ci_harbor.go — the cobra wiring for the two Harbor lanes. The lanes themselves
+// cobra_harbor_lanes.go — the cobra wiring for the two Harbor lanes. The lanes themselves
 // are internal/harbor.
 //
 // Neither takes a flag: both read their inputs from the environment, because both

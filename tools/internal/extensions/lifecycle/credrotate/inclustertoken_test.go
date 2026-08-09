@@ -1,6 +1,6 @@
 package credrotate
 
-// linode_token_test.go — moved out of the es-store-recovery lane's test file when
+// inclustertoken_test.go — moved out of the es-store-recovery lane's test file when
 // that lane was extracted. It tests linode_token.go, which stayed: the reconciler
 // reads its Linode token lazily from an OPTIONAL Secret volume, so "the file
 // appears later" is the case that matters and the one this pins.

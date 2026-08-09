@@ -1,6 +1,6 @@
 package database
 
-// ci_db_report.go — the two workflow-facing helpers around the `databases` root,
+// db_report.go — the two workflow-facing helpers around the `databases` root,
 // kept in Go rather than inline `run:` bash for the reason .untestable-budget.yaml
 // exists: both encode a decision (is a cluster declared? did the apply provision
 // anything?) and a decision in CI shell is a decision nothing tests.

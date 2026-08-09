@@ -1,6 +1,6 @@
 package assertobs
 
-// loki_query.go — shared read access to the in-cluster Loki HTTP API, for the
+// lokiquery.go — shared read access to the in-cluster Loki HTTP API, for the
 // `assert-openbao-audit` gate. Same transport as prom_query.go (one ephemeral
 // `kubectl port-forward` per command; the apiserver Service proxy is
 // webhook-denied on LKE-Enterprise), with two Loki-specific pieces: the tenant

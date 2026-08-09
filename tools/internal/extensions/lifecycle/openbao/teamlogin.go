@@ -1,6 +1,6 @@
 package openbao
 
-// openbao_login.go — `llz openbao login`, the human-operator auth primitive for
+// teamlogin.go — `llz openbao login`, the human-operator auth primitive for
 // team-scoped OpenBao writes. It runs an OAuth 2.0 Device Authorization Grant
 // against the APL Keycloak realm (externally reachable at keycloak.<domainSuffix>),
 // then exchanges the resulting id_token for a short-lived OpenBao token via the

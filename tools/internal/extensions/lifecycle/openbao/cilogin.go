@@ -1,6 +1,6 @@
 package openbao
 
-// ci_openbao_login.go — `llz ci openbao-login`: obtain a short-lived OpenBao
+// cilogin.go — `llz ci openbao-login`: obtain a short-lived OpenBao
 // token and export it to $GITHUB_ENV (or print it) for later steps. The auth
 // primitive behind the CI-agnostic day-2 pattern (docs/designs/cross-org-reuse-pattern.md).
 //

@@ -8,7 +8,7 @@ package forge
 // (it handles interactive auth modes this deliberately does not).
 //
 // This is where the Phase 2 GitHub implementation of the SecretWriter capability
-// lives; cmd/llz/gh_secrets_native.go is now a thin env-sourced caller of it. The
+// lives; internal/shared/ghsecret is now a thin env-sourced caller of it. The
 // API base is passed in explicitly rather than taken from a Forge so the caller
 // can supply an env-resolved host (GITHUB_API / GH_HOST) or a test server URL.
 

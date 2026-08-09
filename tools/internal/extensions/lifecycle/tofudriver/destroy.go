@@ -7,7 +7,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfbin"
 )
 
-// ci_tfdestroy.go — `llz ci tf-destroy`, the assimilation of the inline
+// destroy.go — `llz ci tf-destroy`, the assimilation of the inline
 // `terraform plan -destroy … && terraform apply destroy-plan.bin` blocks (the
 // cluster and object-storage teardown steps in llz-terraform.yml) and the
 // `terraform apply -refresh-only` step in llz-secret-rotation.yml. Completes the

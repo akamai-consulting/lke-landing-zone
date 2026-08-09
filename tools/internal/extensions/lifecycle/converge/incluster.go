@@ -1,6 +1,6 @@
 package converge
 
-// ci_health_incluster.go — `llz ci health-incluster`: the KUBECTL-FREE sibling of
+// incluster.go — `llz ci health-incluster`: the KUBECTL-FREE sibling of
 // `llz ci health`, for a day-2 job that runs INSIDE the cluster on the slim
 // distroless llz image (no kubectl, no shell). It computes the cluster
 // convergence verdict — the same 0/1/2/3 exit-code contract — over `internal/kube`

@@ -1,6 +1,6 @@
 package tokenprobe
 
-// s3_probe.go — validity probe for the Terraform-state Object Storage keys
+// s3probe.go — validity probe for the Terraform-state Object Storage keys
 // (TF_STATE_ACCESS_KEY / TF_STATE_SECRET_KEY). Unlike the Linode/GitHub/GHCR
 // tokens, S3 credentials can't be checked with a plain Bearer GET — they need an
 // AWS SigV4-signed request. There's no AWS SDK in this module, so SigV4 is

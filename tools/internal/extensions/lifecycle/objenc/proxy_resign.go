@@ -1,6 +1,6 @@
 package objenc
 
-// objproxy_resign.go — the fix for #397.
+// proxy_resign.go — the fix for #397.
 //
 // THE BUG. Recent aws-sdk-go-v2 sends PutObject as `content-encoding: aws-chunked`
 // with a trailing CRC32 (`x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`,

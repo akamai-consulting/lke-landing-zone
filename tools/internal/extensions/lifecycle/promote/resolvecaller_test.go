@@ -1,7 +1,7 @@
 package promote
 
 // TestResolveCaller followed resolveCaller here out of package main's
-// coverage_tier2_test.go — another file named for a coverage TIER rather than a
+// resolvecaller_test.go — another file named for a coverage TIER rather than a
 // subject, which is now the fifth time that naming has hidden a test from its
 // own code.
 

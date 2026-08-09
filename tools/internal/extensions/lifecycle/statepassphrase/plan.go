@@ -1,6 +1,6 @@
 package statepassphrase
 
-// state_passphrase.go — provision TF_STATE_ENCRYPTION_PASSPHRASE, the one
+// plan.go — provision TF_STATE_ENCRYPTION_PASSPHRASE, the one
 // required secret nothing used to create.
 //
 // Every Terraform root carries an OpenTofu `encryption` block (ADR 0007 (state encryption)), and the

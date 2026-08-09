@@ -1,6 +1,6 @@
 package ghgitdata
 
-// gh_gitdata_native.go — a pure net/http client for GitHub's "git data" REST
+// gitdata.go — a pure net/http client for GitHub's "git data" REST
 // API (blobs/trees/commits/refs) plus the Contents API for reads. Used by the
 // in-cluster reconciler, which runs on the slim distroless llz image: NO git
 // binary, NO shell, NO gh CLI — so an overlay commit to a values branch can't

@@ -12,8 +12,17 @@ package registry
 // WHY GATES FIRST. A gate is the one kind that needs no capability plumbing: the
 // validator permits it `read-repo` and nothing else, so there is no client to
 // scope, no credential to fence, and no argument about what a handle should look
-// like. The guards/ bucket is 15 packages and 15-for-15 all-Gate, which is what
-// makes it a clean target rather than a convenient one.
+// like. The guards/ bucket was 15 packages and 15-for-15 all-Gate when this was
+// chosen, which is what made it a clean target rather than a convenient one.
+//
+// IT IS NO LONGER ALL-GATE, and the exception is worth knowing rather than
+// papering over: the bucket is now 16 packages, and `guard-coverage` carries a
+// `transition:scaffolded` named `floor-bank` beside its gate. That does not
+// weaken the reasoning above — a gate still needs no plumbing, and every row in
+// the table below is still a gate binding — but "the bucket is all gates" has
+// stopped being a fact about the tree, so nobody should navigate by it.
+// TestEveryDrivenGateIsReadRepoOnly is what actually holds the line, and it
+// checks the BINDING rather than the bucket.
 //
 // ────────────────────────────────────────────────────────────────────────────
 // IT NEEDS NO ACTION ABI, AND THAT IS THE DESIGN, not a shortcut.

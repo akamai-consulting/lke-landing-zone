@@ -1,6 +1,6 @@
 package teardown
 
-// ci_drain_obj_buckets.go — `llz ci drain-obj-buckets`: empty the data buckets
+// drain_obj_buckets.go — `llz ci drain-obj-buckets`: empty the data buckets
 // WITHOUT deleting them.
 //
 // WHY IT EXISTS. SSE-C keys are per-object and every cluster mints its own

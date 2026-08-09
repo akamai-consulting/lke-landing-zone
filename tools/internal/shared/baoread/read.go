@@ -1,6 +1,6 @@
 package baoread
 
-// bao_read.go — kubectl_probe.go for OpenBao KV reads.
+// read.go — kubectl_probe.go for OpenBao KV reads.
 //
 // baoKVGetField returned "" on any failure. Its own doc comment named the two
 // states it was conflating — "'' on any failure (unseeded path, sealed pod)" —

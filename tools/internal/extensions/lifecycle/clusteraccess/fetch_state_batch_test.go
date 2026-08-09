@@ -1,6 +1,6 @@
 package clusteraccess
 
-// kubeconfig_state_batch_test.go — moved from package main's ci_batch2_test.go,
+// fetch_state_batch_test.go — moved from package main's ci_batch2_test.go,
 // a file that grouped tests by when they were written rather than by what they
 // test. It exercises the state-read path end to end, so it belongs with the code.
 

@@ -5,7 +5,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// cobra_root.go — the `llz <verb>` flag set, moved out of package main.
+// cobra_regenroot.go — the `llz <verb>` flag set, moved out of package main.
 //
 // An extension owns its own command; main owns the tree. These are ROOT-level
 // verbs rather than `llz ci` ones, which changes nothing about the rule.

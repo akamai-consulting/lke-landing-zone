@@ -308,12 +308,18 @@ type Extension struct {
 	// become one.
 	//
 	// IT IS A DEFAULT, NOT A CONSTANT. The assert lanes are the case that settles
-	// this: `llz ci assert-suite` is called from three places in instance-template
-	// (bootstrap unconditionally, cluster-health as a six-lane subset, and
-	// scheduled-checks), so an instance with no object storage has to be able to
-	// turn assert-objstore off in its own configuration rather than by taking a
-	// different build. The registry that reads this field must therefore let an
-	// instance override it in both directions.
+	// this. `llz ci assert-suite` is called from TWO workflows in instance-template
+	// — llz-bootstrap-openbao.yml unconditionally, and llz-cluster-health.yml as a
+	// six-lane `--only` subset — while llz-scheduled-checks.yml reaches PAST the
+	// suite and runs individual lanes (assert-wave-health-vap,
+	// assert-rotation-health) directly. So an instance with no object storage has to
+	// be able to turn assert-objstore off in its own configuration rather than by
+	// taking a different build. The registry that reads this field must therefore
+	// let an instance override it in both directions.
+	//
+	// The third caller used to be listed as scheduled-checks invoking the suite; it
+	// does not, and the correction strengthens the argument rather than weakening
+	// it — a lane reached directly by name is even harder to disable by rebuilding.
 	//
 	// NOTHING VALIDATES IT, DELIBERATELY. There is no rule an always-enabled
 	// extension must satisfy that an opt-in one need not; inventing one to give

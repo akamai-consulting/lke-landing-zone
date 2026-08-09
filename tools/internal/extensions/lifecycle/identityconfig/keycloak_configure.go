@@ -1,6 +1,6 @@
 package identityconfig
 
-// ci_keycloak_configure.go — `llz ci keycloak-configure`, the Keycloak-realm half
+// keycloak_configure.go — `llz ci keycloak-configure`, the Keycloak-realm half
 // of the team-scoped-credentials turnkey path. `llz ci bao-configure` provisions
 // the OpenBao side (the keycloak auth mount + per-team policy/role); this ensures
 // the matching realm objects so `llz openbao login` works with no manual console

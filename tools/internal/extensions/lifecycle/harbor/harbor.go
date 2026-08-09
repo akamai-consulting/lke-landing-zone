@@ -1,6 +1,6 @@
 package harbor
 
-// ci_harbor.go — the CI-side remainder of Harbor provisioning, plus the Harbor
+// harbor.go — the CI-side remainder of Harbor provisioning, plus the Harbor
 // REST plumbing shared with the in-cluster provisioner.
 //
 // The ACTIVE-path provisioning (ensure `platform` project, create the

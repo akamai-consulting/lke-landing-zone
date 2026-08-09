@@ -1,6 +1,6 @@
 package assertobs
 
-// prom_query.go — shared access to in-cluster HTTP APIs behind a Service, for
+// promquery.go — shared access to in-cluster HTTP APIs behind a Service, for
 // the `prom-metrics` / `alert-eval` diagnostics and the assert-* gates.
 //
 // It reaches them via `kubectl port-forward`, NOT the apiserver Service proxy

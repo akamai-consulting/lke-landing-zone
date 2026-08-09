@@ -1,6 +1,6 @@
 package objenc
 
-// ci_obj_encryption_harbor.go — the check that proves the CA chain, by making
+// harbor_blob.go — the check that proves the CA chain, by making
 // HARBOR write a blob rather than writing one ourselves.
 //
 // WHY THIS EXISTS SEPARATELY FROM THE OTHER THREE CHECKS. CheckRegistryPodsCarryCA

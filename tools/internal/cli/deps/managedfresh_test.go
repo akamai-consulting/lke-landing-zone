@@ -1,6 +1,6 @@
 package deps
 
-// managedlock_test.go — the managed-fresh tests that assert against the LIVE
+// managedfresh_test.go — the managed-fresh tests that assert against the LIVE
 // .template-manifest class table, and therefore stayed.
 //
 // They build a scaffold tree in a temp dir and assert which files the guard locks:

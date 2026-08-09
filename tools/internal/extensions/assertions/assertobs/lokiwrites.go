@@ -1,6 +1,6 @@
 package assertobs
 
-// ci_loki_prove_writes.go — make "Loki persists logs" a PROVEN property rather than
+// lokiwrites.go — make "Loki persists logs" a PROVEN property rather than
 // an inferred one.
 //
 // WHY THIS EXISTS. assert-loki's other checks are all observational, and every one
