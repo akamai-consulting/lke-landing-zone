@@ -183,7 +183,6 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		// Linode's gitea on managed, not this repo).
 		instanceRepoToken: os.Getenv("APL_VALUES_REPO_TOKEN"),
 	}
-	reportDNSTokenPlaceholder(os.Getenv("LINODE_DNS_TOKEN"))
 	// apps-repo-revision + managedApps come from the spec (Defaults() populates
 	// managedApps to the LLZ set on managed).
 	if lz, present, err := loadSpec(); present && err == nil {

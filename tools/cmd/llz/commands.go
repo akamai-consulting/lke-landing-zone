@@ -1051,16 +1051,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 			return err
 		}
 	}
-	// The dispatch is the point of no return AND the point the operator loses
-	// sight of the flow — `gh workflow run` prints no run id. Baseline BEFORE the
-	// dispatch: "newest run" afterwards is only ours if it is newer than what was
-	// there before. See build_watch.go.
-	watch := beginDispatchWatch(g, "terraform.yml")
-	if err := runGated(g, buildArgv(env)...); err != nil {
-		return err
-	}
-	watch.report()
-	return nil
+	return runGated(g, buildArgv(env)...)
 }
 
 // up{Tokens,Doctor,Build} are the seams cmdUp drives — package-level vars so a
@@ -1117,21 +1108,7 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 func printManualActions(env string) {
 	b := func(s string) string { return "  " + dim("•") + " " + s }
 	fmt.Println("\n" + bold("══ remaining manual actions (the tooling can't do these for you) ══"))
-	// ORDER IS THE POINT. This used to open with `llz status <env> --wait`, which
-	// cannot succeed for the first ~20 minutes (the cluster does not exist yet) and
-	// then still needs a kubeconfig this machine has none of and a control-plane ACL
-	// that has never contained it — none of which it mentioned. So the first
-	// instruction after a successful dispatch was one guaranteed to fail, with a
-	// fifteen-line remediation block as the reward for following it. Wait for the
-	// build, then get access, then check health.
-	fmt.Println(b("1. Wait for the build (~40 min) — the run URL + `gh run watch` are printed above."))
-	fmt.Println(dim("      A failure there is recoverable: docs/runbooks/first-build-failed.md"))
-	fmt.Println(b("2. Get cluster access — the build ran in CI, so this machine has no kubeconfig:"))
-	fmt.Println(dim("      export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)"))
-	fmt.Println(dim("      llz ci fetch-kubeconfig --region " + env + " --output ~/.kube/" + env + ".yaml"))
-	fmt.Println(dim("      export KUBECONFIG=~/.kube/" + env + ".yaml"))
-	fmt.Println(dim("      (refused? `llz ci runner-acl open --region " + env + "` — the ACL never held this host)"))
-	fmt.Println(b("3. Watch convergence:   " + cyan("llz status "+env+" --wait")))
+	fmt.Println(b("Watch convergence:   " + cyan("llz status "+env+" --wait")))
 	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
 	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
 	// Repeated here because stage 1's banner has scrolled past a full build by now,

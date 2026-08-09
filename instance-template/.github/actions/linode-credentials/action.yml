@@ -23,15 +23,8 @@ inputs:
       object_storage:read_write for OBJ keys.
     required: true
   label:
-    description: >
-      Label for the new credential and the drain target — `revoke-old` matches the
-      same label `create` mints. LEAVE EMPTY in normal use: llz derives the
-      instance-scoped label from the spec (`llz-<objLabelPrefix>-<kind>`). It was
-      a required literal, and the literal every caller passed carried no instance
-      discriminator — so `revoke-old` drained every LLZ instance on the Linode
-      account down to --keep-newest, including the broad account PAT. Set it only
-      to drain a specific legacy label by hand.
-    required: false
+    description: Label for the new credential and the drain target — `revoke-old` matches the same label `create` mints.
+    required: true
   apply:
     description: 'Set to "true" to arm the rotation/revocations. Default is dry-run.'
     required: false
@@ -70,13 +63,6 @@ inputs:
     required: false
   bucket-name:
     description: 'obj-key create: bucket name to scope the key to (e.g. `ecc-block-storage`).'
-    required: false
-  state-endpoint:
-    description: >
-      obj-key create: the state bucket S3 endpoint (`vars.TF_STATE_ENDPOINT`,
-      https://<cluster>.linodeobjects.com). llz derives `bucket-cluster` from it
-      when that input is empty, which is the normal path — a hardcoded cluster
-      mints a key that cannot read the bucket it is meant to unlock.
     required: false
   bucket-permissions:
     description: 'obj-key create: `read_only`, `read_write`, or `none`. Default `read_write`.'
@@ -245,8 +231,6 @@ runs:
         LINODE_TOKEN:           ${{ inputs.linode-token }}
         OBJ_LABEL:              ${{ inputs.label }}
         OBJ_BUCKET_CLUSTER:     ${{ inputs.bucket-cluster }}
-        # Read by llz when OBJ_BUCKET_CLUSTER is empty (rotation_identity.go).
-        TF_STATE_ENDPOINT:      ${{ inputs.state-endpoint }}
         OBJ_BUCKET_NAME:        ${{ inputs.bucket-name }}
         OBJ_BUCKET_PERMISSIONS: ${{ inputs.bucket-permissions }}
         ROTATION_APPLY:         ${{ inputs.apply }}

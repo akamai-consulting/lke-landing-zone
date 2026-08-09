@@ -164,11 +164,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 				if _, err := client.CreateObjectStorageBucket(ctx, clusterID, bucketName); err != nil {
 					return fmt.Errorf("create bucket: %w", err)
 				}
-				// Name what earlier interrupted runs left behind before adding to it
-				// (tokens_statekey.go). Report-only — the repo still reads one of them
-				// until this run's push lands.
-				reportOrphanedStateKeys(ctx, client, instanceRepo)
-				key, err := client.CreateObjectStorageKey(ctx, stateKeyLabel(instanceRepo), clusterID, bucketName, "read_write")
+				key, err := client.CreateObjectStorageKey(ctx, "llz-tfstate-"+repoSlug(instanceRepo), clusterID, bucketName, "read_write")
 				if err != nil {
 					return fmt.Errorf("create scoped key: %w", err)
 				}
@@ -179,16 +175,6 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 				}
 				secrets["TF_STATE_ACCESS_KEY"], secrets["TF_STATE_SECRET_KEY"] = ak, sk
 				fmt.Printf("      %s bucket + scoped read_write key created\n", green("✓"))
-				// Persist the moment the credential exists, not at the end of the
-				// wizard. Everything between here and the push is interactive — three
-				// PAT prompts the operator may well Ctrl-C out of to go create one —
-				// and the secret half of an OBJ key is shown exactly ONCE. Deferring
-				// the write meant an interrupt left a live read_write key on the state
-				// bucket with no record anywhere, and the re-run (finding nothing
-				// cached) minted another. Nothing reaps `llz-tfstate-*`, so they
-				// accumulated. checkpointEnvFiles is best-effort: the authoritative
-				// write still happens below.
-				checkpointEnvFiles(secrets, vars)
 			} else {
 				fmt.Println(dim("      (--yes to create the bucket + scoped key)"))
 			}
@@ -384,13 +370,6 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
 	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
 	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
-	// PRESENCE is not FRESHNESS. reportReadiness ticks TF_IMAGE/KUBE_IMAGE as set;
-	// `llz ci assert-image-fresh` — the first step of the apply's first job —
-	// additionally requires them to name THIS instance's pin. Same merged lookup
-	// `llz tokens` re-pins from, so doctor sees what CI will see.
-	pinErr := checkCIImagePins(func(k string) string {
-		return firstNonEmpty(vars[k], instSt.value(k))
-	})
 	if len(missing) > 0 {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
@@ -398,27 +377,9 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if invalid > 0 {
 		return fmt.Errorf("%d probeable credential(s) are invalid — rotate them (see the validity report above)", invalid)
 	}
-	if pinErr != nil {
-		return pinErr
+	if len(missing) == 0 {
+		fmt.Println("\n" + green("✓") + " ready — every required value is set and every probeable token is valid.")
 	}
-	// Missing REQUIRED config has to fail, not just print.
-	//
-	// This reported "✗ N required item(s) missing" and then returned nil, so
-	// `llz doctor --env <env>` exited 0 on an instance that cannot build — while
-	// its own documentation says "Green when every required item is set". Two ways
-	// that bites: an operator reads exit 0 as ready and runs `llz build`, and
-	// `llz up --skip-tokens` (which the quickstart documents) walks straight past
-	// stage 2 into the dispatch. Either way the answer arrives from CI's
-	// `require-secret` minutes later instead of from the gate that exists to
-	// prevent exactly that.
-	//
-	// reportReadiness collects REQUIRED items only (state.go: `if r.Required &&
-	// !onGitHub`), so an optional credential left unset still exits 0.
-	if len(missing) > 0 {
-		return fmt.Errorf("%d required item(s) not set on %s: %s — run `llz tokens%s --env %s --yes`",
-			len(missing), instanceRepo, strings.Join(missing, ", "), adminFlag(admin), env)
-	}
-	fmt.Println("\n" + green("✓") + " ready — every required value is set and every probeable token is valid.")
 	return nil
 }
 
@@ -671,20 +632,9 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
 		return protErr
 	}
-	for i, it := range items {
+	for _, it := range items {
 		if err := execArgv(it.argv, it.val); err != nil {
-			// Say WHERE the run stopped and that finishing is a re-run. This loop
-			// pushes N secrets/variables and used to abort with a bare
-			// `NAME: exit status 1`, leaving the operator with a half-pushed repo and
-			// no statement of that fact — in a command whose headline property is
-			// that it skips everything already set.
-			//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded remediation block, not a sentence fragment
-			return fmt.Errorf("pushing %s failed (%d of %d pushed): %w\n"+
-				"  The items before it ARE set; %s picks up where this stopped\n"+
-				"  (it skips everything already satisfied). If this is a permissions\n"+
-				"  error, %s reports which credential and scope.",
-				it.argv[3], i, len(items), err,
-				cyan("llz tokens --env "+env+" --yes"), cyan("llz doctor --env "+env))
+			return fmt.Errorf("%s: %w", it.argv[3], err)
 		}
 	}
 	// The env was created + seeded; if its branch policy couldn't be applied

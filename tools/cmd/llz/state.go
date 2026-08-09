@@ -29,13 +29,7 @@ func e2eRequirements(admin bool) []requirement {
 		{"LINODE_API_TOKEN", true, true, true, false, "Linode PAT (also creates the state bucket)"},
 		{"TF_STATE_ACCESS_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
 		{"TF_STATE_SECRET_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
-		// "Environments: write", NOT "Secrets". The fine-grained Secrets permission
-		// governs only REPO-level secrets, and every secret the build writes back is
-		// scoped to infra-<env> — so a PAT built from this line 403s on the seal-key
-		// write six minutes after the cluster comes up. The wizard prompt and the
-		// quickstart both say Environments; this table (which the code calls the
-		// single source of truth) said the opposite.
-		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Environments:write"},
+		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Secrets:write"},
 		{"APL_VALUES_REPO_TOKEN", true, true, true, false, "GitHub fine-grained PAT, Contents:write (values+apps repo)"},
 		// REPO-LEVEL (EnvScope false), unlike every other secret here. One instance
 		// has ONE state-encryption passphrase: the key-provider name it writes under

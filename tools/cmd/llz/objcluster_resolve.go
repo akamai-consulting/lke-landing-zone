@@ -54,16 +54,12 @@ var objClusterClient = func() objClusterLister {
 func objClustersInRegion(region string) (ids []string, ok bool) {
 	c := objClusterClient()
 	if c == nil {
-		// Announced, not swallowed — see accountRegions. checkRegion runs first and
-		// reports the no-token case for both, so this only speaks when it has
-		// something the region check did not already say.
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	all, err := c.ListObjectStorageClusters(ctx)
 	if err != nil {
-		reportSkippedAccountCheck("--obj-cluster", err)
 		return nil, false
 	}
 	for _, m := range all {

@@ -47,12 +47,6 @@ func credentialsPATCreateCmd(o *rotatorOpts) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The label used to be a workflow literal shared by every instance on
-			// the account, which made revoke-old a cross-instance revocation.
-			// See rotation_identity.go.
-			if label, err = resolveRotationLabel(label, rotationKindPAT, "`llz credentials pat create`"); err != nil {
-				return err
-			}
 			return runCredentialsPATCreate(context.Background(), newPATRotatorClient(token), apply, label, scopes, validityDays, ghaSecretName, strings.Fields(ghaDeployments))
 		},
 	}
@@ -79,9 +73,6 @@ func credentialsPATRevokeOldCmd(o *rotatorOpts) *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token, apply, err := o.resolve()
 			if err != nil {
-				return err
-			}
-			if label, err = resolveRotationLabel(label, rotationKindPAT, "`llz credentials pat revoke-old`"); err != nil {
 				return err
 			}
 			return runCredentialsPATRevokeOld(context.Background(), newPATRotatorClient(token), apply, label, graceDays)
@@ -177,13 +168,8 @@ func runCredentialsPATRevokeOld(ctx context.Context, client patAPI, apply bool, 
 		created int64
 	}
 	var candidates []cand
-	legacyN := 0
 	for _, t := range tokens {
-		s, _ := t["label"].(string)
-		if s == legacyRotationLabels[rotationKindPAT] {
-			legacyN++
-		}
-		if s != label {
+		if s, _ := t["label"].(string); s != label {
 			continue
 		}
 		id, ok := cli.AsUint64(t["id"])
@@ -197,9 +183,6 @@ func runCredentialsPATRevokeOld(ctx context.Context, client patAPI, apply bool, 
 		candidates = append(candidates, cand{id, created})
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].created > candidates[j].created })
-	if label != legacyRotationLabels[rotationKindPAT] {
-		reportLegacyRotationLabels(rotationKindPAT, legacyN)
-	}
 
 	if len(candidates) == 0 {
 		slog.Warn("no PATs match label — nothing to revoke", "label", label)

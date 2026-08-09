@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -28,14 +28,18 @@ RETRY := template-scripts/ci/with-retry.sh
 # Override on the CLI, e.g. `make coverage COVERAGE_MINS="cmd/llz=20"`.
 COVERAGE_MINS := \
 	cmd/llz=48 \
+	internal/budget=92 \
 	internal/cli=95 \
 	internal/clusterspec=95 \
+	internal/extension=95 \
 	internal/health=95 \
 	internal/kube=78 \
 	internal/linode=80 \
 	internal/metrics=95 \
 	internal/openbao=88 \
+	internal/pathglob=93 \
 	internal/preflight=95 \
+	internal/shquote=100 \
 	internal/terraform=95
 
 help:
@@ -86,6 +90,7 @@ help:
 	@echo "  monitoring-label-guard      every ServiceMonitor/PodMonitor/PrometheusRule carries prometheus: system (#175 day-2-blind class)"
 	@echo "  dropped-apiversions-check  no manifest declares an apiVersion apl-core's operators no longer serve (#330 class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
+	@echo "  core-surface-check    fail when Go logic in package main exceeds .core-surface-budget.yaml (ADR 0014)"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
 	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
@@ -506,6 +511,22 @@ dropped-apiversions-check:
 untestable-loc-check:
 	$(call LLZ_CI,untestable-loc,--root ..)
 
+# core-surface-check: the counterweight to untestable-loc-check (ADR 0014). That
+# gate names tools/cmd/llz as the destination for converted logic but caps
+# nothing there, so package main accretes — 236 non-test files, 130 of them
+# ci_*.go. This one budgets the destination: Go logic lines in package main,
+# from .core-surface-budget.yaml. Satisfy it by extracting to
+# tools/internal/<pkg> (ADR 0013) or moving the capability out to an extension
+# (issue #10) — never by raising the budget. Ratchets DOWN, same as its sibling.
+#
+# `make lint` fires this and untestable-loc-check from ONE changed-file
+# condition, so a Go-only change also runs the sibling and a workflow-only change
+# also runs this. Both are pure Go over a config file and take well under a
+# second; splitting the condition would have cost recipe lines in a category with
+# one line of headroom left, to save nothing measurable.
+core-surface-check:
+	$(call LLZ_CI,core-surface,--root ..)
+
 # chart-guards: the two halves of "I changed a chart" — run them together.
 # Bumping a Chart.yaml version is only half the job: the bump leaves every Argo
 # pin on the OLD version, and chart-version-guard passing says nothing about
@@ -667,7 +688,7 @@ docs-guard:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -703,8 +724,8 @@ lint:
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
 		$(MAKE) --no-print-directory actions-lint; \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$'; then \
-		$(MAKE) --no-print-directory untestable-loc-check; \
+	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$|^tools/cmd/llz/.*\.go$$|^\.core-surface-budget\.yaml$$'; then \
+		$(MAKE) --no-print-directory untestable-loc-check core-surface-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/cmd/llz/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
 		$(MAKE) --no-print-directory docs-guard; \

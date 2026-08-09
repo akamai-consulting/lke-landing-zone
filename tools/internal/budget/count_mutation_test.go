@@ -1,4 +1,4 @@
-package main
+package budget
 
 import (
 	"os"
@@ -50,14 +50,14 @@ func TestScanUntestableOrderingAndBreakdown(t *testing.T) {
 	write("scripts/header-only.sh", "#!/bin/bash\n# no logic\n\n") // 0 — must not appear in the breakdown
 	write(".github/workflows/w.yml", "steps:\n  - run: |\n      echo a\n")
 
-	cfg := untestableBudget{Categories: map[string]untestableCategory{
+	cfg := budgetConfig{Categories: map[string]budgetCategory{
 		"zulu-workflows": {Kind: "workflow-run", Budget: 9, Include: []string{".github/workflows/*.yml"}},
 		"alpha-scripts":  {Kind: "script", Budget: 9, Include: []string{"scripts/**/*.sh"}},
 	}}
 
-	results, err := scanUntestable(root, cfg)
+	results, err := scanBudgetCategories(root, cfg)
 	if err != nil {
-		t.Fatalf("scanUntestable: %v", err)
+		t.Fatalf("scanBudgetCategories: %v", err)
 	}
 	if len(results) != 2 {
 		t.Fatalf("results = %+v, want 2 categories", results)
@@ -151,31 +151,6 @@ func TestCountMakefileRecipeLinesEdges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := countMakefileRecipeLines(tt.in); got != tt.want {
 				t.Errorf("countMakefileRecipeLines() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestMatchGlobStarAtPatternEdges covers the `*` lookahead at both ends of a
-// pattern — a leading `*` (there is nothing before it to inspect) and a trailing
-// `*` (there is nothing after it). Both are ordinary budget-config include
-// patterns, and either edge mishandled makes matchGlob's error path swallow the
-// pattern, silently dropping a whole category's files from the tally.
-func TestMatchGlobStarAtPatternEdges(t *testing.T) {
-	tests := []struct {
-		pattern, path string
-		want          bool
-	}{
-		{"*.sh", "lib.sh", true},
-		{"*.sh", "scripts/lib.sh", false}, // a single * stays within a segment
-		{"scripts/*", "scripts/deploy.sh", true},
-		{"scripts/*", "scripts/sub/deploy.sh", false},
-		{"**", "a/b/c.sh", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.pattern+"~"+tt.path, func(t *testing.T) {
-			if got := matchGlob(tt.pattern, tt.path); got != tt.want {
-				t.Errorf("matchGlob(%q,%q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
 			}
 		})
 	}

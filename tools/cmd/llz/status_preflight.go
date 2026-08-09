@@ -15,9 +15,7 @@ package main
 // print that instead.
 
 import (
-	"errors"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -39,15 +37,6 @@ func statusPreflight(env string) error {
 	if !lookable("kubectl") {
 		return fmt.Errorf("kubectl is not on PATH — `llz status` reads the cluster with it (`llz doctor` lists the tooling)")
 	}
-	// Wrong directory, before wrong cluster. Every remediation below is written for
-	// someone standing in their instance — it opens with `grep … .llz/secrets.env`
-	// and goes on to `llz ci fetch-kubeconfig`, which resolves the cluster through
-	// <env>.tfvars. Run from anywhere else, all of that is noise about a file that
-	// is not there. `llz env add` already refuses this case precisely; status
-	// printed the fifteen-line kubeconfig block instead.
-	if err := requireStatusInstanceRoot(env); err != nil {
-		return err
-	}
 	if ctx := toolOut("kubectl", "config", "current-context"); ctx == "" {
 		return noClusterAccessErr(env, "no current kubectl context is set")
 	}
@@ -55,39 +44,6 @@ func statusPreflight(env string) error {
 		return noClusterAccessErr(env, why)
 	}
 	return nil
-}
-
-// requireStatusInstanceRoot refuses `llz status` outside an instance checkout.
-//
-// Separate wording from requireInstanceRoot's, because the reason differs: env
-// add would AUTHOR files in the wrong place, whereas status would merely read the
-// wrong cluster — but every remedy it prints (the `.llz/secrets.env` token, the
-// <env>.tfvars fetch-kubeconfig resolves the cluster through) is relative to the
-// instance root, so away from it the whole block is unfollowable.
-func requireStatusInstanceRoot(env string) error {
-	if isInstanceRoot(".") {
-		return nil
-	}
-	cwd, _ := os.Getwd()
-	var b strings.Builder
-	fmt.Fprintf(&b, "`llz status` must run from your instance repo root, and %s is not one.\n", cwd)
-	b.WriteString("  It resolves the cluster through that deployment's rendered tfvars and reads the\n")
-	b.WriteString("  Linode token from .llz/secrets.env — neither of which exists here.\n")
-	switch cands := instanceSubdirs("."); {
-	case len(cands) > 0:
-		b.WriteString("  • your instance is right here — cd into it first:\n")
-		for _, c := range cands {
-			fmt.Fprintf(&b, "      %s\n", cyan("cd "+c+" && llz status "+env))
-		}
-	case enclosingInstanceRoot() != "":
-		fmt.Fprintf(&b, "  • you are inside an instance, below its root — go up to it:\n      %s\n",
-			cyan("cd "+enclosingInstanceRoot()+" && llz status "+env))
-	default:
-		fmt.Fprintf(&b, "  • already scaffolded one?  %s\n", cyan("cd <instance-dir> && llz status "+env))
-		fmt.Fprintf(&b, "  • checking a cluster you already have a kubeconfig for? %s\n",
-			cyan("kubectl get applications -A -n argocd"))
-	}
-	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
 // toolOut is execOutput reduced to trimmed stdout, "" on any error. (gitOut

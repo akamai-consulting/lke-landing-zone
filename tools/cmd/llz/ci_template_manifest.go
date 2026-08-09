@@ -17,6 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pathglob"
 )
 
 // upgradeAction is what `llz upgrade` does to a file of a given class once
@@ -242,7 +244,7 @@ func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) e
 		}
 		covered := false
 		for _, g := range protect {
-			if matchGlob(g, rel) {
+			if pathglob.Match(g, rel) {
 				covered = true
 				break
 			}
@@ -261,7 +263,90 @@ func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) e
 			"or reclassify it in %s if the template should in fact own it.\n", m.path)
 		return fmt.Errorf("template-manifest: %d copier-fenced file(s) not protected by copier", len(viol))
 	}
+	return m.checkCopierFencingReverse(files, p, copierPath, errOut)
+}
+
+// checkCopierFencingReverse is the other half of the containment: every scaffold
+// file copier SKIPS must be a class that wants skipping.
+//
+// The forward pass asks "is every fenced file protected?". Without this one,
+// nothing asks the converse, and the gap is not cosmetic: a `managed` or `merge`
+// file listed in `_skip_if_exists` is pinned at whatever version the instance
+// first rendered. Copier skips it, so no update reaches it; and the manifest
+// classes it template-owned, so `llz upgrade`'s restore pass does not put a newer
+// version back either. The file silently stops receiving template changes, and
+// both files individually look correct — the disagreement only exists BETWEEN
+// them. That is precisely the class of drift the one-class-table refactor set out
+// to make impossible, so the check belongs with it.
+//
+// SCOPE: `_skip_if_exists` only, not `_exclude`. They mean different things.
+// `_skip_if_exists` is the fence — "copier will not update this" — which is an
+// ownership claim, and ownership is the manifest's business. `_exclude` removes a
+// file from the template altogether, which is a DELIVERY decision: a file that
+// never ships has no meaningful update class, so demanding one would reject a
+// legitimate "keep this out of instances" rule.
+//
+// ADR 0014 records why this matters beyond hygiene: the extension framework
+// (issue #10) needs to fence copier off extension-owned files, and PR #15
+// currently does it with a second, runtime `copier update --exclude` built from
+// the extension lock. Two fences can disagree. Making the containment
+// bidirectional means a fenced path that the manifest does not know about cannot
+// pass silently.
+func (m templateManifest) checkCopierFencingReverse(files []string, p copierProtect, copierPath string, errOut io.Writer) error {
+	var mislabelled []string
+	for _, rel := range files {
+		if p.AnswersFile != "" && rel == p.AnswersFile {
+			continue // copier regenerates the answers tracker itself
+		}
+		if !pathglob.MatchAny(p.SkipIfExists, rel) {
+			continue
+		}
+		if c, ok := lookupTemplateClass(m.classify(rel)); ok && c.copierFenced {
+			continue
+		}
+		mislabelled = append(mislabelled, rel)
+	}
+	if len(mislabelled) > 0 {
+		fmt.Fprintf(errOut, "::error::%d scaffold file(s) are fenced by copier's _skip_if_exists in %s "+
+			"but are not a copier-fenced class in %s:\n", len(mislabelled), copierPath, m.path)
+		for _, rel := range mislabelled {
+			fmt.Fprintf(errOut, "  - %s (class %q)\n", rel, m.classify(rel))
+		}
+		fmt.Fprintf(errOut, "Copier will never update these, but %s says the template owns them — so they\n"+
+			"are pinned at whatever the instance first rendered and no upgrade reaches them.\n"+
+			"Reclassify each as a copier-fenced class (%s), or drop it from `_skip_if_exists`.\n",
+			m.path, fencedClassNames())
+		return fmt.Errorf("template-manifest: %d copier-fenced path(s) the manifest does not own", len(mislabelled))
+	}
+	// A pattern matching nothing is dead config, and this repo normally FAILS on
+	// unused registry entries. Not here: a fence rule may legitimately anticipate a
+	// file the template does not ship yet (copier applies it the moment one
+	// appears), so an unmatched rule is reported and not enforced.
+	for _, g := range p.SkipIfExists {
+		matched := false
+		for _, rel := range files {
+			if pathglob.Match(g, rel) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			fmt.Fprintf(errOut, "note: copier `_skip_if_exists` rule %q in %s matches no scaffold file.\n", g, copierPath)
+		}
+	}
 	return nil
+}
+
+// fencedClassNames lists the classes that copier must be fenced off, for error
+// text. Derived from the class table so a new fenced class needs no edit here.
+func fencedClassNames() string {
+	var names []string
+	for _, c := range templateClasses {
+		if c.copierFenced {
+			names = append(names, c.name)
+		}
+	}
+	return strings.Join(names, "|")
 }
 
 func loadTemplateManifest(root string) (templateManifest, error) {
@@ -316,7 +401,7 @@ func (m templateManifest) classify(rel string) string {
 	rel = strings.TrimPrefix(rel, "./")
 	var hit string
 	for _, rule := range m.rules {
-		if matchGlob(rule.pattern, rel) {
+		if pathglob.Match(rule.pattern, rel) {
 			hit = rule.class
 		}
 	}

@@ -77,7 +77,7 @@ func ciCmd() *cobra.Command {
 	// converge tail is event-paced instead of waiting out the */5 schedule.
 	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd(), ciKickHarborProvisionerCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
-	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd(), ciBuildFailureSummaryCmd())
+	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
 	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
@@ -347,6 +347,11 @@ func ciCmd() *cobra.Command {
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
 	c.AddCommand(ciUntestableLOCCmd())
+	// Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
+	// destination for converted logic but no capacity, so package main accretes.
+	// This budgets the destination. Ratchets DOWN as code moves to
+	// tools/internal/<pkg> or out to an extension.
+	c.AddCommand(ciCoreSurfaceCmd())
 	// Release-hygiene gate: a chart change must bump its Chart.yaml version, or
 	// publish-charts.yml never publishes it and clusters keep the stale artifact.
 	c.AddCommand(ciChartVersionGuardCmd())
@@ -447,10 +452,12 @@ func runCIVerifyObjectStorage(region string) error {
 	for _, b := range buckets {
 		have[cli.AsString(b["label"])] = true
 	}
-	// objBucketLabels, not a second copy of the list: this verb and the
-	// `llz doctor` bucket-label preflight must agree about what the
-	// object-storage root creates, and two literals cannot be kept in step.
-	want := objBucketLabels(prefix, region)
+	want := []string{
+		prefix + "-loki-chunks-" + region,
+		prefix + "-loki-ruler-" + region,
+		prefix + "-loki-admin-" + region,
+		prefix + "-harbor-registry-" + region,
+	}
 	var missing []string
 	for _, label := range want {
 		if !have[label] {

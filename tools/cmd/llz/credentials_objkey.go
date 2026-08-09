@@ -56,15 +56,6 @@ func credentialsObjKeyCreateCmd(o *rotatorOpts) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Resolve identity BEFORE the client call: both of these used to be
-			// workflow literals, and both fail silently rather than loudly when
-			// wrong (see rotation_identity.go).
-			if label, err = resolveRotationLabel(label, rotationKindTFStateKey, "`llz credentials obj-key create`"); err != nil {
-				return err
-			}
-			if cluster, err = resolveObjBucketCluster(cluster, os.Getenv("TF_STATE_ENDPOINT")); err != nil {
-				return err
-			}
 			return runCredentialsObjKeyCreate(context.Background(), newObjKeyRotatorClient(token), apply, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName, strings.Fields(ghaDeployments))
 		},
 	}
@@ -97,9 +88,6 @@ func credentialsObjKeyRevokeOldCmd(o *rotatorOpts) *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token, apply, err := o.resolve()
 			if err != nil {
-				return err
-			}
-			if label, err = resolveRotationLabel(label, rotationKindTFStateKey, "`llz credentials obj-key revoke-old`"); err != nil {
 				return err
 			}
 			return runCredentialsObjKeyRevokeOld(context.Background(), newObjKeyRotatorClient(token), apply, label, keepNewest)
@@ -194,13 +182,8 @@ func runCredentialsObjKeyRevokeOld(ctx context.Context, client objKeyAPI, apply 
 	// Linode IDs increase monotonically per account — sort same-labeled keys by
 	// id descending so the newest is index 0.
 	var ids []uint64
-	legacyN := 0
 	for _, k := range keys {
-		s, _ := k["label"].(string)
-		if s == legacyRotationLabels[rotationKindTFStateKey] {
-			legacyN++
-		}
-		if s != label {
+		if s, _ := k["label"].(string); s != label {
 			continue
 		}
 		id, ok := cli.AsUint64(k["id"])
@@ -210,11 +193,6 @@ func runCredentialsObjKeyRevokeOld(ctx context.Context, client objKeyAPI, apply 
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
-	// Report-only, and only when the drain is NOT already pointed at the legacy
-	// label (an operator cleaning up by hand does not need to be told about it).
-	if label != legacyRotationLabels[rotationKindTFStateKey] {
-		reportLegacyRotationLabels(rotationKindTFStateKey, legacyN)
-	}
 
 	now := time.Now().Unix()
 	if len(ids) == 0 {

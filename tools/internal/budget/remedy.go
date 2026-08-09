@@ -1,0 +1,37 @@
+package budget
+
+// remedy.go — the two gates' breach guidance, and the reason it is a value rather
+// than a constant in the engine.
+//
+// A budget gate's OUTPUT IS ITS PRODUCT: the number only teaches if the message
+// beside it says what to do, and the two gates that share this engine want
+// OPPOSITE things done. untestable-loc says "move the logic into tools/cmd/llz";
+// core-surface says "move it out" (ADR 0014). One message saying both would be a
+// riddle, so the remedy travels with the gate and the engine only substitutes
+// `{config}` into it.
+//
+// `{config}` is a placeholder rather than a %s verb because the alternative remedy
+// comes from YAML, where a stray % would turn into a format error.
+
+// UntestableRemedy is `llz ci untestable-loc`'s guidance. Its doctrine is
+// absolute — the budget never goes up — because the logic it counts has somewhere
+// unambiguously better to be.
+const UntestableRemedy = "Move the logic into unit-tested Go " +
+	"(tools/cmd/llz), or — for genuine install/glue with no logic — add the file to " +
+	"`exclude:` in {config} with a justification. Do NOT raise the budget to make this pass."
+
+// CoreSurfaceRemedy is `llz ci core-surface`'s guidance, and the ONLY copy of it:
+// .core-surface-budget.yaml deliberately sets no `remedy:` key, because when the
+// wording lived in both places the YAML copy silently won and edits here never
+// reached an operator.
+//
+// It has two branches because the number is a high-water mark with no slack, so a
+// breach is routine rather than exceptional. Preferred: decompose, and the number
+// goes DOWN. Otherwise: record the growth on the same line in the same commit,
+// where a reviewer sees it next to the code that caused it. Telling authors never
+// to raise it — untestable-loc's doctrine — would be wrong here, and would get the
+// gate deleted rather than obeyed.
+const CoreSurfaceRemedy = "Package main grew (ADR 0014). Prefer to shrink it: extract to " +
+	"tools/internal/<pkg> (ADR 0013), move the capability out to an extension (issue #10), " +
+	"or delete what is dead. If the growth is intended, update the number in {config} in THIS " +
+	"commit and say in the message why the code belongs in package main."

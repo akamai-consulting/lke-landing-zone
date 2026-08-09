@@ -827,10 +827,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Explain the failure
-        if: failure()
-        run: llz ci build-failure-summary --stage bootstrap --region "$REGION"
-
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
