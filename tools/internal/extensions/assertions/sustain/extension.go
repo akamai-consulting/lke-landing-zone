@@ -110,16 +110,26 @@ func Extension() extension.Extension {
 		},
 		Incomplete: []string{
 			"transition:upgraded[own-paths] — the copier restore/overwrite pass " +
-				"(upgrade_policy.go) reads .template-manifest's class table, which ADR 0014 " +
-				"pins as the single ownership authority, so the binding that would hold " +
-				"own-paths cannot be separated from the file that defines it",
+				"(SnapshotUpgradeOwned, tools/internal/verbs/selfupgrade/upgrade_policy.go) " +
+				"reads .template-manifest's class table, which ADR 0014 pins as the single " +
+				"ownership authority. THIS NOTE USED TO READ AS A DEBT AWAITING EXTRACTION " +
+				"into this extension, on the grounds that the binding could not be separated " +
+				"from the file defining it. That is no longer the situation: the file went to " +
+				"internal/verbs, where TestVerbsDoNotDeclareExtensions forbids a declaration " +
+				"outright, because `llz self-upgrade` is a command an operator runs and not a " +
+				"capability an instance has or lacks. So no binding here is pending; the " +
+				"surface was CLASSIFIED away rather than extracted, and own-paths stays held " +
+				"by import-brownfield alone",
 			"provenance resolution over the GitHub API and the copier-update smoke gate " +
 				"were listed here as unextracted; BOTH HAVE SINCE MOVED, and neither came " +
 				"to this extension — provenance is now the `template-commit` extension " +
-				"(assertions/templatecommit/commit.go) and the smoke gate is " +
-				"verbs/upgrade/cobra_upgrade_test_gate.go. Recorded rather than deleted " +
-				"because it answers the question the first note raises: the sustain surface " +
-				"did not grow to cover them, it was split away from them",
+				"(tools/internal/extensions/assertions/templatecommit/commit.go) and the " +
+				"smoke gate is tools/internal/verbs/upgrade/cobra_upgrade_test_gate.go. " +
+				"Recorded rather than deleted because it answers the question the first note " +
+				"raises: the sustain surface did not grow to cover them, it was split away " +
+				"from them — which is what happened a third time to the first note's own " +
+				"subject. The paths are written tools/-relative on purpose, so " +
+				"guard-source-refs resolves them; module-relative citations are its blind spot",
 		},
 	}
 }
