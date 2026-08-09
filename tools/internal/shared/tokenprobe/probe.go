@@ -11,7 +11,7 @@
 // full set of them, and only the second is a capability.
 //
 // THE SPLIT ALSO UNBLOCKED config-readiness, whose own model could not move down
-// while it referenced tokeninv.TokenValidity -- the same two-packages-each-
+// while it referenced tokeninv's TokenValidity -- the same two-packages-each-
 // waiting-on-the-other shape that kept the OpenBao client and the HA topology
 // model stuck in extensions/ until they were moved together.
 package tokenprobe

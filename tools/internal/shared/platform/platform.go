@@ -4,7 +4,7 @@
 // THEY ARE FACTS, NOT CAPABILITIES, and that phrasing is lifted from
 // internal/extensions/reconciler/names.go, which had already made the argument and
 // then drawn the wrong conclusion from it: "the same call baoread.Namespace and
-// docsguard.DeliveredDocs got. Four packages need to agree on them ... the only
+// docsguard's DeliveredDocs got. Four packages need to agree on them ... the only
 // way two callers can disagree about what a ConfigMap is called is if there are
 // two copies of the name." Correct -- and it then placed them "with the RECONCILER
 // rather than with `llz ci firewall`", which answers WHICH EXTENSION when the
@@ -44,7 +44,7 @@ const FirewallDeploymentName = "llz-linode-cidr-firewall"
 //
 // DeliveredDocs came from internal/extensions/docsguard. It is the third name
 // reconciler/names.go cited when it argued these are FACTS -- "the same call
-// baoread.Namespace and docsguard.DeliveredDocs got" -- so it was already
+// baoread.Namespace and docsguard's DeliveredDocs got" -- so it was already
 // recognised as one and left in an extension anyway. deliver-docs consumes it to
 // decide what to keep; docs-guard consumes it to decide what to check. Two
 // consumers that must agree exactly is the whole argument.

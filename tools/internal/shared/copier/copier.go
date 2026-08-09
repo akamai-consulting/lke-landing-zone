@@ -48,7 +48,7 @@ func ResolveRef(ref string) string {
 
 // LatestReleaseFn resolves the newest published vX.Y.Z release of a template repo;
 // seamed for tests. The picker drops drafts / pre-releases and ignores the llz/v*
-// CLI tag track (llzver.LatestLLZTag). It USED TO READ selfupgrade.LatestRelease —
+// CLI tag track (llzver.LatestLLZTag). It USED TO READ selfupgrade's LatestRelease —
 // this package importing an extension to borrow it was one of four such
 // inversions; the version vocabulary now lives in shared/llzver, where both
 // callers reach it without either layer depending on the other.

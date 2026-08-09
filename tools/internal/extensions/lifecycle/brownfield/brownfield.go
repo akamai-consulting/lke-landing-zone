@@ -603,7 +603,8 @@ func buildDNS(in reportInputs, hostsByNS map[string][]string) importDNS {
 // for facts the cluster scan can only guess: the APL version, the domain suffix,
 // and which components are on. No-op when no apl-role repo was scanned.
 //
-// Precondition: platform.Components is non-nil (detectComponents guarantees it);
+// Precondition: the platform argument's Components is non-nil (detectComponents
+// guarantees it);
 // buildReport nils an empty set only after this fold.
 func foldAplSignals(apl *aplSignals, platform *importPlatform, dns *importDNS) {
 	if apl == nil {

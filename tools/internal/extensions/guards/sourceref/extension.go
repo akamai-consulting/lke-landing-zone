@@ -16,6 +16,13 @@ package sourceref
 // instruction nobody can follow, in a file only opened while changing the thing
 // it governs. A stale link is a dead end; a stale pointer with a direction on it
 // sends the reader somewhere wrong.
+//
+// TWO COMMANDS, ONE BINDING, because they are the same claim about two halves of
+// a reference. `source-ref-guard` resolves the PATH and `symbol-ref-guard` the
+// `pkg.Symbol`, and a reference can be right about one and wrong about the other
+// — the sweep that fixed the paths shipped exactly that, naming the file a symbol
+// had left. They read the same corpus through the same gate binding and there is
+// no instance where you would want one without the other.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
@@ -34,7 +41,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "guard-source-refs",
-		Short:  "a path literal naming the source tree must resolve to something that exists",
+		Short:  "a path or pkg.Symbol naming this repo's source must resolve to something that exists",
 		Always: true,
 		Bindings: []extension.Binding{{
 			Kind:   extension.Gate,

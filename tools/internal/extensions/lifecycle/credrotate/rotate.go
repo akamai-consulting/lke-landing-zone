@@ -56,7 +56,7 @@ func firstNonEmpty(vals ...string) string {
 // Opts is the global argument set every `llz credentials` subcommand
 // shares — the cobra-flag equivalent of the hand-rolled argument preamble the
 // standalone rotator binaries used before they were folded into llz. (That
-// preamble, cli.ParseRotatorArgs, outlived its callers and has been removed.)
+// preamble, cli's ParseRotatorArgs, outlived its callers and has been removed.)
 type Opts struct {
 	Token string
 	Apply bool

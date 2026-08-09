@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -255,4 +256,11 @@ func TestRunSkipsGeneratedAndVendoredTrees(t *testing.T) {
 	if err := Run(root); err != nil {
 		t.Fatalf("findings inside generated trees must not fail this repo: %v", err)
 	}
+}
+
+// repoFor builds the read-repo handle the guards use, for tests that exercise a
+// helper below Run rather than Run itself.
+func repoFor(t *testing.T, root string) capability.Repo {
+	t.Helper()
+	return capability.RepoForGate(Extension(), root)
 }

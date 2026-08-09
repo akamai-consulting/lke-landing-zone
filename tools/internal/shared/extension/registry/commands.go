@@ -246,6 +246,7 @@ var commands = []Command{
 	{"tokeninv", tokeninv.ValidateTokensCmd},
 	{"versionpins", versionpins.Cmd},
 	{"sourceref", sourceref.Cmd},
+	{"sourceref", sourceref.SymbolsCmd},
 	{"workflowshells", workflowshells.Cmd},
 	{"wavehealth", wavehealth.DependencyGuardCmd},
 	{"wavehealth", wavehealth.HealthGuardCmd},

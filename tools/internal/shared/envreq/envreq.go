@@ -8,7 +8,7 @@
 // E2ERequirements -- not the `llz ci env-readiness` verb.
 //
 // IT COULD NOT MOVE UNTIL ONE COMMIT AGO. ReportReadiness renders the validity
-// column, which meant this file referenced tokeninv.TokenValidity and so could not
+// column, which meant this file referenced tokeninv's TokenValidity and so could not
 // be substrate while the token probe was still inside the token INVENTORY. Two
 // packages each waiting on the other, for the third time in this sweep; splitting
 // tokenprobe out is what unblocked it.

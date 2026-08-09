@@ -1826,7 +1826,7 @@ trusting a plan you wrote yourself**, especially one written from a comment rath
 **The placeholder set moved to the validator's side.** `bootstrapValuePlaceholders` is the secrets-only
 set of `${...}` tokens bootstrap-cluster substitutes, and apl-schema validates that committed values
 use only those. It now lives in the guard and `cmd/llz` imports it — the same resolution
-`deliver-docs` reached for `docsguard.DeliveredDocs`. A check that validates a set is meaningless if
+`deliver-docs` reached for `docsguard's DeliveredDocs`. A check that validates a set is meaningless if
 it runs against a different set than the producer ships.
 
 ### What `assert-objstore` said out loud — the write is the check
@@ -2231,7 +2231,7 @@ everything downstream of it is stuck until it does.
 |---|---|
 | `baoExecFn` | a real capability → `Exec` seam, with **which pod** baked in by the installer (`rootOpenbaoPod` has six callers in main and is not this package's business) |
 | `parseBaoPodStatus` | four other callers in main — shared machinery → `PodStatusUnsealed` seam over it |
-| `transientExecMarkers` | **data**, and it moved *here* rather than being injected: the only thing that reasons about kube transport failures is this classifier. Same resolution as `docsguard.DeliveredDocs` |
+| `transientExecMarkers` | **data**, and it moved *here* rather than being injected: the only thing that reasons about kube transport failures is this classifier. Same resolution as `docsguard's DeliveredDocs` |
 
 **`PodStatusUnsealed` defaults to `false`, deliberately.** This package's entire discipline is that a
 non-answer must never read as absence — erring toward unknown costs a failed run, erring toward absent
@@ -2418,7 +2418,7 @@ fail-closed discipline exists to prevent, reintroduced one layer up.
 **`Namespace` and `RootPod` moved too, as facts rather than capabilities.** They were consts in
 package `main` with six callers between them. Anything that talks to OpenBao must agree on which pod
 that is, and the only way two copies can disagree is if there are two — the same reasoning as
-`docsguard.DeliveredDocs`.
+`docsguard's DeliveredDocs`.
 
 With that, `ci_mint_objkeys.go` and `ci_incluster_pat.go` followed into `internal/credrotate`.
 

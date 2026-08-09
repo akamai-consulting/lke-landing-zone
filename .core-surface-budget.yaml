@@ -996,7 +996,7 @@ categories:
 #        the exact verb and extension. Checked, not assumed.
 #        Three more help strings restored: "onboard.Gather + push instance
 #        credentials" was USER-FACING (`llz secrets`), plus a color.Green and an
-#        onboard.Prompt in prose. Same blanket-rename class as traps 55 and 61.
+#        onboard's Prompt in prose. Same blanket-rename class as traps 55 and 61.
 #   91st: nine vestigial closures collapsed   1,700 -> 1,700 (0 lines)
 #        ZERO LINES, and that is worth saying: each closure was a ONE-LINE field
 #        assignment, so collapsing it changed characters and not the count. The
@@ -1166,9 +1166,9 @@ categories:
     # LAYERING (no core-surface change; this budget stayed at 1853). internal/shared
     # is substrate and internal/extensions is capability, and the arrow is supposed
     # to point one way only. It had already inverted FOUR times -- shared/answers
-    # reaching up for promote.TemplateRefFromStamp, shared/ghcli for
-    # configreadiness.SecretIsEnvScoped, shared/copier for four selfupgrade version
-    # helpers, shared/ghgitdata for credrotate.InClusterToken. Every one arrived the
+    # reaching up for promote's TemplateRefFromStamp, shared/ghcli for
+    # configreadiness's SecretIsEnvScoped, shared/copier for four selfupgrade version
+    # helpers, shared/ghgitdata for credrotate's InClusterToken. Every one arrived the
     # same way: a genuinely general helper was written inside whichever extension
     # needed it FIRST, and the second caller imported the extension rather than
     # moving the helper. Nobody chose to invert the layering; they chose not to move

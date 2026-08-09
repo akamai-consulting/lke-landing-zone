@@ -360,7 +360,7 @@ func openLinodeRotatorBaoStore(ctx context.Context) (openbao.BaoStore, error) {
 //
 // IT IS A PLAIN VAR OVER shared/openbao NOW, not an installed seam. It used to be
 // a func-valued var defaulting to an error, filled in at startup by an init() in
-// internal/extensions/openbao that called credrotate.InstallBaoStore -- an
+// internal/extensions/openbao that called credrotate's InstallBaoStore -- an
 // extension reaching sideways into another extension to wire itself up, and the
 // last of this package's four inbound edges.
 //
