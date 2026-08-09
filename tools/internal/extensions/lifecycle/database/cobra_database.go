@@ -2,7 +2,7 @@ package database
 
 // cobra_database.go — the `llz ci` database flag sets, and the Deps wiring.
 //
-// The rotation, seeding, probing and assertion are tools/internal/database. What
+// The rotation, seeding, probing and assertion are tools/internal/extensions/lifecycle/database. What
 // stays here is the cobra wiring and the ONE capability package main owns: how to
 // reach OpenBao. The package owns which ROLE the database credential lives under.
 

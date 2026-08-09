@@ -4,7 +4,7 @@ package docsguard
 // workflow, or a repo layout that no longer exists.
 //
 // WHY IT EXISTS, what it checks and the traps it was built from all live in
-// tools/internal/docsguard, along with every line of logic and every test. What is
+// tools/internal/extensions/guards/docsguard, along with every line of logic and every test. What is
 // here is the flag set and the printing — and one argument that cannot move:
 // `cmd.Root()`, the live cobra tree the documented `llz …` invocations are checked
 // against. That argument is the reason this extension is internal Go rather than

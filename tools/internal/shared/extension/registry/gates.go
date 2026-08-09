@@ -103,6 +103,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
@@ -263,6 +264,7 @@ var gates = []Gate{
 	// than guessed.
 	{Extension: "guard-cosign-subject", New: cosignguard.Cmd},
 	{Extension: "guard-monitoring-labels", New: monitoringlabel.Cmd},
+	{Extension: "guard-source-refs", New: sourceref.Cmd},
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},
 	{Extension: "mtls-wiring", New: mtlsguard.Cmd},

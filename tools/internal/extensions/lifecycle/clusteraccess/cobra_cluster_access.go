@@ -2,7 +2,7 @@ package clusteraccess
 
 // cobra_cluster_access.go — the kubeconfig and runner-ACL verbs, reduced to flag sets.
 //
-// Everything they do is `cluster-access` and lives in tools/internal/clusteraccess.
+// Everything they do is `cluster-access` and lives in tools/internal/extensions/lifecycle/clusteraccess.
 // One seam stays here: the shell-out. The terraform binary behind the state read
 // now comes from internal/tfbin, which became a package on this extraction because
 // eight things wanted it.

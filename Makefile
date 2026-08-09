@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard source-ref-guard lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -172,6 +172,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/coverageguard=74 \
 	internal/extensions/guards/cosignguard=72 \
 	internal/extensions/guards/monitoringlabel=60 \
+	internal/extensions/guards/sourceref=80 \
 	internal/extensions/guards/workflowshells=48 \
 	internal/shared/answers=85 \
 	internal/shared/llzver=95 \
@@ -235,6 +236,7 @@ help:
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
 	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007 (state encryption))"
 	@echo "  docs-guard      doc drift: llz FLAGS, gh workflow-run inputs, and links resolve"
+	@echo "  source-ref-guard  stale tools/ path literals in prose, comments and error strings"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -869,6 +871,25 @@ docs-guard: export LLZ_FORCE_SOURCE := 1
 docs-guard:
 	$(call LLZ_CI,gates --only docs-guard,)
 
+# source-ref-guard: `llz ci source-ref-guard` — every `tools/…` path literal in
+# prose resolves to something that exists.
+#
+# THE GAP DOCS-GUARD LEAVES. That guard checks Markdown LINKS, `llz` flags,
+# workflow dispatches and TOCs. A path written as PROSE — inside a sentence, an
+# `#` comment in a chart or workflow, a shell header, a Go error string — is none
+# of those, and nothing looked at one. The move of package main into
+# tools/internal/** left ~90 such references naming files that no longer existed,
+# three of them gone under every path; the worst read "add new seeds THERE" beside
+# a directory deleted a campaign earlier. A dead link is a dead end, but a dead
+# pointer with an instruction on it sends the reader somewhere wrong.
+#
+# FROM SOURCE, for docs-guard's reason one level over: it compares the working
+# tree against ITSELF, so the merge-base binary would resolve this branch's
+# references against the old tree and pass on exactly the moves that break them.
+source-ref-guard: export LLZ_FORCE_SOURCE := 1
+source-ref-guard:
+	$(call LLZ_CI,gates --only source-ref-guard,)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
@@ -913,6 +934,9 @@ lint:
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/internal/cli/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
 		$(MAKE) --no-print-directory docs-guard; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.md$$|\.ya?ml$$|\.sh$$|\.go$$|^Makefile$$'; then \
+		$(MAKE) --no-print-directory source-ref-guard; \
 	fi
 
 # ── Audit ─────────────────────────────────────────────────────────────────────

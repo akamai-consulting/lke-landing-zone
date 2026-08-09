@@ -2,7 +2,7 @@ package deliverdocs
 
 // cobra_deliverdocs.go — the `llz ci deliver-docs` flag set.
 //
-// The verb itself is tools/internal/deliverdocs, which declares the extension.
+// The verb itself is tools/internal/extensions/lifecycle/deliverdocs, which declares the extension.
 // What stays here is what package main owns: the cobra wiring and the help text.
 // Nothing else — the extension needs no injected capabilities, because everything
 // it touches is the instance repo's own files, which is exactly what its grant

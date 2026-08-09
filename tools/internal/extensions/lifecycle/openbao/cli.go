@@ -156,7 +156,7 @@ func RunExec(dryRun bool, args []string) error {
 }
 
 // contains is a COPY. It was defined in ci_pin_images.go, which moved to
-// tools/internal/releasepublish; package main still uses it here. A three-line
+// tools/internal/extensions/lifecycle/releasepublish; package main still uses it here. A three-line
 // slice predicate travels by copy rather than becoming an exported symbol whose
 // only job is to be reachable from both sides — the same call made for warn,
 // firstNonEmpty, orAll and report.

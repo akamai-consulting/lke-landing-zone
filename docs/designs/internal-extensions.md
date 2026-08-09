@@ -1501,7 +1501,7 @@ assert-identity  assertion:verified   "certificates" [cluster-read]
 **The constraint.** The Keycloak admin client is a struct with methods, and three separate places
 extend it: the login smoke test, the `configure` verb, and `llz users add`. Go will not let a package
 define a method on a type it does not own, so there was no way to move *one* of those three into
-`tools/internal/extensions/assertidentity` and leave the other two in package `main` — the type has to live
+`tools/internal/extensions/assertions/assertidentity` and leave the other two in package `main` — the type has to live
 somewhere both sides can reach before either can move. `tools/internal/shared/keycloak` came out first, as
 the thirteenth shared package, and only then could this extension be extracted at all.
 

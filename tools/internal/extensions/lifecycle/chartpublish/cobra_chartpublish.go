@@ -2,7 +2,7 @@ package chartpublish
 
 // cobra_chartpublish.go — the `llz ci chart-publish-check` flag set.
 //
-// The check is tools/internal/chartpublish, which declares the extension. The
+// The check is tools/internal/extensions/lifecycle/chartpublish, which declares the extension. The
 // wiring travels with the capability rather than sitting in main.
 //
 // Opts is EXPORTED and threaded as a parameter rather than installed: the call

@@ -2,7 +2,7 @@ package credrotate
 
 // cobra_credflagsets.go — the `llz ci rotate-broad-pat` and `temp-objkey` flag sets.
 //
-// Both verbs are tools/internal/credrotate, which owns the credential-rotation
+// Both verbs are tools/internal/extensions/lifecycle/credrotate, which owns the credential-rotation
 // family end to end after three wall extractions.
 
 import (

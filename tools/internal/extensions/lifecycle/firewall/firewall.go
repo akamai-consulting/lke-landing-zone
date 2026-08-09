@@ -6,7 +6,7 @@ package firewall
 // two pipelines cannot drift.
 //
 // Seeds the in-cluster state required by the custom firewall-controller
-// (tools/firewall-controller) to reconcile the node-pool Linode Cloud Firewall
+// to reconcile the node-pool Linode Cloud Firewall
 // in place:
 //  1. Linode API Secret (kube-system/linode, key=token).
 //  2. linode-internal-cidr-firewall-config ConfigMap, with LINODE_FIREWALL_ID

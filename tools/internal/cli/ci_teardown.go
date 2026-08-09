@@ -2,7 +2,7 @@ package cli
 
 // ci_teardown.go — the destroy verbs, reduced to flag sets.
 //
-// Everything they do is `teardown` and lives in tools/internal/teardown. What is
+// Everything they do is `teardown` and lives in tools/internal/extensions/lifecycle/teardown. What is
 // left here is teardownDeps(): the seven capabilities that package is HANDED.
 //
 // SIX OF THE SEVEN ARE THE SAME FOUR the earlier extractions named — a cloud

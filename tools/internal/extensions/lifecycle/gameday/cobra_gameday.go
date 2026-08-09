@@ -2,7 +2,7 @@ package gameday
 
 // cobra_gameday.go — the `llz ci wedge-gameday` flag set.
 //
-// The drill is tools/internal/gameday, which declares the extension.
+// The drill is tools/internal/extensions/lifecycle/gameday, which declares the extension.
 //
 // NO Deps STRUCT — the fourth extraction to need none, and the cheapest reason yet:
 // it already took internal/cigate.Deps as a parameter before the move. That package

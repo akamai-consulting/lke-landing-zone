@@ -2,7 +2,7 @@ package openbao
 
 // cobra_baoseed.go — the three OpenBao seeder flag sets, and their Deps wiring.
 //
-// The seeders are tools/internal/baoseed. What stays here is the cobra wiring and
+// The seeders are tools/internal/extensions/lifecycle/openbao. What stays here is the cobra wiring and
 // the three capabilities package main owns: applying a manifest, rendering the
 // generic Secret shape half a dozen verbs share, and writing a GitHub secret.
 

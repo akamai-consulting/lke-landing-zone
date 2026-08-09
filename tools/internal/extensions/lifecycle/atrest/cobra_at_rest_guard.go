@@ -4,7 +4,7 @@ package atrest
 // at rest (docs/adr/0007-terraform-state-encryption.md).
 //
 // The scanner, the residual registry, the corpus location and the report all live
-// in tools/internal/atrest. What is left here is the flag set.
+// in tools/internal/extensions/lifecycle/atrest. What is left here is the flag set.
 //
 // That the corpus location could move too is the whole reason guardkit exists: it
 // is shared with seven other guards, so while it sat in package main this file

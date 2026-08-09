@@ -13,7 +13,7 @@ func Cmd() *cobra.Command {
 		Use:   "bootstrap-cloud-firewall",
 		Short: "seed the firewall-controller's token Secret + config ConfigMap on the cluster",
 		Long: "Native port of bootstrap-cloud-firewall.sh. Seeds the in-cluster state the\n" +
-			"custom firewall-controller (tools/firewall-controller) needs to reconcile the\n" +
+			"custom firewall-controller needs to reconcile the\n" +
 			"node-pool Linode Cloud Firewall in place: the kube-system/linode API-token\n" +
 			"Secret (key=token) and the linode-internal-cidr-firewall-config ConfigMap\n" +
 			"with LINODE_FIREWALL_ID (plus LKE_CLUSTER_ID when CLUSTER_ID is set, enabling\n" +

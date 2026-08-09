@@ -2,7 +2,7 @@ package manifestguard
 
 // cobra_manifestguard.go — the three `guard-manifests` flag sets.
 //
-// The guards are tools/internal/manifestguard, which declares the extension.
+// The guards are tools/internal/extensions/assertions/manifestguard, which declares the extension.
 // The wiring travels with the capability rather than sitting in main.
 
 import (

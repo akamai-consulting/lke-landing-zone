@@ -2,7 +2,7 @@ package mutate
 
 // cobra_mutate.go — the `llz ci mutate` flag set.
 //
-// The run is tools/internal/mutate, which declares the extension. Ninety-seven
+// The run is tools/internal/verbs/mutate, which declares the extension. Ninety-seven
 // lines of RunE moved with it: the closure held the control run, the gremlins
 // invocation, harness validation and the survivor diff, which is the whole verb.
 // A flag set that keeps its verb in a callback has not been extracted, it has been

@@ -2,7 +2,7 @@ package objenc
 
 // cobra_objenc.go — the object-storage encryption verbs, reduced to flag sets.
 //
-// Everything they do is `obj-encryption` and lives in tools/internal/objenc. What
+// Everything they do is `obj-encryption` and lives in tools/internal/extensions/lifecycle/objenc. What
 // stays here is ObjencDeps(): the OpenBao KV pair that IS the custody, a kubectl
 // read, a Secret decoder, and the log mask.
 //

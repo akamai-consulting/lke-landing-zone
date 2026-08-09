@@ -2,7 +2,7 @@ package plaintext
 
 // cobra_plaintext.go — the `llz ci plaintext-guard` flag set.
 //
-// The guard is tools/internal/plaintext, which declares the extension. The
+// The guard is tools/internal/extensions/guards/plaintext, which declares the extension. The
 // wiring travels with the capability rather than sitting in main.
 //
 // ZERO injected capabilities, because the guard reads files and nothing else —

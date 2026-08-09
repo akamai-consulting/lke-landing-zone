@@ -2,43 +2,43 @@
 
 **Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
 bindings, grants and their validation) in `tools/internal/shared/extension`. Phase 2 is the first ten
-extensions: `guard-budgets` (`tools/internal/extensions/budget`), `guard-docs` (`tools/internal/extensions/docsguard`),
-`posture-at-rest` (`tools/internal/extensions/atrest`), `assert-storage` (`tools/internal/extensions/volumes`) and
-`reconcile-actions` (`tools/internal/extensions/reconcilelanes`) `teardown` (`tools/internal/extensions/teardown`) and
-`template-sustain` (`tools/internal/extensions/sustain`) and `import-brownfield` (`tools/internal/extensions/brownfield`) and
-`obj-encryption` (`tools/internal/extensions/objenc`), `guard-charts`
-(`tools/internal/extensions/chartguard`), `cluster-access` (`tools/internal/extensions/clusteraccess`), `health-sla`
-(`tools/internal/extensions/healthsla`) `token-inventory` (`tools/internal/extensions/tokeninv`) `converge`
-(`tools/internal/extensions/converge`) `assert-platform`
-(`tools/internal/extensions/assertplatform`) `assert-reconciler`
-(`tools/internal/extensions/assertreconciler`) `assert-registry`
-(`tools/internal/extensions/assertregistry`) `promote-pipeline`
-(`tools/internal/extensions/promote`) `posture-credential-coverage`
-(`tools/internal/extensions/credcoverage`) `config-readiness`
-(`tools/internal/extensions/configreadiness`) `env-topology`
-(`tools/internal/extensions/envtopology`) `assert-network`
-(`tools/internal/extensions/assertnetwork`) `wave-health`
-(`tools/internal/extensions/wavehealth`) `tofu-driver`
-(`tools/internal/extensions/tofudriver`) `assert-observability`
-(`tools/internal/extensions/assertobs`) `assert-secrets`
-(`tools/internal/extensions/assertsecrets`) and `assert-identity` (`tools/internal/extensions/assertidentity`) and `deliver-docs`
-(`tools/internal/extensions/deliverdocs`) and `argocd-diagnostics`
-(`tools/internal/extensions/argodiag`) and `posture-plaintext`
-(`tools/internal/extensions/plaintext`) and `chart-publish`
-(`tools/internal/extensions/chartpublish`) and `guard-manifests`
-(`tools/internal/extensions/manifestguard`) and `assert-objstore`
-(`tools/internal/extensions/assertobjstore`) and `wedge-gameday`
-(`tools/internal/extensions/gameday`) and `phase-timing`
-(`tools/internal/extensions/phasetiming`) and `doctor-probes`
-(`tools/internal/extensions/doctor`) and `kyverno-policies`
-(`tools/internal/extensions/kyverno`) and `dev-mutation-testing`
-(`tools/internal/extensions/mutate`) and `release-publish`
-(`tools/internal/extensions/releasepublish`) and `credential-state-passphrase`
-(`tools/internal/extensions/statepassphrase`) and `credential-pat` + `credential-objkey`
-(both in `tools/internal/extensions/credrotate` — the first package to declare two) and `database-provisioner`
-(`tools/internal/extensions/database`, holding `assert-database` as its third binding) and `openbao-seed`
-(`tools/internal/extensions/baoseed`) and `openbao-peer-ca`
-(`tools/internal/extensions/baoca`) declare themselves, `tools/internal/shared/extension/registry` collects and validates the compiled-in set,
+extensions: `guard-budgets` (`tools/internal/extensions/guards/budget`), `guard-docs` (`tools/internal/extensions/guards/docsguard`),
+`posture-at-rest` (`tools/internal/extensions/lifecycle/atrest`), `assert-storage` (`tools/internal/extensions/assertions/volumes`) and
+`reconcile-actions` (`tools/internal/extensions/lifecycle/reconcilelanes`) `teardown` (`tools/internal/extensions/lifecycle/teardown`) and
+`template-sustain` (`tools/internal/extensions/assertions/sustain`) and `import-brownfield` (`tools/internal/extensions/lifecycle/brownfield`) and
+`obj-encryption` (`tools/internal/extensions/lifecycle/objenc`), `guard-charts`
+(`tools/internal/extensions/guards/chartguard`), `cluster-access` (`tools/internal/extensions/lifecycle/clusteraccess`), `health-sla`
+(`tools/internal/extensions/lifecycle/healthsla`) `token-inventory` (`tools/internal/extensions/assertions/tokeninv`) `converge`
+(`tools/internal/extensions/lifecycle/converge`) `assert-platform`
+(`tools/internal/extensions/assertions/assertplatform`) `assert-reconciler`
+(`tools/internal/extensions/assertions/assertreconciler`) `assert-registry`
+(`tools/internal/extensions/assertions/assertregistry`) `promote-pipeline`
+(`tools/internal/extensions/lifecycle/promote`) `posture-credential-coverage`
+(`tools/internal/extensions/guards/credcoverage`) `config-readiness`
+(`tools/internal/extensions/assertions/configreadiness`) `env-topology`
+(`tools/internal/shared/envtopology`) `assert-network`
+(`tools/internal/extensions/assertions/assertnetwork`) `wave-health`
+(`tools/internal/extensions/guards/wavehealth`) `tofu-driver`
+(`tools/internal/extensions/lifecycle/tofudriver`) `assert-observability`
+(`tools/internal/extensions/assertions/assertobs`) `assert-secrets`
+(`tools/internal/extensions/assertions/assertsecrets`) and `assert-identity` (`tools/internal/extensions/assertions/assertidentity`) and `deliver-docs`
+(`tools/internal/extensions/lifecycle/deliverdocs`) and `argocd-diagnostics`
+(`tools/internal/verbs/argodiag`) and `posture-plaintext`
+(`tools/internal/extensions/guards/plaintext`) and `chart-publish`
+(`tools/internal/extensions/lifecycle/chartpublish`) and `guard-manifests`
+(`tools/internal/extensions/assertions/manifestguard`) and `assert-objstore`
+(`tools/internal/extensions/lifecycle/assertobjstore`) and `wedge-gameday`
+(`tools/internal/extensions/lifecycle/gameday`) and `phase-timing`
+(`tools/internal/verbs/phasetiming`) and `doctor-probes`
+(`tools/internal/verbs/doctor`) and `kyverno-policies`
+(`tools/internal/extensions/lifecycle/kyverno`) and `dev-mutation-testing`
+(`tools/internal/verbs/mutate`) and `release-publish`
+(`tools/internal/extensions/lifecycle/releasepublish`) and `credential-state-passphrase`
+(`tools/internal/extensions/lifecycle/statepassphrase`) and `credential-pat` + `credential-objkey`
+(both in `tools/internal/extensions/lifecycle/credrotate` — the first package to declare two) and `database-provisioner`
+(`tools/internal/extensions/lifecycle/database`, holding `assert-database` as its third binding) and `openbao-seed`
+(`tools/internal/extensions/lifecycle/openbao`) and `openbao-peer-ca`
+(`tools/internal/extensions/lifecycle/openbao`) declare themselves, `tools/internal/shared/extension/registry` collects and validates the compiled-in set,
 and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
 all forty-five still run because `ci.go` and the reconciler register them, and the declarations are inert.
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,

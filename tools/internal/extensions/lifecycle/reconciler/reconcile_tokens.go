@@ -150,7 +150,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		case credtargets.TokenStateOK, credtargets.TokenStateAbsent:
 			present := sec.State == credtargets.TokenStateOK
 			// LABELS ARE `cred` ONLY, and that is a correctness requirement rather
-			// than tidiness. tools/internal/metrics upserts keyed by the RENDERED
+			// than tidiness. tools/internal/shared/metrics upserts keyed by the RENDERED
 			// LABEL SET and has no delete: SetGauge with a different label value
 			// adds a series, it does not replace one, and the old sample is served
 			// at its last value for the life of the pod.

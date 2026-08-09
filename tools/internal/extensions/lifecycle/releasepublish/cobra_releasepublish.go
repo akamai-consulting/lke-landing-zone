@@ -3,7 +3,7 @@ package releasepublish
 // cobra_releasepublish.go — the `llz ci publish-charts` and `pin-instance-images`
 // flag sets.
 //
-// The verbs are tools/internal/releasepublish, which declares the extension — and
+// The verbs are tools/internal/extensions/lifecycle/releasepublish, which declares the extension — and
 // declares that only one of the two has a lifecycle state to attach to.
 
 import (

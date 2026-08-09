@@ -3,7 +3,7 @@ package credrotate
 // cobra_credentials_flagsets.go — the `llz credentials pat` and `llz credentials
 // lke-admin` flag sets.
 //
-// The rotators are tools/internal/credrotate, which also owns the shared
+// The rotators are tools/internal/extensions/lifecycle/credrotate, which also owns the shared
 // framework they run on. The wiring travels with the capability rather than
 // sitting in main.
 

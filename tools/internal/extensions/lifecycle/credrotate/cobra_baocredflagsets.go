@@ -3,7 +3,7 @@ package credrotate
 // cobra_baocredflagsets.go — the flag sets for the three credential verbs that
 // needed the OpenBao write seams.
 //
-// The verbs are tools/internal/credrotate; the write path they reach —
+// The verbs are tools/internal/extensions/lifecycle/credrotate; the write path they reach —
 // baoread.KVPut and baoread.ExecStdin — is installed by baoread_deps.go.
 
 import (

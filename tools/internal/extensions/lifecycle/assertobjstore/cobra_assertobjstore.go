@@ -2,7 +2,7 @@ package assertobjstore
 
 // cobra_assertobjstore.go — the `llz ci assert-obj-roundtrip` flag set.
 //
-// The assertion is tools/internal/assertobjstore, which declares the extension.
+// The assertion is tools/internal/extensions/lifecycle/assertobjstore, which declares the extension.
 //
 // NO Deps STRUCT — the third extraction to need none. Every shell-out was a
 // `kubectl get`, and internal/kubectlprobe already exports Exec with the identical

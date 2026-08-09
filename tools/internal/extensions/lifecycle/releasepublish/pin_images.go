@@ -8,7 +8,7 @@ package releasepublish
 // CI images built from THIS commit, so the baked `llz` binary can never drift
 // from the workflow YAML the instantiate job renders at the same commit (the
 // recurring "llz: unknown flag" / stale-binary e2e failures). build-images only
-// runs when tools/dockerfiles change, so a per-commit `sha-<sha>` image exists
+// runs when tools/ or dockerfiles/ change, so a per-commit `sha-<sha>` image exists
 // ONLY for binary-changing commits: pin the exact sha when one built (waiting for
 // a build cut just before release to finish publishing), else pin `:latest` (the
 // most recent build = the unchanged binary's image).
@@ -195,7 +195,7 @@ func imageRef(base, sha string, built bool) string {
 }
 
 // commitBuiltImages reports whether a "Build Container Images" run exists for sha
-// (i.e. the commit touched tools/dockerfiles, so a per-commit image is/was built).
+// (i.e. the commit touched tools/ or dockerfiles/, so a per-commit image is/was built).
 func commitBuiltImages(token, templateRepo, sha string) (bool, error) {
 	out, err := pinGHRetry(token, "api",
 		fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", templateRepo, sha),

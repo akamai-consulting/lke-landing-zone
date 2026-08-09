@@ -2,7 +2,7 @@ package kyverno
 
 // cobra_kyverno.go — the `llz ci apply-kyverno-policy` flag set.
 //
-// The apply is tools/internal/kyverno, which declares the extension. `warn` is
+// The apply is tools/internal/extensions/lifecycle/kyverno, which declares the extension. `warn` is
 // NOT re-exported: it is a two-line ::warning:: printer that happened to be
 // defined in this file and is used by two other package main files, so main keeps
 // its own and the package keeps its own. Two copies of a printf beat one exported

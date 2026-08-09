@@ -2,7 +2,7 @@ package credrotate
 
 // cobra_rotatelinode.go — the `llz ci rotate-linode-creds` flag set.
 //
-// The rotation table and its drivers are tools/internal/credrotate, which owns the
+// The rotation table and its drivers are tools/internal/extensions/lifecycle/credrotate, which owns the
 // whole credential-rotation family: the framework, the three rotators, the table
 // that says WHICH credentials exist and where they live, and the in-cluster token
 // resolver they share.

@@ -1,7 +1,7 @@
 package statepassphrase
 
 // cobra_statepassphrase.go — the `llz ci rotate-state-passphrase` flag set, and the
-// Deps wiring for tools/internal/statepassphrase.
+// Deps wiring for tools/internal/extensions/lifecycle/statepassphrase.
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"

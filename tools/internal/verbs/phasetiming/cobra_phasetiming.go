@@ -2,7 +2,7 @@ package phasetiming
 
 // cobra_phasetiming.go — the four `phase-timing` flag sets.
 //
-// The instrumentation is tools/internal/phasetiming, which declares the
+// The instrumentation is tools/internal/verbs/phasetiming, which declares the
 // extension — and declares, at length, that the declaration does not fit.
 
 import (

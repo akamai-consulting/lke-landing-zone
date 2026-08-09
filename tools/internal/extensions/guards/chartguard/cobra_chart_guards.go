@@ -2,7 +2,7 @@ package chartguard
 
 // cobra_chart_guards.go — the three chart gates, reduced to flag sets.
 //
-// Everything they do is `guard-charts` and lives in tools/internal/chartguard.
+// Everything they do is `guard-charts` and lives in tools/internal/extensions/guards/chartguard.
 // What stays here is one seam: git.
 //
 // THE SMALLEST Deps IN THE REPO, and that is the shape of a gate rather than an

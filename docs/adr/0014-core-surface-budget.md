@@ -96,7 +96,7 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 >
 > **Then down, for the first time: 46,797** across 235 files, when `guard-budgets`
 > became the first internal extension and the engine moved to
-> `tools/internal/extensions/budget`. The downward move is the half that was still unproven —
+> `tools/internal/extensions/guards/budget`. The downward move is the half that was still unproven —
 > and `exact: true` is what forced it to be recorded, since extracting the code
 > and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
 >
@@ -214,7 +214,7 @@ would be actively wrong. untestable-loc's remedy is "move the logic into
 breach message says both is not a gate, it's a riddle.
 
 So they share the *engine* and not the *doctrine*: one scan, one glob walk, one
-tally, one ratchet convention, in `tools/internal/extensions/budget`. The only thing this ADR
+tally, one ratchet convention, in `tools/internal/extensions/guards/budget`. The only thing this ADR
 made configurable is the remedy sentence. The two budgets are then reviewed and
 ratcheted independently, which is what they need — they will often move in
 opposite directions in the same PR, and that is exactly the trade being made

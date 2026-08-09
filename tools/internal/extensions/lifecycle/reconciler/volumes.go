@@ -2,7 +2,7 @@ package reconciler
 
 // ci_volumes.go — the three storage commands, reduced to flag sets.
 //
-// Everything they do is `assert-storage` and lives in tools/internal/volumes. What
+// Everything they do is `assert-storage` and lives in tools/internal/extensions/assertions/volumes. What
 // stays here is the four capabilities that package is HANDED (volumes.Deps) and
 // cannot reach for itself: the Linode token, the in-cluster client, the kubectl
 // shell-out, and the GitHub step-summary sink.

@@ -2,7 +2,7 @@ package openbao
 
 // cobra_baoca.go — the `llz ci extract-openbao-ca` and `provision-peer-ca` flag sets.
 //
-// The verbs are tools/internal/baoca. This is the CA slice of the catalog's
+// The verbs are tools/internal/extensions/lifecycle/openbao. This is the CA slice of the catalog's
 // openbao-lifecycle row, taken on its own because it is the one part of that row
 // with a boundary: two cobra constructors in, nothing else out.
 

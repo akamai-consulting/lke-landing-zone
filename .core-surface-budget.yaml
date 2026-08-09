@@ -88,14 +88,14 @@ categories:
     #                       gate went red until someone did.
     #   46,716 / 234 files  the guard-budgets EXTRACTION. The budget engine, the
     #                       counters, the remedies and their tests are now
-    #                       tools/internal/extensions/budget; the two commands are a flag set
+    #                       tools/internal/extensions/guards/budget; the two commands are a flag set
     #                       each. -466, and the FIRST paydown.
     #   46,797 / 235 files  `llz extension list`. +81, spent deliberately: the
     #                       declaration model was validated with no way to look at
     #                       it, and a ratchet that could only be paid into would be
     #                       a freeze rather than a budget.
     #   46,106 / 235 files  guard-docs, the second extension. docs-guard and the
-    #                       TOC renderer are tools/internal/extensions/docsguard; the two
+    #                       TOC renderer are tools/internal/extensions/guards/docsguard; the two
     #                       commands are a flag set and a file write. -691, the
     #                       largest single move so far.
     #   45,763 / 234 files  posture-at-rest, the first extension that is not a
@@ -858,7 +858,8 @@ categories:
 #        internal/extensions/, 39 to internal/shared/. 1,243 import lines.
 #        BOTH STAY UNDER internal/, which is the whole point -- it is compiler-
 #        enforced, tools/ is one module, and this repo is the public upstream.
-#        Hoisting to tools/extensions/ would have made 113 packages public API.
+#        Hoisting them to a top-level extensions/ package inside tools/ -- i.e.
+#        out from under internal/ -- would have made 113 packages public API.
 #        FIVE CLASSES OF PATH BROKE AND ONLY ONE WAS AN IMPORT: path-keyed
 #        registries (plaintext, atrest), segment-joined filepath.Join("tools",
 #        "internal",...) that a literal rewrite cannot see, relative escapes now
@@ -1268,7 +1269,12 @@ categories:
     #                       the whole cost of the split. NOT a paydown and not
     #                       claimed as one — the same code, in a package that can be
     #                       imported.
-    budget: 1898
+    #   1,900 / 113 files  +2 for `guard-source-refs`: one import and one
+    #                       AddCommand in ci.go. A new gate's whole cost in this
+    #                       layer is its two wiring lines, which is the shape ADR
+    #                       0014 wants — the 300 lines of decision logic landed in
+    #                       tools/internal/extensions/guards/sourceref, not here.
+    budget: 1900
     exact: true
     include:
       - "tools/internal/cli/*.go"
@@ -1295,6 +1301,13 @@ categories:
       - "tools/cmd/llz/*.go"
 
 exclude:
-  - "tools/cmd/llz/*_test.go"
+  # A `*_test.go` pattern under the cmd/llz entry point was here and MATCHED
+  # NOTHING -- that package has held only main.go since the move, so the pattern
+  # named no file. Removed rather
+  # than kept as insurance: with `cmd-llz-entrypoint` at an exact 6, a test file
+  # appearing in that package SHOULD fail the gate and be argued for, which is the
+  # ratchet working. source-ref-guard found it; a glob that matches nothing and a
+  # glob that is doing its job produce byte-identical output, which is the hazard
+  # count.go's header names.
   - "tools/internal/cli/*_test.go"
   - "tools/internal/cli/deps/*_test.go"

@@ -2,7 +2,7 @@ package cli
 
 // import.go — the brownfield-adoption verbs, reduced to flag sets.
 //
-// Everything they do is `import-brownfield` and lives in tools/internal/brownfield.
+// Everything they do is `import-brownfield` and lives in tools/internal/extensions/lifecycle/brownfield.
 // What stays here is brownfieldDeps(): the scaffold pipeline the adoption drives
 // (`llz new`, `llz env add`, the two spec editors, `llz render`), a kubectl seam,
 // `--yes`, and two constants other verbs also read.

@@ -5,7 +5,7 @@
 // enabled "components" (was the per-env tfvars + the apl-values/<env> manifest
 // kustomization). The loader (instance.go) assembles them into one *LandingZone
 // the `llz` CLI reconciles into the existing Terraform / Argo / copier config
-// (see tools/cmd/llz/render.go).
+// (see tools/internal/extensions/lifecycle/render/render.go).
 //
 // The types carry json tags and use the apiVersion/kind/metadata/spec shape so
 // the same struct tree can graduate to a controller-gen CRD later without a
