@@ -101,9 +101,87 @@ func ns(namespace string) []string {
 	return []string{"-n", namespace}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// A NAMED OPERATION MUST NOT BE AN ARGV IN DISGUISE.
+//
+// The whole argument for these six is that "a reviewer sees Annotate/Delete/
+// PatchMerge in the diff rather than an argv they have to parse". Every parameter
+// below lands in that argv as its own element, so a parameter that starts with `-`
+// is a FLAG, and the review property is gone. Probed:
+//
+//	Delete("kube-system", "pod", "--all")  -> kubectl -n kube-system delete pod --all
+//	Delete("", "namespace", "--all")       -> kubectl delete namespace --all
+//
+// The second removes every namespace in the cluster, through the handle whose
+// purpose is to make what a lane may do legible. Delete already guards the bare
+// `delete <kind>` case, with a comment saying why — "a bare `delete pod` in a
+// namespace would remove every one of them" — and `--all` reaches that exact
+// outcome past the guard.
+//
+// NOTE WHAT IS **NOT** A HOLE, because it shaped the fix. These run through
+// exec.Command with an argv SLICE, so a parameter containing spaces is one
+// argument: `RolloutRestart("ns", "deploy/x --namespace kube-system")` is a single
+// absurd resource name that kubectl rejects, not two tokens. Only parameters that
+// occupy their own element can smuggle a flag, which is why the rule is about a
+// leading `-` and not about quoting.
+//
+// A KUBERNETES NAME CANNOT BEGIN WITH `-` — DNS label rules — so refusing one costs
+// nothing and no shipping caller passes one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// safeArg rejects a positional that would be read as a flag.
+func safeArg(what, v string) error {
+	if strings.HasPrefix(v, "-") {
+		return fmt.Errorf("capability: %s %q begins with '-', so kubectl would read it as a FLAG "+
+			"rather than as a name. A named operation exists so a reviewer can see what it does "+
+			"without parsing an argv; a flag in a parameter takes that back (`--all` is the case "+
+			"that made this a rule). Kubernetes names cannot begin with '-'.", what, v)
+	}
+	return nil
+}
+
+// deleteFlags are the flags a caller may pass in Delete's variadic target, valued
+// forms first. EARNED, not enumerated: `--wait=` is the one shipping caller
+// (assert-network's namespace teardown) and the selector forms are what Delete's
+// own error message already promises ("needs a name or selector"). Everything else
+// beginning with `-` is refused, `--all` and `-A` most of all.
+var (
+	deleteValuedFlags  = map[string]bool{"-l": true, "--selector": true}
+	deleteFlagPrefixes = []string{"--selector=", "--wait=", "--timeout="}
+)
+
+// checkDeleteTargets walks the variadic, allowing the earned flags and their
+// values and requiring everything else to be a plain name.
+func checkDeleteTargets(kind string, target []string) error {
+	for i := 0; i < len(target); i++ {
+		t := target[i]
+		if !strings.HasPrefix(t, "-") {
+			continue
+		}
+		if deleteValuedFlags[t] {
+			if i+1 >= len(target) {
+				return fmt.Errorf("capability: Delete got %q with no value", t)
+			}
+			i++ // the selector expression is data, whatever it looks like
+			continue
+		}
+		if hasAnyPrefix(t, deleteFlagPrefixes) {
+			continue
+		}
+		return fmt.Errorf("capability: Delete refuses the flag %q. It permits a name, a selector "+
+			"(-l/--selector) and --wait=/--timeout=; anything else in this position is a flag "+
+			"nobody reviewing the call site would see. `delete %s --all` removes every one of "+
+			"them, which is the outcome the empty-target guard above already refuses.", t, kind)
+	}
+	return nil
+}
+
 func (w writer) PermitsWrite() error { return nil }
 
 func (w writer) Annotate(namespace, kind, name, keyValue string) ([]byte, error) {
+	if err := firstErr(safeArg("namespace", namespace), safeArg("kind", kind), safeArg("name", name)); err != nil {
+		return nil, err
+	}
 	if !strings.Contains(keyValue, "=") {
 		return nil, fmt.Errorf("capability: Annotate needs key=value, got %q", keyValue)
 	}
@@ -116,22 +194,35 @@ func (w writer) Delete(namespace, kind string, target ...string) ([]byte, error)
 		return nil, fmt.Errorf("capability: Delete needs a name or selector — a bare `delete %s` "+
 			"in a namespace would remove every one of them", kind)
 	}
+	if err := firstErr(safeArg("namespace", namespace), safeArg("kind", kind),
+		checkDeleteTargets(kind, target)); err != nil {
+		return nil, err
+	}
 	a := append(ns(namespace), "delete", kind)
 	a = append(a, target...)
 	return w.exec("kubectl", append(a, "--ignore-not-found")...)
 }
 
 func (w writer) PatchMerge(namespace, kind, name, patchJSON string) ([]byte, error) {
+	if err := firstErr(safeArg("namespace", namespace), safeArg("kind", kind), safeArg("name", name)); err != nil {
+		return nil, err
+	}
 	a := append(ns(namespace), "patch", kind, name, "--type", "merge", "-p", patchJSON)
 	return w.exec("kubectl", a...)
 }
 
 func (w writer) RolloutRestart(namespace, target string) ([]byte, error) {
+	if err := firstErr(safeArg("namespace", namespace), safeArg("target", target)); err != nil {
+		return nil, err
+	}
 	a := append(ns(namespace), "rollout", "restart", target)
 	return w.exec("kubectl", a...)
 }
 
 func (w writer) CreateToken(namespace, serviceAccount, duration string) ([]byte, error) {
+	if err := firstErr(safeArg("namespace", namespace), safeArg("serviceaccount", serviceAccount)); err != nil {
+		return nil, err
+	}
 	a := append([]string{"create", "token", serviceAccount}, ns(namespace)...)
 	if duration != "" {
 		a = append(a, "--duration="+duration)
@@ -156,6 +247,9 @@ func (w writer) ApplyStdin(manifest, fieldManager string) ([]byte, error) {
 }
 
 func (w writer) CreateStdin(namespace, manifest string) ([]byte, error) {
+	if err := safeArg("namespace", namespace); err != nil {
+		return nil, err
+	}
 	a := append(ns(namespace), "create", "-f", "-", "-o", "json")
 	return w.stdin(manifest, a...)
 }
@@ -185,3 +279,14 @@ func (d deniedWriter) CreateStdin(_, _ string) ([]byte, error)      { return nil
 // and refusing" is only true if it is true for zero values too, and a struct
 // literal bypasses every constructor that would otherwise guarantee it.
 func Denied() Writer { return deniedWriter{} }
+
+// firstErr returns the first non-nil error, so a guard can check several
+// parameters on one line and still name the one that failed.
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}

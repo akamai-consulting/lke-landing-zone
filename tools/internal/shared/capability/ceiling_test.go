@@ -339,3 +339,88 @@ func TestForgeApiMethodEdgeSpellings(t *testing.T) {
 		t.Errorf("a field whose value names a method was misread: %v", err)
 	}
 }
+
+// A NAMED OPERATION MUST NOT BE AN ARGV IN DISGUISE.
+//
+// The Writer's six named mutations exist so "a reviewer sees Annotate/Delete/
+// PatchMerge in the diff rather than an argv they have to parse". Every parameter
+// lands in that argv as its own element, so one beginning with `-` is a FLAG and
+// the review property is gone. Both cases below were probed and both reached
+// kubectl before this test existed.
+func TestNamedWriteOperationsRefuseAFlagAsAParameter(t *testing.T) {
+	var ran []string
+	h := WithExec(
+		extension.Binding{Kind: extension.Transition, State: extension.Converged,
+			Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite}},
+		func(name string, args ...string) ([]byte, error) {
+			ran = append(ran, name+" "+strings.Join(args, " "))
+			return nil, nil
+		},
+		func(string, ...string) string { return "" })
+	w := h.Writer
+
+	// `delete pod --all` is the outcome Delete's empty-target guard already
+	// refuses, reached past it through the variadic. `delete namespace --all`
+	// removes every namespace in the cluster.
+	if _, err := w.Delete("kube-system", "pod", "--all"); err == nil {
+		t.Error("Delete accepted --all as a target — that is `kubectl delete pod --all`, the " +
+			"exact outcome the empty-target guard exists to prevent")
+	}
+	if _, err := w.Delete("", "namespace", "--all"); err == nil {
+		t.Error("Delete accepted --all for namespaces — cluster-wide destruction through the " +
+			"handle whose purpose is to make what a lane may do legible")
+	}
+	if _, err := w.Delete("ns", "pod", "-A"); err == nil {
+		t.Error("Delete accepted -A")
+	}
+	// The same class in the positional parameters of the other operations.
+	if _, err := w.Annotate("ns", "pod", "--all", "k=v"); err == nil {
+		t.Error("Annotate accepted --all as a name")
+	}
+	if _, err := w.PatchMerge("ns", "pod", "--all", `{"a":1}`); err == nil {
+		t.Error("PatchMerge accepted --all as a name")
+	}
+	if _, err := w.RolloutRestart("ns", "--all"); err == nil {
+		t.Error("RolloutRestart accepted --all as a target")
+	}
+	if _, err := w.CreateToken("--kubeconfig=/tmp/x", "sa", "10m"); err == nil {
+		t.Error("CreateToken accepted a flag as a namespace")
+	}
+	if len(ran) != 0 {
+		t.Errorf("a refused operation still reached kubectl: %v — the refusal must happen "+
+			"before the process starts", ran)
+	}
+
+	// THE SHIPPING CALLERS MUST STILL WORK, or the fence is an outage. Each of
+	// these is a live call site.
+	ok := []struct {
+		what string
+		run  func() ([]byte, error)
+	}{
+		{"assert-network's namespace teardown", func() ([]byte, error) {
+			return w.Delete("", "namespace", "probe-ns", "--wait=false")
+		}},
+		{"assert-platform's workflow reap", func() ([]byte, error) {
+			return w.Delete("argo", "workflow", "wf-1")
+		}},
+		{"a selector delete", func() ([]byte, error) {
+			return w.Delete("ns", "pod", "-l", "app=x")
+		}},
+		{"converge's refresh annotation", func() ([]byte, error) {
+			return w.Annotate("argocd", "application", "app", "argocd.argoproj.io/refresh=hard")
+		}},
+		{"gameday's ExternalSecret patch", func() ([]byte, error) {
+			return w.PatchMerge("ns", "externalsecret.external-secrets.io", "es", `{"a":1}`)
+		}},
+		{"a rollout restart", func() ([]byte, error) { return w.RolloutRestart("ns", "deploy/x") }},
+		{"login-smoke's token mint", func() ([]byte, error) { return w.CreateToken("ns", "sa", "10m") }},
+	}
+	for _, c := range ok {
+		if _, err := c.run(); err != nil {
+			t.Errorf("%s was refused by the new fence: %v", c.what, err)
+		}
+	}
+	if len(ran) != len(ok) {
+		t.Errorf("%d permitted operations reached kubectl, want %d", len(ran), len(ok))
+	}
+}
