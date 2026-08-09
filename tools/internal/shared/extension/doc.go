@@ -88,6 +88,14 @@
 // turns a declaration into a handle. Keeping those apart is what lets this package
 // stay dependency-free, which the boundary rule below pins.
 //
+// AND Validate() IS A BUILD-TIME LINT. Only a test calls it — no `llz` code path
+// validates a declaration before using it, because the declarations are
+// compiled-in Go values that cannot arrive malformed after the build. The
+// consequence is worth being explicit about: the three ceiling tables constrain
+// what anyone may WRITE, not what the binary will DO. capability.For reads a
+// binding's grants directly and never asks whether the binding is legal. See
+// registry.Validate for the longer form.
+//
 // BOUNDARY RULE. This package must not import cmd/llz (it is a library and must
 // not depend upward) and must not import a concrete cloud (internal/linode) — the
 // same rule ADR 0013 establishes for the APL layer, enforced here by

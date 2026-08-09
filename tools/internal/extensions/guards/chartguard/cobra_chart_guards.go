@@ -26,15 +26,41 @@ func ChartguardDeps() Deps {
 func ChartLockDriftCmd() *cobra.Command {
 	var root string
 	c := &cobra.Command{
-		Use:   "chart-lock-drift <chart-dir>...",
+		Use:   "chart-lock-drift [chart-dir...]",
 		Short: "fail when a chart's committed Chart.lock drifts from its Chart.yaml dependencies",
 		Long: "Native port of check-chart-lock-drift.py (the Makefile's helm-dep-lock-check).\n" +
 			"For each chart directory, compares Chart.lock against the dependency\n" +
 			"declarations in Chart.yaml and fails if any dependency's name, version, or\n" +
 			"repository differs (or Chart.lock is missing) — meaning Chart.yaml was updated\n" +
 			"without re-running `helm dependency update`.",
-		Args: cobra.MinimumNArgs(1),
+		// NO ARGS MEANS EVERY FIRST-PARTY CHART, and that is what made this gate
+		// driveable at all.
+		//
+		// It was one of two gates registry/gates.go could not run, both filed under
+		// "the caller chooses the subject". Reading them side by side, they are not
+		// the same shape: `check-coverage` takes a COVERPROFILE — a build artifact
+		// that does not exist until `go test` has run, plus a floor list the Makefile
+		// deliberately keeps overridable. This one takes chart directories, which are
+		// simply `kubernetes-charts/*/` and were already enumerated ten lines away by
+		// loadLocalChartVersions for chart-pin-guard.
+		//
+		// So this was a missing DEFAULT, not a gap in the model. It is worth saying
+		// plainly because the two cases together looked like the two-case bar for a
+		// new vocabulary word ("let a binding declare its own corpus"), and one of
+		// them dissolving means that bar is NOT met — `check-coverage` stands alone,
+		// and one case is an anecdote. See undrivenGates.
+		//
+		// The positionals still work, and the Makefile still passes $(OPENBAO_CHART):
+		// a caller narrowing the subject is the reason the flag set exists.
+		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				found, err := firstPartyChartDirs(root)
+				if err != nil {
+					return err
+				}
+				args = found
+			}
 			return RunLockDrift(root, args, os.Stdout)
 		},
 	}

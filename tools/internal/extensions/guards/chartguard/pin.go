@@ -35,6 +35,10 @@ import (
 // chartPinScanRoots are the repo subtrees scanned for first-party chart pins:
 // the platform-bootstrap Applications, the live per-env Argo Application
 // manifests, and the app-of-apps generator's component list. All pin chart
+// chartsDir is the first-party chart tree, named once so the pin guard and the
+// lock-drift guard cannot disagree about where charts live.
+const chartsDir = "kubernetes-charts"
+
 // versions that must track kubernetes-charts/.
 //
 // platform-apl was MISSING here, and it holds the repo's first-party pins
@@ -151,7 +155,7 @@ func extractChartPins(content string) []chartPin {
 // version by reading kubernetes-charts/<dir>/Chart.yaml. Keyed on the chart's
 // declared `name:` (the value pins reference), not the directory.
 func loadLocalChartVersions(repo capability.Repo) (map[string]string, error) {
-	entries, err := repo.ReadDir("kubernetes-charts")
+	entries, err := repo.ReadDir(chartsDir)
 	if err != nil {
 		return nil, err
 	}

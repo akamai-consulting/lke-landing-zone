@@ -235,16 +235,28 @@ var undrivenGates = map[string]string{
 
 // gates is every gate binding this binary can RUN, as opposed to merely describe.
 //
-// `chart-lock-drift` is absent for the same not-driveable reason as
-// `guard-coverage` above — it takes a chart directory as a POSITIONAL (the
-// Makefile passes $(OPENBAO_CHART)) and the registry has no way to know which
-// charts an instance has. It is not in undrivenGates because its EXTENSION,
-// guard-charts, is driven for its other binding; the gap is per-command, and the
-// model's unit here is the extension.
+// `chart-lock-drift` USED TO BE ABSENT for what looked like guard-coverage's
+// reason — it took a chart directory as a POSITIONAL and "the registry has no way
+// to know which charts an instance has". Reading the two side by side, they were
+// never the same shape, and the difference is the whole finding:
+//
+//	check-coverage's subject is a COVERPROFILE, a build artifact that does not
+//	exist until `go test` has run, plus a floor list the Makefile keeps
+//	overridable on purpose. It is not a repo-scanning gate at all.
+//
+//	chart-lock-drift's subject is `kubernetes-charts/*/`, which chart-pin-guard
+//	in the very same package had been enumerating all along.
+//
+// So it was a missing DEFAULT, not a gap in the model, and it now discovers its own
+// corpus (refusing an empty one). THAT MATTERS BEYOND ONE GATE: the two cases
+// together were the apparent two-case bar for giving the model a way to let a
+// binding declare its corpus. One of them dissolved, so the bar is NOT met and no
+// word is invented — which is the rule every other vocabulary change here followed.
 var gates = []Gate{
 	{Extension: "guard-budgets", New: budget.CoreSurfaceCmd},
 	{Extension: "guard-budgets", New: budget.UntestableLOCCmd},
 	{Extension: "guard-charts", New: chartguard.ChartPinGuardCmd},
+	{Extension: "guard-charts", New: chartguard.ChartLockDriftCmd},
 	{Extension: "posture-credential-coverage", New: credcoverage.CoverageGuardCmd},
 	// The SECOND command of the same gate binding, and its absence was a hole of
 	// exactly the shape this driver exists to close: the extension counted as

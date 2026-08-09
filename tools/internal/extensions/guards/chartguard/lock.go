@@ -168,3 +168,37 @@ func sortedDepKeys(m map[string]chartDep) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// firstPartyChartDirs enumerates kubernetes-charts/*/ — the corpus chart-lock-drift
+// checks when the caller names none.
+//
+// IT REFUSES AN EMPTY RESULT. A lock-drift guard that found no charts would report
+// the same clean as one that checked them all, which is the vacuous-green shape
+// every corpus guard in this tree already refuses (guardkit.RequireCorpus). The
+// discovery path is exactly where that failure would arrive unnoticed, because
+// nobody typed the subject.
+func firstPartyChartDirs(root string) ([]string, error) {
+	repo := capability.RepoForGate(Extension(), root)
+	entries, err := repo.ReadDir(chartsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s to discover first-party charts: %w", chartsDir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// A directory without a Chart.yaml is not a chart — the guard would report
+		// it as unlocked, which is a finding about a directory rather than a chart.
+		if _, err := repo.Stat(filepath.Join(chartsDir, e.Name(), "Chart.yaml")); err != nil {
+			continue
+		}
+		out = append(out, filepath.Join(chartsDir, e.Name()))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no first-party charts found under %s — refusing to report a "+
+			"clean lock-drift run having examined nothing", chartsDir)
+	}
+	sort.Strings(out)
+	return out, nil
+}
