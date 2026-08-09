@@ -20,13 +20,48 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertidentity"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertnetwork"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertobs"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertreconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/converge"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cosignguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/coverageguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/firewall"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/meshegress"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/monitoringlabel"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/seedspecial"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/wavehealth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/workflowshells"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/objenc"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 func ciCmd() *cobra.Command {
+	// Install converge's capability set before any of its verbs can run. Here
+	// rather than in main() because gopts is populated by flag parsing, and DryRun
+	// is one of the capabilities.
+	installConvergeDeps(gopts)
+	installAssertPlatformDeps()
+	installAssertReconcilerDeps()
 	c := &cobra.Command{
 		Use:   "ci",
 		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
@@ -38,29 +73,29 @@ func ciCmd() *cobra.Command {
 			"in internal/terraform + internal/linode behind unit tests; these commands are\n" +
 			"the thin orchestration over it.",
 	}
-	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
-		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
-		ciAssertAplVersionCmd(),
+	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), tofudriver.PlanCmd(), tofudriver.OutputCmd(), tofudriver.DestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
+		configreadiness.PreflightCmd(), ciVerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
+		assertplatform.AplVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciBaoBreakglassCmd(),
-		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd(),
+		ciExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), ciProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
 		ciKeycloakConfigureCmd(),
-		ciTeamLoginSmokeCmd())
+		assertidentity.TeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
+	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
-	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
+	c.AddCommand(converge.WaitPodsCmd(), converge.WaitClusterReadyCmd())
 	// Fail-fast gate ahead of wait-pods: a missing Argo Application means the
 	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
 	// operationState message instead of burning the 600s pod wait blind (PR #142).
-	c.AddCommand(ciAssertArgoAppCmd())
+	c.AddCommand(assertplatform.ArgoAppCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
@@ -83,7 +118,7 @@ func ciCmd() *cobra.Command {
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
 	// bootstrap-cloud-firewall is the manual/recovery fallback; the cidrFirewall
 	// component's CronJob (discover-firewall-config) is the steady-state owner.
-	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
+	c.AddCommand(firewall.Cmd(), reconciler.DiscoverFirewallCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	// fetch-kubeconfig (the Linode-API variant) is BREAK-GLASS and deliberately
 	// callerless: the workflows use fetch-kubeconfig-state, which reads the TF
@@ -115,7 +150,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciMutateCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
-		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
+		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
 	// Apply-time failure diagnostics (llz-terraform.yml). (The former
 	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
@@ -133,7 +168,7 @@ func ciCmd() *cobra.Command {
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
-		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd(),
+		seedspecial.ResolveHarborURLCmd(), seedspecial.AuditPVCStorageClassCmd(),
 		// Must run BEFORE the OpenBao pods are waited on: it patches the
 		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
 		ciPinKeycloakGatewayAliasCmd())
@@ -164,22 +199,22 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciSeedSSECKeyCmd())
 	c.AddCommand(ciAssertObjEncryptionCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
-	c.AddCommand(ciAssertBroadPATRotationCmd())
+	c.AddCommand(assertsecrets.BroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed
 	// drops a trivial manifest under kubernetes-custom/namespaces/<ns>/, and this
 	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
-	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps green).
-	c.AddCommand(ciAssertInstanceCustomCmd())
+	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps color.Green).
+	c.AddCommand(assertplatform.InstanceCustomCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
-	c.AddCommand(ciRelabelVolumesCmd())
+	c.AddCommand(reconciler.RelabelVolumesCmd())
 	// Linode Volume tag-heal backstop for Volumes born without the StorageClass's
 	// lke<id> ownership tag (also runnable in-cluster by the volume-tags reconciler).
-	c.AddCommand(ciReconcileVolumeTagsCmd())
+	c.AddCommand(reconciler.ReconcileVolumeTagsCmd())
 	// The e2e GATE for the same invariant the two lanes above maintain: asserts
 	// against the Linode API that every PV-backed Volume is encrypted at rest AND
 	// carries its lke<id> ownership tag. Fails closed, including on an empty cluster.
-	c.AddCommand(ciAssertVolumeEncryptionCmd())
+	c.AddCommand(reconciler.AssertVolumeEncryptionCmd())
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.
@@ -206,16 +241,16 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciUpgradeTestCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
-	c.AddCommand(ciExternalSecretPathsCmd())
+	c.AddCommand(credcoverage.ExternalSecretPathsCmd())
 	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
-	c.AddCommand(ciWaveHealthGuardCmd())
-	c.AddCommand(ciMTLSWiringGuardCmd())
+	c.AddCommand(wavehealth.HealthGuardCmd())
+	c.AddCommand(mtlsguard.Cmd())
 	c.AddCommand(ciPlaintextGuardCmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).
-	c.AddCommand(ciCredentialCoverageGuardCmd())
+	c.AddCommand(credcoverage.CoverageGuardCmd())
 	// Static guard on ENCRYPTION AT REST for Terraform-declared resources: every
 	// root declares an encryption block, every node pool sets disk_encryption
 	// (Makefile at-rest-guard).
@@ -223,78 +258,78 @@ func ciCmd() *cobra.Command {
 	// Static guard for the #163 wedge class: a workload that hard-depends on a
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
-	c.AddCommand(ciWaveDependencyGuardCmd())
+	c.AddCommand(wavehealth.DependencyGuardCmd())
 	// Live fault-injection game-day: break one platform ExternalSecret and assert
 	// the wedge is contained to its own carved Application (blast-radius
 	// decomposition proof). Run on a warm e2e cluster.
 	c.AddCommand(ciWedgeGamedayCmd())
 	// Runtime counterpart to wave-health-guard: assert the VAP is bound + enforcing
 	// (negative canary), which is what makes the static guard's verdict hold live.
-	c.AddCommand(ciAssertWaveHealthVAPCmd())
+	c.AddCommand(assertnetwork.WaveHealthVAPCmd())
 	// Cluster diagnostic: list in-cluster Prometheus metric names matching a regex
 	// (metric-name discovery for writing error-rate/saturation alerts).
-	c.AddCommand(ciPromMetricsCmd())
+	c.AddCommand(assertobs.PromMetricsCmd())
 	// Cluster diagnostic: evaluate deployed PrometheusRule alert exprs against the
 	// live Prometheus (catch never-fire / false-positive rules promtool can't).
-	c.AddCommand(ciAlertEvalCmd())
+	c.AddCommand(assertobs.AlertEvalCmd())
 	// E2E gate: assert every landing-zone ServiceMonitor has an `up` scrape target
 	// and every PrometheusRule group is loaded — the observability-pipeline wiring
-	// converge/health/assert-loki all stay green on when a label/port/selector
+	// converge/health/assert-loki all stay color.Green on when a label/port/selector
 	// regression silently un-scrapes/un-loads it.
-	c.AddCommand(ciAssertScrapeTargetsCmd())
+	c.AddCommand(assertobs.ScrapeTargetsCmd())
 	// E2E gate: assert the reconciler is FUNCTIONALLY healthy (llz_reconcile_up=1 +
 	// llz_reconcile_leader=1) — the silently-broken-loop class (pod Running yet
 	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
 	// both miss.
-	c.AddCommand(ciAssertReconcilerCmd())
+	c.AddCommand(assertreconciler.ReconcilerCmd())
 	// E2E gate: what the reconciler lanes DO, not that they are running. A lane can
 	// report a successful pass every cycle while its effect on the cluster is absent
 	// (reconciled onto the wrong object, reverted by Argo, computed from empty
 	// input) — assert-reconciler reads the lane's self-report and cannot see that.
-	c.AddCommand(ciAssertReconcilerEffectsCmd())
+	c.AddCommand(assertreconciler.EffectsCmd())
 	// ── Tier-2 delivery gates: does the data actually ARRIVE? ────────────────
 	// Each covers a pipeline whose failure mode is silence — the producer stays
-	// Running, the sink stays Ready, converge stays green, and the thing simply
+	// Running, the sink stays Ready, converge stays color.Green, and the thing simply
 	// never gets there. assert-openbao-audit proved one such round trip; these are
 	// the rest of them.
 	//
 	// log path (the cluster-wide collector, NOT the OpenBao promtail sidecar).
-	c.AddCommand(ciAssertLogIngestionCmd())
+	c.AddCommand(assertobs.LogIngestionCmd())
 	// secret path: ESO is still RE-READING OpenBao, not just holding a Secret it
 	// materialized once and can no longer refresh.
-	c.AddCommand(ciAssertESORoundTripCmd())
+	c.AddCommand(assertsecrets.ESORoundTripCmd())
 	// alert path: a firing alert has somewhere to go. Prometheus treats "firing
 	// with no receivers" as normal, so this is invisible everywhere else.
-	c.AddCommand(ciAssertAlertDeliveryCmd())
+	c.AddCommand(assertobs.AlertDeliveryCmd())
 	// dashboard path: the sidecar is a label selector, so a dropped label leaves a
 	// valid ConfigMap holding a dashboard nobody can see.
-	c.AddCommand(ciAssertGrafanaDashboardsCmd())
+	c.AddCommand(assertobs.GrafanaDashboardsCmd())
 	// ── Tier-4 enforcement negatives ─────────────────────────────────────────
 	// The runtime counterpart to the static policy manifests, in the same spirit as
 	// assert-wave-health-vap: server-dry-run something each policy MUST act on and
 	// require that policy's own response. `kubectl get clusterpolicy` proves the
 	// YAML is present; it cannot tell an enforcing policy from a decorative one,
 	// and both ship failurePolicy: Ignore, so a downed Kyverno admits silently.
-	c.AddCommand(ciAssertAdmissionEnforcementCmd())
+	c.AddCommand(assertnetwork.AdmissionEnforcementCmd())
 	// The two enforcement properties that CANNOT be dry-run: admission answers
 	// from the API server, but a dropped packet is only knowable by sending one.
 	// assert-network-enforcement opens real connections from a real pod (each
 	// negative paired with a positive control, so a broken probe reports
 	// INCONCLUSIVE rather than passing); net-probe is the dial it runs there.
-	c.AddCommand(ciAssertNetworkEnforcementCmd(), ciNetProbeCmd())
+	c.AddCommand(assertnetwork.NetworkEnforcementCmd(), assertnetwork.NetProbeCmd())
 	// The e2e assert battery itself. Was ~40 lines of inline bash implementing a
 	// parallel job runner in YAML — untestable, and with the lane list written
 	// TWICE (once to run, once to collect) so a lane could run and never be able to
 	// fail the step. One tested list now drives both, and it ships with the binary
 	// rather than with each instance's vendored workflow.
 	// ── Tier-3 credential-lifecycle gates ────────────────────────────────────
-	// assert-rotation-health gates the age of every credential credPaths declares:
+	// assert-rotation-health gates the age of every credential reconcilelanes.CredPaths declares:
 	// a declared credential publishing NO series is invisible on the single pane
 	// AND unalertable, because a rule over an absent series never evaluates.
 	// assert-harbor-roundtrip USES a minted robot rather than trusting it was
 	// created — the truncation regression left every credential valid and every
 	// push and pull 401ing on a malformed host.
-	c.AddCommand(ciAssertRotationHealthCmd(), ciAssertHarborRoundTripCmd())
+	c.AddCommand(assertsecrets.RotationHealthCmd(), ciAssertHarborRoundTripCmd())
 	// ── Delivery/health gates found in the post-review functional pass ───────
 	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
 	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks
@@ -306,29 +341,29 @@ func ciCmd() *cobra.Command {
 	// assert-certificates consumes a signal that already existed and nothing read:
 	// llz_certificates_not_ready is published and alerted on, but alert-eval is
 	// report-only and --strict ignores FIRING, so a stuck Certificate reds nothing.
-	c.AddCommand(ciAssertCertificatesCmd())
+	c.AddCommand(assertidentity.CertificatesCmd())
 	// assert-database proves the seeded admin credential is still ACCEPTED.
 	// rotate-db-admin resets the password in place with no overlap window, so the
 	// failure is a live endpoint that rejects the credential every consumer holds.
 	c.AddCommand(ciAssertDatabaseCmd())
-	c.AddCommand(ciAssertSuiteCmd())
+	c.AddCommand(assertsuite.Cmd())
 	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
 	// out of Loki. The metrics path has assert-scrape-targets; the log path had
 	// nothing, and shipped to a Service that never existed for its entire life —
 	// with a NetworkPolicy egress allow pointed at the same empty namespace, so
 	// both sides agreed with each other and neither agreed with the cluster. Only
 	// the round trip can tell a correct URL from a plausible one.
-	c.AddCommand(ciAssertOpenbaoAuditCmd())
+	c.AddCommand(assertsecrets.OpenbaoAuditCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
-	c.AddCommand(ciMeshEgressGuardCmd())
+	c.AddCommand(meshegress.Cmd())
 	c.AddCommand(ciPlaceholderGuardCmd())
 	// Static guard for the #175 day-2-blind class: every ServiceMonitor/PodMonitor/
 	// PrometheusRule must carry `prometheus: system` or apl-core's Prometheus
 	// silently ignores it (metrics unscraped / rules unloaded) — Makefile
 	// monitoring-label-guard.
-	c.AddCommand(ciMonitoringLabelGuardCmd())
+	c.AddCommand(monitoringlabel.Cmd())
 	// No manifest may declare an apiVersion apl-core's bundled operators no longer
 	// serve (it cannot apply — opaque Argo SyncFailed). Covers platform-apl/, which
 	// the $RENDER_DIR-based dry-run never sees — Makefile dropped-apiversions-check.
@@ -339,11 +374,11 @@ func ciCmd() *cobra.Command {
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.
-	c.AddCommand(ciCheckPromRulesCmd())
+	c.AddCommand(assertobs.CheckPromRulesCmd())
 	// Render/coverage lint gates ported from template-scripts (the Makefile's
 	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
 	// coverage floor in `make coverage`).
-	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), ciCheckCoverageCmd())
+	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), coverageguard.Cmd())
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
 	c.AddCommand(ciUntestableLOCCmd())
@@ -360,7 +395,7 @@ func ciCmd() *cobra.Command {
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
-	c.AddCommand(ciCosignSubjectGuardCmd())
+	c.AddCommand(cosignguard.Cmd())
 	// Runtime companion: a pinned first-party chart version must actually EXIST in
 	// the OCI registry, or Argo 404s the pull on a feature-branch e2e (bumped-but-
 	// unpublished chart) and the OpenBao bootstrap dies on the missing llz-openbao ns.
@@ -374,7 +409,7 @@ func ciCmd() *cobra.Command {
 	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
 	// separately runnable (bootstrap-cluster calls them in-process), and
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
-	c.AddCommand(ciBootstrapClusterCmd(), ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
+	c.AddCommand(ciBootstrapClusterCmd(), converge.WaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
 	// apl-core 6.1.0's pre-upgrade prerequisite (the apl-operator sync-options
 	// annotation). bootstrap-cluster runs it on every apply; it stays separately
@@ -387,20 +422,20 @@ func ciCmd() *cobra.Command {
 	// Release gate for the shape e2e structurally cannot produce: an instance pinned
 	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
-	// first-run to a live adopter with e2e green throughout.
+	// first-run to a live adopter with e2e color.Green throughout.
 	c.AddCommand(ciAssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
-	c.AddCommand(ciCheckWorkflowShellsCmd())
+	c.AddCommand(workflowshells.Cmd())
 	// Scaffold update-class manifest gate (former template-scripts/check-template-manifest.sh).
-	c.AddCommand(ciTemplateManifestCmd())
+	c.AddCommand(templatemanifest.Cmd())
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
 	c.AddCommand(ciManagedFreshCmd())
 	// Tool-version pin agreement: the Dockerfile ARG block is the authority and
 	// every restatement (build matrix, container fallbacks, Go constants) must
 	// match it. This drifted once already — see ci_version_pins.go.
-	c.AddCommand(ciVersionPinsCmd())
+	c.AddCommand(versionpins.Cmd())
 	return c
 }
 
@@ -433,11 +468,11 @@ func runCIVerifyObjectStorage(region string) error {
 	// From the spec, never a constant: these have to be THIS instance's buckets. A
 	// hardcoded prefix would let the gate pass on another adopter's identically
 	// named buckets in the same region (clusterspec/objlabels.go).
-	prefix, err := objLabelPrefixFor("verify-object-storage")
+	prefix, err := objenc.LabelPrefixFor("verify-object-storage")
 	if err != nil {
 		return err
 	}
-	token, err := ciToken()
+	token, err := linode.TokenFromEnv()
 	if err != nil {
 		return err
 	}
@@ -541,12 +576,12 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	}
 	// Token first, so a missing credential still reports before a missing tfvars
 	// file — the order this verb has always failed in.
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
 
-	vars, varFile, err := readRegionTFVars("", region)
+	vars, varFile, err := tfvars.ReadRegion("", region)
 	if err != nil {
 		return err
 	}
@@ -733,7 +768,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := tfCommandContext(ctx, "import", "-var-file="+varFile, addr, id)
+	cmd := tfbin.CommandContext(ctx, "import", "-var-file="+varFile, addr, id)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	runErr := cmd.Run()
 	// A context-deadline kill returns from Run() as an opaque "signal: killed"
@@ -758,7 +793,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 // or "" if the resource is not in state: `state show` of an absent address
 // exits non-zero, so the error path covers the not-in-state case.
 func tfStateID(addr string) string {
-	out, err := tfCommand("state", "show", addr).Output()
+	out, err := tfbin.Command("state", "show", addr).Output()
 	if err != nil {
 		return ""
 	}
@@ -781,7 +816,7 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 
 	// First attempt — the happy path. -no-color is load-bearing: the heal
 	// parsers anchor on the plain "  with <addr>," diagnostic lines.
-	applyLog, code, err := runTeed(tfBin(), "apply", "-no-color", "-auto-approve", plan)
+	applyLog, code, err := runTeed(tfbin.Bin(), "apply", "-no-color", "-auto-approve", plan)
 	if err != nil {
 		return fmt.Errorf("could not run terraform apply: %w", err)
 	}
@@ -886,7 +921,7 @@ func healFirewallCollision(g globalOpts, applyLog, varFile string, applyExit int
 
 // runTF runs a terraform subcommand with inherited stdio.
 func runTF(args ...string) error {
-	cmd := tfCommand(args...)
+	cmd := tfbin.Command(args...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return cmd.Run()
 }
@@ -934,7 +969,7 @@ func ciReapVolumesCmd() *cobra.Command {
 			"--require-empty (needs --volume-ids) re-lists after the sweep and, if any\n" +
 			"tracked Volume is still present, retries up to --attempts (sleeping\n" +
 			"--retry-delay s between tries) and finally EXITS NON-ZERO when orphans\n" +
-			"remain — so a destroy doesn't go green leaving Volumes that block the next\n" +
+			"remain — so a destroy doesn't go color.Green leaving Volumes that block the next\n" +
 			"apply's preflight. Without it the sweep is single-pass and best-effort.\n" +
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
@@ -969,7 +1004,7 @@ func ciReapNodeBalancersCmd() *cobra.Command {
 			"--require-empty (needs --cluster-id) re-lists after the sweep and, if any\n" +
 			"NodeBalancer still carries the cluster's CCM tag, retries up to --attempts\n" +
 			"(sleeping --retry-delay s between tries) and finally EXITS NON-ZERO when\n" +
-			"orphans remain — so a destroy doesn't go green leaving a NodeBalancer that\n" +
+			"orphans remain — so a destroy doesn't go color.Green leaving a NodeBalancer that\n" +
 			"blocks the next apply's preflight.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -1011,35 +1046,26 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
-	prefix, err := objLabelPrefixFor("reap-env-creds")
+	prefix, err := objenc.LabelPrefixFor("reap-env-creds")
 	if err != nil {
 		return err
 	}
 	del, fin := ciDeleter(ctx, g, client)
-	if err := reapEnvObjKeys(ctx, client, prefix, env, del); err != nil {
+	if err := teardown.ReapEnvObjKeys(ctx, client, prefix, env, del); err != nil {
 		return err
 	}
-	if err := reapEnvInclusterPAT(ctx, client, prefix, env, del); err != nil {
+	if err := teardown.ReapEnvInclusterPAT(ctx, client, prefix, env, del); err != nil {
 		return err
 	}
 	return fin()
 }
 
-// ciToken reads the Linode PAT the CI sweeps run under.
-func ciToken() (string, error) {
-	t := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
-	if t == "" {
-		return "", fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT")
-	}
-	return t, nil
-}
-
 // tfApplyLinodeToken reads the Linode PAT available on the terraform apply path.
-// Deliberately NOT ciToken: the apply step is handed its credential as
+// Deliberately NOT linode.TokenFromEnv: the apply step is handed its credential as
 // TF_VAR_linode_token (terraform's own variable plumbing), not LINODE_API_TOKEN,
 // so the fallback name differs and folding the two readers together would
 // silently change which variable wins in jobs that set more than one. Returns ""
@@ -1051,7 +1077,7 @@ func tfApplyLinodeToken() string {
 
 // ciDeleter returns a delete closure that honors --yes/--dry-run and tallies
 // outcomes, plus a finalize func that prints the summary and errors if any delete
-// failed. Mirrors the del/summary scaffolding in runReap.
+// failed. Mirrors the del/summary scaffolding in teardown.RunReap.
 func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(path, desc string), func() error) {
 	confirm := g.yes && !g.dryRun
 	if !confirm {
@@ -1159,7 +1185,7 @@ func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude strin
 	if requireEmpty && volumeIDs == "" {
 		return fmt.Errorf("--require-empty needs --volume-ids (the precise set whose disappearance is verified)")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
@@ -1199,7 +1225,7 @@ func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude strin
 		// volumes survived the destroy of lke637974, then squatted their labels so
 		// the NEXT cluster could not relabel 12 of its 17. `llz reap` already passed
 		// env here; this path never did.
-		return reapVolumes(ctx, client, reapOpts{env: env, region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
+		return teardown.ReapVolumes(ctx, client, teardown.ReapOpts{Env: env, Region: region, VolumeIDs: volumeIDs, TagMustInclude: tagMustInclude}, del)
 	}, func() (int, error) {
 		return countVolumesPresent(ctx, client, volumeIDs)
 	})
@@ -1322,7 +1348,7 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	if requireEmpty && clusterID == "" {
 		return fmt.Errorf("--require-empty needs --cluster-id (the scoped set whose disappearance is verified)")
 	}
-	client, ctx, err := ciClient()
+	client, ctx, err := linode.ClientFromEnv()
 	if err != nil {
 		return err
 	}
@@ -1332,7 +1358,7 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	if clusterID == "" {
 		del, fin := ciDeleter(ctx, g, client)
 		fmt.Printf("=== orphan NodeBalancers — account-wide (region=%q) ===\n", region)
-		if err := reapNodeBalancers(ctx, client, reapOpts{region: region}, del); err != nil {
+		if err := teardown.ReapNodeBalancers(ctx, client, teardown.ReapOpts{Region: region}, del); err != nil {
 			return err
 		}
 		return fin()

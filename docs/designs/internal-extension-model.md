@@ -1,10 +1,128 @@
 # Design: the internal extension model — bindings and grants
 
-**Status:** **Partial** — Phase 1 landed: the declaration model (states, bindings, grants and their
-validation), implemented in `tools/internal/extension` and **wired to nothing**. The registry, the
-loader, CI codegen and the remote half did *not* land. Phase 1 replaces the `kind: check|tool`
-capability ceiling from PR #15 (closed); the rest of that design is not contradicted here, only
-re-sequenced, and is tracked in issue #399.
+**Status:** **Partial** — Phases 1 and 2 landed. Phase 1 is the declaration model (states,
+bindings, grants and their validation) in `tools/internal/extension`. Phase 2 is the first ten
+extensions: `guard-budgets` (`tools/internal/budget`), `guard-docs` (`tools/internal/docsguard`),
+`posture-at-rest` (`tools/internal/atrest`), `assert-storage` (`tools/internal/volumes`) and
+`reconcile-actions` (`tools/internal/reconcilelanes`) `teardown` (`tools/internal/teardown`) and
+`template-sustain` (`tools/internal/sustain`) and `import-brownfield` (`tools/internal/brownfield`) and
+`obj-encryption` (`tools/internal/objenc`), `guard-charts`
+(`tools/internal/chartguard`), `cluster-access` (`tools/internal/clusteraccess`), `health-sla`
+(`tools/internal/healthsla`) `token-inventory` (`tools/internal/tokeninv`) `converge`
+(`tools/internal/converge`) `assert-platform`
+(`tools/internal/assertplatform`) `assert-reconciler`
+(`tools/internal/assertreconciler`) `assert-registry`
+(`tools/internal/assertregistry`) `promote-pipeline`
+(`tools/internal/promote`) `posture-credential-coverage`
+(`tools/internal/credcoverage`) `config-readiness`
+(`tools/internal/configreadiness`) `env-topology`
+(`tools/internal/envtopology`) `assert-network`
+(`tools/internal/assertnetwork`) `wave-health`
+(`tools/internal/wavehealth`) `tofu-driver`
+(`tools/internal/tofudriver`) `assert-observability`
+(`tools/internal/assertobs`) `assert-secrets`
+(`tools/internal/assertsecrets`) and `assert-identity` (`tools/internal/assertidentity`) and `deliver-docs`
+(`tools/internal/deliverdocs`) and `argocd-diagnostics`
+(`tools/internal/argodiag`) and `posture-plaintext`
+(`tools/internal/plaintext`) and `chart-publish`
+(`tools/internal/chartpublish`) and `guard-manifests`
+(`tools/internal/manifestguard`) and `assert-objstore`
+(`tools/internal/assertobjstore`) and `wedge-gameday`
+(`tools/internal/gameday`) and `phase-timing`
+(`tools/internal/phasetiming`) and `doctor-probes`
+(`tools/internal/doctor`) and `kyverno-policies`
+(`tools/internal/kyverno`) and `dev-mutation-testing`
+(`tools/internal/mutate`) and `release-publish`
+(`tools/internal/releasepublish`) and `credential-state-passphrase`
+(`tools/internal/statepassphrase`) and `credential-pat` + `credential-objkey`
+(both in `tools/internal/credrotate` — the first package to declare two) and `database-provisioner`
+(`tools/internal/database`, holding `assert-database` as its third binding) and `openbao-seed`
+(`tools/internal/baoseed`) and `openbao-peer-ca`
+(`tools/internal/baoca`) declare themselves, `tools/internal/extension/registry` collects and validates the compiled-in set,
+and `llz extension list` shows them. **Nothing is loaded, dispatched or disabled through the model** —
+all forty-five still run because `ci.go` and the reconciler register them, and the declarations are inert.
+**ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded` — the group the old ceiling banned by omission — ALL NINE grants, both values of `Always`, multi-binding extensions,
+named bindings, `Incomplete` and the `grantStates` table are now exercised against real code — and [the
+closure census](internal-extensions.md#the-cost-of-the-interesting-half) shows why that is structural
+rather than incidental. The action
+ABI, the YAML manifest, per-instance enablement and the remote half did *not* land. Phase 1 replaces
+the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that design is not
+contradicted here, only re-sequenced, and is tracked in issue #399.
+
+**The VOCABULARY was wrong once, and it took three extractions in a row to prove it.**
+`secret-custody` was a single word documented as *"read or write credential material"*. `cluster-access`
+WRITES a kubeconfig (custody); `health-sla` READS `updated_time` with the root token (declared custody
+under protest); `token-inventory` READS every pipeline credential and mutates nothing — and that one
+was **inexpressible**, because a gate permits `read-repo` alone and an assertion permits read grants
+only, which `secret-custody` was not. The grant was split into `secret-read` (reading credential
+material or its metadata; read-only) and `secret-custody` (placing it; mutating). **This is the model's
+only vocabulary ADDITION**, as against two `grantStates` widenings, and the distinction it draws is the
+one a reviewer actually wants: *"this could leak a secret"* versus *"this decides what the secret is"*.
+
+Note what did NOT happen: no `grantStates` row was widened. The ceiling was not too tight, the
+vocabulary was too coarse — and widening the row would have let every credential-reading check in the
+repo claim a mutating grant.
+
+**The ceiling has been wrong twice, at opposite ends of the lifecycle, and both times an
+extraction of shipping code found it.** The second: `secret-custody` was legal at `seeded` and
+`operating` only, which made `cluster-access` — it fetches the cloud-issued **cluster-admin
+kubeconfig**, the one human-facing credential per cluster — inexpressible. The row had only ever seen
+credentials the platform *mints* or *replaces*, both of which happen to a cluster that already works,
+so it quietly meant "custody begins once there is a platform to hold it". `provisioned` was added.
+Note the symmetry: the first widening added a state at the **end** of the lifecycle, this one at the
+**start**, and neither was predictable by reading the catalog. The first:
+
+**The ceiling was wrong once, and the fourth extension found it.** `grantStates` did not list
+`operating` as a legal state for `cloud-mutate`, which made two shipping reconciler lanes — they run
+in-pod, continuously, and mutate Linode Volumes — inexpressible. The row was added with the argument
+recorded beside it and the whole table pinned by a test. Refusing it was not the conservative choice:
+a ceiling that makes a continuously-running cloud mutator inexpressible does not prevent it, it only
+stops it being written down, which is `→ seeded` banned-by-omission recurring inside the half of the
+ceiling built to fix banning-by-omission.
+
+**FIXED by the seventh extension:** that an extension is PARTIAL. `reconcile-actions` declares four bindings and reads as complete, while four more of its
+lanes are still in core — the same failure shape as banning by omission, since the reader cannot tell
+what is missing. `template-sustain` was the second independent case, so `Extension.Incomplete` now exists and both partial declarations say what they are missing.
+
+**A FOURTH thing the model cannot say, found by the twenty-ninth extension:** there is no binding
+kind for a **diagnostic**. `argocd-diagnostics` reads a failing platform and prints it for a human,
+always exits 0 by design ("diagnostics must never mask the failure that triggered them"), and runs
+precisely when `converged` did *not* hold. None of the four kinds fits: `gate` is files-only,
+`transition` acts, `invariant` holds continuously, and `assertion` contributes evidence a state
+**holds** — which is the opposite of what this contributes. It ships declared as an `assertion` with
+an `Incomplete` note saying so, because a fifth kind needs a declaration to be impossible **and** two
+independent cases; this is case one. `doctor-probes` and `phase-timing` are the same shape and are
+where the argument should be made. The question the kind has to answer is already sharp: **does a
+diagnostic attach to a state, or to the failure of one?**
+
+**A third thing the model cannot say, found by the sixth extension:** the difference between
+GRANTED and CONFIRMED. `cloud-mutate` permits a binding to delete cloud resources; nothing expresses
+whether a human authorised *this* deletion (`teardown.Deps.Confirm` — `--yes`). A destroy verb that is
+granted but unconfirmed must dry-run rather than proceed, so the two bits must not be one. Unlike the
+other two this is probably not a missing grant but a missing axis, and it belongs to the action ABI.
+
+**The `write-repo` gap is CLOSED, by the twenty-eighth extension.** It was open from the second one,
+and refused three times: `llz ci gen-toc`, `guard-docs` and `promote-pipeline` each write the
+operator's repo, and each was resolved by a **file split** — the package renders bytes, package `main`
+calls `os.WriteFile` — on the stated grounds that two cases say the vocabulary has a hole and do not
+say what shape it is.
+
+`deliver-docs` is where that answer stops working. It does not render bytes for someone else to
+write: it **prunes a directory and rewrites links in place**, deciding per file, mid-walk, from that
+file's inode identity and whether the template owns its path. Hoisting the writes means buffering
+every rewritten file to hand back, or passing `main` a callback that writes — the write happening
+inside the package with extra indirection. The declaration was **impossible**, not incomplete, which
+is this model's stated bar for a new word.
+
+`write-repo` means the instance repo's **tracked** files; a temp dir needs no grant, the same way
+reading `/tmp` needs no `read-repo`. Its `grantStates` row is `{scaffolded, upgraded}` — the two
+moments copier runs — and deliberately **not** `promoted`, because `promote-pipeline` still keeps its
+write in `main` and a row no shipping code exercises is a guess. It is not `own-paths`: that is a
+**fence** ("copier must not render these bytes") and this is a **permit**; `deliver-docs` holds the
+permit and not the fence, since it prunes what copier just rendered and wants the re-render.
+
+Two vocabulary additions in twenty-eight extractions — `secret-read` (a **split**) and `write-repo`
+(an **addition**) — is the rate to judge the next one against.
 
 **Relates:** [ADR 0014](../adr/0014-core-surface-budget.md) (the budget this exists to relieve),
 [internal-extensions.md](internal-extensions.md) (the catalog this model is derived from),
@@ -14,6 +132,17 @@ issue #399 (the sequenced plan), PR #15 (closed, superseded).
 **This document owns the MODEL** — states, bindings, grants, and the rules between them. Its
 evidence is [the catalog](internal-extensions.md); the budget it serves is [ADR
 0014](../adr/0014-core-surface-budget.md). Cited, not restated.
+
+<!-- toc -->
+## Contents
+
+- [What changed, and why](#what-changed-and-why)
+- [The model](#the-model)
+- [Anatomy of an extension](#anatomy-of-an-extension)
+- [What is deliberately absent](#what-is-deliberately-absent)
+- [Ordering](#ordering)
+
+<!-- /toc -->
 
 ## What changed, and why
 
@@ -147,14 +276,14 @@ from that repo. Asserting `upgraded` (template drift) and `promoted` follows the
 
 *It reaches the non-`verified` spine states, and the repo already demonstrates why.* `internal/health`
 is **1,164 logic lines** of pure classification — `argo.go`, `certs.go`, `matchers.go` — which
-`ci_health.go`'s own header calls "the tested `internal/health` predicate", describing itself as "the
+`health.go`'s own header calls "the tested `internal/health` predicate", describing itself as "the
 kubectl orchestration that feeds them". That separation is already built and already load-bearing;
 under this model the library half simply *is* an `assertion:converged` and the command half a
 `transition:converged`. `config-readiness` is the same shape for `configured`, which the catalog
 identified as "the `configured` predicate, mis-filed as a command". A rule admitting only `verified`
 would have nowhere to put either.
 
-(An earlier draft of this section claimed `ci_health.go` *fused* action and predicate and called that
+(An earlier draft of this section claimed `health.go` *fused* action and predicate and called that
 the catalog's most valuable split. It does not — the split happened before this design existed. The
 rule is unchanged; the evidence for it is stronger as a precedent than it was as a proposal.)
 
@@ -167,7 +296,7 @@ count from ~57 toward ~49.
 
 ### Grants
 
-`read-repo` · `cloud-read` · `cluster-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
+`read-repo` · `cloud-read` · `cluster-read` · `secret-read` · `cluster-write` · `cloud-mutate` · `secret-custody` ·
 `own-paths`
 
 The vocabulary is closed. [The catalog](internal-extensions.md) records how it distributes across all
@@ -192,7 +321,7 @@ The ceiling is now the relationship between the two. `Validate()` enforces:
 | a `transition:seeded` binding **must** declare `secret-custody` | that transition is *defined* by placing credential material; claiming the state without the grant hides custody from the reviewer reading the grant line |
 | `own-paths` only on a `transition` to `scaffolded` or `upgraded` | it is exactly `.template-manifest`'s `owned` class — "copier must not render these bytes, something else does" — and a fence only matters when the thing it fences off runs. Copier runs at exactly two moments: `llz new` and `copier update`. Writing a file at some other state is not grounds for the grant; being outside copier's render is (see the catalog's Decision 1) |
 | every binding must declare **at least one** grant | the grant is the handle the action receives — a read-only kubeconfig, a path-fenced OpenBao token — so a binding asking for nothing is handed nothing and cannot run |
-| `secret-custody` only at `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `destroyed`; `cluster-write` only at those plus `operating` | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
+| `secret-custody` (PLACING credential material — reading it is `secret-read`, which is unrestricted) only at `provisioned`, `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `cluster-write` at the same five | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
 
 Plus the structural rules: kebab-case unique names, at least one binding, closed vocabularies, no
 duplicate bindings or grants.
@@ -207,7 +336,20 @@ mistake they always were.
 
 **The state table's restricted-grant rows are judgement transcribed, not derived.** They record where
 the catalog places each grant today. A new row is the most likely thing here to be needed, and should
-arrive as an argued change rather than a quiet widening.
+arrive as an argued change rather than a quiet widening. Two have: `cloud-mutate` at `operating` and
+`secret-custody` at `provisioned`, each carrying its argument inline and each re-pinned in
+`grantstates_internal_test.go`. Both were found by extracting code that already ships — **not** by
+re-reading the catalog — which is the case for taking the expensive capabilities early.
+
+**THE ACTION ABI IS NOW THE BINDING CONSTRAINT.** Fourteen extractions have not needed one; the
+fourteenth showed why the next ones will. `converge` is 2,476 lines whose call tree runs six or seven
+frames from entry point to the leaf that shells out, so its capabilities are INSTALLED once
+(`converge.Install`) rather than threaded as a parameter the way every earlier extension does. That
+works, and its cost is stated in the package: an installed seam is global mutable state, tests must
+restore it, and two callers cannot hold different capability sets at once. An action ABI would hand
+each binding its own handle at dispatch time — which is exactly the thing package-level installation
+cannot do. `cmd/llz/ci_converge.go` is the hand-written version of that dispatch, and it is the
+clearest specification of the ABI these extractions have produced. Issue #399 sequences it.
 
 **The escape hatch is re-modelling, not an exception list.** The catalog contains exactly two
 entries that break the assertion rule, and flags both itself: `assert-storage` holds `cloud-mutate`
@@ -265,7 +407,7 @@ assertion enable and disable together, so they are one extension rather than two
 | always | no |
 | why it validates | the seeded transition declares the custody that transition is *defined* by; the assertion stays read-only |
 
-The acid test — the action and the predicate separated. `ci_health.go` fuses them today; under this
+The acid test — the action and the predicate separated. `health.go` fuses them today; under this
 model they come apart, which is why an `assertion` must be allowed to target `converged`:
 
 | | `converge` |

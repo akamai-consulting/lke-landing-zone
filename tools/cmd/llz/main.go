@@ -19,18 +19,62 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/baolifecycle"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/newinstance"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reachability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const (
-	templateName       = "lke-landing-zone"
-	defaultTemplateOrg = "akamai-consulting"
-)
+// The reconciler package needs the same stamp and cannot read this one, so main
+// hands it over at init. One source, set once.
+func init() {
+	reconciler.Version = version
+	// Same one-source rule: selfupgrade decides whether an update is AVAILABLE, so
+	// a stale "dev" there would make every release look newer than the running
+	// binary, forever.
+	selfupgrade.Version = version
+	// copier anchors a scaffold to this binary's release when it has one.
+	copier.Version = version
+	// envadd regenerates promote.yml after adding an environment, but the WRITE
+	// stays here: internal/promote declares transition:promoted[read-repo] and its
+	// own guard refuses a write path, and write-repo is not legal at `promoted`.
+	envadd.SyncPromoteWorkflow = syncPromoteWorkflow
+	// sustain.Deps needs lockableScaffoldFiles and the global --yes, both main's.
+	upgrade.SustainDeps = sustainDeps
+	newinstance.InstallHooks = func(dryRun, yes bool, dir string) error {
+		return runHooksInstall(globalOpts{dryRun: dryRun, yes: yes}, dir)
+	}
+}
 
 // globalOpts holds the persistent flags shared by every subcommand. It's
 // populated from the root command's flags before any RunE runs.
+// onboardOpts narrows globalOpts to the three fields internal/onboard reads.
+//
+// A CONVERTER, NOT AN EXPORT. Handing the whole struct over would put package
+// main's flag model on the other side of a package boundary and make every future
+// field visible there whether or not it is read. Three fields, named once.
+func (g globalOpts) onboardOpts() onboard.Opts {
+	return onboard.Opts{DryRun: g.dryRun, Open: g.open, Yes: g.yes}
+}
+
 type globalOpts struct {
 	dryRun bool
 	open   bool
@@ -41,7 +85,7 @@ var gopts globalOpts
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, red("llz:"), err)
+		fmt.Fprintln(os.Stderr, color.Red("llz:"), err)
 		os.Exit(1)
 	}
 }
@@ -63,11 +107,11 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), envtopology.SpecCmd(), envtopology.NetworkCmd(), componentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
-		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
-		aplCmd(),
+		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconciler.Cmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
+		aplCmd(), extensionCmd(),
 	)
 
 	// Group the adopter-facing commands in `llz --help` so the front door is
@@ -96,7 +140,7 @@ func newRootCmd() *cobra.Command {
 	// Operator-defined commands from .llz/commands.yaml (added last so the
 	// built-in set wins any name collision). See docs/extending-llz.md.
 	if cmds, err := loadExtCommands("."); err != nil {
-		fmt.Fprintln(os.Stderr, red("llz:"), err)
+		fmt.Fprintln(os.Stderr, color.Red("llz:"), err)
 	} else {
 		addExtCommands(root, cmds)
 	}
@@ -152,10 +196,10 @@ func newCmd() *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return runNew(gopts, org, ref, dir, push)
+			return newinstance.Run(gopts.dryRun, gopts.yes, org, ref, dir, push)
 		},
 	}
-	c.Flags().StringVar(&org, "org", defaultTemplateOrg, "template org to scaffold from")
+	c.Flags().StringVar(&org, "org", templateid.DefaultOrg, "template org to scaffold from")
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to scaffold + pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&push, "push", false, "create the instance_repo on GitHub and push the scaffold (gh repo create; needs --yes)")
 	return c
@@ -169,7 +213,7 @@ func doctorCmd() *cobra.Command {
 		Short: "am I ready to build? tooling + gh auth + deployment readiness + repo config",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(repo, env, admin, cmd.Flags().Changed("env"), sshHost, knownHosts)
+			return onboard.RunDoctor(repo, env, admin, cmd.Flags().Changed("env"), sshHost, knownHosts)
 		},
 	}
 	c.Flags().StringVar(&repo, "repo", "", "instance repo for the readiness check (default: .copier-answers.yml, or example repo in --admin)")
@@ -185,7 +229,7 @@ func tokensCmd() *cobra.Command {
 	var env, cluster, bucket, repo string
 	c := &cobra.Command{
 		Use:   "tokens",
-		Short: "provision wizard: create state bucket/key, gather PATs, push",
+		Short: "provision wizard: create state bucket/key, onboard.Gather PATs, push",
 		Long: "Idempotently provisions an instance's credentials: creates the Terraform-\n" +
 			"state OBJ bucket + a scoped key (Linode API), generates the ArgoCD deploy\n" +
 			"key, gathers GitHub PATs, computes image vars, writes .llz/*.env, and pushes.\n" +
@@ -193,7 +237,7 @@ func tokensCmd() *cobra.Command {
 			"e2e harness and defaults to the example repo. Mutating steps need --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := runTokens(gopts, admin, env, cluster, bucket, repo); err != nil {
+			if err := onboard.RunTokens(gopts.onboardOpts(), admin, env, cluster, bucket, repo); err != nil {
 				return err
 			}
 			// Recommend the rest of the flow — but only after a real run (not a
@@ -202,9 +246,9 @@ func tokensCmd() *cobra.Command {
 			if gopts.yes && !gopts.dryRun {
 				eff := env
 				if eff == "" {
-					eff = "e2e" // matches runTokens' admin default
+					eff = "e2e" // matches onboard.RunTokens' admin default
 				}
-				printTokensNextSteps(eff)
+				onboard.PrintNextSteps(eff)
 			}
 			return nil
 		},
@@ -218,17 +262,17 @@ func tokensCmd() *cobra.Command {
 }
 
 func secretsCmd() *cobra.Command {
-	s := &cobra.Command{Use: "secrets", Short: "gather + push instance credentials"}
+	s := &cobra.Command{Use: "secrets", Short: "onboard.Gather + push instance credentials"}
 	s.AddCommand(
 		&cobra.Command{
-			Use: "gather", Short: "paste-everything token wizard (links + .llz/*.env)",
+			Use: "onboard.Gather", Short: "paste-everything token wizard (links + .llz/*.env)",
 			Args: cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error { return gather(gopts, ".") },
+			RunE: func(_ *cobra.Command, _ []string) error { return onboard.Gather(gopts.onboardOpts(), ".") },
 		},
 		&cobra.Command{
 			Use: "push <env>", Short: "write gathered tokens into infra-<env> (--yes)",
 			Args: cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error { return pushSecrets(gopts, args[0]) },
+			RunE: func(_ *cobra.Command, args []string) error { return onboard.PushSecrets(gopts.onboardOpts(), args[0]) },
 		},
 	)
 	return s
@@ -300,7 +344,7 @@ func upgradeCmd() *cobra.Command {
 			"a one-view summary of the churn, and — with --commit — records it as a single\n" +
 			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runUpgrade(gopts, ref, commit, noRender) },
+		RunE: func(_ *cobra.Command, _ []string) error { return upgrade.Run(gopts.dryRun, ref, commit, noRender) },
 	}
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to update + re-pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&commit, "commit", false, "stage + record the upgrade as one labeled git commit")
@@ -315,7 +359,9 @@ func driftCmd() *cobra.Command {
 		Use:   "drift",
 		Short: "report how far behind the template this instance is",
 		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runDrift(branch, repoURL, strict) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return sustain.RunDrift(sustainDeps(), branch, repoURL, strict)
+		},
 	}
 	c.Flags().StringVar(&branch, "branch", "main", "template branch to compare against")
 	c.Flags().StringVar(&repoURL, "repo-url", "", "override the fetch URL (default: derived from .copier-answers.yml)")
@@ -325,7 +371,7 @@ func driftCmd() *cobra.Command {
 
 func envCmd() *cobra.Command {
 	env := &cobra.Command{Use: "env", Short: "manage deployments (environments)"}
-	var o envAddOpts
+	var o envdef.Opts
 	add := &cobra.Command{
 		Use:   "add <name>",
 		Short: "scaffold a deployment — authors the LandingZone spec, then renders it",
@@ -341,32 +387,32 @@ func envCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
 	}
 	f := add.Flags()
-	f.StringVar(&o.templateEnv, "template-env", "example", "template env to clone")
-	f.StringVar(&o.region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
-	f.StringVar(&o.regionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
+	f.StringVar(&o.TemplateEnv, "template-env", "example", "template env to clone")
+	f.StringVar(&o.Region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
+	f.StringVar(&o.RegionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
 	// DEPRECATED and WRITE-NOTHING. Linode owns the cluster domain on Managed App
 	// Platform (lke<id>.akamai-apl.net) and the spec validator REJECTS
 	// cluster.bootstrap.domainSuffix outright, so there is nothing for this to set.
 	// It survived as a flag that echoed the value back in the summary banner —
 	// which read exactly like it had been applied. Marked deprecated so cobra says
 	// so on every use rather than leaving the reader to discover it at apply time.
-	f.StringVar(&o.clusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
+	f.StringVar(&o.ClusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
 	_ = f.MarkDeprecated("cluster-domain", "ignored — Linode owns the cluster domain (lke<id>.akamai-apl.net) and LLZ discovers it in-cluster, so this writes nothing")
-	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
-	f.StringVar(&o.k8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
-	f.StringVar(&o.nodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")
-	f.StringVar(&o.nodeCount, "node-count", "", "node pool size, integer (default: example value)")
-	f.StringVar(&o.runnerIPv4CIDRs, "runner-ipv4-cidrs", "", "comma-separated operator/CI egress IPv4 CIDRs (never 0.0.0.0/0)")
-	f.StringVar(&o.runnerIPv6CIDRs, "runner-ipv6-cidrs", "", "comma-separated operator/CI egress IPv6 CIDRs")
-	f.StringVar(&o.aplChartVersion, "apl-chart-version", "", "apl-core chart version (apl_chart_version)")
-	f.StringVar(&o.aplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
-	f.StringVar(&o.haRole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
-	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
-	f.StringVar(&o.network, "network", "", "shared VPC name (spec.networks, see `llz network add`) to co-locate in; default: dedicated VPC")
-	f.StringVar(&o.subnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
-	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
-	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envShowCmd(), envSetCmd(), envEditCmd(), envListCmd(), envRoleCmd(), envPeerCmd(), envResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
+	f.StringVar(&o.ObjCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
+	f.StringVar(&o.K8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
+	f.StringVar(&o.NodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")
+	f.StringVar(&o.NodeCount, "node-count", "", "node pool size, integer (default: example value)")
+	f.StringVar(&o.RunnerIPv4CIDRs, "runner-ipv4-cidrs", "", "comma-separated operator/CI egress IPv4 CIDRs (never 0.0.0.0/0)")
+	f.StringVar(&o.RunnerIPv6CIDRs, "runner-ipv6-cidrs", "", "comma-separated operator/CI egress IPv6 CIDRs")
+	f.StringVar(&o.AplChartVersion, "apl-chart-version", "", "apl-core chart version (apl_chart_version)")
+	f.StringVar(&o.AplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
+	f.StringVar(&o.HARole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
+	f.StringVar(&o.HAGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
+	f.StringVar(&o.Network, "network", "", "shared VPC name (spec.networks, see `llz network add`) to co-locate in; default: dedicated VPC")
+	f.StringVar(&o.SubnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
+	f.IntVar(&o.PromotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
+	f.BoolVar(&o.DryRun, "dry-run", false, "print what would be created; write nothing")
+	env.AddCommand(add, envShowCmd(), envtopology.SetCmd(), envtopology.EditCmd(), envtopology.ListCmd(), envtopology.RoleCmd(), envtopology.PeerCmd(), envtopology.ResolveCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 
@@ -384,7 +430,7 @@ func envPipelineCmd() *cobra.Command {
 			"ranked deployments to form a pipeline; runs only in a rendered instance.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			tfDir, _, relPrefix := instanceLayout()
+			tfDir, _, relPrefix := instancelayout.Detect()
 			changed, err := syncPromoteWorkflow(tfDir, relPrefix, check)
 			if err != nil {
 				return err
@@ -436,7 +482,7 @@ func openbaoCmd() *cobra.Command {
 		Use:   "exec [--] <bao args...>",
 		Short: "run a bao command in the cluster via kubectl exec (day-2 auth/policy admin; needs OPENBAO_ROOT_TOKEN)",
 		Args:  cobra.MinimumNArgs(1),
-		RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoExec(gopts, a) },
+		RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunExec(gopts.dryRun, a) },
 	}
 	execCmd.Flags().SetInterspersed(false)
 
@@ -445,13 +491,13 @@ func openbaoCmd() *cobra.Command {
 			Use:   "get <active|standby> <secret/path> <key>",
 			Short: "read one field from a cluster by HA role (value to stdout)",
 			Args:  cobra.ExactArgs(3),
-			RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoGet(a[0], a[1], a[2]) },
+			RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunGet(a[0], a[1], a[2]) },
 		},
 		&cobra.Command{
 			Use:   "set <secret/path> <key=value>...",
 			Short: "dual-write to active+standby, or single-write a standalone (--yes); rollback + hash-verify",
 			Args:  cobra.MinimumNArgs(2),
-			RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoSet(gopts, a[0], a[1:]) },
+			RunE:  func(_ *cobra.Command, a []string) error { return openbao.RunSet(gopts.dryRun, gopts.yes, a[0], a[1:]) },
 		},
 		execCmd,
 		openbaoLoginCmd(),
@@ -461,7 +507,7 @@ func openbaoCmd() *cobra.Command {
 }
 
 func openbaoLoginCmd() *cobra.Command {
-	var o openbaoLoginOpts
+	var o openbao.TeamLoginOpts
 	c := &cobra.Command{
 		Use:   "login --team <name>",
 		Short: "mint a team-scoped OpenBao token via Keycloak OIDC (no root token)",
@@ -479,18 +525,18 @@ func openbaoLoginCmd() *cobra.Command {
 			"(KUBECONFIG): it port-forwards OpenBao for the token exchange. See\n" +
 			"docs/designs/team-scoped-credentials.md.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runOpenbaoLogin(o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return openbao.RunTeamLogin(o) },
 	}
 	f := c.Flags()
-	f.StringVar(&o.team, "team", "", "team name == OpenBao keycloak role == spec.teams entry (required)")
-	f.StringVar(&o.region, "region", "", "spec env whose domainSuffix derives the Keycloak issuer (optional if the spec has one env)")
-	f.StringVar(&o.issuer, "issuer", "", "Keycloak realm issuer URL override (e.g. https://keycloak.<domain>/realms/otomi)")
-	f.StringVar(&o.clientID, "client-id", "", "Keycloak OIDC device-flow client id (default: $OPENBAO_OIDC_CLIENT_ID or 'llz')")
+	f.StringVar(&o.Team, "team", "", "team name == OpenBao keycloak role == spec.teams entry (required)")
+	f.StringVar(&o.Region, "region", "", "spec env whose domainSuffix derives the Keycloak issuer (optional if the spec has one env)")
+	f.StringVar(&o.Issuer, "issuer", "", "Keycloak realm issuer URL override (e.g. https://keycloak.<domain>/realms/otomi)")
+	f.StringVar(&o.ClientID, "client-id", "", "Keycloak OIDC device-flow client id (default: $OPENBAO_OIDC_CLIENT_ID or 'llz')")
 	return c
 }
 
 func regenRootCmd() *cobra.Command {
-	var o regenRootOpts
+	var o baolifecycle.RegenRootOpts
 	c := &cobra.Command{
 		Use:   "regen-root <region>",
 		Short: "quorum-regenerate root — needs you to HOLD 3 recovery keys (else use break-glass)",
@@ -509,15 +555,15 @@ func regenRootCmd() *cobra.Command {
 			"<region> names the infra-<region> GitHub environment for --update-gha-secret.\n" +
 			"Run after a bootstrap revokes root.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, a []string) error { return runRegenRoot(gopts, a[0], o) },
+		RunE: func(_ *cobra.Command, a []string) error { return baolifecycle.RunRegenRoot(gopts.dryRun, a[0], o) },
 	}
-	c.Flags().BoolVar(&o.updateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
-	c.Flags().StringVar(&o.repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
+	c.Flags().BoolVar(&o.UpdateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
+	c.Flags().StringVar(&o.Repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
 	return c
 }
 
 func verifyCmd() *cobra.Command {
-	var o verifyOpts
+	var o reachability.VerifyOpts
 	c := &cobra.Command{
 		Use:   "verify",
 		Short: "post-bootstrap acceptance snapshot (SSH wiring, platform apps, ESO) — read-only",
@@ -527,14 +573,14 @@ func verifyCmd() *cobra.Command {
 			"pointed at the external HTTPS repo, OpenBao seal status, and the ESO store.\n" +
 			"It does not wait — re-run if a check is just mid-reconcile.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runVerify(gopts, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return reachability.RunVerify(gopts.dryRun, o) },
 	}
-	c.Flags().StringVar(&o.sshSourceHost, "ssh-source-host", "", "SSH source-of-truth host to check for (e.g. a self-hosted Git host); empty skips the SSH-source checks")
+	c.Flags().StringVar(&o.SSHSourceHost, "ssh-source-host", "", "SSH source-of-truth host to check for (e.g. a self-hosted Git host); empty skips the SSH-source checks")
 	return c
 }
 
 func reapCmd() *cobra.Command {
-	var o reapOpts
+	var o teardown.ReapOpts
 	c := &cobra.Command{
 		Use:   "reap",
 		Short: "sweep orphaned Linode resources from failed cluster cycles (--yes to delete)",
@@ -544,16 +590,16 @@ func reapCmd() *cobra.Command {
 			"PAT from LINODE_API_TOKEN (or LINODE_TOKEN). Dry-run by default; deletes only\n" +
 			"with --yes. Volumes need a scope (--region or --volume-ids).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runReap(gopts, o) },
+		RunE: func(_ *cobra.Command, _ []string) error { return teardown.RunReap(gopts.dryRun, gopts.yes, o) },
 	}
 	f := c.Flags()
-	f.StringVar(&o.region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
-	f.StringVar(&o.clusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
-	f.StringVar(&o.env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys <objLabelPrefix>-loki-<env>/<objLabelPrefix>-harbor-registry-<env> + in-cluster PAT llz-incluster-<objLabelPrefix>-<env>)")
-	f.StringVar(&o.fwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
-	f.StringVar(&o.volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
-	f.StringVar(&o.tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
-	f.BoolVar(&o.force, "force", false, "delete the node firewall even if a live cluster still carries --cluster-label")
+	f.StringVar(&o.Region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
+	f.StringVar(&o.ClusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
+	f.StringVar(&o.Env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys <objLabelPrefix>-loki-<env>/<objLabelPrefix>-harbor-registry-<env> + in-cluster PAT llz-incluster-<objLabelPrefix>-<env>)")
+	f.StringVar(&o.FwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
+	f.StringVar(&o.VolumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
+	f.StringVar(&o.TagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
+	f.BoolVar(&o.Force, "force", false, "delete the node firewall even if a live cluster still carries --cluster-label")
 	return c
 }
 
@@ -574,7 +620,7 @@ func selfUpdateCmd() *cobra.Command {
 			"release SHA256SUMS, and atomically overwrites the running binary. Defaults to\n" +
 			"the latest vX.Y.Z release; --dry-run reports the target without installing.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runSelfUpdate(gopts, repo, ref) },
+		RunE: func(_ *cobra.Command, _ []string) error { return selfupgrade.RunSelfUpdate(gopts.dryRun, repo, ref) },
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release to install, e.g. v0.0.39 (default: latest)")
 	c.Flags().StringVar(&repo, "repo", "", "template repo to pull from (default: upstream_org/lke-landing-zone)")

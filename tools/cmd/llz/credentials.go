@@ -27,81 +27,15 @@ package main
 // record format, not a live binary reference.
 
 import (
-	"context"
-	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/credrotate"
 	"github.com/spf13/cobra"
 )
 
-// rotatorOpts is the global argument set every `llz credentials` subcommand
-// shares — the cobra-flag equivalent of the hand-rolled argument preamble the
-// standalone rotator binaries used before they were folded into llz. (That
-// preamble, cli.ParseRotatorArgs, outlived its callers and has been removed.)
-type rotatorOpts struct {
-	token string
-	apply bool
-}
-
-// resolve applies the env defaults (LINODE_TOKEN / ROTATION_APPLY), emits the
-// dry-run banner when unarmed, and returns the token + armed flag.
-func (o *rotatorOpts) resolve() (token string, apply bool, err error) {
-	token = firstNonEmpty(o.token, os.Getenv("LINODE_TOKEN"))
-	if token == "" {
-		return "", false, fmt.Errorf("a Linode PAT is required (env LINODE_TOKEN)")
-	}
-	apply = o.apply || cli.EnvBool("ROTATION_APPLY", false)
-	if !apply {
-		slog.Warn("DRY-RUN: no Linode API write will be made. Pass --apply (or ROTATION_APPLY=true) to arm.")
-	}
-	return token, apply, nil
-}
-
-// writeRotatedSecret persists a freshly-rotated account credential into the GitHub
-// secret `name` for EVERY infra-<deployment> environment (or repo-level when
-// deployments is empty). The shared Linode credentials (LINODE_API_TOKEN, the
-// TF-state OBJ key) live as a per-environment copy — the infra-<env> environments
-// are the main-only secret-injection boundary, so each deployment holds its own
-// copy and a rotation must update all of them, not a single repo-level secret.
-func writeRotatedSecret(name, value string, deployments []string) error {
-	if len(deployments) == 0 {
-		return ghSetSecretFn(name, "", value) // repo-level fallback (pre-env-scoped instances)
-	}
-	for _, d := range deployments {
-		if err := ghSetSecretFn(name, "infra-"+d, value); err != nil {
-			return fmt.Errorf("set %s in infra-%s: %w", name, d, err)
-		}
-	}
-	return nil
-}
-
-// Client constructors as package vars so the commands are exercisable without
-// network access (same seam pattern as newKubeconfigClient / newACLClient).
-var (
-	newPATRotatorClient    = func(token string) patAPI { return linode.NewClient(token, 30*time.Second) }
-	newObjKeyRotatorClient = func(token string) objKeyAPI { return linode.NewClient(token, 30*time.Second) }
-)
-
-// patAPI is the slice of the Linode client the PAT rotation uses.
-type patAPI interface {
-	CreateProfileToken(ctx context.Context, label, scopes, expiry string) (map[string]any, error)
-	ListProfileTokens(ctx context.Context) ([]map[string]any, error)
-	DeleteProfileToken(ctx context.Context, id uint64) error
-}
-
-// objKeyAPI is the slice of the Linode client the OBJ-key rotation uses.
-type objKeyAPI interface {
-	CreateObjectStorageKey(ctx context.Context, label, cluster, bucket, permissions string) (map[string]any, error)
-	ListObjectStorageKeys(ctx context.Context) ([]map[string]any, error)
-	DeleteObjectStorageKey(ctx context.Context, id uint64) error
-}
-
 func credentialsCmd() *cobra.Command {
-	o := &rotatorOpts{}
+	o := &credrotate.Opts{}
 	c := &cobra.Command{
 		Use:   "credentials",
 		Short: "rotate the shared Linode credentials (PAT + TF-state OBJ key); dry-run unless --apply",
@@ -120,8 +54,8 @@ func credentialsCmd() *cobra.Command {
 		},
 	}
 	pf := c.PersistentFlags()
-	pf.StringVar(&o.token, "linode-token", "", "Linode PAT with account:read_write (default: env LINODE_TOKEN)")
-	pf.BoolVar(&o.apply, "apply", false, "arm the Linode API writes (default: env ROTATION_APPLY; dry-run otherwise)")
+	pf.StringVar(&o.Token, "linode-token", "", "Linode PAT with account:read_write (default: env LINODE_TOKEN)")
+	pf.BoolVar(&o.Apply, "apply", false, "arm the Linode API writes (default: env ROTATION_APPLY; dry-run otherwise)")
 	c.AddCommand(credentialsPATCmd(o), credentialsObjKeyCmd(o), credentialsLKEAdminCmd(o))
 	return c
 }

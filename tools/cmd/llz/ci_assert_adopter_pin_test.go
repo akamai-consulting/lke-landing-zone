@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/versionpins"
 )
 
 const (
@@ -62,7 +64,7 @@ func TestAssertAdopterPinDefaultsToLatestRelease(t *testing.T) {
 
 // THE REGRESSION. This is the gate reproducing the pre-fix behaviour: `llz tokens`
 // computes a floating version tag for a release-pinned instance. It has to FAIL —
-// this exact configuration shipped to a live adopter with e2e green throughout.
+// this exact configuration shipped to a live adopter with e2e color.Green throughout.
 func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
@@ -74,7 +76,7 @@ func TestAssertAdopterPinRejectsAFloatingImagePin(t *testing.T) {
 	if err == nil {
 		t.Fatal("gate passed an instance that would run a floating, main-tracking image")
 	}
-	for _, want := range []string{"would not pin", "ci-tofu:" + ciTofuTag, "llz render --check"} {
+	for _, want := range []string{"would not pin", "ci-tofu:" + versionpins.CITofuTag, "llz render --check"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message missing %q:\n%v", want, err)
 		}
@@ -144,7 +146,7 @@ func TestAssertAdopterPinCmdWiring(t *testing.T) {
 			t.Errorf("missing --%s flag", f)
 		}
 	}
-	// No --org: the GHCR owner comes from defaultTemplateOrg via computeCIImageVars,
+	// No --org: the GHCR owner comes from templateid.DefaultOrg via computeCIImageVars,
 	// so a flag here would accept a value and silently ignore it.
 	if c.Flags().Lookup("org") != nil {
 		t.Error("--org is a no-op flag; it must not exist")

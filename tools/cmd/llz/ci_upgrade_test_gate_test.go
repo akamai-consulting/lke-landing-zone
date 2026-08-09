@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
 )
 
 // TestCopierUpdateArgvIsNonInteractive is the unit-speed twin of the gate's
@@ -14,25 +16,25 @@ import (
 // upgrade-test` needs copier, git tags, and ~90s, and self-skips without them.
 // This one runs in microseconds on every `go test`, so the flag cannot be
 // dropped and rediscovered by an adopter — which is how it was found the first
-// time. Losing --defaults makes `llz upgrade` re-prompt, and with no terminal
-// that is an unhandled prompt_toolkit exception rather than a prompt.
+// time. Losing --defaults makes `llz upgrade` re-onboard.Prompt, and with no terminal
+// that is an unhandled prompt_toolkit exception rather than a onboard.Prompt.
 func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 	for _, ref := range []string{"v0.0.40", ""} {
-		argv := copierUpdateArgv(ref)
+		argv := copier.UpdateArgv(ref)
 		if !containsArg(argv, "--defaults") {
-			t.Errorf("copierUpdateArgv(%q) = %v\n"+
+			t.Errorf("copier.UpdateArgv(%q) = %v\n"+
 				"missing --defaults: `copier update` re-asks every question without it, which is an\n"+
 				"unhandled exception in CI/scripts/ssh and three silent re-answer prompts by hand.", ref, argv)
 		}
 		if !containsArg(argv, "--trust") {
-			t.Errorf("copierUpdateArgv(%q) lost --trust; the template's _tasks would not run: %v", ref, argv)
+			t.Errorf("copier.UpdateArgv(%q) lost --trust; the template's _tasks would not run: %v", ref, argv)
 		}
 	}
 	// The ref is what the upgrade exists to move. A bare update floats the code to
 	// the latest tag while leaving llz_version stale, which is the skew the
 	// explicit --data pin prevents.
-	if argv := copierUpdateArgv("v0.0.40"); !containsArg(argv, "llz_version=v0.0.40") {
-		t.Errorf("copierUpdateArgv did not pin llz_version: %v", argv)
+	if argv := copier.UpdateArgv("v0.0.40"); !containsArg(argv, "llz_version=v0.0.40") {
+		t.Errorf("copier.UpdateArgv did not pin llz_version: %v", argv)
 	}
 }
 
@@ -40,8 +42,8 @@ func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 // must be silent. Pinning that keeps a future "make everything non-interactive"
 // sweep from turning the scaffold's questions into silent defaults.
 func TestCopierCopyArgvStillPrompts(t *testing.T) {
-	if argv := copierCopyArgv("acme", "v0.0.40", "dest"); containsArg(argv, "--defaults") {
-		t.Errorf("copierCopyArgv gained --defaults: `llz new` must ASK for instance_repo, not "+
+	if argv := copier.CopyArgv("acme", "v0.0.40", "dest"); containsArg(argv, "--defaults") {
+		t.Errorf("copier.CopyArgv gained --defaults: `llz new` must ASK for instance_repo, not "+
 			"scaffold silently onto the placeholder: %v", argv)
 	}
 }
@@ -66,9 +68,9 @@ func TestCopierScaffoldArgv(t *testing.T) {
 			t.Errorf("scaffold argv is missing --data %s: %v", want, argv)
 		}
 	}
-	// The harness itself must never block on a prompt.
+	// The harness itself must never block on a onboard.Prompt.
 	if !containsArg(argv, "--defaults") {
-		t.Errorf("scaffold argv would prompt: %v", argv)
+		t.Errorf("scaffold argv would onboard.Prompt: %v", argv)
 	}
 	// Deterministic ordering, so a failure diff is stable across runs.
 	if got := copierScaffoldArgv("/t", "v1.0.0", "/d",
@@ -87,21 +89,6 @@ func indexOfArg(argv []string, want string) int {
 	return -1
 }
 
-func TestCurrentAnswerMap(t *testing.T) {
-	// nil outside an instance — `llz upgrade` runs this before copier, and a hard
-	// error there would break upgrading a tree that simply has no answers file yet.
-	chdirTemp(t)
-	if got := currentAnswerMap(); got != nil {
-		t.Errorf("currentAnswerMap = %v outside an instance; want nil", got)
-	}
-	if err := os.WriteFile(".copier-answers.yml", []byte("instance_repo: o/r\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := currentAnswerMap(); got["instance_repo"] != "o/r" {
-		t.Errorf("currentAnswerMap = %v", got)
-	}
-}
-
 func TestPreviousReleaseTag(t *testing.T) {
 	// Numeric ordering, not string: "v0.0.9" > "v0.0.10" lexically, and picking the
 	// wrong one quietly narrows what the gate covers.
@@ -114,7 +101,7 @@ func TestPreviousReleaseTag(t *testing.T) {
 
 	// THE case this argument exists for. Cutting a release tags the commit under
 	// test, and "upgrade v0.0.40 → v0.0.40" is a no-op that passes while testing
-	// nothing — a green gate meaning least on the run that matters most.
+	// nothing — a color.Green gate meaning least on the run that matters most.
 	t.Run("skips a tag on the commit under test", func(t *testing.T) {
 		got, ok := previousReleaseTag(
 			[]string{"v0.0.39", "v0.0.40"}, map[string]bool{"v0.0.40": true})
@@ -123,7 +110,7 @@ func TestPreviousReleaseTag(t *testing.T) {
 		}
 	})
 
-	// Delegated to latestLLZTag, so pre-releases and the retired llz/v* track are
+	// Delegated to selfupgrade.LatestLLZTag, so pre-releases and the retired llz/v* track are
 	// excluded by the same rule `llz self-update` and `llz new` apply.
 	t.Run("ignores pre-releases and the legacy tag track", func(t *testing.T) {
 		got, ok := previousReleaseTag([]string{"v0.0.39", "v0.0.41-rc1", "llz/v9.9.9"}, nil)
@@ -135,70 +122,6 @@ func TestPreviousReleaseTag(t *testing.T) {
 	t.Run("reports not-ok on a clone with no release tags", func(t *testing.T) {
 		if got, ok := previousReleaseTag([]string{"main", ""}, nil); ok {
 			t.Errorf("previousReleaseTag = %q,%v; want not-ok so the gate skips rather than inventing a release", got, ok)
-		}
-	})
-}
-
-func TestAnswerRegressions(t *testing.T) {
-	base := map[string]string{
-		"instance_repo": "probe-org/probe-instance",
-		"openbao_team":  "probe-team",
-		"upstream_org":  "akamai-consulting",
-		"_commit":       "v0.0.39",
-		"llz_version":   "v0.0.39",
-		"_src_path":     "gh:acme/tmpl",
-	}
-	clone := func(over map[string]string) map[string]string {
-		m := map[string]string{}
-		for k, v := range base {
-			m[k] = v
-		}
-		for k, v := range over {
-			m[k] = v
-		}
-		return m
-	}
-
-	// The pin and copier's provenance are exactly what an upgrade is FOR.
-	t.Run("moving the pin and provenance is not a regression", func(t *testing.T) {
-		after := clone(map[string]string{"_commit": "v0.0.40", "llz_version": "v0.0.40", "_src_path": "/local"})
-		if got := answerRegressions(base, after); len(got) != 0 {
-			t.Errorf("answerRegressions = %v; want none", got)
-		}
-	})
-
-	// The live bug: copier substitutes the template DEFAULT for an answer it
-	// cannot keep — an answer the CURRENT template's validator rejects — and exits
-	// 0. instance_repo is the ArgoCD repoURL and every `gh` target.
-	t.Run("a silently reset answer is reported with both values", func(t *testing.T) {
-		after := clone(map[string]string{"instance_repo": "your-org/your-instance-repo"})
-		got := answerRegressions(base, after)
-		if len(got) != 1 {
-			t.Fatalf("answerRegressions = %v; want exactly the instance_repo reset", got)
-		}
-		for _, want := range []string{"instance_repo", "probe-org/probe-instance", "your-org/your-instance-repo"} {
-			if !strings.Contains(got[0], want) {
-				t.Errorf("regression %q is missing %q — the operator needs to see what it WAS to restore it", got[0], want)
-			}
-		}
-	})
-
-	// A dropped key renders the template default next, which is the same loss.
-	t.Run("a dropped answer counts", func(t *testing.T) {
-		after := clone(nil)
-		delete(after, "openbao_team")
-		got := answerRegressions(base, after)
-		if len(got) != 1 || !strings.Contains(got[0], "dropped") {
-			t.Errorf("answerRegressions = %v; want the dropped openbao_team reported", got)
-		}
-	})
-
-	// nil `before` is the not-an-instance / pre-copier case. An upgrade cannot have
-	// lost an answer that was never recorded, and reporting one would make
-	// `llz upgrade` fail on a tree it should simply update.
-	t.Run("no recorded answers means nothing to regress", func(t *testing.T) {
-		if got := answerRegressions(nil, base); len(got) != 0 {
-			t.Errorf("answerRegressions = %v; want none", got)
 		}
 	})
 }
@@ -263,27 +186,5 @@ func TestShortRef(t *testing.T) {
 	// noise.
 	if got := shortRef("v0.0.40"); got != "v0.0.40" {
 		t.Errorf("shortRef(tag) = %q; want it left alone", got)
-	}
-}
-
-func TestReadAnswerMap(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "a.yml")
-	if err := os.WriteFile(p, []byte("_commit: v0.0.39\ninstance_repo: o/r\npromotion_rank: 3\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m, err := readAnswerMap(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m["instance_repo"] != "o/r" || m["_commit"] != "v0.0.39" {
-		t.Errorf("readAnswerMap = %v", m)
-	}
-	// Non-string scalars must survive as comparable text, not blow up the compare.
-	if m["promotion_rank"] != "3" {
-		t.Errorf("numeric answer = %q; want \"3\"", m["promotion_rank"])
-	}
-	if _, err := readAnswerMap(filepath.Join(dir, "missing.yml")); err == nil {
-		t.Error("readAnswerMap on a missing file returned no error")
 	}
 }

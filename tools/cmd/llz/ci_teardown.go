@@ -1,58 +1,55 @@
 package main
 
-// ci_teardown.go implements the `llz ci teardown-*` family — native ports of
-// the destroy-cluster job's inline Linode API steps in llz-terraform.yml
-// (capture ids before destroy / force-delete stragglers / delete the VPC).
-// The bash versions hand-rolled curl+jq against single-page list endpoints
-// (page_size=500, silently truncating bigger accounts); these reuse the fully
-// paginated internal/linode client the reap commands already drive. All three
-// expect to run from the instance repo root (the terraform-iac-bootstrap/
-// cluster paths are relative), like the workflow steps they replace.
+// ci_teardown.go — the destroy verbs, reduced to flag sets.
+//
+// Everything they do is `teardown` and lives in tools/internal/teardown. What is
+// left here is teardownDeps(): the seven capabilities that package is HANDED.
+//
+// SIX OF THE SEVEN ARE THE SAME FOUR the earlier extractions named — a cloud
+// credential, a cluster client, a shell-out, a summary sink — plus the two shapes
+// a destroy needs that an in-cluster lane does not: a kubeconfig it resolves at
+// run time, and the terraform binary.
+//
+// THE SEVENTH IS `Confirm`, AND IT IS NOT A CAPABILITY. It is an AUTHORISATION —
+// `--yes`, the answer to "may I", not the means to act. The grant vocabulary has
+// no way to say it: `cloud-mutate` declares that this binding may delete cloud
+// resources and says nothing about whether a human agreed to THIS deletion. That
+// distinction never came up in the first five extensions because none of them
+// destroys anything, and it is a live question for the action ABI.
 
 import (
-	"context"
-	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"time"
+	"os/exec"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/preflight"
-	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/teardown"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfvars"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
-// defaultClusterTFDir is where the destroy job's terraform working directory
-// and tfvars live, relative to the instance repo root.
-const defaultClusterTFDir = "terraform-iac-bootstrap/cluster"
-
-// teardownClient is the slice of the Linode client the teardown steps use,
-// seamed (like runner-acl's aclClient) so the capture/force-delete/VPC logic
-// is unit-testable without the live API.
-type teardownClient interface {
-	ClustersWithLabel(ctx context.Context, label string) ([]uint64, error)
-	ListNodePools(ctx context.Context, clusterID uint64) ([]map[string]any, error)
-	ListVolumes(ctx context.Context) ([]map[string]any, error)
-	ListFirewalls(ctx context.Context) ([]map[string]any, error)
-	ListVPCs(ctx context.Context) ([]map[string]any, error)
-	DeleteResourcePath(ctx context.Context, path string) error
+func teardownDeps() teardown.Deps {
+	return teardown.Deps{
+		Client:         linode.ClientFromEnv,
+		Token:          linode.TokenFromEnv,
+		Exec:           execOutput,
+		TempKubeconfig: cigate.WriteTempKubeconfig,
+		RegionTFVars:   func(dir, region string) (tf.TFVars, string, error) { return tfvars.ReadRegion(dir, region) },
+		Combined: func(kubeconfigPath string, args ...string) (string, bool) {
+			cmd := exec.Command("kubectl", args...)
+			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+			return cigate.RunCombined(cmd)
+		},
+		Summary: ghaout.Append,
+		TFBin:   tfbin.Bin,
+		Confirm: func() bool { return gopts.yes },
+	}
 }
-
-var newTeardownClient = func(token string) teardownClient {
-	return linode.NewClient(token, 60*time.Second)
-}
-
-// Force-delete cluster verify/retry knobs (overridable in tests). A wedged LKE-E
-// cluster accepts a DELETE but its async teardown can stall, so force-delete
-// re-issues the DELETE and verifies the cluster actually leaves the account rather
-// than firing once and hoping — a single fire-and-forget DELETE is what let a dead
-// cluster linger and hang the next apply's tf-import.
-var (
-	forceDeleteClusterAttempts = 6
-	forceDeleteClusterDelay    = 15 * time.Second
-	teardownSleep              = time.Sleep
-)
 
 func ciTeardownCaptureCmd() *cobra.Command {
 	var region, tfDir string
@@ -69,10 +66,10 @@ func ciTeardownCaptureCmd() *cobra.Command {
 			"the cluster still exists. Writes LKE_CLUSTER_ID and CLUSTER_PVC_VOLUME_IDS\n" +
 			"to $GITHUB_ENV. Read-only; reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCITeardownCapture(region, tfDir) },
+		RunE: func(_ *cobra.Command, _ []string) error { return teardown.RunCapture(teardownDeps(), region, tfDir) },
 	}
 	c.Flags().StringVar(&region, "region", "", "tfvars prefix, e.g. primary (required)")
-	c.Flags().StringVar(&tfDir, "tf-dir", defaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
+	c.Flags().StringVar(&tfDir, "tf-dir", teardown.DefaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
 	return c
 }
 
@@ -92,11 +89,11 @@ func ciTeardownForceDeleteCmd() *cobra.Command {
 			"delete. Reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCITeardownForceDelete(gopts, region, tfDir)
+			return teardown.RunForceDelete(teardownDeps(), region, tfDir)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "tfvars prefix, e.g. primary (required)")
-	c.Flags().StringVar(&tfDir, "tf-dir", defaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
+	c.Flags().StringVar(&tfDir, "tf-dir", teardown.DefaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
 	return c
 }
 
@@ -114,16 +111,16 @@ func ciTeardownDeleteVPCCmd() *cobra.Command {
 			"Resolves the exact vpc_id terraform output first, then the\n" +
 			"\"<cluster_label>-vpc\" label. Still-undeletable after the retries is a\n" +
 			"warning by default; --require-deleted turns it into a NON-ZERO exit so a\n" +
-			"destroy doesn't go green leaving an orphan VPC that blocks the next apply's\n" +
+			"destroy doesn't go color.Green leaving an orphan VPC that blocks the next apply's\n" +
 			"preflight. Dry-run by default; --yes to delete. Reads LINODE_TOKEN (or\n" +
 			"LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCITeardownDeleteVPC(gopts, region, tfDir, clusterID, attempts, retryDelay, requireDeleted)
+			return teardown.RunDeleteVPC(teardownDeps(), region, tfDir, clusterID, attempts, retryDelay, requireDeleted)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "tfvars prefix, e.g. primary (required)")
-	c.Flags().StringVar(&tfDir, "tf-dir", defaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
+	c.Flags().StringVar(&tfDir, "tf-dir", teardown.DefaultClusterTFDir, "cluster terraform root holding <region>.tfvars")
 	c.Flags().StringVar(&clusterID, "cluster-id", "", "LKE cluster id — resolves the LKE-E auto VPC labeled lke<id> (defaults to the LKE_CLUSTER_ID env teardown-capture exports, so the workflow needs no new flag)")
 	c.Flags().IntVar(&attempts, "attempts", 6, "delete attempts before giving up")
 	c.Flags().IntVar(&retryDelay, "retry-delay", 20, "seconds between delete attempts")
@@ -139,7 +136,7 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 		Short: "fail if orphaned Linode resources remain after a destroy (with retry)",
 		Long: "Final destroy-job gate. Counts orphaned Volumes / NodeBalancers / VPCs with\n" +
 			"the SAME account census `llz ci preflight` runs, and FAILS the job when the\n" +
-			"count EXCEEDS --threshold — so a destroy can't go green leaving orphans that\n" +
+			"count EXCEEDS --threshold — so a destroy can't go color.Green leaving orphans that\n" +
 			"stall the next apply's preflight. This backstops the scoped Volume/NB sweeps,\n" +
 			"which no-op when the cluster was already gone at capture time (a re-run of a\n" +
 			"partial destroy, or pre-existing orphans). Cluster-delete reaps NBs/VPCs\n" +
@@ -153,7 +150,7 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 			"Reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIAssertNoOrphans(region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
+			return teardown.RunAssertNoOrphans(teardownDeps(), region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
 		},
 	}
 	f := c.Flags()
@@ -167,476 +164,26 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 	return c
 }
 
-func runCIAssertNoOrphans(region, volumeRegion, clusterID, env string, threshold, attempts, retryDelay int) error {
-	client, ctx, err := ciClient()
-	if err != nil {
-		return err
+func ciDestroyUnwedgeCmd() *cobra.Command {
+	var region string
+	cmd := &cobra.Command{
+		Use:   "destroy-unwedge",
+		Short: "clear Argo/discovery/CNPG finalizer deadlocks before helm uninstalls apl (destroy-time)",
+		Long: "Native port of null_resource.unwedge_namespace_finalizers_on_destroy's\n" +
+			"local-exec heredoc, now a standalone CI destroy step. Runs while the cluster is\n" +
+			"still up and clears the wedges that otherwise make `helm uninstall apl`'s\n" +
+			"--wait time out: scales down Argo CD, strips resources-finalizer.argocd from\n" +
+			"Applications/AppProjects, deletes stale aggregated APIServices (dead backing\n" +
+			"Service → Available=False → discovery failure), and strips CNPG cluster/pooler\n" +
+			"finalizers. All best-effort and non-fatal (always exit 0); a subsequent\n" +
+			"cluster delete reaps everything regardless.\n\n" +
+			"Kubeconfig source, in order: $KUBECONFIG_B64 (base64), then $KUBECONFIG (a\n" +
+			"file), then --region — which resolves the cluster by its <region>.tfvars\n" +
+			"label via the Linode API (LINODE_TOKEN / LINODE_API_TOKEN). When --region\n" +
+			"finds no live cluster (already reaped), this is a clean no-op.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return teardown.RunDestroyUnwedge(teardownDeps(), region) },
 	}
-	return assertNoOrphans(ctx, client, region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
-}
-
-// orphanGateScanner is everything the destroy gate reads: the shared orphan
-// census plus the cluster list that says whether the cluster itself survived.
-type orphanGateScanner interface {
-	orphanScanner
-	ListClusters(ctx context.Context) ([]map[string]any, error)
-}
-
-func assertNoOrphans(ctx context.Context, client orphanGateScanner, region, volumeRegion, clusterID, env string, threshold, attempts, retryDelay int) error {
-	var err error
-	if attempts < 1 {
-		attempts = 1
-	}
-	volRegion := firstNonEmpty(volumeRegion, region)
-	clusterID = firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID"))
-
-	// The destroyed cluster's OWN leftovers are unambiguously ours and must never
-	// pass, regardless of --threshold (which only tolerates other-account orphans
-	// the destroy can't clean). A surviving NB (lke_cluster.id) or VPC (lke<id>)
-	// here means the scoped sweeps failed — fail loudly so the leak can't recur
-	// silently the way it did before lke_cluster.id attribution.
-	//
-	// This check shares the retry loop with the threshold census rather than
-	// running once ahead of it. Both read the SAME asynchronous account state, so
-	// a single read is a coin flip on Linode's delete propagation: on run
-	// 30643426633 `teardown-delete-vpc` printed "VPC 587295 deleted." and this
-	// gate — configured `--attempts 5 --retry-delay 30` — still saw that VPC in
-	// the list and failed the teardown 0.9s later, having ridden out none of the
-	// settling window it documents. A deleted-but-still-listed VPC is exactly the
-	// transient the retries exist for; only a survivor that outlives ALL attempts
-	// is a real leak.
-	var scan orphanScan
-	var own ownOrphans
-	ownClean := clusterID == ""
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if !ownClean {
-			if own, err = scanOwnOrphans(ctx, client, clusterID); err != nil {
-				return err
-			}
-			if ownClean = own.clean(); ownClean {
-				fmt.Printf("cluster %s is gone and left no NodeBalancers or VPC of its own — scoped teardown is clean.\n", clusterID)
-			}
-		}
-		if ownClean {
-			if scan, err = scanOrphans(ctx, client, region, volRegion, env); err != nil {
-				return err
-			}
-			fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
-				orAll(region), orAll(volRegion), attempt, attempts, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, scan.orphans(), threshold)
-			if !preflight.OrphansExceedThreshold(scan.orphans(), threshold) {
-				fmt.Println("no orphaned resources above threshold — destroy is clean.")
-				return nil
-			}
-		} else {
-			fmt.Printf("cluster %s still shows survived=%t, %d own NodeBalancer(s), %d own VPC [attempt %d/%d]\n",
-				clusterID, own.clusterSurvived, own.nbs, own.vpcCount(), attempt, attempts)
-		}
-		if attempt < attempts {
-			fmt.Printf("orphans still present — re-checking in %ds (cluster-delete reaps NBs/VPCs and detaches Volumes asynchronously)...\n", retryDelay)
-			teardownSleep(time.Duration(retryDelay) * time.Second)
-		}
-	}
-
-	// The cluster ITSELF must be gone. A wedged LKE-E cluster that force-delete
-	// could not remove (dead control plane, async teardown stalled) survives
-	// here — and left un-flagged it hangs the NEXT apply's tf-import on the same
-	// unreadable state-refresh (the incident this closes). Fatal, like a leaked
-	// own NB/VPC (which means the scoped sweeps failed).
-	if !ownClean {
-		if own.clusterSurvived {
-			fmt.Fprintf(os.Stderr, "::error::cluster %s STILL EXISTS after destroy — its control plane is likely wedged (force-delete could not remove it). The next apply's tf-import will hang on it. Delete it: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%s\n", clusterID, clusterID)
-		}
-		if own.nbs > 0 || own.vpc {
-			fmt.Fprintf(os.Stderr, "::error::cluster %s left its OWN orphans after destroy: %d NodeBalancer(s) + %d VPC. Clear them: LINODE_TOKEN=<token> llz reap --region %s --cluster-label <label> --yes\n",
-				clusterID, own.nbs, own.vpcCount(), orAll(volRegion))
-		}
-		return fmt.Errorf("assert-no-orphans: destroyed cluster %s survived=%t and left %d NodeBalancer(s) + %d VPC of its own after %d attempt(s)", clusterID, own.clusterSurvived, own.nbs, own.vpcCount(), attempts)
-	}
-	fmt.Fprintf(os.Stderr, "::error::%d orphaned Linode resource(s) remain after the destroy (threshold %d): %d Volume(s), %d NodeBalancer(s), %d VPC(s). These count against the account's active-services quota and will stall the next apply's preflight. Clear them: LINODE_TOKEN=<token> llz reap --region %s --yes\n",
-		scan.orphans(), threshold, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, orAll(volRegion))
-	return fmt.Errorf("assert-no-orphans: %d orphaned resource(s) over threshold %d after %d attempt(s)", scan.orphans(), threshold, attempts)
-}
-
-// ownOrphans is what the destroyed cluster left behind that is unambiguously
-// ITS OWN — attributable by lke_cluster.id (NodeBalancers) or the lke<id> label
-// (VPC) — plus whether the cluster object itself is still on the account.
-type ownOrphans struct {
-	clusterSurvived bool
-	nbs             int
-	vpc             bool
-}
-
-// clean reports whether nothing of the cluster's own survives.
-func (o ownOrphans) clean() bool { return !o.clusterSurvived && o.nbs == 0 && !o.vpc }
-
-// vpcCount renders the boolean as the 0/1 count the operator-facing messages use.
-func (o ownOrphans) vpcCount() int {
-	if o.vpc {
-		return 1
-	}
-	return 0
-}
-
-// scanOwnOrphans takes one point-in-time reading of the destroyed cluster's own
-// surviving resources. Every field is asynchronously reaped by Linode after the
-// cluster DELETE, so a single reading proves nothing — callers must re-read
-// until it comes back clean or the attempt budget runs out.
-func scanOwnOrphans(ctx context.Context, client interface {
-	ListNodeBalancers(context.Context) ([]map[string]any, error)
-	ListVPCs(context.Context) ([]map[string]any, error)
-	ListClusters(context.Context) ([]map[string]any, error)
-}, clusterID string) (ownOrphans, error) {
-	var own ownOrphans
-	nbs, err := client.ListNodeBalancers(ctx)
-	if err != nil {
-		return own, fmt.Errorf("list NodeBalancers: %w", err)
-	}
-	for _, nb := range nbs {
-		if nbBelongsToCluster(nb, clusterID) {
-			own.nbs++
-		}
-	}
-	vpcs, err := client.ListVPCs(ctx)
-	if err != nil {
-		return own, fmt.Errorf("list VPCs: %w", err)
-	}
-	_, own.vpc = linode.FindIDByLabel(vpcs, "lke"+clusterID)
-	if cNum, perr := strconv.ParseUint(clusterID, 10, 64); perr == nil && cNum != 0 {
-		clusters, cerr := client.ListClusters(ctx)
-		if cerr != nil {
-			return own, fmt.Errorf("list clusters: %w", cerr)
-		}
-		own.clusterSurvived = clusterIDPresent(clusters, cNum)
-	}
-	return own, nil
-}
-
-// teardownLabels reads <tf-dir>/<region>.tfvars (falling back to the .example,
-// like tf-import) and derives the cluster resource labels.
-func teardownLabels(region, tfDir string) (tf.Labels, error) {
-	if region == "" {
-		return tf.Labels{}, fmt.Errorf("--region is required (the tfvars prefix, e.g. primary)")
-	}
-	vars, _, err := readRegionTFVars(tfDir, region)
-	if err != nil {
-		return tf.Labels{}, err
-	}
-	return tf.DeriveLabels(vars), nil
-}
-
-// tfOutputRaw returns `terraform -chdir=<dir> output -raw <name>`, "" when the
-// output is absent / state empty (the bash `2>/dev/null || true`).
-func tfOutputRaw(dir, name string) string {
-	out, err := execOutput(tfBin(), "-chdir="+dir, "output", "-raw", name)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// numericOrEmpty mirrors the bash `case in ”|*[!0-9]*)` guard: terraform
-// output noise ("Warning: No outputs found") must not be mistaken for an id.
-func numericOrEmpty(s string) string {
-	if _, err := strconv.ParseUint(s, 10, 64); err != nil {
-		return ""
-	}
-	return s
-}
-
-func runCITeardownCapture(region, tfDir string) error {
-	labels, err := teardownLabels(region, tfDir)
-	if err != nil {
-		return err
-	}
-	token, err := ciToken()
-	if err != nil {
-		return err
-	}
-	client := newTeardownClient(token)
-	ctx := context.Background()
-
-	clusterID := ""
-	if ids, err := client.ClustersWithLabel(ctx, labels.Cluster); err != nil {
-		return fmt.Errorf("list clusters: %w", err)
-	} else if len(ids) > 0 {
-		clusterID = strconv.FormatUint(ids[0], 10)
-	}
-
-	// Snapshot the pvc-* Volume ids attached to this cluster's nodes. If the
-	// cluster is already gone there's nothing to track — any attached pvc-*
-	// Volumes in the region belong to a live peer and are correctly ignored.
-	volIDs := ""
-	if clusterID != "" {
-		cNum, _ := strconv.ParseUint(clusterID, 10, 64)
-		pools, err := client.ListNodePools(ctx, cNum)
-		if err != nil {
-			return fmt.Errorf("list node pools of cluster %s: %w", clusterID, err)
-		}
-		nodeIDs := map[uint64]bool{}
-		for _, pool := range pools {
-			nodes, _ := pool["nodes"].([]any)
-			for _, n := range nodes {
-				if nm, ok := n.(map[string]any); ok {
-					if id := linode.MapUint(nm, "instance_id"); id != 0 {
-						nodeIDs[id] = true
-					}
-				}
-			}
-		}
-		vols, err := client.ListVolumes(ctx)
-		if err != nil {
-			return fmt.Errorf("list Volumes: %w", err)
-		}
-		// Accept the CSI default label AND anything the volume-labels reconciler
-		// renamed to `<region>-<ns>-<pvc>`.
-		//
-		// This used to be a bare `pvc-` prefix check, which silently stopped
-		// matching the moment that reconciler started working: a renamed Volume was
-		// never TRACKED, so it was never handed to the sweep below, so it survived
-		// the destroy. Measured on lke637974 — 15 renamed Volumes outlived their
-		// cluster, then squatted their labels (Linode labels are account-unique) so
-		// the next cluster could not relabel 12 of its 17. One stale prefix check
-		// produced both an unbounded cost leak and a permanently broken relabeler.
-		//
-		// OWNERSHIP is established two ways, and a Volume needs only one:
-		//
-		//  1. the cluster's `lke<id>` TAG, which the block-storage StorageClasses
-		//     stamp inside CreateVolume. Authoritative: a Volume carrying it was
-		//     provisioned by this cluster and can never have belonged to another.
-		//  2. ATTACHMENT to one of this cluster's nodes — the original test, kept as
-		//     the fallback for Volumes provisioned before the tag existed.
-		//
-		// Attachment alone is not enough, and that gap leaked in production. It is a
-		// point-in-time property: a Volume whose pod happens to be unscheduled when
-		// capture runs is detached, fails the test, and is never tracked. Observed on
-		// the lke638015 destroy — pvc-0f8efbcdf6704500 (monitoring/storage-loki-0) was
-		// mid-reschedule and survived its own cluster. The tag has no such window.
-		//
-		// The label guard applies ONLY to the attachment path. A tag match is already
-		// proof of ownership, so re-checking the label there could only reject a
-		// Volume we know is ours — which is exactly the class of false negative that
-		// caused the leak this whole block exists to close. On the attachment path the
-		// label still guards against sweeping something an operator attached by hand,
-		// so it must admit every label the platform itself produces.
-		lkeTag := "lke" + clusterID
-		prefixes := linode.VolumeLabelPrefixes(region)
-		var tracked []string
-		var byTag, byAttach int
-		for _, v := range vols {
-			owned := false
-			for _, t := range linode.MapTags(v) {
-				if t == lkeTag {
-					owned = true
-					break
-				}
-			}
-			if owned {
-				byTag++
-			} else {
-				if linode.VolumeLinodeIDNull(v) || !nodeIDs[linode.MapUint(v, "linode_id")] {
-					continue
-				}
-				if !linode.HasAnyVolumeLabelPrefix(linode.MapString(v, "label"), prefixes) {
-					continue
-				}
-				byAttach++
-			}
-			tracked = append(tracked, linode.MapIDString(v))
-		}
-		fmt.Printf("tracked Volumes: %d by %s tag, %d by node attachment only\n", byTag, lkeTag, byAttach)
-		volIDs = strings.Join(tracked, " ")
-	}
-
-	fmt.Printf("captured cluster %q id=%q; tracked pvc Volume ids: %q\n",
-		labels.Cluster, clusterID, firstNonEmpty(volIDs, "<none>"))
-	return appendGHAFile("GITHUB_ENV",
-		"LKE_CLUSTER_ID="+clusterID,
-		"CLUSTER_PVC_VOLUME_IDS="+volIDs)
-}
-
-func runCITeardownForceDelete(g globalOpts, region, tfDir string) error {
-	labels, err := teardownLabels(region, tfDir)
-	if err != nil {
-		return err
-	}
-	token, err := ciToken()
-	if err != nil {
-		return err
-	}
-	client := newTeardownClient(token)
-	ctx := context.Background()
-	confirm := g.yes && !g.dryRun
-	if !confirm {
-		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
-	}
-	// Warn-don't-fail delete: this runs on the always() cleanup path where the
-	// orphan reaper backstops anything left behind (the bash `|| true`).
-	del := func(path, desc string) {
-		if !confirm {
-			fmt.Printf("  would DELETE %s\n", desc)
-			return
-		}
-		if err := client.DeleteResourcePath(ctx, path); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::DELETE %s failed (%v) — the orphan reaper will catch it.\n", desc, err)
-			return
-		}
-		fmt.Printf("  DELETE %s (deletion is asynchronous)\n", desc)
-	}
-
-	// ── LKE cluster, if terraform couldn't reach or import it ──
-	ids, err := client.ClustersWithLabel(ctx, labels.Cluster)
-	if err != nil {
-		return fmt.Errorf("list clusters: %w", err)
-	}
-	if len(ids) == 0 {
-		fmt.Printf("Cluster %q not found — already deleted.\n", labels.Cluster)
-	}
-	for _, id := range ids {
-		fmt.Printf("Cluster %q (id=%d) still exists — force-deleting via API...\n", labels.Cluster, id)
-		forceDeleteCluster(ctx, client, labels.Cluster, id, confirm)
-	}
-
-	// ── Node firewall: exact id output first, then the module-correct label ──
-	fwID := numericOrEmpty(tfOutputRaw(tfDir, "node_firewall_id"))
-	if fwID == "" {
-		label := firstNonEmpty(tfOutputRaw(tfDir, "node_firewall_label"), labels.Firewall)
-		fws, err := client.ListFirewalls(ctx)
-		if err != nil {
-			return fmt.Errorf("list firewalls: %w", err)
-		}
-		if id, ok := linode.FindIDByLabel(fws, label); ok {
-			fwID = strconv.FormatUint(id, 10)
-		}
-	}
-	if fwID == "" {
-		fmt.Println("Node firewall not found — already deleted.")
-		return nil
-	}
-	fmt.Printf("Node firewall (id=%s) still exists — deleting via API...\n", fwID)
-	del("/v4/networking/firewalls/"+fwID, "firewall "+fwID)
-	return nil
-}
-
-// forceDeleteCluster deletes an LKE cluster and VERIFIES it actually leaves the
-// account, re-issuing the DELETE across a bounded retry.
-//
-// A single fire-and-forget DELETE is not enough for the failure this exists to
-// contain: a wedged LKE-E cluster (dead control plane, kubeconfig unavailable)
-// accepts the DELETE but its async teardown stalls, so the cluster object lingers.
-// The NEXT apply's `llz ci tf-import` then hangs on that unreadable state-refresh
-// until its 300s deadline SIGKILLs terraform — the incident this change follows.
-// Polling until the cluster is gone (re-deleting each round) turns a silent leak
-// into either a real deletion or a loud, actionable warning.
-//
-// Warn-not-fail, like the rest of this always()-path cleanup: assert-no-orphans is
-// the hard gate that reds the teardown when a cluster genuinely will not die.
-func forceDeleteCluster(ctx context.Context, client teardownClient, label string, id uint64, confirm bool) {
-	path := fmt.Sprintf("/v4beta/lke/clusters/%d", id)
-	if !confirm {
-		fmt.Printf("  would DELETE cluster %d (with delete-verify retry)\n", id)
-		return
-	}
-	for attempt := 1; attempt <= forceDeleteClusterAttempts; attempt++ {
-		if err := client.DeleteResourcePath(ctx, path); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::DELETE cluster %d failed on attempt %d/%d (%v) — retrying.\n", id, attempt, forceDeleteClusterAttempts, err)
-		} else {
-			fmt.Printf("  DELETE cluster %d issued (attempt %d/%d; deletion is asynchronous)\n", id, attempt, forceDeleteClusterAttempts)
-		}
-		remaining, err := client.ClustersWithLabel(ctx, label)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::could not re-list clusters to verify %d deleted (%v) — leaving it to assert-no-orphans.\n", id, err)
-			return
-		}
-		if !containsUint(remaining, id) {
-			fmt.Printf("  cluster %d is gone.\n", id)
-			return
-		}
-		if attempt < forceDeleteClusterAttempts {
-			teardownSleep(forceDeleteClusterDelay)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "::warning::cluster %d (%s) still present after %d force-delete attempts — its control plane is likely wedged, blocking deletion. assert-no-orphans will red the teardown; delete it manually: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%d\n", id, label, forceDeleteClusterAttempts, id)
-}
-
-func containsUint(xs []uint64, want uint64) bool {
-	for _, x := range xs {
-		if x == want {
-			return true
-		}
-	}
-	return false
-}
-
-// clusterIDPresent reports whether an LKE cluster with the given id is still on the
-// account (ListClusters returns each cluster as a JSON map; "id" decodes to float64).
-func clusterIDPresent(clusters []map[string]any, id uint64) bool {
-	if id == 0 {
-		return false
-	}
-	for _, cl := range clusters {
-		if v, ok := cl["id"].(float64); ok && uint64(v) == id {
-			return true
-		}
-	}
-	return false
-}
-
-func runCITeardownDeleteVPC(g globalOpts, region, tfDir, clusterID string, attempts, retryDelay int, requireDeleted bool) error {
-	labels, err := teardownLabels(region, tfDir)
-	if err != nil {
-		return err
-	}
-	token, err := ciToken()
-	if err != nil {
-		return err
-	}
-	client := newTeardownClient(token)
-	ctx := context.Background()
-	clusterID = firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID"))
-
-	// Resolution order: the exact vpc_id terraform output, then the BYO
-	// "<cluster_label>-vpc" label, then — for LKE-E, which auto-creates a VPC
-	// labeled lke<cluster_id> that no terraform output or BYO label names — the
-	// captured cluster id. Missing that last path leaked the lke<id> VPC every
-	// teardown (the vpc_id output is empty once the cluster state is destroyed).
-	vpcID := numericOrEmpty(tfOutputRaw(tfDir, "vpc_id"))
-	if vpcID == "" {
-		vpcs, err := client.ListVPCs(ctx)
-		if err != nil {
-			return fmt.Errorf("list VPCs: %w", err)
-		}
-		if id, ok := linode.FindIDByLabel(vpcs, labels.VPC); ok {
-			vpcID = strconv.FormatUint(id, 10)
-		} else if clusterID != "" {
-			if id, ok := linode.FindIDByLabel(vpcs, "lke"+clusterID); ok {
-				vpcID = strconv.FormatUint(id, 10)
-			}
-		}
-	}
-	if vpcID == "" {
-		fmt.Println("VPC not found — already deleted.")
-		return nil
-	}
-	if !(g.yes && !g.dryRun) {
-		fmt.Printf("DRY-RUN — would DELETE vpc %s. Re-run with --yes to delete.\n", vpcID)
-		return nil
-	}
-
-	fmt.Printf("Deleting VPC %s (retrying the 409/in-use window while the cluster + NodeBalancers finish releasing the subnet)...\n", vpcID)
-	for attempt := 1; attempt <= attempts; attempt++ {
-		// DeleteResourcePath treats 2xx AND 404 (already gone) as success.
-		if err := client.DeleteResourcePath(ctx, "/v4/vpcs/"+vpcID); err == nil {
-			fmt.Printf("VPC %s deleted.\n", vpcID)
-			return nil
-		} else if attempt < attempts {
-			fmt.Printf("VPC %s delete failed (attempt %d/%d): %v — still in use; retrying in %ds...\n",
-				vpcID, attempt, attempts, err, retryDelay)
-			time.Sleep(time.Duration(retryDelay) * time.Second)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "::warning::VPC %s still not deletable after %d attempts — a straggler NodeBalancer or other device is likely still parked in its subnet. The orphan reaper ('llz reap --region <r>', or 'make reap-orphans') will catch it; run it with the e2e LINODE_TOKEN if VPC quota is tight.\n", vpcID, attempts)
-	if requireDeleted {
-		return fmt.Errorf("teardown-delete-vpc: VPC %s still not deletable after %d attempt(s) — orphan VPC remains; failing the destroy so it doesn't block the next apply's preflight", vpcID, attempts)
-	}
-	return nil
+	cmd.Flags().StringVar(&region, "region", "", "tfvars prefix (e.g. primary); resolve the cluster kubeconfig by label via the Linode API when KUBECONFIG_B64/KUBECONFIG are unset")
+	return cmd
 }

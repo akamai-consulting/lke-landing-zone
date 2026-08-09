@@ -1,0 +1,26 @@
+package main
+
+// ci_assert_platform.go — the capability wiring for the `assert-platform`
+// extension (internal/assertplatform).
+//
+// Like internal/converge, the lanes export their own cobra constructors and this
+// file is the capability set. Same reasoning: four assertion lanes sharing one
+// exit contract, and what package main actually owns is HOW this binary reaches a
+// cluster and where an instance repo keeps its spec.
+
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertplatform"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+)
+
+// installAssertPlatformDeps hands the extension the capabilities it declares.
+// Every field is a real implementation — an assertion whose diagnostic seam
+// returns "" reports a failure with no evidence attached, which is the vacuous
+// fixture bug in production form.
+func installAssertPlatformDeps() {
+	assertplatform.Install(assertplatform.Deps{
+		ExecCombined: execCombined,
+		Exec:         execOutput,
+		LoadSpec:     func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
+	})
+}

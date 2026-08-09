@@ -21,9 +21,9 @@ func TestAplSemver(t *testing.T) {
 		{"6.x.0", 0, 0, 0, false},
 	}
 	for _, c := range cases {
-		maj, min, patch, ok := aplSemver(c.in)
+		maj, min, patch, ok := AplSemver(c.in)
 		if ok != c.ok || (ok && (maj != c.maj || min != c.min || patch != c.patch)) {
-			t.Errorf("aplSemver(%q) = %d.%d.%d ok=%v, want %d.%d.%d ok=%v",
+			t.Errorf("AplSemver(%q) = %d.%d.%d ok=%v, want %d.%d.%d ok=%v",
 				c.in, maj, min, patch, ok, c.maj, c.min, c.patch, c.ok)
 		}
 	}

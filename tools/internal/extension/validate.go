@@ -69,10 +69,93 @@ var bindableStates = map[BindingKind][]State{
 // TRANSCRIBED, not a derived fact — it is the most likely thing here to need a row
 // added, and adding one should be an argued change rather than a quiet widening.
 var grantStates = map[Grant][]State{
-	SecretCustody: {Seeded, Operating},
-	CloudMutate:   {Provisioned, Seeded, Converged, Destroyed},
-	ClusterWrite:  {Provisioned, Seeded, Converged, Operating, Destroyed},
+	// SECOND WIDENING. `provisioned` was added for `cluster-access`, which fetches
+	// the cluster-admin kubeconfig. The row had only ever been shown credentials the
+	// platform MINTS (seeding) or REPLACES (rotation), both of which happen to a
+	// cluster that already works — so it encoded "custody begins once there is a
+	// platform to hold it". The bootstrap credential breaks that: the cloud issues
+	// it at provisioning time, and holding it is the PRECONDITION for seeding, not a
+	// consequence of it. A table that cannot express the first credential in the
+	// system's life is describing the middle of the story only.
+	//
+	// Note this widening is not symmetric with the first one. cloud-mutate gained
+	// `operating` at the END of the lifecycle (reconciler lanes, which keep running);
+	// this gains one at the START. Both were found the same way — by an extraction
+	// of code that already shipped — which is the argument for extracting the
+	// expensive capabilities before trusting the ceiling, not after.
+	SecretCustody: {Provisioned, Seeded, Operating},
+	// THIRD WIDENING, and the one that took longest to earn: `configured`, added
+	// for `chart-publish`'s --publish-if-missing dispatch.
+	//
+	// env-topology (twenty-first extraction) wrote this exact binding for
+	// branchpolicy.go's PUT against GitHub's deployment-branch-policy API, ran
+	// Validate(), was refused by this row, and moved the file back to package main
+	// rather than widen on one case. It predicted the second case would be `llz
+	// tokens`; it turned out to be a `gh workflow run` dispatch. That the
+	// prediction missed is itself evidence the shape is general rather than
+	// specific to branch policies.
+	//
+	// THE ARGUMENT THE ROW WAS MISSING. The other five states are where a LINODE
+	// cloud exists to mutate, and `configured` was read as a purely local moment —
+	// resolve some inputs, touch nothing. It is not. GitHub is configured before
+	// Linode is provisioned, and "its inputs resolve" can require CREATING an
+	// input rather than merely reading it: a pinned chart the registry never
+	// received, and a branch policy nobody locked, are both inputs that do not
+	// resolve until something writes.
+	//
+	// `scaffolded` is still absent and should stay absent — at scaffolding there is
+	// no configured credential to mutate anything WITH, which is the same reasoning
+	// that keeps secret-custody out of it.
+	CloudMutate:  {Configured, Provisioned, Seeded, Converged, Operating, Destroyed},
+	ClusterWrite: {Provisioned, Seeded, Converged, Operating, Destroyed},
+
+	// FIRST ROW ADDED RATHER THAN WIDENED, because write-repo is the first grant
+	// added since this table was written (see the Grant block in extension.go for
+	// why it took four cases).
+	//
+	// The two states are the two moments `deliver-docs` runs, and it runs at both
+	// by construction: copier invokes it from `_tasks`, which fire on render
+	// (`llz new` → scaffolded) and on `copier update` (→ upgraded). Its own
+	// repointInstanceRootLinks comment is about the second — the walk is gated on
+	// template ownership precisely because on update it runs against a LIVE
+	// instance holding files that are none of the template's business.
+	//
+	// NOTHING ELSE IS LISTED, and the omissions are deliberate rather than
+	// pending. `promoted` looks obvious — promote-pipeline generates
+	// .github/workflows/promote.yml — but that extension does not hold this grant:
+	// its rendering is pure and its os.WriteFile stayed in package main, so adding
+	// the state would list a row no shipping code exercises. The rule this table
+	// has followed for both earlier widenings is that a state earns its place by an
+	// extraction that needed it, not by seeming plausible. When promote-pipeline's
+	// write moves in, `promoted` can be argued then, and there is a test that will
+	// notice: TestGrantStatesIsPinned.
+	//
+	// Note this is also the first row whose states are all OUTSIDE the mutating
+	// middle of the lifecycle. The other three rows start at `provisioned` — you
+	// cannot mutate a cluster or a cloud before one exists. Repo writes are the
+	// opposite shape: they happen when the REPO changes, which is before any
+	// substrate exists and again when the template moves under it.
+	WriteRepo: {Scaffolded, Upgraded},
 }
+
+// `Operating` was ADDED to CloudMutate by the fourth extension, and the row is
+// worth reading as a worked example of the paragraph above.
+//
+// The original four states came from where the catalog places cloud-mutate — the
+// `→ provisioned` and `→ destroyed` groups, where it is obvious. `assert-storage`
+// then could not be declared: two of its three bindings are reconciler lanes wired
+// into reconcile.go that run in-pod, continuously, and PUT tags and labels onto
+// Linode Volumes. They SHIP. The model was refusing to describe code in production.
+//
+// Refusing it was not the conservative choice, it was wrong in the dangerous
+// direction. A continuously-running cloud mutator is precisely what a reviewer most
+// wants declared; a ceiling that makes it inexpressible does not prevent it, it
+// only stops it being written down — which is `→ seeded` banned-by-omission again,
+// in the half of the ceiling that exists to fix banning-by-omission.
+//
+// The catalog had the evidence and did not follow it: it flagged assert-storage as
+// "holds cloud-mutate — the odd one out" and never carried that into this table.
+// A flagged anomaly is a defect report, not a footnote.
 
 func kinds() []BindingKind { return []BindingKind{Transition, Assertion, Invariant, Gate} }
 
@@ -132,6 +215,13 @@ func (e Extension) Validate() []error {
 			errs = append(errs, fmt.Errorf("%s: duplicate binding %s", e.Name, b))
 		}
 		seenBinding[at] = true
+	}
+
+	for i, note := range e.Incomplete {
+		if strings.TrimSpace(note) == "" {
+			errs = append(errs, fmt.Errorf("%s: Incomplete[%d] is blank — the field records WHAT is "+
+				"not declared yet; an empty entry says an extension is partial without saying how", e.Name, i))
+		}
 	}
 
 	for _, b := range e.Bindings {

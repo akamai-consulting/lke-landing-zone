@@ -140,19 +140,81 @@ const (
 	ReadRepo      Grant = "read-repo"      // read the instance repo's files
 	CloudRead     Grant = "cloud-read"     // read cloud APIs
 	ClusterRead   Grant = "cluster-read"   // read cluster state
+	WriteRepo     Grant = "write-repo"     // create, rewrite or delete the instance repo's files
 	ClusterWrite  Grant = "cluster-write"  // mutate cluster state
 	CloudMutate   Grant = "cloud-mutate"   // create/destroy cloud resources
-	SecretCustody Grant = "secret-custody" // read or write credential material
+	SecretRead    Grant = "secret-read"    // read credential material or its metadata
+	SecretCustody Grant = "secret-custody" // place or store credential material
 	OwnPaths      Grant = "own-paths"      // own instance files against `copier update`
 )
 
+// ADDING write-repo WAS THE TWENTY-EIGHTH EXTENSION'S FINDING, and it is the
+// SECOND word this vocabulary has gained — the first since secret-custody was
+// split. It took four cases, and three refusals, to get here.
+//
+// THE THREE REFUSALS ARE THE POINT. `llz ci gen-toc`, `guard-docs` and
+// `promote-pipeline` each write the operator's repo and each declared `read-repo`,
+// because in all three the write could be lifted OUT of the extension and left in
+// package main: the package renders bytes, main calls os.WriteFile. Each time the
+// catalog recorded the gap and refused to invent a word, on the stated grounds
+// that two cases say the vocabulary has a hole and do not say what SHAPE it is.
+//
+// `deliver-docs` is the case where that answer stops working, and the difference
+// is structural rather than a matter of degree. It does not render bytes for
+// someone else to write — it PRUNES A DIRECTORY and rewrites links in place,
+// deciding per file, mid-walk, from the file's own inode identity and whether the
+// template owns its path. Lifting the writes out means either buffering every
+// rewritten file to hand back, or passing main a callback that writes — which is
+// the write happening inside the package with extra indirection and a worse
+// boundary. The declaration was not INCOMPLETE, which a file split fixes; it was
+// IMPOSSIBLE, which is this model's stated bar for a new word.
+//
+// AND THE SHAPE IS NOW KNOWN, which is what the earlier refusals were waiting for.
+// The question they left open was which writes count: the operator's repo, or a
+// build artifact, or a temp file. All four cases answer it the same way — they
+// write files an operator has checked in and will read a diff of. So write-repo
+// means the INSTANCE REPO'S TRACKED FILES, and a temp dir or a render output under
+// .instance-test needs no grant, the same way reading /tmp needs no read-repo.
+//
+// It is NOT own-paths, and the two are easy to confuse. own-paths is a FENCE —
+// "copier must not render these bytes" — and says nothing about who writes them.
+// write-repo is a PERMIT and says nothing about copier. deliver-docs holds the
+// permit and not the fence: it rewrites files copier itself rendered, and wants
+// them re-rendered on the next update.
+
+// SPLITTING secret-custody WAS THE THIRTEENTH EXTENSION'S FINDING, and the first
+// that could not be fixed by adding a table row.
+//
+// This constant used to be one word documented as "read OR WRITE credential
+// material" — the ambiguity was written down and then relied on. Three extractions
+// pushed on it in a row:
+//
+//   - cluster-access WRITES a cluster-admin kubeconfig to disk. Custody.
+//   - health-sla READS `updated_time` off a KV entry using the OpenBao root
+//     token. Declared custody, and the declaration said so under protest.
+//   - token-inventory READS every pipeline credential and probes it. Mutates
+//     nothing.
+//
+// The third one broke it outright. `validate-tokens` blocks the pipeline before
+// anything provisions, so it is a gate or an assertion; a gate permits read-repo
+// alone, and an assertion permits READ GRANTS ONLY — and secret-custody was not
+// one, because it was half a write grant. The check was therefore INEXPRESSIBLE:
+// not mis-described, not over-granted, simply impossible to declare honestly.
+//
+// So: reading a credential is now secret-read (read-only, an assertion may hold
+// it), and PLACING one is secret-custody (mutating, still bound by grantStates).
+// The distinction is the one the reviewer actually cares about — "this could leak
+// a secret" versus "this decides what the secret IS" — and it was always the one
+// the single word could not draw.
+
 // Grants returns the closed vocabulary, ordered least to most dangerous.
 func Grants() []Grant {
-	return []Grant{ReadRepo, CloudRead, ClusterRead, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
+	return []Grant{ReadRepo, CloudRead, ClusterRead, SecretRead, WriteRepo, ClusterWrite, CloudMutate, SecretCustody, OwnPaths}
 }
 
-// readOnly are the grants that observe without changing anything.
-var readOnly = map[Grant]bool{ReadRepo: true, CloudRead: true, ClusterRead: true}
+// readOnly are the grants that observe without changing anything. secret-read is
+// here and secret-custody is not: that is the whole content of the split.
+var readOnly = map[Grant]bool{ReadRepo: true, CloudRead: true, ClusterRead: true, SecretRead: true}
 
 func validGrant(g Grant) bool {
 	for _, k := range Grants() {
@@ -195,6 +257,32 @@ type Extension struct {
 	// Bindings is where it attaches and, per binding, what it may touch. At least
 	// one.
 	Bindings []Binding
+
+	// Incomplete names what this extension does NOT yet declare, and is empty for
+	// an extension that declares its whole surface.
+	//
+	// IT EXISTS BECAUSE TWO EXTRACTIONS ARRIVED PARTIAL AND THE MODEL COULD NOT SAY
+	// SO. `reconcile-actions` declares four invariants while four more of its lanes
+	// are still in package main; `template-sustain` declares the half that does not
+	// touch `.template-manifest`, which ADR 0014 pins as permanently core. Both
+	// read as COMPLETE — nothing distinguished "has four bindings" from "has eight,
+	// four of which have not moved" — and an extension that silently under-declares
+	// its own surface is the same failure shape as PR #15's ban-by-omission: the
+	// reader cannot tell what is missing.
+	//
+	// Added on the SECOND case, not the first, which is the rule this model has
+	// been following for every vocabulary change (see grantStates' cloud-mutate
+	// row). One occurrence is an anecdote; two independent ones with different
+	// causes — a sibling extension's territory, and a core-by-construction file —
+	// is a shape.
+	//
+	// IT IS PROSE, NOT A SCHEMA, and deliberately: what is missing is a sentence
+	// about code that has not moved, and there is nothing yet to validate it
+	// against. Validate() only checks that the strings are non-empty, so the field
+	// cannot become a silent `[]string{""}`. When the loader exists and can compare
+	// a declaration against what is registered, this is where the discrepancy gets
+	// reported.
+	Incomplete []string
 }
 
 // Grants is the union of every binding's grants — "what does this extension

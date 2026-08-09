@@ -8,13 +8,27 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envadd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
 // captureStderr mirrors captureStdout for the os.Stderr path (the remediation /
 // warning printers write there).
+// withGhOwnerKind stubs the instance_repo owner classifier. A local copy: the
+// other one went to internal/newinstance with the repo-creation tests, and what
+// is left here tests onboard.RemediateMissingRepo, which is neither package's.
+func withGhOwnerKind(t *testing.T, fn func(string) (string, error)) {
+	t.Helper()
+	orig := ghcli.OwnerKindFn
+	t.Cleanup(func() { ghcli.OwnerKindFn = orig })
+	ghcli.OwnerKindFn = fn
+}
+
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stderr
@@ -45,27 +59,27 @@ func writeFileMkdir(t *testing.T, path, content string) {
 // ── item C: no-remote-repo detection (tokens.go) ─────────────────────────────
 
 func TestRepoExists(t *testing.T) {
-	// repoStatus resolves `gh` on PATH before shelling out; stub it so the test
+	// onboard.RepoStatus resolves `gh` on PATH before shelling out; stub it so the test
 	// asserts llz's logic rather than whether this machine has gh installed.
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) < 2 || args[0] != "api" || args[1] != "repos/o/r" {
-			t.Errorf("repoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
+			t.Errorf("onboard.RepoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
 		}
 		return nil, nil
 	})
-	if !repoExists("o/r") {
-		t.Error("repoExists = false when gh succeeds, want true")
+	if !onboard.RepoExists("o/r") {
+		t.Error("onboard.RepoExists = false when gh succeeds, want true")
 	}
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("HTTP 404") })
-	if repoExists("o/r") {
-		t.Error("repoExists = true when gh errors (repo absent), want false")
+	if onboard.RepoExists("o/r") {
+		t.Error("onboard.RepoExists = true when gh errors (repo absent), want false")
 	}
 }
 
 func TestRemediateMissingRepo(t *testing.T) {
 	withGhOwnerKind(t, func(string) (string, error) { return "Organization", nil })
-	out := captureStderr(t, func() { remediateMissingRepo("acme/inst") })
+	out := captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`instance repo "acme/inst" is not reachable`,
 		"gh repo create acme/inst",
@@ -77,7 +91,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 		"apps_repo_revision",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("remediateMissingRepo output missing %q:\n%s", want, out)
+			t.Errorf("onboard.RemediateMissingRepo output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "OWNER") {
@@ -87,7 +101,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 	// An absent owner needs a different first step — creating the repo under an
 	// org that does not exist fails with a bare CreateRepository error.
 	withGhOwnerKind(t, func(string) (string, error) { return "", nil })
-	out = captureStderr(t, func() { remediateMissingRepo("acme/inst") })
+	out = captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`OWNER "acme" does not exist`,
 		"check how it is spelled", // a typo is likelier than an uncreated org
@@ -155,7 +169,7 @@ func TestRunEnvReadinessHappyPath(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeGoodReadiness(t, dir, "e2e") // obj_cluster us-ord-10 must be accepted (regression guard)
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err != nil {
 		t.Fatalf("consistent scaffold should pass, got %v\n%s", err, out)
 	}
@@ -170,7 +184,7 @@ func TestRunEnvReadinessDiscriminatorMismatch(t *testing.T) {
 	// deployment disagrees with the env name → silent state-key desync.
 	writeTFVars(t, dir, "cluster-bootstrap", "e2e", "deployment = \"wrong\"\napl_values_env = \"e2e\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("discriminator mismatch must fail:\n%s", out)
 	}
@@ -184,7 +198,7 @@ func TestRunEnvReadinessBadObjCluster(t *testing.T) {
 	writeGoodReadiness(t, dir, "e2e")
 	writeTFVars(t, dir, "object-storage", "e2e", "region_suffix = \"e2e\"\nobj_cluster = \"0.0.0.0/0\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("malformed obj_cluster must fail:\n%s", out)
 	}
@@ -200,7 +214,7 @@ func TestRunEnvReadinessChartPlaceholder(t *testing.T) {
 	writeFileMkdir(t, filepath.Join(dir, "kubernetes-charts", "llz-argo-bootstrap-apps", "values.yaml"),
 		"global:\n  gitRepoURL: \"REPLACE_ME-git-repo-url\"\n")
 	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	out := captureStdout(t, func() { err = configreadiness.RunEnvReadiness("e2e") })
 	if err == nil {
 		t.Fatalf("REPLACE_ME in chart values must fail:\n%s", out)
 	}
@@ -209,7 +223,7 @@ func TestRunEnvReadinessChartPlaceholder(t *testing.T) {
 	}
 }
 
-// ── runDoctor: the envExplicit gating (wizard.go) ────────────────────────────
+// ── onboard.RunDoctor: the envExplicit gating (wizard.go) ────────────────────────────
 
 func TestRunDoctorEnvGating(t *testing.T) {
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
@@ -219,14 +233,14 @@ func TestRunDoctorEnvGating(t *testing.T) {
 	// A bare `llz doctor` (default env, NOT explicit) must not error just because
 	// no deployment has been scaffolded — readiness is skipped.
 	var errBare error
-	captureStdout(t, func() { errBare = runDoctor("", "e2e", false, false, "", "") })
+	captureStdout(t, func() { errBare = onboard.RunDoctor("", "e2e", false, false, "", "") })
 	if errBare != nil {
 		t.Errorf("bare doctor errored on a missing scaffold: %v", errBare)
 	}
 
 	// `llz doctor --env lab` (explicit) must surface the missing scaffold.
 	var errExplicit error
-	out := captureStdout(t, func() { errExplicit = runDoctor("", "lab", false, true, "", "") })
+	out := captureStdout(t, func() { errExplicit = onboard.RunDoctor("", "lab", false, true, "", "") })
 	if errExplicit == nil {
 		t.Fatalf("explicit --env with no scaffold should error:\n%s", out)
 	}
@@ -352,7 +366,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// With a residual placeholder → it's listed.
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "apl-values", "lab", "issuer.yaml"), "email: REPLACE_PER_ENV\n")
-	out := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
+	out := captureStdout(t, func() { envadd.PrintPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out, "Placeholders still to fill") || !strings.Contains(out, "REPLACE_PER_ENV") {
 		t.Errorf("checklist did not flag the placeholder:\n%s", out)
 	}
@@ -360,99 +374,24 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// Clean overlay → the "nothing left" message.
 	dir2 := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir2, "apl-values", "lab", "issuer.yaml"), "email: ops@example.com\n")
-	out2 := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
+	out2 := captureStdout(t, func() { envadd.PrintPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out2, "no placeholders left") {
 		t.Errorf("clean overlay should report none left:\n%s", out2)
-	}
-}
-
-func TestRunEnvReadinessOpenWorldACL(t *testing.T) {
-	// `llz env add` rejects 0.0.0.0/0 at the flag, but a spec is a file: `llz env
-	// edit`, a hand edit, or an inherited spec.defaults renders one without ever
-	// passing that check. doctor reports it — as a finding, not a blocker, so an
-	// instance that already has one can still render and build while it fixes it.
-	dir := chdirTempDir(t)
-	writeGoodReadiness(t, dir, "e2e")
-	writeTFVars(t, dir, "cluster", "e2e",
-		"region = \"us-ord\"\ngithub_runner_ipv4_cidrs = [\"0.0.0.0/0\"]\n")
-	var err error
-	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
-	if err != nil {
-		t.Fatalf("an open ACL must be reported, not blocking: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "admits every address") {
-		t.Errorf("open-world ACL not flagged:\n%s", out)
-	}
-}
-
-func TestIsOpenWorldCIDRLine(t *testing.T) {
-	for _, open := range []string{
-		`github_runner_ipv4_cidrs = ["0.0.0.0/0"]`,
-		`github_runner_ipv4_cidrs = ["203.0.113.0/24", "0.0.0.0/0"]`,
-		`github_runner_ipv6_cidrs = ["::/0"]`,
-	} {
-		if !isOpenWorldCIDRLine(open) {
-			t.Errorf("isOpenWorldCIDRLine(%q) = false, want true", open)
-		}
-	}
-	for _, ok := range []string{
-		`github_runner_ipv4_cidrs = ["203.0.113.0/24"]`,
-		`github_runner_ipv4_cidrs = []`,
-		`github_runner_ipv4_cidrs = [] # was "0.0.0.0/0"`, // the comment is not the value
-		`node_count = 5`,
-		`github_runner_ipv4_cidrs`, // no assignment at all
-	} {
-		if isOpenWorldCIDRLine(ok) {
-			t.Errorf("isOpenWorldCIDRLine(%q) = true, want false", ok)
-		}
-	}
-}
-
-func TestOpenWorldACLFindings(t *testing.T) {
-	// The spec-level half of the ACL check. It exists because the other two paths
-	// structurally cannot see this: `llz env add` validates only the FLAGS it was
-	// given, and the tfvars scan reads a gitignored build artifact that a fresh
-	// clone has not rendered. The spec is merged at load (applyInheritance), so an
-	// open-world prefix inherited from spec.defaults — which environments/<env>.yaml
-	// never even mentions — arrives here like an explicit one.
-	got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{
-		IPv4: []string{"203.0.113.0/24", "0.0.0.0/0"},
-		IPv6: []string{"2001:db8::/32", "::/0"},
-	})
-	if len(got) != 2 {
-		t.Fatalf("got %d findings, want 2 (one per open prefix): %+v", len(got), got)
-	}
-	for _, f := range got {
-		if f.blocking {
-			t.Errorf("%q must be a finding, not a blocker — an instance that already has one still has to be able to build while it fixes it", f.token)
-		}
-		// Named against the spec, not a rendered artifact: that is where the
-		// operator edits, and for an inherited value the env file has no such line.
-		if f.file != filepath.Join("environments", "lab.yaml") {
-			t.Errorf("finding points at %q, want the env spec file", f.file)
-		}
-		if !strings.Contains(f.hint, "if it is inherited") {
-			t.Errorf("hint should send the operator to spec.defaults too: %q", f.hint)
-		}
-	}
-	// A closed ACL says nothing.
-	if got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{IPv4: []string{"203.0.113.0/24"}}); len(got) != 0 {
-		t.Errorf("a closed ACL must produce no findings, got %+v", got)
 	}
 }
 
 // `llz env add`'s output used to print an unconditional "Still to fill … the
 // REPLACE_PER_ENV / REPLACE_ME placeholders" block and then, two lines later,
 // "✓ no placeholders left to fill" — so a clean scaffold sent the operator
-// hunting for placeholders that were not there. printPlaceholderChecklist is now
+// hunting for placeholders that were not there. envadd.PrintPlaceholderChecklist is now
 // the sole reporter; this pins that.
 func TestEnvAddNextSteps_DoesNotClaimPlaceholdersUnconditionally(t *testing.T) {
 	out := captureStdout(t, func() {
-		printEnvAddNextSteps("lab", "environments/lab.yaml", envAddOpts{})
+		envadd.PrintNextSteps("lab", "environments/lab.yaml", envdef.Opts{})
 	})
 	for _, banned := range []string{"Still to fill", "REPLACE_PER_ENV", "REPLACE_ME"} {
 		if strings.Contains(out, banned) {
-			t.Errorf("printEnvAddNextSteps must leave placeholder reporting to the checklist, but printed %q:\n%s", banned, out)
+			t.Errorf("envadd.PrintNextSteps must leave placeholder reporting to the checklist, but printed %q:\n%s", banned, out)
 		}
 	}
 	if !strings.Contains(out, "scaffolded") {
@@ -467,8 +406,8 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
 	out := captureStdout(t, func() {
-		_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
-			region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+		_ = envadd.Run(true, "lab", envdef.Opts{
+			Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 		})
 	})
 	if strings.Contains(out, "domainSuffix:") {
@@ -477,19 +416,19 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 }
 
 // cobra's MarkDeprecated already warns at parse time; a second warning printed
-// from runEnvAdd said the same thing twice AND split the summary banner in half.
+// from envadd.Run said the same thing twice AND split the summary banner in half.
 func TestEnvAdd_ClusterDomainWarnsExactlyOnce(t *testing.T) {
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
 	var out, errOut string
 	errOut = captureStderr(t, func() {
 		out = captureStdout(t, func() {
-			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
-				region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+			_ = envadd.Run(true, "lab", envdef.Opts{
+				Region: "us-sea", ObjCluster: "us-sea-1", ClusterDomain: "lab.example.com", DryRun: true,
 			})
 		})
 	})
 	if n := strings.Count(errOut+out, "cluster-domain"); n > 0 {
-		t.Errorf("runEnvAdd must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
+		t.Errorf("envadd.Run must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
 	}
 }

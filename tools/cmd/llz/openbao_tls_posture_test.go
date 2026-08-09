@@ -8,7 +8,7 @@ import (
 )
 
 // Every in-cluster workload that talks to OpenBao must VERIFY its TLS. The
-// transport is chosen by inClusterBaoHTTPClient() from two env vars, so the
+// transport is chosen by openbao.InClusterHTTPClient() from two env vars, so the
 // posture lives in the manifests — and a manifest that quietly drops
 // OPENBAO_CA_FILE silently downgrades to unverified TLS while still looking
 // configured (OPENBAO_SKIP_VERIFY is deliberately kept as the cold-start
@@ -45,7 +45,7 @@ func TestInClusterOpenBaoConsumersVerifyTLS(t *testing.T) {
 			workload := readForTLSTest(t, root, c.workload)
 			// Match the env DECLARATION, not the bare name: these manifests also
 			// discuss OPENBAO_CA_FILE in comments, and a substring check on the
-			// name alone stays green after the actual env entry is deleted (it
+			// name alone stays color.Green after the actual env entry is deleted (it
 			// did, the first time this test was written).
 			for _, want := range []string{
 				"- name: OPENBAO_CA_FILE",
@@ -107,9 +107,9 @@ func repoRootForTLSTest(t *testing.T) string {
 }
 
 // listsResource reports whether a kustomization declares `name` as a list entry,
-// ignoring comment lines. A bare strings.Contains would be satisfied by a comment
+// ignoring comment lines. A bare strings.Contains would be configreadiness.Satisfied by a comment
 // that merely mentions the file, which is exactly how the first version of this
-// guard stayed green after the resource entry was deleted.
+// guard stayed color.Green after the resource entry was deleted.
 func listsResource(kustomization, name string) bool {
 	for _, line := range strings.Split(kustomization, "\n") {
 		trimmed := strings.TrimSpace(line)

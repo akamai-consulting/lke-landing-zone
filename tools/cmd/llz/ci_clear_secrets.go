@@ -17,9 +17,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 	"github.com/spf13/cobra"
 )
 
@@ -40,16 +40,6 @@ var clusterScopedSecrets = []string{
 	"OPENBAO_APPROLE_SECRET_ID_STANDBY",
 	"HARBOR_ROBOT_NAME",
 	"HARBOR_PASSWORD",
-}
-
-// ghDeleteSecretFn deletes one env-scoped GitHub secret. gh resolves auth + repo
-// from the ambient GH_TOKEN/GH_REPO. Seamed for tests.
-var ghDeleteSecretFn = func(name, ghEnv string) error {
-	cmd := exec.Command("gh", "secret", "delete", name, "--env", ghEnv)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh secret delete %s --env %s: %s", name, ghEnv, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func ciClearClusterSecretsCmd() *cobra.Command {
@@ -84,7 +74,7 @@ func runCIClearClusterSecrets(ghEnv string) error {
 		// 404 (secret absent) and any other per-secret failure are non-fatal: the
 		// cluster IS being destroyed, so blocking teardown on a secrets-API hiccup
 		// is disproportionate — surface a warning and continue.
-		if err := ghDeleteSecretFn(s, ghEnv); err != nil {
+		if err := ghsecret.DeleteFn(s, ghEnv); err != nil {
 			fmt.Printf("::warning::Could not delete %s / %s (already absent, or token lacks scope): %v\n", ghEnv, s, err)
 			continue
 		}

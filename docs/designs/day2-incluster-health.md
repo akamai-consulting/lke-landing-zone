@@ -7,7 +7,7 @@ went green in release-e2e run 29345530071). #206 trimmed it to on-demand only
 from PR #202 (the cross-org reuse pattern) after a second critical review found it
 couldn't run as designed; this doc records how it was made real.
 **Relates to:** `platform-apl/components/clusterHealthWorkflow/`,
-`tools/cmd/llz/ci_health.go`, `docs/designs/kube-native-reconciler.md`,
+`tools/internal/converge/health.go`, `docs/designs/kube-native-reconciler.md`,
 `docs/designs/cross-org-reuse-pattern.md` (§ "Day-2", in #202).
 
 ## Goal
@@ -28,7 +28,7 @@ runner controller in every cluster — the opposite of abstracting the pipeline.
 ## The blocker (why it was pulled) and the fix
 
 **`llz ci health` is a `kubectl` orchestrator** — it shells out to `kubectl`
-throughout ([ci_health.go](../../tools/cmd/llz/ci_health.go): `kubectlReachable()`,
+throughout ([ci_health.go](../../tools/internal/converge/health.go): `kubectlReachable()`,
 `kItems("get", "jobs", "-A")`, …). The slim `llz` image is
 `gcr.io/distroless/static` — **no kubectl, no shell**. So an in-cluster
 `WorkflowTemplate` running `llz ci health` on that image cannot start.
@@ -44,7 +44,7 @@ Two options, best-first:
      `llz ci health` uses → the 0/1/2 convergence code.
    - `reconcile_health.go` reads ESO store / cert-manager Certificates / OpenBao
      pods via `internal/kube`.
-   The follow-up factors the resource fetches `ci_health.go` does over kubectl
+   The follow-up factors the resource fetches `health.go` does over kubectl
    (jobs, pods, storageclasses, …) onto `internal/kube`, feeds the existing
    `internal/health` predicates, and returns the convergence-contract exit code.
    Then it runs in the slim image as-is, consistent with the whole in-cluster
@@ -76,7 +76,7 @@ reconciler already proved.
 ## Remaining work (the PR)
 
 - [x] **The kubectl-free health verb (option 1)** — `llz ci health-incluster`
-      ([ci_health_incluster.go](../../tools/cmd/llz/ci_health_incluster.go)):
+      ([ci_health_incluster.go](../../tools/internal/converge/incluster.go)):
       builds the in-cluster client, classifies Argo Application convergence via
       the shared `convergenceReport` (factored out of `reconcile_convergence.go`,
       same `health.ClassifyArgoApp` predicate), and exits 0/1/2/3. `--fail-on-

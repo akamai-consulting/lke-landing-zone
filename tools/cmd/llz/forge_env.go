@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
@@ -13,10 +11,4 @@ import (
 // config (bao-configure) and OIDC-audience minting adopt a non-github forge the
 // moment the spec is allowed to name one, rather than staying hardcoded.
 // See docs/designs/forge-abstraction.md (Phase 3).
-func forgeFromEnv() (forge.Forge, error) {
-	flavor := forge.Flavor(os.Getenv("LLZ_FORGE"))
-	if flavor == "" {
-		flavor = forge.GitHub
-	}
-	return forge.New(flavor, os.Getenv("LLZ_FORGE_HOST"))
-}
+func forgeFromEnv() (forge.Forge, error) { return forge.FromEnv() }

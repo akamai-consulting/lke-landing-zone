@@ -91,6 +91,59 @@ when this was written (215 non-test files, 121 of them `ci_*.go`).
 > rebase and stayed red until the line moved. The dated figures below are left as
 > written; [the catalog](../designs/internal-extensions.md#re-measured-on-rebase-2026-08-05)
 > reconciles the two measurements file by file.
+>
+> **Then down, for the first time: 46,797** across 235 files, when `guard-budgets`
+> became the first internal extension and the engine moved to
+> `tools/internal/budget`. The downward move is the half that was still unproven —
+> and `exact: true` is what forced it to be recorded, since extracting the code
+> and leaving this line alone fails with `SHRANK — LOWER IT` and the new number.
+>
+> **And again: 46,106** with `guard-docs`, **45,763** with `posture-at-rest`, and
+> **45,229** with `assert-storage`, **44,826** with
+> `reconcile-actions` **44,171** with `teardown`, **43,817** with `template-sustain` and **40,827**
+> with `import-brownfield` and **38,821** with `obj-encryption`, **38,364** with `guard-charts` and
+> **37,483** with `cluster-access`, **37,131** with `health-sla` and **36,107** with
+> `token-inventory`, **34,359** with `converge` and **33,877** with `assert-platform`.
+> and **33,157** with `assert-reconciler`.
+> and **32,965** with `assert-registry`.
+> and **32,733** with `promote-pipeline`.
+> and **32,077** with `posture-credential-coverage`.
+> and **31,372** with `config-readiness`.
+> and **30,687** with `env-topology`.
+> and **29,853** with `assert-network`.
+> and **29,450** with `wave-health`.
+> and **29,230** with `tofu-driver`.
+> and **27,156** with `assert-observability`.
+> and **26,174** with `assert-secrets`.
+> and **25,274** with `assert-identity`.
+> and **25,020** with `deliver-docs`.
+> and **24,807** with `argocd-diagnostics`.
+> and **24,203** with `posture-plaintext`.
+> and **23,898** with `chart-publish`.
+> and **23,653** with `guard-manifests`.
+> and **23,387** with `assert-objstore`.
+> and **23,205** with `wedge-gameday`.
+> and **22,964** with `phase-timing`.
+> and **22,726** with `doctor-probes`.
+> and **22,566** with `kyverno-policies`.
+> and **22,383** with `managed-fresh` (which grew `template-sustain` rather than adding an extension).
+> and **22,153** with `dev-mutation-testing`.
+> and **21,841** with `release-publish`.
+> and **21,542** with `credential-state-passphrase`.
+> and **21,457** with `internal/baoread` (a shared package, not an extension).
+> and **21,082** with `credential-pat` + `credential-objkey`.
+> and **20,835** with the rotation table (wall three of the credential family).
+> and **20,591** with broad-PAT + temp-objkey.
+> and **20,492** with wall four half down.
+> and **20,269** with wall four finished for the credential family.
+> and **19,436** with `database-provisioner` + `assert-database`.
+> and **19,074** with `openbao-seed`.
+> and **19,006** with `openbao-peer-ca`.
+> Forty-five extensions, net −28,176 (59.7%) — now BELOW the
+> 41,803 this gate first recorded, and below the pre-rebase number — a floor on
+> the effort rather than a schedule, since the cheapest went first. The catalog's
+> [closure census](../designs/internal-extensions.md#the-cost-of-the-interesting-half)
+> measures what the rest costs and finds size and difficulty close to uncorrelated.
 
 `exact: true` makes "no
 slack" literal in both directions: the gate fails when the number sits ABOVE the
@@ -133,7 +186,7 @@ signal to watch is the trend of this line, not any single value.
 the default answer), make it an extension (issue #10 — per the catalog that is the
 same move with a registry and a binding attached, since 36 of 57 candidates must
 stay in-process Go), or delete what is dead. The gate says as much on a breach;
-the wording lives in `coreSurfaceRemedy` and is not restated here.
+the wording lives in `budget.CoreSurfaceRemedy` and is not restated here.
 
 
 ### Where the budget is going
@@ -159,7 +212,7 @@ would be actively wrong. untestable-loc's remedy is "move the logic into
 breach message says both is not a gate, it's a riddle.
 
 So they share the *engine* and not the *doctrine*: one scan, one glob walk, one
-tally, one ratchet convention, in `ci_untestable_loc.go`. The only thing this ADR
+tally, one ratchet convention, in `tools/internal/budget`. The only thing this ADR
 made configurable is the remedy sentence. The two budgets are then reviewed and
 ratcheted independently, which is what they need — they will often move in
 opposite directions in the same PR, and that is exactly the trade being made
@@ -256,7 +309,7 @@ a second fence appearing, not a bug fix.
   change available to #15.
 
 - **Run the acid test second, not last.** The catalog's most valuable single
-  split is inside `converge`: `ci_health.go` (1,097 lines) fuses the *action*
+  split is inside `converge`: `health.go` (1,097 lines) fuses the *action*
   with the *predicate*. Separating them — health becomes the core-registered
   `converged` assertion, converge stays the extension action — is where the
   binding model either holds or doesn't. Deferring it risks building a registry,

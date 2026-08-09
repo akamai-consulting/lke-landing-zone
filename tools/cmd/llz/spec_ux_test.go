@@ -6,11 +6,14 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/promote"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
 )
 
 // writeSpecInstance lays a minimal spec-driven instance into the current dir: a
 // landingzone.yaml + one environments/<env>.yaml per (name, body) pair. Only the
-// spec YAMLs are needed — loadSpec/readTopology read those, not the tfvars.
+// spec YAMLs are needed — clusterspec.Detected/readTopology read those, not the tfvars.
 func writeSpecInstance(t *testing.T, envs map[string]string) {
 	t.Helper()
 	writeFileMkdir(t, "landingzone.yaml", `apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -43,6 +46,8 @@ spec:
 
 // #2: readTopology / promotionRanks read the SPEC, so role/peer/next stay correct
 // even when no tfvars exist (a spec edit that wasn't rendered).
+// #2: readTopology / promotionRanks read the SPEC, so role/peer/next stay correct
+// even when no tfvars exist (a spec edit that wasn't rendered).
 func TestReadTopologyFromSpec(t *testing.T) {
 	chdirTempDir(t)
 	writeSpecInstance(t, map[string]string{
@@ -51,22 +56,22 @@ func TestReadTopologyFromSpec(t *testing.T) {
 		"lab":  clusterDef("lab", "    promotionRank: 1\n"),
 	})
 
-	deps, err := readTopology("terraform-iac-bootstrap")
+	deps, err := envtopology.ReadTopology("terraform-iac-bootstrap")
 	if err != nil {
 		t.Fatalf("readTopology: %v", err)
 	}
-	d, _ := findDeployment(deps, "east")
-	if d.haRole != "active" || d.haGroup != "prod" {
+	d, _ := envtopology.FindDeployment(deps, "east")
+	if d.HARole != "active" || d.HAGroup != "prod" {
 		t.Errorf("east from spec = %+v, want active/prod", d)
 	}
-	if peer, ok, err := peerOf(deps, "east"); err != nil || !ok || peer != "west" {
+	if peer, ok, err := envtopology.PeerOf(deps, "east"); err != nil || !ok || peer != "west" {
 		t.Errorf("peerOf(east) = %q,%v,%v, want west", peer, ok, err)
 	}
-	if lab, _ := findDeployment(deps, "lab"); lab.haRole != "standalone" {
-		t.Errorf("lab role = %q, want standalone default", lab.haRole)
+	if lab, _ := envtopology.FindDeployment(deps, "lab"); lab.HARole != "standalone" {
+		t.Errorf("lab role = %q, want standalone default", lab.HARole)
 	}
 
-	ranks, err := promotionRanks("terraform-iac-bootstrap")
+	ranks, err := promote.PromotionRanks(promoteDeps(), "terraform-iac-bootstrap")
 	if err != nil {
 		t.Fatalf("promotionRanks: %v", err)
 	}
@@ -75,6 +80,8 @@ func TestReadTopologyFromSpec(t *testing.T) {
 	}
 }
 
+// #5: render --diff reports new files for an un-rendered env, and a no-op once the
+// committed apl-values match.
 // #5: render --diff reports new files for an un-rendered env, and a no-op once the
 // committed apl-values match.
 func TestRenderDiff(t *testing.T) {
@@ -86,34 +93,19 @@ func TestRenderDiff(t *testing.T) {
 	writeFileMkdir(t, "terraform-iac-bootstrap/object-storage/terraform.tfvars.example", "obj_cluster = \"x\"\n")
 	writeFileMkdir(t, filepath.Join("apl-values", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 
-	lz, present, err := loadSpec()
+	lz, present, err := clusterspec.Detected()
 	if !present || err != nil {
-		t.Fatalf("loadSpec present=%v err=%v", present, err)
+		t.Fatalf("clusterspec.Detected present=%v err=%v", present, err)
 	}
 	var rerr error
 	out := captureStdout(t, func() {
-		rerr = runRenderDiff(lz, []string{"lab"}, "terraform-iac-bootstrap", "apl-values", false)
+		rerr = render.RunDiff(lz, []string{"lab"}, "terraform-iac-bootstrap", "apl-values", false)
 	})
 	if rerr != nil {
-		t.Fatalf("runRenderDiff: %v", rerr)
+		t.Fatalf("render.RunDiff: %v", rerr)
 	}
 	if !strings.Contains(out, "+ new") || !strings.Contains(out, "would change") {
 		t.Errorf("diff should report new files:\n%s", out)
-	}
-}
-
-func TestLineDiff(t *testing.T) {
-	// Localized change → shows the -/+ pair with context, no truncation note.
-	d := lineDiff("a\nb\nc\n", "a\nB\nc\n")
-	if !strings.Contains(d, "- b") || !strings.Contains(d, "+ B") {
-		t.Errorf("lineDiff missing the change:\n%s", d)
-	}
-	if strings.Contains(d, "more changes") {
-		t.Errorf("small diff should not truncate:\n%s", d)
-	}
-	// New file (old empty) → all additions.
-	if d := lineDiff("", "x\ny\n"); !strings.Contains(d, "+ x") || !strings.Contains(d, "+ y") {
-		t.Errorf("new-file diff wrong:\n%s", d)
 	}
 }
 

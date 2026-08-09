@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
 	"github.com/spf13/cobra"
 )
 
@@ -129,7 +130,7 @@ func runPrecommit(g globalOpts) error {
 
 	// ── operator escape hatch ──
 	if fi, err := os.Stat(".githooks/pre-commit.local"); err == nil && fi.Mode()&0o111 != 0 {
-		return run(g, ".githooks/pre-commit.local")
+		return proc.RunEcho(g.dryRun, ".githooks/pre-commit.local")
 	}
 	return nil
 }

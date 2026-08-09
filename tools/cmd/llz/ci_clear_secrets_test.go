@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghsecret"
 )
 
 // stubGHDeleteSecret records env-scoped gh secret deletions, failing those named
@@ -11,15 +13,15 @@ import (
 func stubGHDeleteSecret(t *testing.T, failFor map[string]bool) *[]string {
 	t.Helper()
 	var calls []string
-	prev := ghDeleteSecretFn
-	ghDeleteSecretFn = func(name, ghEnv string) error {
+	prev := ghsecret.DeleteFn
+	ghsecret.DeleteFn = func(name, ghEnv string) error {
 		calls = append(calls, name+"@"+ghEnv)
 		if failFor[name] {
 			return errors.New("HTTP 404")
 		}
 		return nil
 	}
-	t.Cleanup(func() { ghDeleteSecretFn = prev })
+	t.Cleanup(func() { ghsecret.DeleteFn = prev })
 	return &calls
 }
 

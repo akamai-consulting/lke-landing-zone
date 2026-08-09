@@ -11,7 +11,7 @@ package main
 //
 // So the e2e harness exercised exactly the one configuration in which the image
 // pin cannot be wrong, and the configuration every real instance runs was tested
-// by nobody. It broke in the field: `llz tokens` computed `ci-tofu:<ciTofuTag>`, a
+// by nobody. It broke in the field: `llz tokens` computed `ci-tofu:<versionpins.CITofuTag>`, a
 // tag build-images.yml republishes on every push to main, so a release-pinned tree
 // ran main's llz and the adopter's first pipeline died on `llz render --check`
 // drift they could not resolve. Green e2e the whole time.
@@ -42,6 +42,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templateid"
 )
 
 func ciAssertAdopterPinCmd() *cobra.Command {
@@ -58,11 +62,11 @@ func ciAssertAdopterPinCmd() *cobra.Command {
 			"release-e2e lane's pre-flight job, ahead of any cluster spend.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runAssertAdopterPin(firstNonEmpty(repo, instanceTemplateRepo()), ref)
+			return runAssertAdopterPin(firstNonEmpty(repo, templatecommit.InstanceTemplateRepo()), ref)
 		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release tag to check (default: the template repo's latest release)")
-	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+defaultTemplateRepo+")")
+	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+sustain.DefaultTemplateRepo+")")
 	return c
 }
 
@@ -81,7 +85,7 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    warning because it cannot tell "skewed" from "unreachable" — an
 	//    unresolvable ref IS a failure here: this gate's entire job is to answer
 	//    this question, so being unable to ask it is a failed gate, not a pass.
-	commit, ok := resolveTemplateCommit(templateRepo, ref)
+	commit, ok := templatecommit.Resolve(templateRepo, ref)
 	if !ok {
 		return fmt.Errorf("could not resolve %s@%s to a commit — the gate cannot verify what an adopter "+
 			"scaffolding at this tag would run", templateRepo, ref)
@@ -102,7 +106,7 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	// ForCommit: leg 1 already resolved this tag. Re-resolving here would make the
 	// verdict depend on a second round-trip, and a blip on it reported "could not
 	// resolve" as a pin-computation failure — blaming the code for the network.
-	tfImage, kubeImage, pinned, why := computeCIImageVarsForCommit(commit, ref)
+	tfImage, kubeImage, pinned, why := templatecommit.ComputeImageVarsForCommit(commit, ref)
 	if !pinned {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
 		return fmt.Errorf("`llz tokens` would not pin an instance scaffolded at %s to an immutable image: %s.\n"+
@@ -131,7 +135,7 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    legs vouched for, and the pull itself is the backstop — an absent image
 	//    fails the first job with `manifest unknown`, which is unambiguous.
 	for _, im := range []struct{ name, ref string }{{"TF_IMAGE", tfImage}, {"KUBE_IMAGE", kubeImage}} {
-		if published, asked := imagePublished(im.ref); published && asked {
+		if published, asked := templatecommit.ImagePublished(im.ref); published && asked {
 			fmt.Printf("  ✓ %s is published\n", im.ref)
 			continue
 		}
@@ -187,22 +191,22 @@ func foreignCommit(commit string) string {
 // whole reason a release candidate can be published without being consumable —
 // so the tag this returns is the one an adopter running `llz new` today gets.
 //
-// Bounded HTTP rather than `gh api`, for the same reason resolveTemplateCommit
+// Bounded HTTP rather than `gh api`, for the same reason templatecommit.Resolve
 // dropped it: execOutput has no timeout, and this runs in a gate.
 var latestReleaseTag = func(repo string) (string, bool) {
 	if repo == "" {
 		return "", false
 	}
-	req, err := http.NewRequest(http.MethodGet, githubAPIBase+"/repos/"+repo+"/releases/latest", nil)
+	req, err := http.NewRequest(http.MethodGet, templatecommit.GithubAPIBase+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return "", false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if t := githubToken(); t != "" {
+	if t := templatecommit.GithubToken(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
-	resp, err := (&http.Client{Timeout: httpAskTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: templatecommit.HTTPAskTimeout}).Do(req)
 	if err != nil {
 		return "", false
 	}
@@ -244,18 +248,18 @@ var (
 // is spent, or the registry stops answering.
 //
 // Returns nothing: it is a WAIT, not a check. Whether the images are there is
-// still decided downstream by computeCIImageVarsForCommit, which owns that verdict
+// still decided downstream by templatecommit.ComputeImageVarsForCommit, which owns that verdict
 // and its message — duplicating the decision here would mean two places that can
 // disagree about the same fact.
 func waitForCIImages(commit string) {
 	images := []string{
-		ciImageRef(defaultTemplateOrg, "ci-tofu", "sha-"+commit),
-		ciImageRef(defaultTemplateOrg, "ci-kubernetes", "sha-"+commit),
+		templatecommit.CIImageRef(templateid.DefaultOrg, "ci-tofu", "sha-"+commit),
+		templatecommit.CIImageRef(templateid.DefaultOrg, "ci-kubernetes", "sha-"+commit),
 	}
 	for attempt := 0; ; attempt++ {
 		missing := ""
 		for _, im := range images {
-			published, asked := imagePublished(im)
+			published, asked := templatecommit.ImagePublished(im)
 			// !asked means the registry never answered. Waiting on that is pointless —
 			// polling an unreachable endpoint ten more times tells us nothing new, and
 			// the downstream check treats "could not ask" as "do not downgrade" anyway.

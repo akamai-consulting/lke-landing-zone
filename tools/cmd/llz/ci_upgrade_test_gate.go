@@ -13,15 +13,15 @@ package main
 // harness that covers the configuration we build and not the one operators run.
 // It cost two bugs, both found by hand rather than by CI:
 //
-//  1. `llz upgrade` re-prompted every copier question, because copierUpdateArgv
-//     omitted --defaults. With no TTY that is not a prompt, it is an unhandled
+//  1. `llz upgrade` re-prompted every copier question, because copier.UpdateArgv
+//     omitted --defaults. With no TTY that is not a onboard.Prompt, it is an unhandled
 //     OSError out of prompt_toolkit — so the command was unusable in CI, in a
 //     wrapper script, over `ssh host 'llz upgrade'`. Check `update-is-
 //     noninteractive` is that bug, and it is why this gate closes stdin rather
 //     than inheriting it.
 //  2. An answer the CURRENT template's validator rejects is silently replaced by
 //     the template DEFAULT, exit 0, no warning — copier falls back to the
-//     default when it cannot prompt, and to the default in the prompt when it
+//     default when it cannot onboard.Prompt, and to the default in the onboard.Prompt when it
 //     can. For instance_repo that repoints the ArgoCD repoURL and every `gh`
 //     target at a repository that does not exist. Check `answers-preserved`.
 //
@@ -46,7 +46,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/upgrade"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -55,13 +61,6 @@ import (
 var probeUpgradeAnswers = map[string]string{
 	"instance_repo": "probe-org/probe-instance",
 	"openbao_team":  "probe-team",
-}
-
-// upgradeVolatileAnswers are the keys an upgrade is SUPPOSED to rewrite: the
-// provenance copier maintains and the version pin the upgrade exists to move.
-// Everything else must survive untouched.
-var upgradeVolatileAnswers = map[string]bool{
-	"_commit": true, "_src_path": true, "llz_version": true,
 }
 
 func ciUpgradeTestCmd() *cobra.Command {
@@ -87,7 +86,7 @@ func ciUpgradeTestCmd() *cobra.Command {
 	f.StringVar(&from, "from", "", "release tag to scaffold at (default: the highest vX.Y.Z tag that is not the commit under test)")
 	f.StringVar(&to, "to", "", "ref to upgrade to (default: HEAD)")
 	f.StringVar(&template, "template", "", "template repo path (default: this checkout's root)")
-	f.StringVar(&dir, "dir", ".upgrade-test", "build directory (gitignored)")
+	f.StringVar(&dir, "dir", ".Upgrade-test", "build directory (gitignored)")
 	f.BoolVar(&keep, "keep", false, "leave the built instance in place for inspection")
 	return c
 }
@@ -99,14 +98,14 @@ type upgradeTestOpts struct {
 
 // previousReleaseTag picks the release an adopter would most plausibly be
 // upgrading FROM: the highest bare vX.Y.Z tag that is not on the commit under
-// test. It delegates the "highest release" rule to latestLLZTag — the SAME rule
+// test. It delegates the "highest release" rule to selfupgrade.LatestLLZTag — the SAME rule
 // `llz self-update` and `llz new` apply — so the gate scaffolds onto exactly the
 // release an adopter would have installed, rather than a second opinion about
 // what "latest" means that could drift from the one that ships.
 //
 // Excluding the tag on HEAD is the whole point. Cutting a release puts a tag on
 // the commit this gate is checking, and "upgrade v0.0.40 → v0.0.40" is a no-op
-// that passes while testing nothing — the failure mode where a green gate means
+// that passes while testing nothing — the failure mode where a color.Green gate means
 // least, on the one run that matters most.
 func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) {
 	var candidates []string
@@ -115,11 +114,11 @@ func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 			candidates = append(candidates, t)
 		}
 	}
-	return latestLLZTag(candidates)
+	return selfupgrade.LatestLLZTag(candidates)
 }
 
-// releaseTagRe keeps ONLY a full release tag. latestLLZTag cannot do this on its
-// own: semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
+// releaseTagRe keeps ONLY a full release tag. selfupgrade.LatestLLZTag cannot do this on its
+// own: selfupgrade.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
 // callers hand it a list the GitHub releases API already filtered by isDraft /
 // isPrerelease. This gate reads `git tag`, where that metadata does not exist —
 // and the release convention here is to cut a PRE-RELEASE first, so `v0.0.41-rc1`
@@ -128,45 +127,21 @@ func previousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 // pre-releases, so nobody is ever upgrading FROM one.
 var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// answerRegressions lists every answer the upgrade changed that it had no
-// business changing. Pure so the comparison — not the copier run — is what the
-// unit tests exercise.
-//
-// A DISAPPEARED key counts: copier dropping an answer is the same loss as
-// rewriting it, and the value it renders next is the template default either way.
-func answerRegressions(before, after map[string]string) []string {
-	var out []string
-	for k, was := range before {
-		if upgradeVolatileAnswers[k] {
-			continue
-		}
-		now, ok := after[k]
-		switch {
-		case !ok:
-			out = append(out, fmt.Sprintf("%s: %q → (dropped)", k, was))
-		case now != was:
-			out = append(out, fmt.Sprintf("%s: %q → %q", k, was, now))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // copierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
-// copierCopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
+// copier.CopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
 // gate must point copier at a local path so it works offline, on a branch, and
 // in a fork. --defaults here is a harness choice — `llz new` legitimately
 // prompts for its three answers, and they are supplied below as --data.
 //
 // The UPGRADE invocation is deliberately NOT built here. It is
-// copierUpdateArgv — the exact argv `llz upgrade` runs — because a gate that
+// copier.UpdateArgv — the exact argv `llz upgrade` runs — because a gate that
 // composed its own would be testing copier rather than testing us, and would
 // have passed cleanly while `llz upgrade` was unusable in every unattended
 // context. That is the blind spot this whole file exists to remove; re-creating
 // it one level down would be the same mistake in a smaller box.
 func copierScaffoldArgv(template, ref, dest string, answers map[string]string) []string {
 	a := []string{"copier", "copy", "--trust", "--defaults", "--vcs-ref", ref, "--data", "llz_version=" + ref}
-	for _, k := range sortedKeys(answers) {
+	for _, k := range onboard.SortedKeys(answers) {
 		a = append(a, "--data", k+"="+answers[k])
 	}
 	return append(a, template, dest)
@@ -183,37 +158,6 @@ var runCopier = func(dir string, argv []string) ([]byte, error) {
 	cmd.Dir = dir
 	cmd.Stdin = nil // == /dev/null
 	return cmd.CombinedOutput()
-}
-
-// currentAnswerMap is the working directory instance's answers, or nil when
-// there is no readable answers file. nil is the pre-copier / not-an-instance
-// case, and answerRegressions over a nil `before` reports nothing — an upgrade
-// cannot be said to have lost an answer that was never recorded.
-func currentAnswerMap() map[string]string {
-	m, err := readAnswerMap(".copier-answers.yml")
-	if err != nil {
-		return nil
-	}
-	return m
-}
-
-// readAnswerMap loads a .copier-answers.yml as a flat string map. Non-scalar
-// values are rendered with %v; the answers this template asks are all scalars,
-// and a structural change there should show up as a diff rather than a panic.
-func readAnswerMap(path string) (map[string]string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(raw))
-	for k, v := range raw {
-		out[k] = fmt.Sprintf("%v", v)
-	}
-	return out, nil
 }
 
 // mergeConflictArtifacts walks the built instance for the two ways a botched
@@ -301,7 +245,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		if from, ok = previousReleaseTag(strings.Split(tagsOut, "\n"), headTags); !ok {
 			// A shallow clone has no tags. Skipping is right — this gate cannot
 			// invent a prior release, and failing would make every shallow checkout
-			// red for a reason that is not about the change under test.
+			// color.Red for a reason that is not about the change under test.
 			fmt.Println("upgrade-test: SKIPPED — no vX.Y.Z tag to upgrade from (shallow clone? fetch tags, or pass --from)")
 			return nil
 		}
@@ -329,7 +273,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		return fmt.Errorf("scaffold at %s failed:\n%s", from, indentedTail(string(out), 20))
 	}
 	answersPath := filepath.Join(inst, ".copier-answers.yml")
-	before, err := readAnswerMap(answersPath)
+	before, err := upgrade.ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read scaffolded answers: %w", err)
 	}
@@ -350,7 +294,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 	}
 
 	// 2. The upgrade, with stdin closed. THE check — see runCopier.
-	out, upErr := runCopier(inst, copierUpdateArgv(to))
+	out, upErr := runCopier(inst, copier.UpdateArgv(to))
 	var failures []string
 	if upErr != nil {
 		detail := indentedTail(string(out), 25)
@@ -358,8 +302,8 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		if strings.Contains(string(out), "prompt_toolkit") || strings.Contains(string(out), "Traceback") {
 			hint = "\n    This is copier PROMPTING. `copier update` re-asks every question unless it is\n" +
 				"    passed --defaults, and with no terminal that is an unhandled exception rather\n" +
-				"    than a prompt — so the command works by hand and dies in CI, in a script, and\n" +
-				"    over ssh. Fix: add --defaults to the update argv (copierUpdateArgv)."
+				"    than a onboard.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
+				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
 		failures = append(failures, fmt.Sprintf("update-is-noninteractive: `copier update` to %s failed:\n%s%s",
 			shortRef(to), detail, hint))
@@ -374,11 +318,11 @@ func runUpgradeTest(o upgradeTestOpts) error {
 		return upgradeTestFailure(failures)
 	}
 
-	after, err := readAnswerMap(answersPath)
+	after, err := upgrade.ReadAnswerMap(answersPath)
 	if err != nil {
 		return fmt.Errorf("read upgraded answers: %w", err)
 	}
-	if regressions := answerRegressions(before, after); len(regressions) > 0 {
+	if regressions := upgrade.AnswerRegressions(before, after); len(regressions) > 0 {
 		failures = append(failures, "answers-preserved: the upgrade rewrote answers it does not own:\n      "+
 			strings.Join(regressions, "\n      ")+
 			"\n    copier falls back to the template DEFAULT for an answer it cannot keep — including\n"+
@@ -386,7 +330,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 			"    and every `gh` target, so this silently repoints the instance at a repo that does\n"+
 			"    not exist, exit 0.")
 	} else {
-		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(upgradeVolatileAnswers))
+		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(upgrade.VolatileAnswers))
 	}
 
 	if got := after["llz_version"]; got != to {
@@ -426,7 +370,7 @@ func runUpgradeTest(o upgradeTestOpts) error {
 
 func upgradeTestFailure(failures []string) error {
 	for _, f := range failures {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", red("✗"), f)
+		fmt.Fprintf(os.Stderr, "  %s %s\n", color.Red("✗"), f)
 	}
 	return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken", len(failures))
 }
@@ -442,7 +386,7 @@ func shortRef(r string) string {
 // The tail, because a traceback's exception line and copier's own message are
 // last while the head is a wall of file-creation noise.
 func indentedTail(s string, n int) string {
-	t := tailLines(s, n)
+	t := cigate.TailLines(s, n)
 	if t == "" {
 		return "      (no output)"
 	}

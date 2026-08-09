@@ -26,6 +26,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/assertsecrets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +68,7 @@ func ciKickHarborProvisionerCmd() *cobra.Command {
 }
 
 func runKickHarborProvisioner(namespace, cronjob string, coreTimeout int) {
-	if !kExists("-n", namespace, "get", "cronjob", cronjob) {
+	if !kubectlprobe.Exists("-n", namespace, "get", "cronjob", cronjob) {
 		fmt.Printf("cronjob/%s not present in %s — nothing to kick (component disabled or standby).\n", cronjob, namespace)
 		return
 	}
@@ -123,7 +125,7 @@ func waitJobTerminal(namespace, name string, budget, interval time.Duration) (su
 	for {
 		out, _ := execOutput("kubectl", "-n", namespace, "get", "job", name,
 			"-o", "jsonpath={.status.succeeded}/{.status.failed}")
-		if succ, fail := parseJobStatus(string(out)); succ || fail {
+		if succ, fail := assertsecrets.ParseJobStatus(string(out)); succ || fail {
 			return succ, fail
 		}
 		if !time.Now().Before(deadline) {

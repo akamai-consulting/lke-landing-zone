@@ -1,0 +1,323 @@
+package argodiag
+
+// ci_diagnose_argocd.go implements `llz ci diagnose-argocd` — the native port
+// of llz-terraform.yml's 'Diagnose ArgoCD install failure' step. Runs only on
+// the failure path and dumps everything needed to see WHY the bootstrap is not
+// becoming ready. Diagnostics must never mask the original failure, so every
+// probe is best-effort and the command always exits 0.
+//
+// The most common failure on a fresh cluster is helm_release.apl hitting its
+// 600s wait timeout (context deadline exceeded): the apl-operator Deployment
+// never becomes Available, usually because no worker node is Ready/schedulable
+// or the operator image can't be pulled. That release lives in the apl-operator
+// namespace; the argocd namespace is created later, in-cluster, only once the
+// operator's helmfile pipeline gets that far. So we sweep BOTH namespaces —
+// apl-operator first (the earlier, more likely failure point), then argocd —
+// instead of looking only at an argocd namespace that is empty by design when
+// the operator install is what failed.
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/kubectlprobe"
+)
+
+// diagStream runs a command with output streamed to stdout, best-effort. A
+// package var so tests can record the probe sequence without real binaries.
+var diagStream = func(name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	_ = cmd.Run()
+}
+
+func Run(aplNS, argoNS string) error {
+	if kubectlprobe.EffectiveKubeconfig() == "" {
+		fmt.Fprintln(os.Stderr, "::warning::No kubeconfig available — cluster may not exist; nothing to diagnose")
+		return nil
+	}
+
+	// Reachability gate. Every probe below is an unbounded kubectl/helm call; on an
+	// unreachable apiserver each one blocks on its default ~30s dial timeout, and
+	// the dozens of them add up to the full 50m job cap (observed: the diagnose step
+	// spun for ~49m after the runner was never allowlisted on the control-plane
+	// firewall, then the job was force-canceled). One bounded probe up front turns
+	// that into a ~10s clean skip so the ORIGINAL failure stays the visible one.
+	if !kubectlprobe.Reachable() {
+		fmt.Fprintln(os.Stderr, "::warning::apiserver unreachable (control-plane ACL not granted, or cluster gone) — skipping diagnostics to avoid a per-probe timeout pile-up")
+		return nil
+	}
+
+	diagGroup("Nodes (schedulable? Ready?)", func() {
+		diagStream("kubectl", "get", "nodes", "-o", "wide")
+		// The bash piped describe through grep for the scheduling-relevant
+		// sections; print them from the captured describe instead.
+		if out, err := kubectlprobe.Exec("kubectl", "describe", "nodes"); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				switch {
+				case strings.HasPrefix(line, "Name:"), strings.HasPrefix(line, "Taints:"),
+					strings.HasPrefix(line, "Conditions:"), strings.HasPrefix(line, "Allocated resources:"):
+					fmt.Println(line)
+				}
+			}
+		}
+	})
+
+	// Sweep apl-operator first: helm_release.apl ("apl") timing out is the most
+	// likely fresh-cluster failure, and argocd is empty until the operator's
+	// helmfile pipeline gets that far.
+	diagnoseNamespace(aplNS, "apl")
+	// The operator can sit Running 1/1 yet be wedged BEFORE helmfile installs
+	// anything (observed: a fresh cluster's operator consuming the previous,
+	// destroyed cluster's stale apl-<env> values branch — v0.0.25, run 29446982026,
+	// argocd CRD absent after 15m with zero stage-01 charts). The failing-workload
+	// sweep below only fetches logs from pods that LOOK broken, and the namespace
+	// sweep above captures Job logs + describes but never a healthy-looking
+	// Deployment's container log — which is the only record of which git/helmfile
+	// step the operator actually reached. Dump it explicitly.
+	diagGroup(aplNS+" — apl-operator container logs (git/helmfile progress)", func() {
+		diagStream("kubectl", "-n", aplNS, "logs", "deploy/apl-operator", "--tail=200")
+	})
+	diagnoseNamespace(argoNS, "argocd")
+
+	// The install can REACH argocd yet still never pass the convergence gate —
+	// an Application wedged OutOfSync/Missing (a child's ComparisonError) or the
+	// phase gate misreading the OpenBao/cert-manager handoff. Neither shows in the
+	// namespace sweeps above, so capture them explicitly before teardown.
+	diagnoseConvergence(argoNS)
+
+	// The captures above report STATES; a workload's root cause is a container LOG
+	// they never grab. Sweep every failing pod / Job across all namespaces and dump
+	// its logs — on a torn-down cluster this is the only record of WHY it failed.
+	diagnoseFailingWorkloads()
+
+	fmt.Println("Diagnostics complete. Common causes:")
+	fmt.Println("  • apl-operator pod stuck Pending  -> no Ready/schedulable node (check Nodes / Taints / Conditions above)")
+	fmt.Println("  • ImagePullBackOff                -> registry unreachable or image pull secret missing")
+	fmt.Println("  • CrashLoopBackOff                -> see Job / pod logs above")
+	fmt.Println("  • argocd namespace empty          -> apl-operator helmfile pipeline never reached argocd (see apl-operator above)")
+	fmt.Println("  • Application OutOfSync/Missing    -> see 'Argo CD Applications' below; a child ComparisonError stalls the parent app-of-apps")
+	fmt.Println("  • phase gate stuck                 -> see platform-app-ca plus OpenBao ClusterSecretStore / cert-manager CA chain below")
+	return nil
+}
+
+// diagnoseConvergence captures the two convergence-gate blockers the namespace
+// sweeps miss: the Argo CD Application states (sync/health + the condition
+// messages that carry a ComparisonError) and the phase gate — whether the
+// legacy cert-manager platform-app-ca Secret, the OpenBao ClusterSecretStore,
+// and the CA chain are present/Ready.
+// Best-effort throughout; group titles keep it scannable in the run log.
+func diagnoseConvergence(argoNS string) {
+	diagGroup("convergence — Argo CD Applications (sync / health / condition messages)", func() {
+		// One line per app with its condition messages inline — a child's
+		// "ComparisonError: ... app path does not exist" is visible at a glance.
+		diagStream("kubectl", "-n", argoNS, "get", "applications",
+			"-o", "custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,MESSAGE:.status.conditions[*].message")
+	})
+	diagGroup("convergence — platform-bootstrap seed Application (full status)", func() {
+		// The seed app-of-apps; its conditions + operationState.message explain an
+		// OutOfSync/Missing stall (and whether a child app poisoned its sync).
+		diagStream("kubectl", "-n", argoNS, "get", "application", "platform-bootstrap", "-o", "yaml")
+	})
+	diagnoseUnsyncedApplications(argoNS)
+	diagGroup("convergence — phase gate: platform-app-ca, OpenBao store, CA chain", func() {
+		// platform-app-ca is legacy but still useful context; OpenBao store Ready is
+		// the post-bootstrap signal that ends phase1. Capture both plus the CA chain.
+		diagStream("kubectl", "-n", "cert-manager", "get", "secret", "platform-app-ca", "-o", "wide")
+		diagStream("kubectl", "get", "clustersecretstore", "openbao", "-o", "wide")
+		diagStream("kubectl", "get", "certificate,certificaterequest", "--all-namespaces", "-o", "wide")
+		diagStream("kubectl", "get", "clusterissuer", "-o", "wide")
+	})
+}
+
+// diagnoseUnsyncedApplications dumps the FULL status of every Application that is
+// not Synced-and-Healthy — conditions plus operationState, which is where Argo
+// records why an apply was refused.
+//
+// WHY THIS EXISTS. The one-line table above prints
+// `.status.conditions[*].message`, so an app carrying several conditions shows
+// whichever came first — and a benign OrphanedResourceWarning will happily mask a
+// SyncError sitting right behind it. Only platform-bootstrap got a full dump, on
+// the assumption that a child's failure always surfaces through the parent. It
+// does not when the child app itself was created fine and only its OWN apply
+// failed: the parent reports "successfully synced (all tasks run)" and looks
+// healthy.
+//
+// That combination cost a whole e2e run. A StatefulSet was rejected at apply
+// (a duplicate `container.env` key, which server-side apply refuses), so the app
+// sat OutOfSync/Healthy with no workload — no pod, no restart, no container log,
+// and the only line about it in the entire run log was an orphaned-resources
+// warning. The error text existed in `.status.operationState.message` and nothing
+// printed it.
+//
+// Health is deliberately part of the predicate, not just sync: a Degraded app is
+// equally worth the dump, and an app that is OutOfSync purely because it is
+// mid-sync costs only a few lines of noise.
+// needsFullAppStatusDump selects the Applications worth a full status dump. Pure,
+// so the predicate is unit-tested rather than only exercised against a cluster.
+//
+// An EMPTY sync or health status counts as needing the dump: a freshly created
+// Application whose controller has not written status yet is precisely the state
+// a stalled child sits in, and treating "" as fine would skip it.
+func needsFullAppStatusDump(name, sync, health string) bool {
+	if name == "" {
+		return false
+	}
+	// platform-bootstrap already gets a full dump of its own.
+	if name == "platform-bootstrap" {
+		return false
+	}
+	return sync != "Synced" || health != "Healthy"
+}
+
+func diagnoseUnsyncedApplications(argoNS string) {
+	type app struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Sync struct {
+				Status string `json:"status"`
+			} `json:"sync"`
+			Health struct {
+				Status string `json:"status"`
+			} `json:"health"`
+		} `json:"status"`
+	}
+	var names []string
+	for _, raw := range kubectlprobe.Items("-n", argoNS, "get", "applications") {
+		var a app
+		if json.Unmarshal(raw, &a) != nil {
+			continue
+		}
+		if needsFullAppStatusDump(a.Metadata.Name, a.Status.Sync.Status, a.Status.Health.Status) {
+			names = append(names, a.Metadata.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	diagGroup(fmt.Sprintf("convergence — full status of %d not-Synced/not-Healthy Application(s)", len(names)), func() {
+		for _, n := range names {
+			fmt.Printf("### %s\n", n)
+			// .status only: the spec is already visible in git, and the whole
+			// object for ~10 apps buries the one message that matters.
+			diagStream("kubectl", "-n", argoNS, "get", "application", n, "-o", "jsonpath={.status.conditions}{\"\\n\"}{.status.operationState.phase}{\"\\n\"}{.status.operationState.message}{\"\\n\"}")
+		}
+	})
+}
+
+// diagnoseFailingWorkloads dumps describe + previous/current container logs for
+// every crashlooping / not-starting pod and every failed Job across ALL
+// namespaces. The namespace sweeps and Argo/CA captures above report STATES; a
+// workload's root cause is a container LOG they never grab — so on a torn-down
+// cluster this is the only record of WHY a workload failed (e.g. otomi-api
+// CrashLoopBackOff, harbor-robot-provisioner Job Failed). Best-effort throughout:
+// PodIsFailing is the same predicate the convergence gate uses, so this captures
+// exactly the pods that pinned it.
+func diagnoseFailingWorkloads() {
+	diagGroup("convergence — failing-workload logs (crashloop / not-starting pods + failed Jobs)", func() {
+		for _, raw := range kubectlprobe.Items("get", "pods", "-A") {
+			var p struct {
+				Metadata struct {
+					Namespace string `json:"namespace"`
+					Name      string `json:"name"`
+				} `json:"metadata"`
+				Status health.PodStatus `json:"status"`
+			}
+			if json.Unmarshal(raw, &p) != nil || !health.PodIsFailing(p.Status) {
+				continue
+			}
+			fmt.Printf("### %s/%s — %s\n", p.Metadata.Namespace, p.Metadata.Name, health.SummarizeStates(p.Status))
+			diagStream("kubectl", "-n", p.Metadata.Namespace, "describe", "pod", p.Metadata.Name)
+			all := append(append([]health.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
+			for _, c := range all {
+				diagStream("kubectl", "-n", p.Metadata.Namespace, "logs", p.Metadata.Name, "-c", c.Name, "--previous", "--tail=60")
+				diagStream("kubectl", "-n", p.Metadata.Namespace, "logs", p.Metadata.Name, "-c", c.Name, "--tail=40")
+			}
+		}
+		for _, raw := range kubectlprobe.Items("get", "jobs", "-A") {
+			var j struct {
+				Metadata struct {
+					Namespace string `json:"namespace"`
+					Name      string `json:"name"`
+				} `json:"metadata"`
+				Status struct {
+					Failed int `json:"failed"`
+				} `json:"status"`
+			}
+			if json.Unmarshal(raw, &j) != nil || j.Status.Failed == 0 {
+				continue
+			}
+			fmt.Printf("### job %s/%s (failed=%d)\n", j.Metadata.Namespace, j.Metadata.Name, j.Status.Failed)
+			diagStream("kubectl", "-n", j.Metadata.Namespace, "logs", "job/"+j.Metadata.Name, "--all-containers", "--tail=120")
+		}
+	})
+}
+
+// diagGroup wraps fn in a collapsible ::group::/::endgroup:: block for the run
+// log. Package-level so the per-namespace sweep can share it.
+func diagGroup(title string, fn func()) {
+	fmt.Printf("::group::%s\n", title)
+	fn()
+	fmt.Println("::endgroup::")
+}
+
+// diagnoseNamespace dumps the install-failure picture for one namespace: its
+// resources, Jobs (+ logs), per-pod describes, recent events, and the Helm
+// status/history for release. Every probe is best-effort; group titles carry
+// the namespace so the two sweeps stay distinguishable in the run log.
+func diagnoseNamespace(ns, release string) {
+	diagGroup(ns+" — all resources", func() {
+		diagStream("kubectl", "get", "all", "-n", ns, "-o", "wide")
+	})
+	diagGroup(ns+" — Jobs", func() {
+		diagStream("kubectl", "get", "jobs", "-n", ns, "-o", "wide")
+	})
+	diagGroup(ns+" — Pods (wide): Pending / ImagePullBackOff / Error", func() {
+		diagStream("kubectl", "get", "pods", "-n", ns, "-o", "wide")
+	})
+	diagGroup(ns+" — describe every pod (scheduling + pull errors)", func() {
+		for _, p := range kubectlNames("-n", ns, "get", "pods", "-o", "name") {
+			fmt.Printf("----- describe %s -----\n", p)
+			diagStream("kubectl", "describe", "-n", ns, p)
+		}
+	})
+	diagGroup(ns+" — logs from Job pods", func() {
+		for _, j := range kubectlNames("-n", ns, "get", "jobs", "-o", "name") {
+			fmt.Printf("----- logs %s -----\n", j)
+			diagStream("kubectl", "logs", "-n", ns, j, "--all-containers", "--tail=200")
+		}
+	})
+	diagGroup(ns+" — recent events (by time)", func() {
+		if out, err := kubectlprobe.Exec("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp"); err == nil {
+			fmt.Print(cigate.TailLines(string(out), 60))
+			fmt.Println()
+		}
+	})
+	diagGroup(ns+" — Helm release "+release+" status / history", func() {
+		diagStream("helm", "status", release, "-n", ns)
+		diagStream("helm", "history", release, "-n", ns)
+	})
+}
+
+// kubectlNames returns the non-empty lines of a `kubectl ... -o name` listing,
+// nil on any error (the diagnostics' best-effort contract).
+func kubectlNames(args ...string) []string {
+	out, err := kubectlprobe.Exec("kubectl", args...)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l != "" {
+			names = append(names, l)
+		}
+	}
+	return names
+}

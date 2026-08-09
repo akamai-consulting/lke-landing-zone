@@ -10,8 +10,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/pincoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/templatemanifest"
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/sustain"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfbin"
 )
 
 // checks.go ports the instance-local checks that used to live in the template's
@@ -156,7 +168,7 @@ func goModuleDirs() []string {
 
 // stepGoFmt is the gofmt half of the format gate. stepFmtCheck covers HCL via
 // `tofu fmt`; nothing covered Go, so gofmt drift could only ever be caught by
-// CI's `make fmt-check` — which is exactly how it was caught, as a red Lint on an
+// CI's `make fmt-check` — which is exactly how it was caught, as a color.Red Lint on an
 // already-pushed commit. The pre-commit gate is the cheaper place to learn it.
 //
 // Deliberately NOT `make fmt-check`: this must run from any cwd inside the repo,
@@ -168,11 +180,11 @@ func stepGoFmt(g globalOpts) error {
 		return nil
 	}
 	argv := goFmtListArgv(gofmtBin, dirs)
-	fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+	fmt.Fprintln(os.Stderr, "→ "+ghcli.Quote(argv))
 	if g.dryRun {
 		return nil
 	}
-	out, _ := runCombined(exec.Command(argv[0], argv[1:]...))
+	out, _ := cigate.RunCombined(exec.Command(argv[0], argv[1:]...))
 	unformatted := goFmtUnformatted(out)
 	if len(unformatted) == 0 {
 		return nil
@@ -198,12 +210,12 @@ func stepFmtCheck(g globalOpts) error {
 			if len(paths) == 0 {
 				continue
 			}
-			if err := run(g, fmtCheckArgvPaths(tofu, paths)...); err != nil {
+			if err := proc.RunEcho(g.dryRun, fmtCheckArgvPaths(tofu, paths)...); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := run(g, fmtCheckArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, fmtCheckArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -216,7 +228,7 @@ func stepFmtFix(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, fmtArgv(tofu, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, fmtArgv(tofu, d)...); err != nil {
 			return err
 		}
 	}
@@ -235,7 +247,7 @@ func stepTFLint(g globalOpts) error {
 		return err
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, tfLintArgv(tflint, d, config)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfLintArgv(tflint, d, config)...); err != nil {
 			return err
 		}
 	}
@@ -254,7 +266,7 @@ func stepActionsLint(g globalOpts) error {
 	if len(files) == 0 {
 		return nil
 	}
-	return run(g, actionsLintArgv(actionlint, files)...)
+	return proc.RunEcho(g.dryRun, actionsLintArgv(actionlint, files)...)
 }
 
 func stepGitleaks(g globalOpts) error {
@@ -262,7 +274,7 @@ func stepGitleaks(g globalOpts) error {
 	if !haveTool(gitleaks) {
 		return nil
 	}
-	return run(g, gitleaksArgv(gitleaks)...)
+	return proc.RunEcho(g.dryRun, gitleaksArgv(gitleaks)...)
 }
 
 // conflictMarkerLines scans text for git/copier merge-conflict markers and
@@ -301,11 +313,11 @@ func conflictMarkerLines(content string) []int {
 // Skips cleanly when there is no .template-manifest / no lock — a template-repo
 // checkout or a pre-lock instance has nothing to verify.
 func stepVendoredFresh(_ globalOpts) error {
-	if _, err := loadTemplateManifest(""); err != nil {
+	if _, err := templatemanifest.Load(""); err != nil {
 		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
 		return nil
 	}
-	return runManagedFresh("", false, io.Discard, os.Stderr)
+	return sustain.RunManagedFresh(sustainDeps(), "", false, io.Discard, os.Stderr)
 }
 
 // stepRenderFresh fails the lint gate when the COMMITTED render output no longer
@@ -320,12 +332,17 @@ func stepVendoredFresh(_ globalOpts) error {
 // difference in what is DEPLOYED, not just what is checked in.
 //
 // Skips outside an instance (the template repo has no spec of its own).
+// stepPinCoherence is the lint-gate wrapper. It runs in an instance's pre-commit
+// hook (where an upgrade's diff is about to be committed) and is a no-op in the
+// template repo, which has no .copier-answers.yml of its own.
+func stepPinCoherence(_ globalOpts) error { return pincoherence.Assert(".") }
+
 func stepRenderFresh(g globalOpts) error {
-	tfDir, _, _ := instanceLayout()
+	tfDir, _, _ := instancelayout.Detect()
 	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
 		return nil // no LandingZone spec — nothing renders here
 	}
-	if err := runRender(g, "", false, true, false); err != nil {
+	if err := render.Run(g.dryRun, "", false, true, false); err != nil {
 		return fmt.Errorf("committed render output is stale (`llz render` to refresh): %w", err)
 	}
 	return nil
@@ -554,15 +571,15 @@ func stepDroppedAPIVersions(_ globalOpts) error {
 }
 
 func stepTFValidate(g globalOpts) error {
-	terraform := tool(tfBin(), "LLZ_TERRAFORM")
+	terraform := tool(tfbin.Bin(), "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, tfInitArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfInitArgv(terraform, d)...); err != nil {
 			return err
 		}
-		if err := run(g, tfValidateArgv(terraform, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, tfValidateArgv(terraform, d)...); err != nil {
 			return err
 		}
 	}
@@ -575,7 +592,7 @@ func stepCheckov(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
-		if err := run(g, checkovArgv(checkov, d)...); err != nil {
+		if err := proc.RunEcho(g.dryRun, checkovArgv(checkov, d)...); err != nil {
 			return err
 		}
 	}
@@ -587,7 +604,7 @@ func stepCheckov(g globalOpts) error {
 // and that is a silent failure no amount of testing the step itself would catch.
 func lintSteps() []func(globalOpts) error {
 	return []func(globalOpts) error{
-		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard,
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, func(g globalOpts) error { return sustain.StepUpgradeChurnGuard(sustainDeps()) },
 		stepPinCoherence, stepRenderFresh,
 		stepFmtCheck, stepGoFmt, stepTFLint, stepActionsLint, stepGitleaks,
 	}
@@ -608,7 +625,7 @@ func runValidate(g globalOpts) error {
 	// The spec is config-as-code, so the code gate validates it first when present
 	// (this is where `llz validate` users look for "is my spec valid?"). Same check
 	// as `llz render --check`, run before the TF roots.
-	if lz, present, err := loadSpec(); present {
+	if lz, present, err := clusterspec.Detected(); present {
 		if err != nil {
 			return err
 		}
@@ -667,7 +684,7 @@ func validateCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if env != "" {
 				// Thin back-compat alias — the readiness scan now lives in doctor.
-				return runEnvReadiness(env)
+				return configreadiness.RunEnvReadiness(env)
 			}
 			return runValidate(gopts)
 		},
