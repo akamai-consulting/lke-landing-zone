@@ -42,11 +42,17 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // `read-repo` because the lane reads the assembled spec (clusterspec.Detected)
 // to learn what it is bootstrapping.
 //
-// ONE EDGE COULD NOT BE CUT, and it is declared rather than hidden:
-// PinnedTemplateRef is a package var defaulting to "". Its real implementation
-// reads the copier answers file through the scaffold mass this campaign has
-// recorded as blocked. The default returns empty rather than guessing — a wrong
-// ref would be bootstrapped into a real cluster, and an empty one makes the caller
+// ONE EDGE COULD NOT BE CUT WHEN THIS LANDED, AND HAS SINCE BEEN. PinnedTemplateRef
+// was a package var defaulting to "", because its real implementation read the
+// copier answers file through the scaffold mass the campaign had recorded as
+// blocked. Extracting internal/shared/answers dissolved that: bootstrap_cluster.go
+// now calls answers.PinnedTemplateRef() directly and there is no injected var, no
+// seam and no installer.
+//
+// The reason the default was empty is worth keeping even though the default is
+// gone — answers.PinnedTemplateRef still returns "" rather than guessing when the
+// answers file is unreadable, and firstNonEmpty falls through to "main". A wrong
+// ref would be bootstrapped into a real cluster; an empty one makes the caller
 // say so.
 func Extension() extension.Extension {
 	return extension.Extension{
@@ -61,10 +67,9 @@ func Extension() extension.Extension {
 				extension.ClusterWrite, extension.SecretCustody,
 			},
 		}},
-		Incomplete: []string{
-			"PinnedTemplateRef is injected and defaults to \"\": its implementation " +
-				"reads the copier answers file through `readAnswers`, which is inside " +
-				"the blocked scaffold mass. package main installs the real one.",
-		},
+		// NO Incomplete NOTE. It carried one about PinnedTemplateRef being injected
+		// because its implementation was stuck behind the scaffold mass; extracting
+		// internal/shared/answers cut that edge, so the note was describing a seam
+		// that no longer exists. See the header.
 	}
 }

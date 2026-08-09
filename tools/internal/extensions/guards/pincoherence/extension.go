@@ -40,7 +40,7 @@ func Extension() extension.Extension {
 				"`_commit` and `llz_version` in one pass — but a gate cannot attach to " +
 				"`upgraded`, because a gate precedes the state it names and this follows " +
 				"one. The model has no way to say 'gate that runs after X to catch what " +
-				"X broke'. This is case one; see internal/argodiag for the same shape " +
+				"X broke'. This is case one; see internal/verbs/argodiag for the same shape " +
 				"from the other direction, where a DIAGNOSTIC runs after a state failed.",
 		},
 	}

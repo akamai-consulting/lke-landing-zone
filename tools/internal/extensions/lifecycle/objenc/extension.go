@@ -83,10 +83,13 @@ func Extension() extension.Extension {
 			},
 		},
 		Incomplete: []string{
-			"ci_drain_obj_buckets.go — the destroy-time bucket drain. It belongs to the " +
-				"teardown path by state and to this one by subject, and it reads objkey " +
-				"credentials that are credential-objkey's territory; nothing settles which " +
-				"extension owns a verb that two of them have a claim on",
+			"drain-obj-buckets — the destroy-time bucket drain. It has since moved into " +
+				"the teardown PACKAGE (lifecycle/teardown/drain_obj_buckets.go), which " +
+				"settles it by state, but no extension DECLARES it: teardown's bindings do " +
+				"not name it and this one cannot, since it belongs here only by subject and " +
+				"it reads objkey credentials that are credential-objkey's territory. A verb " +
+				"living in one extension's package while no declaration covers it is the " +
+				"half-settled case — physically owned, declaratively invisible",
 		},
 	}
 }

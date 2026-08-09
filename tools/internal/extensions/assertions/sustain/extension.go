@@ -113,8 +113,13 @@ func Extension() extension.Extension {
 				"(upgrade_policy.go) reads .template-manifest's class table, which ADR 0014 " +
 				"pins as the single ownership authority, so the binding that would hold " +
 				"own-paths cannot be separated from the file that defines it",
-			"template_commit.go and ci_upgrade_test_gate.go — provenance resolution over " +
-				"the GitHub API and the copier-update smoke gate, both still in internal/cli",
+			"provenance resolution over the GitHub API and the copier-update smoke gate " +
+				"were listed here as unextracted; BOTH HAVE SINCE MOVED, and neither came " +
+				"to this extension — provenance is now the `template-commit` extension " +
+				"(assertions/templatecommit/commit.go) and the smoke gate is " +
+				"verbs/upgrade/cobra_upgrade_test_gate.go. Recorded rather than deleted " +
+				"because it answers the question the first note raises: the sustain surface " +
+				"did not grow to cover them, it was split away from them",
 		},
 	}
 }

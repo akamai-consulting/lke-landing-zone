@@ -49,5 +49,42 @@ storage_config:
 	}
 }
 
-func TestHarborWorkloadSets(t *testing.T) {
+// THIS TEST WAS AN EMPTY BODY, and the name is why it survived as one. It covered
+// HarborDeployments/HarborStatefulSets, the pre-seed control-plane sets f0aa68f
+// retired along with the workflow job that was their only consumer. The functions
+// went; the test was hollowed out instead of deleted, leaving `func
+// TestHarborWorkloadSets(t *testing.T) {}` — which passes unconditionally, counts
+// toward the suite, and reads to anyone scanning for coverage as though the Harbor
+// workload sets are tested.
+//
+// An empty test is worse than a missing one: a missing test is visibly missing.
+// This is the vacuous-green shape the guards in this tree refuse, sitting in the
+// test suite itself. TestNoTestFunctionHasAnEmptyBody now gates the class.
+//
+// So it tests what actually survived. The set is deliberately ONE deployment and
+// the assertion says which, because assertobs/readiness.go derives its probe count
+// from this length (ci_readiness_deadline_test.go asserts probes == len(...)), so a
+// silent addition here changes a deadline calculation two packages away.
+func TestHarborRegistryDeploymentsIsTheSeededSetOnly(t *testing.T) {
+	got := HarborRegistryDeployments()
+	want := []string{"harbor-registry"}
+	if len(got) != len(want) {
+		t.Fatalf("HarborRegistryDeployments() = %v, want %v — assertobs derives its "+
+			"readiness probe count from this length", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("HarborRegistryDeployments()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// The retired sets must not come back by name without the gate that consumed
+	// them: harbor-core and harbor-jobservice were the pre-seed control plane, and
+	// nothing waits on them here any more.
+	for _, d := range got {
+		if d == "harbor-core" || d == "harbor-jobservice" {
+			t.Errorf("%q is back in the seeded set — it belonged to the pre-seed gate "+
+				"f0aa68f retired, and this set is specifically the workloads that depend "+
+				"on the mid-bootstrap object-storage credentials", d)
+		}
+	}
 }

@@ -39,7 +39,6 @@ import (
 // slack the next partial extraction grows into. Adding a line is legal and is a
 // line in a diff a reviewer sees.
 var incompleteNotes = map[string]int{
-	"bootstrap-cluster":           1,
 	"credential-state-passphrase": 1,
 	"import-brownfield":           1,
 	"obj-encryption":              1,
