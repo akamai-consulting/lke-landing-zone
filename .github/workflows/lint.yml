@@ -26,6 +26,21 @@ on:
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
+      # The GITOPS TREES the gates actually read. platform-apl/ is 91 files of
+      # sync-wave manifests and components, and NO path here matched it — so a PR
+      # touching only that tree started no run of this workflow at all, and with it
+      # none of the 24 gates. wave-health's entire subject is
+      # platform-apl/manifest + platform-apl/components; mesh-egress,
+      # monitoring-labels, guard-manifests, posture-plaintext, credential-coverage,
+      # pin-coherence and cosign-subject all read it too, and `prom-rules-check`
+      # lints platform-apl/components/observability/prometheus-rules by path.
+      # This is the same defect as the Markdown entry below, one tree over: the
+      # Makefile's changed-file lint has named `^platform-apl/` and
+      # `^instance-template/apl-values/` as a change class needing wave-health-guard
+      # all along, so the local mirror knew about a class CI could not be triggered
+      # by. A guard that cannot be invoked is not a guard.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
       # Markdown ANYWHERE. The `docs` job below runs docs-guard, whose corpus is
       # every .md file in the repo — but no path here matched one, so the guard
       # only ever ran when a PR happened to also touch code. A docs-only PR (the
@@ -58,6 +73,9 @@ on:
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
+      # The gitops trees — see the note on the pull_request copy above.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
       # Markdown anywhere — see the note on the pull_request copy above.
       - '**.md'
   workflow_dispatch:

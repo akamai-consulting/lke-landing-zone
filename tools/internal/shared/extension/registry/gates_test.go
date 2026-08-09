@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -600,5 +601,93 @@ func TestEveryLintBranchReachesTheGateSuite(t *testing.T) {
 		t.Error("the changed-file lint path does not run `llz-gates`. It runs unconditionally " +
 			"by design: the whole suite is ~4s, so per-gate trigger filters were deleted rather " +
 			"than maintained, and dropping the call reinstates the problem they had.")
+	}
+}
+
+// EVERY CHANGE CLASS THE LOCAL MIRROR KNOWS MUST BE ABLE TO TRIGGER CI.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// `platform-apl/` WAS A CHANGE CLASS IN THE MAKEFILE AND NOT A PATH IN lint.yml.
+//
+// The Makefile's changed-file lint keys on `^platform-apl/` and routes it to
+// wave-health-guard — it has known that tree is a change class all along. The
+// workflow's `paths:` filters listed neither it nor instance-template/apl-values,
+// so a PR touching only those started NO run of lint.yml, and with it none of the
+// 24 gates. wave-health's entire subject is platform-apl/manifest and
+// platform-apl/components; seven other guards read the tree; prom-rules-check
+// lints platform-apl/components/observability/prometheus-rules by path.
+//
+// That is precisely the defect lint.yml's own `**.md` entry documents at length —
+// "the gate existed, was tested, was wired into `make lint`, and nothing in CI
+// could invoke it" — recurring one tree over, with the diagnosis written directly
+// above the line that was missing.
+//
+// SO THE COUPLING IS ASSERTED RATHER THAN REMEMBERED. The Makefile is the local
+// mirror of CI; where it recognises a top-level tree as worth linting, the workflow
+// must be able to see a change to it. Both directions are NOT checked: a workflow
+// may legitimately watch more than the Makefile branches on (`.tflintrc.hcl`,
+// budget files), and demanding symmetry there would be inventing a rule.
+// ────────────────────────────────────────────────────────────────────────────
+func TestEveryLocalLintTreeCanTriggerCI(t *testing.T) {
+	root := filepath.FromSlash("../../../../../")
+	mk, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "lint.yml"))
+	if err != nil {
+		t.Fatalf("reading lint.yml: %v — it is the CI half of this coupling", err)
+	}
+
+	recipe := string(mk)
+	i := strings.Index(recipe, "\nlint:\n")
+	if i < 0 {
+		t.Fatal("no `lint:` target — see TestEveryLintBranchReachesTheGateSuite")
+	}
+	recipe = recipe[i:]
+	if j := strings.Index(recipe, "\n\n"); j >= 0 {
+		recipe = recipe[:j]
+	}
+
+	// Top-level trees named in the recipe's changed-file greps.
+	trees := map[string]bool{}
+	for _, pat := range regexp.MustCompile(`grep -qE '([^']+)'`).FindAllStringSubmatch(recipe, -1) {
+		for _, m := range regexp.MustCompile(`\^([a-z][a-z0-9._-]*)/`).FindAllStringSubmatch(pat[1], -1) {
+			trees[m[1]] = true
+		}
+	}
+	if len(trees) == 0 {
+		t.Fatal("extracted no change-class trees from the lint recipe — the greps were " +
+			"restructured, and this guard would pass over anything")
+	}
+
+	var watched []string
+	for _, m := range regexp.MustCompile(`(?m)^\s+- '([^']+)'`).FindAllStringSubmatch(string(wf), -1) {
+		watched = append(watched, m[1])
+	}
+	if len(watched) == 0 {
+		t.Fatal("lint.yml declares no path filters — either it now runs on everything " +
+			"(delete this guard and say so) or the parse broke")
+	}
+
+	var missing []string
+	for tree := range trees {
+		var seen bool
+		for _, p := range watched {
+			if p == tree+"/**" || strings.HasPrefix(p, tree+"/") {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			missing = append(missing, tree)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("the Makefile lints %v on change, and no lint.yml path filter matches "+
+			"them — a PR touching only such a tree starts no run of that workflow, so every "+
+			"gate reading it is unreachable from CI while passing locally. Add '<tree>/**' to "+
+			"BOTH the pull_request and push filters.", missing)
 	}
 }
