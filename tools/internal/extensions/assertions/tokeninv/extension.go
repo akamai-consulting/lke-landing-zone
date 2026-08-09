@@ -24,7 +24,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 //	assertion:configured "validate-tokens"  [read-repo, secret-read]
 //	gate:configured      "rotation-plan"    [read-repo]
-//	invariant:operating  "expiry-inventory" [cloud-read, secret-read]
+//	invariant:operating  "token-inventory" [cloud-read, secret-read]
 //
 // WHY `configured` FOR THE FIRST TWO. `validate-tokens` runs as an early CI
 // preflight, before anything provisions, and answers one question: are the
@@ -78,7 +78,7 @@ func Extension() extension.Extension {
 			},
 			{
 				Kind:   extension.Invariant,
-				Name:   "expiry-inventory",
+				Name:   "token-inventory",
 				State:  extension.Operating,
 				Grants: []extension.Grant{extension.CloudRead, extension.SecretRead},
 			},

@@ -81,6 +81,28 @@ func Extension() extension.Extension {
 				// StorageClass as cluster default; two defaults hard-fail converge,
 				// and the Kyverno policy is admission-only so it starves once Flux
 				// goes quiet. This is the durable backstop.
+				// FOUND BY THE COUPLING TEST, NOT BY REVIEW. This lane rotates the
+				// in-cluster Linode object-storage credentials on a timer
+				// (credrotate.RunRotateLinodeCreds) and had NO declaration at all —
+				// a continuously-running credential mutator outside the model, so
+				// invisible to `llz extension list`, to enablement and to the
+				// capability fence. reconciler_registry_test.go is what said so.
+				//
+				// It reads as a rotation, and rotation is declared elsewhere as
+				// `transition:seeded` — which says the mutation happens ONCE, at
+				// seeding. This one runs forever, which is what makes it an
+				// invariant rather than a transition that someone forgot to move.
+				//
+				// cloud-mutate mints and revokes the keys; secret-custody writes them
+				// into OpenBao. Both are legal at `operating` (grantStates), and both
+				// are what the lane's own code does.
+				Kind: extension.Invariant, Name: "linode-creds",
+				State: extension.Operating,
+				Grants: []extension.Grant{
+					extension.ClusterRead, extension.CloudMutate, extension.SecretCustody,
+				},
+			},
+			{
 				Kind: extension.Invariant, Name: "sc-demote",
 				State: extension.Operating, Grants: cluster,
 			},

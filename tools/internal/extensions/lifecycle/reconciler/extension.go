@@ -23,12 +23,20 @@ package reconciler
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
+// VOLUME-HYGIENE WAS REMOVED, and the coupling test is what exposed it. This
+// extension declared an invariant covering the Volume tag/label work while
+// `assert-storage` declared the SAME two lanes as volume-tags and volume-labels —
+// arguing at length that they belong there because "they run in-pod, forever, and
+// they PUT tags and labels onto Linode Volumes". Two extensions declaring one pair
+// of lanes counts their grants twice and leaves a reviewer unable to say who owns
+// them. assert-storage owns the code and made the argument, so the duplicate here
+// goes.
+//
 // Extension is the `reconciler-runtime` declaration.
 //
 //	invariant:operating [cloud-read, cluster-read, cluster-write]  cidr-firewall
-//	invariant:operating [cloud-read, cloud-mutate, cluster-read]   volume-hygiene
-//	invariant:operating [cluster-read, cloud-mutate]               apl-overlay-sync
-//	invariant:operating [cluster-read, secret-custody]             runtime-gauges
+//	invariant:operating [cluster-read, cloud-mutate]               apl-overlay
+//	invariant:operating [cluster-read, secret-custody]             observe
 //
 // FOUR BINDINGS, FOUR DIFFERENT GRANT SETS, and that is the whole argument for not
 // writing one. Collapse them and the union is every mutating grant the model has —
@@ -42,8 +50,8 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //   - volume-hygiene labels and tags Linode Volumes so an orphan is attributable.
 //     It never writes to the cluster; the cluster is where it learns which volumes
 //     exist.
-//   - apl-overlay-sync commits to the apl-values repo.
-//   - runtime-gauges is the health, convergence and token-inventory sampling. It
+//   - apl-overlay commits to the apl-values repo.
+//   - observe is the health, convergence and token-inventory sampling. It
 //     holds an OpenBao credential to sample what OpenBao knows and writes nothing
 //     anywhere, which is why it gets `secret-custody` and no write grant at all.
 //
@@ -71,15 +79,11 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.CloudRead, extension.ClusterRead, extension.ClusterWrite},
 			},
 			{
-				Kind: extension.Invariant, Name: "volume-hygiene", State: extension.Operating,
-				Grants: []extension.Grant{extension.CloudRead, extension.CloudMutate, extension.ClusterRead},
-			},
-			{
-				Kind: extension.Invariant, Name: "apl-overlay-sync", State: extension.Operating,
+				Kind: extension.Invariant, Name: "apl-overlay", State: extension.Operating,
 				Grants: []extension.Grant{extension.ClusterRead, extension.CloudMutate},
 			},
 			{
-				Kind: extension.Invariant, Name: "runtime-gauges", State: extension.Operating,
+				Kind: extension.Invariant, Name: "observe", State: extension.Operating,
 				Grants: []extension.Grant{extension.ClusterRead, extension.SecretCustody},
 			},
 		},

@@ -336,6 +336,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	}
 	recs := []reconciler{{
 		name:     "observe",
+		ext:      "reconciler-runtime",
+		binding:  "observe",
 		interval: o.sampleInterval,
 		// Read-only: node readiness + the convergence gauge (Argo app health via
 		// the shared internal/health predicate). A convergence read failure zeroes
@@ -380,6 +382,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileArgoNudge {
 		recs = append(recs, reconciler{
 			name:     "argo-nudge",
+			ext:      "reconcile-actions",
+			binding:  "argo-nudge",
 			interval: o.argoNudgeResync, // resync floor; the watch drives immediacy
 			run:      gate(func(ctx context.Context) error { return reconcilelanes.ArgoNudge(ctx, client) }),
 			watch: func(ctx context.Context, onEvent func()) error {
@@ -393,6 +397,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileCidrFW {
 		recs = append(recs, reconciler{
 			name:     "cidr-firewall",
+			ext:      "reconciler-runtime",
+			binding:  "cidr-firewall",
 			interval: o.cidrFWResync,
 			// Same logic the cidrFirewall CronJob runs (`ci discover-firewall-config`);
 			// reads NODE_NAME/LINODE_TOKEN from env. Node changes shift which instance
@@ -411,6 +417,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileVolLabels {
 		recs = append(recs, reconciler{
 			name:     "volume-labels",
+			ext:      "assert-storage",
+			binding:  "volume-labels",
 			interval: o.volLabelsResync,
 			// Go port of the linode-volume-labeler relabel.sh (`ci relabel-volumes`);
 			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
@@ -430,6 +438,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileVolTags {
 		recs = append(recs, reconciler{
 			name:     "volume-tags",
+			ext:      "assert-storage",
+			binding:  "volume-tags",
 			interval: o.volTagsResync,
 			// Tag-heal BACKSTOP (`ci reconcile-volume-tags`). The block-storage-retain
 			// StorageClass stamps the desired tags — this cluster's lke<id> ownership tag
@@ -457,6 +467,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		}
 		recs = append(recs, reconciler{
 			name:     "sc-demote",
+			ext:      "reconcile-actions",
+			binding:  "sc-demote",
 			interval: o.scDemoteResync, // resync floor — defeats the admission-policy starvation
 			run:      gate(func(ctx context.Context) error { return reconcilelanes.SCDemote(ctx, client, name) }),
 			watch: func(ctx context.Context, onEvent func()) error {
@@ -470,6 +482,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileLinodeCred {
 		recs = append(recs, reconciler{
 			name:     "linode-creds",
+			ext:      "reconcile-actions",
+			binding:  "linode-creds",
 			interval: o.linodeCredInterval,
 			// Same logic the linodeCredRotator CronJob runs (`ci rotate-linode-creds
 			// --apply`); reads REGION/OBJ_CLUSTER/LINODE_TOKEN/OPENBAO_* from env.
@@ -480,6 +494,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		state := &reconcilelanes.ESStoreRecovery{}
 		recs = append(recs, reconciler{
 			name:     "es-store-recovery",
+			ext:      "reconcile-actions",
+			binding:  "es-store-recovery",
 			interval: o.esRecoveryResync, // resync floor; the store watch drives immediacy
 			// Driving (patches ES/PushSecret annotations) → leader-gated. State is
 			// per-process; the leader gate means only the driving replica advances it.
@@ -503,6 +519,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		// replicas=1 and the lane is read-only/un-gated so no coordination needed.
 		recs = append(recs, reconciler{
 			name:     "openbao-gauges",
+			ext:      "reconcile-actions",
+			binding:  "openbao-gauges",
 			interval: o.openbaoInterval,
 			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return reconcilelanes.SampleOpenBao(ctx, reg, time.Now()) }),
 		})
@@ -510,6 +528,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileTokens {
 		recs = append(recs, reconciler{
 			name:     "token-inventory",
+			ext:      "token-inventory",
+			binding:  "token-inventory",
 			interval: o.tokensInterval,
 			// Read-only (re-exposes the token-inventory ConfigMap), so NOT gated —
 			// every replica may read the ConfigMap harmlessly.
@@ -519,6 +539,8 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	if o.reconcileAplOverlay {
 		recs = append(recs, reconciler{
 			name:     "apl-overlay",
+			ext:      "reconciler-runtime",
+			binding:  "apl-overlay",
 			interval: o.aplOverlayInterval,
 			// Git-syncs the apl-overlay onto apl-<env> with ff-retry. WRITES (to git),
 			// so leader-gated — a single writer cooperating with apl-operator's pushes.

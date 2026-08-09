@@ -34,7 +34,32 @@ import (
 // interval (the timed reconcilers); if watch is set it is event-triggered (the
 // Phase 1 watch reconcilers), with interval serving as a resync floor.
 type reconciler struct {
-	name     string
+	name string
+	// ext and binding name the declaration this lane IS: the extension that
+	// declares it and the Binding.Name of its `invariant:operating` binding.
+	//
+	// ────────────────────────────────────────────────────────────────────────
+	// THE RECONCILER WAS A THIRD REGISTRY, AND IT HAD ALREADY DRIFTED.
+	//
+	// Gates dispatch from the extension registry and the assert battery is checked
+	// against it. This scheduler was the last of the four binding kinds with no
+	// relationship to the declarations at all — eleven lanes here, fifteen
+	// invariant bindings there, and nothing comparing them. It could not: the
+	// registry IMPORTS this package to declare it, so a call the other way is a
+	// cycle.
+	//
+	// The drift was already real when this was added. Two lanes were declared
+	// under a DIFFERENT name than they run under (`apl-overlay` was declared
+	// `apl-overlay-sync`, `token-inventory` was declared `expiry-inventory`), and
+	// two more ran with no declaration naming them at all. Most of the table
+	// matched, which is exactly why nobody noticed the rest.
+	//
+	// Naming the declaration HERE rather than in the registry keeps the import
+	// direction intact: this is data a test in internal/cli reads through
+	// ReconcilerLanes(), which is the one package that can see both.
+	// ────────────────────────────────────────────────────────────────────────
+	ext      string
+	binding  string
 	interval time.Duration
 	// run performs one reconcile pass. It must be idempotent and safe to call
 	// repeatedly (level-based: it re-reads state and acts, so a pass with nothing
@@ -235,4 +260,43 @@ func reconcileOnce(ctx context.Context, reg *metrics.Registry, now func() time.T
 	reg.SetGauge("llz_reconcile_up", "1 if the reconciler's last pass succeeded", lbl, 1)
 	reg.SetGauge("llz_reconcile_last_success_timestamp_seconds",
 		"unix time of the reconciler's most recent successful pass", lbl, float64(end.Unix()))
+}
+
+// LaneDecl is one runtime lane's declaration attribution, for the coupling test.
+type LaneDecl struct {
+	// Lane is the name the scheduler and the metrics use.
+	Lane string
+	// Extension and Binding are the declaration this lane IS.
+	Extension string
+	Binding   string
+}
+
+// ReconcilerLanes reports every lane this binary can schedule, with the
+// declaration each one claims.
+//
+// IT BUILDS THE FULL SET, not the enabled one: the coupling it feeds is between
+// the CODE and the MODEL, and a lane behind a disabled flag is still a lane whose
+// declaration must exist. reconcileOpts is set to all-on for that reason.
+//
+// Exported for internal/cli's coupling test — the registry cannot call it (it
+// imports this package to declare it), and this package cannot call the registry
+// for the same reason. See the ext/binding fields on reconciler.
+func ReconcilerLanes() []LaneDecl {
+	all := reconcileOpts{
+		reconcileArgoNudge:  true,
+		reconcileCidrFW:     true,
+		reconcileVolLabels:  true,
+		reconcileVolTags:    true,
+		reconcileSCDemote:   true,
+		reconcileLinodeCred: true,
+		reconcileOpenBao:    true,
+		reconcileTokens:     true,
+		reconcileESRecovery: true,
+		reconcileAplOverlay: true,
+	}
+	var out []LaneDecl
+	for _, r := range buildReconcilers(nil, nil, all, func(f func(context.Context) error) func(context.Context) error { return f }) {
+		out = append(out, LaneDecl{Lane: r.name, Extension: r.ext, Binding: r.binding})
+	}
+	return out
 }
