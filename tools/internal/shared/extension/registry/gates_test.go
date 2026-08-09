@@ -531,3 +531,74 @@ func namedCmd(name string) func() *cobra.Command {
 		return c
 	}
 }
+
+// EVERY ENTRY POINT THAT CLAIMS TO RUN EVERYTHING MUST REACH THIS SUITE.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// `make lint LINT_ALL=1` DID NOT, AND IT IS THE MODE THAT ADVERTISES ITSELF AS
+// EXHAUSTIVE — "runs the full local mirror", "every check unconditionally", "run
+// all checks", in three separate places in the Makefile.
+//
+// The recipe has two branches. LINT_ALL runs a fixed target list and then
+// `exit 0`; the changed-file path falls through to `llz-gates` at the bottom. The
+// gate call existed only at the bottom, so the narrower mode ran the whole suite
+// and the exhaustive one ran none of it. Roughly half the gates have no equivalent
+// in the LINT_ALL list — posture-plaintext, mesh-egress, mtls-wiring,
+// guard-source-refs, guard-cosign-subject, guard-monitoring-labels,
+// guard-manifests, wave-health, pin-coherence — so a contributor running the
+// "everything" target before pushing got a clean pass over none of them.
+//
+// The comment above that recipe said "`llz-gates` now runs unconditionally". It
+// was true of one branch. This test is what makes the word mean both.
+//
+// IT READS THE MAKEFILE AS TEXT, which is coarse, and that is the right trade: the
+// alternative is running `make lint LINT_ALL=1` in a unit test, which takes minutes
+// and needs tflint, checkov, kube-linter and a rendered chart tree. What can go
+// wrong here is a rename, and a rename breaks this loudly rather than quietly.
+// ────────────────────────────────────────────────────────────────────────────
+func TestEveryLintBranchReachesTheGateSuite(t *testing.T) {
+	const makefile = "../../../../../Makefile"
+	b, err := os.ReadFile(filepath.FromSlash(makefile))
+	if err != nil {
+		t.Fatalf("reading %s: %v — this test's whole subject is that file", makefile, err)
+	}
+	src := string(b)
+
+	// The recipe, from `lint:` at column 0 to the next column-0 line that is not
+	// part of it. Recipe lines are tab-indented or continuations.
+	i := strings.Index(src, "\nlint:\n")
+	if i < 0 {
+		t.Fatal("no `lint:` target in the Makefile — it was renamed, and this guard cannot " +
+			"tell that from a Makefile that stopped linting")
+	}
+	recipe := src[i+len("\nlint:\n"):]
+	if j := strings.Index(recipe, "\n\n"); j >= 0 {
+		recipe = recipe[:j]
+	}
+	if !strings.Contains(recipe, "LINT_ALL") {
+		t.Fatal("the lint recipe no longer mentions LINT_ALL — the two-branch shape this " +
+			"checks is gone, so re-derive what the entry points are before deleting this")
+	}
+
+	// The LINT_ALL branch is everything up to its `exit 0`; the changed-file path is
+	// what follows. Both must invoke the suite.
+	k := strings.Index(recipe, "exit 0")
+	if k < 0 {
+		t.Fatal("the LINT_ALL branch no longer exits early — re-read the recipe; this test " +
+			"assumes the two branches are separated by that exit")
+	}
+	lintAll, changed := recipe[:k], recipe[k:]
+
+	if !strings.Contains(lintAll, "llz-gates") {
+		t.Error("`make lint LINT_ALL=1` does not run `llz-gates`. That branch is documented as " +
+			"running every check, and roughly half the gate suite is reachable no other way — a " +
+			"contributor running it before pushing would get a clean pass over gates that never " +
+			"ran, then meet them in CI. Add `$(MAKE) --no-print-directory llz-gates;` before its " +
+			"`exit 0`.")
+	}
+	if !strings.Contains(changed, "llz-gates") {
+		t.Error("the changed-file lint path does not run `llz-gates`. It runs unconditionally " +
+			"by design: the whole suite is ~4s, so per-gate trigger filters were deleted rather " +
+			"than maintained, and dropping the call reinstates the problem they had.")
+	}
+}

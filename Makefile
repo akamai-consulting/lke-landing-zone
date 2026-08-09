@@ -944,6 +944,26 @@ symbol-ref-guard:
 # selection was buying nothing and costing a copy that can drift. `llz-gates` now
 # runs unconditionally and the copy is deleted rather than relocated.
 #
+# "UNCONDITIONALLY" MEANS BOTH BRANCHES, AND FOR A WHILE IT MEANT ONE. The recipe
+# has two: LINT_ALL=1 runs a fixed list and then `exit 0`, and the changed-file
+# path falls through to `llz-gates` at the very bottom. The gate call was only at
+# the bottom — so `make lint LINT_ALL=1`, the mode documented in three places as
+# running "every check" / "all checks" / "the full local mirror", was the ONE mode
+# that skipped the entire gate suite. The narrower mode ran more than the
+# exhaustive one.
+#
+# Roughly half the suite has no equivalent in the LINT_ALL list: posture-plaintext,
+# mesh-egress, mtls-wiring, guard-source-refs, guard-cosign-subject,
+# guard-monitoring-labels, guard-manifests, wave-health and pin-coherence are
+# reachable only through `llz-gates`. A contributor running the "everything" target
+# before pushing got a clean pass over none of them, then met them in CI — which is
+# the local/CI divergence the preflight notes exist to prevent, manufactured here.
+#
+# It cost 3.8s to fix. The lesson is the one lint-k8s' comment already carries: a
+# gate absent from an entry point is a gate that exists, passes review, and never
+# runs — and an entry point that CLAIMS to be exhaustive is the worst place to be
+# missing one, because it is the claim people rely on instead of checking.
+#
 # What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
 # kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
 # Those are not gates and the registry has no opinion about them.
@@ -952,6 +972,7 @@ lint:
 	if [ -n "$(LINT_ALL)" ]; then \
 		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
+		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \
 	fi; \
 	CHANGED=$$(git diff --name-only HEAD 2>/dev/null || git ls-files); \
