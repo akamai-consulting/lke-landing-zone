@@ -43,7 +43,12 @@ func TestNoLaneHoldsAnotherLanesCapability(t *testing.T) {
 // Four named invariants at one state. Without Binding.Name the model caps an
 // extension at ONE invariant, since `operating` is the only state they may attach
 // to — so the names are what make this extension expressible at all.
-func TestFourNamedInvariantsAreDistinct(t *testing.T) {
+// FIVE SINCE linode-creds WAS DECLARED. reconciler_registry_test.go found that
+// lane running with no declaration naming it — a credential mutator on a timer,
+// outside the model — so it joined this extension. The count is asserted rather
+// than derived on purpose: a lane appearing here should be a decision someone
+// made, not a number that quietly moved.
+func TestFiveNamedInvariantsAreDistinct(t *testing.T) {
 	e := Extension()
 	seen := map[string]bool{}
 	for _, b := range e.Bindings {
@@ -62,8 +67,8 @@ func TestFourNamedInvariantsAreDistinct(t *testing.T) {
 		}
 		seen[b.Name] = true
 	}
-	if len(seen) != 4 {
-		t.Fatalf("want four named lanes, got %d: %v", len(seen), seen)
+	if len(seen) != 5 {
+		t.Fatalf("want five named lanes, got %d: %v", len(seen), seen)
 	}
 
 	// And the names are load-bearing, not decorative: strip them and the model
@@ -73,7 +78,7 @@ func TestFourNamedInvariantsAreDistinct(t *testing.T) {
 		e.Bindings[i].Name = ""
 	}
 	if errs := e.Validate(); len(errs) == 0 {
-		t.Error("four unnamed invariants at the same state must be refused as duplicates")
+		t.Error("five unnamed invariants at the same state must be refused as duplicates")
 	}
 }
 

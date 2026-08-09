@@ -63,8 +63,8 @@ func TestValidateTokensIsAnAssertionThatOnlyReadsCredentials(t *testing.T) {
 
 // The expiry inventory emits metadata only — "never a token value", per the
 // command's own help. secret-read is therefore the ceiling as well as the floor.
-func TestExpiryInventoryNeverClaimsCustody(t *testing.T) {
-	b, ok := bindingNamed(t, "expiry-inventory")
+func TestTokenInventoryLaneNeverClaimsCustody(t *testing.T) {
+	b, ok := bindingNamed(t, "token-inventory")
 	if !ok {
 		return
 	}

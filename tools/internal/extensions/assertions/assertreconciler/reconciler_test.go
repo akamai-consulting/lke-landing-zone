@@ -323,9 +323,31 @@ func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 	}
 	body := string(src)
 
-	// Every --reconcile-* flag reconcile.go registers must be in the table.
-	flagRe := regexp.MustCompile(`"(reconcile-[a-z-]+)"`)
-	for _, m := range flagRe.FindAllStringSubmatch(body, -1) {
+	// THE FLAG HALF USED TO SCAN THE WRONG FILE, AND SO CHECKED NOTHING.
+	//
+	// It read reconcile.go for `"reconcile-*"` literals, but the flags are
+	// registered in cobra_cmds.go — reconcile.go contained none, so the loop
+	// iterated zero times and the assertion passed vacuously for its whole life.
+	// Only the lane half below was doing any work.
+	//
+	// It surfaced when the lanes gained an `ext:` attribution naming the
+	// `reconcile-actions` EXTENSION: a string that matches the flag pattern
+	// without being a flag, which made a check that had never fired start failing
+	// on something it was never about. The fix is to read the file that registers
+	// flags, and to match the REGISTRATION rather than any string that looks like
+	// one.
+	const cobraCmds = "../../lifecycle/reconciler/cobra_cmds.go"
+	flagSrc, err := os.ReadFile(cobraCmds)
+	if err != nil {
+		t.Fatalf("reading %s: %v", cobraCmds, err)
+	}
+	flagRe := regexp.MustCompile(`BoolVar\([^,]+,\s*"(reconcile-[a-z-]+)"`)
+	matches := flagRe.FindAllStringSubmatch(string(flagSrc), -1)
+	if len(matches) == 0 {
+		t.Fatalf("no --reconcile-* flag registrations found in %s — the scan is looking at the "+
+			"wrong file or for the wrong shape, which is how this half came to check nothing", cobraCmds)
+	}
+	for _, m := range matches {
 		flag := "--" + m[1]
 		if _, ok := reconcileFlagLane[flag]; !ok {
 			t.Errorf("reconcile.go registers %s but reconcileFlagLane has no entry — "+
