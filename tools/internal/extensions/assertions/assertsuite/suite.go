@@ -52,23 +52,8 @@ import (
 // Lane is one parallel lane of the battery.
 type Lane struct {
 	Name string
-	// Extension names the extension this lane belongs to, so the battery can ask
-	// whether an instance still has it. Empty means the lane always runs.
-	//
-	// IT EXISTS BECAUSE A LANE THAT SKIPS ITSELF IS INVISIBLE. Several lanes
-	// already "skip clean when the component is disabled" — health-workflow's Why
-	// says so — and the way they do it is by EXITING 0. This struct had no skip
-	// state, so a lane that ran nothing was reported exactly like one that proved
-	// something. That is the vacuous-green shape this file's own header was
-	// written to kill (the bash battery it replaced had a step that "RUNS AND CAN
-	// NEVER FAIL"), reappearing one level up.
-	//
-	// With the extension named, the BATTERY decides and the skip is a state rather
-	// than an exit code nobody can interpret.
-	Extension string
-	// Steps run IN ORDER inside the lane, stopping at the first failure. One step
-	// is one `llz ci …` invocation, given as its argv after "ci".
-	Steps [][]string
+	// Steps run IN ORDER inside the lane, stopping at the first failure.
+	Steps []Step
 	// Gating lanes fail the battery. Report-only lanes are diagnostics whose
 	// output is the deliverable — they are still run and still printed, but their
 	// exit status is discarded (the old `|| true`).
@@ -81,17 +66,58 @@ type Lane struct {
 	Why string
 }
 
+// Step is one `llz ci …` invocation inside a lane, and the extension that owns
+// the verb it runs.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// THE EXTENSION SITS ON THE STEP, NOT THE LANE, AND THAT WAS MEASURED.
+//
+// It used to be `Lane.Extension`, documented as the thing that stops a disabled
+// lane looking like a passing one — and it was NEVER SET. Not on one lane. The
+// resolver was installed, runLane guarded on `l.Extension != ""`, and the
+// condition was false every time, so the whole enablement path for this battery
+// was unreachable code behind a guard that could not fire. That is the
+// vacuous-green shape this file's own header was written to kill, one level up
+// again.
+//
+// Populating the old field would not have fixed it. FIVE OF FIFTEEN LANES SPAN
+// TWO EXTENSIONS — `delivery` runs assert-observability's log-ingestion and
+// assert-secrets' ESO round-trip; `surfaces` runs two observability checks and
+// one network one; `credentials` runs assert-secrets and assert-registry;
+// `scrape-reconciler` runs assert-observability then assert-reconciler. A
+// singular field cannot name them, so a third of the battery would have kept the
+// empty default — and "empty means always run" is exactly the silent default that
+// made this dead in the first place.
+//
+// The step is the unit the REGISTRY names: one step is one `llz ci` verb, and a
+// verb belongs to exactly one extension (registry.Commands() says so, and
+// TestEveryBatteryStepNamesARegisteredExtension holds it). So enablement resolves per
+// step, and a lane counts as skipped only when EVERY step in it was — which keeps
+// the other extension's coverage rather than discarding it with its neighbour.
+// ────────────────────────────────────────────────────────────────────────────
+type Step struct {
+	// Extension is the registry name of the extension owning this verb.
+	Extension string
+	// Argv is the invocation after "ci".
+	Argv []string
+}
+
 // Lanes is the battery. ONE list — a lane here is both run and
 // collected, so the "declared but never checked" hazard is structurally gone.
 //
 // region is threaded in rather than read from the environment at each call site
 // so the table stays a pure value the tests can build.
 func Lanes(region string) []Lane {
-	regionArg := func(verb string) []string {
+	// step and regionStep both carry the owning extension, so the table cannot
+	// grow a verb whose extension nobody wrote down.
+	step := func(ext, verb string, args ...string) Step {
+		return Step{Extension: ext, Argv: append([]string{verb}, args...)}
+	}
+	regionStep := func(ext, verb string) Step {
 		if region == "" {
-			return []string{verb}
+			return Step{Extension: ext, Argv: []string{verb}}
 		}
-		return []string{verb, "--region", region}
+		return Step{Extension: ext, Argv: []string{verb, "--region", region}}
 	}
 	return []Lane{
 		{
@@ -99,45 +125,56 @@ func Lanes(region string) []Lane {
 			// --region because the write PROOF has to resolve this deployment's chunks
 			// bucket from the spec. Without it the proof degrades to a skip, which is
 			// the quiet failure this lane exists to stop having.
-			Steps: [][]string{regionArg("assert-loki")},
+			Steps: []Step{regionStep("assert-observability", "assert-loki")},
 			Why:   "Loki is bootstrapped and S3-backed. Says nothing about anything REACHING it — that is openbao-audit and delivery.",
 		},
 		{
 			Name: "scrape-reconciler", Gating: true,
-			Steps: [][]string{{"assert-scrape-targets"}, {"assert-reconciler"}, {"assert-reconciler-effects"}},
+			Steps: []Step{
+				step("assert-observability", "assert-scrape-targets"),
+				step("assert-reconciler", "assert-reconciler"),
+				step("assert-reconciler", "assert-reconciler-effects"),
+			},
 			Why: "ORDERED on purpose. assert-scrape-targets proves every landing-zone ServiceMonitor has a live `up` target and every PrometheusRule group loaded; " +
 				"assert-reconciler then reads gauges that assert just proved fresh (and gates per-lane freshness, which llz_reconcile_up's max() across lanes cannot see); " +
 				"assert-reconciler-effects finally checks the cluster invariants those lanes maintain. Splitting them would race the gauge's first scrape.",
 		},
 		{
 			Name: "openbao-audit", Gating: true,
-			Steps: [][]string{{"assert-openbao-audit"}},
+			Steps: []Step{step("assert-secrets", "assert-openbao-audit")},
 			Why: "OpenBao's audit records are ARRIVING in Loki. Separate from `loki` on purpose: \"Loki is bootstrapped\" and \"records reach it\" are different failures, " +
 				"and this pipeline shipped to a Service that never existed for its whole life with a NetworkPolicy allow pointed at the same empty namespace.",
 		},
 		{
 			Name: "delivery", Gating: true,
-			Steps: [][]string{{"assert-log-ingestion"}, {"assert-eso-roundtrip"}},
+			Steps: []Step{
+				step("assert-observability", "assert-log-ingestion"),
+				step("assert-secrets", "assert-eso-roundtrip"),
+			},
 			Why: "Did the data actually arrive? assert-log-ingestion covers apl-core's cluster-wide collector over pod stdout — the path the OpenBao sidecar lane does not touch. " +
 				"assert-eso-roundtrip proves ESO still RE-READS OpenBao: a Secret it can no longer refresh keeps serving its frozen value and every consumer keeps working.",
 		},
 		{
 			Name: "surfaces", Gating: true,
-			Steps: [][]string{{"assert-alert-delivery"}, {"assert-grafana-dashboards"}, {"assert-admission-enforcement"}},
+			Steps: []Step{
+				step("assert-observability", "assert-alert-delivery"),
+				step("assert-observability", "assert-grafana-dashboards"),
+				step("assert-network", "assert-admission-enforcement"),
+			},
 			Why: "Is the thing that is supposed to ACT still live? A firing alert with no Alertmanager goes nowhere and Prometheus does not consider that an error; " +
 				"a dashboard whose sidecar label was dropped is Synced, valid and invisible; a Kyverno policy that stopped enforcing looks identical to one that works, " +
 				"and both ship failurePolicy: Ignore so a downed Kyverno ADMITS everything silently.",
 		},
 		{
 			Name: "net-enforcement", Gating: true,
-			Steps: [][]string{{"assert-network-enforcement"}},
+			Steps: []Step{step("assert-network", "assert-network-enforcement")},
 			Why: "MUTATING (its own scratch namespace, deleted on every path). The two enforcement properties that cannot be dry-run: a dropped packet is only knowable by sending one. " +
 				"Proves the CNI enforces NetworkPolicy at all — without which every default-deny in this repo is decorative — and that Istio refuses plaintext on a STRICT-mesh port. " +
 				"Each negative is paired with a POSITIVE CONTROL from the same pod, so a probe that simply could not reach anything reports INCONCLUSIVE instead of passing as enforcement.",
 		},
 		{
 			Name: "obj-encryption", Gating: true,
-			Steps: [][]string{regionArg("assert-obj-encryption")},
+			Steps: []Step{regionStep("obj-encryption", "assert-obj-encryption")},
 			Why: "Objects actually land ENCRYPTED. Separate from obj-storage on purpose: assert-obj-roundtrip proves a consumer can WRITE, " +
 				"and a plaintext write passes it perfectly. This proves the SSE-C gateway is in the path — the registry pods carry the CA, " +
 				"the DNS rewrite is in force, sampled objects answer 400 to a keyless HEAD, and a blob pushed BY HARBOR lands encrypted. " +
@@ -148,7 +185,7 @@ func Lanes(region string) []Lane {
 		},
 		{
 			Name: "obj-storage", Gating: true,
-			Steps: [][]string{{"assert-obj-roundtrip"}},
+			Steps: []Step{step("assert-objstore", "assert-obj-roundtrip")},
 			Why: "Loki and Harbor can WRITE to their object storage — a PUT and a read-back at each consumer's OWN endpoint with its OWN credential. " +
 				"verify-object-storage asks the Linode API whether the buckets exist by label, and every one of those checks passed while both consumers returned NoSuchBucket: " +
 				"the object-storage generations are disjoint namespaces, so an obj-cluster id stripped to its region puts the bucket on one while the consumers address the other, " +
@@ -156,14 +193,17 @@ func Lanes(region string) []Lane {
 		},
 		{
 			Name: "certificates", Gating: true,
-			Steps: [][]string{{"assert-certificates"}},
+			Steps: []Step{step("assert-identity", "assert-certificates")},
 			Why: "Every cert-manager Certificate is Ready and not expiring inside the renewal window. The signal existed and nothing consumed it: llz_certificates_not_ready is " +
 				"published and LLZCertificatesNotReady alerts on it, but alert-eval is report-only and --strict ignores FIRING, so a stuck Certificate reds nothing. " +
 				"Reports broken ISSUANCE and broken RENEWAL separately — the remedies share nothing.",
 		},
 		{
 			Name: "credentials", Gating: true,
-			Steps: [][]string{{"assert-rotation-health"}, {"assert-harbor-roundtrip"}},
+			Steps: []Step{
+				step("assert-secrets", "assert-rotation-health"),
+				step("assert-registry", "assert-harbor-roundtrip"),
+			},
 			Why: "The credential lifecycle. assert-rotation-health gates every credential credpaths.CredPaths declares: a declared credential publishing NO age series is invisible on the " +
 				"single pane AND unalertable, because a rule over an absent series never evaluates. assert-harbor-roundtrip then USES a minted robot — the auth handshake for pull AND " +
 				"push — rather than trusting it was created; the host-truncation regression left every credential valid and every push and pull 401ing. Neither forces a rotation: " +
@@ -174,39 +214,39 @@ func Lanes(region string) []Lane {
 		},
 		{
 			Name: "health-workflow", Gating: true,
-			Steps: [][]string{regionArg("assert-health-workflow")},
+			Steps: []Step{regionStep("assert-platform", "assert-health-workflow")},
 			Why:   "MUTATING (own namespace). The day-2 RUN path: submits a one-shot Workflow from the llz-cluster-health WorkflowTemplate and requires it to Succeed. Skips clean when the component is disabled.",
 		},
 		{
 			Name: "broad-pat", Gating: true,
-			Steps: [][]string{regionArg("assert-broad-pat-rotation")},
+			Steps: []Step{regionStep("assert-secrets", "assert-broad-pat-rotation")},
 			Why: "MUTATING (own namespace). Forces one rotation Job and requires action=rotated — exercising mint → OpenBao → GitHub publish → revoke against real backends. " +
 				"Safe by construction: an e2e-unique label and BROAD_PAT_DEPLOYMENTS=e2e scope mint/revoke to the e2e PAT family only.",
 		},
 		{
 			Name: "wave-vap", Gating: true,
-			Steps: [][]string{{"assert-wave-health-vap"}},
+			Steps: []Step{step("assert-network", "assert-wave-health-vap")},
 			Why:   "The llz-wave-health-guard VAP is BOUND and ENFORCING: server-dry-runs a Deployment at sync-wave -5 and requires the guard's own denial.",
 		},
 		{
 			Name: "instance-custom", Gating: true,
-			Steps: [][]string{{"assert-instance-custom"}},
+			Steps: []Step{step("assert-platform", "assert-instance-custom")},
 			Why:   "The operator escape hatch generated something. converge and assert-loki gate the PLATFORM apps and stay color.Green when the hatch generated NOTHING — only an assertion that names it catches that.",
 		},
 		{
 			Name: "team-write", Gating: true,
-			Steps: [][]string{regionArg("team-login-smoke")},
+			Steps: []Step{regionStep("assert-identity", "team-login-smoke")},
 			Why: "The team-scoped OpenBao credential path, BOTH halves — spec.teams → Keycloak group/role → OpenBao role → <name>-writer, and the ESO SA → k8s-auth → <name>-reader. " +
 				"A color.Red lane is either a Keycloak fault or a bao-configure policy fault; the log names which assertion tripped. No-op when no teams are declared.",
 		},
 		{
 			Name: "metric-surface", Gating: false,
-			Steps: [][]string{{"prom-metrics", "--match", "^(loki_|cortex_|otelcol_|harbor_)"}},
+			Steps: []Step{step("assert-observability", "prom-metrics", "--match", "^(loki_|cortex_|otelcol_|harbor_)")},
 			Why:   "REPORT-ONLY. Dumps the exporter metric NAMES so error-rate/saturation alerts get written against series that actually exist (promtool checks syntax, not existence).",
 		},
 		{
 			Name: "alert-eval", Gating: false,
-			Steps:        [][]string{{"alert-eval"}},
+			Steps:        []Step{step("assert-observability", "alert-eval")},
 			SummaryTitle: "alert-eval — live rule evaluation",
 			Why: "REPORT-ONLY, and its FIRING/ARMED/DEAD?/BROKEN report is the deliverable. promtool cannot tell a rule referencing a non-existent metric (silent never-fire) " +
 				"from one simply not tripping; this can.",
@@ -261,25 +301,46 @@ var runLaneFn = func(args []string) (string, int) {
 	return buf.String(), 0
 }
 
-// runLane executes a lane's steps in order, stopping at the first failure.
+// runLane executes a lane's steps in order, stopping at the first failure, and
+// skipping any step whose extension this instance no longer has.
+//
+// A LANE IS "SKIPPED" ONLY WHEN EVERY STEP WAS, which is the whole reason the
+// extension moved onto the step. `delivery` runs assert-observability's
+// log-ingestion and assert-secrets' ESO round-trip; an instance that dropped one
+// must still be measured by the other, and skipping the lane wholesale would
+// discard a passing check because of its neighbour.
+//
+// THE SKIPPED STEPS ARE NAMED IN THE OUTPUT, always. A lane reporting green over
+// two steps when it ran one is the same vacuous-green this battery exists to
+// refuse, arriving one level down.
 func runLane(l Lane, now func() time.Time, disabled Disabled) laneResult {
 	start := now()
 	res := laneResult{Lane: l}
-	if disabled != nil && l.Extension != "" {
-		if why, off := disabled(l.Extension); off {
-			res.Skipped, res.SkipReason = true, why
-			res.Duration = now().Sub(start)
-			return res
-		}
-	}
 	var out strings.Builder
+	var ran, skipped int
+	var reasons []string
 	for _, step := range l.Steps {
-		stepOut, code := runLaneFn(step)
+		if disabled != nil && step.Extension != "" {
+			if why, off := disabled(step.Extension); off {
+				skipped++
+				reasons = append(reasons, fmt.Sprintf("%s (%s)", step.Extension, why))
+				fmt.Fprintf(&out, "skipped %s: %s\n", strings.Join(step.Argv, " "), why)
+				continue
+			}
+		}
+		ran++
+		stepOut, code := runLaneFn(step.Argv)
 		out.WriteString(stepOut)
 		if code != 0 {
 			res.ExitCode = code
 			break
 		}
+	}
+	if ran == 0 && skipped > 0 {
+		res.Skipped, res.SkipReason = true, strings.Join(reasons, ", ")
+		res.Output = out.String()
+		res.Duration = now().Sub(start)
+		return res
 	}
 	res.Output = out.String()
 	res.Duration = now().Sub(start)
@@ -398,7 +459,7 @@ func Run(region string, only []string, list bool) error {
 			}
 			steps := make([]string, 0, len(l.Steps))
 			for _, s := range l.Steps {
-				steps = append(steps, "llz ci "+strings.Join(s, " "))
+				steps = append(steps, "llz ci "+strings.Join(s.Argv, " "))
 			}
 			fmt.Printf("%-18s %-12s %s\n", l.Name, kind, strings.Join(steps, " && "))
 		}
@@ -416,7 +477,7 @@ func Run(region string, only []string, list bool) error {
 			fmt.Printf("::group::assert %s — SKIPPED (%s)\n", r.Lane.Name, r.SkipReason)
 			fmt.Printf("# %s\n", r.Lane.Why)
 			fmt.Printf("NOT RUN, and NOT PASSED: this instance does not have %s. Nothing here "+
-				"is evidence about the platform either way.\n", r.Lane.Extension)
+				"is evidence about the platform either way.\n", r.SkipReason)
 			fmt.Println("::endgroup::")
 			continue
 		}

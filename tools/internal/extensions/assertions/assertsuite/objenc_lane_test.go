@@ -32,7 +32,7 @@ func TestObjEncryptionLaneIsRegisteredAndGating(t *testing.T) {
 	if !found.Gating {
 		t.Error("the lane must GATE: a report-only encryption check is a check nobody acts on")
 	}
-	flat := strings.Join(found.Steps[0], " ")
+	flat := strings.Join(found.Steps[0].Argv, " ")
 	if !strings.Contains(flat, "assert-obj-encryption") || !strings.Contains(flat, "--region") {
 		t.Errorf("lane step must invoke the gate with a region: %q", flat)
 	}

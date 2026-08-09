@@ -19,8 +19,8 @@ func TestAssertSuiteLanesNameRealVerbs(t *testing.T) {
 			t.Errorf("lane %s has no steps — it would pass having run nothing", l.Name)
 		}
 		for _, s := range l.Steps {
-			if !registered[s[0]] {
-				t.Errorf("lane %s invokes `llz ci %s`, which is not a registered verb", l.Name, s[0])
+			if !registered[s.Argv[0]] {
+				t.Errorf("lane %s invokes `llz ci %s`, which is not a registered verb", l.Name, s.Argv[0])
 			}
 		}
 	}

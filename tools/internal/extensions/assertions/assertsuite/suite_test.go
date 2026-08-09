@@ -44,7 +44,7 @@ func suiteNow() func() time.Time {
 // cascading failures for one root cause.
 func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 	calls := seamLaneRunner(t, map[string]int{"b": 3})
-	l := Lane{Name: "x", Gating: true, Steps: [][]string{{"a"}, {"b"}, {"c"}}}
+	l := Lane{Name: "x", Gating: true, Steps: []Step{{Argv: []string{"a"}}, {Argv: []string{"b"}}, {Argv: []string{"c"}}}}
 	res := runLane(l, suiteNow(), nil)
 
 	if res.ExitCode != 3 || !res.Failed {
@@ -62,7 +62,7 @@ func TestRunLaneStopsAtFirstFailure(t *testing.T) {
 // `|| true`, now expressed as data rather than shell.
 func TestRunLaneReportOnlyNeverGates(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"diag": 1})
-	res := runLane(Lane{Name: "d", Gating: false, Steps: [][]string{{"diag"}}}, suiteNow(), nil)
+	res := runLane(Lane{Name: "d", Gating: false, Steps: []Step{{Argv: []string{"diag"}}}}, suiteNow(), nil)
 	if res.ExitCode != 1 {
 		t.Errorf("the exit code must still be recorded, got %d", res.ExitCode)
 	}
@@ -77,9 +77,9 @@ func TestRunLaneReportOnlyNeverGates(t *testing.T) {
 func TestRunAssertSuiteLanesRunsEveryLaneAndPreservesOrder(t *testing.T) {
 	calls := seamLaneRunner(t, map[string]int{})
 	lanes := []Lane{
-		{Name: "one", Gating: true, Steps: [][]string{{"a"}}},
-		{Name: "two", Gating: true, Steps: [][]string{{"b"}}},
-		{Name: "three", Gating: true, Steps: [][]string{{"c"}}},
+		{Name: "one", Gating: true, Steps: []Step{{Argv: []string{"a"}}}},
+		{Name: "two", Gating: true, Steps: []Step{{Argv: []string{"b"}}}},
+		{Name: "three", Gating: true, Steps: []Step{{Argv: []string{"c"}}}},
 	}
 	results := runAssertSuiteLanes(lanes, suiteNow(), nil)
 
@@ -105,9 +105,9 @@ func TestRunAssertSuiteLanesRunsEveryLaneAndPreservesOrder(t *testing.T) {
 func TestEveryFailingGatingLaneReachesTheVerdict(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"boom": 1, "diag": 1})
 	lanes := []Lane{
-		{Name: "ok", Gating: true, Steps: [][]string{{"fine"}}},
-		{Name: "bad", Gating: true, Steps: [][]string{{"boom"}}},
-		{Name: "report", Gating: false, Steps: [][]string{{"diag"}}},
+		{Name: "ok", Gating: true, Steps: []Step{{Argv: []string{"fine"}}}},
+		{Name: "bad", Gating: true, Steps: []Step{{Argv: []string{"boom"}}}},
+		{Name: "report", Gating: false, Steps: []Step{{Argv: []string{"diag"}}}},
 	}
 	results := runAssertSuiteLanes(lanes, suiteNow(), nil)
 	failed := failedLaneNames(results)
@@ -170,7 +170,7 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	for _, l := range lanes {
 		hasRegion := false
 		for _, s := range l.Steps {
-			for _, a := range s {
+			for _, a := range s.Argv {
 				if a == "--region" {
 					hasRegion = true
 				}
@@ -184,7 +184,7 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	// `--region ""` is a different thing from not scoping at all.
 	for _, l := range Lanes("") {
 		for _, s := range l.Steps {
-			for _, a := range s {
+			for _, a := range s.Argv {
 				if a == "--region" {
 					t.Errorf("lane %s passes --region with no value available", l.Name)
 				}
@@ -258,8 +258,8 @@ func TestASkippedLaneDoesNotRunAndIsNotAPass(t *testing.T) {
 	t.Cleanup(func() { runLaneFn = prev })
 
 	lanes := []Lane{
-		{Name: "registry", Gating: true, Extension: "assert-registry", Steps: [][]string{{"x"}}},
-		{Name: "always", Gating: true, Steps: [][]string{{"y"}}},
+		{Name: "registry", Gating: true, Steps: []Step{{Extension: "assert-registry", Argv: []string{"x"}}}},
+		{Name: "always", Gating: true, Steps: []Step{{Argv: []string{"y"}}}},
 	}
 	disabled := func(ext string) (string, bool) {
 		if ext == "assert-registry" {
@@ -308,8 +308,8 @@ func TestNoResolverRunsEveryLane(t *testing.T) {
 	t.Cleanup(func() { runLaneFn = prev })
 
 	lanes := []Lane{
-		{Name: "a", Gating: true, Extension: "assert-registry", Steps: [][]string{{"x"}}},
-		{Name: "b", Gating: true, Extension: "obj-encryption", Steps: [][]string{{"y"}}},
+		{Name: "a", Gating: true, Steps: []Step{{Extension: "assert-registry", Argv: []string{"x"}}}},
+		{Name: "b", Gating: true, Steps: []Step{{Extension: "obj-encryption", Argv: []string{"y"}}}},
 	}
 	res := runAssertSuiteLanes(lanes, suiteNow(), nil)
 	if n := ran.Load(); n != 2 {
