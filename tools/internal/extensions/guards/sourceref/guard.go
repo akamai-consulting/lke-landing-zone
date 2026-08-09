@@ -89,19 +89,31 @@ import (
 // contradicting itself six lines apart, "See internal/extension/validate.go" — and
 // this guard reported 1,128 references all resolving over them.
 //
-// A ROW IS NOT EARNED YET, AND THE MEASUREMENT IS WHY, not caution. Counted across
-// docs/ and tools/:
+// A ROW IS NOT EARNED YET, AND THE SHAPE OF THE POPULATION IS WHY, not caution:
 //
-//	`internal/…`   148 candidates, 116 unresolved — but the bare `internal/<pkg>`
-//	               form is now SHORTHAND for a package that lives at
-//	               internal/shared/<pkg> or internal/extensions/<bucket>/<pkg>.
-//	               Most of the 116 are prose naming a package, not a false claim
-//	               about a file, and a row would demand ~116 edits that mostly make
-//	               the prose longer without making it truer.
-//	`cmd/llz/…`     23 unresolved, and almost all are "moved here from X" notes —
+//	`internal/…`   ~150 candidates, and roughly three quarters do not resolve —
+//	               because the bare `internal/<pkg>` form is now SHORTHAND for a
+//	               package that lives at internal/shared/<pkg> or
+//	               internal/extensions/<bucket>/<pkg>. Most are prose NAMING A
+//	               PACKAGE, not a false claim about a file, and a row would demand
+//	               a hundred-odd edits that mostly make the prose longer without
+//	               making it truer.
+//	`cmd/llz/…`    a couple of dozen, and almost all are "moved here from X" notes —
 //	               the class the docs doctrine explicitly says to KEEP, because an
 //	               operator upgrading an older tree searches for the thing that
 //	               vanished. A guard reporting those would be fighting the rule.
+//
+// THE MAGNITUDES ARE DELIBERATELY APPROXIMATE, which is a correction to how this
+// note was first written. It carried exact figures — 148/116 and 23 — and the very
+// commit that recorded them repointed a batch of stale references and moved all
+// three. An unpinned exact count in a comment is wrong by the time it is read, and
+// here it would be wrong while LOOKING like the measurement the argument rests on.
+// The argument rests on the SHAPE (shorthand, and history worth keeping), which is
+// stable. Re-measure with the recipe below if you need a figure:
+//
+//	grep -rhoE '(^|[^A-Za-z0-9_./-])internal/[A-Za-z0-9_-]+(/[A-Za-z0-9_.-]+)*' \
+//	  --include='*.md' --include='*.go' docs tools | sort -u
+//	# then test each against tools/<path>
 //
 // So the shape a row needs is a way to tell a LIVE claim from a historical one,
 // and nothing here can read tense. That is the modelling this prefix set had to do

@@ -255,12 +255,18 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the
 // code. This closes that without moving sixty-one packages and rotting every
-// document that names one — 29 files under docs/ cite an internal/extensions path.
+// document that names one.
 //
-// (That second number was written as "thirty-one documents" for a while, borrowed
-// from the name/package count in the sentence above it. The two are unrelated, and
-// only the first is pinned — which is the footnote-not-measurement shape gates.go
-// names, appearing inside the comment that names it.)
+// NO COUNT OF THOSE DOCUMENTS IS GIVEN, and the omission is the finding rather than
+// a gap. The sentence carried one for a long time — "thirty-one documents", borrowed
+// from the unrelated name/package count beside it. An audit corrected it to 29,
+// measured; the same audit then repointed a batch of stale doc paths at
+// internal/extensions and pushed the real figure to 31, so the correction was wrong
+// before the commit that made it had finished. The number was decoration: it has now
+// been wrong in both directions and never once changed what a reader should do. The
+// name/package count above it stays because a test pins it. This is what the
+// footnote-not-measurement rule in gates.go is warning about, demonstrated twice
+// inside the comment that names it.
 //
 // The bucket (assertions/ guards/ lifecycle/) is deliberately kept in the string.
 // It predicts neither the binding kind nor the name — guards/ holds

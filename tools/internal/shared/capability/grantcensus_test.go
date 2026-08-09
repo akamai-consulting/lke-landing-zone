@@ -35,18 +35,32 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension/registry"
 )
 
-// citedCounts is what the headers in this package say, keyed by the file that says
-// it. BINDING counts, except where noted: a grant is per-binding, so the binding is
-// the unit a handle is built for.
+// citedCounts is every grant's census, keyed by where it is quoted. BINDING counts
+// and EXTENSION counts both: a grant is per-binding, so the binding is the unit a
+// handle is built for, but the model doc's distribution table counts extensions
+// because "what does this extension touch?" is the question a reviewer asks.
+//
+// ALL NINE ARE HERE, WHICH THEY WERE NOT AT FIRST. The table started as the five
+// grants the handle headers quote, and the model doc then grew a nine-row
+// distribution table under a sentence saying "the counts are pinned by
+// TestHandleHeaderCensusesMatchTheRegistry" — which was true of five of them. Four
+// numbers presented as checked were not, in the paragraph arguing that an unchecked
+// count is how a design doc comes to describe a system that no longer exists. A
+// grant with no prose citing it still belongs here: it costs a line, and the next
+// sentence quoting it starts out pinned instead of starting out unverified.
 var citedCounts = map[extension.Grant]struct {
 	bindings, extensions int
 	cited                string
 }{
-	extension.ReadRepo:      {54, 42, "repo.go: \"declared by 42 of 62 extensions — more than any other grant\""},
-	extension.CloudRead:     {19, 16, "cloud.go: \"19 declarations of cloud-read\""},
-	extension.CloudMutate:   {21, 17, "cloud.go: \"21 of cloud-mutate\""},
-	extension.SecretRead:    {11, 9, "secrets.go: \"eleven declare secret-read\""},
-	extension.SecretCustody: {18, 12, "secrets.go: \"Eighteen bindings declare secret-custody\""},
+	extension.ReadRepo:      {54, 42, "repo.go: \"declared by 42 of 62 extensions — more than any other grant\"; model doc distribution table"},
+	extension.CloudRead:     {19, 16, "cloud.go: \"19 declarations of cloud-read\"; model doc distribution table"},
+	extension.CloudMutate:   {21, 17, "cloud.go: \"21 of cloud-mutate\"; model doc distribution table"},
+	extension.SecretRead:    {11, 9, "secrets.go: \"eleven declare secret-read\"; model doc distribution table"},
+	extension.SecretCustody: {18, 12, "secrets.go: \"Eighteen bindings declare secret-custody\"; model doc distribution table"},
+	extension.ClusterRead:   {51, 23, "model doc distribution table"},
+	extension.ClusterWrite:  {22, 16, "model doc distribution table"},
+	extension.WriteRepo:     {8, 5, "model doc distribution table"},
+	extension.OwnPaths:      {1, 1, "model doc distribution table"},
 }
 
 func census() (bindings, extensions map[extension.Grant]int, total int) {
