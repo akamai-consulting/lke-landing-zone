@@ -31,7 +31,11 @@ on:
       # changed the apply logic (or the composite actions it drives) merged with no
       # plan run against it. The reusable and the actions are `managed`, so they
       # change on exactly the upgrades an operator most wants a plan for.
-      - '.github/workflows/llz-terraform.yml'
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
       - '.github/actions/**'
   pull_request:
     branches: [main, master]
@@ -44,7 +48,11 @@ on:
       # changed the apply logic (or the composite actions it drives) merged with no
       # plan run against it. The reusable and the actions are `managed`, so they
       # change on exactly the upgrades an operator most wants a plan for.
-      - '.github/workflows/llz-terraform.yml'
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
       - '.github/actions/**'
   workflow_dispatch:
     inputs:
