@@ -9,11 +9,11 @@ package provider_test
 //
 // What IS worth enforcing is the invariant the package exists to create. ADR 0013
 // (docs/adr/0013-llz-as-apl-cli.md) establishes "two altitudes": the APL layer
-// (internal/apl/...) must reach provisioning ONLY through ClusterProvider, never
-// by importing a concrete cloud, so a future non-Linode provider drops in without
-// touching APL-layer code. That is an architectural claim, and today it holds
-// only by convention — nothing fails if someone adds `import ".../internal/linode"`
-// to an APL-layer file.
+// (internal/shared/apl/...) must reach provisioning ONLY through ClusterProvider,
+// never by importing a concrete cloud, so a future non-Linode provider drops in
+// without touching APL-layer code. That is an architectural claim, and today it
+// holds only by convention — nothing fails if someone adds an import of
+// internal/shared/linode to an APL-layer file.
 //
 // Mutation testing cannot find this class of gap: there is no operator to mutate.
 // Coverage cannot either. It needs an explicit assertion about the build graph,
@@ -61,11 +61,19 @@ func TestAPLLayerDoesNotDependOnAConcreteCloud(t *testing.T) {
 }
 
 // The seam is only a boundary if the substrate side does not depend back on the
-// layer it serves. A provider that imported internal/apl would make the two
+// layer it serves. A provider that imported the APL layer would make the two
 // altitudes one.
+//
+// THE PREFIX NAMED A PATH THAT DOES NOT EXIST. It read `/internal/apl`, and the
+// tree re-filed that package as `internal/shared/apl` — so the HasPrefix matched
+// nothing and this test could not have failed. It is the same defect the sibling
+// boundary_test.go carried in its `forbidden` map, found the same way and in the
+// same pass: a layering rule keyed on a hardcoded package path is dead the moment
+// the package moves, and dead in the direction that reports success.
 func TestProviderDoesNotDependOnTheAPLLayer(t *testing.T) {
+	const aplLayer = modulePath + "/internal/shared/apl"
 	for _, dep := range deps(t, ".") {
-		if strings.HasPrefix(dep, modulePath+"/internal/apl") {
+		if strings.HasPrefix(dep, aplLayer) {
 			t.Errorf("internal/provider depends on %s — the substrate must not depend on the layer above it", dep)
 		}
 	}
@@ -76,15 +84,25 @@ func TestProviderDoesNotDependOnTheAPLLayer(t *testing.T) {
 // discriminates by running it against a package that DOES legitimately depend on
 // the concrete cloud. cmd/llz is the intended home for Linode day-0 code, so it
 // must trip the same rule the APL layer must not.
+//
+// IT PROVED THIS FOR FREE UNTIL NOW. `go list -deps X` includes X, and `cmd/llz` is
+// itself in `forbidden` — so the old version tripped on the package being its own
+// dependency and would have passed with every real edge deleted. Skipping self
+// forces the walk to FIND the concrete cloud, which is the edge the rule is about.
 func TestForbiddenRuleActuallyDiscriminates(t *testing.T) {
+	const self = modulePath + "/cmd/llz"
+	const cloud = modulePath + "/internal/shared/linode"
 	var tripped bool
 	for _, dep := range deps(t, "./../../../cmd/llz") {
-		if _, bad := forbidden[dep]; bad {
+		if dep == self {
+			continue // the package is its own dependency; that is not evidence
+		}
+		if dep == cloud {
 			tripped = true
 		}
 	}
 	if !tripped {
-		t.Fatal("cmd/llz depends on no forbidden package, so the rule above proves nothing — " +
-			"either the Linode day-0 code moved, or `forbidden` no longer names anything real")
+		t.Fatalf("cmd/llz does not transitively reach %s, so the rule above proves nothing — "+
+			"either the Linode day-0 code moved, or `forbidden` no longer names anything real", cloud)
 	}
 }

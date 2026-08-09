@@ -105,10 +105,13 @@
 // between "what may be declared" and "what a declaration gets", in the direction
 // that fails safe.
 //
-// BOUNDARY RULE. This package must not import cmd/llz (it is a library and must
-// not depend upward) and must not import a concrete cloud (internal/linode) — the
-// same rule ADR 0013 establishes for the APL layer, enforced here by
-// boundary_test.go for the same reason: nothing else would notice. It imports
+// BOUNDARY RULE. This package must not import the CLI layer (internal/cli, or the
+// cmd/llz entry point above it — it is a library and must not depend upward) and
+// must not import a concrete cloud (internal/linode) — the same rule ADR 0013
+// establishes for the APL layer, enforced here by boundary_test.go for the same
+// reason: nothing else would notice. The rule named cmd/llz ALONE until ADR 0014's
+// amendment was carried through: once the command tree moved to internal/cli, the
+// layer being fenced off was not the one the fence listed. It imports
 // nothing but `strings`, `fmt` and `sort`, which
 // TestDeclarationModelStaysDependencyFree pins: every extension depends on this
 // package, so anything it reaches becomes a dependency of all of them.
