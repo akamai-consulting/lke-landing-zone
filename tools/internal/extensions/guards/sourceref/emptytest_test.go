@@ -6,7 +6,8 @@ package sourceref
 // HarborDeployments/HarborStatefulSets; f0aa68f retired those functions along with
 // the workflow job that consumed them, and the test was HOLLOWED OUT rather than
 // deleted — leaving `func TestHarborWorkloadSets(t *testing.T) {}` in the suite.
-// It passed on every run for as long as it existed.
+// It passed on every run for as long as it existed. What stands in its place is
+// TestHarborRegistryDeploymentsIsTheSeededSetOnly, which asserts what survived.
 //
 // An empty test is worse than a missing one. A missing test is visibly missing; an
 // empty one inflates the count, appears in `go test -v` output as a PASS, and reads

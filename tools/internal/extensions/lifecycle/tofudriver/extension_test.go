@@ -39,7 +39,8 @@ func TestEachVerbDeclaresWhatItDoes(t *testing.T) {
 				t.Errorf("%s: binding = %s, want assertion:provisioned", b.Name, b)
 			}
 		case "apply", "import":
-			// THE NAME OF THIS TEST USED TO BE TestOnlyDestroyMutates, and it was true
+			// THE NAME OF THIS TEST (now TestEachVerbDeclaresWhatItDoes) USED TO BE
+			// TestOnlyDestroyMutates, and it was true
 			// while apply/import sat in package main. It is not any more: an apply is
 			// the transition that REACHES `provisioned`, and declaring it read-only
 			// would be the lie the `plan` case above exists to prevent.

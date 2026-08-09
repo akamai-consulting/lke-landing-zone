@@ -62,8 +62,8 @@ func healthInClusterExitCode(ctx context.Context, failOnUnhealthy bool) int {
 // pre-bootstrap, and report-only suppression to 0. Exit 3 (apiserver unreachable)
 // is handled by the caller before this — report-only does NOT suppress it.
 // EXPORTED because a coupling test spans the extraction boundary:
-// TestHealthInClusterGateRejectsEmptyCorpus drives the RECONCILER's
-// convergenceReport (package main) into THIS package's exit-code contract, and
+// TestHealthInClusterGateRejectsEmptyCorpus (in lifecycle/reconciler, which is
+// where convergenceReport went) drives it into THIS package's exit-code contract, and
 // that pairing is the thing worth testing — the two halves must agree that an
 // empty Applications corpus is in-progress rather than converged.
 func ConvergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {

@@ -3,7 +3,8 @@ package openbao
 // The two `bao` output parsers came here from internal/extensions/openbao and
 // their tests came with them. TestParseTokenAndPolicies was TWO tests wearing one
 // name -- parseTokenField stayed behind with the regen-root lifecycle, and only
-// the policy check moved -- so it was split rather than moved or kept.
+// the policy check moved -- so it was split rather than moved or kept. What is here
+// now is TestParseBaoStatus and TestPoliciesIncludeRoot.
 
 import (
 	"testing"

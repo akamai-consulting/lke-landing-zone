@@ -496,7 +496,7 @@ func TestCleartextWireProtocolsAreFindings(t *testing.T) {
 
 // Spelling freedom: quoted and trailing-whitespace forms mean the same thing to
 // Kubernetes and must not be a way around the gate. Same rationale as
-// TestSchemeHTTPSpellings.
+// TestAlternateInsecureGoSpellingsAreFindings.
 func TestEventSourceSecretsSpellings(t *testing.T) {
 	for _, ln := range []string{
 		`      resource: secrets`,

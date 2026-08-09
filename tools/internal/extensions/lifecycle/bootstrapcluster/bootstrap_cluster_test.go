@@ -112,7 +112,7 @@ func TestManifestBuilders(t *testing.T) {
 	}
 }
 
-// TestLlzOpenbaoNamespaceManifest — the managed bootstrap pre-creates the
+// TestLlzNamespaceManifest — the managed bootstrap pre-creates the
 // LLZ namespaces (managed apl-core does not) with the restricted PSS + monitoring
 // labels and the bootstrap marker, so the carved apps (CreateNamespace=false) sync
 // without waiting on a namespace that would otherwise never be created. llz-observability

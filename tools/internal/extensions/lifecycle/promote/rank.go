@@ -84,8 +84,11 @@ func ReadPromotion(d Deps, tfDir string) ([]promoStage, error) {
 }
 
 // EXPORTED because a coupling test spans the extraction boundary:
-// cmd/llz/spec_ux_test.go asserts that the SPEC's environments and their ranks
-// agree, and the two halves of that claim now live in different packages.
+// internal/cli/spec_topology_test.go asserts that the SPEC's environments and
+// their ranks agree, and the two halves of that claim live in different packages.
+// (The citation used to name cmd/llz/spec_ux_test.go; that file is now
+// clusterspec/spec_ux_test.go and is NOT the test that drives this — the ranks
+// half stayed with the CLI when the spec-UX half moved down.)
 //
 // PromotionRanks returns each deployment's promotion_rank from the LandingZone
 // spec when present (the source of truth), else from the committed cluster tfvars.

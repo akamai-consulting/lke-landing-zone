@@ -5,7 +5,7 @@ package clusterspec_test
 // rejects it as "import cycle not allowed in test". Testing from outside is the
 // honest fix — it exercises the package the way envdef itself does.
 
-// TestHAGroupMissingRole STAYED: envdef.HAGroupMissingRole is in scaffold_spec.go, part of
+// TestHaGroupMissingRole STAYED: envdef.HAGroupMissingRole is in scaffold_spec.go, part of
 // the scaffolding path, not the topology reader. It travelled to
 // internal/envtopology inside env_set_test.go and came straight back.
 
