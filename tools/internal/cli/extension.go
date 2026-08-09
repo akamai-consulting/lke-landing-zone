@@ -79,37 +79,81 @@ func listExtensions(out io.Writer, exts []extension.Extension, verbose bool) err
 		fmt.Fprintln(out, "no extensions are compiled into this binary")
 		return nil
 	}
+	if verbose {
+		return listVerbose(out, exts)
+	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tENABLED\tBINDINGS\tGRANTS\tSUMMARY")
 	for _, e := range exts {
-		enabled := "opt-in"
-		if e.Always {
-			enabled = "always"
-		}
-		// A PARTIAL extension must not read as a complete one. The marker goes in
-		// the ENABLED column rather than a footnote because that column is what a
-		// skimmer reads, and "always" beside a four-binding extension that has
-		// eight is the misreading Incomplete exists to prevent.
-		if len(e.Incomplete) > 0 {
-			enabled += " ◐"
-		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			e.Name, enabled, bindingSummary(e), grantSummary(e), e.Short)
-		if verbose {
-			// Continuation rows leave NAME/ENABLED empty and put the full binding —
-			// including the grants THAT binding holds — in the BINDINGS column. Not
-			// indented under the name: a wider first cell would stretch the column
-			// for every row, and the summary line is the one that has to stay
-			// scannable.
-			for _, b := range e.Bindings {
-				fmt.Fprintf(w, "\t\t%s\t\t\n", b)
-			}
-			for _, note := range e.Incomplete {
-				fmt.Fprintf(w, "\t\tNOT DECLARED: %s\t\t\n", note)
-			}
-		}
+			e.Name, enabledLabel(e), bindingSummary(e), grantSummary(e), e.Short)
 	}
 	return w.Flush()
+}
+
+// listVerbose renders one BLOCK per extension instead of continuation rows.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// THE TABLE COULD NOT CARRY THE DETAIL, AND PRETENDING IT COULD MADE IT
+// UNREADABLE.
+//
+// Verbose used to add continuation rows to the same tabwriter. `Incomplete` is
+// deliberately PROSE, so one long note sized the BINDINGS column for the entire
+// table and every summary row rendered past 1,600 characters. Moving the content
+// to the last column fixed the padding and pushed the detail off the right-hand
+// edge instead — the two failure modes of putting a paragraph in a column.
+//
+// A listing whose whole job is to make the model legible cannot be the thing that
+// hides it, so verbose stops being a table. The summary view keeps its alignment,
+// which is what a skimmer needs; verbose gets a block, which is what a reader
+// following one extension needs. They are different questions.
+// ────────────────────────────────────────────────────────────────────────────
+func listVerbose(out io.Writer, exts []extension.Extension) error {
+	for i, e := range exts {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "%s  (%s)\n", e.Name, enabledLabel(e))
+		// WHERE THE CODE IS, which the name does not tell you: fifteen of the
+		// sixty-two extensions live in a package with a different name
+		// (assert-storage in assertions/volumes, posture-at-rest in
+		// lifecycle/atrest, import-brownfield in lifecycle/brownfield). Every error
+		// message, gate exemption and ratchet entry in this tree names the
+		// EXTENSION, so without this a reader holding a failure has no route to the
+		// code. Derived from the declaration's constructor rather than transcribed —
+		// see registry.Package.
+		if pkg, ok := registry.Package(e.Name); ok {
+			fmt.Fprintf(out, "  package  internal/extensions/%s\n", pkg)
+		}
+		if e.Component != "" {
+			fmt.Fprintf(out, "  follows  spec.components.%s\n", e.Component)
+		}
+		fmt.Fprintf(out, "  %s\n", e.Short)
+		for _, b := range e.Bindings {
+			fmt.Fprintf(out, "    %s\n", b)
+		}
+		for _, note := range e.Incomplete {
+			fmt.Fprintf(out, "    NOT DECLARED: %s\n", note)
+		}
+	}
+	return nil
+}
+
+// enabledLabel is the ENABLED cell, and the ◐ marker beside it.
+//
+// A PARTIAL extension must not read as a complete one. The marker rides the
+// ENABLED column because that is what a skimmer reads, and "always" beside a
+// four-binding extension that has eight is the misreading Incomplete exists to
+// prevent.
+func enabledLabel(e extension.Extension) string {
+	label := "opt-in"
+	if e.Always {
+		label = "always"
+	}
+	if len(e.Incomplete) > 0 {
+		label += " ◐"
+	}
+	return label
 }
 
 // bindingSummary collapses an extension's bindings to `kind:state` pairs. The

@@ -20,7 +20,10 @@
 package registry
 
 import (
+	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
@@ -212,3 +215,47 @@ func Lookup(name string) (extension.Extension, bool) {
 // exported Validate() looks like wiring somebody forgot, and the honest version of
 // "we only lint this" is cheaper than the next reader deciding to "fix" it.
 func Validate() []error { return extension.ValidateSet(All()) }
+
+// Package reports the source package each extension is declared in, as a path
+// relative to internal/extensions (e.g. "assertions/volumes").
+//
+// ────────────────────────────────────────────────────────────────────────────
+// IT IS DERIVED FROM THE CONSTRUCTOR, NOT WRITTEN DOWN, which is the only reason
+// it is worth having at all. A second list mapping name to directory would be the
+// hand-maintained copy this registry exists to avoid — and it would be wrong the
+// first time a package moved.
+//
+// WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
+// fifteen of the sixty-two: `assert-storage` lives in assertions/volumes,
+// `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
+// lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
+// this tree names the EXTENSION, so a reader holding a failure has no route to the
+// code. This closes that without moving sixty-one packages and rotting the paths
+// named in thirty-one documents.
+//
+// The bucket (assertions/ guards/ lifecycle/) is deliberately kept in the string.
+// It predicts neither the binding kind nor the name — guards/ holds
+// posture-plaintext and template-manifest, assertions/ holds two gates — and
+// showing it is what makes that visible rather than arguable.
+// ────────────────────────────────────────────────────────────────────────────
+func Package(name string) (string, bool) {
+	for _, d := range declarations {
+		if d().Name != name {
+			continue
+		}
+		full := runtime.FuncForPC(reflect.ValueOf(d).Pointer()).Name()
+		// ".../internal/extensions/assertions/volumes.Extension" -> the path after
+		// the marker, with the trailing ".Func" removed.
+		const marker = "/internal/extensions/"
+		i := strings.Index(full, marker)
+		if i < 0 {
+			return "", false
+		}
+		pkg := full[i+len(marker):]
+		if j := strings.LastIndex(pkg, "."); j >= 0 {
+			pkg = pkg[:j]
+		}
+		return pkg, true
+	}
+	return "", false
+}

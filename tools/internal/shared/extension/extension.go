@@ -340,13 +340,29 @@ type Extension struct {
 	// extension-scoped components cannot be reconciled with multi-binding
 	// extensions.
 	//
-	// NOTHING IS INVENTED HERE, because one case is an anecdote. The two other
-	// candidates were checked and are not cases: `credential-pat` has a single
-	// binding (so its link is a whole-extension decision, not a per-binding one),
-	// and `health-sla`'s two invariants are both cross-cutting — neither follows a
-	// component at all. When a second multi-component extension appears, this is
-	// the note it belongs beside, and the reconciler lanes are already carrying the
-	// binding name that per-binding resolution would need (see LaneDecl).
+	// AND `openbao` FOUND THE SAME AXIS FROM THE OTHER SIDE, independently, which is
+	// the part worth reading. Its Incomplete note says "ENABLEMENT IS PER-EXTENSION,
+	// NOT PER-BINDING": `openbao-peer-ca` only matters for an HA PAIR and shipped
+	// `Always: false`, while its siblings are unconditional — merging forced one
+	// value and the honest one was wrong. That note refuses a `Binding.Always` on
+	// the grounds that it is "STILL ONE CASE", and ends "this note stays until a
+	// second case says what shape the answer is."
+	//
+	// assert-secrets is a second case on the same axis and it says the shape is NOT
+	// what openbao guessed. peer-ca wants a PREDICATE — it runs when the deployment
+	// is an HA pair, a topology fact read at run time, not a toggle anyone sets.
+	// assert-secrets wants a per-binding COMPONENT REFERENCE, which is a static
+	// value and much smaller. Two cases, two shapes, so what they establish
+	// together is that the AXIS is real (enablement belongs on the binding) and not
+	// yet what the field is. A `Binding.Component` would serve assert-secrets and
+	// still miss peer-ca, because there is no component called `ha`.
+	//
+	// NOTHING IS INVENTED HERE. The two remaining candidates were checked and are
+	// not cases: `credential-pat` has a single binding (so its link is a
+	// whole-extension decision), and `health-sla`'s two invariants are both
+	// cross-cutting — neither follows a component at all. The reconciler lanes
+	// already carry the binding name per-binding resolution would need (see
+	// LaneDecl), so the plumbing is not what is missing; the argument is.
 	//
 	// EMPTY IS NOT "ALWAYS ON". Four of the seven opt-in extensions have no
 	// component and should not be given one: import-brownfield is a one-time

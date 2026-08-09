@@ -1274,7 +1274,21 @@ categories:
     #                       layer is its two wiring lines, which is the shape ADR
     #                       0014 wants — the 300 lines of decision logic landed in
     #                       tools/internal/extensions/guards/sourceref, not here.
-    budget: 1900
+    #   1,920 / 113 files  `llz extension list --verbose` became a BLOCK renderer
+    #                       instead of continuation rows in the summary table. +20,
+    #                       spent deliberately and not a good sign about where this
+    #                       code lives: it is presentation, and the budget's whole
+    #                       argument is that this layer holds WIRING. It is here
+    #                       because the old rendering was unreadable — `Incomplete`
+    #                       is prose, one long note sized a tabwriter column for the
+    #                       entire table, and every summary row rendered past 1,600
+    #                       characters. A listing whose job is to make the model
+    #                       legible cannot be the thing that hides it.
+    #
+    #                       `llz extension list` is on the unclaimed-command ratchet
+    #                       (commands_claimed_test.go) and its real home is an
+    #                       extension. When it moves, this comes back down.
+    budget: 1920
     exact: true
     include:
       - "tools/internal/cli/*.go"
