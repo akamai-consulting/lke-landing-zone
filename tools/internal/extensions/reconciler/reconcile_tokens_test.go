@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
 )
 
@@ -277,7 +277,7 @@ func TestCredentialPresenceSurvivesReclassification(t *testing.T) {
 	if n := strings.Count(out, `llz_credential_presence_ok{cred="harbor-password"}`); n != 1 {
 		t.Errorf("got %d presence_ok series for one credential, want 1:\n%s", n, out)
 	}
-	// And the surviving verdict is the CURRENT one: optional is configreadiness.Satisfied by an
+	// And the surviving verdict is the CURRENT one: optional is envreq.Satisfied by an
 	// absent credential, so nothing alerts.
 	if !strings.Contains(out, `llz_credential_presence_ok{cred="harbor-password"} 1`) {
 		t.Errorf("the latest classification must win:\n%s", out)
@@ -290,12 +290,12 @@ func TestPresenceMatchesExpectation(t *testing.T) {
 		present bool
 		want    bool
 	}{
-		{tokeninv.CredExpectPresent, true, true},
-		{tokeninv.CredExpectPresent, false, false},
-		{tokeninv.CredExpectAbsent, false, true},  // the healthy root-token state
-		{tokeninv.CredExpectAbsent, true, false},  // parked after a break-glass
-		{tokeninv.CredExpectOptional, true, true}, // the Harbor pair, either way
-		{tokeninv.CredExpectOptional, false, true},
+		{credtargets.CredExpectPresent, true, true},
+		{credtargets.CredExpectPresent, false, false},
+		{credtargets.CredExpectAbsent, false, true},  // the healthy root-token state
+		{credtargets.CredExpectAbsent, true, false},  // parked after a break-glass
+		{credtargets.CredExpectOptional, true, true}, // the Harbor pair, either way
+		{credtargets.CredExpectOptional, false, true},
 		{"", true, true}, // an older writer sent no expect: treat as present
 		{"", false, false},
 	} {

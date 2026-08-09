@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 )
 
 // Helpers the returned tests use, copied back across the boundary.
@@ -39,9 +39,9 @@ func writeMiniInstance(t *testing.T, dir string, envs ...string) {
 // substring of the request path. A path with no entry 404s (returns an error).
 func stubGitHub(t *testing.T, bodies map[string]any) {
 	t.Helper()
-	orig := buildpreflight.GHAPIJSON
-	t.Cleanup(func() { buildpreflight.GHAPIJSON = orig })
-	buildpreflight.GHAPIJSON = func(path string, out any) error {
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
+	ghapi.GHAPIJSON = func(path string, out any) error {
 		// Longest match wins: "repos/<r>" is a prefix of "repos/<r>/contents/…",
 		// and map iteration order would otherwise pick between them at random.
 		best, found := "", false

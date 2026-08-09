@@ -21,11 +21,12 @@ package reconcilelanes
 import (
 	"context"
 	"fmt"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 const (
 	SCStorageClassesPath = "/apis/storage.k8s.io/v1/storageclasses"
-	SCDefaultAnnotation  = "storageclass.kubernetes.io/is-default-class"
 	DefaultDemoteSC      = "linode-block-storage-retain"
 )
 
@@ -55,7 +56,7 @@ func SCDemote(ctx context.Context, client Client, name string) error {
 func scIsDefault(sc map[string]any) bool {
 	meta, _ := sc["metadata"].(map[string]any)
 	ann, _ := meta["annotations"].(map[string]any)
-	v, _ := ann[SCDefaultAnnotation].(string)
+	v, _ := ann[platform.SCDefaultAnnotation].(string)
 	return v == "true"
 }
 
@@ -64,7 +65,7 @@ func scIsDefault(sc map[string]any) bool {
 func scDemotePatch() map[string]any {
 	return map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{SCDefaultAnnotation: "false"},
+			"annotations": map[string]any{platform.SCDefaultAnnotation: "false"},
 		},
 	}
 }

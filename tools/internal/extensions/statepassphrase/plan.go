@@ -17,7 +17,7 @@ package statepassphrase
 // live passphrase makes every existing state file unrecoverable — the same blast
 // radius as losing OPENBAO_SEAL_KEY. The wizard's ambient "is it already set?"
 // answer cannot be trusted for that decision: ghAPI returns nil on ANY error, so
-// configreadiness.GHSecretNames yields an empty list for a network blip, an expired login or a
+// envreq.GHSecretNames yields an empty list for a network blip, an expired login or a
 // rate limit exactly as it does for a repo with no secrets. Every other credential
 // degrades from that to a harmless re-prompt. This one would degrade to
 // generate-and-clobber. So this asks GitHub a direct question and acts only on a

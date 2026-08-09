@@ -127,27 +127,6 @@ type ObjKeyAPI interface {
 	DeleteObjectStorageKey(ctx context.Context, id uint64) error
 }
 
-// appendGHAFile appends lines to the GitHub Actions command file named by envVar.
-// Outside Actions the variable is unset and the write is skipped. THE REAL THING,
-// not a stub — the LKE-admin rotator's summary is asserted on.
-func appendGHAFile(envVar string, lines ...string) error {
-	path := os.Getenv(envVar)
-	if path == "" {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open $%s: %w", envVar, err)
-	}
-	for _, l := range lines {
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			f.Close()
-			return fmt.Errorf("write $%s: %w", envVar, err)
-		}
-	}
-	return f.Close()
-}
-
 // maskGHA asks GitHub Actions to redact a value from the log. Pure, localised —
 // four lines, and package main keeps its own for the verbs that stayed.
 func maskGHA(v string) {

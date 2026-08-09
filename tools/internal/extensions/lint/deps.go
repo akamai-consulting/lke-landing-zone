@@ -13,8 +13,6 @@ package lint
 // package initialised, which defeats a test that swaps it later.
 
 import (
-	"strings"
-
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
@@ -22,13 +20,4 @@ import (
 // SustainDeps is installed by package main before any command runs.
 var SustainDeps func() sustain.Deps
 
-func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
-
 func execLookPath(file string) (string, error) { return kubectlprobe.LookPathFn(file) }
-
-// gitOutput runs git in dir and returns trimmed stdout. A four-line local copy;
-// the original is in hooks.go, which is package main's and is not moving.
-func gitOutput(dir string, args ...string) (string, error) {
-	out, err := execOutput("git", append([]string{"-C", dir}, args...)...)
-	return strings.TrimSpace(string(out)), err
-}

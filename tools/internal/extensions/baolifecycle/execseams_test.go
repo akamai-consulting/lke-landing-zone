@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
 func withBaoExec(t *testing.T, fn func(pod, token, stdin string, args ...string) (string, string, error)) {
@@ -24,13 +23,6 @@ func withBaoExec(t *testing.T, fn func(pod, token, stdin string, args ...string)
 	t.Cleanup(func() { baoread.ExecFn = orig })
 }
 
-func withBaoExecRaw(t *testing.T, fn func(pod, token, stdin string, args ...string) (string, string, error)) {
-	t.Helper()
-	orig := baoread.ExecRaw
-	baoread.ExecRaw = fn
-	t.Cleanup(func() { baoread.ExecRaw = orig })
-}
-
 func withBaoSleep(t *testing.T) *int {
 	t.Helper()
 	orig := baoread.Sleep
@@ -38,13 +30,4 @@ func withBaoSleep(t *testing.T) *int {
 	baoread.Sleep = func(time.Duration) { *n++ }
 	t.Cleanup(func() { baoread.Sleep = orig })
 	return n
-}
-
-// withExecOutput stubs the kubectl-shaped seam — findLeaderPod and the
-// current-context probe, NOT the `bao` calls.
-func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
-	t.Helper()
-	orig := kubectlprobe.Exec
-	kubectlprobe.Exec = fn
-	t.Cleanup(func() { kubectlprobe.Exec = orig })
 }

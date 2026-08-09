@@ -9,20 +9,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/doctor"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
@@ -239,8 +240,8 @@ func Gather(o Opts, dir string) error {
 	}
 	secretsPath := filepath.Join(llzDir, "secrets.env")
 	varsPath := filepath.Join(llzDir, "vars.env")
-	secrets := ReadEnvFile(secretsPath)
-	vars := ReadEnvFile(varsPath)
+	secrets := cli.ReadEnvFile(secretsPath)
+	vars := cli.ReadEnvFile(varsPath)
 
 	in := bufio.NewScanner(os.Stdin)
 	for _, s := range specs {
@@ -288,7 +289,7 @@ func printSpec(s secretSpec) {
 // renderEnvFile serializes m as sorted KEY=value lines (pure; tested).
 func renderEnvFile(m map[string]string) string {
 	var b strings.Builder
-	for _, k := range SortedKeys(m) {
+	for _, k := range cli.SortedKeys(m) {
 		b.WriteString(k)
 		b.WriteByte('=')
 		b.WriteString(m[k])
@@ -304,35 +305,6 @@ func WriteEnvFile(path string, m map[string]string) error {
 	}
 	// WriteFile only applies perms on create; enforce on an existing file too.
 	return os.Chmod(path, 0o600)
-}
-
-// ReadEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
-// file → empty map.
-func ReadEnvFile(path string) map[string]string {
-	m := map[string]string{}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return m
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if k, v, ok := strings.Cut(line, "="); ok {
-			m[strings.TrimSpace(k)] = v
-		}
-	}
-	return m
-}
-
-func SortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func openURL(o Opts, url string) {
@@ -359,8 +331,8 @@ func PushSecrets(o Opts, env string) error {
 	if err := validate.EnvName(env); err != nil {
 		return err
 	}
-	secrets := ReadEnvFile(filepath.Join(".llz", "secrets.env"))
-	vars := ReadEnvFile(filepath.Join(".llz", "vars.env"))
+	secrets := cli.ReadEnvFile(filepath.Join(".llz", "secrets.env"))
+	vars := cli.ReadEnvFile(filepath.Join(".llz", "vars.env"))
 	if len(secrets)+len(vars) == 0 {
 		return fmt.Errorf("nothing to push — run `llz secrets Gather` first")
 	}
@@ -381,10 +353,10 @@ func PushSecrets(o Opts, env string) error {
 		val  string
 	}
 	var items []item
-	for _, k := range SortedKeys(secrets) {
-		items = append(items, item{ghcli.SecretSetArgv(env, k), secrets[k]})
+	for _, k := range cli.SortedKeys(secrets) {
+		items = append(items, item{ghcli.SecretSetArgv(env, k, envreq.SecretIsEnvScoped(k)), secrets[k]})
 	}
-	for _, k := range SortedKeys(vars) {
+	for _, k := range cli.SortedKeys(vars) {
 		items = append(items, item{ghcli.VariableSetArgv(k), vars[k]})
 	}
 
@@ -517,6 +489,14 @@ func RunDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		if err := configreadiness.RunEnvReadiness(env); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	// The spec-answerable half of the CI preflights doctor used to leave to the
+	// build — see doctor_build_preflights.go. Only inside an instance: outside one
+	// there is no spec to check, and a bare `llz doctor` is a tooling check. The
+	// image-pin half needs the REPO's variables, so it runs in cmdDoctorE2E below.
+	if clusterspec.InstancePresent(filepath.Dir(tfDir)) {
+		errs = append(errs, checkSpecPreflights(env)...)
 	}
 
 	// e2e readiness — .llz/*.env merged with the live repo config. Needs a repo:

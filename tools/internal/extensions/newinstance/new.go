@@ -18,13 +18,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
@@ -34,7 +34,7 @@ import (
 //
 // INJECTED RATHER THAN MOVED, and this is the edge that made `commands.go` look
 // blocked for five iterations. `runHooksInstall` lives in hooks.go, which needs
-// `runLint` from checks.go, which needs `gitOutput` back from hooks.go — a cycle
+// `runLint` from checks.go, which needs `gitcmd.Output` back from hooks.go — a cycle
 // between two cobra-heavy files that this command needs exactly one function from.
 // One seam settles it; dragging 886 lines across to satisfy a best-effort call
 // would not.
@@ -69,9 +69,9 @@ func Gated(dryRun, yes bool, argv ...string) error {
 // templateSourceStatusFn reports whether the --org template source is reachable
 // on GitHub; seamed for tests. runNew preflights it because copier clones
 // gh:<org>/<template> over HTTPS, and a 404 there (typo'd/un-forked --org)
-// surfaces as an interactive `Username for 'https://github.com':` onboard.Prompt rather
+// surfaces as an interactive `Username for 'https://github.com':` prompt rather
 // than a clear error — the failure mode adopters actually hit.
-var templateSourceStatusFn = onboard.RepoStatus
+var templateSourceStatusFn = ghapi.RepoStatus
 
 // templateUnreachableTail states what an unanswerable lookup does NOT prove about
 // the --org template source. The default upstream is public, so gh is the only
@@ -271,7 +271,7 @@ func printNextSteps(dir string, pushed bool) {
 // for twice. instanceRepoExistsFn reports whether the instance repo itself is
 // already there (an adopter who created it by hand after a failed --push).
 var (
-	instanceRepoExistsFn = onboard.RepoExists
+	instanceRepoExistsFn = ghapi.RepoExists
 	ghLoginFn            = ghLogin
 )
 

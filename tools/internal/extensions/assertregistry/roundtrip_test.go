@@ -1,7 +1,6 @@
 package assertregistry
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,16 +12,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 )
-
-func robotB64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
-
-func robotSecretJSON(user, pass, host string) []byte {
-	obj := map[string]any{"data": map[string]string{
-		"username": robotB64(user), "password": robotB64(pass), "registry_host": robotB64(host),
-	}}
-	b, _ := json.Marshal(obj)
-	return b
-}
 
 // fakeOCIRegistry stands up a distribution-v2 endpoint plus a token service, so the
 // whole handshake runs for real over HTTP.

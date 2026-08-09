@@ -28,12 +28,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instanceresolve"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfroots"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
@@ -265,7 +265,7 @@ func UntrackRenderedTfvars(relPrefix string) {
 	// All tracked files under the TF roots, filtered in Go to the rendered per-env
 	// tfvars across every root (cluster, object-storage, vpc).
 	// terraform.tfvars.example stays tracked — it ends in .example, not .tfvars.
-	listed := buildpreflight.GitOut("ls-files", "--", "terraform-iac-bootstrap")
+	listed := gitcmd.Out("ls-files", "--", "terraform-iac-bootstrap")
 	var tracked []string
 	for _, p := range strings.Split(strings.TrimSpace(listed), "\n") {
 		if p = strings.TrimSpace(p); strings.HasSuffix(p, ".tfvars") {
@@ -343,7 +343,7 @@ func ResolveLLZImageTag() string {
 // build-images.yml pushes :latest and :sha-<40-hex> on every main push, and
 // llz-release.yml retags that commit's sha- image as :vX.Y.Z when a release is
 // promoted. llz_version is NOT one of those forms — it is a raw commit sha or a
-// selfupgrade.Semver tag — so returning it verbatim rendered an image reference that does not
+// llzver.Semver tag — so returning it verbatim rendered an image reference that does not
 // resolve (ghcr.io/…/llz:<sha> and :v0.0.28 both 404), pinning the reconciler,
 // harbor-provisioner and broad-pat-rotator to an ImagePullBackOff. release-e2e
 // masked it by exporting $LLZ_IMAGE_REF, which short-circuits above.
@@ -396,7 +396,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
 	// carried by LLZ on managed, but that is now proven harmless rather than a
 	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
-	// has been configreadiness.Satisfied — the full observability stack (grafana, prometheus,
+	// has been envreq.Satisfied — the full observability stack (grafana, prometheus,
 	// loki→S3) converges Synced+Healthy on a managed cluster without them, because
 	// grafana-admin is apl-core's own and the otel ingress bearer is optional. So
 	// the previous ::warning:: here is retired; see docs/adr/0005-managed-app-platform.md.

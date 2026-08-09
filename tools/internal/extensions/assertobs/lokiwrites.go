@@ -4,7 +4,7 @@ package assertobs
 // an inferred one.
 //
 // WHY THIS EXISTS. assert-loki's other checks are all observational, and every one
-// of them can be configreadiness.Satisfied by a Loki that has never written a byte. #397 is exactly
+// of them can be envreq.Satisfied by a Loki that has never written a byte. #397 is exactly
 // that state: Running, Ready, Synced, Healthy, S3-configured, and 403 AccessDenied on
 // every PutObject. Two successive attempts to catch it observationally both passed
 // vacuously on a real cluster — a 60s flush-error scan finds nothing when nothing has
@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
@@ -200,10 +202,10 @@ func lokiIngesterPods(nameMatch string) []lokiPod {
 	return out
 }
 
-// lokiNewestObject returns the newest object in the bucket. objenc.SampleObjectKeys sorts
+// lokiNewestObject returns the newest object in the bucket. objstore.SampleObjectKeys sorts
 // newest-first, so one key is enough.
 var lokiNewestObject = func(ak, sk, endpoint, bucket string) (time.Time, bool) {
-	refs, err := objenc.SampleObjectKeys(ak, sk, endpoint, bucket, 1)
+	refs, err := objstore.SampleObjectKeys(ak, sk, endpoint, bucket, 1)
 	if err != nil || len(refs) == 0 {
 		return time.Time{}, false
 	}
@@ -232,7 +234,7 @@ var lokiFlushIngester = func(p lokiPod) error {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	local, err := ReadForwardPortTimeout(stdout, ForwardEstablishTimeout)
+	local, err := portfwd.ReadForwardPortTimeout(stdout, portfwd.ForwardEstablishTimeout)
 	if err != nil {
 		return err
 	}

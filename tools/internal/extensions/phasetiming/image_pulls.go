@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
 
@@ -47,7 +48,7 @@ func RunCollectImagePulls(out string) error {
 	pulls := parseImagePulls(raw)
 	table := renderImagePullTable(pulls)
 	fmt.Print(table)
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY", strings.TrimRight(table, "\n")); err != nil {
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY", strings.TrimRight(table, "\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::collect-image-pulls: step-summary write failed (ignored): %v\n", err)
 	}
 	if out != "" {

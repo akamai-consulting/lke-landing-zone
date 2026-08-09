@@ -23,14 +23,6 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 	t.Cleanup(func() { caps.Exec = prev })
 }
 
-// withGHJSONPaged replaces the paginated-GET capability for one test.
-func withGHJSONPaged(t *testing.T, fn func(path string, out any) error) {
-	t.Helper()
-	prev := caps.GHJSONPaged
-	caps.GHJSONPaged = fn
-	t.Cleanup(func() { caps.GHJSONPaged = prev })
-}
-
 // captureStderr mirrors captureStdout for the os.Stderr path (the remediation /
 // warning printers write there).
 func captureStderr(t *testing.T, fn func()) string {

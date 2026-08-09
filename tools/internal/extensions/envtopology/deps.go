@@ -70,7 +70,7 @@ var caps = Deps{
 // Install wires the capabilities main owns. Call once, before any verb runs.
 func Install(d Deps) { caps = d }
 
-// validateEnvName returns an error if env is not a legal Deployment name. The
+// validateEnvName returns an error if env is not a legal topo.Deployment name. The
 // contract (^[a-z][a-z0-9-]{1,30}$) lives in internal/validate so the LandingZone
 // spec validator enforces the identical rule; this is a one-line delegation, not a
 // seam.

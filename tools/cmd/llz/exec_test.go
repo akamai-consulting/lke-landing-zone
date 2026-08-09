@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
 )
 
 // withExecOutput / withLookPath swap the package-level exec seam for the
@@ -38,18 +38,18 @@ func withLookPath(t *testing.T, fn func(file string) (string, error)) {
 func TestGitOut(t *testing.T) {
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "git" {
-			t.Errorf("buildpreflight.GitOut shelled out to %q, want git", name)
+			t.Errorf("gitcmd.Out shelled out to %q, want git", name)
 		}
 		return []byte("  deadbeef\n"), nil
 	})
-	if got := buildpreflight.GitOut("rev-parse", "HEAD"); got != "deadbeef" {
-		t.Errorf("buildpreflight.GitOut = %q, want deadbeef (trimmed)", got)
+	if got := gitcmd.Out("rev-parse", "HEAD"); got != "deadbeef" {
+		t.Errorf("gitcmd.Out = %q, want deadbeef (trimmed)", got)
 	}
 
 	// Any error yields the empty string.
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("boom") })
-	if got := buildpreflight.GitOut("status"); got != "" {
-		t.Errorf("buildpreflight.GitOut(error) = %q, want empty", got)
+	if got := gitcmd.Out("status"); got != "" {
+		t.Errorf("gitcmd.Out(error) = %q, want empty", got)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestLookable(t *testing.T) {
 func TestLatestRelease(t *testing.T) {
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) == 0 || args[0] != "release" {
-			t.Errorf("selfupgrade.LatestRelease shelled out to %q %v, want gh release ...", name, args)
+			t.Errorf("llzver.LatestRelease shelled out to %q %v, want gh release ...", name, args)
 		}
 		// Bare vX.Y.Z full releases are the CLI track. Every tag ABOVE the expected
 		// winner is excluded for a different reason — v0.0.38 is a pre-release (an
@@ -97,16 +97,16 @@ func TestLatestRelease(t *testing.T) {
 			`{"tagName":"v0.0.39","isDraft":true,"isPrerelease":false},` +
 			`{"tagName":"llz/v0.0.40","isDraft":false,"isPrerelease":false}]`), nil
 	})
-	tag, err := selfupgrade.LatestRelease("akamai/lke-landing-zone")
+	tag, err := llzver.LatestRelease("akamai/lke-landing-zone")
 	if err != nil || tag != "v0.0.37" {
-		t.Errorf("selfupgrade.LatestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
+		t.Errorf("llzver.LatestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
 	}
 
 	// Only pre-releases/prefixed tags -> error (no full release to serve).
 	withExecOutput(t, func(string, ...string) ([]byte, error) {
 		return []byte(`[{"tagName":"v1.0.0","isDraft":false,"isPrerelease":true},{"tagName":"llz/v1.0.0","isDraft":false,"isPrerelease":false}]`), nil
 	})
-	if _, err := selfupgrade.LatestRelease("x"); err == nil {
-		t.Error("selfupgrade.LatestRelease(no full release) = nil, want error")
+	if _, err := llzver.LatestRelease("x"); err == nil {
+		t.Error("llzver.LatestRelease(no full release) = nil, want error")
 	}
 }

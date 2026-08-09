@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
@@ -25,7 +25,7 @@ type UpgradeSnapshot struct {
 	files map[string]os.FileMode
 }
 
-func SnapshotUpgradeOwned(m templatemanifest.Manifest) (UpgradeSnapshot, error) {
+func SnapshotUpgradeOwned(m manifest.Manifest) (UpgradeSnapshot, error) {
 	files, err := upgradeWorktreeFiles()
 	if err != nil {
 		return UpgradeSnapshot{}, err
@@ -79,11 +79,11 @@ func (s UpgradeSnapshot) restore() error {
 }
 
 // upgradeProtectsOwned reports whether a file must be snapshotted before copier
-// runs and put back after. The class table is the authority (templatemanifest.UpgradeRestore);
+// runs and put back after. The class table is the authority (manifest.UpgradeRestore);
 // the answers tracker is copier's own bookkeeping and is never restored.
 func upgradeProtectsOwned(class, rel string) bool {
-	c, ok := templatemanifest.LookupClass(class)
-	return ok && c.Upgrade == templatemanifest.UpgradeRestore && rel != copierAnswersPath
+	c, ok := manifest.LookupClass(class)
+	return ok && c.Upgrade == manifest.UpgradeRestore && rel != copierAnswersPath
 }
 
 func upgradeWorktreeFiles() ([]string, error) {
@@ -222,18 +222,18 @@ func copierRenderArgv(a *answers.File, ref, dst string) []string {
 }
 
 func overwriteManagedFromScaffold(cleanRoot string) (int, error) {
-	m, err := templatemanifest.Load(cleanRoot)
+	m, err := manifest.Load(cleanRoot)
 	if err != nil {
 		return 0, err
 	}
-	files, err := templatemanifest.ScaffoldFiles(cleanRoot)
+	files, err := manifest.ScaffoldFiles(cleanRoot)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
 	for _, rel := range files {
-		c, ok := templatemanifest.LookupClass(m.Classify(rel))
-		if !ok || c.Upgrade != templatemanifest.UpgradeOverwrite {
+		c, ok := manifest.LookupClass(m.Classify(rel))
+		if !ok || c.Upgrade != manifest.UpgradeOverwrite {
 			continue
 		}
 		src := filepath.Join(cleanRoot, filepath.FromSlash(rel))

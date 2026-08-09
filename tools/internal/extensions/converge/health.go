@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -733,7 +732,7 @@ func checkLokiObjStorage(r *health.Report, phase1 bool) {
 		return
 	}
 	hdr("apl-overlay obj storage (Loki S3)")
-	cfg := LokiConfigText("loki")
+	cfg := health.LokiConfigText("loki")
 	if strings.TrimSpace(cfg) == "" {
 		record(r, health.CatOK, "Loki not deployed — no obj overlay to await")
 		return
@@ -1500,26 +1499,3 @@ func countReadyEndpoints(ns, svc string) int {
 // returned "" for every test, so the S3-detection assertions ran against nothing.
 // A seam in the wrong place does not just add indirection; it manufactures a
 // vacuous fixture.
-
-// lokiConfigText concatenates the data values of every name-matching ConfigMap
-// (where the rendered Loki config lives) so the S3 detection can scan it.
-func LokiConfigText(match string) string {
-	re := regexp.MustCompile(match)
-	var b strings.Builder
-	for _, raw := range kubectlprobe.Items("get", "configmap", "-A") {
-		var cm struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Data map[string]string `json:"data"`
-		}
-		if json.Unmarshal(raw, &cm) != nil || !re.MatchString(cm.Metadata.Name) {
-			continue
-		}
-		for _, v := range cm.Data {
-			b.WriteString(v)
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
-}

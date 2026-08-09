@@ -3,10 +3,12 @@ package openbao
 import (
 	"reflect"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func TestBaoExecArgv(t *testing.T) {
-	got := ExecArgv("platform-openbao-0", "s.tok", []string{"policy", "list"})
+	got := openbao.ExecArgv("platform-openbao-0", "s.tok", []string{"policy", "list"})
 	// Targets the LOOPBACK listener (8210) and VERIFIES the server against the
 	// pod-mounted CA. The network listener (8200) now requires a client
 	// certificate that an exec'd `bao` does not carry, and the openbao-tls cert
@@ -28,7 +30,7 @@ func TestBaoExecArgv(t *testing.T) {
 		t.Errorf("ExecArgv\n got: %v\nwant: %v", got, want)
 	}
 	// bao's own flags must survive untouched as trailing args.
-	got2 := ExecArgv("platform-openbao-0", "t", []string{"write", "-f", "auth/approle/role/x/secret-id", "-format=json"})
+	got2 := openbao.ExecArgv("platform-openbao-0", "t", []string{"write", "-f", "auth/approle/role/x/secret-id", "-format=json"})
 	tail := got2[len(got2)-4:]
 	if !reflect.DeepEqual(tail, []string{"write", "-f", "auth/approle/role/x/secret-id", "-format=json"}) {
 		t.Errorf("bao flags not passed through: %v", tail)

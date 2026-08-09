@@ -2,7 +2,6 @@ package sustain
 
 import (
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,40 +123,4 @@ func realGitDeps(t *testing.T) Deps {
 		return exec.Command(argv[0], argv[1:]...).Run()
 	}
 	return d
-}
-
-// testManagedDeps hands the managed-lock guard a REAL LockableScaffoldFiles.
-//
-// AN INSTALLED DEFAULT IS A FIXTURE TOO — five times over in this branch. These
-// tests write a scaffold tree to a temp dir and assert the guard notices drift in
-// it, so a stub returning (".", nil, nil) would make every one of them pass
-// against nothing. This reads the tree the test just built: every file under root
-// except the lock itself, which is what package main's class table resolves to for
-// these fixtures.
-func testManagedDeps() Deps {
-	return Deps{
-		LockableScaffoldFiles: func(root string) (string, []string, error) {
-			if root == "" {
-				root = "."
-			}
-			var rels []string
-			err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
-					return err
-				}
-				rel, rerr := filepath.Rel(root, p)
-				if rerr != nil {
-					return rerr
-				}
-				rel = filepath.ToSlash(rel)
-				if rel == ManagedLockPath {
-					return nil
-				}
-				rels = append(rels, rel)
-				return nil
-			})
-			sort.Strings(rels)
-			return root, rels, err
-		},
-	}
 }

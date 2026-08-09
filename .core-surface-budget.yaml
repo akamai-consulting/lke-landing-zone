@@ -1012,6 +1012,41 @@ categories:
 #        mutation -- `llz ci` verbs run inside a workflow that is itself the
 #        authorization. So it stays caller-supplied, and a resolver produces
 #        capability handles only. That is the right split, not a wart.
+#   93rd: merge origin/main   1,700 -> 1,885 (+185)
+#        NOT A REGRESSION -- main`s first-run audit (#416) landed real new code in
+#        package main while this branch was relocating everything under it. Nine
+#        conflicts, and every one was main fixing a file this branch had moved.
+#        THE FIXES MERGED, NOT THE LOCATIONS. Each was applied at the new home:
+#        resolveDeploymentScope (the deployment-name-as-Linode-region bug that made
+#        the Volume census read 0, so a destroy could go green having leaked every
+#        Volume) went to configreadiness and is now called by BOTH `ci preflight`
+#        and `ci assert-no-orphans`; checkReapRegion`s guard, the objkey drain,
+#        checkpointEnvFiles, the dispatch watcher and the reordered manual-actions
+#        list all landed with their capabilities.
+#        +185 IS MAIN`S NEW CODE, not drift: build_watch.go (97) serves cmdBuild,
+#        which is composition and stays; ci_build_failure_summary.go (90) is a NEW
+#        undeclared verb and wants the same treatment the last three got -- an
+#        owner argued, then a move. Recorded rather than done, because a
+#        declaration decision does not belong in a merge commit.
+#        ~20 of main`s symbols had to be repointed at their new homes
+#        (appendGHAFile -> ghaout.Append, execArgv -> proc.Run, probeTokenValidities
+#        -> doctor.ProbeTokenValidities, lookable -> kubectlprobe.Lookable, ...).
+#   94th: staticcheck`s first run on this branch   1,885 -> 1,853 (-32)
+#        122 FINDINGS, TWO OF THEM REAL, and both were this campaign`s doing:
+#        teardown lost the `!dryRun` half of its confirm gate (see e1f79ba5), and
+#        a bootstrap-cluster skew guard became value-against-itself when the alias
+#        it compared was deleted. Neither was visible because lint.yml -- the only
+#        workflow that runs go test AND staticcheck -- is filtered to
+#        branches [main, master], and #415 targeted a branch until today.
+#        THE OTHER 120 WERE DEAD TEST HELPERS the extraction left behind as tests
+#        moved between packages, plus THREE DEAD NON-TEST FILES in cmd/llz
+#        (forge_env.go, sortedmapkeys.go, orq.go, indent.go -- the last two had
+#        only their own tests as callers, their production users having moved to
+#        configreadiness and extension.go`s own copy).
+#        A LINE-ARITHMETIC PRUNER TRUNCATED A RAW STRING LITERAL on the first
+#        attempt -- the trap this campaign already had on record -- and deleted a
+#        helper that was in use. Reverted whole, then redone with a go/ast pruner
+#        that cannot be confused by a brace in a comment or a backtick block.
 # THE FILE COUNTS ABOVE ARE UNRELIABLE FROM ROUGHLY THE 30th ENTRY ON, and the
     # line counts are not. `exact: true` checks the NUMBER every commit, so every
     # budget figure here has been verified by the gate; nothing checks the "/ N
@@ -1020,11 +1055,89 @@ categories:
     # earlier entries in that stretch are approximate and were left rather than
     # invented. Read `llz ci core-surface --verbose | wc -l` for the real count.
 
+    # LAYERING (no core-surface change; this budget stayed at 1853). internal/shared
+    # is substrate and internal/extensions is capability, and the arrow is supposed
+    # to point one way only. It had already inverted FOUR times -- shared/answers
+    # reaching up for promote.TemplateRefFromStamp, shared/ghcli for
+    # configreadiness.SecretIsEnvScoped, shared/copier for four selfupgrade version
+    # helpers, shared/ghgitdata for credrotate.InClusterToken. Every one arrived the
+    # same way: a genuinely general helper was written inside whichever extension
+    # needed it FIRST, and the second caller imported the extension rather than
+    # moving the helper. Nobody chose to invert the layering; they chose not to move
+    # a function. Three were moved down (a new shared/llzver holds the version
+    # vocabulary); the fourth was policy, not substrate, so ghcli now takes the
+    # answer as a parameter from a caller that already knew it.
+    # internal/shared/llzver=95 and the selfupgrade floor 49 -> 56 are here rather
+    # than as Makefile comments because untestable-loc COUNTS MAKEFILE COMMENT
+    # LINES. llzver arrived at 68% because LatestRelease shells out to `gh` and read
+    # as untestable; it is not -- kubectlprobe.Exec is a swappable seam and every
+    # decision is made on the returned bytes, so it went to 96.5%. selfupgrade FELL
+    # to 44.3% without one line of it getting worse: the version helpers were among
+    # its best-covered code and they left. Lowering that floor would have been the
+    # wrong read of the number -- it described a package that no longer exists -- so
+    # verifyChecksum and walkUpgradeFiles, both long at 0% and both pure filesystem
+    # work, were covered instead, and the floor went UP to 56 against an actual 57.4.
+    #
+    # 1856 -> 1857. One import line. The two firewall names moved from
+    # internal/extensions/reconciler to internal/shared/platform, and the two
+    # cmd/llz files that use them still import `reconciler` for other things, so
+    # each gained a `platform` import without losing the old one. Five insertions
+    # against four deletions.
+    #
+    # It is recorded rather than absorbed because `exact: true` means every number
+    # here was checked, and a budget that quietly rounds off single lines stops
+    # being able to say anything about ten.
+    #
+    # IN-DEGREE SWEEP, ROUND TWO (no core-surface change). 90 -> 66 extension ->
+    # extension edges, by splitting the four biggest hubs. The COVERAGE FLOORS MOVED
+    # WITH THE CODE and three of them went DOWN, which needs saying plainly rather
+    # than being left to look like a regression:
+    #
+    #   internal/extensions/instanceresolve   87 -> 95   (0 lib lines left; 100% now)
+    #   internal/extensions/envtopology       31 ->  8
+    #   internal/extensions/openbao           58 -> 32
+    #   internal/shared/instanceresolve             87   (measured 89.6)
+    #   internal/shared/envtopology                 67   (measured 69.9)
+    #   internal/shared/openbao                     76   (measured 79.0)
+    #   internal/shared/portfwd                     90   (40 -> 93.3, timeout path)
+    #
+    # THE COVERAGE DID NOT DROP, IT RELOCATED. Each of those three extensions was
+    # mostly library, the library was mostly what was tested, and both went to
+    # internal/shared together -- so the shared floors above are where the same
+    # tests now count. What is left behind in envtopology and openbao is cobra verb
+    # plumbing, which is genuinely less covered and always was; it had been hidden
+    # inside a package average carried by the library sitting next to it. Lowering
+    # those two is the number stopping being flattering, not the tests getting worse.
+    #
+    # This is the OPPOSITE case to the selfupgrade entry below, where a floor also
+    # fell after a move and the right answer was to write tests rather than lower
+    # it. The difference is where the uncovered code came from: there, well-covered
+    # code left and the REMAINDER had cheap untested functions worth covering
+    # (verifyChecksum, walkUpgradeFiles, both at 0%). Here the remainder is 2,600
+    # lines of command wiring. instanceresolve is the case that proves the rule
+    # rather than breaking it -- its floor went UP, because what remained was a bare
+    # declaration with no test at all, and a declaration is cheap to check.
+    #
+    # 1853 -> 1856, AND THE FIRST DELIBERATE GROWTH IN A LONG WHILE. Binding gained
+    # a Requires field (the precondition axis) and `llz extension list` renders it:
+    # three lines in bindingSummary. The code belongs in package main because that
+    # is the CLI rendering layer and the summary string is a presentation choice —
+    # it uses `<operating` rather than Binding.String()'s spelled-out form because
+    # the column holds several bindings side by side.
+    #
+    # Not rendering it was the alternative and it was wrong. `database-provisioner`
+    # holds two bindings at `transition:seeded`, one of which requires `operating`;
+    # without the field they collapsed to a single entry and the list silently
+    # showed one binding where there are two. A list command whose help says it
+    # shows bindings, quietly dropping the part that distinguishes two of them, is
+    # the banning-by-omission shape this whole model was built to prevent — in the
+    # one surface an operator actually reads.
+    #
     # `exact: true` is what made this commit possible to get wrong and therefore
     # possible to get right: extracting the code and forgetting this line fails the
     # gate with "SHRANK — LOWER IT" and the new number, so the paydown is banked
     # rather than left as slack the next change grows into unremarked.
-    budget: 1700
+    budget: 1857
     exact: true
     include:
       - "tools/cmd/llz/*.go"

@@ -102,8 +102,13 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		created int64
 	}
 	var candidates []cand
+	legacyN := 0
 	for _, t := range tokens {
-		if s, _ := t["label"].(string); s != label {
+		s, _ := t["label"].(string)
+		if s == legacyRotationLabels[rotationKindPAT] {
+			legacyN++
+		}
+		if s != label {
 			continue
 		}
 		id, ok := cli.AsUint64(t["id"])
@@ -117,6 +122,9 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		candidates = append(candidates, cand{id, created})
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].created > candidates[j].created })
+	if label != legacyRotationLabels[rotationKindPAT] {
+		reportLegacyRotationLabels(rotationKindPAT, legacyN)
+	}
 
 	if len(candidates) == 0 {
 		slog.Warn("no PATs match label — nothing to revoke", "label", label)

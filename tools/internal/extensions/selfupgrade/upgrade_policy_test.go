@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 )
 
 func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
@@ -19,7 +19,7 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	gitInitRepo(t, dir, ".template-manifest", "owned.txt", ".copier-answers.yml", "managed.txt")
 	chdir(t, dir)
 
-	m, err := templatemanifest.Load(".")
+	m, err := manifest.Load(".")
 	if err != nil {
 		t.Fatal(err)
 	}

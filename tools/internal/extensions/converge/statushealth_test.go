@@ -3,15 +3,17 @@ package converge
 import (
 	"reflect"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
 
 func TestClassifyArgoApps(t *testing.T) {
 	required := []string{"platform-openbao", "platform-harbor"}
-	apps := []ArgoApp{
-		{"platform-openbao", "Synced", "Healthy"},   // required, ok
-		{"platform-harbor", "OutOfSync", "Healthy"}, // required, unhealthy
-		{"some-app", "Synced", "Degraded"},          // other, unhealthy
-		{"another", "Synced", "Healthy"},            // other, ok (ignored)
+	apps := []health.AppRef{
+		{Name: "platform-openbao", Sync: "Synced", Health: "Healthy"},   // required, ok
+		{Name: "platform-harbor", Sync: "OutOfSync", Health: "Healthy"}, // required, unhealthy
+		{Name: "some-app", Sync: "Synced", Health: "Degraded"},          // other, unhealthy
+		{Name: "another", Sync: "Synced", Health: "Healthy"},            // other, ok (ignored)
 		// platform-... harbor present but openbao... note: missing "platform-…" handled below
 	}
 	reqUnhealthy, missing, other := classifyArgoApps(apps, required)
@@ -29,21 +31,12 @@ func TestClassifyArgoApps(t *testing.T) {
 
 func TestClassifyArgoAppsMissingRequired(t *testing.T) {
 	required := []string{"platform-openbao", "platform-loki"}
-	apps := []ArgoApp{{"platform-openbao", "Synced", "Healthy"}} // loki absent
+	apps := []health.AppRef{{Name: "platform-openbao", Sync: "Synced", Health: "Healthy"}} // loki absent
 	reqUnhealthy, missing, _ := classifyArgoApps(apps, required)
 	if len(reqUnhealthy) != 0 {
 		t.Errorf("reqUnhealthy = %v, want none", reqUnhealthy)
 	}
 	if want := []string{"platform-loki"}; !reflect.DeepEqual(missing, want) {
 		t.Errorf("missing = %v, want %v", missing, want)
-	}
-}
-
-func TestArgoAppHealthy(t *testing.T) {
-	if !(ArgoApp{"x", "Synced", "Healthy"}).Healthy() {
-		t.Error("Synced+Healthy should be healthy")
-	}
-	if (ArgoApp{"x", "Synced", "Progressing"}).Healthy() {
-		t.Error("Progressing is not healthy")
 	}
 }

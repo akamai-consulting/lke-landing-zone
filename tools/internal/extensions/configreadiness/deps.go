@@ -1,7 +1,6 @@
 package configreadiness
 
 import (
-	"os"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -68,7 +67,6 @@ func firstNonEmpty(vals ...string) string {
 // statePassphraseSecret is the GitHub secret name the Terraform roots read the
 // state-encryption passphrase from. A const, not a seam — this package needs to
 // know the NAME to report on its presence, not the value.
-const statePassphraseSecret = "TF_STATE_ENCRYPTION_PASSPHRASE"
 
 // validateEnvName returns an error if env is not a legal deployment name.
 // The deployment-name contract (^[a-z][a-z0-9-]{1,30}$) lives in internal/validate
@@ -99,26 +97,6 @@ func tfvarsValue(content, key string) string {
 		return val
 	}
 	return ""
-}
-
-// readEnvFile parses KEY=value lines, ignoring blanks and # comments. Missing
-// file → empty map.
-func readEnvFile(path string) map[string]string {
-	m := map[string]string{}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return m
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if k, v, ok := strings.Cut(line, "="); ok {
-			m[strings.TrimSpace(k)] = v
-		}
-	}
-	return m
 }
 
 // deps is the installed capability set. Defaults do something harmless and

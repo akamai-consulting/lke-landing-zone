@@ -9,23 +9,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
 func TestWaitPoll(t *testing.T) {
 	// Succeeds on the 3rd try.
 	n := 0
-	if !WaitPoll(time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
+	if !cigate.WaitPoll(time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
 		t.Errorf("WaitPoll succeeded=%v after %d tries, want true at 3", n == 3, n)
 	}
 	// A zero/negative budget still gets exactly one immediate try.
 	n = 0
-	if WaitPoll(0, time.Millisecond, func() bool { n++; return false }) {
+	if cigate.WaitPoll(0, time.Millisecond, func() bool { n++; return false }) {
 		t.Error("WaitPoll should be false when cond never holds")
 	}
 	if n != 1 {
 		t.Errorf("WaitPoll tried %d times under a zero budget, want 1", n)
 	}
-	if !WaitPoll(0, time.Millisecond, func() bool { return true }) {
+	if !cigate.WaitPoll(0, time.Millisecond, func() bool { return true }) {
 		t.Error("WaitPoll should succeed on an immediate true even with a zero budget")
 	}
 }

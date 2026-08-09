@@ -56,13 +56,30 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // leaves is real: the model has no way to say "acts DURING one state to restore an
 // earlier one".
 //
-// It is recorded, not invented. `rotate-admin` (internal/credrotate) hit exactly
-// this and resolved it by declaring the state whose credentials it restores rather
-// than the state it runs in. This does the same, and TWO independent cases
-// resolving the same way is evidence the workaround is stable — not yet that a new
-// word is needed. The campaign's rule for adding one is a declaration that is
-// IMPOSSIBLE; this one is merely imprecise, and imprecision that both cases
-// resolve identically is a convention, which is cheaper than a fifth axis.
+// RESOLVED, BY A THIRD CASE THAT BROKE THE ARGUMENT ABOVE. This file used to end
+// here with a refusal, and the refusal was well-reasoned: `rotate-admin` had hit
+// exactly this and resolved it by declaring the state whose credentials it
+// restores rather than the state it runs in, this did the same, and two
+// independent cases resolving the SAME WAY is a convention rather than a missing
+// word. The campaign's bar is a declaration that is IMPOSSIBLE, and imprecision
+// two cases agree about is merely imprecise.
+//
+// The third case is `wedge-gameday`, and it does not follow the convention. It
+// declares `converged` because that is the NEAREST LEGAL state — proximity, not
+// semantics — where these two picked the state whose credentials they restore.
+// So the workaround was never one convention; it was two, and which one a case
+// used depended on whether it happened to restore anything. A convention the third
+// instance does not follow is not a convention.
+//
+// The other half of the evidence is that the two ceiling tables actively CONTRADICT
+// each other on `rotate-admin`: grantStates puts `operating` in the secret-custody
+// row explicitly for rotation, while bindableStates bars a transition there.
+// Imprecision does not explain a model that gives two answers.
+//
+// So Binding.Requires now carries the precondition, and the state line goes back to
+// meaning one thing. Note what did NOT change: the kind is still `transition` and
+// `operating` is still unreachable as a State. See the Requires comment on Binding
+// for why a fifth KIND would have answered the wrong question.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "openbao-lifecycle",
@@ -79,9 +96,10 @@ func Extension() extension.Extension {
 				},
 			},
 			{
-				Kind:  extension.Transition,
-				Name:  "bao-regen-root",
-				State: extension.Seeded,
+				Kind:     extension.Transition,
+				Name:     "bao-regen-root",
+				State:    extension.Seeded,
+				Requires: extension.Operating,
 				Grants: []extension.Grant{
 					extension.ClusterRead, extension.ClusterWrite,
 					extension.SecretCustody, extension.CloudMutate,
@@ -89,11 +107,11 @@ func Extension() extension.Extension {
 			},
 		},
 		Incomplete: []string{
-			"`bao-breakglass` is declared under bao-regen-root's binding because it " +
-				"is the same restore with a different key source (the GitHub-stored " +
-				"recovery quorum rather than operator-held shares). It runs while the " +
-				"platform is `operating`, which the model cannot express for a " +
-				"transition; see the type comment on the precondition axis.",
+			"`bao-breakglass` is declared under bao-regen-root's binding because it is the " +
+				"same restore with a different key source (the GitHub-stored recovery quorum " +
+				"rather than operator-held shares). The rest of this note used to say the " +
+				"model could not express that it runs while the platform is `operating`; " +
+				"Binding.Requires now does, and the binding declares it.",
 		},
 	}
 }

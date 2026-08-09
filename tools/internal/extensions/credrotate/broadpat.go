@@ -30,7 +30,7 @@ package credrotate
 //      every run after the first exits 0, and the credential-age gauge reads the
 //      OpenBao stamp the premature write had just refreshed. Reversed, a
 //      PERSISTENT OpenBao failure leaves the stamp old, so
-//      LLZCredentialRotationOverdue (broad-pat is reconcilelanes.CredClassAutomated) becomes
+//      LLZCredentialRotationOverdue (broad-pat is credpaths.CredClassAutomated) becomes
 //      reachable. One new mode, stated for honesty: a persistent PUBLISH failure
 //      now mints a PAT per weekly run without reaching revoke — self-limiting at
 //      ~13 against the 100-PAT cap given the 90-day expiry. Reversed, a failed OpenBao write leaves the stamp OLD, so
@@ -51,6 +51,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 const (
@@ -88,7 +89,7 @@ var ghSetEnvSecretFn envSecretWriter = func(name, env, value string) error { ret
 // clock) so the rotation flow is unit-testable without any network.
 type broadPATDeps struct {
 	lc          LinodeAPI
-	bao         BaoStore
+	bao         openbao.BaoStore
 	writeSecret envSecretWriter
 	now         func() time.Time
 }

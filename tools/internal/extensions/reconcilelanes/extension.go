@@ -35,7 +35,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // `openbao-gauges` IS THE FIRST `secret-custody` BINDING in the registry. It
 // authenticates to OpenBao through the reconciler's k8s-auth role and reads seal
 // state plus credential rotation metadata — real custody of a real token, fenced
-// by `policyReconcilerRead` to metadata reads on the paths in CredPaths. The
+// by `policyReconcilerRead` to metadata reads on the paths in credpaths.CredPaths. The
 // grantStates table already permitted `secret-custody` at `operating`, so unlike
 // `cloud-mutate` in `assert-storage` this one needed no ceiling change; it is the
 // control case showing the table is not simply permissive everywhere.

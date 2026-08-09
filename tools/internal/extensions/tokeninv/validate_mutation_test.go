@@ -3,6 +3,8 @@ package tokeninv
 import (
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // clearValidatableTokens blanks every credential this preflight reads, so a test
@@ -27,11 +29,13 @@ func clearValidatableTokens(t *testing.T) {
 // silently-empty environment (a mis-scoped GH Environment handing the job no
 // secrets at all) passes as a clean preflight.
 func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
-	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
-	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
-	LinodeProbe = func(string) (int, error) { return 200, nil }
-	GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil } // GHCR is optional
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGHCR, origGH := tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe
+	t.Cleanup(func() {
+		tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe = origLinode, origGHCR, origGH
+	})
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 200, nil }
+	tokenprobe.GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil } // GHCR is optional
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	clearValidatableTokens(t)
 	t.Setenv("LINODE_API_TOKEN", "live")   // required, valid
@@ -56,11 +60,13 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 // must be probed and counted. Losing this branch means an expired state key is
 // discovered by `tofu init` instead of by the preflight.
 func TestValidateTokensProbesTheStateKeyPairWhenBothAreSet(t *testing.T) {
-	origLinode, origGHCR, origGH := LinodeProbe, GHCRTokenProbe, GHPATProbe
-	t.Cleanup(func() { LinodeProbe, GHCRTokenProbe, GHPATProbe = origLinode, origGHCR, origGH })
-	LinodeProbe = func(string) (int, error) { return 200, nil }
-	GHCRTokenProbe = func(_, _ string) (int, error) { return 200, nil }
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	origLinode, origGHCR, origGH := tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe
+	t.Cleanup(func() {
+		tokenprobe.LinodeProbe, tokenprobe.GHCRTokenProbe, tokenprobe.GHPATProbe = origLinode, origGHCR, origGH
+	})
+	tokenprobe.LinodeProbe = func(string) (int, error) { return 200, nil }
+	tokenprobe.GHCRTokenProbe = func(_, _ string) (int, error) { return 200, nil }
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
 	// Endpoint/bucket deliberately left unset: ProbeS3Pair reports "can't sign a
 	// probe" without touching the network, which is enough to observe the branch.

@@ -86,7 +86,7 @@ var plaintextAllowed = map[string]plaintextRule{
 			"pipeline was BROKEN as well as plaintext. Repaired to `monitoring`, where apl-core " +
 			"actually runs Loki — confirmed by apl-core's own otel-operator shipping to " +
 			"http://loki-gateway.monitoring/otlp. The TLS half of ADR 0010's instruction (\"whoever " +
-			"repairs the URL must give it TLS at the same time\") is NOT configreadiness.Satisfied and cannot be from " +
+			"repairs the URL must give it TLS at the same time\") is NOT envreq.Satisfied and cannot be from " +
 			"here: the gateway is nginx serving plain HTTP with no TLS material from apl-core, so " +
 			"https:// would connect to nothing. This closes when the hop is meshed — i.e. when " +
 			"llz-openbao and monitoring are both enrolled in ambient",
@@ -272,7 +272,7 @@ var plaintextAllowed = map[string]plaintextRule{
 	},
 
 	// ── ours, out of this guard's scope by construction ──────────────────────
-	"tools/internal/extensions/openbao/openbao.go:HTTPClientLoopback": {
+	"tools/internal/shared/openbao/openbao.go:HTTPClientLoopback": {
 		owner: "inherent",
 		reason: "re-keyed from HTTPClientInsecure, which #360 renamed. The unverified transport now " +
 			"reaches ONLY loopback: the `kubectl port-forward` tunnel to 127.0.0.1 that `llz openbao " +

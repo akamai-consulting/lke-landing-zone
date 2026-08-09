@@ -27,9 +27,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
 
 const (
@@ -272,7 +272,7 @@ func patchWithWebhookRetry(patch string) error {
 			return nil
 		}
 		text := strings.TrimSpace(string(out)) + " " + err.Error()
-		if !kyverno.IsWebhookRace(text) {
+		if !health.IsWebhookRace(text) {
 			return fmt.Errorf("patch %s/%s hostAliases: %w: %s", baoread.Namespace, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
 		}
 		if !keycloakPinNow().Before(deadline) {

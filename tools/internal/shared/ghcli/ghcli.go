@@ -17,17 +17,21 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 )
 
 // SecretSetArgv routes a secret to its scope. Reads the requirement table rather
 // than hardcoding --env, matching pushToRepo: TF_STATE_ENCRYPTION_PASSPHRASE is
 // repo-level (one per instance), and pushing it env-scoped through `llz secrets
 // push` would give a second deployment a different passphrase.
-func SecretSetArgv(env, name string) []string {
+// envScoped IS A PARAMETER RATHER THAN A LOOKUP. It used to call
+// envreq.SecretIsEnvScoped, which made this substrate package import an
+// extension — the inversion the boundary test now forbids. Scoping is a property
+// of the requirement table, which is configreadiness's to own; building the argv
+// is this package's. The one real caller already imports configreadiness, so
+// passing the answer in costs nothing and removes the edge.
+func SecretSetArgv(env, name string, envScoped bool) []string {
 	argv := []string{"gh", "secret", "set", name}
-	if configreadiness.SecretIsEnvScoped(name) {
+	if envScoped {
 		argv = append(argv, "--env", "infra-"+env)
 	}
 	return argv

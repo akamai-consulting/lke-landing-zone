@@ -1,7 +1,6 @@
 package assertobs
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -14,16 +13,5 @@ func TestParsePromSpec(t *testing.T) {
 		if _, _, _, err := parsePromSpec(bad); err == nil {
 			t.Errorf("parsePromSpec(%q) should error", bad)
 		}
-	}
-}
-
-func TestReadForwardPort(t *testing.T) {
-	out := "Forwarding from 127.0.0.1:54321 -> 9090\nForwarding from [::1]:54321 -> 9090\n"
-	got, err := readForwardPort(strings.NewReader(out))
-	if err != nil || got != "54321" {
-		t.Fatalf("readForwardPort = %q, %v; want 54321", got, err)
-	}
-	if _, err := readForwardPort(strings.NewReader("no port line here\n")); err == nil {
-		t.Error("readForwardPort should error when no Forwarding line is present")
 	}
 }

@@ -42,12 +42,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 )
 
 func RunDrainObjBuckets(region string, yes bool) error {
@@ -173,7 +172,7 @@ func waitObjKeyUsable(ak, sk, endpoint string, buckets []string) error {
 	deadline := drainNow().Add(objKeyReadyBudget)
 	var last error
 	for attempt := 1; ; attempt++ {
-		if _, err := objenc.SampleObjectKeys(ak, sk, endpoint, probe, 1); err == nil {
+		if _, err := objstore.SampleObjectKeys(ak, sk, endpoint, probe, 1); err == nil {
 			if attempt > 1 {
 				fmt.Printf("drain key became usable after %d attempt(s).\n", attempt)
 			}
@@ -243,11 +242,11 @@ func drainOneBucket(ak, sk, endpoint, bucket string) (int, error) {
 
 // listWithRetry lists a page, retrying transient authorization failures within a
 // bounded budget. A key that is genuinely mis-scoped exhausts it and fails.
-func listWithRetry(ak, sk, endpoint, bucket string) ([]objenc.ObjectRef, error) {
+func listWithRetry(ak, sk, endpoint, bucket string) ([]objstore.ObjectRef, error) {
 	deadline := drainNow().Add(objKeyReadyBudget)
 	var last error
 	for {
-		refs, err := objenc.SampleObjectKeys(ak, sk, endpoint, bucket, drainBatch)
+		refs, err := objstore.SampleObjectKeys(ak, sk, endpoint, bucket, drainBatch)
 		if err == nil {
 			return refs, nil
 		}
@@ -291,9 +290,9 @@ var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (in
 		"x-amz-content-sha256:" + payloadHash + "\n" +
 		"x-amz-date:" + amzDate + "\n"
 	signedHeaders := "content-md5;host;x-amz-content-sha256;x-amz-date"
-	escapedPath := objenc.S3EscapePath(path)
+	escapedPath := objstore.S3EscapePath(path)
 	canonicalRequest := strings.Join([]string{
-		"POST", escapedPath, objenc.S3CanonicalQuery(query), canonicalHeaders, signedHeaders, payloadHash,
+		"POST", escapedPath, objstore.S3CanonicalQuery(query), canonicalHeaders, signedHeaders, payloadHash,
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{

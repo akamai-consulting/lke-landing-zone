@@ -13,11 +13,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 type VerifyOpts struct {
@@ -121,7 +121,7 @@ func RunVerify(dryRun bool, o VerifyOpts) error {
 		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", color.Dim("INFO"))
 	} else {
 		st, _, _ := baoread.ExecPod(strings.TrimSpace(pod), "", "", "status", "-format=json")
-		sealed, _ := baolifecycle.ParseStatus(st)
+		sealed, _ := openbao.ParseStatus(st)
 		if strings.TrimSpace(st) == "" {
 			fmt.Printf("  %s  could not determine seal status (pod may be initialising)\n", color.Dim("INFO"))
 		} else if sealed {
@@ -205,12 +205,12 @@ func knownHostsHas(knownHosts, host string) bool {
 }
 
 // selectPlatformApps returns the platform-* (or known llz-*) Applications.
-func selectPlatformApps(appsJSON string) []converge.ArgoApp {
-	all, err := converge.ParseArgoAppList([]byte(appsJSON))
+func selectPlatformApps(appsJSON string) []health.AppRef {
+	all, err := health.ParseAppRefList([]byte(appsJSON))
 	if err != nil {
 		return nil
 	}
-	var out []converge.ArgoApp
+	var out []health.AppRef
 	for _, a := range all {
 		if strings.HasPrefix(a.Name, "platform-") || platformAppRe.MatchString(a.Name) {
 			out = append(out, a)

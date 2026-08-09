@@ -76,20 +76,29 @@ func has(b extension.Binding, g extension.Grant) bool {
 	return false
 }
 
-// THE PUSHED BINDING, PINNED. If bindableStates ever lets a Transition reach
-// `operating`, this fails — and the right response is to move rotate-admin there
-// and delete the Incomplete note, not to leave both.
-func TestRotationStaysAtTheNearestLegalState(t *testing.T) {
+// THE PUSHED BINDING, PINNED — AND NOW IN THE OPPOSITE DIRECTION. This test used
+// to end by failing if the Incomplete note was emptied, because the note was the
+// only record that rotate-admin's state was an approximation. The note is gone and
+// this test is not: `Requires: operating` says the same thing in the declaration,
+// so what needs guarding is no longer the note's presence but the PRECONDITION's.
+//
+// Flipping it rather than deleting it is deliberate. A test that pins a workaround
+// becomes, the moment the workaround is fixed, a test that pins the FIX — and
+// deleting it would have thrown away the one place that records why `seeded` is
+// not the whole story.
+func TestRotationDeclaresOperatingAsItsPrecondition(t *testing.T) {
+	// Neither refusal has been relaxed, and both must stay: Requires exists BECAUSE
+	// a transition still cannot reach `operating`, not as a step toward letting it.
 	probe := extension.Extension{
 		Name: "probe", Short: "x",
 		Bindings: []extension.Binding{{Kind: extension.Transition, State: extension.Operating}},
 	}
 	if errs := probe.Validate(); len(errs) == 0 {
-		t.Error("a transition can now reach `operating` — rotate-admin belongs there: " +
-			"a scheduled rotation runs against a platform that is already up, and this " +
-			"extension's Incomplete note is the record of why it could not say so")
+		t.Error("a transition can now reach `operating` — that is the rule Requires was " +
+			"built to avoid spending; something claiming to MOVE the platform to " +
+			"`operating` is what the restriction exists to prevent")
 	}
-	// The OTHER refusal, and the one that makes the tables disagree: `converged` is
+	// The OTHER refusal, and the one that made the tables disagree: `converged` is
 	// the obvious fallback, and grantStates bars custody there — while its own
 	// comment says `operating` is in the custody row FOR rotation.
 	custodyAtConverged := extension.Extension{
@@ -100,10 +109,27 @@ func TestRotationStaysAtTheNearestLegalState(t *testing.T) {
 		}},
 	}
 	if errs := custodyAtConverged.Validate(); len(errs) == 0 {
-		t.Error("secret-custody became legal at `converged` — re-read this extension's " +
-			"Incomplete note before moving rotate-admin there")
+		t.Error("secret-custody became legal at `converged` — the two-table disagreement " +
+			"this binding exposed was resolved with Requires, not by widening grantStates")
 	}
-	if len(Extension().Incomplete) == 0 {
-		t.Error("Incomplete emptied — rotate-admin's state is an approximation, and nothing else says so")
+
+	var rotate extension.Binding
+	for _, b := range Extension().Bindings {
+		if b.Name == "rotate-admin" {
+			rotate = b
+		}
+	}
+	if rotate.Name == "" {
+		t.Fatal("rotate-admin binding is gone")
+	}
+	if rotate.Requires != extension.Operating {
+		t.Errorf("rotate-admin declares Requires=%q, want %q — a scheduled rotation runs "+
+			"against a platform that is already up, and `seeded` alone does not say so",
+			rotate.Requires, extension.Operating)
+	}
+	if rotate.State != extension.Seeded {
+		t.Errorf("rotate-admin declares State=%q, want %q — the rotation re-places credential "+
+			"material, which is what seeding means; only the PRECONDITION was ever missing",
+			rotate.State, extension.Seeded)
 	}
 }

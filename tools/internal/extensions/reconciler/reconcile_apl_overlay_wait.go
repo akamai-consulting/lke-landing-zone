@@ -74,7 +74,7 @@ var (
 // the obj credential first becomes readable, then holds until ctx is cancelled.
 //
 // Holding is load-bearing, not idling — the manager treats a returning watch as a
-// dropped stream and re-establishes it after a backoff, so returning once configreadiness.Satisfied
+// dropped stream and re-establishes it after a backoff, so returning once envreq.Satisfied
 // would hot-loop the lane at the reconnect cadence forever.
 func watchAplOverlayPrecondition(ctx context.Context, onEvent func()) error {
 	waitForAplOverlayPreconditionThenKick(ctx, onEvent)

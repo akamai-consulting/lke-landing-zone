@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -119,11 +118,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return capture(t, &os.Stdout, fn)
 }
 
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	return capture(t, &os.Stderr, fn)
-}
-
 func capture(t *testing.T, target **os.File, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -147,7 +141,3 @@ func capture(t *testing.T, target **os.File, fn func()) string {
 	_ = r.Close()
 	return out
 }
-
-// errWithStderr builds a failure carrying stderr text, which is how the probes
-// tell a genuine NotFound from an unanswerable call.
-func errWithStderr(msg string) error { return &exec.ExitError{Stderr: []byte(msg)} }

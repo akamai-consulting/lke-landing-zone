@@ -5,7 +5,10 @@ package assertplatform
 // Split from aplversion.go so an extension directory shows its commands at a glance:
 // every file named cobra_*.go is flag wiring and help text, and nothing else.
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/spf13/cobra"
+)
 
 func AplVersionCmd() *cobra.Command {
 	var env string
@@ -14,7 +17,7 @@ func AplVersionCmd() *cobra.Command {
 		Short: "fail fast when the spec pins an apl-core chart version the landing zone no longer supports",
 		Long: "Resolves the apl-core chart version exactly as `llz ci bootstrap-cluster` does\n" +
 			"(spec.cluster.bootstrap.aplChartVersion for the deployment, else the baked\n" +
-			"default) and fails when it is older than " + MinSupportedAplChartVersion + ".\n\n" +
+			"default) and fails when it is older than " + clusterspec.MinSupportedAplChartVersion + ".\n\n" +
 			"Run as a front-loaded preflight so an unsupported pin fails in seconds rather\n" +
 			"than wedging apl-operator (missing apl-sops-secrets) and leaving the cluster\n" +
 			"with no external-secrets operator — both ~2h into the bootstrap.",

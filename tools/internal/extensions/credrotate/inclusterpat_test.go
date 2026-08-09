@@ -104,7 +104,7 @@ func stubInclusterBaoExec(t *testing.T, seededToken, loginToken string) *[][]str
 
 func inclusterPATEnv(t *testing.T, broadToken string) string {
 	t.Helper()
-	// The PAT label is instance-scoped (see InClusterPATLabel), and these verbs
+	// The PAT label is instance-scoped (see linode.InClusterPATLabel), and these verbs
 	// run from the instance checkout — so they read the prefix off the spec.
 	dir := chdirTempDir(t)
 	mustWrite(t, filepath.Join(dir, "landingzone.yaml"),

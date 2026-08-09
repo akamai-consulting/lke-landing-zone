@@ -13,12 +13,13 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 
@@ -96,7 +97,7 @@ func fmtCheckArgvPaths(tofu string, paths []string) []string {
 // the dir scan. A legacy instance's hand-committed <env>.tfvars ARE tracked, so
 // they keep being checked — exactly right.
 func trackedFmtTargets(dir string) ([]string, bool) {
-	out, err := gitOutput("", "ls-files", "--", dir)
+	out, err := gitcmd.Output("", "ls-files", "--", dir)
 	if err != nil {
 		return nil, false
 	}
@@ -314,7 +315,7 @@ func conflictMarkerLines(content string) []int {
 // Skips cleanly when there is no .template-manifest / no lock — a template-repo
 // checkout or a pre-lock instance has nothing to verify.
 func stepVendoredFresh(_ cliopts.Opts) error {
-	if _, err := templatemanifest.Load(""); err != nil {
+	if _, err := manifest.Load(""); err != nil {
 		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
 		return nil
 	}
@@ -357,14 +358,14 @@ func stepRenderFresh(g cliopts.Opts) error {
 // pattern closes (docs/designs/cross-org-reuse-pattern.md). Native (no external
 // tool), so the only legitimate skip is "not a git repo".
 //
-// It used to skip on ANY gitOutput error while the comment claimed it "can never
+// It used to skip on ANY gitcmd.Output error while the comment claimed it "can never
 // skip" — so a corrupt index, a permissions problem, or git missing from PATH
 // silently passed a scan that exists precisely to stop silent breakage. Now the
 // two are told apart: no repo is a skip, a repo we cannot read is an error.
 func stepConflictMarkers(_ cliopts.Opts) error {
-	out, err := gitOutput("", "ls-files")
+	out, err := gitcmd.Output("", "ls-files")
 	if err != nil {
-		if _, repoErr := gitOutput("", "rev-parse", "--git-dir"); repoErr != nil {
+		if _, repoErr := gitcmd.Output("", "rev-parse", "--git-dir"); repoErr != nil {
 			fmt.Fprintln(os.Stderr, "  skip: not a git repo (conflict-marker scan)")
 			return nil
 		}

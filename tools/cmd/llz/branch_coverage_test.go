@@ -10,8 +10,9 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 )
 
@@ -21,7 +22,7 @@ import (
 // warning printers write there).
 // withGhOwnerKind stubs the instance_repo owner classifier. A local copy: the
 // other one went to internal/newinstance with the repo-creation tests, and what
-// is left here tests onboard.RemediateMissingRepo, which is neither package's.
+// is left here tests ghapi.RemediateMissingRepo, which is neither package's.
 func withGhOwnerKind(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
 	orig := ghcli.OwnerKindFn
@@ -59,27 +60,27 @@ func writeFileMkdir(t *testing.T, path, content string) {
 // ── item C: no-remote-repo detection (tokens.go) ─────────────────────────────
 
 func TestRepoExists(t *testing.T) {
-	// onboard.RepoStatus resolves `gh` on PATH before shelling out; stub it so the test
+	// ghapi.RepoStatus resolves `gh` on PATH before shelling out; stub it so the test
 	// asserts llz's logic rather than whether this machine has gh installed.
 	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) < 2 || args[0] != "api" || args[1] != "repos/o/r" {
-			t.Errorf("onboard.RepoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
+			t.Errorf("ghapi.RepoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
 		}
 		return nil, nil
 	})
-	if !onboard.RepoExists("o/r") {
-		t.Error("onboard.RepoExists = false when gh succeeds, want true")
+	if !ghapi.RepoExists("o/r") {
+		t.Error("ghapi.RepoExists = false when gh succeeds, want true")
 	}
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("HTTP 404") })
-	if onboard.RepoExists("o/r") {
-		t.Error("onboard.RepoExists = true when gh errors (repo absent), want false")
+	if ghapi.RepoExists("o/r") {
+		t.Error("ghapi.RepoExists = true when gh errors (repo absent), want false")
 	}
 }
 
 func TestRemediateMissingRepo(t *testing.T) {
 	withGhOwnerKind(t, func(string) (string, error) { return "Organization", nil })
-	out := captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
+	out := captureStderr(t, func() { ghapi.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`instance repo "acme/inst" is not reachable`,
 		"gh repo create acme/inst",
@@ -91,7 +92,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 		"apps_repo_revision",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("onboard.RemediateMissingRepo output missing %q:\n%s", want, out)
+			t.Errorf("ghapi.RemediateMissingRepo output missing %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "OWNER") {
@@ -101,7 +102,7 @@ func TestRemediateMissingRepo(t *testing.T) {
 	// An absent owner needs a different first step — creating the repo under an
 	// org that does not exist fails with a bare CreateRepository error.
 	withGhOwnerKind(t, func(string) (string, error) { return "", nil })
-	out = captureStderr(t, func() { onboard.RemediateMissingRepo("acme/inst") })
+	out = captureStderr(t, func() { ghapi.RemediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`OWNER "acme" does not exist`,
 		"check how it is spelled", // a typo is likelier than an uncreated org

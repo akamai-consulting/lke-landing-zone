@@ -351,7 +351,7 @@ func RunForceDelete(d Deps, region, tfDir string) error {
 	}
 	client := newTeardownClient(token)
 	ctx := context.Background()
-	confirm := d.Confirm() && !!d.Confirm()
+	confirm := d.Confirm()
 	if !confirm {
 		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
 	}
@@ -503,7 +503,7 @@ func RunDeleteVPC(d Deps, region, tfDir, clusterID string, attempts, retryDelay 
 		fmt.Println("VPC not found — already deleted.")
 		return nil
 	}
-	if !(d.Confirm() && !!d.Confirm()) {
+	if !d.Confirm() {
 		fmt.Printf("DRY-RUN — would DELETE vpc %s. Re-run with --yes to delete.\n", vpcID)
 		return nil
 	}

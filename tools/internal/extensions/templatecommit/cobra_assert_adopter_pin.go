@@ -43,7 +43,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
@@ -65,7 +64,7 @@ func AssertAdopterPinCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "release tag to check (default: the template repo's latest release)")
-	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+sustain.DefaultTemplateRepo+")")
+	c.Flags().StringVar(&repo, "template-repo", "", "template repo <owner>/<name> (default: this instance's, else "+templateid.DefaultRepo+")")
 	return c
 }
 

@@ -27,12 +27,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"sigs.k8s.io/yaml"
 )
 
@@ -112,14 +112,6 @@ func envSecondsOrDefault(getenv func(string) string, key string, def int) (int, 
 	return n, nil
 }
 
-// kyvernoWebhookRaceRE matches the transient kyverno-svc admission errors that
-// mean "Kyverno is up but its webhook endpoint/cert isn't reachable yet" — a
-// 30-90s race that re-running terraform apply clears, so it must not fail the
-// whole apply.
-var kyvernoWebhookRaceRE = regexp.MustCompile(`failed calling webhook|connect: operation not permitted|connection refused|no endpoints available`)
-
-func IsWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchString(out) }
-
 // Apply runs the poll/apply/retrofit state machine. It returns a
 // non-nil error ONLY on a hard apply failure (a non-race kubectl-apply error);
 // every readiness timeout, missing-CRD guard, and webhook race is a soft-fail
@@ -149,7 +141,7 @@ func Apply(o Opts, d cigate.Deps) error {
 	out, ok := d.Kubectl("apply", "--server-side", "--force-conflicts",
 		"--field-manager="+o.fieldManager, "-f", o.policyManifest)
 	if !ok {
-		if IsWebhookRace(out) {
+		if health.IsWebhookRace(out) {
 			warn(firstNonEmpty(o.webhookRaceWarning,
 				"Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."))
 			fmt.Fprint(os.Stderr, out)

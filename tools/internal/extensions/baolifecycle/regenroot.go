@@ -20,6 +20,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
 
@@ -47,7 +48,7 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	if err != nil {
 		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", baoread.Namespace, pod)
 	}
-	sealed, threshold := ParseStatus(statusOut)
+	sealed, threshold := openbao.ParseStatus(statusOut)
 	if sealed {
 		return fmt.Errorf("%s is sealed — unseal it first, then re-run", pod)
 	}
@@ -117,7 +118,7 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 		emitRecoveryToken(newRoot, "self-lookup failed")
 		return fmt.Errorf("new root token failed self-lookup")
 	}
-	if !PoliciesIncludeRoot(lookupOut) {
+	if !openbao.PoliciesIncludeRoot(lookupOut) {
 		emitRecoveryToken(newRoot, "token verified but not root")
 		return fmt.Errorf("new token is valid but not root")
 	}
@@ -191,15 +192,6 @@ func emitRecoveryToken(token, reason string) {
 
 // ── pure parse helpers (unit-tested) ─────────────────────────────────────────
 
-func ParseStatus(s string) (sealed bool, threshold int) {
-	var v struct {
-		Sealed bool `json:"sealed"`
-		T      int  `json:"t"`
-	}
-	_ = json.Unmarshal([]byte(s), &v)
-	return v.Sealed, v.T
-}
-
 func parseIsSelf(s string) bool {
 	var v struct {
 		IsSelf bool `json:"is_self"`
@@ -234,21 +226,6 @@ func parseTokenField(s string) string {
 	}
 	_ = json.Unmarshal([]byte(s), &v)
 	return v.Token
-}
-
-func PoliciesIncludeRoot(lookupJSON string) bool {
-	var v struct {
-		Data struct {
-			Policies []string `json:"policies"`
-		} `json:"data"`
-	}
-	_ = json.Unmarshal([]byte(lookupJSON), &v)
-	for _, p := range v.Data.Policies {
-		if p == "root" {
-			return true
-		}
-	}
-	return false
 }
 
 // secretListed reports whether `gh secret list` output contains name in column 1.

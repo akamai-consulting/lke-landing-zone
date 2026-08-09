@@ -7,12 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lint"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // When the underlying tool isn't on PATH, every lint/validate step is a no-op
@@ -108,19 +110,19 @@ func TestOpenbaoClient(t *testing.T) {
 
 func TestRunOpenbaoPathValidation(t *testing.T) {
 	// Both commands reject a path outside the secret/ KV v2 mount up front.
-	if err := openbao.RunGet("active", "not-secret/x", "k"); err == nil {
-		t.Error("openbao.RunGet(bad path) = nil, want error")
+	if err := openbaoext.RunGet("active", "not-secret/x", "k"); err == nil {
+		t.Error("openbaoext.RunGet(bad path) = nil, want error")
 	}
-	if err := openbao.RunSet(false, false, "not-secret/x", []string{"k=v"}); err == nil {
-		t.Error("openbao.RunSet(bad path) = nil, want error")
+	if err := openbaoext.RunSet(false, false, "not-secret/x", []string{"k=v"}); err == nil {
+		t.Error("openbaoext.RunSet(bad path) = nil, want error")
 	}
 	// A malformed key=value pair is caught before any OpenBao call.
-	if err := openbao.RunSet(false, false, "secret/app", []string{"noequals"}); err == nil {
-		t.Error("openbao.RunSet(no '=') = nil, want error")
+	if err := openbaoext.RunSet(false, false, "secret/app", []string{"noequals"}); err == nil {
+		t.Error("openbaoext.RunSet(no '=') = nil, want error")
 	}
 	// No pairs at all is a usage error.
-	if err := openbao.RunSet(false, false, "secret/app", nil); err == nil {
-		t.Error("openbao.RunSet(no pairs) = nil, want error")
+	if err := openbaoext.RunSet(false, false, "secret/app", nil); err == nil {
+		t.Error("openbaoext.RunSet(no pairs) = nil, want error")
 	}
 }
 

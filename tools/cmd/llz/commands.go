@@ -4,15 +4,15 @@ import (
 	"fmt"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envadd"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/newinstance"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
@@ -67,7 +67,16 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 			return err
 		}
 	}
-	return newinstance.Gated(g.DryRun, g.Yes, buildArgv(env)...)
+	// The dispatch is the point of no return AND the point the operator loses
+	// sight of the flow — `gh workflow run` prints no run id. Baseline BEFORE the
+	// dispatch: "newest run" afterwards is only ours if it is newer than what was
+	// there before. See build_watch.go.
+	watch := beginDispatchWatch(g, "terraform.yml")
+	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env)...); err != nil {
+		return err
+	}
+	watch.report()
+	return nil
 }
 
 // up{Tokens,Doctor,Build} are the seams cmdUp drives — package-level vars so a
@@ -128,7 +137,21 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 func printManualActions(env string) {
 	b := func(s string) string { return "  " + color.Dim("•") + " " + s }
 	fmt.Println("\n" + color.Bold("══ remaining manual actions (the tooling can't do these for you) ══"))
-	fmt.Println(b("Watch convergence:   " + color.Cyan("llz status "+env+" --wait")))
+	// ORDER IS THE POINT. This used to open with `llz status <env> --wait`, which
+	// cannot succeed for the first ~20 minutes (the cluster does not exist yet) and
+	// then still needs a kubeconfig this machine has none of and a control-plane ACL
+	// that has never contained it — none of which it mentioned. So the first
+	// instruction after a successful dispatch was one guaranteed to fail, with a
+	// fifteen-line remediation block as the reward for following it. Wait for the
+	// build, then get access, then check health.
+	fmt.Println(b("1. Wait for the build (~40 min) — the run URL + `gh run watch` are printed above."))
+	fmt.Println(color.Dim("      A failure there is recoverable: docs/runbooks/first-build-failed.md"))
+	fmt.Println(b("2. Get cluster access — the build ran in CI, so this machine has no kubeconfig:"))
+	fmt.Println(color.Dim("      export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)"))
+	fmt.Println(color.Dim("      llz ci fetch-kubeconfig --region " + env + " --output ~/.kube/" + env + ".yaml"))
+	fmt.Println(color.Dim("      export KUBECONFIG=~/.kube/" + env + ".yaml"))
+	fmt.Println(color.Dim("      (refused? `llz ci runner-acl open --region " + env + "` — the ACL never held this host)"))
+	fmt.Println(b("3. Watch convergence:   " + color.Cyan("llz status "+env+" --wait")))
 	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
 	fmt.Println(color.Dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
 	// Repeated here because stage 1's banner has scrolled past a full build by now,
@@ -188,7 +211,7 @@ func warnIfRootTokenPresent(env string) {
 	if err != nil {
 		return
 	}
-	for _, n := range configreadiness.GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+	for _, n := range envreq.GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
 			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", color.Yellow("⚠"), env)
 			fmt.Println(color.Dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))

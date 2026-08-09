@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 type fakeProbe struct {
@@ -113,7 +114,7 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 }
 
 // A deployment with databases gets one series per cluster, discovered from the
-// KV collection rather than declared in CredPaths — so a cluster added later is
+// KV collection rather than declared in credpaths.CredPaths — so a cluster added later is
 // covered with no code change.
 func TestSampleOpenBaoDBAdminDiscovered(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
@@ -156,10 +157,10 @@ func TestSampleOpenBaoNoDatabasesIsNotAnError(t *testing.T) {
 	}
 }
 
-// Discovery must not mutate the package-level CredPaths: two passes in a row on
+// Discovery must not mutate the package-level credpaths.CredPaths: two passes in a row on
 // the same process would otherwise accumulate (or overwrite) entries.
 func TestSampleOpenBaoDiscoveryDoesNotMutateCredPaths(t *testing.T) {
-	before := len(CredPaths)
+	before := len(credpaths.CredPaths)
 	p := &fakeProbe{
 		seal:    openbao.SealInfo{Initialized: true},
 		listed:  []string{"shared"},
@@ -171,8 +172,8 @@ func TestSampleOpenBaoDiscoveryDoesNotMutateCredPaths(t *testing.T) {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}
-	if len(CredPaths) != before {
-		t.Errorf("CredPaths grew from %d to %d across sample passes", before, len(CredPaths))
+	if len(credpaths.CredPaths) != before {
+		t.Errorf("credpaths.CredPaths grew from %d to %d across sample passes", before, len(credpaths.CredPaths))
 	}
 }
 

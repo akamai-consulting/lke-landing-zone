@@ -8,12 +8,12 @@ package converge
 // context (one cluster), which is what an operator actually has in hand.
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
 
 // requiredSupportApps must be Synced+Healthy for the support plane to be up.
@@ -22,18 +22,10 @@ var requiredSupportApps = []string{
 	"platform-loki", "platform-prometheus", "platform-grafana",
 }
 
-type ArgoApp struct {
-	Name   string
-	Sync   string
-	Health string
-}
-
-func (a ArgoApp) Healthy() bool { return a.Sync == "Synced" && a.Health == "Healthy" }
-
 // classifyArgoApps splits the cluster's Applications into required-unhealthy,
 // missing-required, and other-unhealthy — the pure core (unit-tested).
-func classifyArgoApps(apps []ArgoApp, required []string) (reqUnhealthy, missing, otherUnhealthy []string) {
-	byName := make(map[string]ArgoApp, len(apps))
+func classifyArgoApps(apps []health.AppRef, required []string) (reqUnhealthy, missing, otherUnhealthy []string) {
+	byName := make(map[string]health.AppRef, len(apps))
 	for _, a := range apps {
 		byName[a.Name] = a
 	}
@@ -60,44 +52,14 @@ func classifyArgoApps(apps []ArgoApp, required []string) (reqUnhealthy, missing,
 
 // listArgoApps runs `kubectl -n argocd get applications -o json` against the
 // current context and parses the Application sync/health states.
-func listArgoApps() ([]ArgoApp, error) {
+func listArgoApps() ([]health.AppRef, error) {
 	out, err := deps.Exec("kubectl", "-n", "argocd", "get", "applications", "-o", "json")
 	if err != nil {
 		return nil, fmt.Errorf("kubectl get applications: %w", err)
 	}
-	apps, err := ParseArgoAppList(out)
+	apps, err := health.ParseAppRefList(out)
 	if err != nil {
 		return nil, fmt.Errorf("parse applications JSON: %w", err)
-	}
-	return apps, nil
-}
-
-// ParseArgoAppList reads `kubectl get applications -o json` into the name +
-// sync/health triple. The same anonymous struct and the same append loop were
-// written out twice, here and in selectPlatformApps (verify.go) — identical down
-// to the field tags.
-//
-// Deliberately NOT health.ParseArgoApp: that one is richer (spec-error
-// conditions, automated-policy detection) and is the right tool where those
-// matter. These two callers want only the triple.
-func ParseArgoAppList(raw []byte) ([]ArgoApp, error) {
-	var doc struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Sync   struct{ Status string } `json:"sync"`
-				Health struct{ Status string } `json:"health"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	apps := make([]ArgoApp, 0, len(doc.Items))
-	for _, it := range doc.Items {
-		apps = append(apps, ArgoApp{it.Metadata.Name, it.Status.Sync.Status, it.Status.Health.Status})
 	}
 	return apps, nil
 }

@@ -1,6 +1,6 @@
 package main
 
-// The one test of the pair that is about openbao.RunCILogin, not about the client.
+// The one test of the pair that is about openbaoext.RunCILogin, not about the client.
 // It resets the memo through the exported constructor so the env vars it sets are
 // actually read — filename-as-subject again, in miniature.
 
@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func TestOpenBaoLoginRequiresClientIdentity(t *testing.T) {
@@ -22,7 +24,7 @@ func TestOpenBaoLoginRequiresClientIdentity(t *testing.T) {
 	openbao.InClusterHTTPClient = openbao.NewInClusterHTTPClient()
 	t.Cleanup(func() { openbao.InClusterHTTPClient = prev })
 
-	err := openbao.RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes", "", "OPENBAO_TOKEN")
+	err := openbaoext.RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes", "", "OPENBAO_TOKEN")
 	if err == nil {
 		t.Fatal("expected an error when no client identity is mounted")
 	}

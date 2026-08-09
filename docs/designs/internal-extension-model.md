@@ -265,6 +265,44 @@ Two of these rows are load-bearing findings rather than taxonomy:
 platform *to*. `verified` is the conclusion of assertions; `operating` is a condition that holds.
 Making that a type error is what stops "run the asserts" from being modelled as a step.
 
+#### Preconditions
+
+A binding's `State` says what it **establishes**. `Requires` says what must **already hold** for it to
+run, and is optional — the zero value means the binding makes no such claim, which is the honest
+reading for most of the catalog.
+
+| field | means | may be |
+|---|---|---|
+| `Requires` | the state that must already hold | `operating`, on a `transition` only |
+
+Three extractions in a row shipped a declaration that was accurate about the effect while silently
+dropping the precondition. `wedge-gameday` refuses to start unless the cluster is already Healthy;
+`rotate-admin` refuses to rotate an unseeded path; `bao-breakglass` restores root access to a
+platform that is up. None of them moves the platform anywhere, and all of them need it to be
+somewhere.
+
+**This is a field, not a fifth kind**, and `wedge-gameday` wrote the reason down before the field
+existed: what these want "is not a new binding kind but a way to say 'this is a CHECK, it must mutate
+to run, and it requires state X rather than establishing it'. A fifth kind bolted on now would have
+answered the kind question and left the state question exactly where it is." The kind was never
+wrong — all three really are transitions and really do mutate. `State` was carrying two meanings and
+could only ever express one.
+
+**It does not relax the rule above.** Letting `transition` reach `operating` was the other available
+fix and would have spent the restriction to buy the accuracy: something could then claim to move the
+platform *to* `operating`. `Requires` gets the accuracy and keeps the rule.
+
+**The grant check runs at both states, never at `Requires` alone.** Checking only the precondition is
+the natural reading and is a quiet widening — a binding could then ask at `operating` for a grant its
+declared `State` forbids, and the `State` line would stop meaning anything. Requiring both is
+strictly tighter than the check that shipped before the field existed, and all three cases pass it
+unchanged.
+
+The gap was real rather than cosmetic, and the sharpest evidence is that the two ceiling tables
+*contradicted each other* about `rotate-admin`: `grantStates` lists `operating` in the
+`secret-custody` row explicitly for rotation, while `bindableStates` bars a transition there. It
+ended up at `seeded`, the one state both tables allow.
+
 **`assertion` may target any state, not just `verified`.** Two things follow from that, and the
 first is load-bearing.
 

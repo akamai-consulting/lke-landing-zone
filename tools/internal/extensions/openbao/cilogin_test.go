@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func TestOpenBaoLoginDryRun(t *testing.T) {
@@ -30,9 +32,9 @@ func TestOpenBaoLoginUnknownMethod(t *testing.T) {
 // itself is covered by TestHTTPClientMTLS_Handshake in internal/
 func stubInClusterBaoClient(t *testing.T, c *http.Client) {
 	t.Helper()
-	prev := InClusterHTTPClient
-	InClusterHTTPClient = func() (*http.Client, error) { return c, nil }
-	t.Cleanup(func() { InClusterHTTPClient = prev })
+	prev := openbao.InClusterHTTPClient
+	openbao.InClusterHTTPClient = func() (*http.Client, error) { return c, nil }
+	t.Cleanup(func() { openbao.InClusterHTTPClient = prev })
 }
 
 // TestOpenBaoLoginRequiresClientIdentity: with no client certificate mounted,

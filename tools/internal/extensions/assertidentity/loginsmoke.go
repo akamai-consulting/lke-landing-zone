@@ -30,10 +30,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/healthsla"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 // kc wraps the shared Keycloak client so this package can hang its own smoke
@@ -224,9 +224,9 @@ func runTeamLoginSmoke(region, teamFlag string) error {
 	// binding end-to-end: mint the external-secrets controller SA token (the identity
 	// the eso role binds), log in as role `eso`, and assert it can READ the key the
 	// team just wrote, then is DENIED a path no policy grants.
-	saJWT, err := mintServiceAccountToken(healthsla.ESONamespace, esoServiceAccount)
+	saJWT, err := mintServiceAccountToken(platform.ESONamespace, esoServiceAccount)
 	if err != nil {
-		return fmt.Errorf("mint %s/%s SA token for the eso-reader check: %w", healthsla.ESONamespace, esoServiceAccount, err)
+		return fmt.Errorf("mint %s/%s SA token for the eso-reader check: %w", platform.ESONamespace, esoServiceAccount, err)
 	}
 	esoTok, err := openbao.KubernetesLogin(ctx, openbao.HTTPClientLoopback(30*time.Second), addr, "kubernetes", "eso", saJWT)
 	if err != nil {
@@ -332,7 +332,7 @@ func isDenied(err error) bool {
 }
 
 // esoServiceAccount is the External Secrets Operator controller ServiceAccount
-// (apl-core 6.x ships ESO in healthsla.ESONamespace with a same-named SA). It is the
+// (apl-core 6.x ships ESO in platform.ESONamespace with a same-named SA). It is the
 // identity bao-configure's `eso` Kubernetes-auth role binds — see
 // ci_openbao_configure.go (bound_service_account_names=external-secrets).
 const esoServiceAccount = "external-secrets"

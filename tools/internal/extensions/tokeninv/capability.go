@@ -10,7 +10,7 @@ package tokeninv
 //	       public key: HTTP 403: Resource not accessible by personal access token
 //
 // A fine-grained PAT missing "Secrets: write" still authenticates cleanly against
-// the API root that GHPATProbe hits, so it sails through validate-tokens with
+// the API root that tokenprobe.GHPATProbe hits, so it sails through validate-tokens with
 // months of life left and then 403s six minutes later — AFTER the cluster, apl-
 // core, Kyverno and the Argo bridge are already up. That failure lands past the
 // `foundation-ready` phase mark, leaving a half-configured deployment with no
@@ -39,7 +39,7 @@ import (
 
 // GHCapabilityProbe GETs one API path with the credential and returns the HTTP
 // status (0 == unreachable). Package var so callers are exercisable without
-// network access, matching the GHPATProbe / LinodeProbe seams.
+// network access, matching the tokenprobe.GHPATProbe / tokenprobe.LinodeProbe seams.
 var GHCapabilityProbe = func(api, token, path string) (int, error) {
 	url := strings.TrimRight(api, "/") + path
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -285,4 +285,14 @@ func capabilityCell(cr capabilityResult) string {
 	default: // capSkipped
 		return color.Dim("– " + orDefault(cr.detail, "not probed"))
 	}
+}
+
+// orDefault is a four-line local copy rather than an export from
+// internal/shared/tokenprobe. It stayed unexported there because exporting it
+// would widen that package's API for a string fallback, and this is cheaper.
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

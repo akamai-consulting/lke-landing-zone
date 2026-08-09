@@ -20,24 +20,16 @@ package assertobs
 // other in-cluster HTTP API, so it is shared rather than copied.
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 )
-
-var forwardPortRe = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
-
-// ForwardEstablishTimeout bounds how long we wait for kubectl to announce its
-// local port — a hung kubectl (auth prompt, stuck apiserver) must not hang the
-// diagnostic forever.
-const ForwardEstablishTimeout = 30 * time.Second
 
 // forwardedService describes the far end of a port-forward: what to call it in
 // errors, which path to warm the tunnel against, and any headers every request
@@ -81,10 +73,10 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 		return fmt.Errorf("kubectl port-forward: %w", err)
 	}
 	// Kill + reap on return; killing closes stdout, which unblocks the reader
-	// goroutine in ReadForwardPortTimeout (no leak).
+	// goroutine in portfwd.ReadForwardPortTimeout (no leak).
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	localPort, err := ReadForwardPortTimeout(stdout, ForwardEstablishTimeout)
+	localPort, err := portfwd.ReadForwardPortTimeout(stdout, portfwd.ForwardEstablishTimeout)
 	if err != nil {
 		return err
 	}
@@ -172,42 +164,6 @@ func parsePromSpec(spec string) (ns, svc, port string, err error) {
 		return "", "", "", fmt.Errorf("prom spec must be <namespace>/<service>:<port>, got %q", spec)
 	}
 	return ns, svc, port, nil
-}
-
-// ReadForwardPortTimeout returns the local port kubectl announced, or an error if
-// it doesn't announce within d. The reader goroutine unblocks when the caller
-// kills the process (closing stdout).
-func ReadForwardPortTimeout(r io.Reader, d time.Duration) (string, error) {
-	type result struct {
-		port string
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		p, e := readForwardPort(r)
-		ch <- result{p, e}
-	}()
-	select {
-	case res := <-ch:
-		return res.port, res.err
-	case <-time.After(d):
-		return "", fmt.Errorf("timed out after %s waiting for kubectl port-forward to start", d)
-	}
-}
-
-// readForwardPort blocks until kubectl prints "Forwarding from 127.0.0.1:PORT"
-// and returns PORT.
-func readForwardPort(r io.Reader) (string, error) {
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		if m := forwardPortRe.FindStringSubmatch(sc.Text()); m != nil {
-			return m[1], nil
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("kubectl port-forward did not report a local port — check your kube-context/KUBECONFIG points at the target cluster and you have pods/portforward RBAC")
 }
 
 // truncateForError keeps an error message readable when the body is an HTML error

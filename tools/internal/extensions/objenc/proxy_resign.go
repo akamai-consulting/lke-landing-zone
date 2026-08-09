@@ -44,14 +44,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
 
@@ -170,7 +169,7 @@ func verifyClientSigV4(r *http.Request, secretKey, host string) error {
 	}
 	payloadHash := r.Header.Get("X-Amz-Content-Sha256")
 	canonicalRequest := strings.Join([]string{
-		r.Method, S3EscapePath(r.URL.Path), S3CanonicalQuery(r.URL.RawQuery),
+		r.Method, objstore.S3EscapePath(r.URL.Path), objstore.S3CanonicalQuery(r.URL.RawQuery),
 		canonical.String(), signedHeaders, payloadHash,
 	}, "\n")
 	stringToSign := strings.Join([]string{
@@ -350,7 +349,7 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 		"x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
-	escapedPath := S3EscapePath(r.URL.Path)
+	escapedPath := objstore.S3EscapePath(r.URL.Path)
 	// The CANONICAL query, not the raw one. SigV4 signs parameters sorted by name and
 	// RFC3986-encoded; the client sends them in whatever order it likes. A multipart
 	// PUT carries `?partNumber=N&uploadId=…`, and signing them in arrival order
@@ -360,7 +359,7 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 	// The wire still carries the original order: the server canonicalises before
 	// verifying, so the two need not match.
 	canonicalRequest := strings.Join([]string{
-		r.Method, escapedPath, S3CanonicalQuery(r.URL.RawQuery), canonicalHeaders, signedHeaders, payloadHash,
+		r.Method, escapedPath, objstore.S3CanonicalQuery(r.URL.RawQuery), canonicalHeaders, signedHeaders, payloadHash,
 	}, "\n")
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
 	stringToSign := strings.Join([]string{
@@ -368,7 +367,7 @@ func resignForUpstream(r *http.Request, creds objProxyCreds, upstreamHost string
 	}, "\n")
 	signature := hex.EncodeToString(s3sig.HMACSHA256(s3sig.SigningKey(creds.SecretAccessKey, dateStamp, region, "s3"), stringToSign))
 
-	// Signed and sent must be the same bytes; see s3SignedRequest for why RawPath is
+	// Signed and sent must be the same bytes; see objstore.S3SignedRequest for why RawPath is
 	// set alongside Path rather than trusting Go to re-escape identically.
 	r.URL.RawPath = escapedPath
 	r.Header.Set("X-Amz-Date", amzDate)
@@ -389,61 +388,6 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 // ~1.5MB, so this clears them by more than an order of magnitude while staying far
 // under the pod's 512Mi limit even with several requests in flight.
 const objProxyResignMaxBody = 32 << 20 // 32 MiB
-
-// S3CanonicalQuery renders a query string in SigV4 canonical form: every parameter
-// URI-encoded, sorted by name, valueless keys kept as `k=`.
-//
-// net/url is not usable here — url.Values.Encode() sorts correctly but escapes with
-// QueryEscape, which encodes a space as `+` where SigV4 requires `%20`.
-func S3CanonicalQuery(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	type kv struct{ k, v string }
-	var pairs []kv
-	for _, part := range strings.Split(raw, "&") {
-		if part == "" {
-			continue
-		}
-		k, v, _ := strings.Cut(part, "=")
-		dk, err := url.QueryUnescape(k)
-		if err != nil {
-			dk = k
-		}
-		dv, err := url.QueryUnescape(v)
-		if err != nil {
-			dv = v
-		}
-		pairs = append(pairs, kv{s3EscapeQueryComponent(dk), s3EscapeQueryComponent(dv)})
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].k != pairs[j].k {
-			return pairs[i].k < pairs[j].k
-		}
-		return pairs[i].v < pairs[j].v
-	})
-	out := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		out = append(out, p.k+"="+p.v)
-	}
-	return strings.Join(out, "&")
-}
-
-// s3EscapeQueryComponent is RFC3986 escaping: unreserved characters pass, everything
-// else becomes %XX. Unlike the path escaper, `/` is NOT exempt in a query component.
-func s3EscapeQueryComponent(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-			c == '-' || c == '_' || c == '.' || c == '~' {
-			b.WriteByte(c)
-			continue
-		}
-		fmt.Fprintf(&b, "%%%02X", c)
-	}
-	return b.String()
-}
 
 // credsLoader serves the re-signing credential, RE-READING it when the file changes.
 //

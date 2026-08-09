@@ -13,7 +13,7 @@ package doctor
 // has since been retired, got a GREEN doctor — and then `llz up` provisioned real
 // cloud resources (state bucket + scoped OBJ key), dispatched a workflow, and
 // failed inside terraform apply. Worse, per docs/lessons-learned.md, an LKE-E
-// create that cannot be configreadiness.Satisfied does not always fail: it can hang on
+// create that cannot be envreq.Satisfied does not always fail: it can hang on
 // "Still creating..." to the job timeout, a mode that doc explicitly calls not
 // reliably diagnosable. This turns the most expensive failure in the flow into a
 // line of local output before anything is provisioned.

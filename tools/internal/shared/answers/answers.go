@@ -17,9 +17,9 @@ package answers
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/promote"
 	"sigs.k8s.io/yaml"
 )
 
@@ -57,7 +57,7 @@ func PinnedTemplateRef() string {
 			return r
 		}
 	}
-	return promote.TemplateRefFromStamp()
+	return TemplateRefFromStamp()
 }
 
 // Read loads .copier-answers.yml from dir (use "." for the current
@@ -76,4 +76,26 @@ func Read(dir string) (*File, error) {
 		return nil, err
 	}
 	return &a, nil
+}
+
+// TemplateRefFromStamp reads the template ref out of .template-version.
+//
+// IT CAME DOWN FROM internal/extensions/promote, which is where it was written
+// and where it did not belong: this package is substrate, promote is a
+// capability, and a shared package importing an extension inverts the layering
+// the boundary test now enforces. Nothing about reading a stamp file is a
+// promotion concern — answers already reads the same file for PinnedTemplateRef.
+// templateRefFromStamp reads the template_ref out of .template-version (best
+// effort; "" if absent/malformed).
+// TemplateRefFromStamp reads the template ref recorded in the version stamp.
+func TemplateRefFromStamp() string {
+	b, err := os.ReadFile(".template-version")
+	if err != nil {
+		return ""
+	}
+	m := regexp.MustCompile(`"template_ref"\s*:\s*"([^"]+)"`).FindSubmatch(b)
+	if m == nil {
+		return ""
+	}
+	return string(m[1])
 }

@@ -15,13 +15,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
-
-// apl-core 6.x ships ESO as a core app in the `external-secrets` namespace; the
-// landing zone no longer runs its own controller. (The `openbao`
-// ClusterSecretStore probed below is cluster-scoped, so the -n is cosmetic, but
-// keep it pointed at the live ESO namespace.)
-const ESONamespace = "external-secrets"
 
 func RunOpenbao(d Deps) error {
 	reg := schedRegion()
@@ -69,7 +64,7 @@ func RunOpenbao(d Deps) error {
 
 	// ── ESO ClusterSecretStore + ExternalSecrets ──
 	summary = append(summary, "", fmt.Sprintf("### ESO ClusterSecretStore — %s", reg), "")
-	css, cssAnswered := kubectlprobe.JSONPathOK("-n", ESONamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+	css, cssAnswered := kubectlprobe.JSONPathOK("-n", platform.ESONamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
 	switch {
 	case css == "True":
 		fmt.Printf("ClusterSecretStore openbao (%s): Ready\n", reg)

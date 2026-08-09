@@ -36,9 +36,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 // kubeAPI is the slice of internal/kube the discover flow uses; seamed so tests
@@ -115,9 +115,9 @@ func resolveFirewallInputs(ctx context.Context, client firewallDiscoverer, linod
 }
 
 const (
-	firewallConfigMapPath  = "/api/v1/namespaces/kube-system/configmaps/" + FirewallConfigMapName
+	firewallConfigMapPath  = "/api/v1/namespaces/kube-system/configmaps/" + platform.FirewallConfigMapName
 	firewallConfigMapsPath = "/api/v1/namespaces/kube-system/configmaps"
-	firewallDeploymentPath = "/apis/apps/v1/namespaces/kube-system/deployments/" + FirewallDeploymentName
+	firewallDeploymentPath = "/apis/apps/v1/namespaces/kube-system/deployments/" + platform.FirewallDeploymentName
 )
 
 func runCIDiscoverFirewallConfig(ctx context.Context) error {
@@ -125,7 +125,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 	if nodeName == "" {
 		return fmt.Errorf("NODE_NAME must be set (downward API spec.nodeName)")
 	}
-	token := credrotate.InClusterLinodeToken()
+	token := linode.InClusterLinodeToken()
 	if token == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume)")
 	}
@@ -174,9 +174,9 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 		if _, err := k.CreateJSON(ctx, firewallConfigMapsPath, map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata":   map[string]string{"name": FirewallConfigMapName, "namespace": "kube-system"},
+			"metadata":   map[string]string{"name": platform.FirewallConfigMapName, "namespace": "kube-system"},
 		}); err != nil {
-			return fmt.Errorf("create %s: %w", FirewallConfigMapName, err)
+			return fmt.Errorf("create %s: %w", platform.FirewallConfigMapName, err)
 		}
 		cm = map[string]any{}
 	}
@@ -191,7 +191,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 
 	changes := firewallConfigChanges(existing, firewallID, clusterID, vpcCIDR)
 	if len(changes) == 0 {
-		fmt.Printf("%s already up to date (LINODE_FIREWALL_ID=%s) — nothing to do\n", FirewallConfigMapName, firewallID)
+		fmt.Printf("%s already up to date (LINODE_FIREWALL_ID=%s) — nothing to do\n", platform.FirewallConfigMapName, firewallID)
 		return nil
 	}
 	if err := k.MergePatch(ctx, firewallConfigMapPath, map[string]any{"data": changes}); err != nil {
@@ -203,7 +203,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		fmt.Printf("Set %s=%s in %s\n", key, changes[key], FirewallConfigMapName)
+		fmt.Printf("Set %s=%s in %s\n", key, changes[key], platform.FirewallConfigMapName)
 	}
 
 	// ── Roll the controller so configMapKeyRef env re-reads the new values ───
@@ -214,7 +214,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 		return err
 	}
 	if status == 404 {
-		fmt.Printf("Deployment %s not present — skipping restart (it will start from the patched ConfigMap)\n", FirewallDeploymentName)
+		fmt.Printf("Deployment %s not present — skipping restart (it will start from the patched ConfigMap)\n", platform.FirewallDeploymentName)
 		return nil
 	}
 
@@ -239,7 +239,7 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 			"(%s). The firewall-controller chart's Argo Application is likely reverting "+
 			"data.LINODE_FIREWALL_ID/LKE_CLUSTER_ID/VPC_CIDR (missing ignoreDifferences on those keys). "+
 			"Re-patched the values but skipping the restart to avoid a roll loop — fix the Application's "+
-			"ignoreDifferences.\n", FirewallConfigMapName, desiredFP)
+			"ignoreDifferences.\n", platform.FirewallConfigMapName, desiredFP)
 		return nil
 	}
 
@@ -254,9 +254,9 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 			"annotations": map[string]string{"kubectl.kubernetes.io/restartedAt": restartedAt},
 		}}},
 	}); err != nil {
-		return fmt.Errorf("restart %s after config change: %w", FirewallDeploymentName, err)
+		return fmt.Errorf("restart %s after config change: %w", platform.FirewallDeploymentName, err)
 	}
-	fmt.Printf("Rolled deployment %s (config changed to %s)\n", FirewallDeploymentName, desiredFP)
+	fmt.Printf("Rolled deployment %s (config changed to %s)\n", platform.FirewallDeploymentName, desiredFP)
 	return nil
 }
 

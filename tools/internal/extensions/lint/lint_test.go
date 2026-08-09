@@ -9,6 +9,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 )
 
 func TestCheckArgvBuilders(t *testing.T) {
@@ -107,7 +108,7 @@ func TestStepConflictMarkers(t *testing.T) {
 			{"config", "user.email", "t@t"},
 			{"config", "user.name", "t"},
 		} {
-			if _, err := gitOutput(dir, args...); err != nil {
+			if _, err := gitcmd.Output(dir, args...); err != nil {
 				t.Fatalf("git %v: %v", args, err)
 			}
 		}
@@ -121,7 +122,7 @@ func TestStepConflictMarkers(t *testing.T) {
 	}
 	write("clean.yaml", "resources:\n  - a\n")
 	write("bin.dat", "<<<<<<< HEAD\x00binary\n") // NUL → treated as binary, skipped
-	if _, err := gitOutput(dir, "add", "-A"); err != nil {
+	if _, err := gitcmd.Output(dir, "add", "-A"); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
@@ -131,7 +132,7 @@ func TestStepConflictMarkers(t *testing.T) {
 
 	// Now introduce a committed conflict marker in a tracked text file.
 	write("kustomization.yaml", "resources:\n<<<<<<< before updating\n  - x\n=======\nresources: []\n>>>>>>> after updating\n")
-	if _, err := gitOutput(dir, "add", "kustomization.yaml"); err != nil {
+	if _, err := gitcmd.Output(dir, "add", "kustomization.yaml"); err != nil {
 		t.Fatal(err)
 	}
 	if err := stepConflictMarkers(cliopts.Global); err == nil {

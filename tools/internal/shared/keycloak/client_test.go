@@ -8,7 +8,6 @@ package keycloak
 // its tests stayed where the method used to live.
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -742,9 +741,6 @@ func withScopeBudget(attempts int, interval time.Duration) func() {
 	return func() { ScopeAttempts, ScopeInterval = oldA, oldI }
 }
 
-// sleepFn is this package's sleep seam, so the poll tests do not wait.
-var sleepFn = time.Sleep
-
 func srvBase(r *http.Request) string { return "http://" + r.Host }
 
 func withScopeWait(attempts int) func() {
@@ -784,57 +780,4 @@ func kcStatusServer(t *testing.T, method, path string, status int) (*httptest.Se
 		_, _ = w.Write([]byte(`{"errorMessage":"boom"}`))
 	}))
 	return srv, &hits
-}
-
-func makeJWT(t *testing.T, groups []string) string {
-	t.Helper()
-	payload, _ := json.Marshal(map[string]any{"groups": groups})
-	enc := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc(payload) + "." + enc([]byte("sig"))
-}
-
-// smokeServer stands in for the Keycloak admin REST + token endpoints the smoke
-// helpers drive, recording an audit trail so a test can assert the full
-// provision → grant → teardown sequence.
-func smokeServer(t *testing.T, idToken string) (*httptest.Server, *[]string) {
-	var audit []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		switch {
-		case r.Method == http.MethodGet && p == "/admin/realms/otomi/groups":
-			name := r.URL.Query().Get("search")
-			_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "gid-1", "name": name}})
-		case r.Method == http.MethodPost && p == "/admin/realms/otomi/clients":
-			audit = append(audit, "create client")
-			w.Header().Set("Location", "http://x/admin/realms/otomi/clients/cuuid")
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/cuuid/default-client-scopes":
-			_ = json.NewEncoder(w).Encode([]map[string]string{{"name": "openid"}}) // already attached
-		case r.Method == http.MethodPost && p == "/admin/realms/otomi/clients/cuuid/protocol-mappers/models":
-			audit = append(audit, "add audience mapper")
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodPut && p == "/admin/realms/otomi/users/uid-1":
-			audit = append(audit, "disable user") // teardown neutralizes before delete
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPost && p == "/admin/realms/otomi/users":
-			audit = append(audit, "create user")
-			w.Header().Set("Location", "http://x/admin/realms/otomi/users/uid-1")
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodPut && p == "/admin/realms/otomi/users/uid-1/groups/gid-1":
-			audit = append(audit, "add to group")
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodDelete && p == "/admin/realms/otomi/users/uid-1":
-			audit = append(audit, "delete user")
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodDelete && p == "/admin/realms/otomi/clients/cuuid":
-			audit = append(audit, "delete client")
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPost && p == "/realms/otomi/protocol/openid-connect/token":
-			_ = json.NewEncoder(w).Encode(map[string]string{"id_token": idToken})
-		default:
-			t.Errorf("unexpected %s %s", r.Method, p)
-			http.Error(w, "unexpected", http.StatusNotFound)
-		}
-	}))
-	return srv, &audit
 }

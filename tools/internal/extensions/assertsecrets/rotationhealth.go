@@ -3,7 +3,7 @@ package assertsecrets
 // ci_assert_rotation_health.go implements `llz ci assert-rotation-health` — the
 // gate on the credential-rotation lifecycle.
 //
-// THE COUPLING IT GUARDS. reconcilelanes.CredPaths (reconcile_openbao.go) DECLARES every
+// THE COUPLING IT GUARDS. credpaths.CredPaths (reconcile_openbao.go) DECLARES every
 // credential whose rotation age is tracked, with the class that says whether
 // anything will ever lower that age. The openbao-gauges lane SAMPLES those paths
 // and publishes llz_credential_age_days{cred,class}. LLZCredentialRotationOverdue
@@ -14,13 +14,13 @@ package assertsecrets
 //
 // That is not hypothetical. The `static` class exists because those paths
 // "published NO series at all and were invisible on the single pane rather than
-// visibly old" (reconcilelanes.CredClassStatic's own comment). A silently-missing series is the
+// visibly old" (credpaths.CredClassStatic's own comment). A silently-missing series is the
 // native failure of this subsystem, and nothing gated it.
 //
 // WHAT IT ASSERTS. Two lanes, because the credential single pane has two feeds
 // and they fail in different ways.
 //
-// AGE LANE — for every credential in reconcilelanes.CredPaths whose class is ALERTABLE
+// AGE LANE — for every credential in credpaths.CredPaths whose class is ALERTABLE
 // (automated / on-demand — the classes something is expected to rotate):
 //
 //   1. a llz_credential_age_days series exists for it, and
@@ -28,7 +28,7 @@ package assertsecrets
 //
 // PRESENCE LANE — for the GitHub-held credentials in ghSecretTargets, where the
 // failure is not "old" but "not there". That whole feed was ungated: the age lane
-// reads reconcilelanes.CredPaths, so it had nothing to say about a write-time probe that never
+// reads credpaths.CredPaths, so it had nothing to say about a write-time probe that never
 // authenticated (which is what was happening in production), a credential that
 // was never configured, or a root token left set after a break-glass. See
 // evalPresenceHealth.
@@ -69,8 +69,8 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertobs"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/promwire"
 )
 
@@ -89,8 +89,8 @@ const (
 // the only ones whose age can fairly gate. Kept in step with the alert's
 // class=~"automated|on-demand" matcher.
 var alertableCredClasses = map[string]bool{
-	reconcilelanes.CredClassAutomated: true,
-	reconcilelanes.CredClassOnDemand:  true,
+	credpaths.CredClassAutomated: true,
+	credpaths.CredClassOnDemand:  true,
 }
 
 // credVerdict is one credential's rotation-health outcome.
@@ -113,14 +113,14 @@ type credVerdict struct {
 const presenceLane = "presence"
 
 // expectedRotationCreds returns the credentials this gate demands a series for,
-// derived from the SAME reconcilelanes.CredPaths table the sampler walks.
+// derived from the SAME credpaths.CredPaths table the sampler walks.
 //
 // Derived from the declaration, not from the metrics: asking Prometheus which
 // credentials exist and then checking those exist is a tautology, and it would
 // pass color.Green on precisely the missing-series bug this gate is for.
 func expectedRotationCreds() []expectedCred {
-	out := make([]expectedCred, 0, len(reconcilelanes.CredPaths))
-	for _, cp := range reconcilelanes.CredPaths {
+	out := make([]expectedCred, 0, len(credpaths.CredPaths))
+	for _, cp := range credpaths.CredPaths {
 		out = append(out, expectedCred{cp.Cred, cp.Class, cp.Optional})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cred < out[j].Cred })
@@ -165,7 +165,7 @@ func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict
 		case !ok && e.Optional:
 			v.FailWhy = ""
 		case !ok && alertableCredClasses[e.Class]:
-			v.FailWhy = "no llz_credential_age_days series — this credential is DECLARED in reconcilelanes.CredPaths but the " +
+			v.FailWhy = "no llz_credential_age_days series — this credential is DECLARED in credpaths.CredPaths but the " +
 				"openbao-gauges lane is publishing nothing for it. It is invisible on the single pane, and " +
 				"LLZCredentialRotationOverdue can never fire for it: a rule over an absent series never evaluates. " +
 				"Usual cause is a missing secret/metadata read in policyReconcilerRead (a 403 fails the whole " +
@@ -187,9 +187,9 @@ func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict
 // description branches on exactly this distinction and so should the gate.
 func rotationRemedy(class string) string {
 	switch class {
-	case reconcilelanes.CredClassAutomated:
+	case credpaths.CredClassAutomated:
 		return "A breach here means the ROTATOR is broken, not that nobody ran it — check the rotator's CronJob/lane"
-	case reconcilelanes.CredClassOnDemand:
+	case credpaths.CredClassOnDemand:
 		return "A breach here means nobody has TRIGGERED it — dispatch secret-rotation.yml for this credential"
 	default:
 		return "Nothing automated lowers this age; it is re-seeded by hand"
@@ -301,7 +301,7 @@ func runCIAssertRotationHealth(prom, namespace string, strict, require bool, set
 
 // ── the presence lane ────────────────────────────────────────────────────────
 //
-// Everything above gates AGE, over the credentials reconcilelanes.CredPaths declares in OpenBao.
+// Everything above gates AGE, over the credentials credpaths.CredPaths declares in OpenBao.
 // It has nothing to say about the OTHER feed — the GitHub write-time lane — and
 // the failure mode there is not "old", it is "not there".
 //
@@ -359,13 +359,13 @@ func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSee
 		}(),
 	}}
 
-	for _, tgt := range tokeninv.GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		cred := credLabelForSecret(tgt.Name)
 		v := credVerdict{Cred: cred, Class: tgt.Class, Lane: presenceLane, Gated: true}
 		got, ok := configured[cred]
 		v.Present = ok
 		switch {
-		case tgt.Expect == tokeninv.CredExpectOptional:
+		case tgt.Expect == credtargets.CredExpectOptional:
 			// Legitimately absent on a healthy deployment (the Harbor robot pair on
 			// a standby peer, before the ACTIVE peer's provisioner has published
 			// them). Visible on the dashboard, never a gate in either direction.
@@ -376,11 +376,11 @@ func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSee
 				"likely one — environment-secret metadata needs different token permissions from " +
 				"repo-scoped, and the OpenBao credentials are environment-scoped), or the funnel " +
 				"between writer and reconciler is broken. It is NOT evidence the credential is missing"
-		case tgt.Expect == tokeninv.CredExpectPresent && got != 1:
+		case tgt.Expect == credtargets.CredExpectPresent && got != 1:
 			v.FailWhy = "expected present and the GitHub secrets API reports it ABSENT. It has no age " +
 				"because it has no value, so no age rule can fire for it. Seed it (docs/secrets.md), or " +
 				"drop it from ghSecretTargets if this instance genuinely does not use it"
-		case tgt.Expect == tokeninv.CredExpectAbsent && got != 0:
+		case tgt.Expect == credtargets.CredExpectAbsent && got != 0:
 			v.FailWhy = "expected ABSENT and it is set. A root token is ephemeral by design — bootstrap " +
 				"revokes it and the recovery quorum is what survives — so this is a live full-admin " +
 				"credential left by a break-glass whose revoke never ran. Dispatch " +

@@ -25,8 +25,3 @@ func existingPaths(paths []string) []string {
 	}
 	return out
 }
-
-// execLookPath goes through kubectlprobe's ONE LookPath seam. This package has no
-// var of its own on purpose: two swappable LookPath vars is exactly the second-seam
-// bug that let a preflight pass or fail on what the developer had installed.
-func execLookPath(file string) (string, error) { return kubectlprobe.LookPathFn(file) }

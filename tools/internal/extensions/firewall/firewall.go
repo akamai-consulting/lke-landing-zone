@@ -33,8 +33,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 )
@@ -155,7 +155,7 @@ func Run() error {
 	// here under a different SSA field manager survive selfHeal (Argo does not
 	// own them).
 	if err := KubectlFn(firewallConfigMapManifest(), "apply", "-f", "-"); err != nil {
-		return fmt.Errorf("apply kube-system/%s ConfigMap: %w", reconciler.FirewallConfigMapName, err)
+		return fmt.Errorf("apply kube-system/%s ConfigMap: %w", platform.FirewallConfigMapName, err)
 	}
 
 	if err := patchFirewallConfig("LINODE_FIREWALL_ID", firewallID); err != nil {
@@ -186,8 +186,8 @@ func Run() error {
 	// placeholders picks up the values just patched in (configMapKeyRef env is
 	// read once at pod creation). A "not found" is benign — ArgoCD has not synced
 	// the Deployment yet, so it will start fresh from the already-patched ConfigMap.
-	if err := KubectlFn("", "rollout", "restart", "deployment", reconciler.FirewallDeploymentName, "-n", "kube-system"); err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::could not roll %s after patching its ConfigMap (likely not created by ArgoCD yet; it will start from the patched values): %v\n", reconciler.FirewallDeploymentName, err)
+	if err := KubectlFn("", "rollout", "restart", "deployment", platform.FirewallDeploymentName, "-n", "kube-system"); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::could not roll %s after patching its ConfigMap (likely not created by ArgoCD yet; it will start from the patched values): %v\n", platform.FirewallDeploymentName, err)
 	}
 	return nil
 }
@@ -215,7 +215,7 @@ func firewallConfigMapManifest() string {
 	b, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata":   map[string]string{"name": reconciler.FirewallConfigMapName, "namespace": "kube-system"},
+		"metadata":   map[string]string{"name": platform.FirewallConfigMapName, "namespace": "kube-system"},
 	})
 	return string(b)
 }
@@ -229,10 +229,10 @@ func firewallConfigPatch(key, value string) string {
 // patchFirewallConfig merge-patches one data key into the controller ConfigMap
 // and logs it, mirroring the script's per-key `kubectl patch` + echo.
 func patchFirewallConfig(key, value string) error {
-	if err := KubectlFn("", "patch", "configmap", reconciler.FirewallConfigMapName,
+	if err := KubectlFn("", "patch", "configmap", platform.FirewallConfigMapName,
 		"-n", "kube-system", "--type", "merge", "--patch", firewallConfigPatch(key, value)); err != nil {
-		return fmt.Errorf("patch %s into %s: %w", key, reconciler.FirewallConfigMapName, err)
+		return fmt.Errorf("patch %s into %s: %w", key, platform.FirewallConfigMapName, err)
 	}
-	fmt.Printf("Set %s=%s in %s\n", key, value, reconciler.FirewallConfigMapName)
+	fmt.Printf("Set %s=%s in %s\n", key, value, platform.FirewallConfigMapName)
 	return nil
 }

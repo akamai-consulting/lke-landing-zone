@@ -25,9 +25,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertplatform"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 )
@@ -77,14 +77,14 @@ func WaitForNamespace(d cigate.Deps, ns string, within time.Duration) error {
 		// Kick a stuck app-of-apps to re-fetch (throttled 20s); a failed fetch
 		// returns fast, so a fresh refresh each cycle re-attempts rather than
 		// interrupts. The namespace is created downstream once the re-fetch succeeds.
-		if cerr := assertplatform.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
+		if cerr := health.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); health.IsTransientFetchError(cerr) && d.Now().Sub(lastRefresh) >= 20*time.Second {
 			d.Kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, cigate.FirstLine(cerr))
 			lastRefresh = d.Now()
 		}
 		if !d.Now().Before(deadline) {
 			extra := ""
-			if cerr := assertplatform.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
+			if cerr := health.ArgoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
 				extra = fmt.Sprintf(" (%s ComparisonError: %s)", openbaoNSParent, cigate.FirstLine(cerr))
 			}
 			return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced%s", ns, within, extra)
@@ -162,11 +162,11 @@ func resolveSealKey(region string) ([]byte, error) {
 		return nil, fmt.Errorf("crypto/rand for the static seal key: %w", err)
 	}
 	enc := base64.StdEncoding.EncodeToString(key)
-	maskGHA(enc)
+	ghaout.Mask(enc)
 
 	// Offline-backup banner first — the key is generated exactly once. (It is NOT
 	// printed here; the operator retrieves it from the infra-<region> secret.)
-	if err := appendGHAFile("GITHUB_STEP_SUMMARY",
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
 		"## OpenBao static auto-unseal key generated — Back It Up Now",
 		"",
 		"**OPERATOR ACTION REQUIRED:**",

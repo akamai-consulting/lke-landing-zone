@@ -410,6 +410,14 @@ jobs:
         working-directory: terraform-iac-bootstrap/vpc
         run: tofu apply -auto-approve -var-file="${{ steps.net.outputs.net }}.tfvars"
 
+      # Orientation for a failed build — see ci_build_failure_summary.go. On every
+      # apply job, because the apply path had no `if: failure()` step at all: a red
+      # X and raw Terraform logs were the entire operator experience. LAST in the
+      # job: `if: failure()` sees failures of PRIOR steps only.
+      - name: Explain the failure
+        if: failure()
+        run: llz ci build-failure-summary --stage vpc --region "$REGION"
+
   apply-cluster:
     name: Apply Cluster
     if: >
@@ -456,11 +464,26 @@ jobs:
       # account-wide; pvc-* Volumes only in THIS region (--volume-region) because
       # a detached Volume carries no cluster id. See the sidecar doc.
       # Tune via repo vars PREFLIGHT_ORPHAN_THRESHOLD / PREFLIGHT_FAIL_ON_ORPHANS.
+      # --deployment is what makes the capacity guards live. It reads the tfvars
+      # rendered by the step above for the Linode region, cluster label, node type
+      # and node count. Previously this passed the DEPLOYMENT name as
+      # --volume-region (a Linode-region filter, so the Volume census always read 0)
+      # and supplied none of the capacity-guard inputs — leaving all three guards
+      # inert on every adopter build, while their own messages describe what they
+      # prevent as a 30-minute cluster-create HANG.
+      #
+      # PREFLIGHT_VPC_LIMIT / PREFLIGHT_VCPU_LIMIT are repo variables because Linode
+      # exposes no quota API — the account owner is the only source. Unset = the
+      # census still prints, the hard guard stays off. Set them to your account's
+      # limits (Linode Cloud Manager → Account → Limits) to fail fast instead.
       - name: Pre-flight — Linode account capacity / orphan check
         env:
           FAIL_ON_ORPHANS:  ${{ vars.PREFLIGHT_FAIL_ON_ORPHANS || 'true' }}
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
-        run: llz ci preflight --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION"
+          # Read by llz as flag defaults (cli.EnvInt), so this stays a one-liner.
+          PREFLIGHT_VPC_LIMIT:  ${{ vars.PREFLIGHT_VPC_LIMIT || '0' }}
+          PREFLIGHT_VCPU_LIMIT: ${{ vars.PREFLIGHT_VCPU_LIMIT || '0' }}
+        run: llz ci preflight --deployment "$REGION" --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD"
 
       - name: Terraform init — cluster
         uses: ./.github/actions/terraform-init
@@ -528,6 +551,10 @@ jobs:
           path: ${{ runner.temp }}/timing/
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Explain the failure
+        if: failure()
+        run: llz ci build-failure-summary --stage cluster --region "$REGION"
 
   # ── Chain: bootstrap (cluster + OpenBao) after the cluster is up ─────────────
   # A single `module=all` apply walks buckets → cluster → this job. With
@@ -860,7 +887,11 @@ jobs:
         if: always() && steps.confirm.outcome == 'success'
         env:
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
-        run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --env "$REGION" --attempts 5 --retry-delay 30
+        # --deployment, not --volume-region "$REGION": that flag is a Linode-REGION
+        # filter and $REGION is the DEPLOYMENT name, so the Volume census matched
+        # nothing and this gate could go green on a destroy that leaked every
+        # Volume. Same resolver `llz ci preflight --deployment` uses.
+        run: llz ci assert-no-orphans --deployment "$REGION" --threshold "$ORPHAN_THRESHOLD" --attempts 5 --retry-delay 30
 
   # ── Apply / plan / destroy object-storage module ────────────────────────────
   # Creates the Loki + Harbor-registry S3 BUCKETS only. The scoped access keys
@@ -937,10 +968,15 @@ jobs:
             echo ""
             echo "**Harbor registry bucket:** \`${HARBOR_BUCKET}\`"
             echo ""
-            echo "**Next step:** run \`bootstrap-openbao.yml\` → \`${REGION}\` — its"
-            echo "mint-bootstrap-objkeys step mints the scoped keys and seeds"
+            echo "**Next:** the chained \`bootstrap-openbao\` job runs automatically after this"
+            echo "one — its mint-bootstrap-objkeys step mints the scoped keys and seeds"
             echo "\`secret/loki/object-store\` + \`secret/harbor/registry-s3\` in OpenBao."
+            echo "(bootstrap-openbao.yml is separately dispatchable, for a retry.)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Explain the failure
+        if: failure()
+        run: llz ci build-failure-summary --stage object-storage --region "$REGION"
 
   plan-destroy-object-storage:
     name: Plan DESTROY Object Storage (${{ inputs.region }})

@@ -9,7 +9,7 @@ package main
 // reach this extension's copy too.
 
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
+	envtopoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
@@ -21,7 +21,7 @@ import (
 func init() { installEnvTopologyDeps() }
 
 func installEnvTopologyDeps() {
-	envtopology.Install(envtopology.Deps{
+	envtopoext.Install(envtopoext.Deps{
 		Exec:     execOutput,
 		ExecArgv: proc.Run,
 		Summary:  ghaout.Append,

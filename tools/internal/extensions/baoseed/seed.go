@@ -34,6 +34,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 )
 
@@ -154,14 +155,6 @@ func defaultMissingAnnotation(path string, missing []string) string {
 	return fmt.Sprintf("%s not set — %s not seeded", strings.Join(missing, " / "), path)
 }
 
-func MaskGHALines(v string) {
-	for _, line := range strings.Split(v, "\n") {
-		if strings.TrimSpace(line) != "" {
-			maskGHA(line)
-		}
-	}
-}
-
 type Opts struct {
 	Path                string
 	FieldSpecs          []string
@@ -232,7 +225,7 @@ func RunSeed(o Opts) error {
 		if o.OnMissingStandby != "" && haRole == "standby" && len(o.MissingNotesStandby) > 0 {
 			notes = o.MissingNotesStandby
 		}
-		if err := appendGHAFile("GITHUB_STEP_SUMMARY", notes...); err != nil {
+		if err := ghaout.Append("GITHUB_STEP_SUMMARY", notes...); err != nil {
 			return err
 		}
 		annotations := o.MissingAnnotations
@@ -250,7 +243,7 @@ func RunSeed(o Opts) error {
 			for _, a := range annotations {
 				fmt.Fprintf(os.Stderr, "::error::%s\n", a)
 			}
-			if err := appendGHAFile("GITHUB_ENV", "BOOTSTRAP_ERRORS=true"); err != nil {
+			if err := ghaout.Append("GITHUB_ENV", "BOOTSTRAP_ERRORS=true"); err != nil {
 				return err
 			}
 		}
@@ -261,7 +254,7 @@ func RunSeed(o Opts) error {
 	// workflow-visible non-secrets — see the file header).
 	for _, f := range fields {
 		if f.src.kind != "literal" {
-			MaskGHALines(values[f.key])
+			ghaout.MaskLines(values[f.key])
 		}
 	}
 
@@ -273,5 +266,5 @@ func RunSeed(o Opts) error {
 		msg = o.Path + " seeded."
 	}
 	fmt.Println(msg)
-	return appendGHAFile("GITHUB_STEP_SUMMARY", o.SummaryOnSeed...)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", o.SummaryOnSeed...)
 }

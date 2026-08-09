@@ -20,18 +20,18 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/buildpreflight"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatecommit"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"sigs.k8s.io/yaml"
 )
@@ -68,7 +68,7 @@ func Run(dryRun bool, ref string, commit, noRender bool) error {
 	//
 	// Degrade gracefully: a pre-manifest instance (or one whose manifest failed to
 	// parse) still upgrades exactly as it did before, just without class enforcement.
-	policy, policyErr := templatemanifest.Load("")
+	policy, policyErr := manifest.Load("")
 	var owned selfupgrade.UpgradeSnapshot
 	if policyErr != nil {
 		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", color.Yellow("!"), policyErr)
@@ -227,12 +227,12 @@ func currentTemplateRef() string {
 // conflictMarkerLines predicate so this gate and `llz lint` agree.
 func conflictFiles() []string {
 	changed := map[string]bool{}
-	for _, f := range strings.Split(buildpreflight.GitOut("diff", "--name-only"), "\n") {
+	for _, f := range strings.Split(gitcmd.Out("diff", "--name-only"), "\n") {
 		if f = strings.TrimSpace(f); f != "" {
 			changed[f] = true
 		}
 	}
-	for _, f := range strings.Split(buildpreflight.GitOut("ls-files", "--others", "--exclude-standard"), "\n") {
+	for _, f := range strings.Split(gitcmd.Out("ls-files", "--others", "--exclude-standard"), "\n") {
 		if f = strings.TrimSpace(f); f != "" {
 			changed[f] = true
 		}
@@ -258,9 +258,9 @@ func printSummary(oldRef, newRef string) {
 		from = "(unknown)"
 	}
 	fmt.Printf("\n%s template %s → %s\n", color.Bold("upgrade"), from, newRef)
-	if stat := buildpreflight.GitOut("diff", "--stat"); stat != "" {
+	if stat := gitcmd.Out("diff", "--stat"); stat != "" {
 		fmt.Println(stat)
-	} else if untracked := buildpreflight.GitOut("ls-files", "--others", "--exclude-standard"); untracked != "" {
+	} else if untracked := gitcmd.Out("ls-files", "--others", "--exclude-standard"); untracked != "" {
 		fmt.Printf("new files:\n%s\n", untracked)
 	} else {
 		fmt.Println(color.Dim("  no file changes — already up to date."))
@@ -281,7 +281,7 @@ func printSummary(oldRef, newRef string) {
 // remediation verbatim, because an operator who ignores this will meet that one
 // next and the two must read as the same instruction.
 var reportCIImageSkew = func(ref string) {
-	local := onboard.ReadEnvFile(".llz/vars.env")
+	local := cli.ReadEnvFile(".llz/vars.env")
 	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
 	if len(skew) == 0 {
 		return
@@ -323,7 +323,7 @@ func conflictMarkerLines(content string) []int {
 }
 
 func commitUpgrade(dryRun bool, oldRef, newRef string) error {
-	if strings.TrimSpace(buildpreflight.GitOut("status", "--porcelain")) == "" {
+	if strings.TrimSpace(gitcmd.Out("status", "--porcelain")) == "" {
 		fmt.Fprintln(os.Stderr, color.Green("✓")+" already up to date — nothing to commit.")
 		return nil
 	}

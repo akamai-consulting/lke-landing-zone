@@ -34,8 +34,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
@@ -62,7 +62,7 @@ var helmRunner = func(args ...string) (string, bool) {
 
 // BootstrapValuePlaceholders is defined HERE, in the guard, and imported by
 // cmd/llz's bootstrap-cluster — not the other way round. Same reasoning as
-// docsguard.DeliveredDocs: a check that validates a set against the tree is
+// platform.DeliveredDocs: a check that validates a set against the tree is
 // meaningless if it runs against a different set than the producer ships, so the
 // set is defined once, next to the check.
 //
@@ -87,7 +87,7 @@ func RunValidateAplValues(valuesPath, chartVersion string, skipSchema bool) erro
 	keys := placeholderSet()
 	if unwired := unwiredPlaceholders(string(valuesRaw), keys); len(unwired) > 0 {
 		return fmt.Errorf("%s references ${%s} not in the runtime-placeholder set (%s) — bootstrap-cluster cannot fill it (the apl_values_repo_url class)",
-			valuesPath, strings.Join(unwired, "}, ${"), strings.Join(brownfield.SortedSetKeys(keys), " "))
+			valuesPath, strings.Join(unwired, "}, ${"), strings.Join(cli.SortedKeys(keys), " "))
 	}
 	fmt.Printf("runtime-placeholder var-contract ok (%d placeholders, all leftover placeholders wired)\n", len(keys))
 

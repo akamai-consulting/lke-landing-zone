@@ -14,14 +14,14 @@ package upgrade
 // It cost two bugs, both found by hand rather than by CI:
 //
 //  1. `llz upgrade` re-prompted every copier question, because copier.UpdateArgv
-//     omitted --defaults. With no TTY that is not a onboard.Prompt, it is an unhandled
+//     omitted --defaults. With no TTY that is not a prompt, it is an unhandled
 //     OSError out of prompt_toolkit — so the command was unusable in CI, in a
 //     wrapper script, over `ssh host 'llz upgrade'`. Check `update-is-
 //     noninteractive` is that bug, and it is why this gate closes stdin rather
 //     than inheriting it.
 //  2. An answer the CURRENT template's validator rejects is silently replaced by
 //     the template DEFAULT, exit 0, no warning — copier falls back to the
-//     default when it cannot onboard.Prompt, and to the default in the onboard.Prompt when it
+//     default when it cannot prompt, and to the default in the prompt when it
 //     can. For instance_repo that repoints the ArgoCD repoURL and every `gh`
 //     target at a repository that does not exist. Check `answers-preserved`.
 //
@@ -47,11 +47,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/onboard"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/selfupgrade"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -97,7 +98,7 @@ type upgradeTestOpts struct {
 
 // PreviousReleaseTag picks the release an adopter would most plausibly be
 // upgrading FROM: the highest bare vX.Y.Z tag that is not on the commit under
-// test. It delegates the "highest release" rule to selfupgrade.LatestLLZTag — the SAME rule
+// test. It delegates the "highest release" rule to llzver.LatestLLZTag — the SAME rule
 // `llz self-update` and `llz new` apply — so the gate scaffolds onto exactly the
 // release an adopter would have installed, rather than a second opinion about
 // what "latest" means that could drift from the one that ships.
@@ -113,11 +114,11 @@ func PreviousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 			candidates = append(candidates, t)
 		}
 	}
-	return selfupgrade.LatestLLZTag(candidates)
+	return llzver.LatestLLZTag(candidates)
 }
 
-// releaseTagRe keeps ONLY a full release tag. selfupgrade.LatestLLZTag cannot do this on its
-// own: selfupgrade.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
+// releaseTagRe keeps ONLY a full release tag. llzver.LatestLLZTag cannot do this on its
+// own: llzver.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
 // callers hand it a list the GitHub releases API already filtered by isDraft /
 // isPrerelease. This gate reads `git tag`, where that metadata does not exist —
 // and the release convention here is to cut a PRE-RELEASE first, so `v0.0.41-rc1`
@@ -140,7 +141,7 @@ var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // it one level down would be the same mistake in a smaller box.
 func CopierScaffoldArgv(template, ref, dest string, answers map[string]string) []string {
 	a := []string{"copier", "copy", "--trust", "--defaults", "--vcs-ref", ref, "--data", "llz_version=" + ref}
-	for _, k := range onboard.SortedKeys(answers) {
+	for _, k := range cli.SortedKeys(answers) {
 		a = append(a, "--data", k+"="+answers[k])
 	}
 	return append(a, template, dest)
@@ -196,7 +197,7 @@ func MergeConflictArtifacts(root string) (markers, rejects []string, err error) 
 func RunUpgradeTest(o upgradeTestOpts) error {
 	root := o.template
 	if root == "" {
-		out, err := gitOutput(".", "rev-parse", "--show-toplevel")
+		out, err := gitcmd.Output(".", "rev-parse", "--show-toplevel")
 		if err != nil {
 			return fmt.Errorf("not in a git checkout of the template (pass --template): %w", err)
 		}
@@ -223,7 +224,7 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 
 	to := o.to
 	if to == "" {
-		sha, err := gitOutput(root, "rev-parse", "HEAD")
+		sha, err := gitcmd.Output(root, "rev-parse", "HEAD")
 		if err != nil {
 			return fmt.Errorf("resolve HEAD: %w", err)
 		}
@@ -231,11 +232,11 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 	}
 	from := o.from
 	if from == "" {
-		tagsOut, err := gitOutput(root, "tag", "--list")
+		tagsOut, err := gitcmd.Output(root, "tag", "--list")
 		if err != nil {
 			return fmt.Errorf("list tags: %w", err)
 		}
-		headOut, _ := gitOutput(root, "tag", "--points-at", to)
+		headOut, _ := gitcmd.Output(root, "tag", "--points-at", to)
 		headTags := map[string]bool{}
 		for _, t := range strings.Fields(headOut) {
 			headTags[t] = true
@@ -301,7 +302,7 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		if strings.Contains(string(out), "prompt_toolkit") || strings.Contains(string(out), "Traceback") {
 			hint = "\n    This is copier PROMPTING. `copier update` re-asks every question unless it is\n" +
 				"    passed --defaults, and with no terminal that is an unhandled exception rather\n" +
-				"    than a onboard.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
+				"    than a cli.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
 				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
 		failures = append(failures, fmt.Sprintf("update-is-noninteractive: `copier update` to %s failed:\n%s%s",

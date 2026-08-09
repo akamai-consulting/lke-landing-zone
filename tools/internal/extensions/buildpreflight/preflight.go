@@ -22,58 +22,22 @@ package buildpreflight
 // exactly as before.
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
-
-// GHAPIJSON runs `gh api <path>` and decodes the response into out. Package var
-// so tests substitute the whole GitHub round-trip.
-var GHAPIJSON = func(path string, out any) error {
-	b, err := execOutput("gh", "api", path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
-}
-
-// GHAPIJSONPaged is GHAPIJSON over every page. `--paginate --slurp` yields an
-// ARRAY of page objects, so the caller's shape is decoded per page and the named
-// list fields concatenated — a single-object decode would silently keep page 1.
-var GHAPIJSONPaged = func(path string, out any) error {
-	b, err := execOutput("gh", "api", "--paginate", "--slurp", path)
-	if err != nil {
-		// `--slurp` is a recent `gh api` flag. An older gh rejects it at parse time
-		// — exit 1, NO stdout — so this is the only place that case is visible. It
-		// used to fall through to a decode of empty output and surface as "could not
-		// determine whether the passphrase exists", with no way forward for an
-		// operator on a distro-packaged gh. Retry unpaged: one page is worse than a
-		// hard stop, and the list this serves is short.
-		if strings.Contains(err.Error(), "unknown flag") || strings.Contains(err.Error(), "unknown shorthand") {
-			return GHAPIJSON(path, out)
-		}
-		return err
-	}
-	// --slurp ALWAYS wraps, including a single page, so a non-array here means the
-	// shape changed rather than "this gh did not slurp".
-	var pages []json.RawMessage
-	if err := json.Unmarshal(b, &pages); err != nil {
-		return fmt.Errorf("gh api --slurp %s: expected an array of pages: %w", path, err)
-	}
-	return MergeJSONPages(pages, out)
-}
 
 // Run verifies the deployment the dispatch names is present, locally
 // and on the branch CI builds from. A returned error blocks the dispatch; every
@@ -138,7 +102,7 @@ func warnUnpublishedEdits(specRoot, aplDir, env string) {
 		filepath.Join(aplDir, env),
 		filepath.Join(aplDir, "_shared"),
 	}
-	dirty := GitOut(append([]string{"status", "--porcelain", "--"}, paths...)...)
+	dirty := gitcmd.Out(append([]string{"status", "--porcelain", "--"}, paths...)...)
 	if dirty == "" {
 		// Also the answer outside a git repo, or when git is unavailable: no
 		// evidence of an unpublished edit is not evidence of one.
@@ -284,7 +248,7 @@ func remoteDeploymentPresent(specRoot, env string) error {
 		// Present but stale: the build will run the pushed spec, not the edits in
 		// the working tree. Advisory — building an older revision on purpose is
 		// legitimate, and this is exactly what a promotion flow looks like.
-		local := GitOut("hash-object", filepath.Join(specRoot, filepath.FromSlash(rel)))
+		local := gitcmd.Out("hash-object", filepath.Join(specRoot, filepath.FromSlash(rel)))
 		if local != "" && remoteSHA != "" && local != remoteSHA {
 			fmt.Fprintf(os.Stderr, "%s %s on %s differs from your working copy — the build uses the PUSHED one (%s).\n",
 				color.Yellow("!"), rel, branch, publishHint(branch))
@@ -315,7 +279,7 @@ func notOnBuildBranchErr(rel, repo, branch, env string) error {
 // DEFAULT branch, so an operator working on a feature branch can push all day
 // and never move the tree the build reads. Name the branch they are on.
 func publishHint(defaultBranch string) string {
-	cur := GitOut("rev-parse", "--abbrev-ref", "HEAD")
+	cur := gitcmd.Out("rev-parse", "--abbrev-ref", "HEAD")
 	if cur == "" || cur == "HEAD" || cur == defaultBranch {
 		return color.Cyan("git push")
 	}
@@ -342,7 +306,7 @@ func ghDefaultBranch(repo string) string {
 	var r struct {
 		DefaultBranch string `json:"default_branch"`
 	}
-	if err := GHAPIJSON("repos/"+repo, &r); err != nil {
+	if err := ghapi.GHAPIJSON("repos/"+repo, &r); err != nil {
 		return ""
 	}
 	return r.DefaultBranch
@@ -364,7 +328,7 @@ func ghFileSHA(repo, path, ref string) (sha string, found, ok bool) {
 	// ask about the DEFAULT ref instead — answering a different question than the
 	// one the caller asked. (The path needs no escaping: rel is landingzone.yaml
 	// or environments/<env>.yaml, and env is bound by validate.EnvName.)
-	err := GHAPIJSON("repos/"+repo+"/contents/"+path+"?ref="+url.QueryEscape(ref), &r)
+	err := ghapi.GHAPIJSON("repos/"+repo+"/contents/"+path+"?ref="+url.QueryEscape(ref), &r)
 	if err != nil {
 		return "", false, isNotFoundErr(err)
 	}
@@ -381,56 +345,4 @@ func ghFileSHA(repo, path, ref string) (sha string, found, ok bool) {
 // transient, which is the failure this whole split exists to avoid.
 func isNotFoundErr(err error) bool {
 	return strings.Contains(err.Error(), "HTTP 404")
-}
-
-// MergeJSONPages decodes each page into a fresh copy of out's type, appends every
-// SLICE field, and takes the LAST non-zero value of every other field.
-//
-// Reflection rather than a per-caller merge because the alternative is each caller
-// hand-rolling pagination, which is how page-1 truncation gets reintroduced.
-//
-// Non-slice fields are carried rather than dropped: the first cut only appended
-// slices, which silently zeroed `total_count` — the one field you would use to
-// CHECK pagination was complete. Scalars are page-invariant on GitHub list
-// endpoints (every page repeats the same total), so last-non-zero is well defined.
-//
-// Limitation, stated rather than discovered later: out must point at a STRUCT, so
-// this cannot serve the gh endpoints returning a top-level array. Those need a
-// slice-shaped variant; there is no caller for one yet.
-func MergeJSONPages(pages []json.RawMessage, out any) error {
-	dst := reflect.ValueOf(out)
-	if dst.Kind() != reflect.Ptr || dst.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("MergeJSONPages: out must be a pointer to struct, got %T", out)
-	}
-	for _, p := range pages {
-		page := reflect.New(dst.Elem().Type())
-		if err := json.Unmarshal(p, page.Interface()); err != nil {
-			return err
-		}
-		for i := 0; i < dst.Elem().NumField(); i++ {
-			f, pf := dst.Elem().Field(i), page.Elem().Field(i)
-			if !f.CanSet() {
-				continue // unexported
-			}
-			if f.Kind() == reflect.Slice {
-				f.Set(reflect.AppendSlice(f, pf))
-				continue
-			}
-			if !pf.IsZero() {
-				f.Set(pf)
-			}
-		}
-	}
-	return nil
-}
-
-// GitOut runs git and returns trimmed stdout, "" on failure. A local copy: the
-// sustain extraction took the original with stamp.go, and build_preflight is the
-// only other caller. Three lines around execOutput, nothing to drift.
-func GitOut(args ...string) string {
-	out, err := execOutput("git", args...)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

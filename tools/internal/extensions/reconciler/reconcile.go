@@ -27,6 +27,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
@@ -345,7 +346,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// day-2 alerting see the linode lanes' activation state instead of
 			// inferring it from their silence.
 			present := 0.0
-			if credrotate.InClusterLinodeToken() != "" {
+			if linode.InClusterLinodeToken() != "" {
 				present = 1
 			}
 			reg.SetGauge("llz_reconcile_linode_token_present", "1 once the in-cluster Linode token (env or optional Secret volume) is readable", nil, present)
@@ -364,7 +365,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	// failed pass — the observe gauge above reports the waiting state.
 	requireLinodeToken := func(run func(context.Context) error) func(context.Context) error {
 		return func(ctx context.Context) error {
-			if credrotate.InClusterLinodeToken() == "" {
+			if linode.InClusterLinodeToken() == "" {
 				return nil
 			}
 			return run(ctx)

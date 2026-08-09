@@ -10,7 +10,7 @@ package openbao
 // token. See docs/designs/team-scoped-credentials.md and ADR 0004.
 //
 // OpenBao has no external ingress, so the id_token→token exchange rides the same
-// ephemeral kubectl port-forward `get`/`set` use (PortForwardFn).
+// ephemeral kubectl port-forward `get`/`set` use (openbao.PortForwardFn).
 
 import (
 	"context"
@@ -22,6 +22,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -232,12 +234,12 @@ func RunTeamLogin(o TeamLoginOpts) error {
 
 	// Reach OpenBao over the same ephemeral port-forward get/set use, then swap
 	// the id_token for a team-scoped OpenBao token via the `keycloak` mount.
-	addr, cleanup, err := PortForwardFn()
+	addr, cleanup, err := openbao.PortForwardFn()
 	if err != nil {
 		return fmt.Errorf("port-forward to %s/%s: %w", baoread.Namespace, baoread.RootPod, err)
 	}
 	defer cleanup()
-	token, err := OIDCLogin(context.Background(), HTTPClientLoopback(30*time.Second), addr, "keycloak", o.Team, idToken)
+	token, err := openbao.OIDCLogin(context.Background(), openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", o.Team, idToken)
 	if err != nil {
 		return err
 	}

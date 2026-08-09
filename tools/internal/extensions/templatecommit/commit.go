@@ -38,8 +38,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
 )
 
 // Endpoint bases, overridable so tests point the two network legs at an httptest
@@ -195,11 +193,11 @@ var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 // pre-copier or hand-assembled instance still resolves.
 func InstanceTemplateRepo() string {
 	if a, _ := answers.Read("."); a != nil {
-		if r := sustain.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
+		if r := templateid.NormalizeTemplateRepo(a.SrcPath); ownerRepoRe.MatchString(r) {
 			return r
 		}
 	}
-	return sustain.DefaultTemplateRepo
+	return templateid.DefaultRepo
 }
 
 // pinnedImageTag returns the ci image tag that pins an instance to the SAME commit
@@ -305,7 +303,7 @@ func ciImageVarsForTag(tag, ref string) (tfImage, kubeImage string, pinned bool,
 // decision is unit-testable rather than buried in a 200-line interactive wizard.
 //
 // Writes ONLY the variables asked for: an operator's existing TF_IMAGE is theirs,
-// and this command's contract is to skip what is already configreadiness.Satisfied.
+// and this command's contract is to skip what is already envreq.Satisfied.
 func ComputeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 	ref := answers.PinnedTemplateRef()
 	tfImage, kubeImage, pinned, why := computeCIImageVars(InstanceTemplateRepo(), ref)
@@ -473,4 +471,16 @@ var ImagePublished = func(image string) (published, asked bool) {
 		// 401/403/5xx: the registry did not answer the question we asked.
 		return false, false
 	}
+}
+
+// CIImageVarNames are the workflow variables that must name the pinned template
+// commit. Exported as NAMES rather than the table: the doctor preflight only
+// needs to ask "is any of these recorded?", and handing out a struct with
+// unexported fields to answer that would be the worse trade.
+func CIImageVarNames() []string {
+	out := make([]string, 0, len(ciImageVars))
+	for _, w := range ciImageVars {
+		out = append(out, w.name)
+	}
+	return out
 }

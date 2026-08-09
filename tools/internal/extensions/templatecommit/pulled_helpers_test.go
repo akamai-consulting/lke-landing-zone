@@ -1,9 +1,7 @@
 package templatecommit
 
 import (
-	"io"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -43,45 +41,4 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 	orig := kubectlprobe.Exec
 	kubectlprobe.Exec = fn
 	t.Cleanup(func() { kubectlprobe.Exec = orig })
-}
-
-func captureStdoutStderr(t *testing.T, fn func()) (stdout, stderr string) {
-	t.Helper()
-	origOut, origErr := os.Stdout, os.Stderr
-	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
-	ro, wo, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	re, we, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout, os.Stderr = wo, we
-	fn()
-	wo.Close()
-	we.Close()
-	o, _ := io.ReadAll(ro)
-	e, _ := io.ReadAll(re)
-	return string(o), string(e)
-}
-
-// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
-// wrote — these helpers print a human report we don't want in test output.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	fn()
-	w.Close()
-	os.Stdout = orig
-	var b strings.Builder
-	if _, err := io.Copy(&b, r); err != nil {
-		t.Fatal(err)
-	}
-	return b.String()
 }

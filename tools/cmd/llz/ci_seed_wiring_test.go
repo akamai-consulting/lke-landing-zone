@@ -11,7 +11,7 @@ import (
 // externalsecret-paths does not cover this and cannot: it proves some Go source
 // contains a `baoread.KVPut("secret/…")` call for each ExternalSecret's path, which is
 // a statement about the SOURCE, not about anything running. `llz ci seed-ssec-key`
-// configreadiness.Satisfied that guard completely while being invoked by nothing — so the path was
+// envreq.Satisfied that guard completely while being invoked by nothing — so the path was
 // never written, ESO reported SecretSyncedError, the DaemonSet could not mount the
 // Secret, and llz-obj-proxy sat OutOfSync/Degraded until the convergence gate gave
 // up. That is how the first e2e run of the obj-proxy component failed, and no

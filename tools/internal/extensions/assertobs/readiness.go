@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/converge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -119,7 +119,7 @@ func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string
 	}
 
 	// 2. Loki is configured for S3 object storage (not the filesystem default).
-	if health.LokiConfigUsesS3(converge.LokiConfigText(nameMatch)) {
+	if health.LokiConfigUsesS3(health.LokiConfigText(nameMatch)) {
 		msgs = append(msgs, "OK: Loki config references S3 object storage")
 	} else {
 		msgs = append(msgs, "FAIL: Loki config does not reference S3 — still on the filesystem default? (kyverno loki-s3-object-store may not have applied)")
@@ -405,7 +405,7 @@ func lokiPods(match string) []lokiPod {
 func runCIWaitHarbor(_ string, _ bool) error {
 	allRolled := true
 	for _, d := range health.HarborRegistryDeployments() {
-		if converge.WaitPoll(harborWaitBudget, 10*time.Second, func() bool { return deploymentRolledOut("harbor", d) }) {
+		if cigate.WaitPoll(harborWaitBudget, 10*time.Second, func() bool { return deploymentRolledOut("harbor", d) }) {
 			fmt.Printf("harbor deployment %q rolled out.\n", d)
 			continue
 		}
@@ -463,7 +463,7 @@ func retrofitHarborObjProxyCA() {
 			fmt.Fprintf(os.Stderr, "::warning::could not roll harbor/%s to pick up the obj-proxy CA (%v) — `kubectl -n %s rollout restart deploy/%s` by hand before relying on Harbor.\n", d, err, objenc.HarborNS, d)
 			return
 		}
-		if !converge.WaitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborCARetrofitRolledOut(objenc.HarborNS, d) }) {
+		if !cigate.WaitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborCARetrofitRolledOut(objenc.HarborNS, d) }) {
 			fmt.Fprintf(os.Stderr, "::warning::harbor/%s did not finish rolling within %s after the obj-proxy CA retrofit.\n", d, harborWaitBudget)
 			return
 		}
@@ -501,7 +501,7 @@ var (
 )
 
 // harborWaitBudget is the wall-clock deadline for each Harbor readiness poll
-// (the former harborPoll's 60 attempts × 10s). converge.WaitPoll (ci_wait.go) bounds the
+// (the former harborPoll's 60 attempts × 10s). cigate.WaitPoll (ci_wait.go) bounds the
 // total wait, so a slow probe can't stretch it the way the old attempt-count
 // loop could. A var (not const) so tests can shrink it to avoid a real 10m poll.
 var harborWaitBudget = 600 * time.Second

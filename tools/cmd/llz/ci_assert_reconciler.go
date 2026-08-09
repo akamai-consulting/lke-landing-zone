@@ -11,13 +11,13 @@ package main
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertreconciler"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconciler"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 func installAssertReconcilerDeps() {
 	assertreconciler.Install(assertreconciler.Deps{
 		Exec:                  execOutput,
 		ExecCombined:          execCombined,
-		FirewallConfigMapName: reconciler.FirewallConfigMapName,
+		FirewallConfigMapName: platform.FirewallConfigMapName,
 	})
 }

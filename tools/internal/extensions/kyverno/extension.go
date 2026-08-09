@@ -54,7 +54,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // WEBHOOK-RACE SOFT-FAIL is why this needs `cluster-read` beyond the readiness
 // poll. Kyverno's own admission webhook can reject the apply while Kyverno itself
 // is still starting; the command recognises that specific rejection and retries
-// rather than failing the converge. IsWebhookRace is exported for exactly one
+// rather than failing the converge. health.IsWebhookRace is exported for exactly one
 // other caller — the Keycloak gateway alias apply, which hits the identical race.
 func Extension() extension.Extension {
 	return extension.Extension{

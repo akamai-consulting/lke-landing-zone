@@ -32,11 +32,3 @@ func capture(t *testing.T, target **os.File, fn func()) string {
 	_ = r.Close()
 	return out
 }
-
-// withExecOutput swaps this package's Exec seam for one test.
-func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
-	t.Helper()
-	orig := deps.Exec
-	deps.Exec = fn
-	t.Cleanup(func() { deps.Exec = orig })
-}

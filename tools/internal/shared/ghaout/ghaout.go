@@ -15,6 +15,7 @@ package ghaout
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // appendGHAFile appends lines to the GitHub Actions command file named by
@@ -50,3 +51,31 @@ func Append(envVar string, lines ...string) error {
 // shares (not unseal keys): the seal mechanism unseals every pod at boot, so
 // there is no submit-keys-to-unseal step. The recovery keys exist only to
 // authorize the `operator generate-root` quorum that bao-regen-root runs.
+
+// ── THE OTHER FILE-BASED CHANNEL: ::add-mask:: ───────────────────────────────
+//
+// Mask and MaskLines came from internal/extensions/baoseed, filed there under
+// "localised pure helpers: copies, not seams" -- which was the right call while
+// baoseed was the only caller and stopped being true when objenc and openbao
+// started importing the seeding extension to redact a secret from a log. Asking
+// GitHub Actions to mask a value is the same kind of thing this package already
+// does: write to a channel GHA reads, with no decision in it.
+//
+// MaskLines splits first because ::add-mask:: is per-line -- a multi-line secret
+// masked whole leaves every individual line visible, which is the failure mode
+// worth having a second function for.
+
+// Mask asks GitHub Actions to redact a value from the log.
+func Mask(v string) {
+	if os.Getenv("GITHUB_ACTIONS") != "" && v != "" {
+		fmt.Printf("::add-mask::%s\n", v)
+	}
+}
+
+func MaskLines(v string) {
+	for _, line := range strings.Split(v, "\n") {
+		if strings.TrimSpace(line) != "" {
+			Mask(line)
+		}
+	}
+}

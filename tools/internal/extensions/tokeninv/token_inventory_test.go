@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
 // a fixed "now" so expiry math is deterministic.
@@ -26,8 +28,8 @@ func (f fakeCredLister) ListObjectStorageKeys(context.Context) ([]map[string]any
 
 func TestGatherGitHubTokens(t *testing.T) {
 	// Stub the probe: name → (code, expHeader).
-	orig := GHPATProbe
-	defer func() { GHPATProbe = orig }()
+	orig := tokenprobe.GHPATProbe
+	defer func() { tokenprobe.GHPATProbe = orig }()
 	resp := map[string]struct {
 		code int
 		hdr  string
@@ -37,7 +39,7 @@ func TestGatherGitHubTokens(t *testing.T) {
 		"noexpiry-token": {200, ""},                        // no header → breach
 		"invalid-token":  {401, ""},                        // 401 → breach
 	}
-	GHPATProbe = func(_, token string) (int, string, error) {
+	tokenprobe.GHPATProbe = func(_, token string) (int, string, error) {
 		r := resp[token]
 		return r.code, r.hdr, nil
 	}
@@ -49,23 +51,23 @@ func TestGatherGitHubTokens(t *testing.T) {
 		{"missing", "https://api", ""}, // not set → unknown
 	}
 	got := gatherGitHubTokens(targets, tiNow, 90, 14)
-	byName := map[string]TokenEntry{}
+	byName := map[string]credtargets.TokenEntry{}
 	for _, e := range got {
 		byName[e.Name] = e
 	}
-	if byName["ok"].State != TokenStateOK || byName["ok"].Expiry == 0 {
+	if byName["ok"].State != credtargets.TokenStateOK || byName["ok"].Expiry == 0 {
 		t.Errorf("ok token: %+v", byName["ok"])
 	}
-	if byName["soon"].State != TokenStateWarn {
+	if byName["soon"].State != credtargets.TokenStateWarn {
 		t.Errorf("soon token should be warn: %+v", byName["soon"])
 	}
-	if byName["noexp"].State != TokenStateBreach {
+	if byName["noexp"].State != credtargets.TokenStateBreach {
 		t.Errorf("no-expiry token should be breach: %+v", byName["noexp"])
 	}
-	if byName["invalid"].State != TokenStateBreach {
+	if byName["invalid"].State != credtargets.TokenStateBreach {
 		t.Errorf("401 token should be breach: %+v", byName["invalid"])
 	}
-	if byName["missing"].State != TokenStateUnknown {
+	if byName["missing"].State != credtargets.TokenStateUnknown {
 		t.Errorf("unset token should be unknown: %+v", byName["missing"])
 	}
 	for _, e := range got {
@@ -86,31 +88,31 @@ func TestGatherLinodeTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byName := map[string]TokenEntry{}
+	byName := map[string]credtargets.TokenEntry{}
 	for _, e := range got {
 		if e.Provider != "linode" {
 			t.Errorf("provider should be linode: %+v", e)
 		}
 		byName[e.Name] = e
 	}
-	if byName["1:ok-pat"].State != TokenStateOK {
+	if byName["1:ok-pat"].State != credtargets.TokenStateOK {
 		t.Errorf("ok-pat: %+v", byName["1:ok-pat"])
 	}
-	if byName["2:soon-pat"].State != TokenStateWarn {
+	if byName["2:soon-pat"].State != credtargets.TokenStateWarn {
 		t.Errorf("soon-pat should be warn: %+v", byName["2:soon-pat"])
 	}
-	if byName["3:noexp-pat"].State != TokenStateBreach || byName["3:noexp-pat"].Expiry != 0 {
+	if byName["3:noexp-pat"].State != credtargets.TokenStateBreach || byName["3:noexp-pat"].Expiry != 0 {
 		t.Errorf("noexp-pat should be breach with 0 expiry: %+v", byName["3:noexp-pat"])
 	}
-	if byName["4:old-pat"].State != TokenStateBreach {
+	if byName["4:old-pat"].State != credtargets.TokenStateBreach {
 		t.Errorf("old-pat should be breach: %+v", byName["4:old-pat"])
 	}
 }
 
 func TestBuildTokenInventorySortedAndStamped(t *testing.T) {
-	orig := GHPATProbe
-	defer func() { GHPATProbe = orig }()
-	GHPATProbe = func(_, _ string) (int, string, error) { return 200, "2026-09-01 00:00:00 UTC", nil }
+	orig := tokenprobe.GHPATProbe
+	defer func() { tokenprobe.GHPATProbe = orig }()
+	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "2026-09-01 00:00:00 UTC", nil }
 	inv := buildTokenInventory(context.Background(), tokenInvDeps{
 		ghTargets:   []PATTarget{{"zzz", "https://api", "t"}, {"aaa", "https://api", "t"}},
 		linodeToken: "tok",
@@ -132,7 +134,7 @@ func TestBuildTokenInventorySortedAndStamped(t *testing.T) {
 }
 
 func TestRenderInventoryConfigMapNoTokenValues(t *testing.T) {
-	inv := Inventory{Updated: 1720000000, Region: "primary", Tokens: []TokenEntry{
+	inv := credtargets.Inventory{Updated: 1720000000, Region: "primary", Tokens: []credtargets.TokenEntry{
 		{Provider: "github", Name: "APL_VALUES_REPO_TOKEN", Expiry: 1725000000, State: "ok"},
 	}}
 	out, err := renderInventoryConfigMap(inv, "llz-reconciler", "llz-token-inventory")
@@ -152,7 +154,7 @@ func TestRenderInventoryConfigMapNoTokenValues(t *testing.T) {
 	}
 	// The embedded inventory round-trips.
 	data := cm["data"].(map[string]any)
-	var back Inventory
+	var back credtargets.Inventory
 	if err := json.Unmarshal([]byte(data["inventory.json"].(string)), &back); err != nil {
 		t.Fatalf("embedded inventory not JSON: %v", err)
 	}
@@ -234,8 +236,8 @@ func TestGHTargetsFromEnvKeepsUnsetRequiredPATs(t *testing.T) {
 	}
 	// And they must classify as unknown (not ok) so nothing reads as healthy.
 	for _, e := range gatherGitHubTokens(got, time.Unix(1_800_000_000, 0), 90, 14) {
-		if e.State != TokenStateUnknown {
-			t.Errorf("%s unset: state = %q, want %q", e.Name, e.State, TokenStateUnknown)
+		if e.State != credtargets.TokenStateUnknown {
+			t.Errorf("%s unset: state = %q, want %q", e.Name, e.State, credtargets.TokenStateUnknown)
 		}
 	}
 }
@@ -250,11 +252,11 @@ func TestGatherSecretAgesRecordsWriteTime(t *testing.T) {
 		}
 		return "", false, nil
 	})
-	if len(got) != len(GHSecretTargets) {
-		t.Fatalf("got %d entries, want %d", len(got), len(GHSecretTargets))
+	if len(got) != len(credtargets.GHSecretTargets) {
+		t.Fatalf("got %d entries, want %d", len(got), len(credtargets.GHSecretTargets))
 	}
 	for _, e := range got {
-		if e.UpdatedAt != "2026-05-01T10:00:00Z" || e.State != TokenStateOK || e.Scope != "infra-primary" {
+		if e.UpdatedAt != "2026-05-01T10:00:00Z" || e.State != credtargets.TokenStateOK || e.Scope != "infra-primary" {
 			t.Errorf("%s: got %+v", e.Name, e)
 		}
 	}
@@ -275,11 +277,11 @@ func TestGatherSecretAgesReportsAbsentDistinctlyFromUnreadable(t *testing.T) {
 	absent := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
 		return "", false, nil // 404: the API answered
 	})
-	if len(absent) != len(GHSecretTargets) {
+	if len(absent) != len(credtargets.GHSecretTargets) {
 		t.Fatalf("absent secrets must still be reported, got %d", len(absent))
 	}
 	for _, e := range absent {
-		if e.State != TokenStateAbsent || e.UpdatedAt != "" {
+		if e.State != credtargets.TokenStateAbsent || e.UpdatedAt != "" {
 			t.Errorf("%s: want absent with no timestamp, got %+v", e.Name, e)
 		}
 	}
@@ -288,7 +290,7 @@ func TestGatherSecretAgesReportsAbsentDistinctlyFromUnreadable(t *testing.T) {
 		return "", false, errors.New("403 Forbidden") // the API refused
 	})
 	for _, e := range unreadable {
-		if e.State != TokenStateUnknown {
+		if e.State != credtargets.TokenStateUnknown {
 			t.Errorf("%s: a refused read must stay unknown, got %+v", e.Name, e)
 		}
 	}
@@ -306,7 +308,7 @@ func TestGatherSecretAgesPrefersAFindOverALaterRefusal(t *testing.T) {
 		return "", false, errors.New("403 Forbidden")
 	})
 	for _, e := range got {
-		if e.State != TokenStateOK {
+		if e.State != credtargets.TokenStateOK {
 			t.Errorf("%s: a successful read must win, got %+v", e.Name, e)
 		}
 	}
@@ -318,16 +320,16 @@ func TestGatherSecretAgesPrefersAFindOverALaterRefusal(t *testing.T) {
 // five OpenBao credentials measured here are environment-scoped. Reporting `ok`
 // there would vouch for a lane that is partly dark.
 func TestSecretProbeVerdictFallsOnAPerCredentialRefusal(t *testing.T) {
-	ok := []SecretEntry{{State: TokenStateOK}, {State: TokenStateAbsent}}
-	if got := SecretProbeVerdict(true, ok); got != SecretProbeOK {
-		t.Errorf("answered entries = %q, want %q", got, SecretProbeOK)
+	ok := []credtargets.SecretEntry{{State: credtargets.TokenStateOK}, {State: credtargets.TokenStateAbsent}}
+	if got := credtargets.SecretProbeVerdict(true, ok); got != credtargets.SecretProbeOK {
+		t.Errorf("answered entries = %q, want %q", got, credtargets.SecretProbeOK)
 	}
-	partial := []SecretEntry{{State: TokenStateOK}, {State: TokenStateUnknown}}
-	if got := SecretProbeVerdict(true, partial); got != SecretProbeUnavailable {
-		t.Errorf("one unreadable entry = %q, want %q", got, SecretProbeUnavailable)
+	partial := []credtargets.SecretEntry{{State: credtargets.TokenStateOK}, {State: credtargets.TokenStateUnknown}}
+	if got := credtargets.SecretProbeVerdict(true, partial); got != credtargets.SecretProbeUnavailable {
+		t.Errorf("one unreadable entry = %q, want %q", got, credtargets.SecretProbeUnavailable)
 	}
-	if got := SecretProbeVerdict(false, nil); got != SecretProbeUnavailable {
-		t.Errorf("no client = %q, want %q", got, SecretProbeUnavailable)
+	if got := credtargets.SecretProbeVerdict(false, nil); got != credtargets.SecretProbeUnavailable {
+		t.Errorf("no client = %q, want %q", got, credtargets.SecretProbeUnavailable)
 	}
 }
 
@@ -353,11 +355,11 @@ func TestGatherSecretAgesToleratesProbeErrors(t *testing.T) {
 	got := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
 		return "", false, errors.New("403")
 	})
-	if len(got) != len(GHSecretTargets) {
+	if len(got) != len(credtargets.GHSecretTargets) {
 		t.Fatalf("probe errors must not drop entries, got %d", len(got))
 	}
 	for _, e := range got {
-		if e.State != TokenStateUnknown {
+		if e.State != credtargets.TokenStateUnknown {
 			t.Errorf("%s: an unreadable secret is unknown, not ok", e.Name)
 		}
 	}
@@ -379,10 +381,10 @@ func TestSecretScopeForRegion(t *testing.T) {
 // rather than in production.
 func TestGHSecretTargetClassesAreKnown(t *testing.T) {
 	known := map[string]bool{
-		reconcilelanes.CredClassAutomated: true, reconcilelanes.CredClassOnDemand: true, reconcilelanes.CredClassGenerateOnce: true,
-		reconcilelanes.CredClassTracksSource: true, reconcilelanes.CredClassStatic: true,
+		credpaths.CredClassAutomated: true, credpaths.CredClassOnDemand: true, credpaths.CredClassGenerateOnce: true,
+		credpaths.CredClassTracksSource: true, credpaths.CredClassStatic: true,
 	}
-	for _, tgt := range GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		if !known[tgt.Class] {
 			t.Errorf("%s has class %q, which no alert rule matches", tgt.Name, tgt.Class)
 		}
@@ -395,9 +397,9 @@ func TestGHSecretTargetClassesAreKnown(t *testing.T) {
 // exactly backwards, and for the Harbor pair pages every healthy standby.
 func TestGHSecretTargetsDeclareExpect(t *testing.T) {
 	known := map[string]bool{
-		CredExpectPresent: true, CredExpectOptional: true, CredExpectAbsent: true,
+		credtargets.CredExpectPresent: true, credtargets.CredExpectOptional: true, credtargets.CredExpectAbsent: true,
 	}
-	for _, tgt := range GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		if !known[tgt.Expect] {
 			t.Errorf("%s: expect = %q, outside the closed set", tgt.Name, tgt.Expect)
 		}
@@ -412,7 +414,7 @@ func TestGHSecretTargetsDeclareExpect(t *testing.T) {
 // than a credential quietly leaving the single pane.
 func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
 	got := map[string]string{}
-	for _, tgt := range GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		got[tgt.Name] = tgt.Expect
 	}
 	for _, name := range []string{
@@ -421,7 +423,7 @@ func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
 		"OPENBAO_RECOVERY_KEY_2",
 		"OPENBAO_RECOVERY_KEY_3",
 	} {
-		if got[name] != CredExpectPresent {
+		if got[name] != credtargets.CredExpectPresent {
 			t.Errorf("%s must be measured and expected present, got expect=%q", name, got[name])
 		}
 	}
@@ -430,14 +432,14 @@ func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
 	// Classing it `present` pages every healthy standby and fails its daily
 	// credential job — a gap closed by a rule that cries wolf is not closed.
 	for _, name := range []string{"HARBOR_PASSWORD", "HARBOR_PULL_PASSWORD"} {
-		if got[name] != CredExpectOptional {
+		if got[name] != credtargets.CredExpectOptional {
 			t.Errorf("%s must be expect=optional, got %q", name, got[name])
 		}
 	}
 	// The one credential whose healthy state is absent. Bootstrap mints a root
 	// token, uses it and revokes it; a set one is a live full-admin credential
 	// left behind by a break-glass that never ran its revoke.
-	if got["OPENBAO_ROOT_TOKEN"] != CredExpectAbsent {
+	if got["OPENBAO_ROOT_TOKEN"] != credtargets.CredExpectAbsent {
 		t.Errorf("OPENBAO_ROOT_TOKEN must be expect=absent, got %q", got["OPENBAO_ROOT_TOKEN"])
 	}
 }
@@ -446,7 +448,7 @@ func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
 // there and nowhere else.
 func TestGatherSecretAgesCarriesExpect(t *testing.T) {
 	want := map[string]string{}
-	for _, tgt := range GHSecretTargets {
+	for _, tgt := range credtargets.GHSecretTargets {
 		want[tgt.Name] = tgt.Expect
 	}
 	for _, e := range gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
@@ -469,8 +471,8 @@ func TestBuildTokenInventoryRecordsSecretProbeUnavailable(t *testing.T) {
 		secretProbe: nil, // newSecretAgeWriter failed — the production case
 		now:         time.Unix(1_800_000_000, 0),
 	})
-	if inv.SecretProbe != SecretProbeUnavailable {
-		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, SecretProbeUnavailable)
+	if inv.SecretProbe != credtargets.SecretProbeUnavailable {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, credtargets.SecretProbeUnavailable)
 	}
 	if len(inv.Secrets) != 0 {
 		t.Errorf("an unavailable probe must contribute no entries, got %d", len(inv.Secrets))
@@ -485,10 +487,10 @@ func TestBuildTokenInventoryRecordsSecretProbeOK(t *testing.T) {
 		},
 		now: time.Unix(1_800_000_000, 0),
 	})
-	if inv.SecretProbe != SecretProbeOK {
-		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, SecretProbeOK)
+	if inv.SecretProbe != credtargets.SecretProbeOK {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, credtargets.SecretProbeOK)
 	}
-	if len(inv.Secrets) != len(GHSecretTargets) {
-		t.Errorf("got %d entries, want %d", len(inv.Secrets), len(GHSecretTargets))
+	if len(inv.Secrets) != len(credtargets.GHSecretTargets) {
+		t.Errorf("got %d entries, want %d", len(inv.Secrets), len(credtargets.GHSecretTargets))
 	}
 }

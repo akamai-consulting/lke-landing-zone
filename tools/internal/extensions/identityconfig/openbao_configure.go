@@ -12,11 +12,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baolifecycle"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
@@ -117,7 +117,7 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 `
 
 // reconciler-read: metadata read on every path in the credential-age gauge set
-// (--reconcile-openbao-gauges; reconcilelanes.CredPaths in reconcile_openbao.go), PLUS a DATA
+// (--reconcile-openbao-gauges; credpaths.CredPaths in reconcile_openbao.go), PLUS a DATA
 // read on the consolidated obj credential (secret/obj/platform) for the
 // apl-overlay reconciler (--reconcile-apl-overlay), which fills accessKeyId/
 // secretAccessKey into apl-core's native obj values before git-syncing them onto
@@ -126,8 +126,8 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 // VALUES the reconciler never sees. Mapped to the `reconciler` k8s-auth role
 // below. See docs/designs/apl-overlay-obj-native.md.
 //
-// The grant list and reconcilelanes.CredPaths move together: the sampler treats a 403 as a hard
-// error (only a 404 is "not seeded yet"), so a path added to reconcilelanes.CredPaths without a
+// The grant list and credpaths.CredPaths move together: the sampler treats a 403 as a hard
+// error (only a 404 is "not seeded yet"), so a path added to credpaths.CredPaths without a
 // line here takes down the whole openbao-gauges lane, not just its own series.
 //
 // Every grant below is METADATA-only (the one data read is the obj/platform
@@ -812,7 +812,7 @@ func RunBaoConfigure(dryRun bool, region string) error {
 		}
 		return fmt.Errorf("root-token preflight failed on %s", region)
 	}
-	if !baolifecycle.PoliciesIncludeRoot(lookupOut) {
+	if !openbao.PoliciesIncludeRoot(lookupOut) {
 		fmt.Fprintf(os.Stderr, "::error::OPENBAO_ROOT_TOKEN on %s is a valid token but not root. Configure steps require root. Re-seed the infra-%s environment secret with an actual root token.\n", region, region)
 		return fmt.Errorf("root-token preflight failed on %s: token is not root", region)
 	}

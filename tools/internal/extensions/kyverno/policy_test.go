@@ -81,30 +81,6 @@ func TestKyvernoOptsFromEnv(t *testing.T) {
 	})
 }
 
-func TestIsKyvernoWebhookRace(t *testing.T) {
-	races := []string{
-		`Error from server (InternalError): failed calling webhook "mutate-policy.kyverno.svc"`,
-		`dial tcp 10.0.0.1:443: connect: operation not permitted`,
-		`connection refused`,
-		`no endpoints available for service "kyverno-svc"`,
-	}
-	for _, s := range races {
-		if !IsWebhookRace(s) {
-			t.Errorf("should classify as race: %q", s)
-		}
-	}
-	notRace := []string{
-		`error validating "p.yaml": ClusterPolicy in version "v1" cannot be handled`,
-		`the server could not find the requested resource`,
-		``,
-	}
-	for _, s := range notRace {
-		if IsWebhookRace(s) {
-			t.Errorf("should NOT classify as race: %q", s)
-		}
-	}
-}
-
 // fakeKubectl scripts kubectl responses keyed by a substring of the joined argv,
 // and records the calls made.
 type fakeKubectl struct {

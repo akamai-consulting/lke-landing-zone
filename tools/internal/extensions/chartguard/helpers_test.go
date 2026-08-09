@@ -22,7 +22,7 @@ func testDeps(t *testing.T) Deps {
 // against, `func(name string, args ...string) ([]byte, error)` — to the GitOutput
 // seam, and returns the Deps to hand in.
 //
-// The adapter is the same three lines package main's gitOutput is: prepend `-C
+// The adapter is the same three lines package main's gitcmd.Output is: prepend `-C
 // <dir>`, trim. Keeping it here rather than rewriting every fixture means the
 // tests still exercise the argv the guard actually builds, which is the part worth
 // checking.

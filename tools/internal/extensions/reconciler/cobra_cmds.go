@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +41,7 @@ func DiscoverFirewallCmd() *cobra.Command {
 		Long: "In-cluster replacement for the bootstrap-cloud-firewall CI seed. Resolves the\n" +
 			"node-pool firewall ID, LKE cluster ID and VPC subnet CIDR from this pod's own\n" +
 			"node via the Linode API (providerID → instance → attached firewall / VPC\n" +
-			"interface), reconciles them into the " + FirewallConfigMapName + " ConfigMap,\n" +
+			"interface), reconciles them into the " + platform.FirewallConfigMapName + " ConfigMap,\n" +
 			"and rolls the controller Deployment only when a value changed.\n\n" +
 			"Env: NODE_NAME (downward API), LINODE_TOKEN (ESO-synced rotating token).",
 		Args: cobra.NoArgs,
@@ -171,7 +172,7 @@ func AssertVolumeEncryptionCmd() *cobra.Command {
 			"get a bounded wait before failing. Encryption never does — it cannot change.\n" +
 			"\n" +
 			"Checks the Linode API rather than the PVC's storageClassName on purpose: the\n" +
-			"class name is a proxy for encryption, and it was a configreadiness.Satisfied proxy the whole\n" +
+			"class name is a proxy for encryption, and it was a envreq.Satisfied proxy the whole\n" +
 			"time a managed cluster was provisioning unencrypted Volumes. `encryption` on\n" +
 			"the Volume itself is the fact.\n" +
 			"\n" +

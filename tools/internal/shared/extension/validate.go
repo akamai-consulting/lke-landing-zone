@@ -56,6 +56,27 @@ var bindableStates = map[BindingKind][]State{
 	Gate:       {Scaffolded, Configured},
 }
 
+// requirableStates says which states a binding may name as a PRECONDITION, and
+// which kinds may name one at all. It is the third ceiling table and the smallest,
+// because it is transcribed from three cases and nothing else.
+//
+// ONLY Transition. The other three kinds do not need it and saying so is not
+// caution, it is what they are: a gate runs BEFORE a state over files alone, so a
+// gate with a precondition is a contradiction; an assertion already targets every
+// state including `operating`, so it can say this with State; an invariant only
+// ever attaches to `operating`, so its precondition is its state.
+//
+// ONLY `operating`. All three shipping cases name it, and the reason is the same
+// each time — the action needs a platform that is up and steady. `converged` is
+// the state that looks next most plausible and is deliberately absent: a
+// transition can already target `converged`, so a binding wanting it as a
+// precondition should be examined rather than accommodated. This table follows the
+// rule the other two follow, that a row is earned by an extraction that needed it
+// and not by seeming plausible.
+var requirableStates = map[BindingKind][]State{
+	Transition: {Operating},
+}
+
 // grantStates is the second half of the ceiling: WHERE a dangerous capability may
 // be asked for. Without it the model requires secret-custody in one place and
 // forbids it in none — a transition to `scaffolded` could declare it and validate
@@ -201,6 +222,7 @@ func (e Extension) Validate() []error {
 			errs = append(errs, fmt.Errorf("%s: a %s binding cannot attach to %q (allowed: %s)",
 				e.Name, b.Kind, b.State, stateList(allowed)))
 		}
+		errs = append(errs, e.checkRequires(b)...)
 		// Keyed on kind:state:name, NOT on b.String() — that includes grants, so two
 		// declarations of the same attachment carrying DIFFERENT grants would have
 		// looked distinct. Same attachment twice is a mistake whatever it asks for,
@@ -252,6 +274,39 @@ func (e Extension) Validate() []error {
 	return errs
 }
 
+// checkRequires enforces the precondition axis. Requires is OPTIONAL — the zero
+// value means "this binding makes no claim about what must already hold", which is
+// the honest reading for the great majority of the catalog and is why the field
+// was addable without touching a single existing declaration.
+func (e Extension) checkRequires(b Binding) []error {
+	if b.Requires == "" {
+		return nil
+	}
+	var errs []error
+	if !validState(b.Requires) {
+		return append(errs, fmt.Errorf("%s: unknown precondition state %q in binding %s", e.Name, b.Requires, b))
+	}
+	// A precondition equal to the state is not a tighter declaration, it is noise —
+	// and worse, it reads as though something was checked. The two fields exist to
+	// hold two different answers.
+	if b.Requires == b.State {
+		errs = append(errs, fmt.Errorf("%s: %s: Requires repeats State — a precondition equal to the "+
+			"state the binding establishes says nothing; drop it", e.Name, b))
+	}
+	allowed, ok := requirableStates[b.Kind]
+	if !ok {
+		return append(errs, fmt.Errorf("%s: %s: a %s binding may not declare a precondition — "+
+			"only %s may, because the other kinds already express this with State",
+			e.Name, b, b.Kind, Transition))
+	}
+	if !containsState(allowed, b.Requires) {
+		errs = append(errs, fmt.Errorf("%s: %s: %q is not a declarable precondition (allowed: %s) — "+
+			"a state a transition can already TARGET should be declared as State, not required",
+			e.Name, b, b.Requires, stateList(allowed)))
+	}
+	return errs
+}
+
 // checkBindingCeiling enforces what ONE binding may touch, judged only on what
 // that binding declares. Nothing another binding holds can widen or narrow it —
 // that independence is the whole reason grants moved onto Binding.
@@ -293,7 +348,16 @@ func (e Extension) checkBindingCeiling(b Binding) []error {
 	if b.Kind == Transition || b.Kind == Invariant {
 		for _, g := range b.Grants {
 			allowed, restricted := grantStates[g]
-			if !restricted || containsState(allowed, b.State) {
+			if !restricted {
+				continue
+			}
+			// BOTH states, when a precondition is declared. The tempting reading is to
+			// check the precondition INSTEAD — the action does run while that state
+			// holds — but that is a widening dressed as a correction: a binding could
+			// then ask at `operating` for a grant its own declared State forbids, and
+			// the State line would stop meaning anything. Requiring both is strictly
+			// tighter than the check that shipped before this field existed.
+			if containsState(allowed, b.State) && (b.Requires == "" || containsState(allowed, b.Requires)) {
 				continue
 			}
 			errs = append(errs, fmt.Errorf("%s: %s: %q may only be asked for at %s — "+

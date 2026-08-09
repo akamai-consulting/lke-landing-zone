@@ -6,7 +6,7 @@ package credcoverage
 // THE PROBLEM IT SOLVES IS THE SAME ONE plaintext-guard SOLVES, one subsystem
 // over: drift, not any single credential. The credential single pane answers "is
 // anything overdue for rotation?" from three feeds, and every feed is driven by a
-// LITERAL LIST in Go — ghPATTargets, ghSecretTargets, reconcilelanes.CredPaths. A list is only
+// LITERAL LIST in Go — ghPATTargets, ghSecretTargets, credpaths.CredPaths. A list is only
 // as good as the last person who revisited it, and nobody did: ADR 0009 went
 // looking for credentials with no expiry, found the state backend, wrote three
 // entries, and left OPENBAO_SEAL_KEY — the at-rest key for every other credential
@@ -35,7 +35,7 @@ package credcoverage
 //
 // WHAT IT DOES NOT DO. It cannot see a credential that never appears in a
 // workflow — one seeded by hand straight into OpenBao, say. That residue belongs
-// to reconcilelanes.CredPaths and its own gate (`assert-rotation-health`), and is stated here so
+// to credpaths.CredPaths and its own gate (`assert-rotation-health`), and is stated here so
 // nobody reads a color.Green run as "every credential is covered".
 
 import (
@@ -47,7 +47,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credtargets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
 
@@ -87,7 +87,7 @@ var credCoverageExempt = map[string]struct {
 		kind: credExemptLinodeAccount,
 		reason: "the broad account PAT. Its expiry IS measured — gatherLinodeTokens lists every " +
 			"PAT on the account and classifies each one (no-expiry / expired / over-policy), and " +
-			"its ROTATION AGE rides secret/linode/broad-pat in reconcilelanes.CredPaths, class automated. " +
+			"its ROTATION AGE rides secret/linode/broad-pat in credpaths.CredPaths, class automated. " +
 			"Measuring the GitHub secret's write time as well would publish a third series for " +
 			"one credential under a third cred label",
 	},
@@ -168,14 +168,14 @@ type credCoverage struct {
 // Derived from the two target lists — never a copy of them.
 func credMeasuredByName() map[string]credCoverage {
 	out := map[string]credCoverage{}
-	for _, t := range tokeninv.GHPATTargets {
+	for _, t := range credtargets.GHPATTargets {
 		d := "expiry probed via the token-expiration header"
 		if t.Optional {
 			d += " (optional — skipped when unset)"
 		}
 		out[t.Name] = credCoverage{how: "expiry", detail: d}
 	}
-	for _, t := range tokeninv.GHSecretTargets {
+	for _, t := range credtargets.GHSecretTargets {
 		out[t.Name] = credCoverage{
 			how:    "write-time",
 			detail: fmt.Sprintf("GitHub secret write time, class %s, expect %s", t.Class, t.Expect),

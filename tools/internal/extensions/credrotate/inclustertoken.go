@@ -11,33 +11,3 @@ package credrotate
 // the consumers resolve the token lazily per pass: env first (CronJob/CI
 // compatibility — those always set LINODE_TOKEN), then the mounted file, which
 // kubelet refreshes (~1m) on Secret create/rotate.
-
-import (
-	"os"
-	"strings"
-)
-
-// LinodeTokenFile is where the Deployment mounts the optional linode-api-token
-// Secret volume. Package var so tests can point it at a fixture.
-var LinodeTokenFile = "/var/run/secrets/llz/linode-api-token/token"
-
-// InClusterLinodeToken resolves the in-cluster Linode token: LINODE_TOKEN env,
-// else the optional Secret volume, else "" (not yet synced — callers no-op or
-// error per their contract).
-func InClusterLinodeToken() string {
-	return InClusterToken("LINODE_TOKEN", LinodeTokenFile)
-}
-
-// InClusterToken is the shared secrets-before-apps token resolver: the named env
-// var first (CronJob/CI compatibility), else the optional Secret volume mounted at
-// file (kubelet-refreshed on rotate), else "" (not yet synced). Backs both the
-// linode and apl-values-repo resolvers.
-func InClusterToken(envVar, file string) string {
-	if t := os.Getenv(envVar); t != "" {
-		return t
-	}
-	if b, err := os.ReadFile(file); err == nil {
-		return strings.TrimSpace(string(b))
-	}
-	return ""
-}

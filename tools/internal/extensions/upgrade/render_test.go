@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 )
 
 // writeInstanceFile writes rel under dir, creating parents.

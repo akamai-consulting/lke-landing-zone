@@ -9,7 +9,6 @@ package main
 
 import (
 	"testing"
-	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 )
@@ -22,23 +21,4 @@ func withBaoExec(t *testing.T, fn func(pod, token, stdin string, args ...string)
 	orig := baoread.ExecFn
 	baoread.ExecFn = fn
 	t.Cleanup(func() { baoread.ExecFn = orig })
-}
-
-// withBaoExecRaw swaps the UNRETRIED primitive, for the tests that are about the
-// retry wrapper itself.
-func withBaoExecRaw(t *testing.T, fn func(pod, token, stdin string, args ...string) (string, string, error)) {
-	t.Helper()
-	orig := baoread.ExecRaw
-	baoread.ExecRaw = fn
-	t.Cleanup(func() { baoread.ExecRaw = orig })
-}
-
-// withBaoSleep makes poll waits instantaneous while counting them.
-func withBaoSleep(t *testing.T) *int {
-	t.Helper()
-	orig := baoread.Sleep
-	n := new(int)
-	baoread.Sleep = func(time.Duration) { *n++ }
-	t.Cleanup(func() { baoread.Sleep = orig })
-	return n
 }

@@ -36,9 +36,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"sigs.k8s.io/yaml"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
 )
 
 //go:embed manifests/block-storage-class.yaml
@@ -148,6 +147,7 @@ func RunBootstrapCluster(f BootstrapFlags) error {
 		// Linode's gitea on managed, not this repo).
 		instanceRepoToken: os.Getenv("APL_VALUES_REPO_TOKEN"),
 	}
+	reportDNSTokenPlaceholder(os.Getenv("LINODE_DNS_TOKEN"))
 	// apps-repo-revision + managedApps come from the spec (Defaults() populates
 	// managedApps to the LLZ set on managed).
 	if lz, present, err := clusterspec.Detected(); present && err == nil {
@@ -597,7 +597,7 @@ func parseStorageClass(raw []byte) (stockStorageClass, error) {
 		VolumeBindingMode:    doc.VolumeBindingMode,
 		AllowVolumeExpansion: doc.AllowVolumeExpansion,
 		Parameters:           doc.Parameters,
-		IsDefault:            doc.Metadata.Annotations[reconcilelanes.SCDefaultAnnotation] == "true",
+		IsDefault:            doc.Metadata.Annotations[platform.SCDefaultAnnotation] == "true",
 	}, nil
 }
 

@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
-)
 
-const DefaultTemplateRepo = "akamai-consulting/lke-landing-zone"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
+)
 
 // TemplateVersion is the resolved provenance `llz drift` reports on. It keeps the
 // legacy .template-version JSON field names so a not-yet-upgraded instance's
@@ -45,7 +45,7 @@ func ResolveTemplateVersion(d Deps) TemplateVersion {
 	tv := TemplateVersion{Schema: 1, Generator: "llz"}
 
 	if a, _ := d.ReadAnswers("."); a != nil {
-		tv.TemplateRepo = NormalizeTemplateRepo(a.SrcPath)
+		tv.TemplateRepo = templateid.NormalizeTemplateRepo(a.SrcPath)
 		tv.TemplateSHA = a.Commit
 		tv.TemplateRef = firstNonEmpty(a.Version, a.Commit)
 	}
@@ -64,13 +64,13 @@ func ResolveTemplateVersion(d Deps) TemplateVersion {
 		}
 	}
 	if tv.TemplateRepo == "" {
-		tv.TemplateRepo = NormalizeTemplateRepo(gitOut(d, "remote", "get-url", "upstream"))
+		tv.TemplateRepo = templateid.NormalizeTemplateRepo(gitOut(d, "remote", "get-url", "upstream"))
 	}
 	if tv.TemplateRepo == "" {
-		tv.TemplateRepo = NormalizeTemplateRepo(gitOut(d, "remote", "get-url", "origin"))
+		tv.TemplateRepo = templateid.NormalizeTemplateRepo(gitOut(d, "remote", "get-url", "origin"))
 	}
 	if tv.TemplateRepo == "" {
-		tv.TemplateRepo = DefaultTemplateRepo
+		tv.TemplateRepo = templateid.DefaultRepo
 	}
 	if tv.TemplateSHA == "" {
 		tv.TemplateSHA = gitOut(d, "rev-parse", "HEAD")
@@ -83,26 +83,6 @@ func ResolveTemplateVersion(d Deps) TemplateVersion {
 		}
 	}
 	return tv
-}
-
-// NormalizeTemplateRepo turns a copier _src_path / git remote into an owner/repo
-// slug when it is a github reference; otherwise returns it unchanged (a non-github
-// host stays a full URL, which `llz drift` handles).
-func NormalizeTemplateRepo(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	switch {
-	case strings.HasPrefix(s, "gh:"):
-		return strings.TrimSuffix(strings.TrimPrefix(s, "gh:"), ".git")
-	case strings.HasPrefix(s, "git@github.com:"):
-		return strings.TrimSuffix(strings.TrimPrefix(s, "git@github.com:"), ".git")
-	case strings.Contains(s, "github.com/"):
-		return strings.TrimSuffix(s[strings.Index(s, "github.com/")+len("github.com/"):], ".git")
-	default:
-		return s // some other host / local path — leave as-is
-	}
 }
 
 // gitOut runs a git command and returns trimmed stdout, or "" on any error.

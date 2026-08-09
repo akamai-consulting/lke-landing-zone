@@ -34,10 +34,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
-// The keep-set moved to docsguard.DeliveredDocs. It is defined ONCE, next to the
+// The keep-set moved to platform.DeliveredDocs. It is defined ONCE, next to the
 // guard that validates every link AS IT RESOLVES inside the pruned tree — a check
 // that is meaningless if it runs against a different set than this verb ships.
 
@@ -48,7 +48,7 @@ func Run(dir, org, ref, root, templateRoot string) error {
 	}
 	var removed []string
 	for _, e := range entries {
-		if docsguard.DeliveredDocs[e.Name()] {
+		if platform.DeliveredDocs[e.Name()] {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {

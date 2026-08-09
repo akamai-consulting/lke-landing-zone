@@ -30,6 +30,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
 
 // installConvergeDeps hands converge the capabilities it declares. Called once
@@ -44,8 +45,8 @@ func installConvergeDeps(g globalOpts) {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		},
 		BaoLoopbackEnv:         baoread.LoopbackEnv,
-		FirewallDeploymentName: reconciler.FirewallDeploymentName,
-		FirewallConfigMapName:  reconciler.FirewallConfigMapName,
+		FirewallDeploymentName: platform.FirewallDeploymentName,
+		FirewallConfigMapName:  platform.FirewallConfigMapName,
 		// The in-cluster client is built HERE, not in converge: it is the
 		// reconciler's kube client and its nodeGetter interface, and a converge
 		// package that imported either would depend on the reconciler's client

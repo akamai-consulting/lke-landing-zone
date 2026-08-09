@@ -18,10 +18,10 @@ func RotationHealthCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "assert-rotation-health",
 		Short: "fail unless every rotatable credential is being observed and is within its rotation SLA",
-		Long: "Gates the credential-rotation lifecycle. For every credential reconcilelanes.CredPaths declares\n" +
+		Long: "Gates the credential-rotation lifecycle. For every credential credpaths.CredPaths declares\n" +
 			"with an ALERTABLE class (automated / on-demand), asserts a\n" +
 			"llz_credential_age_days series exists AND its age is within the class SLA.\n\n" +
-			"The missing series is the point. reconcilelanes.CredPaths declares the credential, the\n" +
+			"The missing series is the point. credpaths.CredPaths declares the credential, the\n" +
 			"openbao-gauges lane samples it, and LLZCredentialRotationOverdue alerts on the\n" +
 			"result — so a credential that is declared but publishes nothing disappears from\n" +
 			"the single pane AND can never fire an alert, because a rule over an absent\n" +

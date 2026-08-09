@@ -11,8 +11,8 @@ import (
 // bootstrap — with an error that names the two v6-only assumptions, so an operator
 // reading CI output knows what breaks and how to fix it.
 func TestAplVersionSupported(t *testing.T) {
-	for _, v := range []string{MinSupportedAplChartVersion, "6.0.1", "6.1.2", "7.0.0"} {
-		if err := aplVersionSupported(v, "prod"); err != nil {
+	for _, v := range []string{clusterspec.MinSupportedAplChartVersion, "6.0.1", "6.1.2", "7.0.0"} {
+		if err := clusterspec.AplVersionSupported(v, "prod"); err != nil {
 			t.Errorf("%s should be supported, got: %v", v, err)
 		}
 	}
@@ -21,12 +21,12 @@ func TestAplVersionSupported(t *testing.T) {
 	// v6-only template): apl-operator wedged on the dropped apl-sops-secrets
 	// placeholder and the cluster got no ESO at all.
 	for _, v := range []string{"5.0.0", "5.9.9", "0.1.0"} {
-		err := aplVersionSupported(v, "prod")
+		err := clusterspec.AplVersionSupported(v, "prod")
 		if err == nil {
-			t.Fatalf("%s must be rejected (older than %s)", v, MinSupportedAplChartVersion)
+			t.Fatalf("%s must be rejected (older than %s)", v, clusterspec.MinSupportedAplChartVersion)
 		}
 		msg := err.Error()
-		for _, want := range []string{"apl-sops-secrets", "external-secrets", MinSupportedAplChartVersion, v} {
+		for _, want := range []string{"apl-sops-secrets", "external-secrets", clusterspec.MinSupportedAplChartVersion, v} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("rejection of %s should mention %q; got:\n%s", v, want, msg)
 			}
@@ -39,7 +39,7 @@ func TestAplVersionSupported(t *testing.T) {
 	}
 
 	// A non-semver pin is a configuration error, not a silent pass.
-	err := aplVersionSupported("main", "prod")
+	err := clusterspec.AplVersionSupported("main", "prod")
 	if err == nil || !strings.Contains(err.Error(), "not a semver") {
 		t.Errorf("unparseable version must fail with a semver error, got: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestAplVersionSupported(t *testing.T) {
 // The default the template bakes must itself satisfy the guard — otherwise every
 // instance without an explicit pin would fail this preflight.
 func TestDefaultAplChartVersionIsSupported(t *testing.T) {
-	if err := aplVersionSupported(clusterspec.BaselineAplChartVersion, "prod"); err != nil {
+	if err := clusterspec.AplVersionSupported(clusterspec.BaselineAplChartVersion, "prod"); err != nil {
 		t.Fatalf("clusterspec.BaselineAplChartVersion %s must satisfy the guard: %v", clusterspec.BaselineAplChartVersion, err)
 	}
 }

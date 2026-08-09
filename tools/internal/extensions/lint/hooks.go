@@ -8,7 +8,7 @@ package lint
 // are covered by the two bindings already declared here: the gate for precommit,
 // and the write row (earned by `llz fmt`) for dropping a shim into .git/hooks.
 //
-// gitOutput did not come with it — deps.go already had the four-line copy.
+// gitcmd.Output did not come with it — deps.go already had the four-line copy.
 
 import (
 	"fmt"
@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/spf13/cobra"
 )
@@ -67,7 +68,7 @@ func RunHooksInstall(g cliopts.Opts, dir string) error {
 	if err != nil {
 		return fmt.Errorf("locate llz binary: %w", err)
 	}
-	hooksDir, err := gitOutput(dir, "rev-parse", "--git-path", "hooks")
+	hooksDir, err := gitcmd.Output(dir, "rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return fmt.Errorf("resolve git hooks dir (is %s a git repo?): %w", dir, err)
 	}
@@ -94,7 +95,7 @@ func RunHooksInstall(g cliopts.Opts, dir string) error {
 // runPrecommit is the hook entrypoint: secrets guard on staged files, then the
 // fast lint gate, then the optional operator escape hatch.
 func runPrecommit(g cliopts.Opts) error {
-	root, err := gitOutput(".", "rev-parse", "--show-toplevel")
+	root, err := gitcmd.Output(".", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("not in a git repo: %w", err)
 	}
@@ -102,7 +103,7 @@ func runPrecommit(g cliopts.Opts) error {
 		return err
 	}
 
-	staged, err := gitOutput(".", "diff", "--cached", "--name-only", "--diff-filter=ACMR")
+	staged, err := gitcmd.Output(".", "diff", "--cached", "--name-only", "--diff-filter=ACMR")
 	if err != nil {
 		return fmt.Errorf("list staged files: %w", err)
 	}

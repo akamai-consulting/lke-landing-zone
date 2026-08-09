@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // TestEnvObjKeyLabelsMatchRotationTable guards that the per-env obj-key reaper
@@ -43,12 +44,12 @@ func TestEnvObjKeyLabelsMatchRotationTable(t *testing.T) {
 }
 
 // TestEnvInclusterPATLabel pins the in-cluster PAT label the reaper deletes to the
-// one credrotate.InClusterPATLabel mints.
+// one linode.InClusterPATLabel mints.
 func TestEnvInclusterPATLabel(t *testing.T) {
 	// Instance-scoped: runCredentialsPATRevokeOld revokes every token with this
 	// exact label, so two instances sharing a deployment name on one Linode
 	// account would revoke each other's live in-cluster credential monthly.
-	if got, want := credrotate.InClusterPATLabel("acme", "e2e"), "llz-incluster-acme-e2e"; got != want {
-		t.Errorf("credrotate.InClusterPATLabel = %q, want %q (reaper matches this exactly)", got, want)
+	if got, want := linode.InClusterPATLabel("acme", "e2e"), "llz-incluster-acme-e2e"; got != want {
+		t.Errorf("linode.InClusterPATLabel = %q, want %q (reaper matches this exactly)", got, want)
 	}
 }

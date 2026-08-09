@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -267,7 +268,7 @@ func lkeFirewallInfo(fw map[string]any) lkeFirewall {
 			set[cidr] = true
 		}
 	}
-	out.InboundCIDRs = SortedSetKeys(set)
+	out.InboundCIDRs = cli.SortedKeys(set)
 	return out
 }
 

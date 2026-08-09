@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/charty"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
@@ -133,9 +134,9 @@ func extractChartPins(content string) []chartPin {
 		// silently exempting that chart from drift checking. chart-publish-check
 		// reads the same YAML with a bidirectional scan, so the two guards disagreed
 		// about which pins even exist.
-		if v := SiblingValue(lines, i, indent, "targetRevision"); v != "" {
+		if v := charty.SiblingValue(lines, i, indent, "targetRevision"); v != "" {
 			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
-		} else if v := SiblingValue(lines, i, indent, "version"); v != "" {
+		} else if v := charty.SiblingValue(lines, i, indent, "version"); v != "" {
 			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
 		}
 	}
@@ -159,18 +160,13 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 		if raw == "" {
 			continue
 		}
-		name, ver := ChartName(raw), ChartVersion(raw)
+		name, ver := charty.ChartName(raw), charty.ChartVersion(raw)
 		if name != "" && ver != "" {
 			out[name] = ver
 		}
 	}
 	return out, nil
 }
-
-// ChartName extracts the top-level `name:` value from Chart.yaml content, or ""
-// when absent. Mirrors ChartVersion (ci_chart_guard.go): only a column-0 key
-// matches, so nested `name:` fields are not picked up.
-func ChartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
 
 // countFirstPartyPins counts the pins across all files that reference a chart
 // present in local — the denominator for the success message (third-party pins
@@ -207,43 +203,4 @@ func checkChartPins(byFile map[string][]chartPin, local map[string]string) []pin
 		}
 	}
 	return out
-}
-
-// SiblingValue reads a key from the same YAML block as line idx — scanning both
-// directions and stopping at a dedent.
-//
-// EXPORTED because `llz ci chart-publish-check` asks the same question about the
-// same files and stayed in package main (it is release-publish's territory, not
-// this extension's). Two scanners disagreeing about what "the same block" means is
-// how a pin gets read from the wrong chart.
-// siblingValue returns the value of `<indent>key: <value>` in the contiguous block
-// around idx at exactly the given indentation, scanning both directions and
-// stopping at the first line that dedents below indent.
-func SiblingValue(lines []string, idx int, indent, key string) string {
-	want := len(indent)
-	prefix := indent + key + ":"
-	scan := func(step int) string {
-		for j := idx + step; j >= 0 && j < len(lines); j += step {
-			ln := lines[j]
-			if strings.TrimSpace(ln) == "" {
-				continue // blank lines don't break a block
-			}
-			if LeadingIndent(ln) < want {
-				return "" // dedented out of the source block
-			}
-			if LeadingIndent(ln) == want && strings.HasPrefix(ln, prefix) {
-				return strings.Trim(strings.TrimSpace(strings.TrimPrefix(ln, prefix)), `"'`)
-			}
-		}
-		return ""
-	}
-	if v := scan(-1); v != "" {
-		return v
-	}
-	return scan(1)
-}
-
-// leadingIndent counts the leading spaces/tabs of a line.
-func LeadingIndent(s string) int {
-	return len(s) - len(strings.TrimLeft(s, " \t"))
 }

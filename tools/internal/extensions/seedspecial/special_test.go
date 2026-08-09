@@ -70,17 +70,6 @@ func chdirTempDir(t *testing.T) string {
 	return dir
 }
 
-func writeTFVars(t *testing.T, dir, sub, region, content string) {
-	t.Helper()
-	p := filepath.Join(dir, "terraform-iac-bootstrap", sub)
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(p, region+".tfvars"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // ── mint-bootstrap-objkeys ────────────────────────────────────────────────────
 
 func TestRunCIResolveHarborURL(t *testing.T) {

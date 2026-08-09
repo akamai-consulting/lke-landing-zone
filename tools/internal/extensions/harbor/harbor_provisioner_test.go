@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/credrotate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // jsonDecode is a tiny helper shared with harborStub.
 func jsonDecode(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
 
-// fakeBaoStore implements credrotate.BaoStore in memory.
+// fakeBaoStore implements openbao.BaoStore in memory.
 type fakeBaoStore struct {
 	data     map[string]map[string]string
 	writes   []string
@@ -66,7 +66,7 @@ func setProvisionerEnv(t *testing.T, adminPass string, store *fakeBaoStore) (gh 
 
 	origStore, origGH, origExists := newProvisionerBaoStore, ghPublishRepoSecret, ghRepoSecretExists
 	gh = new([]string)
-	newProvisionerBaoStore = func(context.Context) (credrotate.BaoStore, error) { return store, nil }
+	newProvisionerBaoStore = func(context.Context) (openbao.BaoStore, error) { return store, nil }
 	ghPublishRepoSecret = func(name, value string) error {
 		*gh = append(*gh, name+"="+value)
 		return nil
@@ -82,7 +82,7 @@ func TestHarborProvisionerNoAdminPasswordIsCleanNoop(t *testing.T) {
 	store := &fakeBaoStore{}
 	setProvisionerEnv(t, "", store) // file never written → read fails
 	origStore := newProvisionerBaoStore
-	newProvisionerBaoStore = func(context.Context) (credrotate.BaoStore, error) {
+	newProvisionerBaoStore = func(context.Context) (openbao.BaoStore, error) {
 		t.Error("bao login must not happen before Harbor is deployed")
 		return store, nil
 	}

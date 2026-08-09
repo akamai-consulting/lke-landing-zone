@@ -15,10 +15,10 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 	"gopkg.in/yaml.v3"
 )
@@ -164,8 +164,8 @@ func scanRepoTree(fsys fs.FS) repoInventory {
 	inv := repoInventory{}
 	if sawTF {
 		tf.Vars = selectedTFVars(tfvars)
-		tf.Modules = SortedSetKeys(modules)
-		tf.Providers = SortedSetKeys(providers)
+		tf.Modules = cli.SortedKeys(modules)
+		tf.Providers = cli.SortedKeys(providers)
 		if len(tf.Resources) == 0 {
 			tf.Resources = nil
 		}
@@ -175,7 +175,7 @@ func scanRepoTree(fsys fs.FS) repoInventory {
 		inv.Terraform = tf
 	}
 	if sawKube {
-		kube.Namespaces = SortedSetKeys(namespaces)
+		kube.Namespaces = cli.SortedKeys(namespaces)
 		kube.HelmCharts = dedupeSorted(charts)
 		if len(kube.Kinds) == 0 {
 			kube.Kinds = nil
@@ -432,15 +432,3 @@ func extractAplSignals(m map[string]any, sig *aplSignals) {
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
-
-func SortedSetKeys(set map[string]bool) []string {
-	if len(set) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}

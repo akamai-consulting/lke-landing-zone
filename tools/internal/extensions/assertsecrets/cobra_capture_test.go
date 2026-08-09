@@ -31,9 +31,3 @@ func captureStdoutStderr(t *testing.T, fn func()) (stdout, stderr string) {
 	e, _ := io.ReadAll(re)
 	return string(o), string(e)
 }
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	out, _ := captureStdoutStderr(t, fn)
-	return out
-}

@@ -32,14 +32,6 @@ func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, 
 	t.Cleanup(func() { caps.Exec, kubectlprobe.Exec = origExec, origProbe })
 }
 
-// withKubectlOut swaps the string-returning kubectl seam.
-func withKubectlOut(t *testing.T, fn func(args ...string) (string, error)) {
-	t.Helper()
-	orig := caps.KubectlOut
-	caps.KubectlOut = fn
-	t.Cleanup(func() { caps.KubectlOut = orig })
-}
-
 func captureStdout(t *testing.T, fn func()) string { t.Helper(); return capture(t, &os.Stdout, fn) }
 func captureStderr(t *testing.T, fn func()) string { t.Helper(); return capture(t, &os.Stderr, fn) }
 

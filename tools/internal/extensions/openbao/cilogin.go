@@ -38,9 +38,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
+
 	"net/http"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/baoseed"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -69,7 +70,7 @@ func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar s
 	// A step that runs somewhere without one must go through the loopback
 	// listener instead (`kubectl port-forward … :8210`), not fall back to
 	// unverified TLS.
-	client, err := InClusterHTTPClient()
+	client, err := openbao.InClusterHTTPClient()
 	if err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar s
 	if err != nil {
 		return err
 	}
-	baoseed.MaskGHALines(token)
+	ghaout.MaskLines(token)
 	if err := ghaout.Append("GITHUB_ENV", exportVar+"="+token); err != nil {
 		return err
 	}
@@ -113,7 +114,7 @@ func kubernetesOpenBaoLogin(ctx context.Context, client *http.Client, addr, moun
 	if err != nil {
 		return "", fmt.Errorf("read ServiceAccount token %s: %w (is this running in-cluster?)", saTokenFile, err)
 	}
-	return KubernetesLogin(ctx, client, addr, mount, role, strings.TrimSpace(string(jwt)))
+	return openbao.KubernetesLogin(ctx, client, addr, mount, role, strings.TrimSpace(string(jwt)))
 }
 
 // oidcOpenBaoLogin mints a GitHub Actions OIDC token and exchanges it at OpenBao's
@@ -127,6 +128,6 @@ func oidcOpenBaoLogin(ctx context.Context, client *http.Client, addr, role strin
 	if err != nil {
 		return "", fmt.Errorf("mint GitHub OIDC token: %w (does the job set `permissions: id-token: write`?)", err)
 	}
-	baoseed.MaskGHALines(oidcToken)
-	return JWTLogin(ctx, client, addr, role, oidcToken)
+	ghaout.MaskLines(oidcToken)
+	return openbao.JWTLogin(ctx, client, addr, role, oidcToken)
 }

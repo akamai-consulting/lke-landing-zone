@@ -73,7 +73,10 @@ func Extension() extension.Extension {
 				"It is the second diagnostic-family extension after argocd-diagnostics, and the " +
 				"two DISAGREE about shape: that one attaches to the failure of `converged`, this " +
 				"one to nothing. They are not one kind, which is why no fifth kind was invented " +
-				"even though the two-case bar was met.",
+				"even though the two-case bar was met. THE TIEBREAKER NAMED IN THIS FILE'S " +
+				"HEADER HAS SINCE SHIPPED: `doctor-probes` attaches to `configured` as a plain " +
+				"assertion and needed no note, which is the outcome the header said would mean " +
+				"'diagnostic' was never a kind. The placement stands; the question is closed.",
 		},
 	}
 }

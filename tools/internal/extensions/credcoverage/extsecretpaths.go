@@ -195,27 +195,40 @@ func collectSeeded(sources []string) (map[string]bool, map[string]map[string]boo
 	return paths, fields, nil
 }
 
+// THE FIELD NAMES ARE MATCHED IN BOTH CASES, and that is not defensive
+// styling. These regexes read Go source, so an extraction that EXPORTS a struct
+// field silently stops them matching — the collector finds no seeds, every
+// ExternalSecret looks unseeded, and the gate fails with eight accusations that
+// are all wrong. That happened: `kvPath`/`path`/`fieldSpecs` became
+// `Path`/`FieldSpecs` when the seeders moved to internal/extensions, and the
+// only symptom was the gate blaming the manifests.
 var (
-	esGoPutRx      = regexp.MustCompile(`(?s)baoKVPutFn\(\s*"secret/([^"]+)",\s*map\[string\]string\{(.*?)\}`)
+	esGoPutRx      = regexp.MustCompile(`(?s)(?:baoKVPutFn|\w*\.KVPut|KVPut)\(\s*"secret/([^"]+)",\s*map\[string\]string\{(.*?)\}`)
 	esGoFieldRx    = regexp.MustCompile(`"(\w+)":`)
-	esGoSpecPathRx = regexp.MustCompile(`kvPath:\s*"secret/([^"]+)"`)
+	esGoSpecPathRx = regexp.MustCompile(`(?:kvPath|KVPath|Path):\s*"secret/([^"]+)"`)
 	// The rotation table's paths (ci_rotate_linode_creds.go) — seeded by
 	// mint-bootstrap-objkeys at bootstrap and rewritten by the rotator
 	// in-cluster. Their field sets live in the table's fields-builder map
 	// literals in the same file (lokiObjectStoreFields, harborRegistryS3Fields,
 	// the dns token literal), so the collector unions every map-literal key in
 	// the file (+ rotated_at, stamped at write time) for these paths.
-	esGoBaoPathRx = regexp.MustCompile(`baoPath:\s*"secret/([^"]+)"`)
+	esGoBaoPathRx = regexp.MustCompile(`(?:baoPath|BaoPath):\s*"secret/([^"]+)"`)
+	// A path held as a CONST and written through the variable, e.g.
+	// `BroadPATBaoPath = "secret/linode/broad-pat"` + `bao.Write(ctx, BroadPATBaoPath, …)`.
+	// The collector cannot resolve identifiers, so the declaration is the seed
+	// evidence. Only consulted for files already on the seed-source list, so a
+	// const elsewhere named *BaoPath cannot vouch for itself.
+	esGoPathConstRx = regexp.MustCompile(`(?m)^\s*(?:\w+\s+)?\w*(?:BaoPath|KVPath)\s*=\s*"secret/([^"]+)"`)
 	// Matches both the CI-side root-token put (baoKVPutFn) and the in-cluster
 	// provisioner's k8s-auth write (bao.Write(ctx, spec.kvPath, …)) driving a
 	// harborRobotSpec kvPath.
-	esGoSpecPutRx = regexp.MustCompile(`(?s)(?:baoKVPutFn\(\s*\w+\.kvPath|\w+\.Write\(ctx,\s*\w+\.kvPath),\s*map\[string\]string\{(.*?)\}`)
+	esGoSpecPutRx = regexp.MustCompile(`(?s)(?:baoKVPutFn\(\s*\w+\.(?:kvPath|KVPath)|\w+\.Write\(ctx,\s*\w+\.(?:kvPath|KVPath)),\s*map\[string\]string\{(.*?)\}`)
 	// The bootstrapSeeds() table (ci_bao_seed_all.go) declares each generic seed
 	// as a baoSeedOpts literal: `path: "secret/<p>", … fieldSpecs: []string{…}`.
 	// path: precedes fieldSpecs: in every entry (skipIfPresent: may sit between),
 	// so a lazy match from one path: to its next fieldSpecs: stays inside the
 	// entry. Each fieldSpecs string is "<name>=<source>".
-	esSeedTableEntryRx = regexp.MustCompile(`(?s)path:\s*"secret/([^"]+)",.*?fieldSpecs:\s*\[\]string\{(.*?)\}`)
+	esSeedTableEntryRx = regexp.MustCompile(`(?s)(?:path|Path):\s*"secret/([^"]+)",.*?(?:fieldSpecs|FieldSpecs):\s*\[\]string\{(.*?)\}`)
 	esSeedTableFieldRx = regexp.MustCompile(`"(\w+)=`)
 )
 
@@ -275,6 +288,25 @@ func collectSeededGo(src string) (map[string]bool, map[string]map[string]bool, e
 	// map-literal key in the file (the builders live alongside the table) plus
 	// rotated_at. Union over-claims per-path (safe: this validator guards
 	// against MISSING seeds, not extra fields).
+	// Const-held paths: the write site passes the identifier, so pair each with
+	// the union of every map-literal key in the file — the same over-claiming
+	// union the rotation table uses below, and safe for the same reason (this
+	// validator guards against MISSING seeds, not extra fields).
+	if ms := esGoPathConstRx.FindAllStringSubmatch(text, -1); len(ms) > 0 {
+		constFields := map[string]bool{}
+		for _, fm := range esGoFieldRx.FindAllStringSubmatch(text, -1) {
+			constFields[fm[1]] = true
+		}
+		for _, m := range ms {
+			paths[m[1]] = true
+			if fields[m[1]] == nil {
+				fields[m[1]] = map[string]bool{}
+			}
+			for f := range constFields {
+				fields[m[1]][f] = true
+			}
+		}
+	}
 	if ms := esGoBaoPathRx.FindAllStringSubmatch(text, -1); len(ms) > 0 {
 		tableFields := map[string]bool{"rotated_at": true}
 		for _, fm := range esGoFieldRx.FindAllStringSubmatch(text, -1) {
@@ -455,21 +487,21 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// no-ops where a pattern is absent).
 	for _, goSrc := range []string{
 		"tools/internal/extensions/harbor/harbor.go",
-		"tools/cmd/llz/ci_harbor_provisioner.go",
-		"tools/cmd/llz/ci_seed_special.go",
-		"tools/cmd/llz/ci_bao_seed_all.go",
-		"tools/cmd/llz/ci_rotate_linode_creds.go",
-		"tools/cmd/llz/ci_incluster_pat.go",
+		"tools/internal/extensions/harbor/harbor_provisioner.go",
+		"tools/internal/extensions/seedspecial/special.go",
+		"tools/internal/extensions/baoseed/seedall.go",
+		"tools/internal/extensions/credrotate/table.go",
+		"tools/internal/extensions/credrotate/inclusterpat.go",
 		// seed-broad-pat writes secret/linode/broad-pat (its own header: "Nothing
 		// else seeds that path"). It was missing here, which stayed invisible only
 		// because the REF side could not see the ExternalSecret that reads it — the
 		// two incomplete corpora masked each other.
-		"tools/cmd/llz/ci_seed_broad_pat.go",
+		"tools/internal/extensions/credrotate/broadpat.go",
 		// seed-ssec-key writes secret/obj/ssec, the obj-proxy's SSE-C key. Nothing
 		// else seeds it, and it is generate-once (Linode discards SSE-C keys, so a
 		// second write orphans every encrypted object) — so it never appears as a
 		// `bao kv put` step in a workflow, only here.
-		"tools/cmd/llz/ci_seed_ssec_key.go",
+		"tools/internal/extensions/objenc/seed_key.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(guardkit.RepoPath(root, goSrc))
 		if err != nil {

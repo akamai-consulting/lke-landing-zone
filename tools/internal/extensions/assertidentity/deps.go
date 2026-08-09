@@ -1,13 +1,5 @@
 package assertidentity
 
-import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"strings"
-)
-
 // Deps carries what this package cannot reach for itself.
 //
 // A note on the literals: keycloak.NS/Realm/AdminSecret moved into
@@ -71,15 +63,6 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// decodeJSON reads a JSON array/object body, requiring a 2xx status.
-func decodeJSON(resp *http.Response, v any) error {
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
-	}
-	return json.NewDecoder(resp.Body).Decode(v)
-}
-
 // containsString: the definition travelled out of package main with a file this
 // extraction moved, leaving both sides using it. Defined here rather than hunted
 // for — it is three lines and slices.Contains-shaped.
@@ -90,9 +73,4 @@ func containsString(hay []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func readSnippet(r io.Reader) string {
-	b, _ := io.ReadAll(io.LimitReader(r, 512))
-	return strings.TrimSpace(string(b))
 }

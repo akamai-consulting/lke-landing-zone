@@ -13,14 +13,14 @@ func ListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "list the scaffolded deployments (the CI matrix source of truth)",
-		Long: "Lists every Deployment scaffolded by `llz env add`, from the UNION of two\n" +
+		Long: "Lists every topo.Deployment scaffolded by `llz env add`, from the UNION of two\n" +
 			"sources: the LandingZone spec's environments/<name>.yaml (the source of\n" +
 			"truth you commit) and any terraform-iac-bootstrap/cluster/<name>.tfvars.\n" +
 			"The union matters because the tfvars are gitignored build artifacts —\n" +
-			"on a fresh clone the spec is the only source, so a spec-only Deployment\n" +
+			"on a fresh clone the spec is the only source, so a spec-only topo.Deployment\n" +
 			"must still appear. The CI workflows' `discover` job runs\n" +
-			"`llz env list --json` and feeds it into each per-Deployment matrix, so a\n" +
-			"new Deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
+			"`llz env list --json` and feeds it into each per-topo.Deployment matrix, so a\n" +
+			"new topo.Deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
 			"OpenBao HA members (ha_role != standalone); --role filters by exact role.\n" +
 			"--ordered emits only the deployments that declare a promotion_rank, in\n" +
 			"ascending promotion order (dev → staging → prod) — the sequence a\n" +
@@ -30,7 +30,7 @@ func ListCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error { return runEnvList(jsonOut, haOnly, ordered, role) },
 	}
 	f := c.Flags()
-	f.BoolVar(&jsonOut, "json", false, "emit a JSON array of Deployment names (for `fromJSON` in a workflow matrix)")
+	f.BoolVar(&jsonOut, "json", false, "emit a JSON array of topo.Deployment names (for `fromJSON` in a workflow matrix)")
 	f.BoolVar(&haOnly, "ha", false, "only deployments in an HA pair (ha_role active|standby)")
 	f.BoolVar(&ordered, "ordered", false, "only ranked deployments, in promotion order (ascending promotion_rank)")
 	f.StringVar(&role, "role", "", "only deployments with this exact ha_role (active|standby|standalone)")

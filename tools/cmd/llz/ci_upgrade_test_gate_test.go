@@ -17,8 +17,8 @@ import (
 // upgrade-test` needs copier, git tags, and ~90s, and self-skips without them.
 // This one runs in microseconds on every `go test`, so the flag cannot be
 // dropped and rediscovered by an adopter — which is how it was found the first
-// time. Losing --defaults makes `llz upgrade` re-onboard.Prompt, and with no terminal
-// that is an unhandled prompt_toolkit exception rather than a onboard.Prompt.
+// time. Losing --defaults makes `llz upgrade` re-prompt, and with no terminal
+// that is an unhandled prompt_toolkit exception rather than a prompt.
 func TestCopierUpdateArgvIsNonInteractive(t *testing.T) {
 	for _, ref := range []string{"v0.0.40", ""} {
 		argv := copier.UpdateArgv(ref)
@@ -69,7 +69,7 @@ func TestCopierScaffoldArgv(t *testing.T) {
 			t.Errorf("scaffold argv is missing --data %s: %v", want, argv)
 		}
 	}
-	// The harness itself must never block on a onboard.Prompt.
+	// The harness itself must never block on a prompt.
 	if !containsArg(argv, "--defaults") {
 		t.Errorf("scaffold argv would prompt: %v", argv)
 	}
@@ -111,7 +111,7 @@ func TestPreviousReleaseTag(t *testing.T) {
 		}
 	})
 
-	// Delegated to selfupgrade.LatestLLZTag, so pre-releases and the retired llz/v* track are
+	// Delegated to llzver.LatestLLZTag, so pre-releases and the retired llz/v* track are
 	// excluded by the same rule `llz self-update` and `llz new` apply.
 	t.Run("ignores pre-releases and the legacy tag track", func(t *testing.T) {
 		got, ok := upgrade.PreviousReleaseTag([]string{"v0.0.39", "v0.0.41-rc1", "llz/v9.9.9"}, nil)

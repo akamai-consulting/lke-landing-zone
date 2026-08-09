@@ -29,12 +29,19 @@ Install the CLI (or `llz self-update` if you already have it), then drive the fl
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<@ upstream_org @>/lke-landing-zone/main/template-scripts/install-llz.sh | bash
 
+# Export a Linode PAT first — without it the region / OBJ-cluster / entitlement
+# checks silently skip, and a typo is first noticed by `terraform apply`.
+printf 'Linode PAT: '; read -rs LINODE_TOKEN; echo; export LINODE_TOKEN
+
 llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # author the spec + render
-git push                   # `env add` commits; the build renders from the PUSHED tree
-llz doctor --env <env>     # readiness gate — fill anything it flags
+llz doctor --env <env>     # readiness gate — fix what it flags BEFORE publishing
+git add -A && git commit -m "llz: fill deployment values" && git push
+                           # `env add` commits its own output; the fixes above are yours,
+                           # and the build renders from the PUSHED tree
 llz up <env> --yes         # tokens → doctor → build (stops at the first failure)
+                           # prints the run URL + `gh run watch`; the build takes ~40 min
 llz ci fetch-kubeconfig --region <env> --output ~/.kube/<env>.yaml   # the build ran in CI; this host has no kubeconfig yet
-KUBECONFIG=~/.kube/<env>.yaml llz status <env>   # OpenBao / ArgoCD / ESO convergence
+KUBECONFIG=~/.kube/<env>.yaml llz status <env> --wait   # OpenBao / ArgoCD / ESO convergence
 ```
 
 Full walkthrough — accounts, credentials, bootstrap order — is in
@@ -61,6 +68,7 @@ Run `llz <command> --help` for any command.
 Shipped locally under [`docs/`](docs/):
 
 - [Quick start](docs/quickstart.md) — nothing → converged cluster, the fast path
+- [The first build failed](docs/runbooks/first-build-failed.md) — what exists, what is safe to re-run, what to sweep
 - [Runbooks](docs/runbooks/) — incident recovery (e.g. the [OpenBao bootstrap runbook](docs/runbooks/bootstrap-openbao.md))
 - [Playbooks](docs/playbooks/) — routine operational how-tos
 

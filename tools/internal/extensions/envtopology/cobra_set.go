@@ -20,7 +20,7 @@ import (
 
 func SetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set <Deployment> <path=value>...",
+		Use:   "set <topo.Deployment> <path=value>...",
 		Short: "set fields in environments/<env>.yaml + re-render (e.g. cluster.nodePool.count=8)",
 		Long: "Sets one or more spec.<path>=<value> fields in environments/<env>.yaml,\n" +
 			"preserving comments, then validates + re-renders. Paths are relative to the\n" +
@@ -64,7 +64,7 @@ func SetCmd() *cobra.Command {
 }
 func EditCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "edit <Deployment>",
+		Use:   "edit <topo.Deployment>",
 		Short: "open environments/<env>.yaml in $EDITOR, then re-render on exit",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {

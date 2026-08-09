@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 )
@@ -587,13 +588,13 @@ func checkObjectsAreEncrypted(d Deps, endpoint string, buckets []string, sample 
 				"there first. The probe needs only LIST and HEAD on the bucket, and NOT the SSE-C key",
 		}}
 	}
-	var keys []ObjectRef
+	var keys []objstore.ObjectRef
 	perBucket := map[string]int{}
 	for _, b := range buckets {
 		if b == "" {
 			continue
 		}
-		got, err := SampleObjectKeys(ak, sk, endpoint, b, sample)
+		got, err := objstore.SampleObjectKeys(ak, sk, endpoint, b, sample)
 		if err != nil {
 			return []Finding{{
 				Check:   "object",
@@ -635,7 +636,7 @@ func checkObjectsAreEncrypted(d Deps, endpoint string, buckets []string, sample 
 				"proxy — and reporting the first as the second is how this check cried wolf",
 		}}
 	}
-	var fresh []ObjectRef
+	var fresh []objstore.ObjectRef
 	for _, k := range keys {
 		if k.LastModified.After(cutover) {
 			fresh = append(fresh, k)

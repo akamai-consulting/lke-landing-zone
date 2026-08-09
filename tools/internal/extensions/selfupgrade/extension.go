@@ -25,7 +25,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // template-owned files over the instance's working tree, which is precisely a
 // working-tree write and precisely what `write-repo` means.
 //
-// `cloud-read` for the release lookup: `LatestRelease` asks GitHub what the newest
+// `cloud-read` for the release lookup: `llzver.LatestRelease` asks GitHub what the newest
 // llz tag is. That is why this is not a gate — a gate is cheap and offline.
 //
 // THE POLICY HALF IS THE INTERESTING HALF. `ApplyManifestPolicy` decides, per

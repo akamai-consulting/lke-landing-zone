@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/spf13/cobra"
 )
@@ -287,7 +287,7 @@ func runCIReapObjKeys(g cliopts.Opts, env string) error {
 	if err != nil {
 		return err
 	}
-	prefix, err := objenc.LabelPrefixFor("reap-env-creds")
+	prefix, err := clusterspec.LabelPrefixFor("reap-env-creds")
 	if err != nil {
 		return err
 	}

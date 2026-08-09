@@ -83,3 +83,49 @@ func TestDesignDocBindingTableMatchesTheCode(t *testing.T) {
 		}
 	}
 }
+
+// The precondition section, pinned the same way: by CONSTRUCTING the declarations
+// the doc describes and asking the validator, so the prose is tied to behaviour
+// rather than to a second copy of requirableStates.
+func TestDesignDocPreconditionSectionMatchesTheCode(t *testing.T) {
+	body, err := os.ReadFile(filepath.FromSlash(modelDoc))
+	if err != nil {
+		t.Fatalf("the model doc is the spec for this package and must exist: %v", err)
+	}
+	doc := string(body)
+
+	if !strings.Contains(doc, "#### Preconditions") {
+		t.Fatal("the Preconditions section is gone from the model doc — Requires is part of " +
+			"the model's shape and the doc is its spec")
+	}
+
+	valid := func(b extension.Binding) bool {
+		e := extension.Extension{Name: "probe", Short: "x", Bindings: []extension.Binding{b}}
+		return len(e.Validate()) == 0
+	}
+
+	// "optional — the zero value means the binding makes no such claim"
+	if !valid(extension.Binding{Kind: extension.Transition, State: extension.Seeded,
+		Grants: []extension.Grant{extension.SecretCustody}}) {
+		t.Error("doc says Requires is optional, but a binding without one does not validate")
+	}
+	// "`operating`, on a `transition` only"
+	if !valid(extension.Binding{Kind: extension.Transition, State: extension.Seeded,
+		Requires: extension.Operating, Grants: []extension.Grant{extension.SecretCustody}}) {
+		t.Error("doc says a transition may require `operating`, but that does not validate")
+	}
+	if valid(extension.Binding{Kind: extension.Assertion, State: extension.Converged,
+		Requires: extension.Operating, Grants: []extension.Grant{extension.ClusterRead}}) {
+		t.Error("doc says `transition` only, but an assertion accepted a precondition")
+	}
+	if valid(extension.Binding{Kind: extension.Transition, State: extension.Seeded,
+		Requires: extension.Converged, Grants: []extension.Grant{extension.SecretCustody}}) {
+		t.Error("doc says `operating` only, but `converged` was accepted as a precondition")
+	}
+	// "the grant check runs at both states, never at `Requires` alone"
+	if valid(extension.Binding{Kind: extension.Transition, State: extension.Configured,
+		Requires: extension.Operating, Grants: []extension.Grant{extension.SecretCustody}}) {
+		t.Error("doc says the grant check runs at BOTH states, but a grant illegal at the " +
+			"declared State was accepted because it is legal at the precondition")
+	}
+}

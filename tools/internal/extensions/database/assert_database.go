@@ -32,10 +32,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/openbao"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/reconcilelanes"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 // dbProbeDatabase is the database every Managed Postgres exposes, used purely as
@@ -118,13 +117,13 @@ func CloseBao() {
 	dbBao.client, dbBao.cleanup, dbBao.err, dbBao.opened = nil, nil, nil, false
 }
 
-// ListClusters returns the cluster names declared under reconcilelanes.DBAdminRoot.
+// ListClusters returns the cluster names declared under credpaths.DBAdminRoot.
 var ListClusters = func(ctx context.Context) ([]string, error) {
 	bao, err := dbBaoClient()
 	if err != nil {
 		return nil, err
 	}
-	names, ok, err := bao.MetadataList(ctx, reconcilelanes.DBAdminRoot)
+	names, ok, err := bao.MetadataList(ctx, credpaths.DBAdminRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +141,7 @@ var ReadCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error) 
 		return dbAdminCreds{}, err
 	}
 	get := func(key string) string {
-		v, _, _ := bao.Get(ctx, reconcilelanes.DBAdminRoot+"/"+cluster, key)
+		v, _, _ := bao.Get(ctx, credpaths.DBAdminRoot+"/"+cluster, key)
 		return v
 	}
 	return dbAdminCreds{
@@ -157,7 +156,7 @@ func probeDBClusters(ctx context.Context, clusters []string, timeout time.Durati
 		creds, err := ReadCreds(ctx, name)
 		if err != nil {
 			out = append(out, dbVerdict{Cluster: name,
-				FailWhy: fmt.Sprintf("could not read its admin credential from %s/%s: %v", reconcilelanes.DBAdminRoot, name, err)})
+				FailWhy: fmt.Sprintf("could not read its admin credential from %s/%s: %v", credpaths.DBAdminRoot, name, err)})
 			continue
 		}
 		if missing := creds.missingFields(); len(missing) > 0 {
@@ -189,11 +188,11 @@ func RunAssertDatabase(timeout, settle, interval time.Duration) error {
 
 	clusters, err := ListClusters(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::could not list declared databases under %s (%v)\n", reconcilelanes.DBAdminRoot, err)
-		return fmt.Errorf("could not list declared databases under %s: %w", reconcilelanes.DBAdminRoot, err)
+		fmt.Fprintf(os.Stderr, "::error::could not list declared databases under %s (%v)\n", credpaths.DBAdminRoot, err)
+		return fmt.Errorf("could not list declared databases under %s: %w", credpaths.DBAdminRoot, err)
 	}
 	if len(clusters) == 0 {
-		fmt.Printf("SKIP: no Managed Postgres declared under %s on this deployment.\n", reconcilelanes.DBAdminRoot)
+		fmt.Printf("SKIP: no Managed Postgres declared under %s on this deployment.\n", credpaths.DBAdminRoot)
 		return nil
 	}
 	fmt.Printf("declared clusters: %s\n", strings.Join(clusters, ", "))

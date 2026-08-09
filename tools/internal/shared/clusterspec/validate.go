@@ -78,10 +78,16 @@ var reservedTeamNames = map[string]bool{
 // and harbor/linode roles. A team's openbaoSubtree may not carve space inside
 // them: a team scoped to e.g. `secret/linode` would grant itself write on the
 // Linode API token + broad-PAT (secret/data/linode/*), a privilege escalation.
-// KEEP IN SYNC with the policy paths in tools/internal/extensions/identityconfig/openbao_configure.go
-// (policyPlatformCI et al.) — the guarded set is the union of their top segments.
-// SystemSecretNamespaces is EXPORTED so a cmd/llz test can assert it stays a
-// superset of the platform policy paths (drift = a team-claimable escalation).
+// THE SET IS THE UNION OF THE TOP SEGMENTS of the platform OpenBao policy paths
+// in tools/internal/extensions/identityconfig/openbao_configure.go (policyPlatformCI
+// et al.). That is not a "keep in sync" request, which is the kind of comment that
+// is true when written and silently false a year later — it is CHECKED, by
+// identityconfig's TestSystemSecretNamespacesCoverPolicyPaths, which lives beside
+// the policies so it can read the unexported consts directly and which also fails
+// if a NEW `const policy… =` appears without being added to its list. A second
+// test, cmd/llz/seedroots_test.go, holds the same line from the seed-root side.
+// SystemSecretNamespaces is EXPORTED so those tests can reach it; drift here is a
+// team-claimable privilege escalation, so it is guarded from both directions.
 var SystemSecretNamespaces = map[string]bool{
 	"alerts":          true,
 	"cert-automation": true,

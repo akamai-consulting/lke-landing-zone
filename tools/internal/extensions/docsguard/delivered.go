@@ -17,16 +17,6 @@ package docsguard
 
 import "os"
 
-// DeliveredDocs is the day-to-day operator set an instance carries locally.
-// Everything else in docs/ is referenced at the template repo. Names are entries
-// directly under docs/ — a file keeps its extension, a directory does not.
-var DeliveredDocs = map[string]bool{
-	"quickstart.md": true, // stand up + operate this instance
-	"runbooks":      true, // incident recovery
-	"playbooks":     true, // routine operational how-tos
-	"README.md":     true, // the pointer deliver-docs writes (kept if it already exists)
-}
-
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil

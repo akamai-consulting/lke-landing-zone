@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/sustain"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
 // Provenance is DERIVED, never stamped to disk: with no .copier-answers.yml the
@@ -34,8 +35,8 @@ func TestResolveTemplateVersionFallsBackToGit(t *testing.T) {
 	if tv.Schema != 1 || tv.Generator != "llz" {
 		t.Errorf("resolved meta wrong: %+v", tv)
 	}
-	if tv.TemplateRepo != sustain.DefaultTemplateRepo {
-		t.Errorf("TemplateRepo = %q, want default %q", tv.TemplateRepo, sustain.DefaultTemplateRepo)
+	if tv.TemplateRepo != templateid.DefaultRepo {
+		t.Errorf("TemplateRepo = %q, want default %q", tv.TemplateRepo, templateid.DefaultRepo)
 	}
 	if tv.TemplateSHA != "deadbeefcafe1234" || tv.TemplateRef != "v1.2.3" {
 		t.Errorf("git fallback not used: %+v", tv)
@@ -54,8 +55,8 @@ func TestResolveTemplateVersionFromAnswers(t *testing.T) {
 	mustWrite(t, ".copier-answers.yml", "_commit: 1234567890abcdef\n_src_path: gh:akamai-consulting/lke-landing-zone\nllz_version: v9.9.9\n")
 
 	tv := sustain.ResolveTemplateVersion(sustainDeps())
-	if tv.TemplateRepo != sustain.DefaultTemplateRepo {
-		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, sustain.DefaultTemplateRepo)
+	if tv.TemplateRepo != templateid.DefaultRepo {
+		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, templateid.DefaultRepo)
 	}
 	if tv.TemplateSHA != "1234567890abcdef" || tv.TemplateRef != "v9.9.9" {
 		t.Errorf("answers not honored: %+v", tv)

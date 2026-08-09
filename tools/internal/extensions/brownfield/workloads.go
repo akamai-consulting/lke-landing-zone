@@ -16,6 +16,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 )
 
 // ── secrets checklist (pure) ─────────────────────────────────────────────────
@@ -386,7 +388,7 @@ func parsePodSecretRefs(podsJSON string) []podSecretUse {
 		out = append(out, podSecretUse{
 			Namespace: p.Metadata.Namespace,
 			Workload:  workloadFromOwner(p.Metadata.OwnerReferences, p.Metadata.Name),
-			Secrets:   SortedSetKeys(set),
+			Secrets:   cli.SortedKeys(set),
 		})
 	}
 	return out
@@ -413,7 +415,7 @@ func attachDBClients(dbs []dbInfo, uses []podSecretUse) []dbInfo {
 				}
 			}
 		}
-		dbs[i].Clients = SortedSetKeys(set)
+		dbs[i].Clients = cli.SortedKeys(set)
 	}
 	return dbs
 }
@@ -511,7 +513,7 @@ func parsePeerAuthModes(js string) []string {
 			set[m] = true
 		}
 	}
-	return SortedSetKeys(set)
+	return cli.SortedKeys(set)
 }
 
 // totalCount sums a per-namespace count map.

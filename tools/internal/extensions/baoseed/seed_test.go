@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 func TestParseSeedField(t *testing.T) {
@@ -338,17 +339,5 @@ func TestMaskGHALines(t *testing.T) {
 	// maskGHA prints to stdout; just assert it doesn't panic on multiline +
 	// blank-line input. (Output assertion would need stdout capture; the
 	// per-line split is the behavior under test and is exercised via fmt.)
-	MaskGHALines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
-}
-
-func funcBody(src, decl string) string {
-	i := strings.Index(src, decl)
-	if i < 0 {
-		return ""
-	}
-	rest := src[i+len(decl):]
-	if j := strings.Index(rest, "\nfunc "); j >= 0 {
-		return rest[:j]
-	}
-	return rest
+	ghaout.MaskLines("-----BEGIN PRIVATE KEY-----\nabc\n\ndef\n-----END PRIVATE KEY-----\n")
 }
