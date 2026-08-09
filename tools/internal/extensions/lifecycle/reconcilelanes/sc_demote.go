@@ -21,6 +21,7 @@ package reconcilelanes
 import (
 	"context"
 	"fmt"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 )
@@ -34,7 +35,11 @@ const (
 // currently marked the cluster default. Idempotent: a no-op when the SC is absent
 // (single-class cluster) or already non-default. A patch failure surfaces (the
 // manager records the pass failed).
-func SCDemote(ctx context.Context, client Client, name string) error {
+// SCDemote takes the FENCED handle, not the daemon's full client. It Gets and
+// Patches one StorageClass and never watches, so the narrower type is both what it
+// uses and what its declaration entitles it to — a lane that lost cluster-write
+// would fail at the patch rather than performing it.
+func SCDemote(ctx context.Context, client capability.KubeAPI, name string) error {
 	obj, status, err := client.GetJSON(ctx, SCStorageClassesPath+"/"+name)
 	if err != nil {
 		return err

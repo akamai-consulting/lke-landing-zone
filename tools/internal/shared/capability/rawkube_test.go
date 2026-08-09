@@ -53,17 +53,39 @@ import (
 // the daemon runs in-pod and reaches the API with its ServiceAccount token, which
 // is precisely the shape Writer's argv transport cannot express today.
 var allowedRawKubeMutations = map[string]int{
-	// argo-nudge, es-store-recovery and sc-demote each MergePatch one object.
-	"reconcilelanes": 3,
-	// discover_firewall writes the firewall ConfigMap/Secret; reconcile_leader
-	// creates and patches the coordination Lease that decides which replica drives.
-	"reconciler": 6,
+	// reconcilelanes IS GONE FROM THIS LIST, which is the paydown this ratchet
+	// exists to bank. All three of its lanes take capability.KubeAPI now, and the
+	// four-method `Client` and `argoClient` interfaces they used to accept were
+	// dead once the last caller narrowed — deleted rather than left as a shape the
+	// next lane could be written against.
+	// The daemon's own plumbing: reconcileClient is what runReconcile and
+	// buildReconcilers pass around before any lane narrows it, and leaseClient is
+	// leader election, which creates and patches the Lease that decides which
+	// replica drives. Both are reconciler-runtime's own declaration rather than a
+	// lane's, so narrowing them is a question about the daemon's shape.
+	"reconciler": 3,
 }
 
-// rawKubeMutation matches kube.Client's two mutating methods. GetJSON and Watch
-// are reads and are deliberately absent: this ratchet is about the grants that
-// CHANGE a cluster, and counting reads would bury the signal it exists to show.
-var rawKubeMutation = regexp.MustCompile(`\.(CreateJSON|MergePatch)\(`)
+// rawKubeMutation matches a function that ACCEPTS an unfenced mutating client.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// IT COUNTS TYPES, NOT CALL SITES, AND THE FIRST VERSION GOT THAT WRONG.
+//
+// The original regex matched `.CreateJSON(` / `.MergePatch(` — every mutating
+// call. That measures the wrong thing: once a lane takes capability.KubeAPI its
+// calls are FENCED, and they still look identical to a regex. Routing three lanes
+// through the handle changed the count by zero, which is how the mistake surfaced.
+//
+// What actually establishes the fence is the TYPE a function accepts. A parameter
+// or field typed as a raw four-method client can mutate whatever it likes; one
+// typed capability.KubeAPI cannot exceed its binding. So the subject is
+// declarations of the raw shape, and converting a lane now moves the number.
+//
+// The pattern deliberately does NOT match `capability.KubeAPI`, which is the whole
+// point of the distinction.
+// ────────────────────────────────────────────────────────────────────────────
+var rawKubeMutation = regexp.MustCompile(
+	`(?:client|c) (?:\*kube\.Client|Client|reconcileClient|argoClient|leaseClient)\b`)
 
 func TestNoNewRawKubeMutations(t *testing.T) {
 	root := filepath.FromSlash("../../extensions")
@@ -99,10 +121,12 @@ func TestNoNewRawKubeMutations(t *testing.T) {
 	}
 
 	// A scan that found nothing agrees with any list. The allowlist is non-empty,
-	// so zero findings means the walk broke rather than the tree got clean.
+	// so zero findings means the walk broke rather than the tree got clean — and
+	// when this list finally reaches zero, that check stops protecting anything
+	// (see rawcloud_test.go for the class), so the control below outlives it.
 	if len(got) == 0 {
-		t.Fatal("no kube.Client mutations found anywhere under internal/extensions — the walk " +
-			"is looking at the wrong tree or the method names changed, and a ratchet that " +
+		t.Fatal("no unfenced kube clients found anywhere under internal/extensions — the walk " +
+			"is looking at the wrong tree or the type names changed, and a ratchet that " +
 			"cannot find its subject passes for the wrong reason")
 	}
 

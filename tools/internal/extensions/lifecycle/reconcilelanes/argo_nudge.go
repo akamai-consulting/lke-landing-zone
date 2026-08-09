@@ -20,6 +20,7 @@ package reconcilelanes
 import (
 	"context"
 	"fmt"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
@@ -27,16 +28,10 @@ import (
 // ArgoAppsPath is the Applications collection (Argo CD installs them in argocd).
 const ArgoAppsPath = "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications"
 
-// argoClient is the slice of the kube client the nudger needs.
-type argoClient interface {
-	GetJSON(ctx context.Context, path string) (map[string]any, int, error)
-	MergePatch(ctx context.Context, path string, patch any) error
-}
-
 // ArgoNudge lists Applications and re-triggers each terminally-failed
 // one. A patch failure on one app does not abort the pass — the rest are still
 // nudged; the first error is returned so the manager records the pass as failed.
-func ArgoNudge(ctx context.Context, client argoClient) error {
+func ArgoNudge(ctx context.Context, client capability.KubeAPI) error {
 	obj, status, err := client.GetJSON(ctx, ArgoAppsPath)
 	if err != nil {
 		return err

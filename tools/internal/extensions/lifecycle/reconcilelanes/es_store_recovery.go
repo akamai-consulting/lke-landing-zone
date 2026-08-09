@@ -24,6 +24,7 @@ package reconcilelanes
 import (
 	"context"
 	"fmt"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
@@ -52,7 +53,10 @@ type ESStoreRecovery struct {
 // llz_es_store_ready gauge, and bumps every ExternalSecret/PushSecret when the
 // store transitions to Ready (or is Ready on the first pass with a bound
 // ExternalSecret still not-Ready — the restart-amnesty case).
-func (s *ESStoreRecovery) Reconcile(ctx context.Context, client Client, reg *metrics.Registry) error {
+// Reconcile takes the FENCED handle for the same reason SCDemote does: it Gets and
+// Patches ExternalSecrets and never watches, so its parameter is exactly what its
+// binding declared.
+func (s *ESStoreRecovery) Reconcile(ctx context.Context, client capability.KubeAPI, reg *metrics.Registry) error {
 	obj, status, err := client.GetJSON(ctx, esStorePath)
 	if err != nil {
 		return err
@@ -126,7 +130,7 @@ func ObjReadyStatus(obj map[string]any) string {
 
 // anyExternalSecretNotReady reports whether any ExternalSecret in the cluster
 // is not (yet) Ready — the restart-amnesty probe.
-func anyExternalSecretNotReady(ctx context.Context, client Client) (bool, error) {
+func anyExternalSecretNotReady(ctx context.Context, client capability.KubeAPI) (bool, error) {
 	obj, status, err := client.GetJSON(ctx, esListPath)
 	if err != nil {
 		return false, err
@@ -152,7 +156,7 @@ func anyExternalSecretNotReady(ctx context.Context, client Client) (bool, error)
 // immediate ESO reconcile). One object's patch failure does not stop the
 // fan-out; the first error is returned so the manager records the pass failed
 // and the resync floor retries.
-func forceSyncESKinds(ctx context.Context, client Client) (int, error) {
+func forceSyncESKinds(ctx context.Context, client capability.KubeAPI) (int, error) {
 	patch := map[string]any{"metadata": map[string]any{
 		"annotations": map[string]any{"force-sync": fmt.Sprintf("%d", nowUnix())},
 	}}

@@ -385,7 +385,9 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			ext:      "reconcile-actions",
 			binding:  "argo-nudge",
 			interval: o.argoNudgeResync, // resync floor; the watch drives immediacy
-			run:      gate(func(ctx context.Context) error { return reconcilelanes.ArgoNudge(ctx, client) }),
+			run: gate(func(ctx context.Context) error {
+				return reconcilelanes.ArgoNudge(ctx, reconcilelanes.Fenced("argo-nudge", client))
+			}),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, reconcilelanes.ArgoAppsPath, "", func(kube.WatchEvent) error {
 					onEvent()
@@ -470,7 +472,9 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			ext:      "reconcile-actions",
 			binding:  "sc-demote",
 			interval: o.scDemoteResync, // resync floor — defeats the admission-policy starvation
-			run:      gate(func(ctx context.Context) error { return reconcilelanes.SCDemote(ctx, client, name) }),
+			run: gate(func(ctx context.Context) error {
+				return reconcilelanes.SCDemote(ctx, reconcilelanes.Fenced("sc-demote", client), name)
+			}),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, reconcilelanes.SCStorageClassesPath, "", func(kube.WatchEvent) error {
 					onEvent()
@@ -499,7 +503,9 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.esRecoveryResync, // resync floor; the store watch drives immediacy
 			// Driving (patches ES/PushSecret annotations) → leader-gated. State is
 			// per-process; the leader gate means only the driving replica advances it.
-			run: gate(func(ctx context.Context) error { return state.Reconcile(ctx, client, reg) }),
+			run: gate(func(ctx context.Context) error {
+				return state.Reconcile(ctx, reconcilelanes.Fenced("es-store-recovery", client), reg)
+			}),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, reconcilelanes.ESStoresWatchPath, "", func(kube.WatchEvent) error {
 					onEvent()
