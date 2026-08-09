@@ -10,6 +10,7 @@ package capability
 // the fix was for.
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -130,6 +131,43 @@ func TestAKindsBlanketRuleIsAppliedWhenTheHandleIsBuilt(t *testing.T) {
 	}
 	if err := g.Cloud.Permits("GET"); err == nil {
 		t.Error("a gate was handed a cloud handle")
+	}
+}
+
+// ReadOnlyCloud IS A FENCE AND NOT A LABEL. The static guard next door proves the
+// verbs tree TAKES it; this proves taking it means something — a mutating request
+// is refused before it leaves, which is the whole difference between this and the
+// `linode.NewClient(tok, …)` it replaced.
+func TestReadOnlyCloudRefusesEveryMutation(t *testing.T) {
+	c := ReadOnlyCloud()
+
+	// The reads the three converted call sites actually make.
+	if err := c.Permits("GET"); err != nil {
+		t.Errorf("ReadOnlyCloud refused a GET: %v — doctor's version check, onboard's bucket "+
+			"preflight and the token wizard all read, so a fence that refuses reads is an outage", err)
+	}
+
+	// The methods the client it replaced could reach. PutControlPlaneACL and
+	// ResetPostgresCredentials are the two that make this worth fencing.
+	for _, m := range []string{"POST", "PUT", "DELETE"} {
+		if err := c.Permits(m); err == nil {
+			t.Errorf("ReadOnlyCloud permits %s — a command that only looks must only look, and "+
+				"this is the tree with no declaration to check it against", m)
+		} else if !errors.Is(err, ErrNoCloudMutate) {
+			t.Errorf("ReadOnlyCloud refused %s with %v, want ErrNoCloudMutate — the two cloud "+
+				"errors are separate so a caller can tell 'may not look' from 'may not change'", m, err)
+		}
+	}
+
+	// It must be the SAME value a cloud-read binding gets, or the classification
+	// has quietly forked into a second copy — the thing the helper exists to avoid.
+	declared := CloudFor(binding(extension.CloudRead))
+	for _, m := range []string{"GET", "POST", "PUT", "DELETE"} {
+		a, b := c.Permits(m) == nil, declared.Permits(m) == nil
+		if a != b {
+			t.Errorf("ReadOnlyCloud and a cloud-read binding disagree about %s (%v vs %v) — "+
+				"they must be one classification, not two", m, a, b)
+		}
 	}
 }
 

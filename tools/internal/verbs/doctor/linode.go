@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 
@@ -50,7 +51,10 @@ var doctorLinodeClient = func() lkeVersionLister {
 	if tok == "" {
 		return nil
 	}
-	return linode.NewClient(tok, 20*time.Second)
+	// Fenced: doctor reports, it does not change the account. See
+	// capability.ReadOnlyCloud for why this tree takes a handle rather than a
+	// binding.
+	return capability.ReadOnlyCloud().Client(tok, 20*time.Second)
 }
 
 // ReportLinodeAccount prints doctor's "Linode account" section for the k8s

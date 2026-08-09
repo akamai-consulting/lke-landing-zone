@@ -235,6 +235,107 @@ func TestVerbsDoNotMutateTheCluster(t *testing.T) {
 	}
 }
 
+// A COMMAND THAT ONLY LOOKS MUST ONLY LOOK — THE CLOUD HALF.
+//
+// TestVerbsDoNotMutateTheCluster above states that rule and enforced it for
+// kubectl alone. An audit found the other half open: three call sites in
+// internal/verbs built a Linode client with `linode.NewClient(tok, …)` and NO
+// policy — doctor's LKE version check, onboard's bucket preflight, onboard's token
+// wizard — and that client carries PutControlPlaneACL and ResetPostgresCredentials.
+//
+// NO VERB CALLED EITHER, which is why this is a fence rather than a fix. The
+// kubectl rule was worth having before anything violated it too; a fence added
+// after the first violation is a post-mortem.
+//
+// THE REMEDY IS A HANDLE, NOT A POLICY LITERAL. capability.ReadOnlyCloud() returns
+// the same value CloudFor builds for a cloud-read binding, so the read/mutate
+// classification stays in one place. A policy written at the call site would be a
+// second copy of readMethods, which is the two-places-one-truth shape this repo has
+// been burned by most.
+func TestVerbsDoNotBuildAnUnfencedCloudClient(t *testing.T) {
+	root := filepath.Join("..", "..", "verbs")
+	// The unfenced constructors. `WithPolicy` is what makes a client fenced, so a
+	// bare NewClient / ClientFromEnv in this tree is one that can call anything.
+	unfenced := regexp.MustCompile(`\blinode\.(NewClient|ClientFromEnv)\b`)
+
+	var scanned int
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		rel, _ := filepath.Rel(root, path)
+		if unfenced.Match(stripComments(b)) {
+			t.Errorf("%s builds a Linode client with no method policy, from a tree that declares "+
+				"nothing. That client can PUT a control-plane ACL and reset a database's "+
+				"credentials, and no grant and no test would notice. Take "+
+				"capability.ReadOnlyCloud().Client(token, timeout) — these commands read an "+
+				"account and print it. If one genuinely must mutate, it is not a verb: move it "+
+				"to internal/extensions and declare cloud-mutate.", filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no sources under internal/verbs — the tree moved and this guard " +
+			"has been vacuous since it did")
+	}
+	// The detector must be able to fire, or a clean tree and a broken pattern look
+	// identical — the same reason TestDetectorsActuallyFire exists below.
+	if !unfenced.MatchString(`c := linode.NewClient(tok, d)`) ||
+		unfenced.MatchString(`c := capability.ReadOnlyCloud().Client(tok, d)`) {
+		t.Error("the unfenced-client pattern no longer discriminates — it would either pass a " +
+			"raw client or demand a change to the fenced one")
+	}
+}
+
+// AND THE HANDLE IS FOR THE VERBS, NOT FOR THE EXTENSIONS.
+//
+// ReadOnlyCloud exists because internal/verbs has no binding to look up. An
+// extension HAS one, so reaching for this instead would be taking a cloud
+// capability without declaring it — the same bypass as calling kubectlprobe.Exec
+// directly, wearing a capability constructor's name. Without this rule, adding the
+// helper for one tree would have quietly opened a door in the other.
+func TestExtensionsDoNotTakeTheUndeclaredCloud(t *testing.T) {
+	root := filepath.Join("..", "..", "extensions")
+	undeclared := regexp.MustCompile(`\bcapability\.ReadOnlyCloud\b`)
+
+	var scanned int
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		if undeclared.Match(stripComments(b)) {
+			rel, _ := filepath.Rel(root, path)
+			t.Errorf("%s takes capability.ReadOnlyCloud, which is the handle for the tree that "+
+				"declares NOTHING. This package has a binding: build the handle from it with "+
+				"capability.CloudFor(<binding>) or capability.For(<binding>).Cloud, so the reach "+
+				"`llz extension list` reports is the reach the code has.", filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no sources under internal/extensions — the tree moved and this guard " +
+			"has been vacuous since it did")
+	}
+}
+
 // stripComments blanks out `//` comment text before matching.
 //
 // IT IS HERE BECAUSE THIS GUARD CAUGHT ITS OWN PROSE. objenc was converted to take

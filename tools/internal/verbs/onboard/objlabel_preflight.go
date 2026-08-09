@@ -29,9 +29,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // bucketLister is the slice of the Linode client this needs; seamed for tests.
@@ -45,7 +45,9 @@ var bucketPreflightClient = func() bucketLister {
 	if tok == "" {
 		return nil
 	}
-	return linode.NewClient(tok, 20*time.Second)
+	// Fenced: a preflight LISTS buckets to warn about a label collision; it creates
+	// nothing. See capability.ReadOnlyCloud.
+	return capability.ReadOnlyCloud().Client(tok, 20*time.Second)
 }
 
 // objBucketLabels are the labels the object-storage root will create for a

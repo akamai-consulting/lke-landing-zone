@@ -185,6 +185,42 @@ func (d deniedCloud) FromEnv() (*linode.Client, context.Context, error) {
 // Deps defaults to refusal rather than to nil.
 func DeniedCloud() Cloud { return deniedCloud{} }
 
+// ReadOnlyCloud is the handle for internal/verbs, THE TREE THAT DECLARES NOTHING.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT EXISTS BECAUSE THE CLUSTER HAD A RULE THERE AND THE CLOUD DID NOT.
+//
+// seambypass_test.go's TestVerbsDoNotMutateTheCluster states the claim that tree
+// lives under: "A COMMAND THAT ONLY LOOKS MUST ONLY LOOK". `llz doctor`,
+// `llz argocd-diagnostics` and `llz phase-timing` read a platform and print it,
+// and a mutating kubectl verb there is a command doing something its name does not
+// say. That rule was enforced for kubectl and for nothing else.
+//
+// Three call sites in that tree built a Linode client with `linode.NewClient(tok,
+// …)` and no policy at all — doctor's version check, onboard's bucket preflight,
+// onboard's token wizard. The client they got carries PutControlPlaneACL and
+// ResetPostgresCredentials. No verb called either, which is why this is a fence
+// added while the count is still zero rather than a bug being fixed; the point of
+// a fence is that it holds before anyone tests it.
+//
+// WHY NOT A BINDING. There is none to look up: internal/verbs declares no
+// extension, which verbs_test.go pins deliberately. Minting one to satisfy
+// CloudFor would be the one-line bypass the mint guard exists to refuse, and it
+// would put a fake declaration in the tree specifically so a check would pass.
+//
+// WHY NOT A POLICY WRITTEN AT THE CALL SITE. The read/mutate split lives in
+// readMethods and mutateMethods in this file, and a second copy in internal/verbs
+// is the two-places-one-truth failure this repo has been burned by most. This
+// returns the SAME cloud value CloudFor builds for a cloud-read binding, so the
+// classification has exactly one home.
+//
+// IT IS NOT FOR internal/extensions, and TestExtensionsDoNotTakeTheUndeclaredCloud
+// enforces that. An extension has a binding; taking this instead would be reaching
+// past its own declaration for a capability it may not have declared, which is the
+// same shape as calling kubectlprobe.Exec directly.
+// ─────────────────────────────────────────────────────────────────────────────
+func ReadOnlyCloud() Cloud { return cloud{read: true} }
+
 // CloudFor builds the Cloud handle a binding's grants entitle it to.
 //
 // `cloud-mutate` IMPLIES `cloud-read`, for the reason cluster-write implies

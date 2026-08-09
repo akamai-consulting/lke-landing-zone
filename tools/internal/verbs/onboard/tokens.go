@@ -27,6 +27,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/branchpolicy"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
@@ -149,7 +150,9 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 			secrets["LINODE_API_TOKEN"] = token
 		}
 		if needKeys {
-			client := linode.NewClient(token, 30*time.Second)
+			// Fenced: the wizard READS the account to let an operator pick a
+			// cluster and to mint nothing. See capability.ReadOnlyCloud.
+			client := capability.ReadOnlyCloud().Client(token, 30*time.Second)
 			ctx := context.Background()
 			if clusterID == "" {
 				clusterID = cluster
