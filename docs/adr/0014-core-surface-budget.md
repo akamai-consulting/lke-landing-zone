@@ -85,8 +85,10 @@ never raise it to make a red build green.
 
 > **Superseded in part — read the [Amendment](#amendment-2026-08-08-the-subject-moved-and-one-of-the-two-arguments-went-with-it).**
 > The subject is no longer package `main`: the command tree moved to
-> `tools/internal/cli` and `cmd/llz/main.go` is now 29 lines, so the budget's globs
-> follow the tree rather than the package. The *decision* — budget the destination,
+> `tools/internal/cli` and `cmd/llz/main.go` is now 29 lines of file — **6 by the
+> `go-logic` counter this ADR budgets in**, which is the number the
+> `cmd-llz-entrypoint` category holds — so the budget's globs follow the tree rather
+> than the package. The *decision* — budget the destination,
 > ratchet down only — is unchanged, and everything below records it as taken.
 
 **The number is a high-water mark with no slack: 41,803**, the exact measurement
@@ -352,8 +354,11 @@ not distinguish at the time:
 The command tree has since moved to `tools/internal/cli` (with the Deps
 assemblers in `tools/internal/cli/deps`, so the extension registry can reach
 them — which is what took `template-sustain` out of `undrivenGates`).
-`tools/cmd/llz` is now a six-line entry point holding the `main` symbol and the
-`os.Exit` that must not run inside a testable function.
+`tools/cmd/llz` is now a six-**logic**-line entry point holding the `main` symbol
+and the `os.Exit` that must not run inside a testable function. (Six and 29 are the
+same file counted two ways: `go-logic` skips blank lines and `//` comments, per
+`.core-surface-budget.yaml`. Both numbers appear in this ADR and the unit is worth
+naming, because a reader meeting them a page apart has no way to reconcile them.)
 
 **Ground 1 no longer applies, and the budget does not claim it.** `internal/cli`
 is an ordinary package: importable, testable, and now carrying the tests that had
