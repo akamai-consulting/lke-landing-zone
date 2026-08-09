@@ -508,3 +508,17 @@ func sortedReadOnly() []Grant {
 	}
 	return out
 }
+
+// GrantStates reports where a restricted grant may be asked for, or nil if the
+// grant carries no state restriction.
+//
+// Exported so the doc-agreement test can compare the table against the design doc
+// without this package exposing the map itself — the table stays unwriteable from
+// outside, which is what keeps it a ceiling rather than a setting.
+func GrantStates(g Grant) []State {
+	states, ok := grantStates[g]
+	if !ok {
+		return nil
+	}
+	return append([]State(nil), states...)
+}

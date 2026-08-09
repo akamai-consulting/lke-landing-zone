@@ -359,7 +359,7 @@ The ceiling is now the relationship between the two. `Validate()` enforces:
 | a `transition:seeded` binding **must** declare `secret-custody` | that transition is *defined* by placing credential material; claiming the state without the grant hides custody from the reviewer reading the grant line |
 | `own-paths` only on a `transition` to `scaffolded` or `upgraded` | it is exactly `.template-manifest`'s `owned` class — "copier must not render these bytes, something else does" — and a fence only matters when the thing it fences off runs. Copier runs at exactly two moments: `llz new` and `copier update`. Writing a file at some other state is not grounds for the grant; being outside copier's render is (see the catalog's Decision 1) |
 | every binding must declare **at least one** grant | the grant is the handle the action receives — a read-only kubeconfig, a path-fenced OpenBao token — so a binding asking for nothing is handed nothing and cannot run |
-| `secret-custody` (PLACING credential material — reading it is `secret-read`, which is unrestricted) only at `provisioned`, `seeded` or `operating`; `cloud-mutate` only at `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `cluster-write` at the same five | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
+| `secret-custody` (PLACING credential material — reading it is `secret-read`, which is unrestricted) only at `provisioned`, `seeded`, `operating`; `cloud-mutate` at `configured`, `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `cluster-write` at `provisioned`, `seeded`, `converged`, `operating`, `destroyed`; `write-repo` at `scaffolded`, `configured`, `upgraded` | the other half of the ceiling. Requiring custody at `seeded` while forbidding it nowhere left a transition to `scaffolded` free to declare it and validate clean — so "declare what you touch and be judged on it" held only for `gate` and `assertion`, 13 of 57 declarations, while the 44 transitions and invariants went unchecked |
 
 Plus the structural rules: kebab-case unique names, at least one binding, closed vocabularies, no
 duplicate bindings or grants.
@@ -374,10 +374,26 @@ mistake they always were.
 
 **The state table's restricted-grant rows are judgement transcribed, not derived.** They record where
 the catalog places each grant today. A new row is the most likely thing here to be needed, and should
-arrive as an argued change rather than a quiet widening. Two have: `cloud-mutate` at `operating` and
-`secret-custody` at `provisioned`, each carrying its argument inline and each re-pinned in
-`grantstates_internal_test.go`. Both were found by extracting code that already ships — **not** by
-re-reading the catalog — which is the case for taking the expensive capabilities early.
+arrive as an argued change rather than a quiet widening. **Four have, plus one whole row added**, each
+carrying its argument inline and each re-pinned in `grantstates_internal_test.go`:
+
+| change | for |
+| --- | --- |
+| `cloud-mutate` at `operating` | `assert-storage`'s reconciler lanes, which run in-pod and PUT tags onto Linode Volumes |
+| `secret-custody` at `provisioned` | `cluster-access` — the bootstrap kubeconfig the cloud issues before anything is seeded |
+| `cloud-mutate` at `configured` | `chart-publish` — a pinned chart the registry never received is an input that does not resolve until something writes |
+| `write-repo` at `configured` | `environments` and `render`, whose entire job is authoring the instance's own files |
+| `write-repo` as a NEW row (`scaffolded`, `configured`, `upgraded`) | `deliver-docs`, which prunes a directory mid-walk — the first grant added since `secret-custody` was split |
+
+Every one was found by extracting code that already ships — **not** by re-reading the catalog — which
+is the case for taking the expensive capabilities early.
+
+**This table drifted from the code and nothing noticed**, which is why
+`TestDesignDocGrantStatesMatchesTheCode` now checks it the way the binding table has always been
+checked. It had `cloud-mutate` at five states when the code allowed six, described `cluster-write` as
+"the same five" when the two rows had diverged, and omitted `write-repo` entirely — three errors in
+the half of the ceiling that governs the dangerous grants, in a document whose whole purpose is to
+say what the ceiling is.
 
 **THE ACTION ABI IS NOW THE BINDING CONSTRAINT.** Fourteen extractions have not needed one; the
 fourteenth showed why the next ones will. `converge` is 2,476 lines whose call tree runs six or seven
