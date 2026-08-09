@@ -11,6 +11,15 @@ cites it as the source of the state vocabulary (the groups all 214 files were as
 taken once: what decomposition was available, and in what order. **Its numbers are a snapshot of
 2026-08-03 and are not maintained** — `llz extension list` is the current set.
 
+> **Four rows below are marked ✅ Extracted and are not among the 62**, which is worth stating here
+> rather than leaving a reader to reconcile the counts. `argocd-diagnostics`, `doctor-probes`,
+> `phase-timing` and `dev-mutation-testing` were extracted as extensions, and later moved to
+> `tools/internal/verbs` and gave up their declarations: they are cobra commands and dev tooling,
+> which an instance cannot enable or disable, and declaring them made `llz extension list` a list of
+> two different kinds of thing. Their rows are kept as the record of what was extracted and what each
+> proved — between them they closed the fifth-kind question — but they are **not** current
+> extensions. `TestVerbsDoNotDeclareExtensions` is what holds that line now.
+
 **Measured:** 2026-08-03, against `feat/core-surface-budget` (214 non-test files, 41,709 logic
 lines). Line counts are `llz ci core-surface --verbose`, so they are the same numbers the budget
 gate enforces and can be re-derived at any time. Spot-checked on merge: `health.go` 1,097,

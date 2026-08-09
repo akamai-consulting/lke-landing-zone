@@ -122,16 +122,28 @@ ceiling built to fix banning-by-omission.
 lanes sit undeclared in the reconciler package next door — the same failure shape as banning by omission, since the reader cannot tell
 what is missing. `template-sustain` was the second independent case, so `Extension.Incomplete` now exists and both partial declarations say what they are missing.
 
-**A FOURTH thing the model cannot say, found by the twenty-ninth extension:** there is no binding
-kind for a **diagnostic**. `argocd-diagnostics` reads a failing platform and prints it for a human,
-always exits 0 by design ("diagnostics must never mask the failure that triggered them"), and runs
-precisely when `converged` did *not* hold. None of the four kinds fits: `gate` is files-only,
-`transition` acts, `invariant` holds continuously, and `assertion` contributes evidence a state
-**holds** — which is the opposite of what this contributes. It ships declared as an `assertion` with
-an `Incomplete` note saying so, because a fifth kind needs a declaration to be impossible **and** two
-independent cases; this is case one. `doctor-probes` and `phase-timing` are the same shape and are
-where the argument should be made. The question the kind has to answer is already sharp: **does a
-diagnostic attach to a state, or to the failure of one?**
+**A FOURTH thing the model could not say, found by the twenty-ninth extension — and since RESOLVED,
+against the kind.** There is no binding kind for a **diagnostic**. `argocd-diagnostics` reads a
+failing platform and prints it for a human, always exits 0 by design ("diagnostics must never mask
+the failure that triggered them"), and runs precisely when `converged` did *not* hold. None of the
+four kinds fits: `gate` is files-only, `transition` acts, `invariant` holds continuously, and
+`assertion` contributes evidence a state **holds** — which is the opposite of what this contributes.
+It was to be argued from `doctor-probes` and `phase-timing`, on this model's usual bar of a
+declaration that is impossible rather than awkward, plus two independent cases.
+
+**Both refuted it.** `phase-timing` attaches to *no* state at all — its subject is the run — so it and
+`argocd-diagnostics` disagreed about the one thing a binding encodes; `doctor-probes` was the
+tiebreaker and sat at `configured` as a plain assertion, needing no note. A kind wide enough for all
+three would have had to mean *"produces operator-facing output and never fails"*, which is a property
+of the **output** where a binding encodes a **position in the lifecycle**.
+
+All three then moved to `tools/internal/verbs`, because they are cobra commands rather than
+capabilities — nobody enables or disables `llz doctor`. So the answer to *"which of the four kinds
+does a diagnostic hold?"* is that it holds **none, because it is not an extension**, and the refusal
+is structural rather than argued: `internal/verbs` declares nothing
+(`TestVerbsDoNotDeclareExtensions`) and the validator rejects the word
+(`TestDiagnosticIsNotABindingKind`). This paragraph described the question as open for a while after
+it closed, citing a declaration that no longer exists — read both tests before proposing a fifth.
 
 **A third thing the model cannot say, found by the sixth extension:** the difference between
 GRANTED and CONFIRMED. `cloud-mutate` permits a binding to delete cloud resources; nothing expresses
@@ -390,13 +402,17 @@ declare their own grants and the distribution is *observed* rather than assigned
 **That condition has since been met, and the observation disagrees.** 62 extensions now declare their
 own grants. Measured against the live registry, per extension:
 
-| grant | extensions | | grant | extensions |
-|---|---|---|---|---|
-| `read-repo` | **42 / 62** | | `cluster-write` | 16 |
-| `cluster-read` | 23 | | `secret-custody` | 12 |
-| `cloud-mutate` | 17 | | `secret-read` | 9 |
-| `cloud-read` | 16 | | `write-repo` | 5 |
-| | | | `own-paths` | 1 |
+| grant | extensions declaring it |
+|---|---|
+| `read-repo` | **42 / 62** |
+| `cluster-read` | 23 |
+| `cloud-mutate` | 17 |
+| `cloud-read` | 16 |
+| `cluster-write` | 16 |
+| `secret-custody` | 12 |
+| `secret-read` | 9 |
+| `write-repo` | 5 |
+| `own-paths` | 1 |
 
 `read-repo` is held by two thirds of the set, so the headline claim is false against the very test the
 caveat named. Honouring the test rather than the conclusion leaves something narrower and still

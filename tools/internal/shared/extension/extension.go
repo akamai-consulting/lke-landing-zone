@@ -68,17 +68,31 @@ func validState(s State) bool {
 // BindingKind is HOW an extension attaches to a state. The four kinds are the
 // distinct shapes the catalog found; nothing in package main needed a fifth.
 //
-// ONE CANDIDATE FOR A FIFTH IS OPEN, and it is recorded here so the sentence above
-// is not read as settled. A DIAGNOSTIC fits none of the four: `argocd-diagnostics`
-// reads a failing platform, prints it for a human, always exits 0 by design, and
-// runs precisely when `converged` did NOT hold — which is the opposite of an
-// assertion, whose whole content is evidence a state DOES hold. It ships declared
-// as an assertion with an Incomplete note saying so. `doctor-probes` and
-// `phase-timing` are the same shape and are where the argument should be made; the
-// bar is this model's usual one — a declaration that is impossible rather than
-// merely awkward, and two independent cases. The question the kind would have to
-// answer is already sharp: does a diagnostic attach to a state, or to the FAILURE
-// of one? See docs/designs/internal-extension-model.md.
+// THE ONE CANDIDATE FOR A FIFTH WAS A DIAGNOSTIC, AND IT IS REFUSED. This
+// paragraph described the case as OPEN for a while after it closed, and cited
+// `argocd-diagnostics` as "shipping declared as an assertion with an Incomplete
+// note saying so" — a declaration that no longer exists. An open question resting
+// on evidence a reader cannot look up is worse than a closed one, because the
+// reader's only move is to go and re-derive it.
+//
+// The case: a diagnostic reads a failing platform, prints it for a human, always
+// exits 0 by design, and runs precisely when a state did NOT hold — the opposite of
+// an assertion, whose whole content is evidence a state DOES hold. It was to be
+// argued from `argocd-diagnostics`, `doctor-probes` and `phase-timing`.
+//
+// All three refused it, and then left. phase-timing attaches to NO state (its
+// subject is the run); doctor-probes sat at `configured` as a plain assertion,
+// needing no note. A kind wide enough for all three would have had to mean
+// "produces operator-facing output and never fails" — a property of the OUTPUT,
+// where a binding encodes a POSITION. Then all three moved to internal/verbs,
+// because they are cobra commands rather than capabilities: nobody enables or
+// disables `llz doctor`. So the answer to "which of the four kinds does a
+// diagnostic hold?" is that it holds none, because it is not an extension.
+//
+// The refusal is structural now rather than argued: internal/verbs declares
+// nothing (TestVerbsDoNotDeclareExtensions), and the word `diagnostic` is refused
+// by the validator (TestDiagnosticIsNotABindingKind, in internal/verbs/argodiag).
+// Read both before proposing a fifth.
 type BindingKind string
 
 const (
