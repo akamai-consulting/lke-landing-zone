@@ -825,8 +825,34 @@ llz-gates: render-charts
 # job runs at all. Collapsing them once already removed the gates from CI
 # entirely — `make lint-k8s` is the only entry point any CI job calls, so a gate
 # absent from this line is a gate that exists, passes review, and never runs.
-lint-k8s: $(LINT_K8S) shellcheck llz-gates
-lint-tf: $(LINT_TF) template-manifest-check managed-lock-check
+#
+# `actions-lint` IS HERE FOR THAT REASON, and it is the THIRD thing found missing
+# from a CI entry point in as many passes (after `make lint LINT_ALL=1` skipping
+# the gate suite, and lint.yml having no `platform-apl/**` trigger).
+#
+# It lints THIS repo's own .github/workflows/*.yml. Nothing in CI did. The only
+# actionlint that ran was inside template-scripts/ci/instance-test.sh, over the
+# RENDERED INSTANCE's workflows — a different tree entirely — so the 13 workflows
+# that decide what CI does were checked by nothing but the pre-commit hook. That
+# hook lives in .git/hooks: per-clone, never committed, and absent for anyone who
+# has not run `llz hooks`, for a web edit, and for Dependabot's own workflow bumps.
+#
+# It costs nothing here: the CI image already ships actionlint (dockerfiles/
+# Dockerfile), which is the same reason shellcheck sits on this line despite not
+# being a chart tool. The caveat worth stating is that this job is skipped for
+# fork PRs (it pulls a private image), so a fork editing a workflow still gets no
+# actionlint — that is the existing posture for every container job, not something
+# this line changes.
+lint-k8s: $(LINT_K8S) shellcheck actions-lint llz-gates
+#
+# `tf-fmt-check` IS ON THIS LINE FOR THE SAME REASON, and it is the fourth of the
+# same class. LINT_TF is tf-lint/checkov/at-rest-guard/tf-validate-roots — every
+# terraform check EXCEPT formatting — so `tofu fmt -check` ran nowhere in CI and
+# was enforced only by the pre-commit hook, which is per-clone and uncommitted.
+# The Makefile's changed-file lint has always run `tf-fmt-check $(LINT_TF)`
+# together on a .tf change; CI ran half the pair. The ci-tofu image this job uses
+# already ships tofu, so it costs nothing.
+lint-tf: $(LINT_TF) tf-fmt-check template-manifest-check managed-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.

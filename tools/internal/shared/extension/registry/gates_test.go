@@ -691,3 +691,159 @@ func TestEveryLocalLintTreeCanTriggerCI(t *testing.T) {
 			"BOTH the pull_request and push filters.", missing)
 	}
 }
+
+// coveredElsewhere are the LINT_ALL targets no CI job reaches by `make <target>`,
+// each with the mechanism that does cover it. It is a ratchet, in both directions.
+//
+// Every entry is a target whose CI coverage is real but indirect, so a reader
+// cannot confirm it by grepping for `make <name>` and neither can the check below.
+var coveredElsewhere = map[string]string{
+	"chart-version-guard": "its own workflow runs `llz ci chart-version-guard` directly (chart-version-guard.yml)",
+	"instance-test":       "lint.yml's instantiate job runs template-scripts/ci/instance-test.sh",
+	"version-pins-check":  "the `version-pins` gate is driven by `llz ci gates` (registry/gates.go)",
+	"vet":                 "lint.yml's go-tests job runs `gofmt + go vet` as its own step",
+}
+
+// EVERY CHECK THE LOCAL "RUN EVERYTHING" MODE RUNS MUST BE REACHABLE FROM CI.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// THIS CLASS HAS NOW BEEN FOUND FOUR TIMES, ONE INSTANCE PER PASS, and each time
+// by someone reading rather than by anything failing:
+//
+//	`make lint LINT_ALL=1`   skipped the whole gate suite — the mode documented
+//	                         in three places as exhaustive ran none of the 24
+//	lint.yml `paths:`        had no platform-apl/** trigger, so a PR touching
+//	                         only that tree started no run at all
+//	`actions-lint`           lints this repo's own workflows and no CI job called
+//	                         it; the only actionlint in CI was over the RENDERED
+//	                         instance's workflows, a different tree
+//	`tf-fmt-check`           LINT_TF is every terraform check except formatting,
+//	                         so `tofu fmt -check` ran nowhere in CI
+//
+// The shared shape is that a check is REAL, TESTED and WIRED INTO `make lint`,
+// and no CI entry point names it — so it passes locally for whoever runs the full
+// target and is absent from the only run that gates a merge. The pre-commit hook
+// hides it further: it lives in .git/hooks, per-clone and uncommitted, so the
+// author who added the check keeps seeing it pass.
+//
+// So the coupling is asserted. `make lint LINT_ALL=1` is the local mirror of CI by
+// its own documentation; a target in it that no CI job can reach is either a gap
+// or an entry in coveredElsewhere saying which mechanism covers it.
+// ────────────────────────────────────────────────────────────────────────────
+func TestEveryLocalLintTargetIsReachableFromCI(t *testing.T) {
+	root := filepath.FromSlash("../../../../../")
+	mkRaw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	mk := string(mkRaw)
+	flat := regexp.MustCompile(`\\\n\s*`).ReplaceAllString(mk, " ")
+
+	varOf := func(name string) []string {
+		m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` :?= (.*)$`).FindStringSubmatch(flat)
+		if m == nil {
+			return nil
+		}
+		return strings.Fields(m[1])
+	}
+	expand := func(toks []string) []string {
+		var out []string
+		for _, tok := range toks {
+			if strings.HasPrefix(tok, "$(") && strings.HasSuffix(tok, ")") {
+				out = append(out, varOf(tok[2:len(tok)-1])...)
+				continue
+			}
+			out = append(out, tok)
+		}
+		return out
+	}
+
+	// The LINT_ALL branch's target list.
+	i := strings.Index(mk, "\nlint:\n")
+	if i < 0 {
+		t.Fatal("no `lint:` target — see TestEveryLintBranchReachesTheGateSuite")
+	}
+	rec := mk[i:]
+	if j := strings.Index(rec, "\n\n"); j >= 0 {
+		rec = rec[:j]
+	}
+	k := strings.Index(rec, "exit 0")
+	if k < 0 {
+		t.Fatal("the LINT_ALL branch no longer exits early — re-read the recipe")
+	}
+	m := regexp.MustCompile(`--no-print-directory ([^;]+);`).FindStringSubmatch(rec[:k])
+	if m == nil {
+		t.Fatal("could not find the LINT_ALL target list — the recipe was restructured, and " +
+			"this guard would pass over an empty set")
+	}
+	lintAll := expand(strings.Fields(m[1]))
+	if len(lintAll) < 5 {
+		t.Fatalf("parsed only %d LINT_ALL targets (%v) — too few to be the full-lint list, so "+
+			"the parse broke rather than the Makefile shrinking", len(lintAll), lintAll)
+	}
+
+	// Everything CI reaches with `make <target>`, plus those targets' prerequisites.
+	reach := map[string]bool{}
+	wfDir := filepath.Join(root, ".github", "workflows")
+	entries, err := os.ReadDir(wfDir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", wfDir, err)
+	}
+	makeCall := regexp.MustCompile(`make (?:--?\S+ )*([a-z0-9-]+)`)
+	var direct []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(wfDir, e.Name()))
+		if err != nil {
+			t.Fatalf("reading %s: %v", e.Name(), err)
+		}
+		for _, mm := range makeCall.FindAllStringSubmatch(string(b), -1) {
+			direct = append(direct, mm[1])
+		}
+	}
+	if len(direct) == 0 {
+		t.Fatal("no `make <target>` call found in any workflow — the parse broke; every target " +
+			"would read as unreachable")
+	}
+	for _, tgt := range direct {
+		reach[tgt] = true
+		pm := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(tgt) + `: (.*)$`).FindStringSubmatch(flat)
+		if pm == nil {
+			continue
+		}
+		for _, p := range expand(strings.Fields(pm[1])) {
+			reach[p] = true
+		}
+	}
+
+	var gaps []string
+	for _, tgt := range lintAll {
+		if reach[tgt] || coveredElsewhere[tgt] != "" {
+			continue
+		}
+		gaps = append(gaps, tgt)
+	}
+	sort.Strings(gaps)
+	if len(gaps) > 0 {
+		t.Errorf("`make lint LINT_ALL=1` runs %v, and no CI job reaches them by `make <target>` "+
+			"nor does coveredElsewhere name a mechanism. Either add the target to a CI entry "+
+			"point (lint-k8s / lint-tf) or record how it IS covered — a check that runs only "+
+			"in the full local target passes for its author and gates nothing.", gaps)
+	}
+
+	// And the ratchet's other direction: an entry that has since become directly
+	// reachable is a stale exemption, which reads as remaining work already done.
+	var stale []string
+	for tgt := range coveredElsewhere {
+		if reach[tgt] {
+			stale = append(stale, tgt)
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Errorf("coveredElsewhere still exempts %v, which CI now reaches by `make <target>` "+
+			"directly — delete the entries; a stale exemption hides the next real gap.", stale)
+	}
+}
