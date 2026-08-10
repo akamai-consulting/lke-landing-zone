@@ -57,6 +57,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/volumes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/callerperms"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
@@ -142,6 +143,7 @@ var declarations = []func() extension.Extension{
 	cosignguard.Extension,
 	monitoringlabel.Extension,
 	setupgosite.Extension,
+	callerperms.Extension,
 	sourceref.Extension,
 	workflowshells.Extension,
 	firewall.Extension,
@@ -252,7 +254,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// thirty-two of the sixty-three — half of them: `assert-storage` lives in assertions/volumes,
+// thirty-three of the sixty-four — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

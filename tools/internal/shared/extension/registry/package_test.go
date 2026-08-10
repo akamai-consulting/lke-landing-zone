@@ -99,15 +99,15 @@ func TestSomeExtensionNamesDifferFromTheirPackage(t *testing.T) {
 	//
 	// Bumping it is fine and expected; updating the three sites below in the same
 	// commit is the point. They are the whole population — `grep -rn "of the
-	// sixty-three"` finds them.
-	const documented = 32 // registry.go (Package), package_test.go (above), cli/extension.go (listVerbose)
+	// sixty-four"` finds them.
+	const documented = 33 // registry.go (Package), package_test.go (above), cli/extension.go (listVerbose)
 	if differ != documented {
 		t.Errorf("%d extensions differ from their package name; the comments justifying Package() say %d.\n"+
 			"\tUpdate all three together — registry.go's Package doc, this file's header, and "+
 			"cli/extension.go's listVerbose comment — then bump `documented` here.", differ, documented)
 	}
-	if total := len(All()); total != 63 {
-		t.Errorf("the registry holds %d extensions; the same three comments say sixty-three. "+
+	if total := len(All()); total != 64 {
+		t.Errorf("the registry holds %d extensions; the same three comments say sixty-four. "+
 			"Same rule: update the prose with the set.", total)
 	}
 }

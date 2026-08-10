@@ -1330,7 +1330,11 @@ categories:
     #                       AddCommand, the same two `pin-coherence` and
     #                       `setup-go-sole-site` cost. The verb itself is in
     #                       internal/verbs/recondiag.
-    budget: 1939
+    #   1,941 / 113 files  +2 for `reusable-workflow-caller-permissions`: an
+    #                       import and an AddCommand. The guard is in
+    #                       guards/callerperms; the class it closes is a delivered
+    #                       scheduled credential rotation that had never once run.
+    budget: 1941
     exact: true
     include:
       - "tools/internal/cli/*.go"
