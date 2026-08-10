@@ -49,6 +49,7 @@ package docsguard
 // The guard buys back the mechanical half so review attention can go to the rest.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -79,11 +80,16 @@ type Scanned struct {
 	Links       int // relative links resolved
 	SelfLinks   int // absolute links into this repo's own tree, resolved
 	TOCEntries  int // generated table-of-contents entries resolved to a heading
+	// WorkflowFiles counts the Actions YAML fed through the SAME command/flag
+	// validator as the docs. Separate from the Markdown total because a floor on
+	// it is what stops the workflow corpus silently emptying — which is how the
+	// gap it closes went unnoticed in the first place.
+	WorkflowFiles int
 }
 
 func (c Scanned) String() string {
-	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s), %d toc entr(ies)",
-		c.Invocations, c.Flags, c.Dispatches, c.Links+c.SelfLinks, c.TOCEntries)
+	return fmt.Sprintf("%d llz invocation(s) / %d flag(s) across docs + %d workflow file(s), %d workflow dispatch(es), %d link(s), %d toc entr(ies)",
+		c.Invocations, c.Flags, c.WorkflowFiles, c.Dispatches, c.Links+c.SelfLinks, c.TOCEntries)
 }
 
 type Finding struct {
@@ -162,6 +168,185 @@ func markdownFiles(repo capability.Repo) ([]string, error) {
 	})
 	sort.Strings(out)
 	return out, err
+}
+
+// workflowScanRoots are the trees whose workflow YAML actually RUNS `llz`.
+// instance-template's is the one that matters most: those files are DELIVERED, so
+// a wrong flag there fails in every adopter's CI rather than in ours.
+var workflowScanRoots = []string{".github", "instance-template/.github"}
+
+// workflowYAMLFiles collects the Actions YAML whose `run:` steps invoke llz.
+//
+// WHY THIS CORPUS EXISTS AT ALL. Everything above this line validates MARKDOWN.
+// A doc naming a flag that no longer exists misleads a reader; a WORKFLOW naming
+// one stops a deployment — and until now only the first was checked. The gap was
+// not theoretical: `llz-terraform.yml` invoked `llz ci preflight --deployment`
+// at two sites after an extraction dropped that flag, and the branch carrying it
+// went green on all eleven CI checks. It surfaced as an e2e apply-cluster dying
+// on `unknown flag: --deployment` before Terraform ran, which is the most
+// expensive place in this repo to learn it.
+//
+// The check itself is checkDocCommands, unchanged and shared. That is deliberate:
+// a second copy of "resolve the command, then validate its flags" would be a
+// second set of tokenizer bugs, and this guard's own history is a list of them
+// (an alternation stopping at a version string, a scan stopping at the first
+// flag). One validator, two corpora.
+func workflowYAMLFiles(repo capability.Repo) ([]string, error) {
+	var out []string
+	for _, root := range workflowScanRoots {
+		err := repo.WalkDir(filepath.FromSlash(root), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				// An absent root is legitimate — this gate also runs in an instance
+				// checkout, which has no instance-template/ of its own. Anything
+				// else fails, for markdownFiles' reason: silent under-coverage is
+				// the defect.
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("walk %s: %w", p, err)
+			}
+			if d.IsDir() {
+				if docsGuardSkipDir[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if n := d.Name(); strings.HasSuffix(n, ".yml") || strings.HasSuffix(n, ".yaml") {
+				out = append(out, filepath.ToSlash(p))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// workflowRunBody reduces an Actions workflow to just its `run:` scalars, each
+// line kept at its ORIGINAL line number so a finding points at the real file.
+//
+// ONLY `run:` — NOT the whole file, and that is the difference between a gate and
+// a nuisance. A first cut scanned the raw YAML and reported three findings, all
+// from PROSE inside `#` comments: "`llz build --yes` (or …)" and a trailing `)`
+// on an inline-code span tokenise as flags, because a YAML comment has none of
+// the delimiters the Markdown scanner relies on to know where a command stops.
+// None of those would ever execute. `run:` is exactly the set GitHub hands to a
+// shell, so it is the set worth being strict about — and comments naming a flag
+// stay free to describe history, which the docs doctrine explicitly wants.
+//
+// A file that does not parse is a FINDING, never a skip: a workflow the guard
+// cannot read is a workflow it cannot vouch for, and silent under-coverage is the
+// defect this whole guard exists to avoid.
+func workflowRunBody(data []byte) (string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return "", err
+	}
+	// +2 so a run block whose last line is the file's last line cannot index out.
+	lines := make([]string, bytes.Count(data, []byte("\n"))+2)
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				v := n.Content[i+1]
+				if n.Content[i].Value == "run" && v.Kind == yaml.ScalarNode {
+					// WHERE THE CONTENT STARTS DEPENDS ON THE SCALAR STYLE, and
+					// getting it wrong is an off-by-one on nearly every step. For a
+					// PLAIN scalar (`run: llz …`) v.Line is the content line itself;
+					// for a BLOCK scalar (`run: |`) it is the line of the `|` MARKER
+					// and content begins on the next line.
+					//
+					// The first cut assumed the plain case for both. It was verified
+					// against llz-terraform.yml:486 — a plain scalar — so the check
+					// passed the real-tree proof while reporting every `run: |` step
+					// one line high, which is most of them: the deprecated-flag
+					// finding pointed at 601 for a flag on 602. A unit test caught
+					// what the integration proof could not, because the integration
+					// proof happened to use the one style that worked.
+					base := v.Line
+					if v.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
+						base++
+					}
+					for j, l := range strings.Split(v.Value, "\n") {
+						if idx := base + j; idx >= 1 && idx < len(lines) {
+							lines[idx] = shellVisible(l)
+						}
+					}
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&root)
+	// Index 1 becomes the first joined line, so element N is file line N.
+	return strings.Join(lines[1:], "\n"), nil
+}
+
+// shellVisible blanks the parts of a shell line that are not a command being run:
+// everything inside single or double quotes, and the `(`/`)`/backtick that wrap a
+// substitution. Length is preserved so column-sensitive callers stay aligned.
+//
+// THE WORKFLOW CORPUS IS SHELL, AND SHELL IS NOT MARKDOWN. Sharing the docs
+// tokenizer wholesale produced four findings that were all noise of two kinds,
+// and both are about quoting:
+//
+//	echo "… 'llz build <env> --yes' (or 'llz up <env> --yes') fires."
+//	BUCKETS=$(llz ci tf-output bucket_names --json)
+//
+// The first is PROSE describing a command — it never executes, and `--yes` is a
+// perfectly real global flag anyway; the tokenizer only reported it because it ran
+// past the closing `'` and swallowed "(or llz" as a flag name. The second is a
+// REAL invocation whose last flag picked up the closing paren of the command
+// substitution and became `--json)`, a flag no command will ever have.
+//
+// Blanking quotes fixes both classes at once and costs nothing: flag VALUES are
+// quoted (`--region "$REGION"`) and this guard validates flag NAMES, so the
+// information removed is information it never used.
+func shellVisible(line string) string {
+	out := []byte(line)
+	var quote byte
+	for i := 0; i < len(out); i++ {
+		c := out[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+			out[i] = ' '
+		case c == '\'' || c == '"':
+			quote = c
+			out[i] = ' '
+		case c == '(' || c == ')' || c == '`':
+			out[i] = ' '
+		}
+	}
+	return string(out)
+}
+
+// loadWorkflowRuns reads each workflow and reduces it to its run: scalars.
+func loadWorkflowRuns(repo capability.Repo, files []string) ([]docFile, []Finding) {
+	out := make([]docFile, 0, len(files))
+	var bad []Finding
+	for _, rel := range files {
+		data, err := repo.ReadFile(filepath.FromSlash(rel))
+		if err != nil {
+			bad = append(bad, Finding{File: rel, Kind: "unreadable",
+				Detail: fmt.Sprintf("could not be read (%v) — the guard cannot vouch for this workflow, so the run fails rather than reporting a coverage it does not have", err)})
+			continue
+		}
+		body, err := workflowRunBody(data)
+		if err != nil {
+			bad = append(bad, Finding{File: rel, Kind: "unparseable",
+				Detail: fmt.Sprintf("is not valid YAML (%v) — its `run:` steps cannot be checked", err)})
+			continue
+		}
+		out = append(out, docFile{rel: rel, body: body})
+	}
+	return out, bad
 }
 
 // docFile is a Markdown file already read into memory. The four checks below
@@ -1041,6 +1226,18 @@ func Run(root string, opts Options, rootCmd *cobra.Command) (Report, error) {
 	rep := Report{Findings: findings, Read: len(docs), Total: len(files)}
 	if !opts.SkipCommands {
 		rep.Findings = append(rep.Findings, checkDocCommands(docs, rootCmd, &rep.Scanned)...)
+
+		// The same validator over the workflow corpus. These are the invocations
+		// that RUN, and nothing checked them until an `unknown flag` killed an e2e
+		// apply-cluster on a branch whose eleven CI checks were all green.
+		wfFiles, werr := workflowYAMLFiles(repo)
+		if werr != nil {
+			return rep, werr
+		}
+		wfDocs, wfBad := loadWorkflowRuns(repo, wfFiles)
+		rep.Scanned.WorkflowFiles = len(wfDocs)
+		rep.Findings = append(rep.Findings, wfBad...)
+		rep.Findings = append(rep.Findings, checkDocCommands(wfDocs, rootCmd, &rep.Scanned)...)
 	}
 	if !opts.SkipWorkflows {
 		f, err := checkDocWorkflowInputs(repo, docs, &rep.Scanned)
