@@ -76,7 +76,19 @@ categories:
   # ─────────────────────────────────────────────────────────────────────────────
   cli-wiring-layer:
     kind: go-logic
-    # 38,364 logic lines across 202 non-test files, 113 of them ci_*.go.
+    # NO SUMMARY LINE HERE, DELIBERATELY. This slot held one — "38,364 logic lines
+    # across 202 non-test files, 113 of them ci_*.go" — and it was the first number
+    # a reader met in the category. It was stale by a factor of twenty: the ledger
+    # below had run on to 1,922 across 113 files while the summary stayed frozen at
+    # the guard-charts entry. It read plausibly because 113 survived as a different
+    # quantity (it is now the TOTAL file count, not the ci_*.go subset).
+    #
+    # checkLedger did not catch it and should not have to. Its rule is that a
+    # category keeping a ledger must have the current budget as its LAST entry, and
+    # a ledger entry is `<count> / <n> files  <why>` — the summary was a different
+    # sentence shape, so it was a THIRD statement of the same measurement with
+    # nothing comparing it. The ledger's last line already says what this said, and
+    # is checked; a summary above it can only ever be a copy that drifts.
     #
     # THIS LINE HAS NOW MOVED IN BOTH DIRECTIONS, which is the only evidence that
     # matters about a ratchet:
