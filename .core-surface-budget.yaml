@@ -1314,7 +1314,19 @@ categories:
     #                       which is the shape this budget is asking for. A new gate
     #                       costing exactly 2 wiring lines is the floor, not growth
     #                       to be paid down.
-    budget: 1924
+    #   1,937 / 113 files  +13 for extensions_init.go — four `<pkg>.Init()` calls
+    #                       and the import block that reaches them. This is the
+    #                       one growth in the ledger that is unambiguously THIS
+    #                       LAYER'S JOB: wiring an extension's dependencies to the
+    #                       implementations package main owns is the definition of
+    #                       the cli-wiring layer, and the alternative to spending
+    #                       the lines is what the tree already had — four exported
+    #                       Init() functions that nothing called, one of which
+    #                       (statepassphrase) left a credential rotation reporting
+    #                       success while doing nothing. Paying 13 lines to delete
+    #                       that class is the trade this budget exists to let you
+    #                       make deliberately rather than by accident.
+    budget: 1937
     exact: true
     include:
       - "tools/internal/cli/*.go"
