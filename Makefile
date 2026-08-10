@@ -494,18 +494,43 @@ k8s-validate: render-charts
 # callers hand-compensated by repeating the flag in $(1). A new caller passing any
 # other flag would have had it silently ignored on the PATH branch. One cwd, one
 # argument list, no convention to remember.
+#
+# A `gates …` INVOCATION ALWAYS BUILDS FROM SOURCE, whatever the tree's state.
+# The gate driver's whole subject is the extension registry IN THIS TREE — which
+# gates exist, what each one is named, and what its command does. An installed
+# binary answers from the registry IT was built with, so `gates --only <name>`
+# routed to it is not a faster way to ask the same question, it is a different
+# question: a gate this tree adds is "unknown" to it, and a gate this tree
+# CHANGED runs as the older implementation and reports that verdict.
+#
+# It was not hypothetical, and the symptom was worse than a wrong answer. Nine
+# gate targets (untestable-loc-check, core-surface-check, mesh-egress-guard,
+# wave-health-guard, mtls-wiring-guard, plaintext-guard, chart-pin-guard,
+# argocd-rendered-apps-check, externalsecret-paths-check) took the PATH branch on
+# a clean tree, and `--only` is newer than any released llz — so `make LINT_ALL=1
+# lint`, the authoritative gate, died on `unknown flag: --only` from a v0.0.39 on
+# PATH. Nothing saw it during development because the tree is DIRTY while you
+# work: the macro built from source, everything passed, and the failure appeared
+# at exactly the moment the work was committed. Four targets had the right
+# behaviour via an explicit `export LLZ_FORCE_SOURCE := 1`, which is the shape
+# that rots — the tenth target added would have forgotten it too. Deciding it
+# from the invocation instead means it cannot be forgotten.
 define LLZ_CI
 	@set -e; \
 	dirty=""; \
 	if git -C . rev-parse --git-dir >/dev/null 2>&1; then \
 		dirty="$$(git -C . status --porcelain -- $(GO_DIR) 2>/dev/null | head -1)"; \
 	fi; \
-	if [ -z "$$LLZ_FORCE_SOURCE" ] && [ -z "$$dirty" ] && command -v llz >/dev/null 2>&1; then \
+	driven=""; \
+	case '$(1)' in gates*) driven=1;; esac; \
+	if [ -z "$$LLZ_FORCE_SOURCE" ] && [ -z "$$driven" ] && [ -z "$$dirty" ] && command -v llz >/dev/null 2>&1; then \
 		echo "[llz: $$(command -v llz) $$(llz version 2>/dev/null | head -1) — NOT your working tree; LLZ_FORCE_SOURCE=1 to build from source]"; \
 		cd $(GO_DIR) && llz ci $(1) $(2); \
 	else \
 		if [ -n "$$dirty" ]; then \
 			echo "[llz: built from source — $(GO_DIR) has uncommitted changes, so the installed binary would answer for code you did not write]"; \
+		elif [ -n "$$driven" ]; then \
+			echo "[llz: built from source — a gate-driver run answers from THIS tree's registry, not the installed binary's]"; \
 		else \
 			echo "[llz: built from source]"; \
 		fi; \
