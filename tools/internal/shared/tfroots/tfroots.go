@@ -24,8 +24,16 @@ import (
 //go:embed roots
 var embedded embed.FS
 
-// The two copier token types the roots carry (established: 3 upstream_org, 3
-// llz_version across the three roots). Substituted verbatim.
+// The two copier token types the roots carry: 3 upstream_org and 3 llz_version,
+// one pair per `git::` module source, in 3 of the 4 roots — vpc composes no
+// module and so carries neither. Substituted verbatim.
+//
+// THE COUNT IS PINNED by TestModuleSourcesCarryBothTokens rather than described.
+// It previously read "across the three roots" and there were four: databases/
+// landed and the sentence stayed, so the one number a reader could have used to
+// notice a root was missing its pin agreed with a tree that no longer existed.
+// That test also checks the property the count is a proxy for, which is the part
+// that actually costs something — see its comment.
 const (
 	tokUpstreamOrg = "<@ upstream_org @>"
 	tokLLZVersion  = "<@ llz_version @>"
