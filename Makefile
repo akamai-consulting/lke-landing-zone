@@ -264,7 +264,7 @@ help:
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  core-surface-check    fail when Go logic in package main exceeds .core-surface-budget.yaml (ADR 0014)"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
-	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
+	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the local mirror of the"
 	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
 	@echo "                  py + actions, \$$(LINT_TF), and \$$(LINT_K8S). The kind server-side"
 	@echo "                  dry-run is CI-only (needs Docker/kind)."
@@ -1028,7 +1028,7 @@ symbol-ref-guard:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet staticcheck shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \

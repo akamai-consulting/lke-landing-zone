@@ -27,7 +27,6 @@ package capability_test
 // ────────────────────────────────────────────────────────────────────────────
 
 import (
-	"fmt"
 	"sort"
 	"testing"
 
@@ -111,9 +110,8 @@ func TestReadRepoIsStillTheMostDeclaredGrant(t *testing.T) {
 		if g != extension.ReadRepo && byExt[g] >= byExt[extension.ReadRepo] {
 			t.Errorf("%s is now held by %d extensions against read-repo's %d — repo.go opens "+
 				"by calling read-repo the most-declared grant, and that is the reason it gives "+
-				"for the fence mattering. %s",
-				g, byExt[g], byExt[extension.ReadRepo],
-				fmt.Sprintf("Re-read that header before changing this test."))
+				"for the fence mattering. Re-read that header before changing this test.",
+				g, byExt[g], byExt[extension.ReadRepo])
 		}
 	}
 }

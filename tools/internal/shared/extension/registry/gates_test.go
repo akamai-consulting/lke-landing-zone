@@ -1136,3 +1136,145 @@ func TestEveryAdvertisedMakeTargetDoesSomething(t *testing.T) {
 	}
 	t.Logf("help advertises %d target(s); .PHONY names %d; %d runnable", len(named), len(phony), len(runnable))
 }
+
+// notInTheLocalMirror is every target a CI job runs that `make lint LINT_ALL=1`
+// deliberately does not, and why. Ratcheted in both directions.
+var notInTheLocalMirror = map[string]string{
+	"coverage":  "runs the whole test suite with a coverage profile — `make coverage` is its own command, and folding it into a lint target would make the lint target minutes long",
+	"test-race": "the -race suite, same reason; it is a TEST gate rather than a linter",
+	"lint-k8s":  "the CI job entry point, whose contents LINT_ALL already runs individually",
+	"lint-tf":   "the CI job entry point, whose contents LINT_ALL already runs individually",
+	// COVERED BY ANOTHER ROUTE rather than skipped: the CHECK runs in LINT_ALL via
+	// `llz-gates` (guard-manifests drives ArgoCDRenderedAppsCmd), so the standalone
+	// target would be a second execution of the same guard. lint.yml's dry-run job
+	// calls it directly because that job already has the rendered tree in hand.
+	"argocd-rendered-apps-check": "its check runs in LINT_ALL through llz-gates as guard-manifests; the standalone target is CI's dry-run job and local iteration",
+}
+
+// The first cut of this map also listed `llz` and `build` as exemptions. lint.yml
+// runs neither, and the ratchet's reverse direction said so on its first run —
+// which is the argument for having that direction at all: an exemption nobody
+// needs reads as a decision that was made.
+
+// THE OTHER DIRECTION: A CHECK CI RUNS THAT NOTHING LOCAL DOES.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// `staticcheck` WAS RED, AND HAD BEEN FOR THE WHOLE OF AN AUDIT CAMPAIGN.
+//
+// TestEveryLocalLintTargetIsReachableFromCI asserts that everything the local
+// full-lint runs is reachable from CI. The reverse was unguarded, and that is the
+// direction that rots quietly: a check CI runs and no local target does is one an
+// author cannot see fail until they push.
+//
+// staticcheck ran ONLY in lint.yml's go-tests job. It was not in LINT_ALL, and
+// the pre-commit hook runs gofmt/actionlint/gitleaks rather than `make lint`. So
+// two ST1005 findings sat in internal/shared/capability for the whole campaign —
+// the working tree was red against a CI gate through twenty-two commits, and
+// every local check said green. It is now in the LINT_ALL list.
+//
+// The exemptions are the genuinely-not-lint targets. `coverage` and `test-race`
+// run the suite and belong to `make coverage` / `make test-race`; folding them in
+// would make the lint target minutes long and is a real reason rather than an
+// excuse. They are listed so the distinction is a decision on the record.
+// ────────────────────────────────────────────────────────────────────────────
+func TestEveryCITargetIsInTheLocalMirror(t *testing.T) {
+	root := filepath.FromSlash("../../../../../")
+	mkRaw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	mk := string(mkRaw)
+	flat := regexp.MustCompile(`\\\n\s*`).ReplaceAllString(mk, " ")
+
+	varOf := func(n string) []string {
+		m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + ` :?= (.*)$`).FindStringSubmatch(flat)
+		if m == nil {
+			return nil
+		}
+		return strings.Fields(m[1])
+	}
+	expand := func(toks []string) []string {
+		var out []string
+		for _, tok := range toks {
+			if strings.HasPrefix(tok, "$(") && strings.HasSuffix(tok, ")") {
+				out = append(out, varOf(tok[2:len(tok)-1])...)
+				continue
+			}
+			out = append(out, tok)
+		}
+		return out
+	}
+
+	i := strings.Index(mk, "\nlint:\n")
+	if i < 0 {
+		t.Fatal("no `lint:` target — see TestEveryLintBranchReachesTheGateSuite")
+	}
+	rec := mk[i:]
+	if j := strings.Index(rec, "\n\n"); j >= 0 {
+		rec = rec[:j]
+	}
+	k := strings.Index(rec, "exit 0")
+	if k < 0 {
+		t.Fatal("the LINT_ALL branch no longer exits early")
+	}
+	local := map[string]bool{}
+	for _, m := range regexp.MustCompile(`--no-print-directory ([^;]+);`).FindAllStringSubmatch(rec, -1) {
+		for _, tgt := range expand(strings.Fields(m[1])) {
+			local[tgt] = true
+			// A CI entry point is satisfied by its contents running locally.
+			for _, p := range expand(strings.Fields(func() string {
+				pm := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(tgt) + `: (.*)$`).FindStringSubmatch(flat)
+				if pm == nil {
+					return ""
+				}
+				return pm[1]
+			}())) {
+				local[p] = true
+			}
+		}
+	}
+	if len(local) < 10 {
+		t.Fatalf("parsed only %d targets from the lint recipe (%v) — the parse broke", len(local), local)
+	}
+
+	// Everything a lint.yml job invokes as `make <target>`.
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "lint.yml"))
+	if err != nil {
+		t.Fatalf("reading lint.yml: %v", err)
+	}
+	ci := map[string]bool{}
+	for _, m := range regexp.MustCompile(`run: make ([a-z0-9-]+)`).FindAllStringSubmatch(string(wf), -1) {
+		ci[m[1]] = true
+	}
+	if len(ci) == 0 {
+		t.Fatal("no `run: make <target>` in lint.yml — the parse broke and nothing would be checked")
+	}
+
+	var missing, stale []string
+	for tgt := range ci {
+		if !local[tgt] && notInTheLocalMirror[tgt] == "" {
+			missing = append(missing, tgt)
+		}
+	}
+	for tgt, why := range notInTheLocalMirror {
+		if !ci[tgt] {
+			stale = append(stale, tgt)
+		}
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("notInTheLocalMirror[%q] has no reason", tgt)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+
+	if len(missing) > 0 {
+		t.Errorf("lint.yml runs %v and `make lint LINT_ALL=1` does not — an author cannot see "+
+			"these fail before pushing, which is how staticcheck stayed red through an entire "+
+			"campaign while every local check said green. Add it to the LINT_ALL list, or record "+
+			"it in notInTheLocalMirror with the reason it is not a linter.", missing)
+	}
+	if len(stale) > 0 {
+		t.Errorf("notInTheLocalMirror names %v, which lint.yml no longer runs — delete the "+
+			"entries; a stale exemption hides the next gap.", stale)
+	}
+}

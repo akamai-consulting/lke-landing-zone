@@ -179,7 +179,7 @@ func safeArg(what, v string) error {
 		return fmt.Errorf("capability: %s %q begins with '-', so kubectl would read it as a FLAG "+
 			"rather than as a name. A named operation exists so a reviewer can see what it does "+
 			"without parsing an argv; a flag in a parameter takes that back (`--all` is the case "+
-			"that made this a rule). Kubernetes names cannot begin with '-'.", what, v)
+			"that made this a rule); Kubernetes names cannot begin with '-'", what, v)
 	}
 	return nil
 }
@@ -247,7 +247,7 @@ func checkDeleteTargets(kind string, target []string) error {
 		return fmt.Errorf("capability: Delete refuses the flag %q. It permits a name, a selector "+
 			"(-l/--selector) and --wait=/--timeout=; anything else in this position is a flag "+
 			"nobody reviewing the call site would see. `delete %s --all` removes every one of "+
-			"them, which is the outcome the empty-target guard above already refuses.", t, kind)
+			"them, which is the outcome the empty-target guard above already refuses", t, kind)
 	}
 	return nil
 }
