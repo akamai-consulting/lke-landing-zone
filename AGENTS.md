@@ -66,7 +66,7 @@ dockerfiles/         Container images (ci-tofu, ci-kubernetes, devcontainer) →
 template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
 docs/                adopter-guide.md, agents.md
-.github/workflows/   build-images.yml, publish-charts.yml, lint.yml, chart-version-guard.yml, release-e2e*.yml, llz-release.yml, secret-scan.yml
+.github/workflows/   Template CI: build/publish, lint + the gate suite, budget ratchets, release e2e, security scans. Conventions in its own AGENTS.md
 ```
 
 Per-directory details live in each directory's `AGENTS.md`.
