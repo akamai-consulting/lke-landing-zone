@@ -34,6 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
@@ -450,6 +451,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(templatecommit.AssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
+	c.AddCommand(setupgosite.Cmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
 	// Scaffold update-class manifest gate (former check-template-manifest.sh).

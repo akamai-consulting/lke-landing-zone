@@ -46,12 +46,23 @@ Prefer these over reimplementing their logic inline:
 
 | Action | Purpose |
 |--------|---------|
-| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The repo's only composite action — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` should appear nowhere else. |
+| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The only composite action in this repo's own CI — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` must appear nowhere else. (`instance-template/.github/actions/` ships seven more, but those are scaffold content an *instance* runs, not CI for this repo.) |
 | `ghcr.io/<owner>/ci-tofu` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
 
-The one deliberate exception to `setup-llz` is `llz-release.yml`, which hand-rolls
-its `go build` to stamp the real release version via `-ldflags` — something the
-composite intentionally does not do.
+**This is enforced** — `make setup-go-sole-site` (in the `llz-gates` suite, so
+every `make lint` runs it) fails on any `uses: actions/setup-go` outside the
+composite. It was written because the rule above had already been broken:
+`release-e2e-lane.yml` carried a second pin at **v7.0.0** while the composite sat
+at **v6.5.0**, in a job running the same functional script `llz-release.yml` runs
+*through* the composite. Nothing caught it, because actionlint judges each
+`uses:` in isolation and a correctly SHA-pinned action looks identical whether or
+not it is the right one.
+
+The one deliberate exception is `llz-release.yml`'s **`go build`**, which it
+hand-rolls to stamp the real release version via `-ldflags` — something the
+composite intentionally does not do. Note the exception is the *build* only: that
+job still takes its **toolchain** from `setup-llz`, which is why the sole-site
+rule above holds with no exemptions at all.
 
 ## Tool installation pattern
 

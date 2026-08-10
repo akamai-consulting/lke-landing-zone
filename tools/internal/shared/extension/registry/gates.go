@@ -112,6 +112,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
@@ -127,8 +128,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-one of the twenty-four gates read the repository root
-// through `--root`, so twenty-one rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-two of the twenty-five gates read the repository root
+// through `--root`, so twenty-two rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -295,6 +296,13 @@ var gates = []Gate{
 	{Extension: "guard-monitoring-labels", New: monitoringlabel.Cmd},
 	{Extension: "guard-source-refs", New: sourceref.Cmd},
 	{Extension: "guard-source-refs", NewWithTree: sourceref.SymbolsCmdFor},
+
+	// Reads .github/ AND instance-template/.github/, so it takes the repo root on
+	// --root like the majority — not a Subtree like guard-workflow-shells below,
+	// whose corpus is one directory. The two scan roots are the gate's own
+	// business; handing it a subtree would silently halve what it checks.
+	{Extension: "setup-go-sole-site", New: setupgosite.Cmd},
+
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},
 	{Extension: "mtls-wiring", New: mtlsguard.Cmd},

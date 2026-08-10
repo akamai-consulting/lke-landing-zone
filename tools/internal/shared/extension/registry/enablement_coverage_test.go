@@ -90,6 +90,8 @@ var componentless = map[string]bool{
 	"guard-manifests":             true,
 	"guard-monitoring-labels":     true,
 	"guard-source-refs":           true,
+	// Its subject is this repo's own CI wiring, which no instance can turn off.
+	"setup-go-sole-site":          true,
 	"guard-workflow-shells":       true,
 	"health-sla":                  true,
 	"identity-plane":              true,

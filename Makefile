@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -172,6 +172,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/coverageguard=84 \
 	internal/extensions/guards/cosignguard=75 \
 	internal/extensions/guards/monitoringlabel=66 \
+	internal/extensions/guards/setupgosite=79 \
 	internal/extensions/guards/sourceref=87 \
 	internal/extensions/guards/workflowshells=71 \
 	internal/shared/answers=87 \
@@ -239,6 +240,7 @@ help:
 	@echo "  docs-guard      doc drift: llz FLAGS, gh workflow-run inputs, and links resolve"
 	@echo "  source-ref-guard  stale tools/ path literals in prose, comments and error strings"
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
+	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -969,6 +971,28 @@ docs-guard:
 source-ref-guard: export LLZ_FORCE_SOURCE := 1
 source-ref-guard:
 	$(call LLZ_CI,gates --only source-ref-guard,)
+
+# setup-go-sole-site: `llz ci setup-go-sole-site` — actions/setup-go may be named
+# by .github/actions/setup-llz and by nothing else.
+#
+# THE COMPOSITE WAS EXTRACTED TO END A 13-SITE SWEEP, and a 14th site had already
+# grown back. release-e2e-lane.yml's `llz functional` job hand-rolled setup-go at
+# v7.0.0 while the composite sat at v6.5.0 — a full major apart — running the SAME
+# functional script that llz-release.yml runs THROUGH the composite. So the two
+# release gates built llz on two different toolchain actions, and the build flags
+# the composite standardises (-buildvcs=false) were absent from one of them.
+#
+# NOTHING COULD SEE IT. actionlint validates each `uses:` in isolation and a
+# correctly SHA-pinned action is textually identical whether or not it is the
+# right one; the rule was written in .github/workflows/AGENTS.md ("`actions/setup-go`
+# should appear nowhere else") and enforced by nobody. The defect is only visible
+# as a RELATION between sites, which is the same shape version-pins exists for.
+#
+# FROM SOURCE for the usual reason: on the PR that introduces the verb, the
+# merge-base image binary does not have it.
+setup-go-sole-site: export LLZ_FORCE_SOURCE := 1
+setup-go-sole-site:
+	$(call LLZ_CI,gates --only setup-go-sole-site,)
 
 # symbol-ref-guard: the OTHER half of a reference — `llz ci symbol-ref-guard`.
 #

@@ -1306,7 +1306,15 @@ categories:
     #                       comment named — answered `unknown command`, while all
     #                       fifteen sibling driven gates sat in both. Found by the
     #                       ci-verb half of source-ref-guard on its first run.
-    budget: 1922
+    #   1,924 / 113 files  +2 for `setup-go-sole-site`, the same two lines and for
+    #                       the same reason as pin-coherence above: an import and an
+    #                       AddCommand, so the verb its Makefile target and its doc
+    #                       comment name actually resolves. The gate itself is 180
+    #                       lines in guards/setupgosite and none of them are here —
+    #                       which is the shape this budget is asking for. A new gate
+    #                       costing exactly 2 wiring lines is the floor, not growth
+    #                       to be paid down.
+    budget: 1924
     exact: true
     include:
       - "tools/internal/cli/*.go"
