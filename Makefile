@@ -92,6 +92,26 @@ RETRY := template-scripts/ci/with-retry.sh
 # already made absolute). Those branches are unreachable on a real filesystem, so
 # recording the transfer is more honest than a test that cannot fail.
 # deliverdocs rose 92 -> 93 in the same commit — the other half of the move.
+# THREE FLOORS HERE WERE BANKED IN THE WRONG ENVIRONMENT, and the rule that
+# floors only ratchet UP is why that has to be said out loud rather than quietly
+# corrected. atrest, verbs/phasetiming and lifecycle/render were introduced on
+# this branch at 90 / 63 / 58 — the values `make coverage-bank` measured on a
+# developer's macOS/arm64 box. CI is linux/amd64, measures 89.9 / 62.5 / 57.1 for
+# the same commits, and had therefore NEVER passed: the "Go tests + coverage" job
+# was red on every run of this branch, on exactly these three, for the same
+# reasons at two different commits.
+#
+# Verified it is the environment and not the code: both Go 1.25.0 (CI's pin) and
+# 1.26.4 give the local numbers, no test in the three packages skips, and none of
+# them branches on GOOS — so the delta is the platform, not a lost test.
+#
+# Lowering a floor to dodge a real regression is banned and this is not that: no
+# coverage was lost, the number was never achievable where the gate runs. A floor
+# is a promise about the GATING environment, so that is the environment allowed to
+# set it. Corrected to what CI measures.
+#
+# THE TRAP: `make coverage-bank` on macOS will try to raise these three straight
+# back. If you bank, check these three against a CI run before committing.
 COVERAGE_MINS := \
 	internal/cli=71 \
 	internal/cli/deps=41 \
@@ -103,7 +123,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertplatform=53 \
 	internal/extensions/assertions/assertreconciler=82 \
 	internal/extensions/assertions/assertregistry=62 \
-	internal/extensions/lifecycle/atrest=90 \
+	internal/extensions/lifecycle/atrest=89 \
 	internal/shared/clusterspec=88 \
 	internal/extensions/lifecycle/clusteraccess=68 \
 	internal/shared/cigate=33 \
@@ -154,14 +174,14 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/manifestguard=73 \
 	internal/extensions/lifecycle/assertobjstore=23 \
 	internal/extensions/lifecycle/gameday=26 \
-	internal/verbs/phasetiming=63 \
+	internal/verbs/phasetiming=62 \
 	internal/verbs/doctor=86 \
 	internal/extensions/lifecycle/kyverno=84 \
 	internal/verbs/mutate=81 \
 	internal/extensions/lifecycle/releasepublish=60 \
 	internal/extensions/lifecycle/statepassphrase=74 \
 	internal/shared/ghsecret=60 \
-	internal/extensions/lifecycle/render=58 \
+	internal/extensions/lifecycle/render=57 \
 	internal/verbs/upgrade=24 \
 	internal/verbs/newinstance=79 \
 	internal/extensions/guards/pincoherence=94 \
