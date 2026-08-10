@@ -12,6 +12,12 @@ SHELL := /bin/bash
 
 KUBECTL_VERSION  := 1.31.0
 
+# Written with a single `=` on purpose. version-pins matches `NAME = <version>`
+# and does NOT match Make's `NAME := <version>`, so the `:=` form above is a
+# restatement of the Dockerfile ARG that nothing compares. Spelled this way, the
+# guard actually holds this copy to dockerfiles/Dockerfile.
+ACTIONLINT_VERSION = 1.7.7
+
 # The Go module that holds the host-side tooling: tools/ (the `llz` CLI). The
 # firewall-cidrs / firewall-controller commands moved to the private
 # lke-landing-zone-internal repo.
@@ -742,8 +748,22 @@ helm-lint-charts: helm-repos
 		helm template "$$(basename "$$dir")" "$$dir" >/dev/null; \
 	done
 
+# actions-lint: actionlint over THIS repo's workflows.
+#
+# THE FALLBACK IS NOT COSMETIC — without it this target is `command not found`
+# wherever actionlint is not preinstalled, and that is most places. actionlint is
+# copied into the devcontainer stage of dockerfiles/Dockerfile ONLY; neither
+# ci-tofu nor ci-kubernetes ships it. A comment on the lint-k8s line asserted the
+# opposite ("the CI image already ships actionlint") and put this target on that
+# line, which made the Kubernetes lint job exit 127 the first time CI ran it.
+# Same shape as staticcheck below, and for the same reason.
 actions-lint:
-	actionlint .github/workflows/*.yml
+	@if command -v actionlint >/dev/null 2>&1; then \
+	  actionlint .github/workflows/*.yml; \
+	else \
+	  echo "actionlint not on PATH — falling back to 'go run' (make install-tools installs it)"; \
+	  cd $(GO_DIR) && go run github.com/rhysd/actionlint/cmd/actionlint@v$(ACTIONLINT_VERSION) ../.github/workflows/*.yml; \
+	fi
 
 # (sync-wave-lint lived here. It grepped whole FILES for `^kind: (Application|
 # AppProject)` and then for the sync-wave string anywhere in that same file, so
@@ -864,13 +884,22 @@ llz-gates: render-charts
 # hook lives in .git/hooks: per-clone, never committed, and absent for anyone who
 # has not run `llz hooks`, for a web edit, and for Dependabot's own workflow bumps.
 #
-# It costs nothing here: the CI image already ships actionlint (dockerfiles/
-# Dockerfile), which is the same reason shellcheck sits on this line despite not
-# being a chart tool. The caveat worth stating is that this job is skipped for
-# fork PRs (it pulls a private image), so a fork editing a workflow still gets no
-# actionlint — that is the existing posture for every container job, not something
-# this line changes.
-lint-k8s: $(LINT_K8S) shellcheck actions-lint llz-gates
+# IT DID NOT COST NOTHING, AND THIS LINE USED TO CARRY `actions-lint`. The
+# comment justifying that read "the CI image already ships actionlint
+# (dockerfiles/Dockerfile)". It does not: actionlint is COPYed into the
+# `devcontainer` stage only — the adopter-workstation image — while ci-tofu and
+# ci-kubernetes ship neither it nor a Go toolchain. The Dockerfile does contain
+# the string, which is what made the claim look checked.
+#
+# The result was the exact failure the change was meant to prevent, one layer
+# over: the Kubernetes lint job died on `actionlint: command not found` (exit
+# 127) the first time CI ran the commit. It passed locally because a developer
+# has actionlint on PATH, which is also why it survived review.
+#
+# actionlint now runs in lint.yml's `go-tests` job, which is a HOST runner with
+# Go — so the `go run` fallback on the target resolves. shellcheck stays here
+# because ci-kubernetes genuinely does ship it (line 319 of the Dockerfile).
+lint-k8s: $(LINT_K8S) shellcheck llz-gates
 #
 # `tf-fmt-check` IS ON THIS LINE FOR THE SAME REASON, and it is the fourth of the
 # same class. LINT_TF is tf-lint/checkov/at-rest-guard/tf-validate-roots — every

@@ -570,6 +570,19 @@ jobs:
       - name: staticcheck
         run: make staticcheck
 
+      # actionlint over THIS repo's workflows. It lives here, on a HOST runner,
+      # rather than on the Kubernetes lint job: that job runs in ci-kubernetes,
+      # which ships neither actionlint nor a Go toolchain, so the target exited
+      # 127 there. This job has Go (setup-llz above), so the target's `go run`
+      # fallback resolves at the pinned ACTIONLINT_VERSION.
+      #
+      # Before this, the only actionlint in CI ran inside instance-test over the
+      # RENDERED INSTANCE's workflows — a different tree — so the workflows that
+      # decide what CI does were checked by nothing but a per-clone pre-commit
+      # hook, absent for web edits and for Dependabot's own workflow bumps.
+      - name: actionlint (this repo's workflows)
+        run: make actions-lint
+
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
 
