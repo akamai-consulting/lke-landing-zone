@@ -1340,7 +1340,10 @@ categories:
     #                       assigns it at startup", and nothing had since the CLI
     #                       left package main. Three lines against a converge stall
     #                       that took four e2e rounds to find.
-    budget: 1944
+    #   1,946 / 113 files  +2 wiring assert-reconciler's WithPrometheus (an import
+    #                       and a field). The omitted field was a nil func call —
+    #                       a SIGSEGV that killed the scrape-reconciler lane.
+    budget: 1946
     exact: true
     include:
       - "tools/internal/cli/*.go"

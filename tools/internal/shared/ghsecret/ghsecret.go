@@ -40,7 +40,16 @@ func Set(name, ghEnv, value string) error {
 	cmd := exec.Command("gh", args...)
 	cmd.Stdin = strings.NewReader(value)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh secret set %s: %s", label, strings.TrimSpace(string(out)))
+		// BOTH err AND out. This used to format only `out`, so a failure that
+		// produced no output rendered as "gh secret set X --env Y: " — a colon and
+		// nothing. That is precisely what the e2e broad-pat lane reported, and the
+		// one fact that would have identified it in seconds (`exec: "gh":
+		// executable file not found in $PATH`, because the in-cluster rotator runs
+		// the distroless llz image) was the part being discarded.
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return fmt.Errorf("gh secret set %s: %w: %s", label, err, s)
+		}
+		return fmt.Errorf("gh secret set %s: %w", label, err)
 	}
 	return nil
 }
@@ -49,7 +58,11 @@ func Set(name, ghEnv, value string) error {
 func Delete(name, ghEnv string) error {
 	cmd := exec.Command("gh", "secret", "delete", name, "--env", ghEnv)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh secret delete %s --env %s: %s", name, ghEnv, strings.TrimSpace(string(out)))
+		// Same fix, same reason as Set above: an empty `out` must not erase the error.
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return fmt.Errorf("gh secret delete %s --env %s: %w: %s", name, ghEnv, err, s)
+		}
+		return fmt.Errorf("gh secret delete %s --env %s: %w", name, ghEnv, err)
 	}
 	return nil
 }

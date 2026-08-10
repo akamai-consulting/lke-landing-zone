@@ -34,10 +34,18 @@ import (
 //
 // THE ONE SEAM. Package main owns the forge credentials and the writer; this
 // package owns WHICH secrets a rotation must reach, which is the part the three
-// rotators share. The default is inert rather than real: unlike a summary sink or
-// a spec reader, a default that actually wrote secrets would make an
-// un-installed caller mutate the operator's repo.
-var SetSecret = func(name, env, value string) error { return nil }
+// rotators share. The default must not WRITE — unlike a summary sink or a spec
+// reader, a default that actually wrote secrets would make an un-installed caller
+// mutate the operator's repo.
+//
+// BUT INERT IS NOT THE SAME AS SUCCESSFUL, and this returned nil. An un-installed
+// caller was told its publish had worked, so a rotation would stamp rotated_at,
+// revoke the old PAT, and move on having written the new one nowhere — the
+// credential equivalent of a green light on an unplugged sensor. Erroring
+// satisfies the original concern (it writes nothing) without the lie.
+var SetSecret = func(name, env, value string) error {
+	return fmt.Errorf("credrotate: SetSecret not installed — refusing to report a publish that did not happen")
+}
 
 // Install wires the capability main owns. Call once, before any rotation runs.
 func Install(setSecret func(name, env, value string) error) { SetSecret = setSecret }

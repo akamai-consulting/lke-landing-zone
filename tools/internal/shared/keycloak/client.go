@@ -65,8 +65,25 @@ const (
 	// with the client because every caller that talks to Keycloak needs the same
 	// three, and a per-caller copy is how a namespace rename becomes a silent
 	// half-migration.
-	NS          = "keycloak"
-	AdminSecret = "keycloak-admin-credentials"
+	NS = "keycloak"
+	// AdminSecret holds the MASTER-realm admin creds (direct-grants against
+	// /realms/master with client admin-cli). On managed apl-core that is
+	// `keycloak-initial-admin` — the secret the Keycloak.X StatefulSet consumes as
+	// KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD.
+	//
+	// THIS CONSTANT WAS THE HALF-MIGRATION THE COMMENT BELOW WARNS ABOUT. It read
+	// `keycloak-admin-credentials`, a name nothing on managed apl-core provisions.
+	// identityconfig's copy had already been corrected — with a comment explaining
+	// exactly which names are wrong and why — while this copy stayed, so
+	// assert-identity's team-write lane read a Secret that does not exist and the
+	// e2e lane failed on `admin creds not readable`. Two copies, one updated.
+	//
+	// Neither near-miss is the right answer either, and both are present in the
+	// cluster: `platform-admin-credentials` is a self-installed-era name that
+	// nothing provisions on managed, and `platform-admin-initial-credentials` is
+	// the otomi-realm PORTAL login — a different secret that cannot master-realm
+	// direct-grant. identityconfig.AdminSecret now aliases this one.
+	AdminSecret = "keycloak-initial-admin"
 	Realm       = "otomi"
 
 	// PlatformAdminRole is apl-core's built-in all-teams platform-admin realm role.

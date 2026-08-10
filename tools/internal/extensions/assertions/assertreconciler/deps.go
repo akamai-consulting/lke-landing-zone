@@ -1,6 +1,7 @@
 package assertreconciler
 
 import (
+	"fmt"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
@@ -50,13 +51,40 @@ var deps = Deps{
 	// A binding with no grants yields a handle that refuses everything, which is
 	// the right default: an un-installed Deps must not silently read a cluster.
 	Cluster: capability.For(extension.Binding{}).Cluster,
+	// AN ERROR, NOT A NO-OP, and this one had to change. The header above says
+	// defaults should "do something harmless and non-nil" — for a query seam that
+	// is neither. Returning nil without querying leaves the probe zero-valued, and
+	// a zero-valued reconcilerProbe satisfies healthy(): every failWhy is empty and
+	// staleLanes() is empty. So an un-installed WithPrometheus made this lane pass
+	// having asked Prometheus nothing, which is precisely the vacuous green the
+	// fail-closed doctrine exists to forbid.
 	WithPrometheus: func(string, func(func(string) ([]byte, error)) error) error {
-		return nil
+		return fmt.Errorf("assertreconciler: WithPrometheus not installed")
 	},
 }
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
-func Install(d Deps) { deps = d }
+//
+// IT FILLS OMITTED FIELDS RATHER THAN REPLACING WHOLESALE, and that is the fix
+// for a defect that reached e2e. `deps = d` means every field the caller's
+// struct literal leaves out becomes Go's ZERO VALUE — nil — not the fail-closed
+// default declared above. The comment promising "defaults that work" was true of
+// the var and false of everything after the first Install.
+//
+// internal/cli's literal set Cluster and FirewallConfigMapName and omitted
+// WithPrometheus, so `llz ci assert-reconciler` called a nil func and died with a
+// SIGSEGV mid-run, taking the scrape-reconciler lane with it (rc=2). Filling
+// instead of replacing turns that class into the fail-closed default: a named
+// error, at the point of use, instead of a stack trace — or, worse, silence.
+func Install(d Deps) {
+	if d.WithPrometheus == nil {
+		d.WithPrometheus = deps.WithPrometheus
+	}
+	if d.Cluster == nil {
+		d.Cluster = deps.Cluster
+	}
+	deps = d
+}
 
 // firstNonEmpty returns the first non-empty string. A local three-liner rather
 // than an import — package main's copy lives in the provisioning wizard.
