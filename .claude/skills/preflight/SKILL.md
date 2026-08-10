@@ -14,8 +14,28 @@ red one actually means.
 
 ```bash
 cd tools && gofmt -w . && go vet ./... && go test ./...   # anything Go
+make test-race                                             # NOT covered by the above
 make lint                                                  # the real gate
 ```
+
+**`make test-race` is the one CI runs that nothing else here does.** It is a step
+of CI's "Go tests + coverage" job (`Makefile` target `test-race`), and it is
+covered by *none* of `go test ./...`, `make lint`, `make staticcheck`,
+`make coverage` or `make core-surface-check`. Skipping it is not theoretical: a
+data race in `assertsuite` — `ran++` from the goroutine `runAssertSuiteLanes`
+starts per lane — failed it **deterministically** (5/5) while `go test ./...` was
+green, and stayed red across five consecutive pushes on
+`feat/first-internal-extension` because everything anyone actually ran passed. A
+handoff doc recorded that branch as "CI green" on the strength of it.
+
+Two lessons, both cheap:
+
+- Run it whenever you touch anything that installs a package-level seam a
+  concurrent caller reaches. A bare counter in a test double is the usual shape;
+  use `atomic.Int64` or a mutex.
+- **Do not take "CI is green" on trust**, from a handoff or from a green check
+  list. Confirm the *Lint* workflow specifically:
+  `gh run list --branch <branch> --json workflowName,conclusion,headSha`.
 
 `make lint` is **change-aware** — it keys off `git diff HEAD` and runs a different
 subset per diff. Two consequences worth internalising:
@@ -62,7 +82,10 @@ stale in the direction that reads as headroom you do not have.
 cd tools && go run ./cmd/llz ci untestable-loc --verbose   # per-file breakdown
 ```
 
-The fix is to move the logic into `tools/cmd/llz` as a tested verb. Genuine
+The fix is to move the logic into `tools/internal/` as a tested verb (an
+extension package under `internal/extensions/`, or `internal/shared/` if it is
+genuinely shared) — not into `tools/cmd/llz`, which is a six-line entry point
+budgeted by `cmd-llz-entrypoint`. Genuine
 install/glue with no logic worth testing goes in `exclude:` **with a one-line
 justification** — that is the sanctioned escape, not a budget bump.
 
@@ -71,7 +94,7 @@ paid inside the same change so the net was still a ratchet down. That is the bar
 
 > **Do not write a new helper as a shell or Python script.** The first cut of one
 > recent helper was a 74-line Python script and failed this gate on its first CI
-> run; the gate's own message says the fix is to move it into `tools/cmd/llz`.
+> run; the gate's own message says the fix is to move it into Go under `tools/internal/`.
 > Note the output is `used / budget` — a category reading `0 / 60` has **no
 > Python in the tree**, which is the state to preserve, not 60 lines of room to
 > spend.

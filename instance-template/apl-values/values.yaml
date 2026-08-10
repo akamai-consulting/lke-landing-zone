@@ -50,7 +50,7 @@ apps:
   # configured the `eso` Kubernetes-auth role. A Degraded resource FAILS the platform-bootstrap sync
   # wave (it was the exact hook that wedged the first lab bootstrap). These
   # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
-  # (see the retry budget in tools/cmd/llz/ci_bootstrap_cluster_manifests.go)
+  # (see the retry budget in tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster_manifests.go)
   # instead of failing. Genuinely-broken stores/secrets still surface via the
   # converge health check (`llz ci health`), which verifies the synced Secret
   # exists independently of Argo's health rollup.
@@ -211,7 +211,7 @@ apps:
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
-    # policy (platform-apl/manifest/kyverno-policies/), NOT here — overriding
+    # policy (manifest/kyverno-policies/), NOT here — overriding
     # schemaConfig corrupts it.
     _rawValues:
       # memberlist DNS bootstrap deadlock (observed live: loki-0 at 37 restarts).

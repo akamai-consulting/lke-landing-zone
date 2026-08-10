@@ -43,7 +43,7 @@ fails in the safe direction — the command does not run, so no state is written
 ### Resolution order is now `tofu` → `terraform`, in one place per language
 
 - Shell: `detect_tf` in `template-scripts/lib-common.sh` (preference inverted).
-- Go: `tfBin()` / `tfCommand()` in `tools/cmd/llz/tfbin.go`, replacing seven
+- Go: `tfBin()` / `tfCommand()` in `tools/internal/shared/tfbin/tfbin.go`, replacing seven
   hardcoded `exec.Command("terraform", …)` calls.
 
 Both honour `$TF` and resolve in the same order, so a script and `llz` can never
@@ -97,7 +97,9 @@ actually installed.
   protect. Only the image it points at changed.
 
   A third restatement of the version pin turned up during the rename, beyond the
-  two the Dockerfile header names: `ciTerraformTag` in `tools/cmd/llz/tokens.go`,
+  two the Dockerfile header names: `ciTerraformTag`, then a package-main const
+  beside the `llz tokens` verb and now `versionpins.CITofuTag` in
+  `tools/internal/extensions/guards/versionpins/citags.go`,
   which computes the default `TF_IMAGE` for newly scaffolded instances. It was
   still `1.9.8`, so a new instance would have been scaffolded onto a HashiCorp
   Terraform image while every caller invoked `tofu`. It is now `ciTofuTag`. The

@@ -11,7 +11,7 @@ command/flag check for exactly that reason, and still checks the links.)
 
 | # | Decision | Date | Status |
 |---|---|---|---|
-| 0001 | *Reserved* — PAT rotation locus | — | **Not written.** Cited by 0007, 0009, 0012 as the "where does the credential live" blast-radius framing |
+| [0001](0001-pat-rotation-locus.md) | PAT rotation locus: where a credential lives decides its blast radius | 2026-07-28 | Accepted |
 | [0002](0002-thin-terraform-native-bootstrap.md) | Thin Terraform: the in-cluster bootstrap runs natively, not as a TF workspace | 2026-07-15 | Accepted |
 | [0003](0003-vendor-actions-and-bodies-into-instances.md) | Vendor reusable workflow bodies + composite actions into each instance | 2026-07-16 | Accepted |
 | [0004](0004-decouple-openbao-write-identity-from-cluster-access.md) | Decouple the OpenBao write identity from cluster access | 2026-07-21 | Accepted |
@@ -25,6 +25,7 @@ command/flag check for exactly that reason, and still checks the links.)
 | 0011 | *Reserved* — ambient mesh migration | — | **Not written.** Cited by 0010 and 0012 as where the remaining plaintext residuals close |
 | [0012](0012-credential-observability-gaps.md) | Credential observability gaps | 2026-07-30 | Accepted |
 | [0013](0013-llz-as-apl-cli.md) | Reframe LLZ as the APL CLI: one binary, two altitudes | 2026-07-24 | Proposed |
+| [0014](0014-core-surface-budget.md) | The core-surface budget: cap the destination, not just the source | 2026-08-03 | Accepted |
 
 ## ⚠️ Two ADRs share the number 0007
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # llz-functional.sh — functional test of the built `llz` binary: drive it the way
 # an adopter does and assert on real behaviour, not mocked argv. Complements the
-# in-process unit tests (tools/cmd/llz/*_test.go, which stub the shell-out) and
+# in-process unit tests (tools/internal/**/*_test.go, which stub the shell-out) and
 # scaffold-render-check.sh (which already covers `llz env add`).
 #
 # Two sections:
@@ -139,7 +139,7 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     # comparison. Without the strip, `split(".") | map(tonumber)` would ERROR on
     # a tag like v1.2.3-hotfix rather than rank it, so the filter and the key
     # have to move together. The reduce keeps the FIRST of equal cores (gh lists
-    # newest first), which is what latestLLZTag does and what a `sort_by | last`
+    # newest first), which is what llzver.LatestLLZTag does and what a `sort_by | last`
     # would silently invert — see TestLatestLLZTagTieKeepsFirst.
     # shellcheck disable=SC2016  # $r is a jq variable; it must NOT expand in the shell.
     TAG="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq \

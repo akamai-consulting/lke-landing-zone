@@ -6,7 +6,7 @@ name: Publish Helm Charts
 # Why GHCR (not the in-cluster Harbor): the charts the bootstrap itself consumes
 # (cluster-foundation, cert-automation, …) must come from a registry that
 # exists BEFORE the cluster does. Harbor runs *inside* the cluster, so it can't
-# serve the charts that stand the cluster up. See docs/templatization-plan.md §9.
+# serve the charts that stand the cluster up. See templatization-plan.md §9.
 #
 # Versioning is immutable-by-convention: a chart is published only if its
 # Chart.yaml `version:` has not already been pushed. To release a change, bump
@@ -41,6 +41,8 @@ jobs:
   publish:
     name: Package & push charts
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.5 / max 1.2 (registry pushes)); GitHub's default is 6h.
+    timeout-minutes: 20
     # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
     permissions:
       contents: read
@@ -94,7 +96,7 @@ jobs:
 
       # The package/push/sign loop — the immutability + re-sign guard, digest
       # parsing, and transient-failure retry — is unit-tested Go
-      # (tools/cmd/llz/ci_publish_charts.go). This step is glue: helm/cosign are on
+      # (tools/internal/extensions/lifecycle/releasepublish/publish_charts.go). This step is glue: helm/cosign are on
       # PATH (installed above) and `helm registry login` already ran.
       - name: Package + push + sign charts
         env:

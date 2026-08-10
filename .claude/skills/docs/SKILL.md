@@ -145,7 +145,7 @@ leading invisible character.
 I got this wrong, and the guard agreed with me — because the generator and the
 checker each carried their own copy of the rule and both copies were wrong, so a
 wrong anchor was compared against a wrong anchor. That is why
-`tools/cmd/llz/testdata/github_slugs.json` is an **oracle**: every heading in the
+`tools/internal/cli/testdata/github_slugs.json` is an **oracle**: every heading in the
 repo paired with the slug the real implementation produced. **Only an oracle
 catches a shared-assumption bug.** Regenerate it with `github-slugger` if
 headings change substantially.

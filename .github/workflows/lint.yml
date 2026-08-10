@@ -25,6 +25,22 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
+      # The GITOPS TREES the gates actually read. platform-apl/ is 91 files of
+      # sync-wave manifests and components, and NO path here matched it — so a PR
+      # touching only that tree started no run of this workflow at all, and with it
+      # none of the 24 gates. wave-health's entire subject is
+      # platform-apl/manifest + platform-apl/components; mesh-egress,
+      # monitoring-labels, guard-manifests, posture-plaintext, credential-coverage,
+      # pin-coherence and cosign-subject all read it too, and `prom-rules-check`
+      # lints platform-apl/components/observability/prometheus-rules by path.
+      # This is the same defect as the Markdown entry below, one tree over: the
+      # Makefile's changed-file lint has named `^platform-apl/` and
+      # `^instance-template/apl-values/` as a change class needing wave-health-guard
+      # all along, so the local mirror knew about a class CI could not be triggered
+      # by. A guard that cannot be invoked is not a guard.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
       # Markdown ANYWHERE. The `docs` job below runs docs-guard, whose corpus is
       # every .md file in the repo — but no path here matched one, so the guard
       # only ever ran when a PR happened to also touch code. A docs-only PR (the
@@ -56,6 +72,10 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
+      # The gitops trees — see the note on the pull_request copy above.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
       # Markdown anywhere — see the note on the pull_request copy above.
       - '**.md'
   workflow_dispatch:
@@ -122,6 +142,8 @@ jobs:
     # private KUBE_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.8 / max 1.0); GitHub's default is 6h.
+    timeout-minutes: 15
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
@@ -137,8 +159,9 @@ jobs:
       - name: Add /usr/local/bin to PATH
         run: echo "PATH=/usr/local/bin:${PATH}" >> "$GITHUB_ENV"
 
-      # `make lint-k8s` runs `externalsecret-paths-check`, which calls `llz ci
-      # externalsecret-paths`. The published ci-kubernetes image bakes llz
+      # `make lint-k8s` runs `llz-gates`, which is `llz ci gates` — the whole
+      # declared gate set in one process, replacing the thirteen individual
+      # `llz ci <verb>` shell-outs this job used to make. The published ci-kubernetes image bakes llz
       # (dockerfiles/Dockerfile (ci-kubernetes target)), but a PR that changes tools/ runs
       # before that image is rebuilt — and the image carries no Go toolchain, so
       # the Makefile's `go run` fallback can't fire either. Set up Go and build
@@ -169,6 +192,8 @@ jobs:
   dry-run:
     name: Server-side dry-run (kind)
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 2.4 / max 2.5 (kind boot)); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -260,7 +285,7 @@ jobs:
           # `helm template --include-crds` and yq filter, same pattern as argocd/eso above.
           # Installs: workflows, workflowtemplates, cronworkflows, clusterworkflowtemplates,
           # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
-          # Referenced from platform-apl/manifest/cert-automation/
+          # Referenced from manifest/cert-automation/
           # haproxy-rebuild-workflowtemplate.yaml.
           $R helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
             --include-crds \
@@ -272,7 +297,7 @@ jobs:
           # returns nothing — use `helm template --include-crds` and yq filter,
           # same pattern as argocd/eso above.
           # Installs: eventbus, eventsources, sensors. Referenced from
-          # platform-apl/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
+          # manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
           $R helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
@@ -301,6 +326,11 @@ jobs:
       - name: Validate rendered ArgoCD Applications
         # Semantic checks (e.g. duplicate Helm parameters) on the generated
         # Applications; render-charts already ran above so this is a no-op render.
+        #
+        # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and that is not
+        # redundancy to delete: this runs it BEFORE the kind cluster is created, so
+        # a malformed Application fails in seconds instead of after a cluster spin.
+        # The duplicate buys placement, not coverage.
         run: make argocd-rendered-apps-check
 
       - name: Create namespaces
@@ -371,6 +401,8 @@ jobs:
   scaffold:
     name: Scaffold + validate apl-values
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -404,12 +436,18 @@ jobs:
   docs:
     name: Docs guard
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go (build llz — the guard reads its own command tree)
         uses: ./.github/actions/setup-llz
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job. It keeps its own job
+      # because it must resolve documented invocations against the cobra tree THIS
+      # PR builds, which needs the Go toolchain set up above — the container jobs
+      # have a prebuilt llz from the merge-base.
       - name: Commands, workflow inputs and links resolve
         run: make docs-guard
 
@@ -428,6 +466,8 @@ jobs:
   instantiate:
     name: Instantiate (copier render)
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.7 / max 0.7 (real copier render)); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -472,6 +512,8 @@ jobs:
     # private TF_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.9 / max 1.2); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
@@ -484,7 +526,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go (source llz for template-manifest gate)
+      # Toolchain only, deliberately: no install-path, so `llz` on PATH stays the
+      # binary baked into ci-tofu. Every LLZ_CI target this job reaches therefore
+      # has to export LLZ_FORCE_SOURCE — at-rest-guard, managed-lock-check and
+      # template-manifest-check all do, and TestContainerJobsRunThePRsLlz pins it.
+      # (This step used to be named "source llz for template-manifest gate", which
+      # asserted an intent the Makefile did not implement: that target was the one
+      # target here NOT forcing source, so it ran the merge-base binary.)
+      - name: Set up Go (the forced-source gates below compile llz from this PR)
         uses: ./.github/actions/setup-llz
 
       - name: tflint + checkov + validate instance roots
@@ -508,6 +557,8 @@ jobs:
   go-tests:
     name: Go tests + coverage
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 4.1 / max 5.6); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -533,6 +584,19 @@ jobs:
       - name: staticcheck
         run: make staticcheck
 
+      # actionlint over THIS repo's workflows. It lives here, on a HOST runner,
+      # rather than on the Kubernetes lint job: that job runs in ci-kubernetes,
+      # which ships neither actionlint nor a Go toolchain, so the target exited
+      # 127 there. This job has Go (setup-llz above), so the target's `go run`
+      # fallback resolves at the pinned ACTIONLINT_VERSION.
+      #
+      # Before this, the only actionlint in CI ran inside instance-test over the
+      # RENDERED INSTANCE's workflows — a different tree — so the workflows that
+      # decide what CI does were checked by nothing but a per-clone pre-commit
+      # hook, absent for web edits and for Dependabot's own workflow bumps.
+      - name: actionlint (this repo's workflows)
+        run: make actions-lint
+
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
 
@@ -555,8 +619,20 @@ jobs:
       # unit-tested llz CLI rather than grow untestable CI shell. Runs here (not
       # in the container jobs) because it needs only the Go toolchain, already
       # set up above; `make untestable-loc-check` falls back to `go run`.
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job; here for the reason
+      # above — this job has the Go toolchain and no rendered charts to wait on.
       - name: Untestable-LOC budget gate
         run: make untestable-loc-check
+
+      # Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
+      # destination for converted logic but caps nothing there, so package main
+      # accretes. This budgets the destination — Go logic lines in package main —
+      # and is satisfied by extracting to tools/internal/<pkg> (ADR 0013) or
+      # moving the capability out to an extension (issue #10), never by raising
+      # the budget. Same Go-toolchain-only requirement as the step above.
+      # ALSO RUN BY `llz ci gates`, same reason as the step above.
+      - name: Core-surface budget gate
+        run: make core-surface-check
 
       # Guard: every container-job `run:` step must resolve to bash, not the
       # container's /bin/sh (dash). A missing default silently broke the scheduled

@@ -4,7 +4,7 @@
 # in cert-manager, so the serving cert can issue on a cold bootstrap with no
 # dependency on apl-core's custom-ca being ready.
 #
-# REPLACES the `llz ci gen-bootstrap-tls` workflow step (llz-bootstrap-openbao.yml)
+# REPLACES the `gen-bootstrap-tls` workflow step (llz-bootstrap-openbao.yml)
 # that hand-seeded a throwaway runner-generated CA + cert as the Secret and let
 # cert-manager's custom-ca replace it in-place later. That was the same
 # anti-pattern the openbao-tls seed removal fixed: a hand-seeded cert whose CA
@@ -85,7 +85,7 @@ spec:
     secretName: otel-bootstrap-ca
 ---
 # The OTel Collector serving cert. Secret name + subject + SANs preserved from
-# the retired `llz ci gen-bootstrap-tls` step (365-day leaf, same as the step
+# the retired `gen-bootstrap-tls` step (365-day leaf, same as the step
 # generated). The per-env `otel.<env>.internal` SAN is added by the
 # llz-render-emitted otel-collector-tls-san-patch.yaml, which replaces
 # spec.dnsNames wholesale (CR lists are atomic under kustomize patching).
@@ -108,7 +108,7 @@ spec:
     size: 4096
   dnsNames:
     # The `platform-otel-collector.*` pair is inherited verbatim from the retired
-    # `llz ci gen-bootstrap-tls` step and does NOT match any Service: the
+    # `gen-bootstrap-tls` step and does NOT match any Service: the
     # OpenTelemetryCollector CR is named `otel`, so the operator creates Service
     # `otel-collector` (otel-collector.yaml's header says the name MUST be `otel`
     # for exactly that reason).

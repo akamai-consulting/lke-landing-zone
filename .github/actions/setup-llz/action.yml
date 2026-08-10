@@ -17,7 +17,7 @@
 # passed it were right about: in a container job the checkout is owned by a
 # different UID than the container's root user, so git refuses VCS queries
 # ("dubious ownership") and stamping fails the build outright. It costs nothing
-# elsewhere — llz takes its version from the -X main.version ldflag (main.go),
+# elsewhere — llz takes its version from the -X ldflag on internal/cli.Version,
 # never from debug.ReadBuildInfo. The release build in llz-release.yml stamps
 # the real version and deliberately does NOT use this action.
 name: Set up llz

@@ -78,7 +78,7 @@ to be stale, fix it in place rather than working around it.
 
 - **The repo is fully on github.com + GitHub-hosted `ubuntu-latest`** — the old
   Linode GitHub Enterprise / self-hosted-runner model (manual `curl` installs to
-  `$HOME/.local/bin`) is **gone**, including `template-scripts/ci/setup-runner.sh`. Both
+  `$HOME/.local/bin`) is **gone**, including `setup-runner.sh`. Both
   `.github/workflows/` and `instance-template/.github/workflows/` follow this.
 - **Install CLI tools with SHA-pinned marketplace setup actions** (version pinned
   from the `env:` block), not `curl | tar`. The real Docker login action is

@@ -139,7 +139,7 @@ else
   fail "docs/README.md is missing the version-pinned reference URL"
 fi
 absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (referenced/template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
-absent "docs/templatization-plan.md"   # template-build
+absent "templatization-plan.md"   # template-build
 absent "docs/agents.md"                # template-build
 absent "docs/adopter-guide.md"         # referenced (in the template repo)
 absent "docs/designs"                  # referenced (internal design docs)

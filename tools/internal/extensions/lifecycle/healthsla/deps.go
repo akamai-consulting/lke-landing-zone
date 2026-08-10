@@ -1,0 +1,58 @@
+package healthsla
+
+import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
+
+// Deps carries what this package cannot reach for itself.
+//
+// The cluster GET path is deliberately absent: it goes through
+// internal/kubectlprobe, which owns its own Exec seam. Only the capabilities that
+// are NOT a plain classified kubectl read appear here.
+type Deps struct {
+	// Summary appends to a GitHub Actions file (GITHUB_STEP_SUMMARY). It is the
+	// only output these checks produce that anything downstream reads, so a
+	// fixture MUST actually record what it is handed — a no-op stub turns every
+	// summary assertion into a tautology. That has been paid for twice already
+	// (teardown's Summary, objenc's SecretField).
+	Summary func(envVar string, lines ...string) error
+
+	// BaoExec runs `bao <args>` inside an OpenBao pod, returning stdout/stderr.
+	// Used for seal status, which is a read.
+	BaoExec func(pod, addr, token string, args ...string) (string, string, error)
+
+	// Exec captures a command's stdout. Only the Loki OBJ-key check needs it: it
+	// builds a `kubectl exec … bao kv metadata get` argv that carries the OpenBao
+	// ROOT token, which is why this extension declares secret-custody.
+	Exec func(name string, args ...string) ([]byte, error)
+
+	// Reachable reports whether the cluster API answers at all. Separate from the
+	// probes because "no cluster" is a legitimate SKIP for a scheduled check —
+	// a torn-down cluster or a stale kubeconfig in TF state must not page anyone.
+	Reachable func() bool
+
+	// BaoExecArgv builds the `kubectl exec` argv for a bao call. Injected rather
+	// than rebuilt here so this package cannot drift from `llz openbao exec`'s
+	// argument shape — a mismatch there once made every `bao status` call error,
+	// and the stub hid it because it ignored args (see baoStatus's comment).
+	BaoExecArgv func(pod, token string, args []string) []string
+
+	// RootPod is the pod `llz openbao exec` targets.
+	RootPod string
+}
+
+// readyResourceItem is the narrow projection these checks decode: a name, a
+// namespace, and Ready conditions.
+//
+// package main has a wider `meta`-embedding version carrying annotations,
+// finalizers and deletionTimestamp — the convergence classifier needs those and
+// these checks do not. Two decoders of the same Kubernetes shape is duplication;
+// two DIFFERENT PROJECTIONS of it is not, and declaring only the fields you read
+// is what keeps a decode honest.
+type readyResourceItem struct {
+	Metadata struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	} `json:"metadata"`
+	Status struct {
+		Conditions []health.Condition `json:"conditions"`
+	} `json:"status"`
+}

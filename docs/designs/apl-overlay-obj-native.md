@@ -68,7 +68,7 @@ committed on `main` (human-authored source), never carrying secrets.
 ### 2. The `apl-overlay` reconciler — git-to-git sync (replaces the force-push)
 
 A new `--reconcile-apl-overlay` pass in the in-cluster reconciler
-([reconcile.go](../../tools/cmd/llz/reconcile.go)) does a **git-to-git overlay
+([reconcile.go](../../tools/internal/extensions/lifecycle/reconciler/reconcile.go)) does a **git-to-git overlay
 sync**, replacing the config role a force-push previously played:
 
 1. **Read** the overlay from the primary repo (`main`) over the GitHub REST

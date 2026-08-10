@@ -135,6 +135,12 @@ jobs:
         run: |
           export KUBECONFIG="$HOME/.kube/config"
           llz ci diagnose-argocd || true
+          # The reconciler half. converge's obj-chain message says "check
+          # llz-reconciler llz_apl_overlay_synced" and nothing in the bundle
+          # contained it — not this step, not converge's own dump, not VERBOSE=1 —
+          # so answering the question the gate asked cost a live cluster that had
+          # usually been destroyed by the time anyone read the log.
+          llz ci diagnose-reconciler || true
           for app in platform-bootstrap llz-cluster-foundation; do
             echo "== ${app} operationState =="
             kubectl -n argocd get application "${app}" -o jsonpath='{.status.operationState}' 2>/dev/null | head -c 6000 || true
@@ -166,7 +172,7 @@ jobs:
       # stream back out of Loki is the only check that can tell those apart.
       #
       # The delivery/enforcement gates come in as ONE call to `llz ci assert-suite`,
-      # which owns the lane table (tools/cmd/llz/ci_assert_suite.go). They belong on
+      # which owns the lane table (tools/internal/extensions/assertions/assertsuite/suite.go). They belong on
       # this day-2 path as much as on the e2e one — a collector that stops shipping
       # next month is exactly what a scheduled check should catch — and routing them
       # through the suite means this workflow never has to be edited again when a

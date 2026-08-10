@@ -48,11 +48,20 @@ jobs:
         run: |
           set -euo pipefail
           # $GITHUB_REF is a trusted built-in (refs/tags/vX.Y.Z); derive the
-          # semver and stamp it into main.version.
+          # semver and stamp it into the CLI's Version.
+          #
+          # THE SYMBOL PATH IS NOT main.version ANY MORE. The command tree moved to
+          # internal/cli so it could be imported and tested; cmd/llz is now a
+          # four-line stub with no version var to stamp. A stale `-X main.version`
+          # here would NOT fail the build — the linker ignores an -X for a symbol it
+          # cannot find — it would ship every release reporting "dev", which makes
+          # selfupgrade see every release as newer than the running binary forever.
+          # tools/internal/cli/version_stamp_test.go pins this exact string against
+          # the variable it names, so the two cannot drift apart silently.
           VER="${GITHUB_REF##*/}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] || VER="dev"
           out="llz-${GOOS}-${GOARCH}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VER}" -o "../${out}" ./cmd/llz
+          go build -trimpath -ldflags "-s -w -X github.com/akamai-consulting/lke-landing-zone/tools/internal/cli.Version=${VER}" -o "../${out}" ./cmd/llz
           echo "asset=${out}" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
@@ -98,7 +107,7 @@ jobs:
   # build-images.yml only ever pushes :latest and :sha-<SHA> (the llz image has no
   # static `version` in its matrix). Nothing published :vX.Y.Z — so an instance
   # pinned to a release rendered ghcr.io/…/llz:v0.0.28 into its carved apps and
-  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/cmd/llz/render.go).
+  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/internal/extensions/lifecycle/render/render.go).
   #
   # RETAG rather than rebuild: the sha- image for this commit is the artifact
   # release-e2e already validated, so pointing the version tag at the same

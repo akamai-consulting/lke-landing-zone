@@ -4,7 +4,7 @@
 this doc specifies — but see **Re-ranking (measured)** below: the largest single
 win is not in Lever 2.
 **Relates to:** `docs/designs/cross-org-reuse-pattern.md` (#201/#202 — why the
-reusable bodies are instance-local), `tools/cmd/llz/commands.go` (`runUpgrade`).
+reusable bodies are instance-local), `tools/internal/verbs/upgrade/upgrade.go` (`upgrade.Run`).
 
 ## Problem
 
@@ -128,14 +128,14 @@ snapshot that has since moved:
 
 | target | lines | verb |
 |---|---|---|
-| `llz-terraform.yml` S3 bucket drain | 102 | `llz ci drain-buckets` — also deletes a pinned `s5cmd` tarball download + sha256 preamble; a Go impl speaks S3 natively |
+| `llz-terraform.yml` S3 bucket drain | 102 | `llz ci drain-obj-buckets` — also deletes a pinned `s5cmd` tarball download + sha256 preamble; a Go impl speaks S3 natively |
 | `linode-credentials/action.yml` (4 near-duplicate blocks) | ~109 | `--gh-output` / `--gh-summary` on `llz credentials` |
-| `llz-bootstrap-openbao.yml` CronJob admission preflight | 47 | `llz ci preflight-cronjob-admission` |
+| `llz-bootstrap-openbao.yml` CronJob admission preflight | 47 | `preflight-cronjob-admission` |
 | `llz-cluster-health.yml` health block | 47 | `llz ci health --gate --summary-out` |
 | `llz-bootstrap-openbao.yml` e2e assert fan-out | 37 | `llz ci assert-suite` (today a bash job-runner over 8 existing verbs) |
-| `llz-scheduled-checks.yml` PrometheusRule check | 28 | `llz ci assert-prometheusrules` |
+| `llz-scheduled-checks.yml` PrometheusRule check | 28 | `assert-prometheusrules` |
 | `llz-wedge-gameday.yml` | 24 | `--summary-out` flag |
-| `llz-terraform.yml` bucket summary | 17 | `llz ci summarize-buckets` |
+| `llz-terraform.yml` bucket summary | 17 | `summarize-buckets` |
 | `llz-cluster-health.yml` argo probes | 15 | fold into existing `llz ci diagnose-argocd` |
 
 `linode-credentials/action.yml` is the priority regardless of line count: it is

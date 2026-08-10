@@ -1,0 +1,284 @@
+package wavehealth
+
+// ci_wave_health_guard.go implements `llz ci wave-health-guard` — the static
+// guard extracted from the 2026-07-04 four-wedge bootstrap outage (PR #142).
+//
+// Argo CD sync waves gate on per-resource HEALTH: a resource at wave N that
+// sits Progressing forever (NetworkPolicy with no CNI-written status) or goes
+// Degraded (ClusterIssuer whose deferred ACME email Let's Encrypt rejects)
+// blocks or fails every wave > N of the platform-bootstrap sync — and OpenBao
+// lives at wave 0, so the whole cluster bootstrap wedges. Two of the four
+// 2026-07-04 wedges were exactly this class, and each cost a ~50-minute e2e
+// run to discover on a real cluster.
+//
+// The guard makes that class a PR-time failure: every resource kind that
+// appears at a NEGATIVE sync wave anywhere in the platform-bootstrap tree
+// (platform-apl/manifest/ + platform-apl/components/) must be listed in
+// AllowedKinds — either because Argo assesses no health for it, or
+// because apl-values/values.yaml carries a resource.customizations.health
+// override neutralizing its built-in check. Kinds whose safety DEPENDS on such
+// an override are cross-checked against values.yaml, so deleting the override
+// re-fails the guard.
+//
+// Adding a new kind at a negative wave forces the author to decide — and
+// document here — why it cannot wedge a fresh-cluster bootstrap.
+
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
+)
+
+// KindRule describes why a kind is safe at a negative sync wave.
+type KindRule struct {
+	// overrideKey non-empty → safety depends on the named
+	// resource.customizations.health entry in apl-values/values.yaml; the guard
+	// fails if that key is missing there.
+	overrideKey string
+	reason      string
+}
+
+// AllowedKinds maps "group/Kind" (core group = "") to the reason it
+// may appear at a negative sync wave in the platform-bootstrap tree.
+// THE EXPORT'S STATED REASON NO LONGER HOLDS, and saying so beats leaving a
+// justification that sends the next reader looking for a caller. It read "EXPORTED
+// because a coupling test in cmd/llz asserts this Go allowlist and the wave-health
+// ValidatingAdmissionPolicy's CEL agree … the two halves now live in different
+// packages". Both halves moved here: the test is health_vap_test.go IN THIS
+// PACKAGE, and nothing outside it references AllowedKinds or AllowedNames.
+//
+// The coupling itself is intact and is the point — a kind vetted in the Go
+// allowlist and not in the CEL (or the reverse) is exactly the drift the pair
+// exists to prevent. What is gone is the reason it had to be exported to check it.
+// Left exported rather than narrowed in an audit commit: it is the guard's stated
+// surface and unexporting is a change a reader should see on its own.
+var AllowedKinds = map[string]KindRule{
+	// Plain config/RBAC — Argo assesses no health; applied == done.
+	"/Namespace":                                   {reason: "no Argo health check"},
+	"/ServiceAccount":                              {reason: "no Argo health check"},
+	"/ConfigMap":                                   {reason: "no Argo health check"},
+	"/Secret":                                      {reason: "no Argo health check"},
+	"rbac.authorization.k8s.io/Role":               {reason: "no Argo health check"},
+	"rbac.authorization.k8s.io/RoleBinding":        {reason: "no Argo health check"},
+	"rbac.authorization.k8s.io/ClusterRole":        {reason: "no Argo health check"},
+	"rbac.authorization.k8s.io/ClusterRoleBinding": {reason: "no Argo health check"},
+	// CronJob: Argo has no CronJob health check (it never runs at sync time).
+	"batch/CronJob": {reason: "no Argo health check"},
+	// Argo CD's own CRs: AppProject has no health; a child Application's
+	// health is assessed only when the operator configures an explicit
+	// argoproj.io_Application customization (apl-core does not), so the CR is
+	// health-inert at sync time. cluster-foundation has synced at wave -20
+	// through every bootstrap on record.
+	"argoproj.io/AppProject":  {reason: "no Argo health check"},
+	"argoproj.io/Application": {reason: "no app-of-apps health customization configured"},
+	// Kyverno policies: Argo's kyverno health check reads the Ready condition,
+	// which the admission controller sets promptly once the policy passes
+	// webhook validation (the webhook-REJECTION class is caught earlier by the
+	// lint dry-run job's Kyverno policy-admission gate).
+	"kyverno.io/ClusterPolicy": {reason: "Kyverno sets Ready promptly post-admission"},
+	// Native admission policy — the wave-health guard's own admission-time twin
+	// (llz-wave-health-guard, blast-radius decomposition). Config resources: applied
+	// == done, Argo assesses no health. The CEL allowlist inside the policy is kept
+	// in lockstep with THIS map by TestWaveHealthVAPMatchesGuard.
+	"admissionregistration.k8s.io/ValidatingAdmissionPolicy":        {reason: "no Argo health check (admission config)"},
+	"admissionregistration.k8s.io/ValidatingAdmissionPolicyBinding": {reason: "no Argo health check (admission config)"},
+	// Health-checked kinds neutralized by apl-values/values.yaml overrides — the
+	// two wedges of PR #142. The override key is cross-checked below.
+	"networking.k8s.io/NetworkPolicy": {
+		overrideKey: "resource.customizations.health.networking.k8s.io_NetworkPolicy",
+		reason:      "LKE CNI writes no NP status; built-in check waits Progressing forever",
+	},
+	"cert-manager.io/ClusterIssuer": {
+		overrideKey: "resource.customizations.health.cert-manager.io_ClusterIssuer",
+		reason:      "deferred ACME email is a supported state; built-in check grades it Degraded",
+	},
+	// ESO CRs: the lenient overrides reclassify not-Ready as Progressing so a
+	// first-boot store/secret cannot FAIL a wave. They still wait — which is
+	// correct: they converge once OpenBao is bootstrapped, and none sit at a
+	// wave that gates OpenBao itself (wave 0). The override keys are pinned.
+	"external-secrets.io/ClusterSecretStore": {
+		overrideKey: "resource.customizations.health.external-secrets.io_ClusterSecretStore",
+		reason:      "lenient override: not-Ready is Progressing during first boot",
+	},
+	"external-secrets.io/ExternalSecret": {
+		overrideKey: "resource.customizations.health.external-secrets.io_ExternalSecret",
+		reason:      "lenient override: not-Ready is Progressing during first boot",
+	},
+	"external-secrets.io/PushSecret": {
+		overrideKey: "resource.customizations.health.external-secrets.io_PushSecret",
+		reason:      "lenient override: not-Ready is Progressing during first boot",
+	},
+}
+
+// AllowedNames are per-RESOURCE exceptions ("group/Kind/name") for
+// kinds that are NOT kind-level safe. Certificates are the case in point: Argo
+// health-checks them (Ready-based), and an ACME Certificate at a negative wave
+// would re-create wedge #3 — but these specific certs are issued by in-cluster
+// self-signed CA chains with no external dependency, by a cert-manager whose
+// webhook `llz ci wait-apl-pipeline` gates Available before the tree ever
+// syncs. They have converged promptly through every color.Green bootstrap on record.
+// Keep this name-scoped: a NEW Certificate at a negative wave must be vetted
+// here, not waved through by kind.
+var AllowedNames = map[string]KindRule{
+	"cert-manager.io/Certificate/openbao-ca":                  {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	"cert-manager.io/Certificate/otel-bootstrap-ca":           {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	"cert-manager.io/Certificate/platform-otel-collector-tls": {reason: "issued by the in-cluster otel-bootstrap-ca; no external dependency"},
+	// ── in-cluster mTLS PKI (docs/adr/0010-in-cluster-mtls.md) ───────────────
+	//
+	// Two roots, both selfSigned-issued exactly like openbao-ca: no external
+	// dependency, and cert-manager is already Available before this tree syncs
+	// (gated by `llz ci wait-apl-pipeline`).
+	"cert-manager.io/Certificate/llz-client-ca":  {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	"cert-manager.io/Certificate/llz-serving-ca": {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	//
+	// The leaves. Each is issued by one of the three in-cluster CA ClusterIssuers
+	// above (llz-client-ca / llz-serving-ca / openbao-ca), all of which are
+	// selfSigned-rooted and present by wave -15 — so a leaf at -14 has its issuer
+	// already. None reaches outside the cluster, which is the property that
+	// distinguishes them from the ACME certs this guard exists to catch.
+	//
+	// Listed individually rather than waved through by kind, per this map's own
+	// rule: a NEW Certificate at a negative wave must be vetted here.
+	"cert-manager.io/Certificate/llz-reconciler-client-tls":           {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-serving-tls":          {reason: "llz-serving-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-scrape-client-tls":    {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-serving-ca":           {reason: "llz-serving-ca anchor (ca.crt only); in-cluster issuer"},
+	"cert-manager.io/Certificate/harbor-robot-provisioner-client-tls": {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/broad-pat-rotator-client-tls":        {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/eso-openbao-client-tls":              {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/otel-client-ca":                      {reason: "llz-client-ca anchor (ca.crt only); in-cluster issuer"},
+	//
+	// NOT listed, deliberately: openbao-apl-ca (llz-openbao-platform chart). It
+	// is issued by apl-core's `custom-ca`, an issuer this repo cannot guarantee
+	// exists, so it CAN sit Pending indefinitely — exactly the wedge class this
+	// guard catches. It therefore ships at the default wave (0), not a negative
+	// one, and its Secret volume is `optional`.
+}
+
+// waveHealthDoc is the minimal YAML shape the guard inspects.
+type waveHealthDoc struct {
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	Metadata   struct {
+		Name        string            `yaml:"name"`
+		Annotations map[string]string `yaml:"annotations"`
+	} `yaml:"metadata"`
+}
+
+// waveHealthFinding is one negative-wave resource and its verdict.
+type waveHealthFinding struct {
+	file, groupKind, name string
+	wave                  int
+	rule                  KindRule
+	allowed               bool
+}
+
+func runCIWaveHealthGuard(root string) error {
+	repo := capability.RepoForGate(Extension(), root)
+	aplDir := guardkit.RepoPath(repo, "apl-values")
+	valuesPath := filepath.Join(aplDir, "values.yaml")
+	valuesRaw, err := repo.ReadFile(valuesPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", valuesPath, err)
+	}
+	dirs := guardwalk.PlatformTreeDirs(repo)
+	findings, examined, err := collectWaveHealthFindings(repo, dirs, string(valuesRaw))
+	if err != nil {
+		return err
+	}
+	// This guard used to DISCARD the examined count: with its trees absent or
+	// moved it walked zero files, found zero negative-wave kinds, and printed the
+	// same color.Green as a full clean run — the PR #142 wedge class silently unpoliced.
+	// Its three siblings gated on requireCorpus; this one did not.
+	if err := guardkit.RequireCorpus("wave-health-guard", examined, dirs); err != nil {
+		return err
+	}
+	failed := false
+	for _, f := range findings {
+		if f.allowed {
+			fmt.Printf("  ok: %s %s/%s wave %d — %s\n", f.file, f.groupKind, f.name, f.wave, f.rule.reason)
+			continue
+		}
+		failed = true
+		if f.rule.overrideKey != "" {
+			fmt.Printf("::error file=%s::%s/%s at sync-wave %d needs the %q health override in apl-values/values.yaml (apps.argocd._rawValues.configs.cm) — it is missing. Without it this kind can wedge the platform-bootstrap sync before OpenBao (wave 0); see PR #142.\n",
+				f.file, f.groupKind, f.name, f.wave, f.rule.overrideKey)
+			continue
+		}
+		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in AllowedKinds (guards/wavehealth/health.go) with the override key, or register it with a documented reason it cannot wedge.\n",
+			f.file, f.groupKind, f.name, f.wave, f.groupKind)
+	}
+	if failed {
+		return fmt.Errorf("wave-health-guard: unvetted kinds at negative sync waves")
+	}
+	fmt.Println("wave-health-guard: every negative-wave kind is health-safe or override-backed.")
+	return nil
+}
+
+// collectWaveHealthFindings walks the given dirs and classifies every
+// negative-wave resource against AllowedKinds + the values overrides.
+// It also returns how many manifest files were read, which the caller must gate
+// on (requireCorpus) — an empty corpus is a failure, not a pass.
+func collectWaveHealthFindings(repo capability.Repo, dirs []string, values string) ([]waveHealthFinding, int, error) {
+	var findings []waveHealthFinding
+	// walkManifests also brings the missing-directory tolerance this guard alone
+	// lacked — it used to hard-error on a layout its three siblings skipped — and
+	// the *.yml extension it alone would have ignored.
+	examined, err := guardwalk.Walk(repo, dirs, func(path string, raw []byte) error {
+		for _, doc := range guardwalk.DecodeDocs(string(raw), func(d waveHealthDoc) bool { return d.Kind != "" }) {
+			f, ok := classifyWaveHealthDoc(path, doc, values)
+			if ok {
+				findings = append(findings, f)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, examined, err
+	}
+	guardwalk.SortFindings(findings, func(f waveHealthFinding) (string, string) { return f.file, f.name })
+	return findings, examined, nil
+}
+
+// classifyWaveHealthDoc returns a finding for docs at negative sync waves;
+// ok=false for wave >= 0 (not gated) and non-resource docs.
+func classifyWaveHealthDoc(path string, d waveHealthDoc, values string) (waveHealthFinding, bool) {
+	waveStr, has := d.Metadata.Annotations["argocd.argoproj.io/sync-wave"]
+	if !has {
+		return waveHealthFinding{}, false // default wave 0 — does not gate wave 0
+	}
+	wave, err := strconv.Atoi(strings.TrimSpace(waveStr))
+	if err != nil || wave >= 0 {
+		return waveHealthFinding{}, false
+	}
+	// Argo hooks (PreSync/Sync/PostSync/SyncFail) are not part of the app's tracked
+	// resource tree, so Argo never wave-gates on their health — a hook at a negative
+	// sync-wave cannot health-wedge the bootstrap. Kept in lockstep with the VAP
+	// matchConditions and the runtime audit, which skip the same annotation.
+	if _, isHook := d.Metadata.Annotations["argocd.argoproj.io/hook"]; isHook {
+		return waveHealthFinding{}, false
+	}
+	group := ""
+	if gv := strings.SplitN(d.APIVersion, "/", 2); len(gv) == 2 {
+		group = gv[0]
+	}
+	groupKind := group + "/" + d.Kind
+	f := waveHealthFinding{file: path, groupKind: groupKind, name: d.Metadata.Name, wave: wave}
+	if rule, ok := AllowedNames[groupKind+"/"+d.Metadata.Name]; ok {
+		f.rule, f.allowed = rule, true
+		return f, true
+	}
+	rule, known := AllowedKinds[groupKind]
+	if !known {
+		return f, true // allowed=false: unvetted kind
+	}
+	f.rule = rule
+	f.allowed = rule.overrideKey == "" || strings.Contains(values, rule.overrideKey+":")
+	return f, true
+}

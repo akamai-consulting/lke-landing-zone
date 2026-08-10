@@ -7,8 +7,8 @@ promotion.
 [apl-core-v6-migration.md](apl-core-v6-migration.md) (the 5.x → 6.x predecessor),
 [apl-overlay-obj-native.md](apl-overlay-obj-native.md),
 [../adr/0005-managed-app-platform.md](../adr/0005-managed-app-platform.md),
-`tools/internal/clusterspec/aplversion.go`,
-`tools/cmd/llz/ci_prepare_apl_upgrade.go`.
+`tools/internal/shared/clusterspec/aplversion.go`,
+`tools/internal/extensions/lifecycle/bootstrapcluster/prepare_apl_upgrade.go`.
 
 ## Why
 
@@ -93,7 +93,7 @@ bootstrapped. It is idempotent and self-retires once the fleet is on 6.1.x.
 | **Loki chart** | `6.55.0` → `17.4.11` | Not a 10-major jump — apl-core switched from the grafana-maintained chart to the **grafana-community** chart, which renumbers. appVersion moves `3.6.7` → `3.7.2` and the `grafana-agent-operator` subchart is dropped. The values contract LLZ touches is unchanged, but this is the single biggest in-place change in the release: **verify Loki ingest + the object-store secret in lab first**. |
 | **Istio** | `1.29.2` → `1.30.2` | apl-core added a runtime upgrade (`runtimeUpgrades` v6.0.1) that restarts outdated sidecars after istiod upgrades. LLZ's PSS-`restricted`-vs-sidecar carve-outs in `llz-cluster-foundation` are the thing to watch. Ambient still defaults off — do not enable it here. |
 | **sealed-secrets** | `2.18.5` → `2.18.6`, and `keyrenewperiod: 0` | Automatic sealing-key renewal is now **disabled** so admins can back keys up during a maintenance window. This removes a moving part behind the sealed-secrets key-mismatch failure mode, but makes **backing the key up an explicit operator responsibility**. |
-| **Argo CD** | `9.5.17` → `9.7.1` | Includes upstream "create argocd redis secret as needed" and a tightened argocd-controller restart condition — both in the area of the repo-server↔redis `WRONGPASS` split LLZ self-heals in `ci_health.go`. **Keep the self-heal**: it is cheap, and whether these fix our specific re-seed path is unproven on a live cluster. Re-evaluate after a lab run. |
+| **Argo CD** | `9.5.17` → `9.7.1` | Includes upstream "create argocd redis secret as needed" and a tightened argocd-controller restart condition — both in the area of the repo-server↔redis `WRONGPASS` split LLZ self-heals in `health.go`. **Keep the self-heal**: it is cheap, and whether these fix our specific re-seed path is unproven on a live cluster. Re-evaluate after a lab run. |
 | **external-secrets** | `2.4.1` → `2.7.0` | New CRDs (`ClusterGenerator`, BeyondTrust dynamic secret) that LLZ does not use; the versions it does use are unchanged. |
 | **kube-prometheus-stack** | `85.4.0` → `86.3.2` | `monitoring.coreos.com/v1` unchanged — LLZ's ServiceMonitors/PrometheusRules are unaffected. |
 | **console / api** | `v5.0.3` → `v5.1.0` | Carries apl-console PR #814, which gates the onboarding "Configure Git Repository" modal on `isDefaultGitConfiguration`. That modal auto-opening on a *correctly* BYO-Git-configured managed cluster was a known, purely cosmetic annoyance; **this upgrade resolves it** and the "dismiss it once" workaround can be dropped. |
@@ -123,5 +123,5 @@ floor only when a 6.0.0 cluster genuinely stops working, and record why in
    NetworkPolicies still admit platform traffic.
 4. Sealed-secrets: capture a backup of the sealing key now that renewal is off.
 5. Argo CD: watch for a repo-server↔redis `WRONGPASS` flap across the upgrade —
-   if `ci_health.go`'s self-heal never fires over several converges, that is the
+   if `health.go`'s self-heal never fires over several converges, that is the
    evidence needed to consider retiring it.

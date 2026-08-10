@@ -39,15 +39,15 @@ rotator-minted token with the stale GitHub copy.
 **Item:** kube-native cred-hardening #4 (generalized) — move the rotation of every
 long-lived **Linode-issued** credential out of CI and into the cluster.
 **Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob
-(`platform-apl/components/volumeLabeler/`), `internal/linode` (rotation primitives),
+(`components/volumeLabeler/`), `internal/linode` (rotation primitives),
 `credentials_pat.go` / `credentials_objkey.go` (existing orchestration), the
-`secret-propagator` OpenBao policy (`tools/cmd/llz/ci_openbao_configure.go`).
+`secret-propagator` OpenBao policy (`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`).
 
 ## Problem
 
 Several long-lived credentials in the platform are **minted by the Linode API**
 and rotated **from CI** (`secret-rotation.yml` → `llz credentials …` →
-`llz ci propagate-pat` → OpenBao), with a copy in `infra-<env>` GitHub secrets:
+`propagate-pat` → OpenBao), with a copy in `infra-<env>` GitHub secrets:
 
 | Credential | GitHub secret | OpenBao path | Consumed by | Trust domain |
 |---|---|---|---|---|
@@ -148,7 +148,7 @@ create|revoke-old`; the new command reuses that logic, dropping the GitHub-secre
 write (tier-1 creds don't need it) and adding the verify probe + the k8s-auth
 OpenBao write.
 
-### Components (skeleton — `platform-apl/components/linodeCredRotator/`)
+### Components (skeleton — `components/linodeCredRotator/`)
 
 Mirror `volumeLabeler/linode-volume-labeler/`:
 
@@ -217,7 +217,7 @@ CI rotation-health.
 
 - The in-cluster credentials' slices of `secret-rotation.yml`
   (`credentials pat` / `credentials obj-key` create+revoke-old) and
-  `llz ci propagate-pat` — the rotator writes OpenBao directly.
+  `propagate-pat` — the rotator writes OpenBao directly.
 - The `infra-<env>` GitHub-secret copies of the **in-cluster-only** credentials
   become bootstrap-only (vestigial after first boot).
 - NOT retired: the broad provisioning PAT's CI rotation and the `TF_STATE_*` key.

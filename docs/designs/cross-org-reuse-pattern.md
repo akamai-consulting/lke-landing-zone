@@ -13,7 +13,7 @@ Phase 0 sync-hardening and Phase 1 doctor guardrail landed and still apply. Exam
 snippets below show the cross-org action refs this design proposed — the shipped form
 is `./.github/actions/<name>`.
 **Tracks:** [#201](https://github.com/akamai-consulting/lke-landing-zone/issues/201) (this design) · [#200](https://github.com/akamai-consulting/lke-landing-zone/issues/200) (the cross-org `secrets: inherit` bug + guardrail).
-**Relates to:** `instance-template/.github/workflows/`, `.github/actions/`, `.github/workflows/llz-*.yml` (the reusable workflows), `copier.yml`, `instance-template/.template-manifest`, `tools/cmd/llz/checks.go`.
+**Relates to:** `instance-template/.github/workflows/`, `.github/actions/`, `.github/workflows/llz-*.yml` (the reusable workflows), `copier.yml`, `instance-template/.template-manifest`, `tools/internal/verbs/lint/lint.go`.
 
 ## Problem
 

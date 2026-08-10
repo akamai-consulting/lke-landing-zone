@@ -22,7 +22,7 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       integration, registering the `acme.slicen.me` API group (the slicen chart
       default) and holding the Linode token from `LINODE_DNS_TOKEN` above. The
       landing zone no longer ships its own webhook Application, nor a
-      `platform-apl/manifest/dns/` base; the `llz-letsencrypt-{production,staging}`
+      `manifest/dns/` base; the `llz-letsencrypt-{production,staging}`
       ClusterIssuers come from the managed App Platform and
       target that group via `groupName: acme.slicen.me` + `solverName: linode`.
       Just confirm apl-core's `cert-manager-webhook-linode` pod reaches Ready

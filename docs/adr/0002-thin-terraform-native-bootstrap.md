@@ -4,9 +4,9 @@
 - Date: 2026-07-15
 - Deciders: platform / LLZ maintainers
 - Related: `docs/architecture/convergence-contract.md`,
-  `tools/cmd/llz/ci_bootstrap_cluster.go`,
-  `tools/cmd/llz/ci_wait_apl_pipeline.go`,
-  `tools/cmd/llz/ci_kyverno.go`
+  `tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go`,
+  `tools/internal/extensions/lifecycle/converge/aplpipeline.go`,
+  `tools/internal/extensions/lifecycle/kyverno/policy.go`
 
 ## Context
 
@@ -28,7 +28,7 @@ Terraform in this repo did two very different jobs under one roof:
 
 The second job fought Terraform's model hardest. Its providers were bootstrapped
 from a kubeconfig read mid-apply out of the cluster workspace's remote state; its
-destroy path needed `terraform state rm` surgery (`llz ci tf-untrack`) to avoid
+destroy path needed `terraform state rm` surgery (`tf-untrack`) to avoid
 `helm uninstall` hanging on finalizers and to handle the cluster-already-gone
 case; and its `lifecycle { ignore_changes }` blocks existed precisely to hand
 ownership of ACLs/firewall/pool off to in-cluster controllers after day-0. The
@@ -42,7 +42,7 @@ imperative building blocks it leaned on already lived in Go
 native `llz ci bootstrap-cluster` command driven from CI.** ArgoCD/apl-core own
 everything day-2 (they already did, post-seed).
 
-`llz ci bootstrap-cluster` (`tools/cmd/llz/ci_bootstrap_cluster.go`) is a faithful
+`llz ci bootstrap-cluster` (`tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go`) is a faithful
 port of the retired workspace, in the same exec-seam style as the rest of `llz ci`:
 read the live coredns ClusterIP, inject the four secrets-only runtime placeholders
 into the committed apl-values, server-side-apply the block-storage StorageClass +
@@ -87,8 +87,8 @@ Supporting decisions (see the PR's plan for the full rationale):
   command's deterministic ordering, its `--dry-run`, and the retained
   `diagnose-argocd` on failure.
 - **Removed:** `terraform-iac-bootstrap/cluster-bootstrap`,
-  `terraform-modules/llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
-  tfroot, and the now-dead `llz ci tf-untrack` + `internal/terraform/untrack.go`.
+  `llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
+  tfroot, and the now-dead `tf-untrack` + `internal/terraform/untrack.go`.
   The offline apl-values var-contract guard (`llz ci validate-apl-values`) now
   checks against the Go `bootstrapValuePlaceholders` constant instead of parsing
   the deleted `main.tf`.

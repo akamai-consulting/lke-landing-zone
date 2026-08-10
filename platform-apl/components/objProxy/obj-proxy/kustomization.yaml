@@ -9,7 +9,7 @@ resources:
   # admitted rather than the second.
   - ca-trust.yaml
   # The Kyverno mutation that mounts that bundle into harbor-registry pods. Lives
-  # here, not in tools/cmd/llz/manifests/, because nothing applies that directory.
+  # here, not in tools/internal/extensions/lifecycle/bootstrapcluster/manifests/, because nothing applies that directory.
   - kyverno-harbor-ca.yaml
   - externalsecret.yaml
   # The obj key the proxy re-signs with (#397). Listed with the other secrets, ahead

@@ -110,6 +110,8 @@ jobs:
     name: Push to main — no plan/apply (informational)
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # Bounded from measured history (echo only); GitHub's default is 6h.
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Explain the no-op

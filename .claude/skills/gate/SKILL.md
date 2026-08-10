@@ -113,15 +113,21 @@ true and useless and sent the reader to a live cluster.
 
 ## Step 5 — wiring a live lane
 
-1. **Write the verb** as `tools/cmd/llz/ci_assert_<thing>.go`, registered in
-   `ci.go`. Keep the judgement in a **pure function over parsed input** so it is
-   testable without a cluster; keep the transport (kubectl, port-forward, API) in
-   a **seam a test can replace**. `ci_assert_scrape.go` and
-   `ci_assert_openbao_audit.go` are the models.
+1. **Write the verb** in the extension package that owns the concern, under
+   `tools/internal/extensions/assertions/<pkg>/` — the logic in `<thing>.go`, the
+   cobra command in `cobra_<thing>.go` — and register its `…Cmd()` constructor in
+   `tools/internal/cli/ci.go`. (It does **not** go in `tools/cmd/llz`: that
+   package is a six-line entry point budgeted by `cmd-llz-entrypoint`.) The
+   package also declares itself in `extension.go` — an assertion binding carries
+   **read grants only**. Keep the judgement in a **pure function over parsed
+   input** so it is testable without a cluster; keep the transport (kubectl,
+   port-forward, API) in a **seam a test can replace**.
+   `assertions/assertobs/scrape.go` and `assertions/assertsecrets/openbaoaudit.go`
+   are the models.
 2. **Unit-test it** — the pure evaluator, every fail-closed arm (empty,
    malformed, unreachable), and the static half of the contract.
 3. **Add the lane** to `assertSuiteLanes` in
-   [`tools/cmd/llz/ci_assert_suite.go`](../../../tools/cmd/llz/ci_assert_suite.go).
+   [`tools/internal/extensions/assertions/assertsuite/suite.go`](../../../tools/internal/extensions/assertions/assertsuite/suite.go).
    One list, so a lane is both run and collected — the "declared but never
    checked" hazard is structurally gone. Fill in every field:
    - `Steps` run in order and short-circuit. Order them only when a later step

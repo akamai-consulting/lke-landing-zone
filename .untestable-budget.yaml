@@ -83,7 +83,7 @@ categories:
     # leaving the freed budget as slack a future PR could fill with untested bash.
     #
     # Ratcheted 550 → 526 when the e2e assert battery moved out of YAML into
-    # `llz ci assert-suite` (tools/cmd/llz/ci_assert_suite.go).
+    # `llz ci assert-suite` (tools/internal/extensions/assertions/assertsuite).
     #
     # It briefly went the other way. Six new e2e gates (assert-reconciler-effects,
     # assert-log-ingestion, assert-eso-roundtrip, assert-alert-delivery,
@@ -145,13 +145,13 @@ categories:
     # the remaining shell is 529, so keep ~3% headroom rather than leaving the
     # freed budget as slack a future PR could fill with untested bash.
     #
-    # Ratcheted 545 → 471 when template-scripts/check-template-manifest.sh moved
+    # Ratcheted 545 → 471 when check-template-manifest.sh moved
     # into `llz ci template-manifest`, then 471 → 420 when
-    # template-scripts/stamp-template-version.sh moved into
-    # `llz ci stamp-template-version`: remaining shell is 408, so keep ~3%
+    # stamp-template-version.sh moved into
+    # `stamp-template-version`: remaining shell is 408, so keep ~3%
     # headroom and do not let the retired checkers creep back as shell.
     #
-    # Ratcheted 420 → 375 when template-scripts/linting-and-validation/
+    # Ratcheted 420 → 375 when linting-and-validation/
     # cleanup-workflow-runs.sh (54 counted lines) was deleted: a one-shot utility
     # that purged Actions run history for seven workflows (ci/fuzz/scorecard/
     # trivy/build-firewall-controller/sync-firewall-cidrs/firewall.yml) which no
@@ -166,17 +166,30 @@ categories:
       - "instance-template/**/*.sh"
 
   python-scripts:
+    kind: script
     # Ratcheted 60 → 0: there are no Python scripts left. The last one was a
     # table-of-contents generator, and it was over budget on its first commit
     # (74/60) — correctly, because it re-implemented githubAnchor in a second
     # language. The two copies then disagreed with GitHub the SAME way, so
     # docs-guard compared a wrong anchor against a wrong anchor and passed. Its
     # logic now lives in `llz ci gen-toc`, sharing docHeadings with the checker.
-    # Keep this at 0: a new .py file here is a decision to put logic somewhere
-    # it cannot be unit-tested, and should be argued for explicitly.
+    #
+    # Two things were still wrong at 0, and the matched-nothing check surfaced
+    # both:
+    #
+    #   allowEmpty: true   A category matching no files used to report `0 / 0 ok`
+    #                      and exit 0, indistinguishable from a glob that had gone
+    #                      stale. This says out loud that matching nothing is the
+    #                      INTENDED end state here (see matchedNothing).
+    #   include broadened  It only ever watched template-scripts/**, so Python
+    #                      added anywhere else in the repo was never policed.
+    #
+    # Net: a dead category became a live tripwire that says "no new Python,
+    # anywhere" — which is what the design principle actually claims.
     budget: 0
+    allowEmpty: true
     include:
-      - "template-scripts/**/*.py"
+      - "**/*.py"
 
   terraform-provisioner-bash:
     # Ratcheted 101 → 28 → 0: the last destroy-time provisioner heredocs
@@ -206,7 +219,7 @@ categories:
 # Files exempted from every category. Keep this list short and justified — each
 # entry is logic the gate is choosing NOT to push into Go.
 exclude:
-  - "template-scripts/install-llz.sh"        # pinned-release installer for the llz CLI. Two decisions it cannot delegate to Go: which release to fetch (there is no llz on the machine yet), and which llz the CALLER'S shell resolves after install (a binary asked "am I the one that wins?" is answering about a PATH it was just handed, not the interactive shell's). Release-tag selection deliberately mirrors latestLLZTag in tools/cmd/llz/selfupdate.go, which IS unit-tested.
+  - "template-scripts/install-llz.sh"        # pinned-release installer for the llz CLI. Two decisions it cannot delegate to Go: which release to fetch (there is no llz on the machine yet), and which llz the CALLER'S shell resolves after install (a binary asked "am I the one that wins?" is answering about a PATH it was just handed, not the interactive shell's). Release-tag selection deliberately mirrors llzver.LatestLLZTag in tools/internal/shared/llzver/llzver.go, which IS unit-tested.
   - "template-scripts/ci/install-trivy.sh"   # pinned-release installer, no logic
   - "template-scripts/ci/install-syft.sh"    # pinned-release installer, no logic
   - "template-scripts/ci/install-gitleaks.sh" # pinned-release installer, no logic

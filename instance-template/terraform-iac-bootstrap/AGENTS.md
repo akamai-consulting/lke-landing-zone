@@ -6,7 +6,7 @@
 
 Both the roots' `*.tf` and the per-environment `*.tfvars` are **generated** by
 `llz render` and gitignored (see `.gitignore` here). The `*.tf` come from the
-`tfroots` package embedded in the `llz` binary (`tools/internal/tfroots`); the
+`tfroots` package embedded in the `llz` binary (`tools/internal/shared/tfroots`); the
 `*.tfvars` are rendered from the LandingZone spec, which is the source of truth:
 
 ```
@@ -26,13 +26,14 @@ the files it would format are not committed.
 
 ## Layout
 
-Three generated roots:
+Four generated roots:
 
 ```
 terraform-iac-bootstrap/
   cluster/          LKE-E cluster + node pool + node firewall — one apply per cluster
   object-storage/   Loki / Harbor S3 buckets (Linode Object Storage) — one per deployment
   vpc/              VPC + subnets — applied before the cluster that attaches to it
+  databases/        Linode Managed Postgres — OPT-IN and BILLED; see below
 ```
 
 The reusable modules are **not** in this directory. They live at the repo root
@@ -50,6 +51,16 @@ source = "git::ssh://git@github.com/<org>/lke-landing-zone.git//terraform-module
 `vpc` → `cluster` → `bootstrap-openbao`, with `object-storage` independent of the
 cluster chain. In `llz-terraform.yml` these are the `apply-vpc`, `apply-cluster`,
 `bootstrap-openbao` and `apply-object-storage` jobs.
+
+`databases` is independent of that chain too, but it is **not** like
+`object-storage` and the difference is the one worth knowing: buckets are a
+platform dependency every cluster needs, so `apply-object-storage` rides along on
+a cluster rebuild (`module=cluster`), while a Managed Postgres cluster is opt-in,
+**billed**, and takes ~15 minutes to provision — so `apply-databases` runs **only**
+on `module=databases` or `module=all`, never as a side effect of rebuilding a
+cluster. On a deployment that declared no databases the apply is a safe no-op:
+`llz render` omits the `databases` assignment entirely and the root's default `{}`
+stands.
 
 There is no `cluster-bootstrap` Terraform root. Installing Akamai App Platform
 (apl-core) is `llz ci bootstrap-cluster`, which the `bootstrap-openbao` job runs
@@ -120,6 +131,7 @@ invocations and handle the render + backend wiring.
 | LKE-E cluster, node pool, VPC | All Kubernetes workloads |
 | Cluster-level Linode Cloud Firewall + node firewall | Helm releases (cert-manager, Harbor, Prometheus, Istio, Keycloak, OpenBao via `manifest/`, etc.) |
 | Linode Object Storage buckets (`object-storage/`) | Loki configuration |
+| Linode Managed Postgres (`databases/`), when declared | In-cluster databases a workload ships for itself |
 | — (apl-core itself is installed by `llz ci bootstrap-cluster`, not Terraform) | Argo CD self-management after bootstrap |
 | — | Everything reconciled from `apl-values/<env>/manifest/` |
 

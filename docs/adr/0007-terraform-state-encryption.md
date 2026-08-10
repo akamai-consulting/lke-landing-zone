@@ -38,7 +38,7 @@ disk theft rather than against the access key, which is the real blast radius.
 > and every chunk flush rather than degrading to plaintext. SSE-C is the only mode
 > Linode implements and no writer here can emit it. See the
 > `linode_object_storage_bucket` entries in `atRestAllowed`
-> (`tools/cmd/llz/ci_at_rest_guard.go`), which carry the same numbers and the
+> (`tools/internal/extensions/lifecycle/atrest/atrest.go`), which carry the same numbers and the
 > conditions that would retire them.
 
 The question that prompted this was narrower: *can we keep the Managed Postgres

@@ -6,7 +6,7 @@
 # and — for the enabled driving reconcilers — holds a coordination.k8s.io Lease so
 # only one replica writes. Single replica + never-two-pods rollout (below).
 #
-# Image is the slim distroless llz (dockerfiles/llz), the same artifact the
+# Image is the slim distroless llz (the `llz` target in dockerfiles/Dockerfile), the same artifact the
 # CronJobs run; rendered by copier and pinned to the signed sha image for the
 # commit under test by release-e2e. No new deps over that image (the reconciler is
 # stdlib net/http + internal/kube + internal/metrics — no client-go).

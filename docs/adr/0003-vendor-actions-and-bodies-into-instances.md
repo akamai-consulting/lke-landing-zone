@@ -5,7 +5,7 @@
 - Deciders: platform / LLZ maintainers
 - Related:
   - `docs/designs/cross-org-reuse-pattern.md` (the boundary this removes)
-  - `tools/cmd/llz/doctor_crossorg.go` — the `llz doctor` cross-org guardrail (#200)
+  - `tools/internal/verbs/doctor/crossorg.go` — the `llz doctor` cross-org guardrail (#200)
   - `instance-template/.github/actions/**`, `instance-template/.github/workflows/llz-*.yml`
   - ADR 0002 — Thin Terraform
   - PR #16 — `internal/forge` + `forge_flavor` (the GHE / GitLab portability track this unblocks)

@@ -159,13 +159,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # setup-llz, not a hand-rolled setup-go + `go build`: this job carried the
+      # only second copy of the setup-go pin in the repo, and the two had already
+      # drifted a major version apart (v7.0.0 here against the composite's v6.5.0)
+      # — the exact 13-site-sweep failure the composite was extracted to end.
+      # llz-release.yml's `functional` job runs this same script off the same
+      # install-path; keep the two spelled the same way.
+      - uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-
-      - name: Build llz
-        run: cd tools && go build -o ../bin/llz ./cmd/llz
+          install-path: ${{ github.workspace }}/bin/llz
 
       - name: Functional test — basic commands (offline)
         env:
@@ -337,6 +339,8 @@ jobs:
     needs: [llz-functional, provision, teardown]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
+    timeout-minutes: 5
     steps:
       - name: Require llz-functional + provision + teardown to have succeeded
         env:

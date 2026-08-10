@@ -21,7 +21,7 @@ landing-zone template. It is a single Go module (`go.mod`).
   (keep-newest-N drain — the OBJ keys API exposes no `created` time). Built and
   exec'd by the `linode-credentials` composite action. The former standalone
   `secret-rotation` binary is folded in too, as `llz credentials lke-admin
-  rotate`. (`linode-cred-audit` became `llz ci cred-audit` and has since been
+  rotate`. (`linode-cred-audit` became `cred-audit` and has since been
   RETIRED in turn — its measurement lives in `llz ci token-inventory` and its
   reporting in `llz ci alert-eval`.)
 - `internal/linode/` — the shared, minimal Linode API client (LKE control-plane

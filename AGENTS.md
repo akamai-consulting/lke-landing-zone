@@ -66,7 +66,7 @@ dockerfiles/         Container images (ci-tofu, ci-kubernetes, devcontainer) →
 template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
 docs/                adopter-guide.md, agents.md
-.github/workflows/   build-images.yml, publish-charts.yml, lint.yml, chart-version-guard.yml, release-e2e*.yml, llz-release.yml, secret-scan.yml
+.github/workflows/   Template CI: build/publish, lint + the gate suite, budget ratchets, release e2e, security scans. Conventions in its own AGENTS.md
 ```
 
 Per-directory details live in each directory's `AGENTS.md`.
@@ -112,11 +112,20 @@ load-bearing.
 - Internal module-to-module references stay **relative** (`../llz-<name>`), never
   `git::` — that keeps the two halves pinned to the same umbrella tag. (There are
   none today; each root composes the modules directly.)
-- **The template hardcodes no version.** `instance-template/`'s first-party pins
-  are copier `<@ llz_version @>` placeholders; `llz new`/`llz upgrade` render them
-  to the `llz` binary's own version (the CLI is the version anchor). Don't write a
-  literal version into those pins, and don't add a bump step — Renovate is disabled
-  on them so `llz upgrade` stays the single channel.
+- **The first-party pins live in the embedded TF roots, not in the scaffold.**
+  `instance-template/` holds no `<@ llz_version @>` token at all — as the bullet
+  above says, and as `terraform-iac-bootstrap/` shows: it ships a `.gitignore`, an
+  `AGENTS.md` and two provider lockfiles, and not one `*.tf`. The roots that carry
+  the `git::…?ref=<@ llz_version @>` module sources are embedded in the `llz`
+  binary (`tools/internal/shared/tfroots/roots/`). `llz render` materialises them
+  into **gitignored** `*.tf`, substituting `<@ upstream_org @>` and
+  `<@ llz_version @>` at that moment from the pin `resolveTemplateRef()` reads —
+  which `llz new`/`llz upgrade` set to the CLI's own version, the version anchor.
+  So the pin is stamped at render time and never committed, which is *why* the
+  no-version-in-the-scaffold rule above is satisfiable at all. Don't write a
+  literal version into those roots, and don't add a bump step — Renovate is
+  disabled on the first-party self-references so `llz upgrade` stays the single
+  channel.
 
 ### Helm charts (`kubernetes-charts/README.md`)
 
@@ -153,13 +162,18 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
 1. `gofmt -w .` in `tools/`; `tofu fmt` any `.tf` files you changed.
 2. `go vet ./...` in `tools/`.
 3. `go test ./...` in `tools/` for any code you touched.
-4. **`make lint` — the authoritative final gate; fix every issue until it exits
+4. `make test-race` — CI runs it and **nothing else in this list does**. `go test
+   ./...`, `make lint`, `staticcheck`, `coverage` and `core-surface-check` all
+   pass over a data race. One in `assertsuite` failed this deterministically
+   while every other gate was green, and survived five pushes because nobody ran
+   the target.
+5. **`make lint` — the authoritative final gate; fix every issue until it exits
    0.** It is change-aware (keys off `git diff HEAD`) and covers everything you
    touched: Go (`gofmt`/`go vet`), `shellcheck`, Terraform (`tofu fmt`,
    `tflint`, `checkov`), Kubernetes (`kube-linter`, `kubeconform`), Helm
    (`helm lint --strict`), and `actionlint` for `.github/workflows/*.yml`.
    (`make LINT_ALL=1 lint` runs every check unconditionally.)
-5. **If you changed behavior, name the gate that would catch it regressing** — in
+6. **If you changed behavior, name the gate that would catch it regressing** — in
    the PR body, in one line. If the honest answer is "none", write the gate
    ([docs/e2e-gates.md](docs/e2e-gates.md)); if the behavior genuinely doesn't
    need one (refactor, docs, a statically-decidable invariant already in

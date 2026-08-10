@@ -207,7 +207,7 @@ spec:
         # The pieces harbor_* needs all ship: apl-values/values.yaml
         # harbor._rawValues.metrics, the harbor-allow-metrics NetworkPolicy, and the
         # ServiceMonitor. But Harbor's ServiceMonitor is NOT in defaultScrapeMonitors
-        # (tools/cmd/llz/ci_assert_scrape.go), so nothing fails if its metrics stop
+        # (tools/internal/extensions/assertions/assertobs/scrape.go), so nothing fails if its metrics stop
         # arriving and these three quietly read DEAD? in `alert-eval`. Names are the
         # goharbor v2.15 exporter/core metrics; confirm against real values with
         # `llz ci prom-metrics --match '^harbor_'`, tune the thresholds, then add the

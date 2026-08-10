@@ -46,12 +46,23 @@ Prefer these over reimplementing their logic inline:
 
 | Action | Purpose |
 |--------|---------|
-| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The repo's only composite action — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` should appear nowhere else. |
+| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The only composite action in this repo's own CI — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` must appear nowhere else. (`instance-template/.github/actions/` ships seven more, but those are scaffold content an *instance* runs, not CI for this repo.) |
 | `ghcr.io/<owner>/ci-tofu` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
 
-The one deliberate exception to `setup-llz` is `llz-release.yml`, which hand-rolls
-its `go build` to stamp the real release version via `-ldflags` — something the
-composite intentionally does not do.
+**This is enforced** — `make setup-go-sole-site` (in the `llz-gates` suite, so
+every `make lint` runs it) fails on any `uses: actions/setup-go` outside the
+composite. It was written because the rule above had already been broken:
+`release-e2e-lane.yml` carried a second pin at **v7.0.0** while the composite sat
+at **v6.5.0**, in a job running the same functional script `llz-release.yml` runs
+*through* the composite. Nothing caught it, because actionlint judges each
+`uses:` in isolation and a correctly SHA-pinned action looks identical whether or
+not it is the right one.
+
+The one deliberate exception is `llz-release.yml`'s **`go build`**, which it
+hand-rolls to stamp the real release version via `-ldflags` — something the
+composite intentionally does not do. Note the exception is the *build* only: that
+job still takes its **toolchain** from `setup-llz`, which is why the sole-site
+rule above holds with no exemptions at all.
 
 ## Tool installation pattern
 
@@ -110,14 +121,36 @@ This avoids interactive host-key prompts hanging a job the first time it talks t
 
 ## permissions blocks
 
-Every job must have an explicit `permissions:` block. The safe default for non-publishing jobs is:
+**Every workflow must declare a workflow-level `permissions:` block, and the
+default is the whole of it:**
 
 ```yaml
 permissions:
   contents: read
 ```
 
-Jobs that push to GHCR need `packages: write` (pulling a private GHCR `container:` image needs `packages: read`). Jobs that comment on PRs need `pull-requests: write`. Never omit the block — an absent `permissions:` inherits workflow-level defaults or write-all.
+That is the load-bearing rule, because a job with no block and a workflow with no
+block is what inherits the repository default — up to write-all. With the
+workflow-level block present, a job that omits its own inherits exactly
+`contents: read`, which is the floor, not a risk.
+
+**A job declares its own block when, and only when, it needs MORE than that** —
+`packages: write` to push to GHCR, `packages: read` to pull a private GHCR
+`container:` image, `pull-requests: write` to comment on a PR, `actions: write`
+to trigger or inspect another workflow's runs, `contents: write` to publish a
+release. Job-level permissions REPLACE the workflow-level set rather than adding
+to it, so a job that declares one must list everything it needs — including
+`contents: read` if it checks out. (`llz-release.yml`'s `image-tag` job is the
+instructive counter-example: it declares `packages: write` and nothing else
+because it never checks out, only retags an image.)
+
+> This section used to read "Every job must have an explicit `permissions:`
+> block … never omit the block", and 28 of the 82 jobs across this repo and
+> `instance-template/` omitted it — correctly, because every one of their
+> workflows declares `contents: read` at the top. A rule that most of the tree
+> already violates safely is one people learn to skip past, and it hid the
+> distinction that actually matters: the danger is a missing block at BOTH
+> levels, not a missing block at the job level.
 
 > Per-environment operational workflows (terraform apply, bootstrap, secret
 > rotation, app deploy) are NOT shipped here — they live with the instance

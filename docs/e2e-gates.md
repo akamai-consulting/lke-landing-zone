@@ -180,14 +180,19 @@ of at e2e time.
 
 ## Adding an e2e gate
 
-1. **Write the verb** as `tools/cmd/llz/ci_assert_<thing>.go`, registered in
-   `ci.go`. Keep the judgement in a pure function over parsed input so it is
-   testable without a cluster; keep the transport (kubectl, port-forward, API) in
-   a seam a test can replace. `ci_assert_scrape.go` and
-   `ci_assert_openbao_audit.go` are the models.
+1. **Write the verb** in the extension that owns the thing being asserted —
+   `tools/internal/extensions/assertions/<ext>/` — and wire its constructor into
+   `tools/internal/cli/ci.go` and into `registry.Commands()`. Keep the judgement
+   in a pure function over parsed input so it is testable without a cluster; keep
+   the transport (kubectl, port-forward, API) in a seam a test can replace.
+   `assertobs/scrape.go` and `assertsecrets/cobra_openbaoaudit.go` are the models.
+
+   It does **not** go in `tools/cmd/llz` — that package is a six-line entry point
+   pinned by an exact budget, and `entrypoint_boundary_test.go` refuses any import
+   there but `internal/cli`.
 2. **Unit-test it** — the pure evaluator, the fail-closed arms (empty, malformed,
    unreachable), and the static half of the contract.
-3. **Add the lane** to `assertSuiteLanes` in `tools/cmd/llz/ci_assert_suite.go`.
+3. **Add the lane** to `assertSuiteLanes` in `tools/internal/extensions/assertions/assertsuite/suite.go`.
    It is ONE list — a lane there is both run and collected — and every field is
    load-bearing:
    - `Steps` run in order and short-circuit at the first failure. Order them only

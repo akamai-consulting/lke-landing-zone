@@ -14,7 +14,7 @@
 # Every field access is has()-guarded so the expressions cannot error.
 #
 # ALLOWLIST LOCKSTEP: the group/Kind + per-name allowlists below MUST equal
-# waveHealthAllowedKinds + waveHealthAllowedNames in tools/cmd/llz/ci_wave_health_guard.go.
+# wavehealth.AllowedKinds + wavehealth.AllowedNames in tools/internal/extensions/guards/wavehealth/health.go.
 # TestWaveHealthVAPMatchesGuard fails the build if they drift. When you vet a new kind
 # at a negative wave, add it in BOTH places.
 apiVersion: admissionregistration.k8s.io/v1

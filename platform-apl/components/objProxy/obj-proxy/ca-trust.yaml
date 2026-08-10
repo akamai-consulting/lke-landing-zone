@@ -7,7 +7,8 @@
 # replicator, no copy job, and it renews on the same schedule as the serving cert.
 #
 # WHAT CONSUMES IT. The Kyverno ClusterPolicy `harbor-obj-proxy-ca`
-# (tools/cmd/llz/manifests/kyverno-harbor-obj-proxy-ca.yaml) mounts this Secret's
+# (kyverno-harbor-ca.yaml, alongside this file in the objProxy component — NOT the
+# bootstrapcluster/manifests/ directory; see that file's header for why) mounts this Secret's
 # ca.crt into harbor-registry pods at /etc/llz/ca and sets SSL_CERT_DIR so Go adds
 # it to the system pool. See that file for why the mutation targets Pods rather
 # than the Deployment, and for the measured trust-store layout it relies on.

@@ -48,7 +48,7 @@ those actions. `inputs.*` are `workflow_call` inputs forwarded by the caller.
 The first-init / wait-for-unseal / re-configure mode selection is the same
 detect → choose a path → re-verify shape the cluster-health contract uses, applied to
 OpenBao seal state — and it lives in ONE place: the `llz ci bao-ensure-ready` command
-(`tools/cmd/llz/ci_bao_ensure_ready.go`), run as a single step. Under the chart's
+(`tools/internal/extensions/lifecycle/openbao/ci_bao_ensure_ready.go`), run as a single step. Under the chart's
 `seal "static"` auto-unseal each pod unseals itself at boot from the static seal key
 (created by the `bao-seed-seal-key` step before the pods start), so there is no
 submit-keys flow and no scheduled re-unseal cron — `bao-ensure-ready` just runs
@@ -307,7 +307,7 @@ Ready before the OpenBao phase proceeds.
 ### Step: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
 
 The whole in-cluster bootstrap in one native command (see
-`tools/cmd/llz/ci_bootstrap_cluster.go`): read the live coredns IP, inject the runtime
+`tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go`): read the live coredns IP, inject the runtime
 secrets into the committed apl-values, SSA the StorageClass + namespaces,
 `helm upgrade --install` apl-core, race the two Kyverno policies concurrently with the
 apl-pipeline readiness gate, then SSA the platform-bootstrap AppProject + Applications.
@@ -330,7 +330,7 @@ phase marks complete the timeline.
 
 The out-of-band self-signed `openbao-tls` seed that used to live here has been REMOVED.
 `openbao-tls` is now issued by the stable, self-signed cert-manager CA `openbao-ca`
-(`platform-apl/manifest/cert-manager/raw/openbao-bootstrap-ca.yaml`), which has no
+(`manifest/cert-manager/raw/openbao-bootstrap-ca.yaml`), which has no
 OpenBao dependency. cert-manager issues `openbao-tls` before OpenBao starts — the
 StatefulSet pod simply waits in `ContainerCreating` for the Secret mount — and the
 serving CA never changes, so there is no mid-bootstrap CA rotation, no OpenBao reload,
@@ -347,7 +347,7 @@ The raft `retry_join` pod-FQDN SAN requirement is satisfied by the `dnsNames` in
 
 ### Removed: the OTel Collector serving-TLS bootstrap seed
 
-The `llz ci gen-bootstrap-tls` step that used to hand-seed
+The `gen-bootstrap-tls` step that used to hand-seed
 `platform-otel-collector-tls` here (a throwaway runner-generated CA + cert, replaced
 in-place by the custom-ca issuer later) has been REMOVED — the same anti-pattern the
 `openbao-tls` seed removal fixed. The cert is now issued from FIRST boot by the stable,
@@ -454,7 +454,7 @@ client-side).
 ### Step: Seed OpenBao KV bootstrap paths
 
 One step runs every generic `bao-seed` path from the `bootstrapSeeds()` table in
-`llz ci bao-seed-all` (`tools/cmd/llz/ci_bao_seed_all.go`):
+`llz ci bao-seed-all` (`tools/internal/extensions/lifecycle/openbao/seedall.go`):
 
 * `secret/infra/github-dispatch-token` (harbor-ready PostSync hook)
 * `secret/cert-automation/github-token` (cert-automation ExternalSecret)
@@ -589,7 +589,7 @@ Non-fatal: a standby whose `openbao-tls` isn't up yet just skips peer-CA provisi
 ### Removed: Verify ExternalSecrets synced
 
 The `Verify ExternalSecrets synced` step (and its backing
-`template-scripts/verify-externalsecrets.sh`) was deleted in the convergence-contract
+`verify-externalsecrets.sh`) was deleted in the convergence-contract
 anti-pattern cleanup. It existed to `kubectl annotate ... force-sync=$(date +%s)` every
 ExternalSecret because ESO's 24h refresh cache could hold a `Ready=False` from before
 the workflow seeded the source path. Replaced by Argo CD `health.lua` for
@@ -681,7 +681,7 @@ converge poll is the verdict.
 
 ### Removed: the one-shot pre-converge "Realign argocd-redis on WRONGPASS" step
 
-The converge poll's own reactive realign (`ci_health.go`: on a detected
+The converge poll's own reactive realign (`health.go`: on a detected
 WRONGPASS/NOAUTH split it restarts argocd-redis once per run) already covers this —
 including a split present BEFORE converge, which it catches on poll 1 — so the pre-step
 only realigned ~one poll earlier while putting ~25 lines of warm-cluster (`KEEP_CLUSTER`)

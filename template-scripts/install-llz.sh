@@ -37,7 +37,7 @@ gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
 }
 
 # Resolve the latest full release when no version is given — the SAME rule
-# `llz self-update` / `llz new` apply (latestLLZTag, tools/cmd/llz/selfupdate.go),
+# `llz self-update` / `llz new` apply (llzver.LatestLLZTag, tools/internal/shared/llzver/llzver.go),
 # because the two must agree: the installer picks the binary, and that binary's
 # own version is what `llz new` pins the instance to. Highest SEMVER, not newest
 # by date — `--limit 1` returned whatever was released last, so a patch
@@ -59,7 +59,7 @@ gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
 # The reduce is not a stylistic choice over `sort_by(.key) | last`. Stripping the
 # tail means two full releases can share one numeric core (v1.2.3 and
 # v1.2.3-hotfix), and jq's sort is stable, so `last` returns the LAST of equals —
-# which is the OLDEST, since gh lists newest first. latestLLZTag replaces its
+# which is the OLDEST, since gh lists newest first. LatestLLZTag replaces its
 # best only on a strictly greater version, keeping the first (newest) of equals;
 # `$r.key > .key` reproduces exactly that. Pinned by
 # TestLatestLLZTagTieKeepsFirst.

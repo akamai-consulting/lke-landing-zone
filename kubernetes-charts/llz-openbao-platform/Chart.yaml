@@ -196,7 +196,15 @@ type: application
 #         what a rule that is shape-correct and effect-free buys you: nothing in
 #         review or in converge can tell it from a working one, and only reading
 #         it back off the wire can.
-version: 0.1.30
+# 0.1.31: doc-only — the source-ref sweep that moved package main into
+#         tools/internal/** repointed two comment path literals here (values.yaml's
+#         `baoEnv` pointer, now tools/internal/shared/openbao/openbao.go, and one in
+#         templates/openbao-tls-cert.yaml) and did NOT bump. publish-charts.yml only
+#         pushes a NEW version, so 0.1.30 would keep being served with pointers to
+#         files that no longer exist — and this is the chart whose comments an
+#         operator reads mid-incident, which is exactly when a dead pointer costs.
+#         Bumped so the corrections ship (behavior unchanged).
+version: 0.1.31
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

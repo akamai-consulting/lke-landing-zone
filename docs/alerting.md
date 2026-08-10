@@ -55,7 +55,7 @@ no GitHub secret, no values churn:
 
    apl-core mounts the URL from the `alertmanager-credentials` Secret; the
    `kyverno-alertmanager-slack-webhook` policy (Kyverno is owned by the managed
-   App Platform — LLZ no longer ships a `platform-apl/manifest/kyverno-policies/`
+   App Platform — LLZ no longer ships a `manifest/kyverno-policies/`
    base) repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
    the seed up within its 5m refresh. Rotation is the same `llz openbao set`
    again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
@@ -141,7 +141,7 @@ resource-saturation alert per service. Availability is covered fleet-wide; Loki 
 fully covered (verified live); OpenBao carries lease/audit coverage.
 
 **Open gap — Harbor and OTel are not scrape-gated.** `defaultScrapeMonitors` in
-`tools/cmd/llz/ci_assert_scrape.go` lists four ServiceMonitors (cert-manager,
+`tools/internal/extensions/assertions/assertobs/scrape.go` lists four ServiceMonitors (cert-manager,
 otel-collector-monitoring, llz-reconciler, platform-openbao); **Harbor's is not
 among them**, so nothing fails if Harbor's metrics stop arriving and its three
 alerts quietly go `DEAD?`. Closing it: spot-check the series on a converged
@@ -243,7 +243,7 @@ template.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the
    rule-drift check in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml)
    AND to `defaultScrapeRuleGroups` in
-   [tools/cmd/llz/ci_assert_scrape.go](../tools/cmd/llz/ci_assert_scrape.go) — the
+   [tools/internal/extensions/assertions/assertobs/scrape.go](../tools/internal/extensions/assertions/assertobs/scrape.go) — the
    e2e `assert-scrape-targets` gate fails if an expected group isn't loaded into
    Prometheus. Likewise, a new landing-zone ServiceMonitor goes in that file's
    `defaultScrapeMonitors` so the e2e asserts it actually produces an `up` target.

@@ -25,11 +25,35 @@ on:
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
+      # The PIPELINE ITSELF, which this stub is only the trigger surface for.
+      # Listing this file and not the reusable it calls watched the 90-line caller
+      # and ignored the body that plans and applies — so a `copier update` that
+      # changed the apply logic (or the composite actions it drives) merged with no
+      # plan run against it. The reusable and the actions are `managed`, so they
+      # change on exactly the upgrades an operator most wants a plan for.
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
+      - '.github/actions/**'
   pull_request:
     branches: [main, master]
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
+      # The PIPELINE ITSELF, which this stub is only the trigger surface for.
+      # Listing this file and not the reusable it calls watched the 90-line caller
+      # and ignored the body that plans and applies — so a `copier update` that
+      # changed the apply logic (or the composite actions it drives) merged with no
+      # plan run against it. The reusable and the actions are `managed`, so they
+      # change on exactly the upgrades an operator most wants a plan for.
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
+      - '.github/actions/**'
   workflow_dispatch:
     inputs:
       action:

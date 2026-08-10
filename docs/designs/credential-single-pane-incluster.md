@@ -22,7 +22,7 @@ runs **daily, per region** (matrix). Per run it:
    kubeconfig out of Terraform state (S3 backend) and opens the LKE-Enterprise
    control-plane ACL for the hosted runner's dynamic egress IP (`llz ci runner-acl open`).
 2. **Writes the inventory** — `llz ci token-inventory | kubectl apply -f -`
-   ([`ci_token_inventory.go`](../../tools/cmd/llz/ci_token_inventory.go)) measures the
+   ([`inventory.go`](../../tools/internal/extensions/assertions/tokeninv/inventory.go)) measures the
    expiry of every CI token it holds — two GitHub service PATs
    (`OPENBAO_SECRETS_WRITE_TOKEN`, `APL_VALUES_REPO_TOKEN`) via the token-expiration
    header, plus Linode account PATs via `GET /v4/profile/tokens` — and applies the
@@ -32,7 +32,7 @@ runs **daily, per region** (matrix). Per run it:
 4. **Closes the ACL dance** — deletes the kubeconfig and revokes the runner ACL.
 
 The in-cluster `llz-reconciler` already reads that ConfigMap every 60s
-([`reconcile_tokens.go`](../../tools/cmd/llz/reconcile_tokens.go)) and re-exposes it as
+([`reconcile_tokens.go`](../../tools/internal/extensions/lifecycle/reconciler/reconcile_tokens.go)) and re-exposes it as
 `llz_token_expiry_timestamp_seconds{provider,token}` etc., so Prometheus + Alertmanager
 already carry the *alerting*. The out-of-cluster job is only the **writer** (step 2) plus
 a **CI gate** (step 3).
@@ -50,7 +50,7 @@ CIDR-fragile port-forward path the reconciler migration set out to eliminate.
 Two mechanical pieces are ready and uncontroversial:
 
 - **`llz ci token-inventory --apply`.** The distroless image has no `kubectl`, so the
-  `| kubectl apply` pipe can't run in-pod. The [`kube.Client`](../../tools/internal/kube/kube.go)
+  `| kubectl apply` pipe can't run in-pod. The [`kube.Client`](../../tools/internal/shared/kube/kube.go)
   already has `GetJSON` / `CreateJSON` / `MergePatch` — enough for a create-or-update of
   the ConfigMap (GET → 404 create, else merge-patch `data`), seamed for a unit test the
   same way the existing measurement path is. Pure-additive; the stdout path (and the CI
@@ -104,7 +104,7 @@ read-only path for this job.
 
 ## `alert-eval` (the CI gate) does not come along
 
-`alert-eval` and its `prom_query.go` helper are built on `kubectl get prometheusrules`
+`alert-eval` and its `promquery.go` helper are built on `kubectl get prometheusrules`
 plus a `kubectl port-forward` to Prometheus (the LKE-E apiserver `services/proxy`
 subresource is webhook-denied, so port-forward is the only out-of-cluster path). Neither
 `kubectl` exists on the distroless image; porting it would be a client-go + direct-HTTP
@@ -134,14 +134,14 @@ without Alertmanager receivers wired. Keep them.
 
 ## Touch-points for when this proceeds
 
-- `tools/cmd/llz/ci_token_inventory.go` (+ `_test.go`) — add `--apply` (create-or-update via
+- `tools/internal/extensions/assertions/tokeninv/inventory.go` (+ `_test.go`) — add `--apply` (create-or-update via
   `kube.Client`).
-- `platform-apl/components/tokenInventory/` — new component (namespace, SA, cross-ns RBAC
+- `components/tokenInventory/` — new component (namespace, SA, cross-ns RBAC
   into `llz-reconciler`, `ExternalSecret`s, default-deny + egress NetworkPolicy, CronJob),
   modeled on `platform-apl/components/broadPatRotator/`.
-- `tools/internal/clusterspec/components.go` — register `tokenInventory` (DependsOn
+- `tools/internal/shared/clusterspec/components.go` — register `tokenInventory` (DependsOn
   `externalSecrets` + `llzReconciler`, `DefaultDisabled`, CarvedApp wave 5).
-- `tools/cmd/llz/ci_bao_seed_all.go` + `ci_openbao_configure.go` (`policyPlatformCI`) — only
+- `tools/internal/extensions/lifecycle/openbao/seedall.go` + `ci_openbao_configure.go` (`policyPlatformCI`) — only
   if decision (1) is to vault `APL_VALUES_REPO_TOKEN`.
 - `.github/workflows/llz-scheduled-checks.yml` — retire the `credential-single-pane` job
   **only after** per-instance adoption.

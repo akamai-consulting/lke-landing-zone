@@ -85,7 +85,7 @@ The workflow detects cluster state automatically and chooses the right path:
 > [quickstart §4](../quickstart.md#4-build-it--llz-up).
 | *(retired)* `LOKI_S3_*` / `HARBOR_REGISTRY_S3_*` | — | No longer exist: the workflow's `llz ci mint-bootstrap-objkeys` step mints the object-storage keys via the Linode API and seeds OpenBao directly; the in-cluster `linodeCredRotator` rotates them. The credentials never transit GitHub. |
 | *(retired)* `GITEA_BACKUP_S3_ACCESS_KEY` / `GITEA_BACKUP_S3_SECRET_KEY` | — | No longer exist: Gitea is disabled on apl-core v6 (external BYO Git / git-server), so there is no in-cluster Gitea to back up and no backup CronJob to seed. |
-| `LINODE_DNS_TOKEN` | Consumed by Terraform (`TF_VAR_linode_dns_token`), not this workflow | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`apps.cert-manager.dns.provider.linode.apiToken`) and ExternalDNS. No OpenBao seed is involved. ACME certificate challenges fail until it is provisioned. The `llz-letsencrypt-*` ClusterIssuers that target that webhook sync automatically via Argo CD (the mandatory `platform-apl/manifest/dns` base). |
+| `LINODE_DNS_TOKEN` | Consumed by Terraform (`TF_VAR_linode_dns_token`), not this workflow | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`apps.cert-manager.dns.provider.linode.apiToken`) and ExternalDNS. No OpenBao seed is involved. ACME certificate challenges fail until it is provisioned. The `llz-letsencrypt-*` ClusterIssuers that target that webhook sync automatically via Argo CD (the mandatory `manifest/dns` base). |
 
 ### Repository-level secrets set by this workflow
 
@@ -151,7 +151,7 @@ gh workflow run bootstrap-openbao.yml \
    - `secret/infra/github-dispatch-token`
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
    - `secret/loki/object-store` + `secret/harbor/registry-s3` (minted + seeded by `llz ci mint-bootstrap-objkeys` — no GitHub secrets involved; skip-if-present so a rotator-minted key is never clobbered)
-   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `platform-apl/components/harbor/` and `platform-apl/manifest/generated-secrets/`.
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `platform-apl/components/harbor/` and `manifest/generated-secrets/`.
 11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
     lets `llz ci rotate-incluster-pat` authenticate to OpenBao via the workflow's
     GitHub OIDC token and write `secret/linode/api-token` without root (the
@@ -194,7 +194,7 @@ for the pods to self-unseal, then exits without re-configuring or re-seeding.
 
 ### Cold bootstrap: the cert-rotation reseal is auto-healed
 
-On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManagerBootstrapCA/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
+On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManagerBootstrapCA/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
 
 The `openbao-cert-watcher` Deployment (`platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
 

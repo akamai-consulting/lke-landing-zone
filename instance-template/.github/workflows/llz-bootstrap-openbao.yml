@@ -294,7 +294,7 @@ jobs:
           }
 
       # The whole in-cluster bootstrap in one command — see
-      # tools/cmd/llz/ci_bootstrap_cluster.go. Idempotent, so a re-run is safe.
+      # tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go. Idempotent, so a re-run is safe.
       - name: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
         if: inputs.bootstrap_cluster
         env:
@@ -429,7 +429,7 @@ jobs:
 
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic seed from the bootstrapSeeds() table in
-      # tools/cmd/llz/ci_bao_seed_all.go — add new seeds THERE, not as steps here.
+      # tools/internal/extensions/lifecycle/openbao/seedall.go — add new seeds THERE, not as steps here.
       # A missing source defers per its table mode; a kv-put failure aborts the
       # rest. HA_ROLE drives the github-dispatch-token standby skip;
       # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
@@ -599,7 +599,11 @@ jobs:
             echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          llz ci wait-harbor --registry-only
+          # No --registry-only: it is deprecated and IGNORED (the registry rollout
+          # is the only behavior now). The CLI still accepts it so already-delivered
+          # instances do not break on an image bump — but the template emitting it
+          # is what would keep that shim alive forever, so new instances stop.
+          llz ci wait-harbor
 
       # ── Extract the standby CA cert for cross-cluster rotation ─────────────────
       # Passes the standby's OpenBao TLS CA out as a job output so provision-peer-ca
@@ -778,8 +782,9 @@ jobs:
       # Release-e2e only (assert_loki=true); normal instance bootstraps skip it.
       #
       # The lane table, the parallel fan-out, the per-lane ::group:: capture and the
-      # pass/fail verdict all live in `llz ci assert-suite` (tools/cmd/llz/
-      # ci_assert_suite.go), not here. This used to be ~40 lines of inline bash
+      # pass/fail verdict all live in `llz ci assert-suite`
+      # (tools/internal/extensions/assertions/assertsuite/suite.go), not here.
+      # This used to be ~40 lines of inline bash
       # implementing a job runner in YAML: it was the only untested part of the
       # battery, its lane list was written TWICE (once to run, once to collect) so a
       # lane could run and never be able to fail the step, and the list shipped
@@ -806,6 +811,18 @@ jobs:
         # hung apiserver can't eat the job budget.
         timeout-minutes: 10
         run: llz ci diagnose-argocd || true
+
+      # The reconciler half, and it belongs HERE rather than only on cluster-health:
+      # THIS is the job that runs `llz ci converge`, so this is the bundle a reader
+      # opens when converge reports "obj chain settling; check llz-reconciler
+      # llz_apl_overlay_synced". Wiring it only into the health workflow (which the
+      # e2e never dispatches) left that instruction just as unanswerable from an
+      # e2e failure as before — the diagnostic existed and was not where the
+      # failure was.
+      - name: Diagnose convergence failure (llz-reconciler + apl-overlay lane)
+        if: failure() || cancelled()
+        timeout-minutes: 10
+        run: llz ci diagnose-reconciler || true
 
       # ── Job tail: timing, ACL revoke, then fail-on-errors ─────────────────────
       # Order matters. Timing runs while cluster access still exists; the ACL revoke

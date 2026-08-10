@@ -46,13 +46,13 @@ OWN content. A `Degraded` resource then fails only its own App.
 > or validation error degrades the ApplicationSet itself and thus platform-bootstrap's
 > health rollup. The operator-triggerable causes are directory names that yield an
 > invalid Application/namespace, which `llz render`/`llz doctor` reject at render time
-> (`tools/cmd/llz/custom_layout.go`). That render-time gate is weaker than the VAP-style
+> (`tools/internal/shared/instanceresolve/custom_layout.go`). That render-time gate is weaker than the VAP-style
 > admission enforcement this document argues for elsewhere — a direct commit bypasses it.
 > Closing that gap is open work. See docs/extending-llz.md.
 
 This PR generalizes that to the four bundles. When `spec.components.<name>` is enabled
 and the component declares a `CarvedApp` (registry field in
-`tools/internal/clusterspec/components.go`), `llz render` emits:
+`tools/internal/shared/clusterspec/components.go`), `llz render` emits:
 
 1. a health-inert `Application` CR `llz-<name>` into `apl-values/<env>/manifest/`
    (referenced under `resources:` of the thin overlay, replacing the old

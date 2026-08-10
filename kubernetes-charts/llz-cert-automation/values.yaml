@@ -110,7 +110,7 @@ externalSecrets:
   # (username/password/registry_host all live at secret/harbor/robot) — no separate
   # secret/harbor/docker-config seed. configTemplate is an ESO v2 template rendered
   # by ESO at sync time (NOT Helm — the braces are data here, injected verbatim),
-  # byte-for-byte the dockerconfigjson the retired `llz ci seed-harbor-dockerconfig`
+  # byte-for-byte the dockerconfigjson the retired `seed-harbor-dockerconfig`
   # produced: host = registry_host (already scheme-stripped), auth = b64(user:pass).
   #
   # NOTE the `{ {{- ` after `"auths":` — the opening object brace MUST be separated
