@@ -40,6 +40,8 @@ jobs:
   budgets:
     name: Untestable-LOC and core-surface budgets
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up llz toolchain

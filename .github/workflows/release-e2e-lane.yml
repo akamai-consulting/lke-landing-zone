@@ -339,6 +339,8 @@ jobs:
     needs: [llz-functional, provision, teardown]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
+    timeout-minutes: 5
     steps:
       - name: Require llz-functional + provision + teardown to have succeeded
         env:

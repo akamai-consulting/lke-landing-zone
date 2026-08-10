@@ -69,6 +69,39 @@ var (
 			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images") | select(.status=="queued" or .status=="in_progress")] | length`)
 		return err == nil && parseBuildCount(out) > 0
 	}
+	// pinBuildFailed reports whether the most recent "Build Container Images" run
+	// for sha has already CONCLUDED unsuccessfully.
+	//
+	// WITHOUT THIS THE WAIT CANNOT TELL A SLOW BUILD FROM A DEAD ONE. waitForManifest
+	// polls the registry for an image and nothing else, so a build that failed at
+	// its push step looks exactly like one still running: the poll burns its whole
+	// budget and then errors "not published in time — did Build Container Images
+	// succeed for <sha>?", a question this API call answers in one request.
+	//
+	// It is not hypothetical. A GHCR secondary rate limit (`You have exceeded a
+	// secondary rate limit`) failed the ci-kubernetes push ~4 minutes in, and the
+	// e2e lane's instantiate job then sat waiting ~20 more minutes for an image
+	// that was never coming — indistinguishable, from the outside, from a hang.
+	//
+	// Same query shape as pinBuildInProgress above, deliberately: one endpoint, one
+	// filter, so the two cannot disagree about which runs count.
+	pinBuildFailed = func(token, templateRepo, sha string) (string, bool) {
+		out, err := pinGH(token, "api",
+			fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", templateRepo, sha),
+			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images") | select(.status=="completed") | select(.conclusion!="success") | .html_url] | first // ""`)
+		if err != nil {
+			return "", false // could not tell — NOT the same as "it failed"; keep waiting
+		}
+		// Trim the QUOTES as well as the whitespace. The jq filter ends in `// ""`,
+		// so "no failed run" can come back as a literal two-character `""` — and
+		// treating that as a URL would abort a perfectly healthy build on the
+		// emptiness it was meant to signal. Only a real http(s) URL counts.
+		u := strings.Trim(strings.TrimSpace(string(out)), `"`)
+		if !strings.HasPrefix(u, "http") {
+			return "", false
+		}
+		return u, true
+	}
 	// pinTriggerBuild kicks off the Build Container Images workflow on ref, passing
 	// the exact sha to build via the `sha` input — `gh workflow run --ref` can only
 	// name a branch/tag, so it would otherwise build the ref HEAD, which races a
@@ -160,8 +193,14 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 		ref := imageRef(base, o.SHA, wantSha)
 		if wantSha {
 			fmt.Printf("Waiting for %s to publish…\n", ref)
-			if !waitForManifest(ref, o.Retries, o.Interval) {
-				return fmt.Errorf("%s not published in time — did Build Container Images succeed for %.8s?", ref, o.SHA)
+			ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, o.Retries, o.Interval)
+			if !ok {
+				if failedURL != "" {
+					return fmt.Errorf("%s will never publish: Build Container Images FAILED for %.8s — %s "+
+						"(aborting the wait instead of polling out the budget)", ref, o.SHA, failedURL)
+				}
+				return fmt.Errorf("%s not published in time and no failed build run was found for %.8s — "+
+					"the build may still be queued, or the run was never triggered", ref, o.SHA)
 			}
 		} else if !pinManifestExists(ref) {
 			return fmt.Errorf("%s not found in GHCR", ref)
@@ -233,15 +272,24 @@ func parseBuildCount(out []byte) int {
 	return n
 }
 
-// waitForManifest polls pinManifestExists until the image is published or the
-// retry budget is spent; the first check is immediate. Returns whether it appeared.
-func waitForManifest(image string, retries int, delay time.Duration) bool {
+// waitForManifest polls pinManifestExists until the image is published, the build
+// that would publish it is known to have FAILED, or the retry budget is spent; the
+// first check is immediate. Returns whether it appeared, and the failed run's URL
+// when it aborted early.
+//
+// The abort is what turns a 20-minute dead wait into an immediate, named failure.
+// The image check stays FIRST: a build can fail after a successful push (a later
+// image in the matrix), and in that case the artifact we need is already there.
+func waitForManifest(image, token, templateRepo, sha string, retries int, delay time.Duration) (bool, string) {
 	for attempt := 0; ; attempt++ {
 		if pinManifestExists(image) {
-			return true
+			return true, ""
+		}
+		if url, failed := pinBuildFailed(token, templateRepo, sha); failed {
+			return false, url
 		}
 		if attempt >= retries {
-			return false
+			return false, ""
 		}
 		pinSleep(delay)
 	}

@@ -32,21 +32,23 @@ func TestParseBuildCount(t *testing.T) {
 }
 
 func TestWaitForManifest(t *testing.T) {
-	prevExists, prevSleep := pinManifestExists, pinSleep
-	t.Cleanup(func() { pinManifestExists, pinSleep = prevExists, prevSleep })
+	prevExists, prevSleep, prevFailed := pinManifestExists, pinSleep, pinBuildFailed
+	t.Cleanup(func() { pinManifestExists, pinSleep, pinBuildFailed = prevExists, prevSleep, prevFailed })
+	// No failed build in these cases — see waitabort_test.go for that arm.
+	pinBuildFailed = func(string, string, string) (string, bool) { return "", false }
 	pinSleep = func(time.Duration) {} // no real sleeps
 
 	// Appears on the 3rd poll.
 	n := 0
 	pinManifestExists = func(string) bool { n++; return n == 3 }
-	if !waitForManifest("img", 5, 0) || n != 3 {
+	if ok, _ := waitForManifest("img", "", "", "", 5, 0); !ok || n != 3 {
 		t.Errorf("appears-on-3rd: got false or polls=%d", n)
 	}
 
 	// Never appears within the budget → false after retries+1 checks.
 	n = 0
 	pinManifestExists = func(string) bool { n++; return false }
-	if waitForManifest("img", 4, 0) {
+	if ok, _ := waitForManifest("img", "", "", "", 4, 0); ok {
 		t.Error("never-appears: want false")
 	}
 	if n != 5 { // first immediate check + 4 retries
@@ -60,10 +62,10 @@ func stubPinSeams(t *testing.T, builds int, manifest func(string) bool) *[]strin
 	t.Helper()
 	var setVars []string
 	pg, pm, pl, ps := pinGH, pinManifestExists, pinDockerLogin, pinSleep
-	pbip, ptb := pinBuildInProgress, pinTriggerBuild
+	pbip, ptb, pbf := pinBuildInProgress, pinTriggerBuild, pinBuildFailed
 	t.Cleanup(func() {
 		pinGH, pinManifestExists, pinDockerLogin, pinSleep = pg, pm, pl, ps
-		pinBuildInProgress, pinTriggerBuild = pbip, ptb
+		pinBuildInProgress, pinTriggerBuild, pinBuildFailed = pbip, ptb, pbf
 	})
 
 	pinDockerLogin = func(string, string) error { return nil }
@@ -72,6 +74,10 @@ func stubPinSeams(t *testing.T, builds int, manifest func(string) bool) *[]strin
 	// Defaults for the build-ensure seams; flow tests that exercise
 	// --build-if-missing override these.
 	pinBuildInProgress = func(string, string, string) bool { return false }
+	// No failed build by default; waitabort_test.go owns that arm. Stubbed here
+	// rather than left to the generic pinGH stub, whose canned output would read
+	// as a failure URL.
+	pinBuildFailed = func(string, string, string) (string, bool) { return "", false }
 	pinTriggerBuild = func(string, string, string, string) error { return nil }
 	pinGH = func(_ string, args ...string) ([]byte, error) {
 		a := strings.Join(args, " ")
@@ -150,6 +156,10 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	var triggeredRef, triggeredSha string
 	pinTriggerBuild = func(_, _, ref, sha string) error { triggeredRef, triggeredSha = ref, sha; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }
+	// No failed build by default; waitabort_test.go owns that arm. Stubbed here
+	// rather than left to the generic pinGH stub, whose canned output would read
+	// as a failure URL.
+	pinBuildFailed = func(string, string, string) (string, bool) { return "", false }
 
 	o := baseOpts()
 	o.BuildIfMissing = true
@@ -202,6 +212,10 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	var branchRef string
 	pinTriggerBuild = func(_, _, ref, _ string) error { branchRef = ref; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }
+	// No failed build by default; waitabort_test.go owns that arm. Stubbed here
+	// rather than left to the generic pinGH stub, whose canned output would read
+	// as a failure URL.
+	pinBuildFailed = func(string, string, string) (string, bool) { return "", false }
 	o4 := baseOpts()
 	o4.BuildIfMissing = true
 	o4.Ref = "feat/x"
@@ -226,6 +240,10 @@ func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
 	triggered := false
 	pinTriggerBuild = func(string, string, string, string) error { triggered = true; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }
+	// No failed build by default; waitabort_test.go owns that arm. Stubbed here
+	// rather than left to the generic pinGH stub, whose canned output would read
+	// as a failure URL.
+	pinBuildFailed = func(string, string, string) (string, bool) { return "", false }
 
 	o := baseOpts()
 	o.BuildIfMissing = true

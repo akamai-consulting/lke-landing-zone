@@ -142,6 +142,8 @@ jobs:
     # private KUBE_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.8 / max 1.0); GitHub's default is 6h.
+    timeout-minutes: 15
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
@@ -190,6 +192,8 @@ jobs:
   dry-run:
     name: Server-side dry-run (kind)
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 2.4 / max 2.5 (kind boot)); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -397,6 +401,8 @@ jobs:
   scaffold:
     name: Scaffold + validate apl-values
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -430,6 +436,8 @@ jobs:
   docs:
     name: Docs guard
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -458,6 +466,8 @@ jobs:
   instantiate:
     name: Instantiate (copier render)
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.7 / max 0.7 (real copier render)); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -502,6 +512,8 @@ jobs:
     # private TF_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.9 / max 1.2); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
@@ -545,6 +557,8 @@ jobs:
   go-tests:
     name: Go tests + coverage
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 4.1 / max 5.6); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:

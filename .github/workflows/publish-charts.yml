@@ -41,6 +41,8 @@ jobs:
   publish:
     name: Package & push charts
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.5 / max 1.2 (registry pushes)); GitHub's default is 6h.
+    timeout-minutes: 20
     # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
     permissions:
       contents: read

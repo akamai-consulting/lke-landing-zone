@@ -65,6 +65,8 @@ jobs:
   plan:
     name: Plan image matrix
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
     steps:
@@ -103,6 +105,8 @@ jobs:
     name: Build ${{ matrix.image }}
     needs: plan
     runs-on: ubuntu-latest
+    # Bounded from measured history (max 7.5 (devcontainer, multi-arch+QEMU)); GitHub's default is 6h.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
