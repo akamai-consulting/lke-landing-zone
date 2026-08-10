@@ -812,6 +812,18 @@ jobs:
         timeout-minutes: 10
         run: llz ci diagnose-argocd || true
 
+      # The reconciler half, and it belongs HERE rather than only on cluster-health:
+      # THIS is the job that runs `llz ci converge`, so this is the bundle a reader
+      # opens when converge reports "obj chain settling; check llz-reconciler
+      # llz_apl_overlay_synced". Wiring it only into the health workflow (which the
+      # e2e never dispatches) left that instruction just as unanswerable from an
+      # e2e failure as before — the diagnostic existed and was not where the
+      # failure was.
+      - name: Diagnose convergence failure (llz-reconciler + apl-overlay lane)
+        if: failure() || cancelled()
+        timeout-minutes: 10
+        run: llz ci diagnose-reconciler || true
+
       # ── Job tail: timing, ACL revoke, then fail-on-errors ─────────────────────
       # Order matters. Timing runs while cluster access still exists; the ACL revoke
       # passes the kubeconfig so the runner-lease is released via kubectl BEFORE the

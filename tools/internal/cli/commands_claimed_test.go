@@ -84,6 +84,7 @@ var unclaimedCommands = []string{
 	"ci collect-timing",
 	"ci destroy-unwedge",
 	"ci diagnose-argocd",
+	"ci diagnose-reconciler",
 	"ci gates",
 	"ci gen-toc",
 	"ci managed-fresh",

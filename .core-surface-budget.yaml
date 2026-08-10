@@ -1326,7 +1326,11 @@ categories:
     #                       success while doing nothing. Paying 13 lines to delete
     #                       that class is the trade this budget exists to let you
     #                       make deliberately rather than by accident.
-    budget: 1937
+    #   1,939 / 113 files  +2 for `diagnose-reconciler`: an import and an
+    #                       AddCommand, the same two `pin-coherence` and
+    #                       `setup-go-sole-site` cost. The verb itself is in
+    #                       internal/verbs/recondiag.
+    budget: 1939
     exact: true
     include:
       - "tools/internal/cli/*.go"

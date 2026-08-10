@@ -135,6 +135,12 @@ jobs:
         run: |
           export KUBECONFIG="$HOME/.kube/config"
           llz ci diagnose-argocd || true
+          # The reconciler half. converge's obj-chain message says "check
+          # llz-reconciler llz_apl_overlay_synced" and nothing in the bundle
+          # contained it — not this step, not converge's own dump, not VERBOSE=1 —
+          # so answering the question the gate asked cost a live cluster that had
+          # usually been destroyed by the time anyone read the log.
+          llz ci diagnose-reconciler || true
           for app in platform-bootstrap llz-cluster-foundation; do
             echo "== ${app} operationState =="
             kubectl -n argocd get application "${app}" -o jsonpath='{.status.operationState}' 2>/dev/null | head -c 6000 || true

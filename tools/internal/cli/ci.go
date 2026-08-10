@@ -68,6 +68,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/argodiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/mutate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/phasetiming"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/recondiag"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/upgrade"
 	"github.com/spf13/cobra"
 
@@ -180,6 +181,7 @@ func ciCmd() *cobra.Command {
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
 	// + apl-core-v6-migration.md — so their commands are gone too.)
 	c.AddCommand(argodiag.DiagnoseArgoCDCmd())
+	c.AddCommand(recondiag.DiagnoseReconcilerCmd())
 	// E2E timing instrumentation (docs/designs/e2e-instrumentation.md): a phase
 	// timeline (phase-mark/phase-report → step summary + JSON artifact) and the
 	// image-pull collector that answers whether a bring-up phase is pull-bound.

@@ -175,6 +175,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/manifestguard=73 \
 	internal/extensions/lifecycle/assertobjstore=23 \
 	internal/extensions/lifecycle/gameday=26 \
+	internal/verbs/recondiag=60 \
 	internal/verbs/phasetiming=62 \
 	internal/verbs/doctor=86 \
 	internal/extensions/lifecycle/kyverno=84 \
