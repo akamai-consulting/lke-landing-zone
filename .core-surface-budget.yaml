@@ -1334,7 +1334,13 @@ categories:
     #                       import and an AddCommand. The guard is in
     #                       guards/callerperms; the class it closes is a delivered
     #                       scheduled credential rotation that had never once run.
-    budget: 1941
+    #   1,944 / 113 files  +3 to wire reconcilelanes.BaoHTTPClient — two imports
+    #                       and the assignment. This is the composition root doing
+    #                       its job: the seam's own default said "package main
+    #                       assigns it at startup", and nothing had since the CLI
+    #                       left package main. Three lines against a converge stall
+    #                       that took four e2e rounds to find.
+    budget: 1944
     exact: true
     include:
       - "tools/internal/cli/*.go"
