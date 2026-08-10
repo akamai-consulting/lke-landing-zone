@@ -8,6 +8,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
+	sharedopenbao "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
 func init() { installAssertIdentityDeps() }
@@ -21,6 +22,10 @@ func installAssertIdentityDeps() {
 		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  identityconfig.DiscoverManagedDomain,
 		DescribeSecret: kube.DescribeSecret,
+		// REQUIRED. Install replaces the whole Deps, so an omitted field is nil —
+		// not the package default. This one was omitted, and the team-write lane
+		// SIGSEGV'd at loginsmoke.go:194 after completing the entire Keycloak half.
+		PortForwardOpenbao: sharedopenbao.PortForward,
 		SpecTeams: func() []string {
 			var out []string
 			for _, t := range identityconfig.SpecTeams() {

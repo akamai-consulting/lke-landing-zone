@@ -665,6 +665,13 @@ func WarnRootToken() {
 	fmt.Fprintln(os.Stderr, "  (set OPENBAO_ALLOW_ROOT=1 to silence this for root-only automation)")
 }
 
+// PortForward is portForward, exported for the capability wiring in
+// internal/cli. assert-identity's team-login smoke needs the ADDRESS (it hands it
+// to OIDCLogin), not the *Client that ClientForward returns, and its Deps field
+// is exactly this signature — so the alternative was a fourth copy of the
+// port-forward dance in the composition root.
+func PortForward() (string, func(), error) { return portForward() }
+
 // portForward runs `kubectl port-forward` to OpenBao pod-0 on a
 // kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
 // warm up, and returns the https base URL and a kill/reap teardown.

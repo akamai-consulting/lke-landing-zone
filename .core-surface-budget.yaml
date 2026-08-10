@@ -1343,7 +1343,11 @@ categories:
     #   1,946 / 113 files  +2 wiring assert-reconciler's WithPrometheus (an import
     #                       and a field). The omitted field was a nil func call —
     #                       a SIGSEGV that killed the scrape-reconciler lane.
-    budget: 1946
+    #   1,948 / 113 files  +2 wiring assertidentity's PortForwardOpenbao (an
+    #                       import and a field) — the same omission, in a second
+    #                       package, that killed the team-write lane. The literals
+    #                       are now held by deps_literals_test.go.
+    budget: 1948
     exact: true
     include:
       - "tools/internal/cli/*.go"

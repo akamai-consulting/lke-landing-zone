@@ -1,6 +1,7 @@
 package assertidentity
 
 import (
+	"fmt"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
@@ -53,17 +54,49 @@ type Deps struct {
 // caps is the installed capability set; defaults are non-nil and harmless.
 var caps = Deps{
 	// Refuses until installed: an un-installed Deps must not mutate a cluster.
-	Writer:             capability.For(extension.Binding{}).Writer,
-	Exec:               func(string, ...string) ([]byte, error) { return nil, nil },
-	SecretField:        func(string, string, string) string { return "" },
-	ManagedDomain:      func() string { return "" },
-	PortForwardOpenbao: func() (string, func(), error) { return "", func() {}, nil },
-	SpecTeams:          func() []string { return nil },
-	DescribeSecret:     func(string, string) string { return "" },
+	Writer:        capability.For(extension.Binding{}).Writer,
+	Exec:          func(string, ...string) ([]byte, error) { return nil, nil },
+	SecretField:   func(string, string, string) string { return "" },
+	ManagedDomain: func() string { return "" },
+	// AN ERROR, NOT AN EMPTY ADDRESS. Returning ("", noop, nil) hands the lane a
+	// blank address it then dials — a confusing downstream failure at best, and a
+	// silently-skipped assertion at worst.
+	PortForwardOpenbao: func() (string, func(), error) {
+		return "", func() {}, fmt.Errorf("assertidentity: PortForwardOpenbao not installed")
+	},
+	SpecTeams:      func() []string { return nil },
+	DescribeSecret: func(string, string) string { return "" },
 }
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
-func Install(d Deps) { caps = d }
+//
+// IT FILLS OMITTED FIELDS rather than replacing wholesale — the same fix, and
+// the same reason, as assertreconciler.Install. `caps = d` means any field the
+// caller's literal leaves out becomes Go's zero value (nil), not the fail-closed
+// default declared above. internal/cli omitted PortForwardOpenbao and the
+// team-write lane died on a nil func call, three assert-suite rounds after the
+// identical defect was fixed one package over.
+func Install(d Deps) {
+	if d.PortForwardOpenbao == nil {
+		d.PortForwardOpenbao = caps.PortForwardOpenbao
+	}
+	if d.Exec == nil {
+		d.Exec = caps.Exec
+	}
+	if d.SecretField == nil {
+		d.SecretField = caps.SecretField
+	}
+	if d.DescribeSecret == nil {
+		d.DescribeSecret = caps.DescribeSecret
+	}
+	if d.ManagedDomain == nil {
+		d.ManagedDomain = caps.ManagedDomain
+	}
+	if d.SpecTeams == nil {
+		d.SpecTeams = caps.SpecTeams
+	}
+	caps = d
+}
 
 // firstNonEmpty returns the first non-empty string. Pure, localised.
 func firstNonEmpty(vals ...string) string {
