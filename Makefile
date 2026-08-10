@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check core-surface-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -252,15 +252,15 @@ help:
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
 	@echo "  chart-guards    run BOTH chart guards (version bump + Argo pin realignment) — a bump needs both"
 	@echo "  llz-gates       ALL of them at once — every gate binding the extension registry"
-	@echo "                  declares and can drive (20 commands, one process). This is what"
-	@echo "                  lint-k8s runs; the individual targets below remain for running one."
+	@echo "                  declares and can drive, in one process. This is what lint-k8s runs."
+	@echo "                  For ONE gate: llz ci gates --only <extension|command>. Four names"
+	@echo "                  used to be listed below as make targets and no longer are —"
+	@echo "                  wave-dependency-guard, monitoring-label-guard,"
+	@echo "                  dropped-apiversions-check and placeholder-guard now run only here."
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
-	@echo "  wave-dependency-guard       a workload must sync AFTER the ExternalSecret it hard-depends on (#163 wedge class)"
 	@echo "  mesh-egress-guard           no NetworkPolicy egress to a STRICT-mesh namespace (harbor) from outside it"
-	@echo "  monitoring-label-guard      every ServiceMonitor/PodMonitor/PrometheusRule carries prometheus: system (#175 day-2-blind class)"
-	@echo "  dropped-apiversions-check  no manifest declares an apiVersion apl-core's operators no longer serve (#330 class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  core-surface-check    fail when Go logic in package main exceeds .core-surface-budget.yaml (ADR 0014)"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"

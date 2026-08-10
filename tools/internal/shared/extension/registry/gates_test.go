@@ -1024,3 +1024,115 @@ func TestContainerJobsRunThePRsLlz(t *testing.T) {
 	}
 	t.Logf("checked %d `make` entry point(s) in jobs that do not rebuild llz", examined)
 }
+
+// A TARGET `make help` ADVERTISES MUST ACTUALLY DO SOMETHING.
+//
+// ────────────────────────────────────────────────────────────────────────────
+// FOUR OF THEM DID NOT, AND EXITED 0 SAYING SO QUIETLY.
+//
+// When thirteen single-guard targets collapsed into `llz-gates`, their recipes
+// went and two things stayed: their names on the `.PHONY` line, and their
+// descriptions in `make help`. A phony target with no recipe and no prerequisites
+// is not an error in GNU make — it is "Nothing to be done", exit 0.
+//
+//	$ make monitoring-label-guard
+//	make: Nothing to be done for `monitoring-label-guard'.  # exit 0
+//
+// So a contributor who read help, ran the guard by name and saw a clean exit had
+// run nothing at all. That is worse than a missing target, which exits 2 and says
+// so. It is the vacuous-green shape this tree refuses everywhere — reached, here,
+// by typing the name the Makefile told you to type.
+//
+// The four were wave-dependency-guard, monitoring-label-guard,
+// dropped-apiversions-check and placeholder-guard. All four still RUN, inside
+// `llz ci gates`; only the Makefile spelling died.
+//
+// TWO INVARIANTS, ONE CHECK. Every name in help must resolve to a target with a
+// recipe or prerequisites, and no `.PHONY` name may be recipe-less — the second
+// catches a target that was never advertised, which is how placeholder-guard hid
+// (it was on the .PHONY line and in no help line at all).
+// ────────────────────────────────────────────────────────────────────────────
+func TestEveryAdvertisedMakeTargetDoesSomething(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(filepath.FromSlash("../../../../../"), "Makefile"))
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	mk := string(raw)
+	lines := strings.Split(mk, "\n")
+
+	// Targets that would actually run: a rule with prerequisites or a recipe.
+	runnable := map[string]bool{}
+	ruleRE := regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9._-]*):([^=].*)?$`)
+	for i, l := range lines {
+		m := ruleRE.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		hasBody := i+1 < len(lines) && strings.HasPrefix(lines[i+1], "\t")
+		if strings.TrimSpace(m[2]) != "" || hasBody {
+			runnable[m[1]] = true
+		}
+	}
+	if len(runnable) == 0 {
+		t.Fatal("parsed no runnable targets from the Makefile — the parse broke and every name " +
+			"below would read as dead")
+	}
+
+	flat := regexp.MustCompile(`\\\n\s*`).ReplaceAllString(mk, " ")
+	phony := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\.PHONY:(.*)$`).FindAllStringSubmatch(flat, -1) {
+		for _, n := range strings.Fields(m[1]) {
+			phony[n] = true
+		}
+	}
+	if len(phony) == 0 {
+		t.Fatal("no .PHONY names parsed — the declaration moved and half this check is vacuous")
+	}
+
+	var deadPhony []string
+	for n := range phony {
+		if !runnable[n] {
+			deadPhony = append(deadPhony, n)
+		}
+	}
+	sort.Strings(deadPhony)
+	if len(deadPhony) > 0 {
+		t.Errorf(".PHONY declares %v with no recipe and no prerequisites. GNU make answers "+
+			"`Nothing to be done` and EXITS 0, so anyone running one of these by name gets a "+
+			"clean result having run nothing. Delete the name, or give it a rule.", deadPhony)
+	}
+
+	// The help recipe's advertised names.
+	i := strings.Index(mk, "\nhelp:")
+	if i < 0 {
+		t.Fatal("no `help:` target — it was renamed, and this check cannot tell that from a " +
+			"Makefile that stopped advertising anything")
+	}
+	helpRec := mk[i:]
+	if j := strings.Index(helpRec, "\n\n"); j >= 0 {
+		helpRec = helpRec[:j]
+	}
+	named := map[string]bool{}
+	for _, m := range regexp.MustCompile(`@echo\s+"\s{2,}([a-z][a-z0-9._-]*)\s{2,}`).FindAllStringSubmatch(helpRec, -1) {
+		named[m[1]] = true
+	}
+	if len(named) == 0 {
+		t.Fatal("parsed no target names out of the help recipe — its echo shape changed and this " +
+			"half of the check now reads nothing")
+	}
+
+	var advertisedDead []string
+	for n := range named {
+		if !runnable[n] {
+			advertisedDead = append(advertisedDead, n)
+		}
+	}
+	sort.Strings(advertisedDead)
+	if len(advertisedDead) > 0 {
+		t.Errorf("`make help` advertises %v, which no rule defines. A contributor who types one "+
+			"gets either `Nothing to be done` (exit 0, having run nothing) or `No rule to make "+
+			"target`. Remove the line, or point it at what actually runs the check now.",
+			advertisedDead)
+	}
+	t.Logf("help advertises %d target(s); .PHONY names %d; %d runnable", len(named), len(phony), len(runnable))
+}
