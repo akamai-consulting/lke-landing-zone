@@ -112,11 +112,20 @@ load-bearing.
 - Internal module-to-module references stay **relative** (`../llz-<name>`), never
   `git::` — that keeps the two halves pinned to the same umbrella tag. (There are
   none today; each root composes the modules directly.)
-- **The template hardcodes no version.** `instance-template/`'s first-party pins
-  are copier `<@ llz_version @>` placeholders; `llz new`/`llz upgrade` render them
-  to the `llz` binary's own version (the CLI is the version anchor). Don't write a
-  literal version into those pins, and don't add a bump step — Renovate is disabled
-  on them so `llz upgrade` stays the single channel.
+- **The first-party pins live in the embedded TF roots, not in the scaffold.**
+  `instance-template/` holds no `<@ llz_version @>` token at all — as the bullet
+  above says, and as `terraform-iac-bootstrap/` shows: it ships a `.gitignore`, an
+  `AGENTS.md` and two provider lockfiles, and not one `*.tf`. The roots that carry
+  the `git::…?ref=<@ llz_version @>` module sources are embedded in the `llz`
+  binary (`tools/internal/shared/tfroots/roots/`). `llz render` materialises them
+  into **gitignored** `*.tf`, substituting `<@ upstream_org @>` and
+  `<@ llz_version @>` at that moment from the pin `resolveTemplateRef()` reads —
+  which `llz new`/`llz upgrade` set to the CLI's own version, the version anchor.
+  So the pin is stamped at render time and never committed, which is *why* the
+  no-version-in-the-scaffold rule above is satisfiable at all. Don't write a
+  literal version into those roots, and don't add a bump step — Renovate is
+  disabled on the first-party self-references so `llz upgrade` stays the single
+  channel.
 
 ### Helm charts (`kubernetes-charts/README.md`)
 
