@@ -599,7 +599,11 @@ jobs:
             echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          llz ci wait-harbor --registry-only
+          # No --registry-only: it is deprecated and IGNORED (the registry rollout
+          # is the only behavior now). The CLI still accepts it so already-delivered
+          # instances do not break on an image bump — but the template emitting it
+          # is what would keep that shim alive forever, so new instances stop.
+          llz ci wait-harbor
 
       # ── Extract the standby CA cert for cross-cluster rotation ─────────────────
       # Passes the standby's OpenBao TLS CA out as a job output so provision-peer-ca
