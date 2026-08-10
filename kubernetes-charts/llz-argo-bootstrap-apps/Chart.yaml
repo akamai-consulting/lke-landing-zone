@@ -60,7 +60,13 @@ type: application
 #         Pin-only change — a pin the registry never received 404s at Argo sync
 #         time, which is why the pin realignment ships with the bump rather than
 #         after it. Same shape as 0.1.20.
-version: 0.1.24
+# 0.1.25: re-pin llz-cert-automation 0.1.11 -> 0.1.12 (that chart's doc-only bump
+#         for the source-ref sweep). Pin-only change, same shape as 0.1.24 and
+#         0.1.20 — and the third time this cascade has run, which is the point of
+#         chart-pin-guard: the pin realignment is not follow-up work, it is half
+#         of the bump, because a pin the registry never received 404s at Argo sync
+#         time.
+version: 0.1.25
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

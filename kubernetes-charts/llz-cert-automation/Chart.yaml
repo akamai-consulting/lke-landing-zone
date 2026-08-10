@@ -44,7 +44,15 @@ type: application
 #        component is ManagedSkip and NOTHING in this repo deploys this chart.
 #        The README now says so and points at the cutover table
 #        (behavior unchanged; bumped so the guard republishes the corrected artifact).
-version: 0.1.11
+# 0.1.12: doc-only — the source-ref sweep that moved package main into
+#        tools/internal/** repointed three comment path literals in this chart
+#        (the two README pointers restated in 0.1.9/0.1.11 above, and values.yaml's
+#        reference to the retired `seed-harbor-dockerconfig` verb) and did NOT bump.
+#        publish-charts.yml only pushes a NEW version, so the corrected artifact
+#        was never going to be published: the registry would keep serving 0.1.11
+#        with the stale pointers, and the fix would live only in git. Bumped so the
+#        corrections actually ship (behavior unchanged).
+version: 0.1.12
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"
