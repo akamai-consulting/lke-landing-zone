@@ -706,7 +706,7 @@ carry a live argument that they may never be worth building.
 | loader | every declaration is compiled in, and nothing has asked to read one from elsewhere | #399 |
 | ordering | nothing sequences bindings against each other, and nothing has needed to | #399 |
 | remote half | serves at most the argv-shaped minority, none of the in-process majority | #399 |
-| **the driver** | **a real gap, not a deferral** — it is what would make the spine operational | **needs its own issue** |
+| **the driver** | **a real gap, not a deferral** — it is what would make the spine operational | **#419** |
 
 **The action ABI.** How an extension's Go entry point receives a cluster client, a credential handle
 or a render context is not defined here. No consumer needs one yet — the one driver that ships
@@ -736,7 +736,7 @@ the component they follow. Neither **ordering** (nothing sequences bindings agai
 nothing has yet asked for one — which is why they sit in #399 rather than here.
 
 **The driver, and what advances the last two spine states.** This is the one entry in the table above
-that is a gap rather than a boundary, and it is not yet tracked in an issue of its own. Five of the
+that is a gap rather than a boundary, and it is tracked in issue #419. Five of the
 seven spine states are entered by acting; `verified` and `operating` are not, and naming them is the
 driver's job. Two decisions already constrain it (both recorded in
 [the catalog](internal-extensions.md#decisions)), and together they are most of its specification:
@@ -763,8 +763,9 @@ not duplicated here: it carries per-slice line counts that move as `main` moves,
 document would drift silently — as an earlier copy already had, quoting `guard-budgets` at 646 lines
 when it had grown to 691.
 
-**If one thing is picked up next, it should be the driver**, because it is the only absent piece with
-a consumer waiting: `llz state` is the command that would make the spine observable, and an
+**If one thing is picked up next, it should be the driver** (issue #419), because it is the only
+absent piece with a consumer waiting: `llz state` is the command that would make the spine
+observable, and an
 unobserved state machine is a diagram. Concretely it needs a declared **cost** on each state's
 predicate, a recorded-result store with a freshness TTL that can say when it last actually looked, a
 core-held required-assertion set, and spec-level **waivers carrying a reason and an expiry**. The
