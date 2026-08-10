@@ -25,6 +25,7 @@ import (
 )
 
 type preflightOpts struct {
+	deployment      string
 	region          string
 	env             string
 	volumeRegion    string
@@ -42,6 +43,21 @@ func runCIPreflight(o preflightOpts) error {
 	if err != nil {
 		return err
 	}
+
+	// --deployment resolves the LINODE region (and --env) from the rendered
+	// cluster tfvars. ResolveDeploymentScope's own header calls itself "shared by
+	// `llz ci preflight` and `llz ci assert-no-orphans`" — this is the preflight
+	// half, and it was silently dropped when this command was extracted into
+	// configreadiness, leaving the flag gone, this call gone, and the resolver
+	// reachable only from teardown while its comment still claimed two callers.
+	//
+	// It is not cosmetic on either side. The delivered llz-terraform.yml invokes
+	// `llz ci preflight --deployment "$REGION"`, so apply-cluster died on
+	// `unknown flag: --deployment` before Terraform ran — for every adopter, not
+	// just e2e. And the bug the resolver exists to prevent came back with it: a
+	// DEPLOYMENT name handed to a Linode-REGION filter matches no Volume, so the
+	// orphan census reads 0 however many are stranded.
+	o.region, o.volumeRegion, o.env = ResolveDeploymentScope(o.deployment, o.region, o.volumeRegion, o.env)
 
 	// Fall back to <region>.tfvars for the capacity-guard inputs (mirrors the
 	// script: the apply-cluster step may run this from the cluster TF dir).

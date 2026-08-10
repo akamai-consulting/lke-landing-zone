@@ -24,6 +24,7 @@ func PreflightCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPreflight(o) },
 	}
 	f := c.Flags()
+	f.StringVar(&o.deployment, "deployment", "", "deployment name; reads terraform-iac-bootstrap/cluster/<name>.tfvars from the repo root and fills the Linode region + `--env`. Without it, passing a deployment name to --volume-region silently scopes the Volume census to a region that does not exist (census always 0).")
 	f.StringVar(&o.region, "region", "", "narrow the scan to one Linode region (empty = account-wide)")
 	f.StringVar(&o.env, "env", "", "deployment name; widens the Volume census to that deployment's RELABELED Volumes (<REGION_SHORT>-<ns>-<pvc>). Without it only the CSI default `pvc-` prefix is counted, so every Volume the volume-labels reconciler has renamed is invisible.")
 	f.StringVar(&o.volumeRegion, "volume-region", "", "scope the pvc-* Volume orphan count to one region (empty = the --region value, or account-wide). Volumes carry no cluster id, so an account-wide count flags other regions'/teams' detached Volumes that `llz reap` won't clean — scope to the deployment region to match reap.")
