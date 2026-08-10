@@ -82,14 +82,26 @@ func reImageTag(image string) *regexp.Regexp {
 	return regexp.MustCompile(regexp.QuoteMeta(image) + `:([0-9][A-Za-z0-9._-]*)`)
 }
 
-// reArgRestatement matches `NAME: "1.2.3"` / `NAME=1.2.3` for exactly NAME.
+// reArgRestatement matches `NAME: "1.2.3"` / `NAME=1.2.3` / `NAME := 1.2.3` for
+// exactly NAME.
 //
 // The leading boundary is load-bearing. lint.yml carries ARGOCD_HELM_VERSION,
 // ESO_HELM_VERSION and KYVERNO_HELM_VERSION — unrelated CHART versions that all
 // end in the ARG name HELM_VERSION. A suffix match would report them as drift and
 // the gate would be useless on day one.
+//
+// `:=` IS A SEPARATE ALTERNATIVE AND IT HAS TO COME FIRST. The separator was
+// `[:=]` — one character — so it matched YAML's `:` and env/ARG's `=` and missed
+// Make's `:=` entirely: after consuming the `:` the value had to start at `=`,
+// which is not [0-9v], so the whole match failed and the site was silently not a
+// site. `Makefile` is a scanRoot and the header above claims "a restatement
+// nobody knew about still gets checked because the scan is by pattern" — but the
+// Makefile's own `KUBECTL_VERSION := 1.31.0`, the idiomatic Make form, was
+// invisible to it. Demonstrated by setting a pin to a wrong value twice: written
+// `=` the gate failed and named the line; written `:=` the same wrong value
+// reported "OK — 9 restatements agree".
 func reArgRestatement(name string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)(?:^|[^A-Z0-9_])` + regexp.QuoteMeta(name) + `\s*[:=]\s*"?([0-9v][A-Za-z0-9._-]*)"?`)
+	return regexp.MustCompile(`(?m)(?:^|[^A-Z0-9_])` + regexp.QuoteMeta(name) + `\s*(?::=|[:=])\s*"?([0-9v][A-Za-z0-9._-]*)"?`)
 }
 
 func reGoConst(name string) *regexp.Regexp {

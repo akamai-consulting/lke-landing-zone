@@ -90,6 +90,25 @@ func TestVersionPinsCatchesEveryRestatementForm(t *testing.T) {
 			body: "env:\n  KUBECTL_VERSION: \"9.9.9\"\n",
 			want: "KUBECTL_VERSION",
 		},
+		// Make's simply-expanded assignment. This form was INVISIBLE to the gate:
+		// the separator was the single-character class [:=], so after consuming the
+		// `:` the value had to begin at `=` and the match failed outright. The
+		// Makefile is a scanRoot and carries `KUBECTL_VERSION := 1.31.0`, so the
+		// one restatement in the file that declares the gate was the one it could
+		// not see. Verified against the real tree before the fix: the same wrong
+		// value written `=` failed the gate, written `:=` it reported "OK".
+		{
+			name: "makefile := restatement",
+			file: "Makefile",
+			body: "KUBECTL_VERSION  := 9.9.9\n",
+			want: "KUBECTL_VERSION",
+		},
+		{
+			name: "makefile = restatement",
+			file: "Makefile",
+			body: "KUBECTL_VERSION = 9.9.9\n",
+			want: "KUBECTL_VERSION",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := pinsFixture(t)

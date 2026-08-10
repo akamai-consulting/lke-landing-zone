@@ -12,10 +12,11 @@ SHELL := /bin/bash
 
 KUBECTL_VERSION  := 1.31.0
 
-# Written with a single `=` on purpose. version-pins matches `NAME = <version>`
-# and does NOT match Make's `NAME := <version>`, so the `:=` form above is a
-# restatement of the Dockerfile ARG that nothing compares. Spelled this way, the
-# guard actually holds this copy to dockerfiles/Dockerfile.
+# Both forms are checked against dockerfiles/Dockerfile's ARG block by
+# version-pins. That was NOT true when this line was added: the guard's separator
+# was a single-character class, so it saw `=` and missed Make's `:=` — including
+# KUBECTL_VERSION above, the one restatement living in the very file that declares
+# the gate. Fixed in reArgRestatement; either spelling is safe now.
 ACTIONLINT_VERSION = 1.7.7
 
 # The Go module that holds the host-side tooling: tools/ (the `llz` CLI). The
