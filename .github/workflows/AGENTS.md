@@ -121,14 +121,36 @@ This avoids interactive host-key prompts hanging a job the first time it talks t
 
 ## permissions blocks
 
-Every job must have an explicit `permissions:` block. The safe default for non-publishing jobs is:
+**Every workflow must declare a workflow-level `permissions:` block, and the
+default is the whole of it:**
 
 ```yaml
 permissions:
   contents: read
 ```
 
-Jobs that push to GHCR need `packages: write` (pulling a private GHCR `container:` image needs `packages: read`). Jobs that comment on PRs need `pull-requests: write`. Never omit the block — an absent `permissions:` inherits workflow-level defaults or write-all.
+That is the load-bearing rule, because a job with no block and a workflow with no
+block is what inherits the repository default — up to write-all. With the
+workflow-level block present, a job that omits its own inherits exactly
+`contents: read`, which is the floor, not a risk.
+
+**A job declares its own block when, and only when, it needs MORE than that** —
+`packages: write` to push to GHCR, `packages: read` to pull a private GHCR
+`container:` image, `pull-requests: write` to comment on a PR, `actions: write`
+to trigger or inspect another workflow's runs, `contents: write` to publish a
+release. Job-level permissions REPLACE the workflow-level set rather than adding
+to it, so a job that declares one must list everything it needs — including
+`contents: read` if it checks out. (`llz-release.yml`'s `image-tag` job is the
+instructive counter-example: it declares `packages: write` and nothing else
+because it never checks out, only retags an image.)
+
+> This section used to read "Every job must have an explicit `permissions:`
+> block … never omit the block", and 28 of the 82 jobs across this repo and
+> `instance-template/` omitted it — correctly, because every one of their
+> workflows declares `contents: read` at the top. A rule that most of the tree
+> already violates safely is one people learn to skip past, and it hid the
+> distinction that actually matters: the danger is a missing block at BOTH
+> levels, not a missing block at the job level.
 
 > Per-environment operational workflows (terraform apply, bootstrap, secret
 > rotation, app deploy) are NOT shipped here — they live with the instance
