@@ -38,6 +38,7 @@ doing its job. Links are still checked.
 | [linode-credential-rotator](linode-credential-rotator.md) | In-cluster ownership of the Linode object-storage key lifecycle; default-on fleet-wide. |
 | [linode-pat-dns-consolidation](linode-pat-dns-consolidation.md) | Collapsing the Linode PAT and DNS-token surface. Phases A and B both landed. |
 | [apl-core-values-branch-isolation](apl-core-values-branch-isolation.md) | Isolating the apl-core values branch so an instance's values tree cannot be clobbered by the operator's push. |
+| [internal-extension-model](internal-extension-model.md) | The **declaration model** — where an extension attaches (bindings) and what each attachment may touch (grants) — in `tools/internal/shared/extension`, plus **64 extensions across 63 packages** declaring 116 bindings. Load-bearing: `registry/gates.go` dispatches 26 gate rows (`llz ci gates`), `registry/enablement.go` resolves the enabled set from `spec.components`, `shared/capability` turns each grant into the handle a binding receives, and four structural tests hold the directory layout to the model. **Scope was narrowed to ship it**: the action ABI, YAML manifest, loader, ordering and the remote half are out of scope and tracked in #399 — three of them carry a live argument that they may never be worth building. The one real gap is the **driver**, so the lifecycle spine is descriptive rather than operational. |
 
 ### Partial — check the status line for which phases
 
@@ -54,7 +55,6 @@ doing its job. Links are still checked.
 | [apl-core-v6-migration](apl-core-v6-migration.md) | apl-core 5.x → 6.x. Pinned to GA `v6.0.0`; validate in lab before any non-lab environment. |
 | [apl-core-v61-upgrade](apl-core-v61-upgrade.md) | apl-core 6.0 → 6.1. Baseline moved, pinned to GA `v6.1.0`; same lab-first caveat. |
 | [apl-overlay-obj-native](apl-overlay-obj-native.md) | Adopting apl-core-native object storage; runtime behaviour still unconfirmed on a live cluster. |
-| [internal-extension-model](internal-extension-model.md) | Phases 1–2 — the declaration model (`tools/internal/shared/extension`) plus **64 extensions across 63 packages**, a registry that collects and validates them, and `llz extension list`. The declarations are **load-bearing**: `registry/gates.go` dispatches 26 gate rows (`llz ci gates`), `registry/enablement.go` resolves an instance's enabled set from `spec.components`, and `shared/capability` turns each grant into the handle a binding receives. The set is deliberately not enumerated here — `llz extension list --verbose` derives it. Action ABI, YAML manifest, loader, ordering and the remote half did not land; issue #399 sequences them. |
 
 ### Proposed — analysed, not built
 

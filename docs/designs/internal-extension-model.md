@@ -1,12 +1,23 @@
 # Design: the internal extension model — bindings and grants
 
-**Status:** **Partial** — Phases 1 and 2 landed, and Phase 2's acceptance criterion (a binding that
-RUNS from the registry) with them. Phase 1 is the declaration model (states, bindings, grants and
-their validation) in `tools/internal/shared/extension`. Phase 2 is **64 extensions across 63
-packages**, declaring **116 bindings** between them — the set is not enumerated here, because a list beside the code it describes is the
-hand-maintained second copy this design exists to avoid. `llz extension list --verbose` is the
-listing, and it derives the package path from each declaration's constructor rather than
-transcribing it.
+**Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
+an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
+and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
+**64 extensions across 63 packages** declare **116 bindings** between them. The set is not enumerated
+here, because a list beside the code it describes is the hand-maintained second copy this design
+exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
+each declaration's constructor rather than transcribing it.
+
+**THE SCOPE WAS NARROWED TO GET HERE, and that is the honest part of this status line.** This design
+was once the front half of the whole decomposition programme, and carried the action ABI, a YAML
+manifest, a loader, ordering, and the remote half with it. Those are **not** specified here and are
+not deferred work *of this design* — see [Out of scope](#out-of-scope-and-where-it-is-tracked) for
+each one and why. The programme is tracked in issue #399.
+
+The narrowing is a claim worth checking rather than trusting: the decomposition target that motivated
+the programme has been **met**. Issue #399 aimed package `main` at ~3,000 lines from 41,803; the
+counted CLI surface is **1,954** today (`cli-wiring-layer` 1,948 + `cmd-llz-entrypoint` 6, both
+`exact: true`). What remains is framework for consumers that do not exist yet.
 
 **THE DECLARATIONS ARE NO LONGER INERT**, which is the sentence this block carried for far too long
 after it stopped being true. Three consumers read them today, and only one is dispatch:
@@ -22,10 +33,15 @@ are hand-wired into the cobra tree in `tools/internal/cli`; invariants are sched
 reconciler. So `Kind` is a real constraint for the validator and a real dispatch key for one kind,
 and saying so plainly beats a reader inferring otherwise from the model's symmetry.
 
-Still absent: the action ABI, the YAML manifest, the remote half, and **the driver** — nothing
-evaluates a required set and names a state. Phase 1 replaces the `kind: check|tool` capability
-ceiling from PR #15 (closed); the rest of that design is not contradicted here, only re-sequenced,
-and is tracked in issue #399.
+**One gap is real, and calling it out-of-scope does not make it smaller.** Nothing evaluates a
+required set and names a state, so `verified` and `operating` — the two spine states not entered by
+acting — are vocabulary that bindings attach to rather than stations an instance is ever declared to
+have reached. The lifecycle spine is **descriptive here, not operational**. That is the driver's job,
+it is the one absent piece with real pull, and it is the reason this document is scoped to
+declaration rather than to running the machine.
+
+This design replaces the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that
+design is not contradicted here, only re-sequenced, and is tracked in issue #399.
 
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded`, the group
 the old ceiling banned by omission — **ALL NINE grants**, both values of `Always`, multi-binding
@@ -191,8 +207,8 @@ evidence is [the catalog](internal-extensions.md); the budget it serves is [ADR
 - [The model](#the-model)
 - [Anatomy of an extension](#anatomy-of-an-extension)
 - [How the directory and the code support the model](#how-the-directory-and-the-code-support-the-model)
-- [What is deliberately absent](#what-is-deliberately-absent)
-- [Ordering](#ordering)
+- [Out of scope, and where it is tracked](#out-of-scope-and-where-it-is-tracked)
+- [What comes next](#what-comes-next)
 
 <!-- /toc -->
 
@@ -677,7 +693,20 @@ The `Deps` one is the sharpest illustration of why the model needs enforcement i
 convention: the same omission shipped **twice**, in two packages, and both times the symptom was a
 segfault in a live e2e run, arbitrarily far from the line that omitted the field.
 
-## What is deliberately absent
+## Out of scope, and where it is tracked
+
+Each of these was once in this design's scope and is no longer. The arguments are kept in full
+because they are the reason for the boundary, not an apology for it — and because three of the five
+carry a live argument that they may never be worth building.
+
+| piece | why it is not here | tracked |
+|---|---|---|
+| action ABI | the case for it **weakened** after gates shipped — self-service works | #399 |
+| YAML manifest | serves the externalisable minority; no external extension exists | #399 |
+| loader | every declaration is compiled in, and nothing has asked to read one from elsewhere | #399 |
+| ordering | nothing sequences bindings against each other, and nothing has needed to | #399 |
+| remote half | serves at most the argv-shaped minority, none of the in-process majority | #399 |
+| **the driver** | **a real gap, not a deferral** — it is what would make the spine operational | **needs its own issue** |
 
 **The action ABI.** How an extension's Go entry point receives a cluster client, a credential handle
 or a render context is not defined here. No consumer needs one yet — the one driver that ships
@@ -702,12 +731,15 @@ is now 64, so anything built here is built for dozens. `Always` is a **default**
 `llz ci assert-suite` is called from three places in `instance-template/`, so an instance with no
 object storage must be able to turn `assert-objstore` off in its own configuration rather than by
 taking a different build — `registry.EnabledFor` is what delivers that today, and 10 extensions name
-the component they follow. What is still missing is **ordering** (nothing sequences bindings against
-each other) and a **loader** (every declaration is compiled in; none is read from anywhere).
+the component they follow. Neither **ordering** (nothing sequences bindings against each other) nor a
+**loader** (every declaration is compiled in; none is read from anywhere) exists, and in both cases
+nothing has yet asked for one — which is why they sit in #399 rather than here.
 
-**The driver, and what advances the last two spine states.** Five of the seven are entered by acting;
-`verified` and `operating` are not, and naming them is the driver's job. Two decisions already
-constrain it (both recorded in [the catalog](internal-extensions.md#decisions)):
+**The driver, and what advances the last two spine states.** This is the one entry in the table above
+that is a gap rather than a boundary, and it is not yet tracked in an issue of its own. Five of the
+seven spine states are entered by acting; `verified` and `operating` are not, and naming them is the
+driver's job. Two decisions already constrain it (both recorded in
+[the catalog](internal-extensions.md#decisions)), and together they are most of its specification:
 
 - **`llz state` recomputes with a freshness window.** Cheap predicates evaluate every time; the
   expensive ones reuse a recorded result inside a TTL and re-run past it. So every state needs a
@@ -719,14 +751,22 @@ constrain it (both recorded in [the catalog](internal-extensions.md#decisions)):
   state reached. The waiver's job is to make a skipped assertion visible and time-boxed rather than
   absorbed, which is what stops `verified` from meaning something different on every instance.
 
-## Ordering
+## What comes next
 
 The remote half of PR #15 — git-pinned `sources:`, digest lock, trust model, `extension sync` — can
 serve at most the externalisable minority and none of the majority that needs in-process Go. The half
 that unblocks 91% of the decomposition is this one, and the spike treated it as a later phase.
-Reversing that is the whole point of the re-sequencing.
+Reversing that was the whole point of the re-sequencing, and that reversal is what shipped.
 
 **The phased plan lives in issue #399**, with the catalog's first five as the forcing cases. It is
 not duplicated here: it carries per-slice line counts that move as `main` moves, and a copy in this
 document would drift silently — as an earlier copy already had, quoting `guard-budgets` at 646 lines
 when it had grown to 691.
+
+**If one thing is picked up next, it should be the driver**, because it is the only absent piece with
+a consumer waiting: `llz state` is the command that would make the spine observable, and an
+unobserved state machine is a diagram. Concretely it needs a declared **cost** on each state's
+predicate, a recorded-result store with a freshness TTL that can say when it last actually looked, a
+core-held required-assertion set, and spec-level **waivers carrying a reason and an expiry**. The
+other four can wait for a consumer that may never arrive — and this document takes the position that
+waiting is correct, rather than building a framework against zero users.
