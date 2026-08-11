@@ -743,3 +743,26 @@ func TestBranchIsDeletedEvenWhenThePRIsNeverOpened(t *testing.T) {
 	t.Errorf("the pushed branch %q was never deleted — it leaks on the fixture repo, and a re-run at "+
 		"the same sha meets its own leftovers. gh calls were: %v", branch, f.ghCalls)
 }
+
+// An unreadable poll followed by a blank one used to leave parseErr set while raw
+// became non-nil, so neither the "could not read" branch nor the "never ran" one
+// owned the case — and the never-ran wording was printed for an I/O problem, one
+// poll after the plumbing that exists to prevent exactly that.
+func TestAnUnreadablePollThenABlankOneStillDiagnosesCorrectly(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"<html>502 Bad Gateway</html>", ""}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("neither poll saw the gates — the verb must fail")
+	}
+	// The blank answer is the newer evidence, so "never ran" is the right verdict…
+	if !strings.Contains(err.Error(), "never ran") {
+		t.Errorf("expected the never-ran verdict from the newer, readable answer, got: %v", err)
+	}
+	// …but the payload we could not read has to survive into the message, or an
+	// operator chasing a paths: filter never learns a poll was garbage.
+	if !strings.Contains(err.Error(), "unreadable") {
+		t.Errorf("the earlier unreadable poll was dropped from the diagnosis: %v", err)
+	}
+}

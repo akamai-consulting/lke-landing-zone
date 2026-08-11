@@ -115,12 +115,18 @@ func AssertInstancePRGatesCmd() *cobra.Command {
 	c.Flags().StringSliceVar(&o.Checks, "check", DefaultPRGateChecks, "check name that must appear AND succeed (repeatable)")
 	c.Flags().BoolVar(&o.Keep, "keep", false, "leave the branch and PR behind instead of closing them, to inspect a failure by hand")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between check polls")
-	// 900s, NOT the 1200s pin-instance-images uses. This step shares a
-	// `timeout-minutes: 35` job with an image pin already sized to wait ~20 minutes,
-	// so a second 20-minute budget can only be spent by overrunning the JOB — which
-	// surfaces as an opaque runner timeout and leaks the throwaway PR, instead of
-	// this verb's own diagnosis. The gated jobs cap themselves at 10 minutes each,
-	// so 15 covers a full run plus queueing with room to report its own verdict.
+	// 900s, NOT the 1200s pin-instance-images uses, and the reason is the shape of
+	// the work rather than the job budget. The gated jobs cap THEMSELVES at 10
+	// minutes each and run concurrently, so 15 minutes covers a full run plus
+	// queueing with room for this verb to report its own verdict — a longer budget
+	// buys nothing but a later, less specific failure.
+	//
+	// The instantiate job it runs in is `timeout-minutes: 60` precisely so 1200 +
+	// 900 fits alongside the scaffold, render, push and chart-publish steps. It was
+	// 35, i.e. exactly the sum of the two waits with nothing left over, which is
+	// how a slow build would have been killed by the runner PAST this step's own
+	// cleanup: an opaque job timeout and a leaked PR instead of a diagnosis. If
+	// either budget grows, check that one first.
 	c.Flags().IntVar(&timeout, "timeout", 900, "max seconds to wait for the gated checks to appear and settle")
 	return c
 }

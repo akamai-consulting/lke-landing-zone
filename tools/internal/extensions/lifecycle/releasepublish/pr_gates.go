@@ -392,8 +392,10 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		// on the 'x' branch" is a confirmation of the diagnosis, not competition
 		// with it — and it is the difference between a filter that missed and a PR
 		// that was never opened against the right base.
-		if obs.ghErr != nil {
-			seenMsg += " — " + strings.TrimSpace(redact(obs.ghErr, o.Token).Error())
+		for _, ctx := range []error{obs.ghErr, obs.priorUnreadable} {
+			if ctx != nil {
+				seenMsg += " — " + strings.TrimSpace(redact(ctx, o.Token).Error())
+			}
 		}
 		return fmt.Errorf("::error title=Instance PR gates never ran::%s did not appear on %s#%s. "+
 			"The jobs are pull_request-gated behind a paths: filter — either the filter no longer covers %s, "+
@@ -549,6 +551,25 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 			// reaches "never appeared" rather than "could not read"), but never
 			// over an earlier REAL observation — checks do not un-appear, and a
 			// late blank answer must not erase what we already saw.
+			//
+			// AND IT MUST CLEAR parseErr, which is subtler than it looks. The
+			// caller's unreadable branch is `parseErr != nil && raw == nil`; an
+			// unreadable poll followed by a blank one used to leave parseErr SET
+			// while raw became "[]", so neither branch owned the case and the
+			// never-ran diagnosis was printed for what was really an I/O problem —
+			// the exact misdiagnosis this plumbing exists to prevent, one poll
+			// later. A newer, readable answer supersedes an older unreadable one;
+			// the discarded payload is folded into the context so nothing is lost.
+			if obs.parseErr != nil {
+				// STICKY, and kept apart from ghErr on purpose: ghErr reflects the
+				// LATEST poll and is overwritten by the next one, so folding the
+				// discarded payload into it loses the payload on the very next
+				// empty answer — which is how the first attempt at this still
+				// dropped it. priorUnreadable is written once and only cleared by a
+				// genuinely successful read.
+				obs.priorUnreadable = fmt.Errorf("an earlier poll was unreadable: %w", obs.parseErr)
+				obs.parseErr = nil
+			}
 			obs.ghErr = ghErr
 			if obs.raw == nil {
 				obs.raw = []byte("[]")
@@ -563,7 +584,7 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 			continue
 		}
 		obs.found, obs.missing, obs.raw = f, m, out
-		obs.parseErr, obs.ghErr = nil, nil
+		obs.parseErr, obs.ghErr, obs.priorUnreadable = nil, nil, nil
 		if len(m) == 0 && settled(f) {
 			return obs
 		}
@@ -582,7 +603,11 @@ type gateObservation struct {
 	missing  []string
 	raw      []byte // last payload; non-nil once anything at all was observed
 	parseErr error  // gh produced output this verb could not parse
-	ghErr    error  // gh could not answer (context, not a verdict)
+	ghErr    error  // gh could not answer on the LATEST poll (context, not a verdict)
+	// priorUnreadable remembers a payload an EARLIER poll could not parse, once a
+	// later readable answer superseded it. Sticky, so a run of empty polls cannot
+	// quietly drop the one piece of evidence that something was wrong with the I/O.
+	priorUnreadable error
 }
 
 // truncate bounds an untrusted payload before it lands in an error message, so a

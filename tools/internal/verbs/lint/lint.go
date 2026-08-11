@@ -57,8 +57,27 @@ func tfDirs() []string {
 			dirs = append(dirs, d)
 		}
 	}
-	scan.usedTFDirs, scan.tfDirCount = true, len(dirs)
+	// COUNT HCL, NOT DIRECTORIES, and the difference is the whole value of
+	// --strict. Every real instance checkout HAS terraform-iac-bootstrap/cluster
+	// and object-storage — each holds a tracked .terraform.lock.hcl — while
+	// carrying zero *.tf, because the roots are rendered. A directory census
+	// therefore says "2 roots found" about a tree with nothing in it to lint, and
+	// --strict would have signed off on exactly the vacuous green it was added to
+	// refuse. What the linters actually read is the only thing worth counting.
+	scan.usedTFDirs, scan.tfFileCount = true, countTFFiles(dirs)
 	return dirs
+}
+
+// countTFFiles totals the *.tf across the given roots.
+func countTFFiles(dirs []string) int {
+	n := 0
+	for _, d := range dirs {
+		matches, err := filepath.Glob(filepath.Join(d, "*.tf"))
+		if err == nil {
+			n += len(matches)
+		}
+	}
+	return n
 }
 
 // tool resolves the executable name for a check, honoring an env override so
@@ -97,7 +116,7 @@ func haveTool(bin string) bool {
 var scan struct {
 	missingTools []string
 	usedTFDirs   bool
-	tfDirCount   int
+	tfFileCount  int
 }
 
 // ── argv builders (pure; covered by checks_test.go) ──────────────────────────
@@ -590,7 +609,7 @@ func CheckCmd() *cobra.Command {
 	var strict bool
 	c.PersistentFlags().BoolVar(&strict, "strict", false,
 		"fail instead of passing when the check could not examine anything — a linter missing from PATH, "+
-			"or no Terraform roots on disk (delivered CI passes this; pre-commit must not)")
+			"or no *.tf on disk to read (delivered CI passes this; pre-commit must not)")
 	for _, s := range steps {
 		s := s
 		c.AddCommand(&cobra.Command{
@@ -598,7 +617,7 @@ func CheckCmd() *cobra.Command {
 			Short: s.short,
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				scan.missingTools, scan.usedTFDirs, scan.tfDirCount = nil, false, 0
+				scan.missingTools, scan.usedTFDirs, scan.tfFileCount = nil, false, 0
 				if err := s.fn(cliopts.Global); err != nil {
 					return err
 				}
@@ -612,10 +631,12 @@ func CheckCmd() *cobra.Command {
 						"thing this flag exists to prevent. Fix the image (TF_IMAGE) rather than dropping --strict",
 						s.use, strings.Join(scan.missingTools, ", "))
 				}
-				if scan.usedTFDirs && scan.tfDirCount == 0 {
-					return fmt.Errorf("::error::%s found no Terraform roots to scan under terraform-iac-bootstrap/. "+
-						"An instance commits zero Terraform — the roots are rendered — so run `llz render "+
-						"--tfvars-only --if-spec` first. Under --strict, scanning nothing is a FAILURE", s.use)
+				if scan.usedTFDirs && scan.tfFileCount == 0 {
+					return fmt.Errorf("::error::%s found no *.tf to scan under terraform-iac-bootstrap/. The root "+
+						"DIRECTORIES exist — every instance has them, they hold the tracked .terraform.lock.hcl — "+
+						"but an instance commits zero Terraform, so until `llz render --tfvars-only --if-spec` has "+
+						"laid the roots down there is nothing here to lint. Under --strict, scanning nothing is a "+
+						"FAILURE", s.use)
 				}
 				return nil
 			},

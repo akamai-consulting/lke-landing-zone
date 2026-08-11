@@ -65,19 +65,54 @@ func TestStrictFailsWhenTheLinterIsMissing(t *testing.T) {
 	}
 }
 
-func TestStrictFailsWhenThereAreNoRootsToScan(t *testing.T) {
-	dir := t.TempDir() // no terraform-iac-bootstrap/ at all
+// THE TREE THIS DRIVES IS THE ONE A REAL INSTANCE HAS, which is the whole point.
+// An earlier version used a bare tempdir with no terraform-iac-bootstrap/ at all —
+// a shape no checkout ever takes — and so could not fail for the case its own
+// comment claimed: every instance HAS cluster/ and object-storage/, because each
+// holds a tracked .terraform.lock.hcl, while carrying zero *.tf. A guard that
+// counted directories saw "2 roots" and signed off on a tree with nothing in it
+// to lint.
+func TestStrictFailsWhenTheRootsHoldNoHCL(t *testing.T) {
+	dir := t.TempDir()
+	for _, root := range []string{"cluster", "object-storage"} {
+		d := filepath.Join(dir, "terraform-iac-bootstrap", root)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// The one tracked file an unrendered root really carries.
+		if err := os.WriteFile(filepath.Join(d, ".terraform.lock.hcl"), []byte("# provider pins\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Stand tflint in as /usr/bin/true: this test is about the VACUITY GUARD, not
+	// about tflint, and depending on a real linter being installed would make the
+	// gate skip (haveTool -> false) in any environment without it — which is the
+	// other half of what --strict exists to catch, and would quietly test the
+	// wrong branch.
+	t.Setenv("LLZ_TFLINT", "true")
 
 	if err := runCheck(t, dir, "tf-lint"); err != nil {
-		t.Fatalf("without --strict an empty tree must stay a pass: %v", err)
+		t.Fatalf("without --strict an unrendered tree must stay a pass: %v", err)
 	}
 	err := runCheck(t, dir, "tf-lint", "--strict")
 	if err == nil {
-		t.Fatal("--strict passed with no Terraform roots on disk — the exact shape of the delivered " +
-			"lint jobs before the render step was added")
+		t.Fatal("--strict passed on an UNRENDERED instance tree — root directories present, zero *.tf. " +
+			"That is exactly the shape the delivered lint jobs had before the render step was added, " +
+			"and the vacuous green the e2e PR-gate probe would then certify")
 	}
 	if !strings.Contains(err.Error(), "llz render") {
 		t.Errorf("the error should say how to get the roots, got: %v", err)
+	}
+
+	// And once the roots ARE rendered it must pass again, or the flag is just a
+	// permanent failure wearing a gate's clothes.
+	if err := os.WriteFile(filepath.Join(dir, "terraform-iac-bootstrap", "cluster", "main.tf"),
+		[]byte("terraform {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCheck(t, dir, "tf-lint", "--strict"); err != nil {
+		t.Errorf("--strict still failed with rendered HCL present: %v", err)
 	}
 }
 
