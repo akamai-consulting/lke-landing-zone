@@ -215,25 +215,61 @@ func matchesCheck(observed, want string) bool {
 	return observed == want || strings.HasSuffix(observed, "/ "+want)
 }
 
+// checkSeverity ranks the verdicts a single name can carry, worst first, so a name
+// that appears more than once is judged by its worst row rather than its first.
+//
+// The order is the one this file already applies across DIFFERENT checks — "a real
+// failure outranks a merely stuck sibling", see failures() — applied to repeats of
+// the SAME check. Pending outranks inconclusive for the re-run case it exists for:
+// a CANCELLED row superseded by an IN_PROGRESS one means the gate is still being
+// decided, and the verb should wait rather than fail on the corpse of the run that
+// was replaced.
+func checkSeverity(c check) int {
+	switch {
+	case strings.EqualFold(c.State, "SUCCESS"):
+		return 0
+	case inconclusiveStates[strings.ToUpper(c.State)]:
+		return 1
+	case isPending(c.State):
+		return 2
+	default:
+		return 3 // ran, finished, did not succeed
+	}
+}
+
 // partitionChecks splits a `gh pr checks` payload into the wanted checks that
 // APPEARED and the wanted names that did not.
+//
+// ONE NAME CAN ARRIVE MORE THAN ONCE, and taking the first row let a gate report
+// green while it was red. Re-running a workflow on the same head SHA leaves both
+// runs' rows in the payload, in no order this verb controls — so a stale SUCCESS
+// ahead of the FAILURE that replaced it ended the scan (`break`) before the failure
+// was ever inspected, and the verb reported that every delivered gate passed. That
+// is the one wrong answer this verb must never give: it exists to prove the
+// instance's CI works, and a false green there is indistinguishable from a real one.
+//
+// Every match is therefore collected and the WORST kept — fail closed on the
+// ambiguity rather than trusting payload order.
 func partitionChecks(raw []byte, want []string) (found []check, missing []string, err error) {
 	var all []check
 	if err := json.Unmarshal(raw, &all); err != nil {
 		return nil, nil, fmt.Errorf("parsing gh pr checks output: %w", err)
 	}
 	for _, w := range want {
-		hit := false
+		var worst *check
 		for _, c := range all {
-			if matchesCheck(c.Name, w) {
-				found = append(found, c)
-				hit = true
-				break
+			if !matchesCheck(c.Name, w) {
+				continue
+			}
+			if worst == nil || checkSeverity(c) > checkSeverity(*worst) {
+				worst = &c
 			}
 		}
-		if !hit {
+		if worst == nil {
 			missing = append(missing, w)
+			continue
 		}
+		found = append(found, *worst)
 	}
 	return found, missing, nil
 }
