@@ -10,7 +10,7 @@ SHELL := /bin/bash
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
 
-KUBECTL_VERSION  := 1.31.0
+KUBECTL_VERSION  := 1.34.10
 
 # Both forms are checked against dockerfiles/Dockerfile's ARG block by
 # version-pins. That was NOT true when this line was added: the guard's separator
@@ -113,6 +113,38 @@ RETRY := template-scripts/ci/with-retry.sh
 #
 # THE TRAP: `make coverage-bank` on macOS will try to raise these three straight
 # back. If you bank, check these three against a CI run before committing.
+#
+# IT HAS NOW HAPPENED TWICE, one day apart, so here is the rule rather than the
+# warning: `coverage-bank` banks the LOCAL reading, which on this box is up to
+# ~1pp above what the gate measures. After banking, revert every floor for a
+# package your diff added no test to — the raise is measurement noise, not
+# coverage — and knock the rest down ~1.5pp from the local number. A floor you
+# cannot verify in the gating environment is only worth banking with margin.
+# ── internal/extensions/lifecycle/reconciler = 69, NOT 70 ────────────────────
+# NOT A LOWERED FLOOR DODGING A REGRESSION. That package's coverage is
+# SCHEDULING-DEPENDENT: reconcile.go starts the metrics and health servers in
+# goroutines (`go func() { healthSrv.ListenAndServe() }`, and the same for
+# serveMetrics), and whether those are scheduled before the test's context
+# cancels decides whether three blocks — reconcile.go:234, 282 and 283 — are
+# recorded as covered. Measured: 70.3% at GOMAXPROCS 1 and 8, oscillating
+# 69.9/70.3 at 2; CI has read both 70.1 (main) and 69.6 (a branch changing
+# nothing in the package).
+#
+# So a floor of 70 sat INSIDE the measurement's own variance — a coin flip
+# rather than a promise, and main's last green run was luck. No coverage was
+# lost and no test was removed; the number was never reliably achievable where
+# the gate runs. 69 is below the whole observed band.
+#
+# THE REAL FIX is to make those three blocks deterministic — have the test wait
+# until the health endpoint answers before cancelling, rather than racing
+# goroutine startup — and then raise this back. A floor inside the band only
+# teaches people to re-run CI.
+#
+# AND NOTE WHERE THIS COMMENT LIVES: above the assignment, never inside it. A
+# `#` on a backslash-continued line ENDS the logical line, so the first attempt
+# at this note — written between two entries — silently truncated COVERAGE_MINS
+# from 123 packages to 115. Eight gates switched off by a comment, with every
+# remaining package still reporting "all gated packages meet their thresholds".
 COVERAGE_MINS := \
 	internal/cli=71 \
 	internal/cli/deps=41 \
@@ -149,7 +181,7 @@ COVERAGE_MINS := \
 	internal/shared/promwire=92 \
 	internal/extensions/lifecycle/promote=90 \
 	internal/extensions/guards/credcoverage=87 \
-	internal/extensions/assertions/configreadiness=45 \
+	internal/extensions/assertions/configreadiness=53 \
 	internal/shared/instancelayout=55 \
 	internal/shared/yamledit=89 \
 	internal/shared/kubectlprobe=77 \
@@ -181,11 +213,11 @@ COVERAGE_MINS := \
 	internal/verbs/doctor=86 \
 	internal/extensions/lifecycle/kyverno=84 \
 	internal/verbs/mutate=81 \
-	internal/extensions/lifecycle/releasepublish=60 \
+	internal/extensions/lifecycle/releasepublish=67 \
 	internal/extensions/lifecycle/statepassphrase=74 \
 	internal/shared/ghsecret=60 \
-	internal/extensions/lifecycle/render=57 \
-	internal/verbs/upgrade=24 \
+	internal/extensions/lifecycle/render=62 \
+	internal/verbs/upgrade=27 \
 	internal/verbs/newinstance=79 \
 	internal/extensions/guards/pincoherence=94 \
 	internal/verbs/lint=37 \
@@ -229,7 +261,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertsuite=73 \
 	internal/extensions/guards/templatemanifest=93 \
 	internal/shared/ghcli=42 \
-	internal/extensions/lifecycle/reconciler=70 \
+	internal/extensions/lifecycle/reconciler=69 \
 	internal/shared/ghgitdata=79 \
 	internal/extensions/lifecycle/identityconfig=58 \
 	internal/extensions/lifecycle/harbor=77 \

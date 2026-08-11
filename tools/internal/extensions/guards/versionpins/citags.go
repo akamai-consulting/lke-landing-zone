@@ -21,5 +21,5 @@ package versionpins
 // onto a HashiCorp Terraform image while every caller invoked `tofu`.
 const (
 	CITofuTag       = "1.12.5"
-	CIKubernetesTag = "1.31.0"
+	CIKubernetesTag = "1.34.10"
 )

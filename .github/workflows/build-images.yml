@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           ALL='[
             {"key":"terraform","image":"ci-tofu","target":"ci-tofu","version":"1.12.5","alias":"ci-terraform"},
-            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0","alias":""},
+            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.34.10","alias":""},
             {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":"","alias":""},
             {"key":"llz","image":"llz","target":"llz","version":"","alias":""}
           ]'
@@ -106,7 +106,15 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     # Bounded from measured history (max 7.5 (devcontainer, multi-arch+QEMU)); GitHub's default is 6h.
-    timeout-minutes: 30
+    # 45, RECOMPUTED FOR THE RETRY. The push step now makes up to three attempts
+    # with 90s + 180s of backoff between them, so a cold-cache multi-arch row that
+    # needs its retries can spend ~4.5 minutes waiting on top of the build. At 30
+    # it would be killed by the runner MID-RETRY — emitting neither the retry
+    # warnings nor the "this is GHCR's secondary rate limit, not a permissions
+    # problem" error — and the image would stay unpublished, which is exactly the
+    # state pin-instance-images' requiredShaImages wait then blocks an e2e on. A
+    # retry budget is only real if the job can outlive it.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -179,19 +187,33 @@ jobs:
             TAGS+=(--tag "${REPO}/${ALIAS}:latest" --tag "${REPO}/${ALIAS}:sha-${SHA}")
             [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${ALIAS}:${VERSION}")
           fi
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg "LLZ_VERSION=dev-${SHA}" \
-            "${TAGS[@]}" \
-            --cache-from "type=gha,scope=${IMAGE}" \
-            --cache-to   "type=gha,scope=${IMAGE},mode=max" \
-            --file dockerfiles/Dockerfile --target "${TARGET}" \
-            dockerfiles
+          # RETRIED, because the failure this absorbs is not ours and not rare.
+          # GHCR answers a burst of pushes with `403 Forbidden` / 429 — a
+          # SECONDARY rate limit that `gh api rate_limit` does not show, so it
+          # reads as a permissions error and sends people to package settings.
+          # Measured: three build-images runs inside two hours (twelve pushes)
+          # and the `llz` row 403'd on `:latest` while the other three images in
+          # the SAME run pushed fine. That left the commit's llz image
+          # unpublished, Kyverno then refused every workload referencing it, and a
+          # release-e2e spent its whole convergence budget on the consequence.
+          # The build itself is cached, so a retry re-pushes rather than rebuilds.
+          for attempt in 1 2 3; do
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              --provenance=true \
+              --sbom=true \
+              --metadata-file /tmp/build-meta.json \
+              --build-context tools-src=tools \
+              --build-arg "LLZ_VERSION=dev-${SHA}" \
+              "${TAGS[@]}" \
+              --cache-from "type=gha,scope=${IMAGE}" \
+              --cache-to   "type=gha,scope=${IMAGE},mode=max" \
+              --file dockerfiles/Dockerfile --target "${TARGET}" \
+              dockerfiles && break
+            [ "${attempt}" -eq 3 ] && { echo "::error::${IMAGE} failed to push after 3 attempts — if the log says 403/429 this is GHCR's secondary rate limit, not a permissions problem; space the builds out and re-run."; exit 1; }
+            echo "::warning::${IMAGE} push attempt ${attempt} failed — retrying (GHCR's secondary rate limit answers a burst with 403/429)." && sleep $((attempt * 90))
+          done
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       # Signed per REPOSITORY, not per digest: cosign stores the signature as a

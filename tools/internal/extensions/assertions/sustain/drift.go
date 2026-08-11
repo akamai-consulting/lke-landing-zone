@@ -56,15 +56,24 @@ func RunDrift(d Deps, branch, repoURL string, strict bool) error {
 		compareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", slug, tv.TemplateSHA, latest)
 	}
 
-	if tv.TemplateSHA == latest {
+	// Compare COMMITS, not spellings. copier records `_commit:` as whatever ref
+	// the upgrade named, which on the normal adopter path is a release TAG
+	// (`v0.0.42`) — never a 40-hex sha. Comparing that string against a branch
+	// head can only be unequal, so an instance sitting exactly ON main's head was
+	// told it was behind, with a compare link of a commit against itself showing
+	// no commits. Every tag-pinned instance saw a permanent drift warning, which
+	// is how a real one stops being read (and --strict fails a scheduled gate).
+	pinned := resolvePin(d, repoURL, tv.TemplateSHA)
+
+	if pinned == latest {
 		fmt.Printf("%s Up to date with %s@%s (%s).\n", color.Green("✓"), tv.TemplateRepo, branch, short(latest))
 		emitDriftSummary(tv, branch, latest, "", "✅ up to date")
 		return nil
 	}
 
 	behind := ""
-	if commitReachable(d, tv.TemplateSHA) && commitReachable(d, latest) {
-		behind = gitOut(d, "rev-list", "--count", tv.TemplateSHA+".."+latest)
+	if commitReachable(d, pinned) && commitReachable(d, latest) {
+		behind = gitOut(d, "rev-list", "--count", pinned+".."+latest)
 	}
 	msg := fmt.Sprintf("behind %s@%s", tv.TemplateRepo, branch)
 	if behind != "" {
@@ -100,6 +109,43 @@ func githubSlug(repo string) string {
 	default:
 		return ""
 	}
+}
+
+// resolvePin turns the recorded pin into a commit sha so it can be compared with
+// a branch head. A pin that already looks like a sha, or a tag the remote does
+// not have, is returned unchanged — an unresolvable pin is still worth reporting
+// as drift, and guessing would be worse than the honest inequality.
+//
+// `^{}` first: an ANNOTATED tag's own object is the tag, not the commit it points
+// at, so refs/tags/<t> alone would compare a tag object against a commit and
+// never match — the same class of mismatch this function exists to remove.
+func resolvePin(d Deps, repoURL, pin string) string {
+	if isHexSHA(pin) {
+		return pin
+	}
+	for _, ref := range []string{"refs/tags/" + pin + "^{}", "refs/tags/" + pin} {
+		out := gitOut(d, "ls-remote", repoURL, ref)
+		if i := strings.IndexAny(out, " \t"); i > 0 {
+			out = out[:i]
+		}
+		if out != "" {
+			return out
+		}
+	}
+	return pin
+}
+
+// isHexSHA reports whether s is a full 40-character hex object name.
+func isHexSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func commitReachable(d Deps, sha string) bool {

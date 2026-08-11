@@ -124,9 +124,24 @@ func ClassifyCronWorkflow(key, submissionErr string, suspended bool, ageDays, st
 	}
 }
 
-// ClassifyServiceEndpoints classifies a Service by its ready endpoint count:
-// >0 passes; zero routes through Phase-1 then operator-deferred before failing.
-func ClassifyServiceEndpoints(key string, readyCount int, phase1Pending bool) (Category, string) {
+// ClassifyServiceEndpoints classifies a Service by its endpoint counts:
+// >0 ready passes; zero routes through Phase-1, then operator-deferred, then the
+// endpoints-exist-but-none-ready case, before failing.
+//
+// THE OLD MESSAGE NAMED BOTH CAUSES AND CHOSE THE WRONG VERDICT FOR ONE OF THEM:
+// "selector drift or all backing pods NotReady". Those need opposite answers.
+// Selector drift is a spec error that waiting never fixes. Backing pods that are
+// not Ready YET is what every Service looks like while its Deployment rolls out —
+// and on a four-minute-old cluster it cost a release-e2e round, because two such
+// Services sixty seconds apart tripped converge's hard-failure abort while the
+// cluster was still installing.
+//
+// The endpoint counts tell them apart without guessing. An EndpointSlice lists
+// notReady addresses too, so total>0 with ready==0 means the pods EXIST and have
+// not passed their probes — pending, bounded by the convergence budget. total==0
+// means nothing backs this Service at all, which is the selector-drift case and
+// stays a failure.
+func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pending bool) (Category, string) {
 	if readyCount > 0 {
 		return CatOK, fmt.Sprintf("Service %s (%d ready endpoint(s))", key, readyCount)
 	}
@@ -136,7 +151,37 @@ func ClassifyServiceEndpoints(key string, readyCount int, phase1Pending bool) (C
 	if r, ok := MatchExternalDep(key, ExternalDepWorkloads()); ok {
 		return CatDeferred, "Service " + key + " has 0 ready endpoints — " + r
 	}
-	return CatFail, "Service " + key + " has 0 ready endpoints (selector drift or all backing pods NotReady)"
+	if totalCount > 0 {
+		// SAME BUDGET RULE AS THE ZERO-ENDPOINT CASE BELOW. Pods that have not
+		// passed readiness YET is a rollout; pods that never pass it is a broken
+		// workload, and only a budget can tell the two apart. This branch returned
+		// CatPending unconditionally while its neighbour was already gated —
+		// leaving a Service whose pods never become Ready reading "still starting"
+		// forever in one-shot `llz ci health`, which is the regression budgeted.go
+		// exists to prevent, in the file that motivated it.
+		return PendingIfBudgeted(
+			fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount),
+			fmt.Sprintf("Service %s has %d endpoint(s) and NONE Ready — this is a steady-state check, so the "+
+				"backing pods are not starting, they are failing their readiness probe", key, totalCount))
+	}
+	// ZERO ENDPOINTS IS ALSO PENDING, and the earlier draft of this function got
+	// that wrong in a way worth recording. It assumed "endpoints exist but are
+	// notReady" covered the still-starting case — but a pod only appears in an
+	// EndpointSlice once it HAS a PodIP, so a Service whose pods are still
+	// Pending/ContainerCreating has no endpoints AT ALL. The young-cluster abort
+	// this whole change set exists to stop would have survived it, now wearing a
+	// more confident message ("selector drift, or nothing backing it").
+	//
+	// Nothing observable here distinguishes drift from not-created-yet: both are
+	// an empty slice. So the poll defers, and the convergence BUDGET is what
+	// decides — a Service that still has no endpoints when the budget runs out is
+	// named in the exhaustion report (reportConvergePending), which is the same
+	// information arriving a few minutes later instead of aborting a cluster that
+	// is merely young.
+	return PendingIfBudgeted(
+		"Service "+key+" has no endpoints yet — backing pods not created, or selector drift; the budget decides",
+		"Service "+key+" has no endpoints (selector drift, or nothing backing it) — this is a steady-state "+
+			"check, so there is no budget left for it to be 'not yet'")
 }
 
 // ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is

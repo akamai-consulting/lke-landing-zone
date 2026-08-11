@@ -54,6 +54,30 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // may hold read grants only. Unlike the six forced spellings this campaign
 // recorded, nothing is forced here — pinning an image IS an act that moves the
 // instance toward a state, not an observation wearing a write grant.
+//
+//	transition:configured "assert-pr-gates" [read-repo, write-repo]
+//
+// ASSERT-INSTANCE-PR-GATES IS THE SEVENTH FORCED SPELLING, and it is the clearest
+// one yet: its NAME says assertion and its grants say otherwise. It proves the
+// delivered pull_request-gated jobs (tf-lint, checkov) actually run — an
+// observation — but the only way to observe them is to CREATE the event that
+// triggers them: a branch, a commit under the paths: filter, and a PR. An assertion
+// may hold read grants only, so the honest declaration is a transition.
+//
+// THAT IS NOT A LOOPHOLE, IT IS THE OBSERVATION HAVING A COST. The gates are gated
+// on `pull_request`; the fixture repo is driven by force-push, dispatch and
+// schedule; so no pull_request had ever existed and the jobs had never run. Reading
+// that state without producing it is not possible — there is nothing to read.
+//
+// WRITE-REPO IS THE RIGHT WORD AND IT WAS NOT OBVIOUS. deliver-docs established
+// that write-repo means THE INSTANCE REPO'S TRACKED FILES — "files an operator has
+// checked in and will read a diff of" — and explicitly that a temp dir needs no
+// grant. Most of this verb's writing IS in a temp dir (it clones to one, edits
+// there, and removes it), which argued for no grant at all. What settles it is the
+// PUSH: the commit lands on a branch in the operator's repo and is visible in a PR
+// diff, however briefly. The branch being throwaway and deleted on the way out
+// changes the DURATION of the write, not whether one happened, and a grant that
+// tracked duration would be a grant nobody could check.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "release-publish",
@@ -64,6 +88,11 @@ func Extension() extension.Extension {
 			Name:   "pin-images",
 			State:  extension.Configured,
 			Grants: []extension.Grant{extension.ReadRepo, extension.CloudMutate},
+		}, {
+			Kind:   extension.Transition,
+			Name:   "assert-pr-gates",
+			State:  extension.Configured,
+			Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
 		}},
 		Incomplete: []string{
 			"publish-charts has NO BINDING, and not because it has not moved — it is here. " +

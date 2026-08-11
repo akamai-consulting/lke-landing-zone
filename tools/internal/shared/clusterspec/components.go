@@ -184,7 +184,7 @@ var Components = []Component{
 		//   components: { argoWorkflows: { enabled: true } }
 		// — rather than enabling clusterHealthWorkflow for its DependsOn side effect.
 		Name:                          "argoWorkflows",
-		ManifestResources:             []string{"argo-workflows/network-policies.yaml"},
+		ManifestResources:             []string{"argo-workflows/network-policies.yaml", "argo-workflows/cert-automation-namespace.yaml"},
 		ArgoApps:                      []string{"applications/argo-workflows.yaml"},
 		ManagedConditionalOnComponent: "clusterHealthWorkflow",
 	},

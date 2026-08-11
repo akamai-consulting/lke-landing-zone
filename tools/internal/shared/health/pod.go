@@ -32,7 +32,13 @@ type ContainerStatus struct {
 
 // PodStatus is the subset of .status the health checks inspect.
 type PodStatus struct {
-	Phase                 string            `json:"phase"`
+	Phase string `json:"phase"`
+	// Conditions is decoded for ONE question PodIsStarting cannot answer without
+	// it: an Unschedulable pod never publishes container statuses, so it is
+	// indistinguishable from a pod the kubelet has simply not reported on yet.
+	// PodScheduled=False is the difference between "no node has taken this yet"
+	// and "no node ever will".
+	Conditions            []Condition       `json:"conditions"`
 	ContainerStatuses     []ContainerStatus `json:"containerStatuses"`
 	InitContainerStatuses []ContainerStatus `json:"initContainerStatuses"`
 }

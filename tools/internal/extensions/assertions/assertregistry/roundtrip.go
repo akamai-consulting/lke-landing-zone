@@ -269,6 +269,31 @@ func Run(secretNS, secretName, registry, repo string, settle, interval time.Dura
 		return nil
 	}
 
+	// A PRESENT NAMESPACE NO LONGER MEANS A DEPLOYED COMPONENT, and this gate found
+	// that out the expensive way. argoWorkflows now ships llz-cert-automation EMPTY
+	// on managed clusters so argo-helm has somewhere to put the workflow RBAC that
+	// controller.workflowNamespaces asks for. With the namespace present and the
+	// chart absent, the check above stopped skipping and this lane spent two minutes
+	// waiting for a Secret nothing would ever create — the only red in an otherwise
+	// green release-e2e.
+	//
+	// The ExternalSecret is created ONLY by the chart, so it answers "is the
+	// component deployed" without depending on who else has a reason to create the
+	// namespace. The finding this gate exists for survives intact: ExternalSecret
+	// PRESENT and Secret ABSENT still means ESO is not materializing
+	// secret/harbor/robot, and still fails below.
+	switch present, err := harborauth.RobotExternalSecretExists(secretNS, secretName); {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "::error::could not tell whether ExternalSecret %s/%s exists (%v)\n", secretNS, secretName, err)
+		return fmt.Errorf("could not determine whether ExternalSecret %s/%s exists: %w", secretNS, secretName, err)
+	case !present:
+		fmt.Printf("SKIP: ExternalSecret %s/%s does not exist — llz-cert-automation is not deployed here, so nothing "+
+			"materializes the robot credential and there is no round trip to make. The namespace alone does not settle "+
+			"this: argoWorkflows ships it empty on managed for argo-helm's workflow RBAC. Deploy the chart and this "+
+			"lane gates again with no code change.\n", secretNS, secretName)
+		return nil
+	}
+
 	// The Secret READ is inside the settle loop, not before it. It is written by
 	// ESO from secret/harbor/robot, which the harbor-robot-provisioner CronJob
 	// seeds only AFTER Harbor's registry is serving — internal/shared/health/allowlists.go

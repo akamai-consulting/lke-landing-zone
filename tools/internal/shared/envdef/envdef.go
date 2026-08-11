@@ -76,7 +76,7 @@ func EnsureLandingZone(specRoot string) (instanceName string, created bool, err 
 	repo := OrElse(a.InstanceRepo, instanceName+"/"+instanceName)
 	// No templateVersion here on purpose: the pin is copier's, and a scaffolded copy
 	// of it in the spec only went stale (see Instance.TemplateVersion).
-	k8s := OrElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
+	k8s := OrElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.34.6+lke2")
 	nodeType := OrElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
 	nodeCount := OrElse(tfvarsExampleValue("cluster", "node_count"), "5")
 	// The default OpenBao team, chosen at `llz new` (copier openbao_team question);

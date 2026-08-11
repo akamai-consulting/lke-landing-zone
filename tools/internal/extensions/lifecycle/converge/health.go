@@ -132,6 +132,13 @@ func runConverge(budget, interval, retryDelay int) error {
 	prevProbeRetries := kubectlprobe.Retries
 	kubectlprobe.Retries = 1
 	defer func() { kubectlprobe.Retries = prevProbeRetries }()
+	// States a BUDGET will resolve are pending here and terminal in one-shot
+	// `llz ci health` — see health.Budgeted. Borrowed and restored exactly like
+	// the probe retries above, so scheduled cluster-health and the in-cluster
+	// reconciler keep their steady-state verdicts.
+	prevBudgeted := health.Budgeted
+	health.Budgeted = true
+	defer func() { health.Budgeted = prevBudgeted }()
 	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's
@@ -183,6 +190,13 @@ func runConverge(budget, interval, retryDelay int) error {
 		case health.ConvergePoll:
 			prevNonOK, prevAttempt = res.nonOK, attempt
 			if time.Now().After(deadline) {
+				// NAME WHAT WAS STILL PENDING. Deferring a verdict to the budget is
+				// only honest if the budget's report says what it was waiting for —
+				// otherwise the checks that now pend (a pod still being created, a
+				// Service whose pods have no IP yet) trade a precise CatFail for a
+				// timeout that names nothing, which is a worse answer, not a kinder
+				// one. This is the other half of those classifier changes.
+				reportConvergePending(res.nonOK)
 				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
 				return fmt.Errorf("budget of %ds exhausted with the cluster still in-progress", budget)
 			}
@@ -965,7 +979,7 @@ func checkWebhooks(r *health.Report) {
 					continue
 				}
 				exists := kubectlprobe.Exists("-n", ns, "get", "svc", svc)
-				ready := countReadyEndpoints(ns, svc)
+				ready, _ := endpointCounts(ns, svc)
 				cat, msg := health.ClassifyWebhookBackend(exists, ready)
 				record(r, cat, fmt.Sprintf("%s %s → %s/%s %s", kind, cfg.Metadata.Name, ns, svc, msg))
 			}
@@ -1307,7 +1321,8 @@ func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
 			}
 			key := ns + "/" + s.Metadata.Name
 			p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingWorkloads())
-			cat, msg := health.ClassifyServiceEndpoints(key, countReadyEndpoints(ns, s.Metadata.Name), p1)
+			ready, total := endpointCounts(ns, s.Metadata.Name)
+			cat, msg := health.ClassifyServiceEndpoints(key, ready, total, p1)
 			if cat != health.CatOK { // only surface non-OK to cut noise (matches script's VERBOSE-gated pass)
 				record(r, cat, msg)
 			}
@@ -1453,6 +1468,22 @@ func checkPods(r *health.Report, phase1 bool) {
 			case extDepMatch(key):
 				reason, _ := health.MatchExternalDep(key, health.ExternalDepWorkloads())
 				record(r, health.CatDeferred, detail+" — "+reason)
+			// Gated on health.Budgeted for the same reason the Service branches are:
+			// a pod wedged in ContainerCreating by a FailedMount or
+			// FailedAttachVolume never leaves that state, and calling it "still
+			// starting" in steady-state health means it never alerts.
+			case health.Budgeted && (health.PodIsStarting(p.Status) || health.PodIsWarmingUp(p.Status)):
+				// STARTING IS NOT FAILED, and reading PodIsFailing as a verdict
+				// cost a release-e2e round: a pod mid-ContainerCreating on a
+				// four-minute-old cluster was recorded CatFail, twice sixty
+				// seconds apart, and converge aborted with "operator
+				// intervention required" while every Application was still
+				// flipping OutOfSync -> Synced. PodIsFailing answers "is this
+				// pod serving?"; this gate needs "is this pod broken?", and the
+				// two differ exactly here. The budget still bounds it — a pod
+				// that never starts exhausts the budget and is reported as the
+				// timeout it is.
+				record(r, health.CatPending, detail+" — still starting")
 			default:
 				record(r, health.CatFail, detail)
 			}
@@ -1484,10 +1515,12 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 	return "", ""
 }
 
-// countReadyEndpoints sums ready endpoints across a Service's EndpointSlices.
-func countReadyEndpoints(ns, svc string) int {
-	return health.CountReadyEndpoints(
-		kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
+// endpointCounts returns (ready, total) for a Service's EndpointSlices. Both come
+// from ONE list call: two calls could observe different moments of a rollout and
+// report ready>total, which would read as nonsense in the message.
+func endpointCounts(ns, svc string) (ready, total int) {
+	slices := kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc)
+	return health.CountReadyEndpoints(slices), health.CountEndpoints(slices)
 }
 
 // MOVED HERE from ci_readiness.go rather than injected.

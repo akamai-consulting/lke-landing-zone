@@ -169,8 +169,15 @@ func TestProbeHarborRoundTripUnauthenticatedRegistry(t *testing.T) {
 func seamHarborCluster(t *testing.T, nsPresent bool, nsErr error, secret []byte, secretErr error) {
 	t.Helper()
 	oN, oS := harborauth.NamespaceExists, harborauth.ReadRobotSecret
-	t.Cleanup(func() { harborauth.NamespaceExists, harborauth.ReadRobotSecret = oN, oS })
+	oE := harborauth.RobotExternalSecretExists
+	t.Cleanup(func() {
+		harborauth.NamespaceExists, harborauth.ReadRobotSecret = oN, oS
+		harborauth.RobotExternalSecretExists = oE
+	})
 	harborauth.NamespaceExists = func(string) (bool, error) { return nsPresent, nsErr }
+	// The chart IS deployed in these cases — the subject is the Secret, not the
+	// deployment shape (which TestRunAssertHarborRoundTripSkipsWithoutTheChart owns).
+	harborauth.RobotExternalSecretExists = func(string, string) (bool, error) { return true, nil }
 	harborauth.ReadRobotSecret = func(string, string) ([]byte, error) { return secret, secretErr }
 }
 
@@ -211,7 +218,12 @@ func TestRunAssertHarborRoundTripFailsWhenNamespaceUnreadable(t *testing.T) {
 // than decided once, which is what made this lane fail on the documented window.
 func TestRunAssertHarborRoundTripRetriesTheSecretRead(t *testing.T) {
 	oN, oS := harborauth.NamespaceExists, harborauth.ReadRobotSecret
-	t.Cleanup(func() { harborauth.NamespaceExists, harborauth.ReadRobotSecret = oN, oS })
+	oE := harborauth.RobotExternalSecretExists
+	t.Cleanup(func() {
+		harborauth.NamespaceExists, harborauth.ReadRobotSecret = oN, oS
+		harborauth.RobotExternalSecretExists = oE
+	})
+	harborauth.RobotExternalSecretExists = func(string, string) (bool, error) { return true, nil }
 	harborauth.NamespaceExists = func(string) (bool, error) { return true, nil }
 	reads := 0
 	harborauth.ReadRobotSecret = func(string, string) ([]byte, error) {

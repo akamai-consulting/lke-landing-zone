@@ -129,6 +129,18 @@ func CountReadyEndpoints(slices []EndpointSlice) int {
 	return n
 }
 
+// CountEndpoints counts EVERY endpoint across slices, ready or not. An
+// EndpointSlice lists notReady addresses too, which is what lets
+// ClassifyServiceEndpoints tell "the pods exist and are still starting" from
+// "nothing backs this Service".
+func CountEndpoints(slices []EndpointSlice) int {
+	n := 0
+	for _, s := range slices {
+		n += len(s.Endpoints)
+	}
+	return n
+}
+
 // ClassifyWebhookBackend classifies an admission webhook's backing Service:
 // a missing Service or zero ready endpoints fails; otherwise it passes.
 func ClassifyWebhookBackend(serviceExists bool, readyCount int) (Category, string) {

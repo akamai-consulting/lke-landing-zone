@@ -228,8 +228,39 @@ var ReadRobotSecret = func(ns, name string) ([]byte, error) {
 // gate that failed on that would color.Red every such cluster for a component it was
 // never asked to run. An absent Secret INSIDE a present namespace is the real
 // finding: ESO is not materializing secret/harbor/robot.
+//
+// IT IS NO LONGER SUFFICIENT ON ITS OWN, and the reason is worth carrying: the
+// namespace is now shipped by argoWorkflows on managed clusters, EMPTY, purely so
+// argo-helm has somewhere to put the workflow RBAC that controller.
+// workflowNamespaces asks for (see that component's cert-automation-namespace.yaml).
+// A present-but-empty namespace made this gate stop skipping and start waiting two
+// minutes for a Secret nothing would ever create. "The namespace exists" stopped
+// meaning "the component is deployed" the moment something else had a reason to
+// create it — so the deployment probe moved to RobotExternalSecretExists, which
+// tests an object only the chart creates.
 var NamespaceExists = func(ns string) (bool, error) {
 	out, err := execOutput("kubectl", "get", "namespace", ns, "--ignore-not-found", "-o", "name")
+	if err != nil {
+		return false, err
+	}
+	return len(bytes.TrimSpace(out)) > 0, nil
+}
+
+// RobotExternalSecretExists reports whether the cert-automation chart's
+// ExternalSecret for the robot credential is on this cluster.
+//
+// THIS IS THE DEPLOYMENT PROBE, not the namespace. The ExternalSecret is created
+// only by llz-cert-automation's templates/externalsecrets.yaml, so its presence
+// answers "is the component deployed here" without depending on who else might
+// have a reason to create the namespace. It also keeps the finding this gate
+// exists for intact: ExternalSecret PRESENT and Secret ABSENT still means ESO is
+// not materializing secret/harbor/robot, which is a real failure and still fails.
+//
+// Re-arms by itself: deploy the chart on a managed cluster and the lane starts
+// gating again with no code change, the same way the mtls lane resumes when a
+// namespace flips to STRICT.
+var RobotExternalSecretExists = func(ns, name string) (bool, error) {
+	out, err := execOutput("kubectl", "-n", ns, "get", "externalsecret", name, "--ignore-not-found", "-o", "name")
 	if err != nil {
 		return false, err
 	}

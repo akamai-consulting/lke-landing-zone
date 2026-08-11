@@ -227,7 +227,7 @@ func (b Binding) String() string {
 // now declare their own grants. Measured (registry.All, per extension):
 //
 //	read-repo 42/62 · cluster-read 23 · cloud-mutate 17 · cloud-read 16 ·
-//	cluster-write 16 · secret-custody 12 · secret-read 9 · write-repo 5 ·
+//	cluster-write 16 · secret-custody 12 · secret-read 9 · write-repo 6 ·
 //	own-paths 1
 //
 // `read-repo` is held by a MAJORITY — two thirds — so the headline claim is false

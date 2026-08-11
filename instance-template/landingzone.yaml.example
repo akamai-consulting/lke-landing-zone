@@ -30,7 +30,7 @@ spec:
   # Inherited by every environment; a per-env value overrides field-by-field.
   defaults:
     cluster:
-      k8sVersion: v1.33.6+lke7   # an LKE-E +lke version available in your Linode account
+      k8sVersion: v1.34.6+lke2   # an LKE-E +lke version available in your Linode account
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       # ── Managed App Platform (REQUIRED) ──────────────────────────────────────
       # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled). Linode

@@ -76,6 +76,18 @@ func WouldRenderPath(prefix, path string) {
 	fmt.Printf("  %s  %s%s\n", color.Cyan("would-render"), prefix, path)
 }
 
+// SpecPresent reports whether this checkout has a LandingZone spec to render
+// from. It resolves the spec root EXACTLY as Run does — same layout detection,
+// same predicate — so `--if-spec` can never skip a render Run would have
+// performed, or perform one Run would refuse. A caller testing for the file by
+// name instead (`[ -f landingzone.yaml ]`) is answering a different question:
+// that one depends on the step's working directory, and layout detection does
+// not.
+func SpecPresent() bool {
+	tfDir, _, _ := instancelayout.Detect()
+	return clusterspec.InstancePresent(filepath.Dir(tfDir))
+}
+
 func Run(dryRun bool, env string, tfvarsOnly, check, diff bool) error {
 	tfDir, aplDir, relPrefix := instancelayout.Detect()
 	specRoot := filepath.Dir(tfDir)

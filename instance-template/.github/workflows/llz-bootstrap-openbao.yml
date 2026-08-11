@@ -115,7 +115,7 @@ env:
   TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
   AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
   REGION:              ${{ inputs.region }}
-  KUBECTL_VERSION:     "1.31.0"
+  KUBECTL_VERSION:     "1.34.10"
 
 defaults:
   run:

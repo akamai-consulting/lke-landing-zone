@@ -103,17 +103,23 @@ func TestClassifyCronWorkflow(t *testing.T) {
 }
 
 func TestClassifyServiceEndpoints(t *testing.T) {
-	if cat, _ := ClassifyServiceEndpoints("x/s", 2, false); cat != CatOK {
+	if cat, _ := ClassifyServiceEndpoints("x/s", 2, 2, false); cat != CatOK {
 		t.Error("ready endpoints ok")
 	}
-	if cat, _ := ClassifyServiceEndpoints("openbao/s", 0, true); cat != CatPending {
+	if cat, _ := ClassifyServiceEndpoints("openbao/s", 0, 0, true); cat != CatPending {
 		t.Error("0 endpoints under phase-1 pends")
 	}
-	if cat, _ := ClassifyServiceEndpoints("external-dns/external-dns", 0, false); cat != CatDeferred {
+	if cat, _ := ClassifyServiceEndpoints("external-dns/external-dns", 0, 0, false); cat != CatDeferred {
 		t.Error("0 endpoints on a deferred workload defers")
 	}
-	if cat, _ := ClassifyServiceEndpoints("x/s", 0, false); cat != CatFail {
-		t.Error("0 endpoints otherwise fails")
+	// 0 endpoints is PENDING now, not FAIL — a Service whose pods have no PodIP
+	// yet is indistinguishable from one whose selector matches nothing, so the
+	// convergence budget decides and its exhaustion report names the Service.
+	// See TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
+	// Inside a convergence budget 0 endpoints defers; outside one it is terminal.
+	// See TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
+	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatFail {
+		t.Error("0 endpoints outside a budget must still fail")
 	}
 }
 
