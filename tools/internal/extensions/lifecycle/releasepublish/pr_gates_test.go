@@ -902,3 +902,46 @@ func TestZeroIntervalGetsAFloorNotATightLoop(t *testing.T) {
 		t.Fatal("the poll loop never slept at all")
 	}
 }
+
+// A real FAILURE outranks an inconclusive sibling. With the branches the other
+// way round, one FAILURE plus one CANCELLED reported "This is NOT a failing gate"
+// and never named the gate that actually broke.
+func TestAFailureOutranksAnInconclusiveSibling(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Checkov IaC Security Scan","state":"CANCELLED"}]`,
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a FAILURE must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "Terraform Lint=FAILURE") {
+		t.Errorf("the gate that actually broke was not named: %v", err)
+	}
+	if strings.Contains(err.Error(), "NOT a failing gate") {
+		t.Errorf("a cancelled sibling hid a definite failure: %v", err)
+	}
+}
+
+// The timeout verdict must also say when the polls were UNPARSEABLE, not only
+// when they were empty — one good poll then a run of garbage is the same
+// I/O-as-verdict trap through the third door.
+func TestATimeoutSaysWhenThePollsWereUnparseable(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		"<html>502 Bad Gateway</html>",
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("unsettled checks must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "TIMEOUT") {
+		t.Errorf("expected the timeout verdict, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "502 Bad Gateway") {
+		t.Errorf("the unparseable polls went unmentioned, so the timeout reads as certain: %v", err)
+	}
+}

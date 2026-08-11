@@ -288,9 +288,8 @@ jobs:
     steps:
       - name: Checkout the instance (the template pin)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Required repo-level secrets and variables are set
-        run: llz ci require-repo-config
-
+      # IMAGE SKEW IS CHECKED FIRST, AND THE ORDER IS THE WHOLE POINT.
+      #
       # THE IMAGE EVERY JOB IN THIS PIPELINE RUNS IN, checked on the cheapest job
       # rather than only on apply-vpc. assert-image-fresh used to run in exactly
       # one place — the first job of an APPLY — so a TF_IMAGE that had not been
@@ -302,6 +301,16 @@ jobs:
       # executing a binary that does not match the pin — and `llz tokens --env
       # <deployment> --yes` clears it in one command.
       #
+      # AND IT MUST PRECEDE require-repo-config, which is a NEW verb. A stale
+      # TF_IMAGE is the normal state immediately after any upgrade (see
+      # reportCIImageSkew), and that image's baked llz does not have the new verb
+      # — so with the steps the other way round this job died on `unknown command
+      # "require-repo-config"` and the actionable skew message never ran, on
+      # exactly the population the job was built for. assert-image-fresh has
+      # shipped for many releases, so it resolves in the old image and says the
+      # useful thing. Any new verb added here belongs BELOW it, for the same
+      # reason.
+      #
       # GH_TOKEN: the pin is a release TAG and the baked llz is a COMMIT, so the
       # guard resolves the tag against the (public) template repo to compare them.
       # Public read is all it needs; without it the guard warns and passes.
@@ -309,6 +318,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: llz ci assert-image-fresh
+
+      - name: Required repo-level secrets and variables are set
+        run: llz ci require-repo-config
 
   # ── tflint ───────────────────────────────────────────────────────────────────
   # Local HCL only — no provider credentials or remote state needed.

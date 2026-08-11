@@ -426,9 +426,20 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
 			time.Duration(o.Retries)*o.Interval, gateContext(obs, o.Token), o.Instance, pr)
 	}
-	// BEFORE the failure branch, for the same reason PENDING is: a check that was
-	// cancelled or never executed proves nothing about the gate, and calling it a
-	// broken gate sends an operator to debug a job that may be perfectly healthy.
+	if bad := failures(obs.found); len(bad) > 0 {
+		var parts []string
+		for _, c := range bad {
+			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
+		}
+		return fmt.Errorf("::error title=Instance PR gates failed::a delivered CI gate does not work in the "+
+			"scaffold it ships to (%s). See %s#%s", strings.Join(parts, ", "), o.Instance, pr)
+	}
+	// AFTER the failure branch, and that ordering was wrong the first time. A run
+	// with one FAILURE and one CANCELLED check reported "This is NOT a failing
+	// gate" and never named the gate that actually broke — the inconclusive
+	// sibling hid the definite verdict. A failure is knowledge; an inconclusive
+	// state is the absence of it, so the failure is the headline whenever there is
+	// one, and this branch owns only the case where NOTHING failed outright.
 	if odd := inconclusive(obs.found); len(odd) > 0 {
 		var parts []string
 		for _, c := range odd {
@@ -440,14 +451,6 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"(cancel-in-progress: false), so re-running is the fix. SKIPPED or NEUTRAL means the job's `if:` "+
 			"excluded it, which IS a regression in the delivered gating: check the pull_request / head-repo "+
 			"conditions on %s#%s", strings.Join(parts, ", "), o.Instance, pr)
-	}
-	if bad := failures(obs.found); len(bad) > 0 {
-		var parts []string
-		for _, c := range bad {
-			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
-		}
-		return fmt.Errorf("::error title=Instance PR gates failed::a delivered CI gate does not work in the "+
-			"scaffold it ships to (%s). See %s#%s", strings.Join(parts, ", "), o.Instance, pr)
 	}
 	fmt.Printf("Both PR-gated CI checks passed on %s#%s\n", o.Instance, pr)
 	return nil
@@ -681,7 +684,12 @@ func redact(err error, token string) error {
 // "still pending after 15m" deserves to know the last four polls errored.
 func gateContext(obs gateObservation, token string) string {
 	var out string
-	for _, ctx := range []error{obs.ghErr, obs.priorUnreadable} {
+	// parseErr BELONGS HERE TOO. It was left out, so one good poll followed by a
+	// run of UNPARSEABLE ones produced a bare "still in_progress after 15m — this
+	// is a TIMEOUT" with no hint that every later read had failed. That is the
+	// omission this helper was extracted to fix, reintroduced by only carrying two
+	// of the three ways a poll can go wrong.
+	for _, ctx := range []error{obs.ghErr, obs.parseErr, obs.priorUnreadable} {
 		if ctx != nil {
 			out += " — " + strings.TrimSpace(redact(ctx, token).Error())
 		}
