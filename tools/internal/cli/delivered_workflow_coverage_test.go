@@ -33,6 +33,7 @@ import (
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
 )
 
 // ── Gate 1: repo-readiness's env: block vs the requirement table ─────────────
@@ -287,4 +288,46 @@ func TestEveryDeliveredEntryPointIsExercisedOrExcused(t *testing.T) {
 	}
 	t.Logf("%d delivered entry point(s); %d driven by the release lane, %d excused",
 		len(entryPoints), driven, len(entryPoints)-driven)
+}
+
+// ── Gate 4: the probe's check names vs the delivered jobs' own ───────────────
+
+// TestPRGateCheckNamesMatchTheDeliveredJobs couples the last restated list in
+// this PR's new machinery.
+//
+// DefaultPRGateChecks names the two jobs `llz ci assert-instance-pr-gates` waits
+// for, and llz-terraform.yml names them again in its `name:` fields. Rename a job
+// there and nothing in this repo notices: the template stays green, and the
+// mismatch surfaces fifteen minutes into the next release-e2e as "the gates never
+// ran — either the paths: filter no longer covers AGENTS.md, or the jobs were
+// removed or renamed". That diagnosis lists the right cause third, behind two
+// wrong ones, for a rename a static gate can see instantly. Every other split
+// contract in this branch got a coupling test; this is the one that did not.
+func TestPRGateCheckNamesMatchTheDeliveredJobs(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	// Job `name:` values, at job depth (4 spaces) inside the pipeline.
+	names := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^    name: (.+)$`).FindAllStringSubmatch(string(raw), -1) {
+		names[strings.TrimSpace(strings.Trim(m[1], `"'`))] = true
+	}
+	if len(names) < 5 {
+		t.Fatalf("found only %d job name(s) in %s — the extractor is broken, so this gate would pass "+
+			"having compared nothing", len(names), deliveredPipeline)
+	}
+	for _, want := range releasepublish.DefaultPRGateChecks {
+		if !names[want] {
+			var have []string
+			for n := range names {
+				have = append(have, n)
+			}
+			sort.Strings(have)
+			t.Errorf("the PR-gate probe waits for a check called %q, but no job in %s is named that.\n"+
+				"A release-e2e run would report it as \"the gates never ran\" and send an operator to the "+
+				"paths: filter. Jobs actually named there: %s",
+				want, deliveredPipeline, strings.Join(have, ", "))
+		}
+	}
 }

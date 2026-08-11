@@ -1055,3 +1055,41 @@ func TestWhitespaceOnlyOutputCountsAsNoChecks(t *testing.T) {
 		t.Errorf("expected the never-ran verdict, got: %v", err)
 	}
 }
+
+// "No checks at all" and "some checks, but not ours" have different causes. The
+// first is most often a run that has not STARTED — the pipeline's concurrency
+// group is cancel-in-progress: false, so runs queue — and blaming the paths:
+// filter first sends an operator to inspect something that is fine.
+func TestNoChecksAtAllNamesTheQueuedRunFirst(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"[]"}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("gates that never appeared must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "has not STARTED") {
+		t.Errorf("a PR with zero checks should name the un-started run first, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "queues") {
+		t.Errorf("the queueing behaviour is the actionable part and went unsaid: %v", err)
+	}
+}
+
+// ...but when OTHER checks did appear, the filter/rename explanation is the right
+// one and must not be buried under the queue story.
+func TestSomeChecksButNotOursStillPointsAtTheFilter(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{`[{"name":"Promotion pipeline up to date","state":"SUCCESS"}]`}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("missing gates must fail the verb")
+	}
+	if strings.Contains(err.Error(), "has not STARTED") {
+		t.Errorf("checks DID appear, so the run plainly started: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Promotion pipeline up to date") {
+		t.Errorf("the checks that did appear should be listed: %v", err)
+	}
+}

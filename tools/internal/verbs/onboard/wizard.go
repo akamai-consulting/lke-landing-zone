@@ -78,13 +78,28 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 }
 
 // ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for
-// the e2e dispatch token: name, resource owner, 90-day expiry, and the three
+// the e2e dispatch token: name, resource owner, 90-day expiry, and the four
 // repository permissions the e2e run needs — Contents (force-push the
-// instantiated tree), Actions (workflow_dispatch + watch the runs), and
-// Workflows (the force-push rewrites .github/workflows/*). GitHub can't
-// pre-select WHICH repository via query, so the caller tells the operator to
-// pick it under "Only select repositories". Unknown perm keys are harmlessly
-// ignored by GitHub, so the operator confirms the toggles on the page anyway.
+// instantiated tree), Actions (workflow_dispatch + watch the runs), Workflows
+// (the force-push rewrites .github/workflows/*), and Pull requests (the PR-gate
+// probe opens a throwaway PR to prove the instance's pull_request-gated CI
+// actually runs). GitHub can't pre-select WHICH repository via query, so the
+// caller tells the operator to pick it under "Only select repositories". Unknown
+// perm keys are harmlessly ignored by GitHub, so the operator confirms the
+// toggles on the page anyway.
+//
+// PULL REQUESTS WAS ADDED LATE, AND THE WAY IT WAS MISSED IS THE POINT. The verb
+// that needs it shipped with both workflow files DESCRIBING the new scope while
+// this function — the one that actually MINTS the token — went on offering
+// three. A token minted here would have passed the presence check and then died
+// at `gh pr create` with "Resource not accessible by integration", which is the
+// exact failure the new scope was documented to prevent. Two places state this
+// contract and only one of them is executable: keep them together.
+// tokensPromptFineGrained is the permission set an operator is told to switch on,
+// kept beside the query string that pre-fills them so the sentence and the URL
+// cannot drift. TestDispatchTokenPromptNamesPullRequests reads it.
+const tokensPromptFineGrained = "Contents + Actions + Workflows + Pull requests: Read and write"
+
 func ghFineGrainedDispatchURL(name, owner string) string {
 	q := url.Values{}
 	q.Set("name", name)
@@ -95,6 +110,7 @@ func ghFineGrainedDispatchURL(name, owner string) string {
 	q.Set("contents", "write")
 	q.Set("actions", "write")
 	q.Set("workflows", "write")
+	q.Set("pull_requests", "write")
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 

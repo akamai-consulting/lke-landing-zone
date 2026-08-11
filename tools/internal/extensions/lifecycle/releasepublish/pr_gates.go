@@ -405,7 +405,18 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 	}
 	if len(obs.missing) > 0 {
 		seen := observedNames(obs.raw)
-		seenMsg := "no checks appeared at all"
+		// NO CHECKS AT ALL IS A DIFFERENT STORY FROM SOME-BUT-NOT-OURS, and the
+		// old wording told only the second one. If OTHER checks appeared and ours
+		// did not, the paths: filter or a rename really is the cause. If NOTHING
+		// appeared, the likeliest explanation is that the run has not started —
+		// the pipeline's concurrency group is cancel-in-progress: false, so a run
+		// QUEUES behind whatever is already in flight, and this lane's own
+		// force-push to the fixture repo puts one there. Naming a filter and a
+		// rename first, for a run that simply had not begun, is the same
+		// I/O-as-verdict conflation this file rejects for PENDING, one level up.
+		seenMsg := "no checks appeared at all — most often the run has not STARTED " +
+			"(the pipeline's concurrency group does not cancel, so a run queues behind one already in " +
+			"flight); after that, a paths: filter that no longer selects the touched file"
 		if len(seen) > 0 {
 			seenMsg = "checks that DID appear: " + strings.Join(seen, ", ")
 		}
@@ -414,10 +425,10 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		// with it — and it is the difference between a filter that missed and a PR
 		// that was never opened against the right base.
 		seenMsg += gateContext(obs, o.Token)
-		return fmt.Errorf("::error title=Instance PR gates never ran::%s did not appear on %s#%s. "+
-			"The jobs are pull_request-gated behind a paths: filter — either the filter no longer covers %s, "+
-			"or the jobs were removed or renamed (%s)",
-			strings.Join(obs.missing, " / "), o.Instance, pr, o.TouchPath, seenMsg)
+		return fmt.Errorf("::error title=Instance PR gates never ran::%s did not appear on %s#%s "+
+			"within %s. The jobs are pull_request-gated behind a paths: filter watching %s (%s)",
+			strings.Join(obs.missing, " / "), o.Instance, pr,
+			time.Duration(o.Retries-1)*o.Interval, o.TouchPath, seenMsg)
 	}
 	// PENDING IS NOT FAILED. Reporting a check that simply never finished as "a
 	// delivered CI gate does not work in the scaffold it ships to" sends an operator
