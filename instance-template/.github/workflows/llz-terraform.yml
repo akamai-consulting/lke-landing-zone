@@ -216,11 +216,18 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # `llz check`, not `make`: an instance has no Makefile. These checks were
+      # ported out of the template's Makefile into the llz binary (see
+      # verbs/lint/lint.go) so they travel with the image instead of via `copier
+      # update` — but this call site kept the old spelling, so every instance's
+      # tflint/checkov jobs died on `No rule to make target`. The jobs are gated
+      # on `pull_request`, which no instance had ever triggered for this pipeline,
+      # so the break stayed invisible. Covered by TestDeliveredWorkflowCommands.
       - name: tflint
-        run: make tf-lint
+        run: llz check tf-lint
 
-  # Checkov IaC security scan — local HCL, no credentials. Gates: `make checkov`
-  # exits non-zero on a finding.
+  # Checkov IaC security scan — local HCL, no credentials. Gates: `llz check
+  # checkov` exits non-zero on a finding.
   checkov:
     name: Checkov IaC Security Scan
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -234,7 +241,7 @@ jobs:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkov
-        run: make checkov
+        run: llz check checkov
 
       # A SARIF-upload step was removed here — it never produced a file and read as
       # security coverage that did not exist. See the sidecar before re-adding.

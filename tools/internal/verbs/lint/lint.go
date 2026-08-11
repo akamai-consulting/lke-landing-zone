@@ -38,8 +38,13 @@ import (
 
 // candidateTFDirs are the Terraform roots an instance may carry. tfDirs() keeps
 // only the ones that exist (the Makefile used `$(wildcard ...)` for this).
+// `databases` is here because an instance that declares a Managed Postgres
+// carries that root exactly like the other three, and omitting it meant tflint,
+// checkov and tf-validate all silently skipped it — a root can only be linted by
+// a list it appears on, and nothing failed to say it was missing.
 var candidateTFDirs = []string{
 	"terraform-iac-bootstrap/cluster",
+	"terraform-iac-bootstrap/databases",
 	"terraform-iac-bootstrap/object-storage",
 	"terraform-iac-bootstrap/vpc",
 }
