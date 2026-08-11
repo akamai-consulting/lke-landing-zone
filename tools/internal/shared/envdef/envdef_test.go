@@ -23,8 +23,20 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		}
 	}
 	write(".copier-answers.yml", "upstream_org: akamai-consulting\ninstance_repo: my-org/platform-support\nllz_version: v0.4.0\nopenbao_team: ops\n")
+	// NOTE: this local file is NOT what supplies the defaults. tfvarsExampleValue
+	// reads the EMBEDDED tfroots copy (an instance ships no .example any more), so
+	// the values asserted below come from
+	// tools/internal/shared/tfroots/roots/cluster/terraform.tfvars.example. It is
+	// written anyway because `llz env add` runs against a tree that has one, and
+	// leaving it out would test a layout no instance has.
+	//
+	// It also used to make this test LIE: it wrote k8s_version = "v1.34.6+lke2" and
+	// the assertion said "want inherited v1.34.6+lke2", which passed only because
+	// the embedded copy carried the same string. Bumping the embedded default
+	// alone broke it — proving the fixture was never the source. The assertions
+	// now name the embedded example as the authority.
 	write("terraform-iac-bootstrap/cluster/terraform.tfvars.example",
-		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
+		"cluster_label = \"x\"\nk8s_version = \"v0.0.0+ignored\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
 
 	// First env: creates landingzone.yaml from the answers + seeded defaults.
 	name, created, err := EnsureLandingZone(dir)
@@ -66,8 +78,10 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 	if c.ClusterLabel != "platform-support-lab" || c.Bootstrap.Name != "platform-support-lab" {
 		t.Errorf("identity not derived: label=%q name=%q", c.ClusterLabel, c.Bootstrap.Name)
 	}
-	if c.K8sVersion != "v1.33.6+lke7" {
-		t.Errorf("k8sVersion = %q, want inherited v1.33.6+lke7", c.K8sVersion)
+	// From the EMBEDDED tfroots example, not the local fixture above.
+	wantK8s := embeddedExampleK8sVersion(t)
+	if c.K8sVersion != wantK8s {
+		t.Errorf("k8sVersion = %q, want %q from the embedded tfroots terraform.tfvars.example", c.K8sVersion, wantK8s)
 	}
 	if c.NodePool.Type != "g8-dedicated-8-4" || c.NodePool.Count != 3 {
 		t.Errorf("nodePool = %+v, want type inherited + count override 3", c.NodePool)
@@ -89,4 +103,17 @@ func TestShortRepoName(t *testing.T) {
 			t.Errorf("ShortRepoName(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// embeddedExampleK8sVersion reads the k8s_version the embedded cluster root's
+// terraform.tfvars.example carries — the single place the default lives, so this
+// test tracks a bump instead of pinning a copy of one.
+func embeddedExampleK8sVersion(t *testing.T) string {
+	t.Helper()
+	v := tfvarsExampleValue("cluster", "k8s_version")
+	if v == "" {
+		t.Fatal("the embedded cluster terraform.tfvars.example has no k8s_version — " +
+			"every default below would silently fall back")
+	}
+	return v
 }

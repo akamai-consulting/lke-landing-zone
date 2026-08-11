@@ -18,7 +18,7 @@ ha_group = ""
 # docs/environments-and-promotion.md.
 
 # Update this to a currently supported LKE Enterprise version in your account.
-k8s_version = "v1.33.6+lke7"
+k8s_version = "v1.34.6+lke2"
 
 # Optional tags applied to the cluster/pool/firewall/VPC. The spec
 # (spec.cluster.tags) is the source of truth and overrides this when set; an

@@ -15,7 +15,7 @@ spec:
   cluster:
     clusterLabel: platform-prod-web-ord           # → cluster_label (Linode LKE label)
     region: us-ord                                 # → region (must match its network's region)
-    k8sVersion: v1.33.6+lke7                       # → k8s_version (or inherit from defaults)
+    k8sVersion: v1.34.6+lke2                       # → k8s_version (or inherit from defaults)
     tags: [platform, prod, web]                    # → tags
 
     nodePool:                                      # → node_type / node_count / autoscaler
