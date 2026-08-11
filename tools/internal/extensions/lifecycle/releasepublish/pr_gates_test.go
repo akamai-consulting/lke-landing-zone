@@ -364,3 +364,104 @@ func TestCloneFailureDoesNotLeakTheToken(t *testing.T) {
 		t.Errorf("the token reached the error text: %v", err)
 	}
 }
+
+// ── the review's findings, pinned ─────────────────────────────────────────────
+
+// The gated jobs live in the REUSABLE llz-terraform.yml, which terraform.yml calls
+// from a job named `call`, so GitHub reports `call / Terraform Lint`. Matching the
+// bare name found nothing and reported the verb's own regression forever.
+func TestReusableWorkflowPrefixedChecksMatch(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"call / Terraform Lint","state":"SUCCESS"},{"name":"call / Checkov IaC Security Scan","state":"SUCCESS"}]`,
+	}}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("caller-job-prefixed check names must match: %v", err)
+	}
+}
+
+// ...but the prefix tolerance must not become a substring match.
+func TestPrefixToleranceIsAnchored(t *testing.T) {
+	for _, tc := range []struct {
+		observed, want string
+		match          bool
+	}{
+		{"Terraform Lint", "Terraform Lint", true},
+		{"call / Terraform Lint", "Terraform Lint", true},
+		{"a / b / Terraform Lint", "Terraform Lint", true},
+		{"Terraform Lint (extra)", "Terraform Lint", false},
+		{"Extra Terraform Lint", "Terraform Lint", false},
+		{"call /Terraform Lint", "Terraform Lint", false},
+	} {
+		if got := matchesCheck(tc.observed, tc.want); got != tc.match {
+			t.Errorf("matchesCheck(%q, %q) = %v, want %v", tc.observed, tc.want, got, tc.match)
+		}
+	}
+}
+
+// The touch target must be a TRACKED file. The first draft used
+// terraform-iac-bootstrap/cluster/versions.tf, which that tree's .gitignore
+// excludes (`*/*.tf` — an instance commits zero Terraform code), so the commit
+// would have been empty and the step would have failed on every run.
+func TestTouchPathIsNotAGeneratedTFRoot(t *testing.T) {
+	if strings.HasSuffix(DefaultPRGateTouchPath, ".tf") {
+		t.Errorf("%q is a rendered TF root — gitignored via */*.tf, so it is never tracked "+
+			"and the touch commit would be empty", DefaultPRGateTouchPath)
+	}
+	if !strings.HasPrefix(DefaultPRGateTouchPath, "terraform-iac-bootstrap/") {
+		t.Errorf("%q is outside the pipeline's paths: filter, so it would select neither gated job",
+			DefaultPRGateTouchPath)
+	}
+}
+
+// A check that never settles is a TIMEOUT. Reporting it as "a delivered CI gate
+// does not work in the scaffold it ships to" sends an operator to debug a job that
+// may be healthy and merely queued.
+func TestTimeoutIsNotReportedAsAFailingGate(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("an unsettled check must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "did not finish") {
+		t.Errorf("expected a timeout diagnosis, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "does not work in the scaffold") {
+		t.Errorf("a pending check was reported as a broken gate: %v", err)
+	}
+}
+
+// The branch is named after the commit, so a retry at the same sha meets its own
+// leaked branch; a plain push dies on non-fast-forward.
+func TestPushIsForcedSoARetryAtTheSameSHAWorks(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	for _, c := range f.gitCalls {
+		if c[0] != "push" {
+			continue
+		}
+		if !slicesContains(c, "--force") {
+			t.Errorf("push is not forced (%v) — a re-run at the same sha cannot overwrite its own leaked branch", c)
+		}
+		return
+	}
+	t.Error("no push was issued")
+}
+
+func slicesContains(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}

@@ -52,11 +52,21 @@ import (
 // this verb report "never appeared", which is the correct and loud answer.
 var DefaultPRGateChecks = []string{"Terraform Lint", "Checkov IaC Security Scan"}
 
-// DefaultPRGateTouchPath is a file inside the terraform pipeline's paths: filter.
-// Touching it is what SELECTS the gated jobs — a PR that changes nothing the filter
-// watches opens cleanly and runs neither job, which would look identical to the
-// regression this verb hunts.
-const DefaultPRGateTouchPath = "terraform-iac-bootstrap/cluster/versions.tf"
+// DefaultPRGateTouchPath is a file inside the terraform pipeline's paths: filter
+// (`terraform-iac-bootstrap/**`). Touching it is what SELECTS the gated jobs — a PR
+// that changes nothing the filter watches opens cleanly and runs neither job, which
+// would look identical to the regression this verb hunts.
+//
+// IT MUST BE A *TRACKED* FILE, AND ALMOST NOTHING UNDER THAT ROOT IS. The first
+// draft touched `terraform-iac-bootstrap/cluster/versions.tf`, which cannot work:
+// that tree's .gitignore excludes `*/*.tf` because an instance commits ZERO
+// Terraform code — the roots are rendered on the fly by `llz render` from the
+// embedded tfroots package. The file is not merely unstaged, it is not there at
+// all, so the commit would have been empty and the step would have failed on every
+// single run. Four files are tracked under the root: .gitignore, AGENTS.md, and two
+// .terraform.lock.hcl provider pins. AGENTS.md is the only one that is pure prose,
+// so appending to it cannot change what tflint or checkov parse.
+const DefaultPRGateTouchPath = "terraform-iac-bootstrap/AGENTS.md"
 
 // Seams (package vars) so tests drive the flow without a forge, a clone or a clock.
 var (
@@ -121,23 +131,41 @@ var pendingStates = map[string]bool{"PENDING": true, "QUEUED": true, "IN_PROGRES
 
 func isPending(state string) bool { return pendingStates[strings.ToUpper(state)] }
 
+// matchesCheck reports whether an observed check name is the wanted job.
+//
+// A BARE NAME IS NOT ENOUGH, AND ASSUMING IT WAS WOULD HAVE MADE THIS VERB REPORT
+// "never ran" FOREVER. The instance's tf-lint and checkov jobs live in the REUSABLE
+// llz-terraform.yml, which terraform.yml invokes from a job named `call`. GitHub
+// names a called workflow's checks `<caller job> / <called job>`, so what actually
+// arrives is `call / Terraform Lint` — and an exact match against "Terraform Lint"
+// finds nothing, which this verb reports as the very regression it hunts. A gate
+// that cannot pass is worth no more than one that cannot fail.
+//
+// The suffix is anchored on the " / " separator rather than matched loosely, so
+// "Terraform Lint (extra)" still does not satisfy "Terraform Lint": the point is to
+// tolerate the caller-job prefix GitHub prepends, not to accept any name that
+// happens to contain the wanted one.
+func matchesCheck(observed, want string) bool {
+	return observed == want || strings.HasSuffix(observed, "/ "+want)
+}
+
 // partitionChecks splits a `gh pr checks` payload into the wanted checks that
-// APPEARED and the wanted names that did not. Names are matched exactly: these are
-// job `name:` values the template repo controls, so a fuzzy match would let a
-// renamed job satisfy the assertion it was supposed to fail.
+// APPEARED and the wanted names that did not.
 func partitionChecks(raw []byte, want []string) (found []check, missing []string, err error) {
 	var all []check
 	if err := json.Unmarshal(raw, &all); err != nil {
 		return nil, nil, fmt.Errorf("parsing gh pr checks output: %w", err)
 	}
-	byName := make(map[string]check, len(all))
-	for _, c := range all {
-		byName[c.Name] = c
-	}
 	for _, w := range want {
-		if c, ok := byName[w]; ok {
-			found = append(found, c)
-		} else {
+		hit := false
+		for _, c := range all {
+			if matchesCheck(c.Name, w) {
+				found = append(found, c)
+				hit = true
+				break
+			}
+		}
+		if !hit {
 			missing = append(missing, w)
 		}
 	}
@@ -152,6 +180,25 @@ func settled(found []check) bool {
 		}
 	}
 	return true
+}
+
+// pendingAfterWait returns the found checks still un-decided once the wait is over.
+func pendingAfterWait(found []check) []check {
+	var out []check
+	for _, c := range found {
+		if isPending(c.State) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func namesOf(cs []check) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.Name)
+	}
+	return out
 }
 
 // failures returns the found checks that did not succeed.
@@ -252,6 +299,16 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"or the jobs were removed or renamed (%s)",
 			strings.Join(missing, " / "), o.Instance, pr, o.TouchPath, seenMsg)
 	}
+	// PENDING IS NOT FAILED. Reporting a check that simply never finished as "a
+	// delivered CI gate does not work in the scaffold it ships to" sends an operator
+	// to debug a job that may be perfectly healthy and merely slow, or queued behind
+	// a busy runner. The two need different words because they need different work.
+	if stuck := pendingAfterWait(found); len(stuck) > 0 {
+		return fmt.Errorf("::error title=Instance PR gates did not finish::%s still %s after %s. "+
+			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
+			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
+			time.Duration(o.Retries)*o.Interval, o.Instance, pr)
+	}
 	if bad := failures(found); len(bad) > 0 {
 		var parts []string
 		for _, c := range bad {
@@ -285,14 +342,23 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	// A trailing comment changes no behavior and still lands in the diff, which is
 	// all the paths: filter needs to select the gated jobs.
 	touch := filepath.Join(repo, o.TouchPath)
-	line := fmt.Sprintf("\n# e2e: exercise the pull_request-gated CI gates (%s)\n", shortSHA(o.SHA))
+	// An HTML comment: the touch target is Markdown, so this renders as nothing and
+	// changes no document. gatesAppend does NOT create the file — a missing touch
+	// target means the paths: filter's tracked surface moved, which must fail loudly
+	// rather than silently commit a new file the filter may not even watch.
+	line := fmt.Sprintf("\n<!-- e2e: exercise the pull_request-gated CI gates (%s) -->\n", shortSHA(o.SHA))
 	if err := gatesAppend(touch, line); err != nil {
 		return "", fmt.Errorf("assert-instance-pr-gates: touching %s (is it still in the paths: filter?): %w",
 			o.TouchPath, err)
 	}
 	for _, argv := range [][]string{
 		{"commit", "-qam", "e2e: trigger PR-gated CI gates"},
-		{"push", "-q", "origin", branch},
+		// FORCE, because the branch is named after the commit under test: a re-run
+		// of the same sha (a retry, or a run whose cleanup was killed) finds its own
+		// leaked branch and a plain push dies on non-fast-forward. The branch is
+		// this verb's own throwaway and nothing else may write it, so there is no
+		// other history to lose.
+		{"push", "-q", "--force", "origin", branch},
 	} {
 		if _, err := gatesGit(repo, argv...); err != nil {
 			return "", fmt.Errorf("assert-instance-pr-gates: %w", redact(err, o.Token))

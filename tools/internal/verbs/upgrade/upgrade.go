@@ -173,9 +173,6 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// then have to re-review.
 	printSummary(oldRef, newRef)
 
-	// A single labeled commit so the operator reviews ONE diff and history reads
-	// "template vX → vY", not N unrelated file changes. Opt-in (--commit) — we
-	// never silently commit someone's working tree.
 	// ── Lever 4: what the new release now REQUIRES that the old one did not ──
 	// Lever 3 covers values the upgrade invalidates; this covers values it makes
 	// NEWLY MANDATORY, which nothing here can compute — the required set lives in
@@ -192,6 +189,9 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 		runPostUpgradeDoctor()
 	}
 
+	// A single labeled commit so the operator reviews ONE diff and history reads
+	// "template vX → vY", not N unrelated file changes. Opt-in (--commit) — we
+	// never silently commit someone's working tree.
 	if commit {
 		return commitUpgrade(dryRun, oldRef, newRef)
 	}

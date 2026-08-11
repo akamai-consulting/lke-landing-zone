@@ -115,6 +115,12 @@ func AssertInstancePRGatesCmd() *cobra.Command {
 	c.Flags().StringSliceVar(&o.Checks, "check", DefaultPRGateChecks, "check name that must appear AND succeed (repeatable)")
 	c.Flags().BoolVar(&o.Keep, "keep", false, "leave the branch and PR behind instead of closing them, to inspect a failure by hand")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between check polls")
-	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for the gated checks to appear and settle")
+	// 900s, NOT the 1200s pin-instance-images uses. This step shares a
+	// `timeout-minutes: 35` job with an image pin already sized to wait ~20 minutes,
+	// so a second 20-minute budget can only be spent by overrunning the JOB — which
+	// surfaces as an opaque runner timeout and leaks the throwaway PR, instead of
+	// this verb's own diagnosis. The gated jobs cap themselves at 10 minutes each,
+	// so 15 covers a full run plus queueing with room to report its own verdict.
+	c.Flags().IntVar(&timeout, "timeout", 900, "max seconds to wait for the gated checks to appear and settle")
 	return c
 }
