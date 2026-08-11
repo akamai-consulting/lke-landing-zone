@@ -469,8 +469,15 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	repo := filepath.Join(work, "repo")
 	cloneURL := fmt.Sprintf("https://x-access-token:%s@%s/%s.git", o.Token, o.Host, o.Instance)
-	// Cloned via `git -C work clone <url> repo` so the seam stays one shape.
-	if _, err := gatesGit(work, "clone", "-q", "--depth", "1", cloneURL, repo); err != nil {
+	// CLONED AT THE BASE BRANCH, not at whatever the repo defaults to. `--depth 1`
+	// with no --branch lands on the default branch, and the throwaway branch is cut
+	// from wherever we land — so with any non-default --base the PR's head would be
+	// unrelated to its base: either a diff carrying every commit on default-but-not-
+	// in-base (so the paths: filter selects far more than the one file we touched,
+	// and the "gates ran" verdict stops being about our change) or an outright
+	// `gh pr create` "No commits between" failure. o.Base is resolved before this
+	// point precisely so it can be used here.
+	if _, err := gatesGit(work, "clone", "-q", "--depth", "1", "--branch", o.Base, cloneURL, repo); err != nil {
 		return "", fmt.Errorf("assert-instance-pr-gates: cloning %s: %w", o.Instance, redact(err, o.Token))
 	}
 	for _, argv := range [][]string{
@@ -593,7 +600,11 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 		// Exit status ignored as a verdict — see the file header — but kept as
 		// context: it is the only place gh explains an empty answer.
 		out, ghErr := gatesGH(o.Token, o.Host, "pr", "checks", pr, "--repo", o.Instance, "--json", "name,state")
-		if len(out) == 0 {
+		// TrimSpace, not len(out): a bare "\n" from a future gh, or from a PATH
+		// shim, is silence rather than garbage — classifying it as unreadable would
+		// report "could not read the checks" for a PR that genuinely triggered
+		// nothing, which is the very regression this verb hunts.
+		if len(bytes.TrimSpace(out)) == 0 {
 			// Zero checks reported. Record it as an observation (so the caller
 			// reaches "never appeared" rather than "could not read"), but never
 			// over an earlier REAL observation — checks do not un-appear, and a
@@ -739,7 +750,14 @@ func defaultBranch(o PRGatesOpts) string {
 	if name := strings.TrimSpace(string(out)); err == nil && name != "" {
 		return name
 	}
-	fmt.Fprintf(os.Stderr, "::warning::could not read %s's default branch (%v) — opening the throwaway PR against `main`\n",
-		o.Instance, redact(err, o.Token))
+	// err IS NIL on the reachable "succeeded but said nothing" path, and `%v` would
+	// then print the literal `(<nil>)` — naming no cause at all for a fallback that
+	// may well target a branch this repo does not have.
+	why := "it returned no branch name"
+	if err != nil {
+		why = redact(err, o.Token).Error()
+	}
+	fmt.Fprintf(os.Stderr, "::warning::could not read %s's default branch (%s) — opening the throwaway PR "+
+		"against `main`, which may not exist on this repo\n", o.Instance, why)
 	return "main"
 }

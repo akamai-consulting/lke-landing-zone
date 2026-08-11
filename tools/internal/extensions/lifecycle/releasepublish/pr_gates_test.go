@@ -1006,3 +1006,52 @@ func TestThePollLoopDoesNotSleepAfterItsLastPoll(t *testing.T) {
 			"waiting for something nobody will ask about", f.slept, o.Retries)
 	}
 }
+
+// The throwaway branch is cut from wherever the clone lands, so the clone has to
+// land on the PR's BASE. With a bare `--depth 1` it lands on the repo default,
+// and any non-default --base yields a PR whose head is unrelated to its base:
+// a diff carrying every commit on default-but-not-in-base, or `gh pr create`
+// refusing with "No commits between".
+func TestTheCloneLandsOnTheBaseBranch(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	for _, c := range f.gitCalls {
+		if c[0] != "clone" {
+			continue
+		}
+		if !slicesContains(c, "--branch") {
+			t.Fatalf("clone does not pin a branch (%v) — it lands on the repo default while the PR "+
+				"is opened against --base", c)
+		}
+		for i, a := range c {
+			if a == "--branch" && i+1 < len(c) && c[i+1] != "master" {
+				t.Errorf("cloned branch %q, but the PR base is the default branch master", c[i+1])
+			}
+		}
+		return
+	}
+	t.Error("no clone was issued")
+}
+
+// A whitespace-only payload is SILENCE, not garbage. Classifying `"\n"` as
+// unreadable reports "could not read the checks" for a PR that genuinely
+// triggered nothing — the regression this verb exists to catch.
+func TestWhitespaceOnlyOutputCountsAsNoChecks(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"\n  \n"}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a PR with no checks must fail the verb")
+	}
+	if strings.Contains(err.Error(), "could not read the checks") {
+		t.Errorf("a blank payload was treated as unreadable rather than as zero checks: %v", err)
+	}
+	if !strings.Contains(err.Error(), "never ran") {
+		t.Errorf("expected the never-ran verdict, got: %v", err)
+	}
+}
