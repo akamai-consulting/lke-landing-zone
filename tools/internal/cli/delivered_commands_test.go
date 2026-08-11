@@ -69,12 +69,23 @@ var runStep = regexp.MustCompile(`(?m)^(\s*)-?\s*run:\s*(\|[-+>]*|>[-+]*)?[ \t]*
 // before the shell ever sees it and so is never a command word.
 var ghExpr = regexp.MustCompile(`\$\{\{[^}]*\}\}`)
 
+// ghExprToken is what an expression collapses to. It is ONE word on purpose:
+// `strings.Fields` would otherwise split `${{ inputs.ref }}` into three (`${{`,
+// `inputs.ref`, `}}`), and three phantom words in argument position is how a
+// perfectly correct call site gets judged against cobra's arity and fails. The
+// substitution happens before any splitting, so nothing downstream ever sees the
+// spaces inside an interpolation.
+const ghExprToken = "__GH_EXPR__"
+
 // commandWords returns the leading word of every command position in a shell
 // snippet: the start of the script, and after each `|`, `&&`, `||`, `;`.
 // Continuations, comments, env-var prefixes (`FOO=bar cmd`) and `sudo` are
 // stepped over so the real command word is what comes back.
 func commandWords(script string) [][]string {
 	var out [][]string
+	// Collapse every `${{ … }}` FIRST — before the chunk split and before any
+	// field split — so an interpolation is one opaque word wherever it lands.
+	script = ghExpr.ReplaceAllString(script, ghExprToken)
 	for _, chunk := range regexp.MustCompile(`\|\||&&|[|;\n]`).Split(script, -1) {
 		chunk = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chunk), "\\"))
 		if chunk == "" || strings.HasPrefix(chunk, "#") {
@@ -120,8 +131,12 @@ func resolve(root *cobra.Command, argv []string) (*cobra.Command, error) {
 	// runtime. That narrow case is the one that matters: it is the shape of
 	// `llz lint check tf-lint`, where a stray word rides on a runnable command
 	// and only NoArgs catches it.
+	// An unexpanded `${{ … }}` is the same case as a flag: this test has no Actions
+	// expression evaluator, so it cannot know whether the expression stands for one
+	// positional argument, several, or none — and cobra's arity check answers a
+	// question that was never asked of it. Judge only what can be judged.
 	for _, w := range rest {
-		if strings.HasPrefix(w, "-") {
+		if strings.HasPrefix(w, "-") || strings.Contains(w, ghExprToken) {
 			return cmd, nil
 		}
 	}

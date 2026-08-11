@@ -411,7 +411,7 @@ own grants. Measured against the live registry, per extension:
 | `cluster-write` | 16 |
 | `secret-custody` | 12 |
 | `secret-read` | 9 |
-| `write-repo` | 5 |
+| `write-repo` | 6 |
 | `own-paths` | 1 |
 
 `read-repo` is held by two thirds of the set, so the headline claim is false against the very test the

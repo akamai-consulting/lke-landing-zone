@@ -491,54 +491,16 @@ jobs:
       # Asserts only the two lint gates. The PR also triggers Plan Cluster, which
       # wants cloud credentials and state — out of scope here, and asserting on it
       # would make this step fail for reasons that have nothing to do with it.
+      #
+      # The logic lives in unit-tested Go (llz ci assert-instance-pr-gates), not
+      # inline bash: branch-create / PR-open / poll / assert / cleanup is logic, and
+      # the first draft of it here WAS inline bash that got the central case wrong —
+      # `gh pr checks` exits non-zero to report a FAILING check, so a `|| echo '[]'`
+      # fallback reported a broken gate as one that never ran. See pr_gates.go.
       - name: Instance PR gates run and pass (tf-lint + checkov)
         env:
           GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          BRANCH="e2e/ci-gates-${GITHUB_SHA::8}"
-          WORK="$(mktemp -d)"
-          git clone -q --depth 1 "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${INSTANCE_REPO}.git" "$WORK"
-          cd "$WORK"
-          git config user.name  "llz-release-e2e[bot]"
-          git config user.email "llz-release-e2e@users.noreply.github.com"
-          git checkout -q -b "$BRANCH"
-          # Touch a path the terraform pipeline's paths: filter watches, so the
-          # PR-gated jobs are actually selected. A trailing comment changes no
-          # behavior and still lands in the diff.
-          printf '\n# e2e: exercise the pull_request-gated CI gates (%s)\n' "${GITHUB_SHA::8}" \
-            >> terraform-iac-bootstrap/cluster/versions.tf
-          git commit -qam "e2e: trigger PR-gated CI gates"
-          git push -q origin "$BRANCH"
-          PR="$(gh pr create --repo "${INSTANCE_REPO}" --base main --head "$BRANCH" \
-                 --title "e2e: PR-gated CI gates" --body "Throwaway: proves tf-lint + checkov run in the pinned image." \
-                 --json number --jq .number 2>/dev/null || gh pr view "$BRANCH" --repo "${INSTANCE_REPO}" --json number --jq .number)"
-          echo "Opened ${INSTANCE_REPO}#${PR}"
-          cleanup() {
-            gh pr close "$PR" --repo "${INSTANCE_REPO}" --delete-branch >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-          # Poll the two checks by name. Fail closed on absence: a gate that never
-          # appeared is the exact failure this step exists to catch, so "not found"
-          # must not read as "nothing to worry about".
-          for _ in $(seq 1 60); do
-            SEEN="$(gh pr checks "$PR" --repo "${INSTANCE_REPO}" --json name,state \
-                     --jq '[.[] | select(.name=="Terraform Lint" or .name=="Checkov IaC Security Scan")]' 2>/dev/null || echo '[]')"
-            [ "$(jq 'length' <<<"$SEEN")" -eq 2 ] \
-              && [ "$(jq '[.[] | select(.state=="PENDING" or .state=="QUEUED" or .state=="IN_PROGRESS")] | length' <<<"$SEEN")" -eq 0 ] \
-              && break
-            sleep 20
-          done
-          echo "$SEEN" | jq -r '.[] | "  \(.name): \(.state)"'
-          if [ "$(jq 'length' <<<"$SEEN")" -ne 2 ]; then
-            echo "::error title=Instance PR gates never ran::Terraform Lint / Checkov IaC Security Scan did not appear on ${INSTANCE_REPO}#${PR}. The jobs are pull_request-gated behind a paths: filter — either the filter no longer covers the touched path, or the jobs were removed." >&2
-            exit 1
-          fi
-          if [ "$(jq '[.[] | select(.state!="SUCCESS")] | length' <<<"$SEEN")" -ne 0 ]; then
-            echo "::error title=Instance PR gates failed::A delivered CI gate does not work in the scaffold it ships to. See ${INSTANCE_REPO}#${PR}." >&2
-            exit 1
-          fi
-          echo "Both PR-gated CI checks passed on ${INSTANCE_REPO}#${PR}"
+        run: bin/llz ci assert-instance-pr-gates --instance "${INSTANCE_REPO}" --sha "${GITHUB_SHA}" --host "${GH_HOST}"
 
       # Chart analog of the image pin above. The rendered instance pins first-party
       # llz-* charts at their bumped Chart.yaml versions, but publish-charts only runs

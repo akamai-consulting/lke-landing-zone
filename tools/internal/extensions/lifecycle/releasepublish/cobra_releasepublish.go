@@ -1,10 +1,10 @@
 package releasepublish
 
-// cobra_releasepublish.go — the `llz ci publish-charts` and `pin-instance-images`
-// flag sets.
+// cobra_releasepublish.go — the `llz ci publish-charts`, `pin-instance-images` and
+// `assert-instance-pr-gates` flag sets.
 //
 // The verbs are tools/internal/extensions/lifecycle/releasepublish, which declares the extension — and
-// declares that only one of the two has a lifecycle state to attach to.
+// declares that only one of the three has no lifecycle state to attach to.
 
 import (
 	"os"
@@ -80,5 +80,41 @@ func PinInstanceImagesCmd() *cobra.Command {
 	c.Flags().BoolVar(&triggerOnly, "trigger-only", false, "with --build-if-missing: trigger a missing build and return WITHOUT waiting or pinning, so the publish wait overlaps the caller's other work; a later full invocation finds the build in flight and pins")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between manifest polls while waiting for a sha image")
 	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for a just-built sha image to publish")
+	return c
+}
+
+// AssertInstancePRGatesCmd is the e2e proof that the DELIVERED pull_request-gated CI
+// actually runs. It sits next to pin-instance-images because it is the same lane —
+// e2e-instantiate.yml drives the same throwaway instance repo, and this step runs
+// immediately after the pin so the gates execute in THIS commit's image.
+func AssertInstancePRGatesCmd() *cobra.Command {
+	var o PRGatesOpts
+	var interval, timeout int
+	c := &cobra.Command{
+		Use:   "assert-instance-pr-gates",
+		Short: "prove the instance's pull_request-gated CI (tf-lint + checkov) actually runs and passes",
+		Long: "Opens a throwaway PR on the instance repo touching a path the terraform\n" +
+			"pipeline's paths: filter watches, waits for the delivered pull_request-gated\n" +
+			"checks, and fails if they did not appear or did not pass — then closes the PR\n" +
+			"and deletes the branch. Those jobs are gated on `pull_request`, and the fixture\n" +
+			"repo is driven by force-push/dispatch/schedule, so nothing had ever triggered\n" +
+			"them: they shipped broken for several releases. Reads GH_TOKEN from the\n" +
+			"environment (contents:write + pull-requests:write on the instance repo).",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			o.Token = os.Getenv("GH_TOKEN")
+			o.Interval = time.Duration(interval) * time.Second
+			o.Retries = timeout / Max1(interval)
+			return RunAssertInstancePRGates(o)
+		},
+	}
+	c.Flags().StringVar(&o.Instance, "instance", "", "instance repo owner/name to open the throwaway PR on")
+	c.Flags().StringVar(&o.SHA, "sha", "", "the template commit under test — names the throwaway branch")
+	c.Flags().StringVar(&o.Host, "host", "github.com", "forge host for the clone URL (the GHES appliance on that lane)")
+	c.Flags().StringVar(&o.TouchPath, "touch-path", DefaultPRGateTouchPath, "repo-relative file to touch so the paths: filter selects the gated jobs")
+	c.Flags().StringSliceVar(&o.Checks, "check", DefaultPRGateChecks, "check name that must appear AND succeed (repeatable)")
+	c.Flags().BoolVar(&o.Keep, "keep", false, "leave the branch and PR behind instead of closing them, to inspect a failure by hand")
+	c.Flags().IntVar(&interval, "interval", 20, "seconds between check polls")
+	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for the gated checks to appear and settle")
 	return c
 }

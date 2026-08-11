@@ -188,8 +188,10 @@ func ciCmd() *cobra.Command {
 	// image-pull collector that answers whether a bring-up phase is pull-bound.
 	c.AddCommand(phasetiming.PhaseMarkCmd(), phasetiming.PhaseReportCmd(), phasetiming.CollectImagePullsCmd(), phasetiming.CollectTimingCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
-	// commit's ci images so the baked llz can't drift from the rendered workflow.
-	c.AddCommand(releasepublish.PinInstanceImagesCmd())
+	// commit's ci images so the baked llz can't drift from the rendered workflow,
+	// then prove the delivered pull_request-gated jobs (tf-lint, checkov) actually
+	// run and pass in that pinned image — nothing had ever triggered them.
+	c.AddCommand(releasepublish.PinInstanceImagesCmd(), releasepublish.AssertInstancePRGatesCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
