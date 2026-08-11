@@ -80,6 +80,10 @@ var runStep = regexp.MustCompile(`(?m)^([ \t]*)-?[ \t]*run:[ \t]*(\|[-+>]*|>[-+]
 // before the shell ever sees it and so is never a command word.
 var ghExpr = regexp.MustCompile(`\$\{\{[^}]*\}\}`)
 
+// lineContinuation matches a shell line continuation — a trailing backslash and
+// the newline it escapes, plus the next line's indentation.
+var lineContinuation = regexp.MustCompile(`\\[ \t]*\n[ \t]*`)
+
 // ghExprToken is what an expression collapses to. It is ONE word on purpose:
 // `strings.Fields` would otherwise split `${{ inputs.ref }}` into three (`${{`,
 // `inputs.ref`, `}}`), and three phantom words in argument position is how a
@@ -127,6 +131,20 @@ func commandWords(script string) [][]string {
 	// Collapse every `${{ … }}` FIRST — before the chunk split and before any
 	// field split — so an interpolation is one opaque word wherever it lands.
 	script = ghExpr.ReplaceAllString(script, ghExprToken)
+	// JOIN BACKSLASH CONTINUATIONS BEFORE SPLITTING ON NEWLINES, or a command
+	// wrapped across lines is torn into pieces. The split below treats `\n` as a
+	// command separator, so
+	//
+	//	llz ci bootstrap-cluster \
+	//	  --apps-repo-revision "$REV"
+	//
+	// became two "commands": one ending at the backslash, and one whose first word
+	// is `--apps-repo-revision` — which matches neither `llz` nor `make` and was
+	// therefore dropped entirely. About twenty delivered invocations put their
+	// flags on continuation lines, so the flag-name check added alongside this
+	// covered a minority of the tree until the join went in. Verified: a typo on a
+	// continuation line used to pass and now fails.
+	script = lineContinuation.ReplaceAllString(script, " ")
 	for _, chunk := range regexp.MustCompile(`\|\||&&|[|;\n]`).Split(script, -1) {
 		chunk = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chunk), "\\"))
 		if chunk == "" || strings.HasPrefix(chunk, "#") {
