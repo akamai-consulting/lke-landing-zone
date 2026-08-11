@@ -50,9 +50,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/gitcmd"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/llzver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 )
 
 // probeUpgradeAnswers are the answers the scaffold is built with. Every value is
@@ -64,36 +64,61 @@ var probeUpgradeAnswers = map[string]string{
 }
 
 func UpgradeTestCmd() *cobra.Command {
-	var from, to, template, dir string
+	var from, to, template, dir, llzBin string
 	var keep bool
+	var depth int
 	c := &cobra.Command{
 		Use:   "upgrade-test",
-		Short: "scaffold at the previous release and `copier update` to HEAD — the day-2 gate instance-test does not cover",
+		Short: "scaffold at each of the last N releases and `llz upgrade` to HEAD — the day-2 gate instance-test does not cover",
 		Long: "Stands up the path an ADOPTER takes on day 2, which nothing else runs:\n" +
-			"`copier copy` at the previous release, then `copier update` to the commit\n" +
-			"under test. Asserts the update is non-interactive, that it preserves every\n" +
-			"answer it is not supposed to move, that the pin advanced, and that it left no\n" +
-			"conflict markers or .rej files behind.\n\n" +
-			"Drives copier against this repo at two git refs, so it is offline, cloud-free,\n" +
+			"`copier copy` at an older release, then `llz upgrade` to the commit under\n" +
+			"test. Asserts the upgrade is non-interactive, that it preserves every answer\n" +
+			"it is not supposed to move, that the pin advanced, that it left no conflict\n" +
+			"markers or .rej files behind, and that the result MATCHES a fresh scaffold at\n" +
+			"the same ref.\n\n" +
+			"Runs once per release in --depth, so the instance that is three releases behind\n" +
+			"is covered and not just the one that upgraded last week. Drives copier and the\n" +
+			"llz under test against this repo at two git refs, so it is offline, cloud-free,\n" +
 			"and works on a branch or a fork. instance-test.sh is the `copier copy` half;\n" +
-			"this is the `copier update` half.",
+			"this is the upgrade half.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return RunUpgradeTest(upgradeTestOpts{from: from, to: to, template: template, dir: dir, keep: keep})
+			return RunUpgradeTest(upgradeTestOpts{
+				from: from, to: to, template: template, dir: dir, llzBin: llzBin, keep: keep, depth: depth,
+			})
 		},
 	}
 	f := c.Flags()
-	f.StringVar(&from, "from", "", "release tag to scaffold at (default: the highest vX.Y.Z tag that is not the commit under test)")
+	f.StringVar(&from, "from", "", "release tag to scaffold at (default: the last --depth releases; setting this pins the run to one)")
 	f.StringVar(&to, "to", "", "ref to upgrade to (default: HEAD)")
+	f.IntVar(&depth, "depth", DefaultUpgradeDepth, "how many of the most recent releases to upgrade FROM, newest first")
 	f.StringVar(&template, "template", "", "template repo path (default: this checkout's root)")
 	f.StringVar(&dir, "dir", ".Upgrade-test", "build directory (gitignored)")
-	f.BoolVar(&keep, "keep", false, "leave the built instance in place for inspection")
+	f.StringVar(&llzBin, "llz", "", "llz binary to upgrade WITH (default: the one running this gate)")
+	f.BoolVar(&keep, "keep", false, "leave the built instances in place for inspection")
 	return c
 }
 
+// DefaultUpgradeDepth is how many releases back the gate covers by default.
+//
+// THREE, NOT ONE. One hop only ever proved that the release cut last week can be
+// upgraded from, and that is the instance least likely to be broken — an adopter
+// who upgrades on every release is exercising a diff the maintainers just looked
+// at. The instance that hurts is the one that skipped two or three releases, where
+// the file whose manifest class changed in vN-2 meets the file whose content moved
+// in vN-1, and copier resolves both against a base neither maintainer had in mind.
+// That instance had no gate at all.
+//
+// Three is where the cost curve turns, not a round number: each hop is one
+// scaffold plus one upgrade plus one fresh render (~45s measured), so three fits
+// the instantiate job's remaining budget with room, while every release further
+// back adds the same cost for a population that shrinks fast.
+const DefaultUpgradeDepth = 3
+
 type upgradeTestOpts struct {
-	from, to, template, dir string
-	keep                    bool
+	from, to, template, dir, llzBin string
+	keep                            bool
+	depth                           int
 }
 
 // PreviousReleaseTag picks the release an adopter would most plausibly be
@@ -117,6 +142,36 @@ func PreviousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 	return llzver.LatestLLZTag(candidates)
 }
 
+// PreviousReleaseTags is PreviousReleaseTag n times over: the n most recent
+// releases an adopter could be sitting on, newest first.
+//
+// It is built by REPEATED APPLICATION of PreviousReleaseTag rather than by
+// sorting the tag list itself, so "which release is next" is answered in exactly
+// one place. A second ordering here could disagree with the first — and the way
+// it would disagree is by admitting a pre-release or a legacy `llz/v*` tag that
+// `llz self-update` skips, i.e. by testing an upgrade FROM a release no adopter
+// can be running.
+//
+// Returns fewer than n when the repo has fewer releases; the caller decides
+// whether a short list is acceptable (see assertDepthCovered — silently covering
+// one release while claiming three is the failure mode this splits out).
+func PreviousReleaseTags(tags []string, headTags map[string]bool, n int) []string {
+	excluded := map[string]bool{}
+	for t, v := range headTags {
+		excluded[t] = v
+	}
+	var out []string
+	for len(out) < n {
+		t, ok := PreviousReleaseTag(tags, excluded)
+		if !ok {
+			break
+		}
+		out = append(out, t)
+		excluded[t] = true
+	}
+	return out
+}
+
 // releaseTagRe keeps ONLY a full release tag. llzver.LatestLLZTag cannot do this on its
 // own: llzver.Semver() deliberately tolerates a `-pre`/`+build` suffix, and its normal
 // callers hand it a list the GitHub releases API already filtered by isDraft /
@@ -126,6 +181,23 @@ func PreviousReleaseTag(tags []string, headTags map[string]bool) (string, bool) 
 // release no adopter can install: `llz self-update` and `llz new` both skip
 // pre-releases, so nobody is ever upgrading FROM one.
 var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// UpgradeUnderTestArgv is what the gate runs to perform the upgrade: the real
+// `llz upgrade`, in the binary under test.
+//
+// NOT copier.UpdateArgv, which is what this gate used to run. `copier update` is
+// step one of three — the manifest-class policy pass and the .template-removals
+// pass follow it, both implemented in Go in this repo, and stopping at copier left
+// both of them ungated while the gate's name said the upgrade path was covered.
+// The AGENTS.md link regression lived in step two: copier produced the right file
+// and the policy pass put an older one back over it.
+//
+// --no-render and --no-doctor are what keep the gate offline; neither is part of
+// what an upgrade DELIVERS. Nothing else may be added here lightly — every flag is
+// a way in which the thing under test stops being the command an adopter runs.
+func UpgradeUnderTestArgv(llzBin, ref string) []string {
+	return []string{llzBin, "upgrade", "--ref", ref, "--no-render", "--no-doctor"}
+}
 
 // CopierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
 // copier.CopyArgv: that one addresses the template as `gh:<org>/<name>`, and this
@@ -158,6 +230,36 @@ var runCopier = func(dir string, argv []string) ([]byte, error) {
 	cmd.Dir = dir
 	cmd.Stdin = nil // == /dev/null
 	return cmd.CombinedOutput()
+}
+
+// osExecutable is os.Executable behind a seam, so a test can pin the binary the
+// gate would upgrade with without being run as that binary.
+var osExecutable = os.Executable
+
+// putOnPATH prepends dir to this process's PATH so every child inherits it.
+//
+// The children are copier, and copier's `_tasks`, which invoke `llz` BY NAME and
+// degrade to a warning when `command -v llz` comes up empty. Under `make
+// upgrade-test` the binary is ./bin/llz — a path, not something on PATH — so
+// without this the tasks took their fallback on both sides of the comparison and
+// the convergence check compared two instances that had each skipped the same
+// delivery. Mutating this process's own environment is the right scope: it is a
+// short-lived CI gate whose entire purpose is running those children, and setting
+// it per-exec would mean threading an env through the seam every caller shares.
+func putOnPATH(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	path := os.Getenv("PATH")
+	for _, existing := range filepath.SplitList(path) {
+		if existing == dir {
+			return nil
+		}
+	}
+	if path == "" {
+		return os.Setenv("PATH", dir)
+	}
+	return os.Setenv("PATH", dir+string(os.PathListSeparator)+path)
 }
 
 // MergeConflictArtifacts walks the built instance for the two ways a botched
@@ -230,8 +332,45 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		}
 		to = sha
 	}
-	from := o.from
-	if from == "" {
+
+	// The binary that performs the upgrade is THE ONE RUNNING THIS GATE unless a
+	// caller says otherwise. Anything else answers for code that is not under test:
+	// `llz upgrade` is three steps, two of them (the manifest-class policy pass and
+	// the declared removals) implemented right here in Go, so a gate that reached
+	// for whatever `llz` happened to be installed would be checking the last
+	// release's upgrade logic against this commit's template.
+	llzBin := o.llzBin
+	if llzBin == "" {
+		self, err := osExecutable()
+		if err != nil {
+			return fmt.Errorf("resolve the llz binary to upgrade with (pass --llz): %w", err)
+		}
+		llzBin = self
+	}
+	if abs, err := filepath.Abs(llzBin); err == nil {
+		llzBin = abs // the upgrade runs with cwd inside the built instance
+	}
+	if _, err := os.Stat(llzBin); err != nil {
+		return fmt.Errorf("the llz binary to upgrade with is not there: %w", err)
+	}
+	// copier's _tasks call `llz` by name — see putOnPATH. Done before any render,
+	// because the reference scaffold is rendered by those same tasks.
+	if err := putOnPATH(filepath.Dir(llzBin)); err != nil {
+		return fmt.Errorf("put %s on PATH for copier's tasks: %w", filepath.Dir(llzBin), err)
+	}
+
+	depth := o.depth
+	if depth < 1 {
+		depth = 1
+	}
+	var froms []string
+	switch {
+	case o.from != "":
+		// An explicit --from pins the run to that one release: the caller is
+		// reproducing a specific upgrade, and quietly adding two more hops around it
+		// would bury the one they asked about.
+		froms = []string{o.from}
+	default:
 		tagsOut, err := gitcmd.Output(root, "tag", "--list")
 		if err != nil {
 			return fmt.Errorf("list tags: %w", err)
@@ -241,13 +380,21 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		for _, t := range strings.Fields(headOut) {
 			headTags[t] = true
 		}
-		var ok bool
-		if from, ok = PreviousReleaseTag(strings.Split(tagsOut, "\n"), headTags); !ok {
+		if froms = PreviousReleaseTags(strings.Split(tagsOut, "\n"), headTags, depth); len(froms) == 0 {
 			// A shallow clone has no tags. Skipping is right — this gate cannot
 			// invent a prior release, and failing would make every shallow checkout
 			// color.Red for a reason that is not about the change under test.
 			fmt.Println("upgrade-test: SKIPPED — no vX.Y.Z tag to upgrade from (shallow clone? fetch tags, or pass --from)")
 			return nil
+		}
+		// SAY SO when the repo cannot supply the depth asked for. A young repo (or a
+		// clone fetched with --depth) legitimately has fewer releases, so this is not
+		// a failure — but it IS the gate covering less than its name claims, and the
+		// one thing it must not do is print a green summary that reads as if three
+		// releases were exercised when one was.
+		if len(froms) < depth {
+			fmt.Printf("upgrade-test: NOTE — asked for the last %d releases, this checkout has %d (%s). "+
+				"Coverage is that much narrower.\n", depth, len(froms), strings.Join(froms, ", "))
 		}
 	}
 
@@ -264,20 +411,85 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 	if err := os.MkdirAll(build, 0o755); err != nil {
 		return err
 	}
-	inst := filepath.Join(build, "instance")
 
-	fmt.Printf("upgrade-test: %s → %s\n", from, ShortRef(to))
+	// ONE fresh scaffold for the whole run, not one per hop. It is the comparison
+	// target for every release — the same instance a brand-new adopter gets at
+	// `to` — and it does not depend on where the upgrade started, so rendering it
+	// per hop would triple the copier work to produce identical trees.
+	fresh := filepath.Join(build, "fresh")
+	freshOut, err := runCopier(build, CopierScaffoldArgv(root, to, fresh, probeUpgradeAnswers))
+	if err != nil {
+		return fmt.Errorf("scaffold the comparison instance at %s failed:\n%s", ShortRef(to), IndentedTail(string(freshOut), 20))
+	}
+	if err := assertTasksRan(root, fresh); err != nil {
+		return err
+	}
+	freshFiles, err := DigestTree(fresh)
+	if err != nil {
+		return fmt.Errorf("digest the comparison instance: %w", err)
+	}
+	// FAIL CLOSED ON VACUITY. Every convergence gap is measured against this tree,
+	// so an empty one turns the strongest check in the gate into a loop over
+	// nothing that reports success — the exact shape of a green check that examined
+	// no evidence.
+	if len(freshFiles) == 0 {
+		return fmt.Errorf("the comparison scaffold at %s is EMPTY — convergence would be asserted against nothing", ShortRef(to))
+	}
+	policy, err := manifest.Load(fresh)
+	if err != nil {
+		return fmt.Errorf("load .template-manifest from the comparison instance: %w", err)
+	}
 
-	// 1. Scaffold at the previous release.
-	if out, err := runCopier(build, CopierScaffoldArgv(root, from, inst, probeUpgradeAnswers)); err != nil {
-		return fmt.Errorf("scaffold at %s failed:\n%s", from, IndentedTail(string(out), 20))
+	fmt.Printf("upgrade-test: %s → %s (%d file(s) in the reference scaffold)\n",
+		strings.Join(froms, ", "), ShortRef(to), len(freshFiles))
+
+	var failures []string
+	for _, from := range froms {
+		fmt.Printf("\n── from %s ──\n", from)
+		hopFailures, err := runUpgradeHop(hopOpts{
+			root: root, build: build, from: from, to: to, llzBin: llzBin,
+			freshFiles: freshFiles, policy: policy,
+		})
+		if err != nil {
+			return err
+		}
+		failures = append(failures, hopFailures...)
+	}
+
+	if len(failures) == 0 {
+		fmt.Printf("\nupgrade-test: OK — an instance at %s upgrades to %s cleanly, unattended, "+
+			"and ends up identical to a fresh scaffold.\n", strings.Join(froms, "/"), ShortRef(to))
+		return nil
+	}
+	return UpgradeTestFailure(failures)
+}
+
+type hopOpts struct {
+	root, build, from, to, llzBin string
+	freshFiles                    map[string]string
+	policy                        manifest.Manifest
+}
+
+// runUpgradeHop is one release's worth of the gate: scaffold at `from`, upgrade
+// to `to` with the llz under test, and check the result five ways.
+//
+// It returns CHECK failures in the slice and only errors out on harness failures
+// (a scaffold that would not build, an unreadable tree). The distinction matters
+// at depth: one release failing to scaffold must not cancel the other two, and
+// "could not tell" must not be reported as "the upgrade is broken".
+func runUpgradeHop(o hopOpts) ([]string, error) {
+	inst := filepath.Join(o.build, "instance-"+o.from)
+
+	// 1. Scaffold at the older release.
+	if out, err := runCopier(o.build, CopierScaffoldArgv(o.root, o.from, inst, probeUpgradeAnswers)); err != nil {
+		return nil, fmt.Errorf("scaffold at %s failed:\n%s", o.from, IndentedTail(string(out), 20))
 	}
 	answersPath := filepath.Join(inst, ".copier-answers.yml")
 	before, err := ReadAnswerMap(answersPath)
 	if err != nil {
-		return fmt.Errorf("read scaffolded answers: %w", err)
+		return nil, fmt.Errorf("read scaffolded answers: %w", err)
 	}
-	fmt.Printf("  ✓ scaffolded at %s\n", from)
+	fmt.Printf("  ✓ scaffolded at %s\n", o.from)
 
 	// copier update diffs against a committed tree, so the scaffold has to be one.
 	// --no-verify: the scaffold arms a pre-commit hook that runs the full `llz
@@ -286,15 +498,29 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		{"git", "init", "-q"},
 		{"git", "add", "-A"},
 		{"git", "-c", "user.email=upgrade-test@llz", "-c", "user.name=upgrade-test",
-			"commit", "-q", "--no-verify", "-m", "scaffold at " + from},
+			"commit", "-q", "--no-verify", "-m", "scaffold at " + o.from},
 	} {
 		if out, err := runCopier(inst, argv); err != nil {
-			return fmt.Errorf("%s: %w\n%s", argv[1], err, IndentedTail(string(out), 10))
+			return nil, fmt.Errorf("%s: %w\n%s", argv[1], err, IndentedTail(string(out), 10))
 		}
 	}
 
-	// 2. The upgrade, with stdin closed. THE check — see runCopier.
-	out, upErr := runCopier(inst, copier.UpdateArgv(to))
+	// 2. The upgrade, with stdin closed.
+	//
+	// `llz upgrade`, NOT `copier update`. This gate used to run copier's argv
+	// directly, on the reasoning that copier.UpdateArgv is the exact argv `llz
+	// upgrade` runs — which is true, and covers the FIRST of the three things the
+	// command does. The other two are the manifest-class policy pass (restore
+	// `owned`, overwrite `managed` from a clean render of the target) and the
+	// declared removals from .template-removals, both of them Go in this repo, both
+	// of them unreached by any test that stopped at copier. That is where the
+	// AGENTS.md link regression lived: `copier update` produced the right file and
+	// the policy pass put the wrong one back.
+	//
+	// --no-render / --no-doctor keep it offline: render wants a spec and terraform,
+	// the readiness check wants gh and the Linode API. Neither is part of what an
+	// upgrade DELIVERS, which is what this gate measures.
+	out, upErr := runCopier(inst, UpgradeUnderTestArgv(o.llzBin, o.to))
 	var failures []string
 	if upErr != nil {
 		detail := IndentedTail(string(out), 25)
@@ -305,22 +531,29 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 				"    than a cli.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
 				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
-		failures = append(failures, fmt.Sprintf("update-is-noninteractive: `copier update` to %s failed:\n%s%s",
-			ShortRef(to), detail, hint))
+		failures = append(failures, fmt.Sprintf("upgrade-is-noninteractive: `llz upgrade --ref %s` failed:\n%s%s",
+			ShortRef(o.to), detail, hint))
 	} else {
-		fmt.Printf("  ✓ update-is-noninteractive — `copier update` ran with stdin closed\n")
+		fmt.Printf("  ✓ upgrade-is-noninteractive — `llz upgrade` ran with stdin closed\n")
 	}
 
 	// Everything below inspects the RESULT, so it only means anything if the
-	// update produced one. Reporting "answers were not preserved" about a tree the
-	// update never wrote would blame the wrong bug.
+	// upgrade produced one. Reporting "answers were not preserved" about a tree the
+	// upgrade never wrote would blame the wrong bug.
 	if upErr != nil {
-		return UpgradeTestFailure(failures)
+		return failures, nil
+	}
+	// The upgrade's own subprocesses degrade to a warning when they cannot find
+	// llz; that path renders a DIFFERENT instance, and comparing two equally
+	// degraded trees is how a convergence check reports success having exercised
+	// none of the delivery it exists to measure.
+	if err := assertTasksRan(o.root, inst); err != nil {
+		return nil, err
 	}
 
 	after, err := ReadAnswerMap(answersPath)
 	if err != nil {
-		return fmt.Errorf("read upgraded answers: %w", err)
+		return nil, fmt.Errorf("read upgraded answers: %w", err)
 	}
 	if regressions := AnswerRegressions(before, after); len(regressions) > 0 {
 		failures = append(failures, "answers-preserved: the upgrade rewrote answers it does not own:\n      "+
@@ -333,16 +566,16 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		fmt.Printf("  ✓ answers-preserved — %d answer(s) survived unchanged\n", len(before)-len(VolatileAnswers))
 	}
 
-	if got := after["llz_version"]; got != to {
+	if got := after["llz_version"]; got != o.to {
 		failures = append(failures, fmt.Sprintf("pin-advanced: llz_version is %q, want %q — the upgrade did not re-pin, so "+
-			"every rendered `?ref=` still resolves to the old release", got, to))
+			"every rendered `?ref=` still resolves to the old release", got, o.to))
 	} else {
-		fmt.Printf("  ✓ pin-advanced — llz_version is now %s\n", ShortRef(to))
+		fmt.Printf("  ✓ pin-advanced — llz_version is now %s\n", ShortRef(o.to))
 	}
 
 	markers, rejects, err := MergeConflictArtifacts(inst)
 	if err != nil {
-		return fmt.Errorf("scan the upgraded instance: %w", err)
+		return nil, fmt.Errorf("scan the upgraded instance: %w", err)
 	}
 	switch {
 	case len(markers) > 0 || len(rejects) > 0:
@@ -361,11 +594,97 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 		fmt.Println("  ✓ clean-merge — no conflict markers, no .rej/.orig files")
 	}
 
-	if len(failures) == 0 {
-		fmt.Printf("upgrade-test: OK — an instance at %s upgrades to %s cleanly and unattended.\n", from, ShortRef(to))
-		return nil
+	// 3. THE delivery check: is this now the same instance a new adopter gets?
+	upgradedFiles, err := DigestTree(inst)
+	if err != nil {
+		return nil, fmt.Errorf("digest the upgraded instance: %w", err)
 	}
-	return UpgradeTestFailure(failures)
+	gaps := ConvergenceGaps(o.freshFiles, upgradedFiles, o.policy.Classify)
+	if len(gaps) > 0 {
+		failures = append(failures, FormatConvergenceGaps(o.from, gaps))
+	} else {
+		fmt.Printf("  ✓ converges-with-fresh — identical to a fresh scaffold across %d template-owned file(s)\n",
+			countAsserted(o.freshFiles, o.policy.Classify))
+	}
+	return failures, nil
+}
+
+// countAsserted is how many files the convergence check actually compared, for
+// the success line. Printing the number is the point: "converges" over 4 files
+// and over 400 are the same words and very different claims, and the first is how
+// a scaffold that half-failed reports in.
+func countAsserted(files map[string]string, classOf func(string) string) int {
+	n := 0
+	for p := range files {
+		if convergenceAsserted(classOf(p)) {
+			n++
+		}
+	}
+	return n
+}
+
+// assertTasksRan fails when copier's `_tasks` took their no-llz fallback.
+//
+// WHY IT IS HERE AT ALL. Those tasks are what deliver docs/, prune it to the
+// operator set, and repoint the root-Markdown links that target template-only
+// paths. When `command -v llz` comes up empty they degrade to a warning and an
+// unpruned tree — and they degrade IDENTICALLY on both sides of the comparison, so
+// two equally undelivered instances match each other perfectly and
+// converges-with-fresh reports success having measured none of the delivery it
+// exists to measure. "The upgrade delivered everything" and "neither side
+// delivered anything" are the same green check without this.
+//
+// IT READS THE TREE, NOT THE LOG. The first cut scanned copier's output for the
+// fallback message — which copier also prints while ECHOING the task it is about
+// to run, so the gate failed on every single render including the successful ones.
+// A log line saying a fallback exists is not evidence that it was taken.
+//
+// The signal is that docs/ came out SMALLER than the template's: pruning is
+// exactly what the fallback cannot do. Deriving it from the two trees means no
+// copy of deliver-docs' keep-set lives here to drift out of date — a hardcoded
+// "adopter-guide.md must be gone" would go stale the day that file is renamed, and
+// go stale silently, in the check whose job is noticing silence.
+func assertTasksRan(templateRoot, instRoot string) error {
+	tmplDocs, err := countFiles(filepath.Join(templateRoot, "docs"))
+	if err != nil {
+		return fmt.Errorf("count the template's docs/: %w", err)
+	}
+	instDocs, err := countFiles(filepath.Join(instRoot, "docs"))
+	if err != nil {
+		return fmt.Errorf("count the rendered instance's docs/: %w", err)
+	}
+	switch {
+	case tmplDocs == 0:
+		return fmt.Errorf("the template at %s has no docs/ — the delivery this gate measures does not exist", templateRoot)
+	case instDocs == 0:
+		return fmt.Errorf("%s received no docs/ at all — copier's docs task did not run", instRoot)
+	case instDocs >= tmplDocs:
+		return fmt.Errorf("copier's _tasks degraded: %s carries %d docs file(s) against the template's %d, so "+
+			"`llz ci deliver-docs` never pruned it.\n"+
+			"  This is a harness failure, not a finding. The tasks invoke `llz` BY NAME and fall back to a\n"+
+			"  warning when it is not on PATH; the gate prepends the binary under test for exactly this\n"+
+			"  reason (putOnPATH). An instance rendered by the fallback path also skips the root-link\n"+
+			"  repoint, and comparing two such instances proves nothing about what an upgrade delivers.\n"+
+			"  Check that the binary passed as --llz exists and is executable", instRoot, instDocs, tmplDocs)
+	}
+	return nil
+}
+
+func countFiles(root string) (int, error) {
+	n := 0
+	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	return n, err
 }
 
 func UpgradeTestFailure(failures []string) error {

@@ -127,6 +127,67 @@ func TestPreviousReleaseTag(t *testing.T) {
 	})
 }
 
+// PreviousReleaseTags is what makes the gate cover the instance that is three
+// releases behind rather than only the one that upgraded last week.
+func TestPreviousReleaseTags(t *testing.T) {
+	tags := []string{"v0.0.38", "v0.0.39", "v0.0.40", "v0.0.41", "v0.0.42", "v0.0.43-rc1", "llz/v9.9.9", "main"}
+
+	t.Run("newest first, no repeats", func(t *testing.T) {
+		got := upgrade.PreviousReleaseTags(tags, nil, 3)
+		want := []string{"v0.0.42", "v0.0.41", "v0.0.40"}
+		if len(got) != len(want) {
+			t.Fatalf("PreviousReleaseTags = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("PreviousReleaseTags = %v, want %v", got, want)
+			}
+		}
+	})
+
+	// Every hop must scaffold a DIFFERENT release. A version that returned the same
+	// tag n times would run three times as long, print three green hops, and cover
+	// exactly what one hop covered — the most expensive way to test nothing.
+	t.Run("each hop is a distinct release", func(t *testing.T) {
+		got := upgrade.PreviousReleaseTags(tags, nil, 5)
+		seen := map[string]bool{}
+		for _, tag := range got {
+			if seen[tag] {
+				t.Fatalf("PreviousReleaseTags repeated %q: %v", tag, got)
+			}
+			seen[tag] = true
+		}
+	})
+
+	// The same exclusions PreviousReleaseTag applies, at depth — because it IS
+	// PreviousReleaseTag, applied n times. A pre-release or a legacy `llz/v*` tag
+	// here would be an upgrade FROM a release `llz self-update` never installs.
+	t.Run("skips the commit under test, pre-releases and the legacy track", func(t *testing.T) {
+		got := upgrade.PreviousReleaseTags(tags, map[string]bool{"v0.0.42": true}, 2)
+		if len(got) != 2 || got[0] != "v0.0.41" || got[1] != "v0.0.40" {
+			t.Errorf("PreviousReleaseTags = %v; want v0.0.41, v0.0.40", got)
+		}
+	})
+
+	// Fewer releases than asked for is a SHORT LIST, not an error and not a silent
+	// pad. The caller prints the shortfall; inventing a tag or repeating the last
+	// one would make a young repo's gate claim coverage it does not have.
+	t.Run("returns what exists when the repo has fewer releases", func(t *testing.T) {
+		if got := upgrade.PreviousReleaseTags([]string{"v0.0.1"}, nil, 3); len(got) != 1 || got[0] != "v0.0.1" {
+			t.Errorf("PreviousReleaseTags = %v; want exactly the one release that exists", got)
+		}
+		if got := upgrade.PreviousReleaseTags([]string{"main"}, nil, 3); len(got) != 0 {
+			t.Errorf("PreviousReleaseTags = %v; want none, so the gate skips rather than inventing a release", got)
+		}
+	})
+
+	t.Run("a depth of zero or less asks for nothing", func(t *testing.T) {
+		if got := upgrade.PreviousReleaseTags(tags, nil, 0); len(got) != 0 {
+			t.Errorf("PreviousReleaseTags(depth=0) = %v; want none", got)
+		}
+	})
+}
+
 func TestMergeConflictArtifacts(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, body string) {

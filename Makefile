@@ -217,7 +217,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/statepassphrase=74 \
 	internal/shared/ghsecret=60 \
 	internal/extensions/lifecycle/render=62 \
-	internal/verbs/upgrade=27 \
+	internal/verbs/upgrade=33 \
 	internal/verbs/newinstance=79 \
 	internal/extensions/guards/pincoherence=94 \
 	internal/verbs/lint=37 \
@@ -339,10 +339,11 @@ help:
 	@echo "                  The fast counterpart to release-e2e (which stands up a real"
 	@echo "                  cluster); also the CI 'instantiate' job. Runs scaffold-check"
 	@echo "                  first. Self-skips without copier; SKIP_TF=1 skips tf validate."
-	@echo "  upgrade-test    Day-2 half: scaffold at the PREVIOUS release, then copier"
-	@echo "                  update to HEAD. Asserts the update runs unattended, keeps"
-	@echo "                  every answer it does not own, moves the pin, and leaves no"
-	@echo "                  merge artifacts. Offline; self-skips without copier or tags."
+	@echo "  upgrade-test    Day-2 half: scaffold at each of the last 3 releases, then run"
+	@echo "                  the real llz upgrade to HEAD. Asserts each runs unattended,"
+	@echo "                  keeps every answer it does not own, moves the pin, leaves no"
+	@echo "                  merge artifacts, and ends up IDENTICAL to a fresh scaffold."
+	@echo "                  Offline; self-skips without copier or tags. --depth N to vary."
 	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
 	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
 	@echo "                  per-env files present, values.yaml renders via templatefile()"
@@ -1442,14 +1443,24 @@ instance-test: scaffold-check
 	template-scripts/ci/instance-test.sh
 
 # upgrade-test: the DAY-2 half of instance-test. That target proves `copier copy`
-# (scaffold) works; this one proves `copier update` (upgrade) does — scaffold at
-# the previous release, update to HEAD, and assert the update ran unattended,
-# kept every answer it does not own, moved the pin, and left no merge artifacts.
-# `copier update` appeared in no workflow, target or script before this, so the
-# path every adopter takes on day 2 was gated by nobody. Offline and cloud-free;
-# skips itself when copier is absent or the clone has no tags.
-# LLZ_FORCE_SOURCE: the gate runs `llz upgrade`'s own copier argv, so it has to be
-# the argv of the tree under test — same reason docs-guard sets it.
+# (scaffold) works; this one proves the UPGRADE does — scaffold at each of the last
+# three releases, run the real `llz upgrade` to HEAD, and assert each one ran
+# unattended, kept every answer it does not own, moved the pin, left no merge
+# artifacts, and produced an instance IDENTICAL to a fresh scaffold at HEAD.
+# The upgrade path appeared in no workflow, target or script before this, so what
+# every adopter does on day 2 was gated by nobody. Offline and cloud-free; skips
+# itself when copier is absent or the clone has no tags.
+#
+# THREE RELEASES, not one: the instance that breaks is the one that SKIPPED
+# releases, and a single hop only ever covered the adopter who upgrades weekly.
+# Costs one scaffold + one upgrade per release (~2.5 min for all three, measured);
+# `llz ci upgrade-test --depth 1` while iterating, but do not pin a depth in CI —
+# the gate's default is what keeps `make upgrade-test` and the CI step honest
+# about testing the same thing.
+#
+# LLZ_FORCE_SOURCE: the gate runs the tree's own `llz upgrade` — including the
+# manifest-policy and removals passes, which are Go in this repo — so it has to be
+# the binary built from the tree under test. Same reason docs-guard sets it.
 upgrade-test: export LLZ_FORCE_SOURCE := 1
 upgrade-test:
 	$(call LLZ_CI,upgrade-test,--template ..)
