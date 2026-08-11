@@ -54,10 +54,24 @@ func DefaultDoctorEnv() string {
 	// immediately after a `copier update`, which is exactly when `llz upgrade`
 	// calls this. Saying so costs one line and turns a confusing report into a
 	// diagnosable one.
-	if err != nil && clusterspec.InstancePresent(root) {
-		fmt.Fprintf(os.Stderr, "%s this instance has a %s that could not be read (%v) — reporting on the "+
-			"%q deployment instead, which is almost certainly not yours. Fix the spec, or pass --env.\n",
-			color.Yellow("!"), clusterspec.LandingZoneFile, err, FallbackDoctorEnv)
+	if clusterspec.InstancePresent(root) {
+		// BOTH WAYS A SPEC CAN YIELD NO DEPLOYMENT, because the silent one is the
+		// likelier. A spec that fails to PARSE is loud and rare (a bad merge). A
+		// spec that loads with ZERO environments is the normal state of a fresh
+		// `llz new` before the first `llz env add` — and falling back there
+		// reproduces the whole infra-e2e / `llz tokens --env e2e` / "run llz env
+		// add e2e" misdirection this function exists to remove, for the operator
+		// least able to tell it is wrong.
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "%s this instance has a %s that could not be read (%v) — reporting on the "+
+				"%q deployment instead, which is almost certainly not yours. Fix the spec, or pass --env.\n",
+				color.Yellow("!"), clusterspec.LandingZoneFile, err, FallbackDoctorEnv)
+		default:
+			fmt.Fprintf(os.Stderr, "%s this instance has a %s but no deployments yet — reporting on %q, which "+
+				"is the template's own lane and not yours. Add one with `llz env add <name>`, or pass --env.\n",
+				color.Yellow("!"), clusterspec.LandingZoneFile, FallbackDoctorEnv)
+		}
 	}
 	return FallbackDoctorEnv
 }

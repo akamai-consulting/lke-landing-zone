@@ -168,7 +168,10 @@ func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pend
 	// named in the exhaustion report (reportConvergePending), which is the same
 	// information arriving a few minutes later instead of aborting a cluster that
 	// is merely young.
-	return CatPending, "Service " + key + " has no endpoints yet — backing pods not created, or selector drift; the budget decides"
+	return PendingIfBudgeted(
+		"Service "+key+" has no endpoints yet — backing pods not created, or selector drift; the budget decides",
+		"Service "+key+" has no endpoints (selector drift, or nothing backing it) — this is a steady-state "+
+			"check, so there is no budget left for it to be 'not yet'")
 }
 
 // ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is

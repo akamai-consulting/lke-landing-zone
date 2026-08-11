@@ -116,8 +116,10 @@ func TestClassifyServiceEndpoints(t *testing.T) {
 	// yet is indistinguishable from one whose selector matches nothing, so the
 	// convergence budget decides and its exhaustion report names the Service.
 	// See TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
-	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatPending {
-		t.Error("0 endpoints should defer to the budget rather than assert selector drift")
+	// Inside a convergence budget 0 endpoints defers; outside one it is terminal.
+	// See TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
+	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatFail {
+		t.Error("0 endpoints outside a budget must still fail")
 	}
 }
 

@@ -161,8 +161,10 @@ func classifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 	// the budget-exhaustion report names what was outstanding. What must not
 	// happen is the message being discarded and the app called functional.
 	if a.SyncErr != "" {
-		return CatPending, label + " — sync is FAILING and retrying: " + FirstLine(a.SyncErr) +
-			summarizeDrifted(a.Drifted)
+		detail := " — sync is FAILING and retrying: " + FirstLine(a.SyncErr) + summarizeDrifted(a.Drifted)
+		return PendingIfBudgeted(label+detail,
+			label+detail+"  ⇒ this is a steady-state check: the sync has been retrying past any startup "+
+				"window, so the resources it cannot apply are not going to appear on their own")
 	}
 	if a.Health == "Healthy" {
 		return CatDrift, label + " — drift only; workload functional" + summarizeDrifted(a.Drifted)

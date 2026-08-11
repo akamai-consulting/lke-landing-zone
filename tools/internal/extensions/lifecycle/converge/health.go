@@ -132,6 +132,13 @@ func runConverge(budget, interval, retryDelay int) error {
 	prevProbeRetries := kubectlprobe.Retries
 	kubectlprobe.Retries = 1
 	defer func() { kubectlprobe.Retries = prevProbeRetries }()
+	// States a BUDGET will resolve are pending here and terminal in one-shot
+	// `llz ci health` — see health.Budgeted. Borrowed and restored exactly like
+	// the probe retries above, so scheduled cluster-health and the in-cluster
+	// reconciler keep their steady-state verdicts.
+	prevBudgeted := health.Budgeted
+	health.Budgeted = true
+	defer func() { health.Budgeted = prevBudgeted }()
 	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's

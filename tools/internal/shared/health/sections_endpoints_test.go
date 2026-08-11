@@ -34,6 +34,16 @@ func TestEndpointsExistButNoneReadyIsPending(t *testing.T) {
 // (reportConvergePending) — so a genuinely drifted selector is still reported,
 // by name, a few minutes later instead of aborting a cluster that is merely young.
 func TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell(t *testing.T) {
+	// Outside a budget it is terminal — scheduled cluster-health has nothing left
+	// to wait with, and reporting a permanently broken Service as "still
+	// settling" is how an alert stops firing.
+	if cat, msg := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatFail {
+		t.Errorf("a steady-state check must FAIL an endpoint-less Service, got %v (%s)", cat, msg)
+	}
+	prev := Budgeted
+	Budgeted = true
+	defer func() { Budgeted = prev }()
+
 	cat, msg := ClassifyServiceEndpoints("x/s", 0, 0, false)
 	if cat != CatPending {
 		t.Errorf("a Service with no endpoints cannot be told from one whose pods have no IP yet; "+

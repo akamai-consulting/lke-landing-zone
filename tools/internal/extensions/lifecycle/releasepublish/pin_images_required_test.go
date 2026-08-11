@@ -59,13 +59,18 @@ func TestPinPassesWhenEveryImageIsPublished(t *testing.T) {
 // A missing APP image must also count as "images are missing" for
 // --build-if-missing, or the build that would publish it never gets triggered.
 func TestAMissingAppImageTriggersTheBuild(t *testing.T) {
-	if !anyShaImageMissing("o", "deadbeef") {
-		// guard: with the default stub everything exists
-	}
+	// The stub goes in FIRST. An earlier draft called anyShaImageMissing before
+	// installing it, so a unit test shelled out to a real `docker manifest
+	// inspect` — and dropped the result in an empty if-body, asserting nothing.
 	stubPinSeams(t, 1, missingOnly("llz"))
 	if !anyShaImageMissing("o", "deadbeef") {
 		t.Error("an absent in-cluster llz image did not count as missing, so --build-if-missing would " +
 			"never trigger the build that publishes it")
+	}
+	// ...and with everything published it must NOT trigger a build.
+	stubPinSeams(t, 1, func(string) bool { return true })
+	if anyShaImageMissing("o", "deadbeef") {
+		t.Error("all images published still read as missing — every run would trigger a needless build")
 	}
 }
 

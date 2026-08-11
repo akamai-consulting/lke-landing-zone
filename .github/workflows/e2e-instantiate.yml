@@ -107,16 +107,20 @@ jobs:
   instantiate:
     name: Instantiate → ${{ vars.E2E_INSTANCE_REPO }}
     runs-on: ubuntu-latest
-    # 60, NOT 35. The two waiting steps in this job are budgeted independently —
-    # pin-instance-images waits up to 1200s for a just-cut image to publish, and
-    # assert-instance-pr-gates up to 900s for the delivered gates to settle — and
-    # 1200 + 900 is 35 minutes exactly, before the scaffold, render, push and
-    # chart-publish steps have spent anything at all. At 35 the first slow build
-    # would have been killed by the runner PAST the PR-gate step's own cleanup,
-    # producing an opaque job timeout and a leaked throwaway PR instead of either
-    # step's diagnosis. A per-step budget is only real if the job can afford the
-    # sum of them.
-    timeout-minutes: 60
+    # 90, and the arithmetic is worth writing down because it has been wrong twice.
+    # pin-instance-images waits up to 1200s PER IMAGE it must see published — and
+    # that is now THREE (ci-tofu, ci-kubernetes and the in-cluster llz image, whose
+    # absence cost a whole e2e round) — then assert-instance-pr-gates waits up to
+    # 900s for the delivered gates. Worst case is 3x1200 + 900 = 75 minutes before
+    # the scaffold, render, push and chart-publish steps have spent anything.
+    #
+    # In practice the three images publish from ONE build and resolve together, so
+    # the real cost is nearer 1200 + 900. But a per-step budget is only real if the
+    # job can afford the SUM: at 35 (and then at 60) the first genuinely slow build
+    # would be killed by the runner PAST the PR-gate step's own cleanup, producing
+    # an opaque job timeout and a leaked throwaway PR instead of either step's
+    # diagnosis. If another required image is added, raise this with it.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: read   # docker login + manifest inspect to confirm this commit's ci images published

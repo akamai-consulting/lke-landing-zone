@@ -82,6 +82,12 @@ func TestCheckServicesPendsAServiceWhoseEndpointsAreNotReadyYet(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
+	// Drive it as a convergence poll: inside a budget the deferrable states pend,
+	// outside one they are terminal (health.Budgeted — runConverge sets it).
+	prev := health.Budgeted
+	health.Budgeted = true
+	defer func() { health.Budgeted = prev }()
+
 	inv := &clusterInventory{nsExists: map[string]bool{"llz-observability": true}}
 	var r health.Report
 	checkServices(&r, inv, false)

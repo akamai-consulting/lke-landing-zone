@@ -22,13 +22,27 @@ resource Deployment/llz-reconciler/llz-reconciler was blocked due to the followi
 verify-llz-image-signature:
   autogen-verify-llz-keyless: 'failed to verify image ghcr.io/o/llz:sha-abc: MANIFEST_UNKNOWN'. Retrying attempt #15`
 
+// budgeted runs fn as a convergence poll (a budget will resolve what it defers)
+// and restores the mode IMMEDIATELY — not via t.Cleanup, which would leave it set
+// for the rest of the test and silently make a later steady-state assertion run
+// in the wrong mode.
+func budgeted(t *testing.T, fn func()) {
+	t.Helper()
+	prev := Budgeted
+	Budgeted = true
+	defer func() { Budgeted = prev }()
+	fn()
+}
+
 func TestAFailingSyncIsNotDrift(t *testing.T) {
 	a := ArgoApp{
 		Name: "llz-reconciler", Sync: "OutOfSync", Health: "Healthy", Automated: true,
 		Drifted: []string{"Deployment/llz-reconciler/llz-reconciler"},
 		SyncErr: kyvernoDenial,
 	}
-	cat, msg := ClassifyArgoApp(a, false)
+	var cat Category
+	var msg string
+	budgeted(t, func() { cat, msg = ClassifyArgoApp(a, false) })
 	if cat == CatDrift {
 		t.Errorf("an Application whose sync keeps failing was called drift-only; its Deployment may never "+
 			"have been created: %s", msg)
@@ -43,6 +57,19 @@ func TestAFailingSyncIsNotDrift(t *testing.T) {
 	if strings.Contains(msg, "\n") || len(msg) > 400 {
 		t.Errorf("the message was not reduced to one bounded line: %q", msg)
 	}
+
+	// AND THE OTHER MODE, which is the whole reason the split exists. One-shot
+	// `llz ci health` (scheduled cluster-health, the in-cluster reconciler) has no
+	// budget to convert pending back into a verdict, and LLZClusterNotConverged
+	// fires on llz_convergence_state == 1 — so softening there would leave a sync
+	// wedged on a policy denial reporting "still settling" forever, unalerted.
+	steady, smsg := ClassifyArgoApp(a, false)
+	if steady != CatFail {
+		t.Errorf("outside a convergence budget a permanently retrying sync must FAIL, got %v (%s)", steady, smsg)
+	}
+	if !strings.Contains(smsg, "steady-state") {
+		t.Errorf("the steady-state verdict should say why it is terminal: %q", smsg)
+	}
 }
 
 // A genuinely drifted app — synced cleanly, resources changed since — must still
@@ -50,9 +77,11 @@ func TestAFailingSyncIsNotDrift(t *testing.T) {
 func TestRealDriftIsStillDrift(t *testing.T) {
 	a := ArgoApp{Name: "x", Sync: "OutOfSync", Health: "Healthy", Automated: true,
 		Drifted: []string{"ConfigMap/x/y"}}
-	if cat, msg := ClassifyArgoApp(a, false); cat != CatDrift {
-		t.Errorf("an app with no sync error is drift, got %v (%s)", cat, msg)
-	}
+	budgeted(t, func() {
+		if cat, msg := ClassifyArgoApp(a, false); cat != CatDrift {
+			t.Errorf("an app with no sync error is drift, got %v (%s)", cat, msg)
+		}
+	})
 }
 
 func TestSyncTasksFailingRecognisesOnlyTheFailureSentence(t *testing.T) {
@@ -101,18 +130,22 @@ func TestParseArgoAppCarriesARetryingSyncMessage(t *testing.T) {
 	if a.OpErr != "" {
 		t.Errorf("OpErr is for a FAILED/Error phase only, got %q", a.OpErr)
 	}
-	if cat, msg := ClassifyArgoApp(a, false); cat != CatPending {
-		t.Errorf("ClassifyArgoApp = %v (%s), want CatPending for a failing-and-retrying sync", cat, msg)
-	}
+	budgeted(t, func() {
+		if cat, msg := ClassifyArgoApp(a, false); cat != CatPending {
+			t.Errorf("ClassifyArgoApp = %v (%s), want CatPending for a failing-and-retrying sync", cat, msg)
+		}
+	})
 
 	// A Running sync that is merely IN FLIGHT must not be treated as failing.
 	inFlight, _ := ParseArgoApp([]byte(`{"metadata":{"name":"x"},"spec":{"syncPolicy":{"automated":{}}},"status":{"sync":{"status":"OutOfSync"},"health":{"status":"Healthy"},"operationState":{"phase":"Running","message":"waiting for healthy state of apps/Deployment/x"}}}`))
 	if inFlight.SyncErr != "" {
 		t.Errorf("an in-flight sync was read as failing: %q", inFlight.SyncErr)
 	}
-	if cat, _ := ClassifyArgoApp(inFlight, false); cat != CatDrift {
-		t.Errorf("an OutOfSync/Healthy app with a healthy in-flight sync is drift, got %v", cat)
-	}
+	budgeted(t, func() {
+		if cat, _ := ClassifyArgoApp(inFlight, false); cat != CatDrift {
+			t.Errorf("an OutOfSync/Healthy app with a healthy in-flight sync is drift, got %v", cat)
+		}
+	})
 }
 
 // FirstLine's remaining arms: an over-long single line is truncated with a
