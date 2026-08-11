@@ -57,6 +57,7 @@ func tfDirs() []string {
 			dirs = append(dirs, d)
 		}
 	}
+	scan.usedTFDirs, scan.tfDirCount = true, len(dirs)
 	return dirs
 }
 
@@ -76,9 +77,27 @@ func tool(name, env string) string {
 func haveTool(bin string) bool {
 	if _, err := execLookPath(bin); err != nil {
 		fmt.Fprintf(os.Stderr, "  skip: %s not installed\n", bin)
+		scan.missingTools = append(scan.missingTools, bin)
 		return false
 	}
 	return true
+}
+
+// scan records what the step that just ran actually EXAMINED, so `--strict` can
+// refuse a check that passed having looked at nothing.
+//
+// A MISSING TOOL AND AN EMPTY ROOT SET BOTH EXIT 0 HERE, by design: this package
+// began as the pre-commit gate, where an absent linter must never wedge a commit.
+// In a delivered CI job that default is the wrong one and produces exactly the
+// vacuous green this tree keeps meeting — `llz check tf-lint` on an instance
+// whose TF_IMAGE lost tflint, or before the roots are rendered, reports SUCCESS
+// having scanned nothing, and the release-e2e PR-gate probe then certifies that
+// success. Same command, two callers, opposite correct answers; the flag is what
+// separates them.
+var scan struct {
+	missingTools []string
+	usedTFDirs   bool
+	tfDirCount   int
 }
 
 // ── argv builders (pure; covered by checks_test.go) ──────────────────────────
@@ -568,13 +587,38 @@ func CheckCmd() *cobra.Command {
 		{"tf-validate", "terraform validate (init -backend=false per root)", stepTFValidate},
 		{"checkov", "Checkov IaC security scan of the terraform/ roots", stepCheckov},
 	}
+	var strict bool
+	c.PersistentFlags().BoolVar(&strict, "strict", false,
+		"fail instead of passing when the check could not examine anything — a linter missing from PATH, "+
+			"or no Terraform roots on disk (delivered CI passes this; pre-commit must not)")
 	for _, s := range steps {
 		s := s
 		c.AddCommand(&cobra.Command{
 			Use:   s.use,
 			Short: s.short,
 			Args:  cobra.NoArgs,
-			RunE:  func(_ *cobra.Command, _ []string) error { return s.fn(cliopts.Global) },
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				scan.missingTools, scan.usedTFDirs, scan.tfDirCount = nil, false, 0
+				if err := s.fn(cliopts.Global); err != nil {
+					return err
+				}
+				if !strict {
+					return nil
+				}
+				cmd.SilenceUsage = true
+				if len(scan.missingTools) > 0 {
+					return fmt.Errorf("::error::%s could not run: %s not on PATH. Under --strict a check that "+
+						"examined nothing is a FAILURE, not a pass — a green gate that scanned nothing is the "+
+						"thing this flag exists to prevent. Fix the image (TF_IMAGE) rather than dropping --strict",
+						s.use, strings.Join(scan.missingTools, ", "))
+				}
+				if scan.usedTFDirs && scan.tfDirCount == 0 {
+					return fmt.Errorf("::error::%s found no Terraform roots to scan under terraform-iac-bootstrap/. "+
+						"An instance commits zero Terraform — the roots are rendered — so run `llz render "+
+						"--tfvars-only --if-spec` first. Under --strict, scanning nothing is a FAILURE", s.use)
+				}
+				return nil
+			},
 		})
 	}
 	return c

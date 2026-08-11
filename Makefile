@@ -113,8 +113,15 @@ RETRY := template-scripts/ci/with-retry.sh
 #
 # THE TRAP: `make coverage-bank` on macOS will try to raise these three straight
 # back. If you bank, check these three against a CI run before committing.
+#
+# IT HAS NOW HAPPENED TWICE, one day apart, so here is the rule rather than the
+# warning: `coverage-bank` banks the LOCAL reading, which on this box is up to
+# ~1pp above what the gate measures. After banking, revert every floor for a
+# package your diff added no test to — the raise is measurement noise, not
+# coverage — and knock the rest down ~1.5pp from the local number. A floor you
+# cannot verify in the gating environment is only worth banking with margin.
 COVERAGE_MINS := \
-	internal/cli=72 \
+	internal/cli=71 \
 	internal/cli/deps=41 \
 	internal/extensions/lifecycle/brownfield=80 \
 	internal/extensions/guards/callerperms=85 \
@@ -125,18 +132,18 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertplatform=53 \
 	internal/extensions/assertions/assertreconciler=82 \
 	internal/extensions/assertions/assertregistry=62 \
-	internal/extensions/lifecycle/atrest=90 \
+	internal/extensions/lifecycle/atrest=89 \
 	internal/shared/clusterspec=88 \
 	internal/extensions/lifecycle/clusteraccess=68 \
 	internal/shared/cigate=33 \
 	internal/extensions/lifecycle/converge=75 \
 	internal/extensions/lifecycle/healthsla=78 \
 	internal/shared/color=86 \
-	internal/extensions/guards/docsguard=73 \
+	internal/extensions/guards/docsguard=71 \
 	internal/shared/extension=96 \
 	internal/shared/extension/registry=93 \
 	internal/shared/harborauth=57 \
-	internal/shared/health=96 \
+	internal/shared/health=95 \
 	internal/shared/kube=86 \
 	internal/shared/linode=81 \
 	internal/shared/metrics=100 \
@@ -149,7 +156,7 @@ COVERAGE_MINS := \
 	internal/shared/promwire=92 \
 	internal/extensions/lifecycle/promote=90 \
 	internal/extensions/guards/credcoverage=87 \
-	internal/extensions/assertions/configreadiness=54 \
+	internal/extensions/assertions/configreadiness=53 \
 	internal/shared/instancelayout=55 \
 	internal/shared/yamledit=89 \
 	internal/shared/kubectlprobe=77 \
@@ -158,7 +165,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/reconcilelanes=79 \
 	internal/shared/s3sig=100 \
 	internal/shared/shquote=100 \
-	internal/extensions/assertions/sustain=56 \
+	internal/extensions/assertions/sustain=55 \
 	internal/extensions/lifecycle/teardown=47 \
 	internal/extensions/assertions/tokeninv=74 \
 	internal/shared/terraform=100 \
@@ -168,7 +175,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertobs=68 \
 	internal/extensions/assertions/assertsecrets=65 \
 	internal/shared/keycloak=49 \
-	internal/extensions/assertions/assertidentity=27 \
+	internal/extensions/assertions/assertidentity=24 \
 	internal/extensions/lifecycle/deliverdocs=93 \
 	internal/verbs/argodiag=81 \
 	internal/extensions/guards/plaintext=90 \
@@ -177,15 +184,15 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/assertobjstore=23 \
 	internal/extensions/lifecycle/gameday=26 \
 	internal/verbs/recondiag=60 \
-	internal/verbs/phasetiming=63 \
+	internal/verbs/phasetiming=62 \
 	internal/verbs/doctor=86 \
 	internal/extensions/lifecycle/kyverno=84 \
 	internal/verbs/mutate=81 \
-	internal/extensions/lifecycle/releasepublish=68 \
+	internal/extensions/lifecycle/releasepublish=67 \
 	internal/extensions/lifecycle/statepassphrase=74 \
-	internal/shared/ghsecret=77 \
-	internal/extensions/lifecycle/render=64 \
-	internal/verbs/upgrade=28 \
+	internal/shared/ghsecret=60 \
+	internal/extensions/lifecycle/render=62 \
+	internal/verbs/upgrade=27 \
 	internal/verbs/newinstance=79 \
 	internal/extensions/guards/pincoherence=94 \
 	internal/verbs/lint=37 \

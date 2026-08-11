@@ -319,8 +319,19 @@ func TestFailuresIsCaseInsensitiveOnSuccess(t *testing.T) {
 	if got := failures([]check{{Name: "a", State: "success"}}); len(got) != 0 {
 		t.Errorf("lowercase success counted as a failure: %+v", got)
 	}
-	if got := failures([]check{{Name: "a", State: "CANCELLED"}}); len(got) != 1 {
-		t.Errorf("CANCELLED must count as a failure, got %+v", got)
+	// CANCELLED is NOT a failure: the gated jobs share a concurrency group, so a
+	// superseded run reports its checks CANCELLED, and calling that "a delivered
+	// CI gate does not work in the scaffold it ships to" sends an operator to
+	// debug a job that never got to run. It is inconclusive — still fatal to the
+	// verb, but under its own words.
+	if got := failures([]check{{Name: "a", State: "CANCELLED"}}); len(got) != 0 {
+		t.Errorf("CANCELLED was counted as a broken gate: %+v", got)
+	}
+	if got := inconclusive([]check{{Name: "a", State: "CANCELLED"}}); len(got) != 1 {
+		t.Errorf("CANCELLED must be inconclusive, got %+v", got)
+	}
+	if got := failures([]check{{Name: "a", State: "TIMED_OUT"}}); len(got) != 1 {
+		t.Errorf("TIMED_OUT is a verdict about the gate and must count as a failure, got %+v", got)
 	}
 }
 
@@ -669,4 +680,66 @@ func slicesContains(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// A superseded run reports CANCELLED. Reporting that as a broken delivered gate
+// is the same conflation the header rejects for PENDING — the operator is sent to
+// debug a job that never got to run.
+func TestCancelledIsNotReportedAsABrokenGate(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"CANCELLED"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("an inconclusive check must still fail the verb — nothing was proven")
+	}
+	if strings.Contains(err.Error(), "does not work in the scaffold") {
+		t.Errorf("a cancelled check was reported as a broken gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no verdict") || !strings.Contains(err.Error(), "concurrency group") {
+		t.Errorf("expected the superseded-run diagnosis with a re-run hint, got: %v", err)
+	}
+}
+
+// SKIPPED means the job's `if:` excluded it — a real regression in the delivered
+// gating, and a different one from a command that failed inside the job.
+func TestSkippedPointsAtTheGatingCondition(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"SKIPPED"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a skipped gate must fail the verb — it did not run")
+	}
+	if !strings.Contains(err.Error(), "`if:`") {
+		t.Errorf("expected the diagnosis to point at the job's if: condition, got: %v", err)
+	}
+}
+
+// The push happens before the PR exists, so a `gh pr create` failure would leave
+// the branch behind with nothing to remove it — including the under-scoped-token
+// case this lane's own docs describe.
+func TestBranchIsDeletedEvenWhenThePRIsNeverOpened(t *testing.T) {
+	f := &fakeForge{
+		t: t, checkPolls: []string{bothPass},
+		prCreateErr: errors.New("gh pr create: exit status 1: GraphQL: Resource not accessible by integration"),
+		prViewOut:   "",
+	}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err == nil {
+		t.Fatal("a PR that could not be opened must fail the verb")
+	}
+	branch := prBranch(gatesBaseOpts().SHA)
+	for _, c := range f.ghCalls {
+		if len(c) >= 4 && c[0] == "api" && c[1] == "-X" && c[2] == "DELETE" && strings.HasSuffix(c[3], branch) {
+			return
+		}
+	}
+	t.Errorf("the pushed branch %q was never deleted — it leaks on the fixture repo, and a re-run at "+
+		"the same sha meets its own leftovers. gh calls were: %v", branch, f.ghCalls)
 }

@@ -348,7 +348,7 @@ jobs:
       # on `pull_request`, which no instance had ever triggered for this pipeline,
       # so the break stayed invisible. Covered by TestDeliveredWorkflowCommands.
       - name: tflint
-        run: llz check tf-lint
+        run: llz check tf-lint --strict
 
   # Checkov IaC security scan — local HCL, no credentials. Gates: `llz check
   # checkov` exits non-zero on a finding.
@@ -370,7 +370,7 @@ jobs:
       - name: Render the Terraform roots from the LandingZone spec
         run: llz render --tfvars-only --if-spec
       - name: Checkov
-        run: llz check checkov
+        run: llz check checkov --strict
 
       # A SARIF-upload step was removed here — it never produced a file and read as
       # security coverage that did not exist. See the sidecar before re-adding.

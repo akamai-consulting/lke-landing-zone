@@ -245,11 +245,38 @@ func namesOf(cs []check) []string {
 	return out
 }
 
-// failures returns the found checks that did not succeed.
+// inconclusiveStates are terminal states that are NOT a verdict on the gate.
+//
+// CANCELLED is the one that matters and the one that was miscounted: the gated
+// jobs share a concurrency group, so a newer run supersedes an older one and
+// GitHub reports the older checks CANCELLED. SKIPPED and NEUTRAL mean the job did
+// not execute — its `if:` excluded it — which is a real regression in the
+// delivered gating but a different one from "the check ran and the command
+// inside it failed". Both still FAIL the verb (nothing was proven either way);
+// they just must not be reported as "a delivered CI gate does not work in the
+// scaffold it ships to", which sends an operator to debug a job that never ran.
+// This is the same distinction the header insists on for PENDING, applied to the
+// terminal states that carry no verdict either.
+var inconclusiveStates = map[string]bool{"CANCELLED": true, "SKIPPED": true, "NEUTRAL": true, "STALE": true}
+
+// inconclusive returns the found checks that reached a terminal state carrying no
+// verdict about the gate.
+func inconclusive(found []check) []check {
+	var out []check
+	for _, c := range found {
+		if inconclusiveStates[strings.ToUpper(c.State)] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// failures returns the found checks that ran and did not succeed — a verdict
+// ABOUT THE GATE, as distinct from the inconclusive states above.
 func failures(found []check) []check {
 	var out []check
 	for _, c := range found {
-		if !strings.EqualFold(c.State, "SUCCESS") {
+		if !strings.EqualFold(c.State, "SUCCESS") && !inconclusiveStates[strings.ToUpper(c.State)] {
 			out = append(out, c)
 		}
 	}
@@ -312,6 +339,19 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 	defer func() { _ = gatesRemoveAll(work) }()
 
 	branch := prBranch(o.SHA)
+	// REGISTERED BEFORE THE BRANCH EXISTS, because openGatePR pushes it and can
+	// then fail: `gh pr create` with a token provisioned from the older
+	// contents+actions wording (the case this lane's own docs describe) leaves
+	// e2e/ci-gates-<sha> on the fixture repo with nothing that removes it. The
+	// PR-close defer below cannot cover that window — there is no PR yet. Deleting
+	// a branch that was never pushed is a harmless no-op, so this is registered
+	// unconditionally and its result ignored, exactly like the close.
+	if !o.Keep {
+		defer func() {
+			_, _ = gatesGH(o.Token, o.Host, "api", "-X", "DELETE",
+				fmt.Sprintf("repos/%s/git/refs/heads/%s", o.Instance, branch))
+		}()
+	}
 	pr, err := openGatePR(o, work, branch)
 	if err != nil {
 		return err
@@ -369,6 +409,20 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
 			time.Duration(o.Retries)*o.Interval, o.Instance, pr)
+	}
+	// BEFORE the failure branch, for the same reason PENDING is: a check that was
+	// cancelled or never executed proves nothing about the gate, and calling it a
+	// broken gate sends an operator to debug a job that may be perfectly healthy.
+	if odd := inconclusive(obs.found); len(odd) > 0 {
+		var parts []string
+		for _, c := range odd {
+			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
+		}
+		return fmt.Errorf("::error title=Instance PR gates returned no verdict::%s. This is NOT a failing gate. "+
+			"CANCELLED usually means a newer run superseded this one in the shared terraform-infra-pr "+
+			"concurrency group — re-run. SKIPPED or NEUTRAL means the job's `if:` excluded it, which IS a "+
+			"regression in the delivered gating: check the pull_request / head-repo conditions on %s#%s",
+			strings.Join(parts, ", "), o.Instance, pr)
 	}
 	if bad := failures(obs.found); len(bad) > 0 {
 		var parts []string

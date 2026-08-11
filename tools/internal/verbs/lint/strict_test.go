@@ -1,0 +1,101 @@
+package lint
+
+// strict_test.go — `llz check <step> --strict` refuses a check that examined
+// nothing.
+//
+// The default is a SKIP, and that default is correct for the pre-commit gate
+// this package began as: an absent linter must never wedge a commit. In a
+// delivered CI job it is the wrong answer and produces exactly the vacuous green
+// the release-e2e PR-gate probe would then certify — `llz check tf-lint` on an
+// instance whose TF_IMAGE lost tflint, or before `llz render` has laid the roots
+// down, exits 0 having scanned nothing. Same command, two callers, opposite
+// correct answers.
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+)
+
+// runCheck drives `llz check <step>` in dir with the given flags.
+func runCheck(t *testing.T, dir string, args ...string) error {
+	t.Helper()
+	t.Chdir(dir)
+	c := CheckCmd()
+	c.SetArgs(args)
+	c.SetOut(os.Stderr)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	return c.Execute()
+}
+
+// withNoTflint makes tflint unresolvable without touching PATH for anything else.
+func withNoTflint(t *testing.T) {
+	t.Helper()
+	orig := kubectlprobe.LookPathFn
+	t.Cleanup(func() { kubectlprobe.LookPathFn = orig })
+	kubectlprobe.LookPathFn = func(bin string) (string, error) {
+		if bin == "tflint" {
+			return "", exec.ErrNotFound
+		}
+		return orig(bin)
+	}
+}
+
+func TestStrictFailsWhenTheLinterIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "terraform-iac-bootstrap", "cluster"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withNoTflint(t)
+
+	if err := runCheck(t, dir, "tf-lint"); err != nil {
+		t.Fatalf("without --strict a missing tool must stay a skip — the pre-commit gate depends on it: %v", err)
+	}
+	err := runCheck(t, dir, "tf-lint", "--strict")
+	if err == nil {
+		t.Fatal("--strict passed with tflint absent: the gate reported success having scanned nothing, " +
+			"and the e2e PR-gate probe would certify that success")
+	}
+	if !strings.Contains(err.Error(), "tflint") {
+		t.Errorf("the error should name the missing tool, got: %v", err)
+	}
+}
+
+func TestStrictFailsWhenThereAreNoRootsToScan(t *testing.T) {
+	dir := t.TempDir() // no terraform-iac-bootstrap/ at all
+
+	if err := runCheck(t, dir, "tf-lint"); err != nil {
+		t.Fatalf("without --strict an empty tree must stay a pass: %v", err)
+	}
+	err := runCheck(t, dir, "tf-lint", "--strict")
+	if err == nil {
+		t.Fatal("--strict passed with no Terraform roots on disk — the exact shape of the delivered " +
+			"lint jobs before the render step was added")
+	}
+	if !strings.Contains(err.Error(), "llz render") {
+		t.Errorf("the error should say how to get the roots, got: %v", err)
+	}
+}
+
+// The flag has to be reachable from the delivered call sites, which pass it after
+// the step name.
+func TestStrictIsAPersistentFlagOnCheck(t *testing.T) {
+	if CheckCmd().PersistentFlags().Lookup("strict") == nil {
+		t.Fatal("`llz check` lost --strict; the delivered tf-lint/checkov jobs pass it")
+	}
+	for _, step := range []string{"tf-lint", "checkov"} {
+		var found bool
+		for _, sub := range CheckCmd().Commands() {
+			if sub.Use == step {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("`llz check %s` is gone — a delivered workflow calls it", step)
+		}
+	}
+}
