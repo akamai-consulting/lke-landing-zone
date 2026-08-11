@@ -57,36 +57,72 @@ func PodIsStarting(s PodStatus) bool {
 			return false
 		}
 	}
-	all := append(append([]ContainerStatus{}, s.InitContainerStatuses...), s.ContainerStatuses...)
 	// Scheduled but no statuses published yet — the kubelet has not reported in.
 	// That is the earliest moment of a pod's life, not a failure.
-	if len(all) == 0 {
+	if len(s.InitContainerStatuses) == 0 && len(s.ContainerStatuses) == 0 {
 		return s.Phase == "Pending"
 	}
-	for _, c := range all {
-		switch {
-		case c.Ready:
-			continue // already up
-		case c.State.Running != nil:
-			// RUNNING BUT NOT READY IS NOT "STARTING", and calling it that would
-			// have removed the commonest broken-workload signal there is: a
-			// container whose readiness probe never passes runs forever without
-			// ever being Ready. Softening it to pending means converge stops
-			// fast-failing on it and instead burns the whole budget to report a
-			// generic timeout. The gate judged this case before and still does —
-			// only the CREATION states were ever the bug.
+	// INIT AND MAIN CONTAINERS ARE JUDGED SEPARATELY, because RUNNING means
+	// opposite things for the two. Flattening them into one list is what the
+	// first version of this did, and it reintroduced the very incident the file
+	// exists to prevent: a non-sidecar init container reports ready=false for its
+	// whole run, so a pod sitting in a perfectly normal `wait-for-db` init was
+	// recorded CatFail and aborted converge.
+	for _, c := range s.InitContainerStatuses {
+		if !initContainerIsStarting(c) {
 			return false
-		case c.State.Waiting != nil:
-			if !startingWaitReasons[c.State.Waiting.Reason] {
-				return false // a waiting reason that waiting will not fix
-			}
-		case c.State.Terminated != nil:
-			// An init container that completed is normal; a main container that
-			// terminated while the pod is not Succeeded is not "starting".
-			if c.State.Terminated.Reason != "Completed" {
-				return false
-			}
+		}
+	}
+	for _, c := range s.ContainerStatuses {
+		if !mainContainerIsStarting(c) {
+			return false
 		}
 	}
 	return true
+}
+
+// initContainerIsStarting judges an INIT container. Running is its normal working
+// state — that is what an init container is for — and Completed is its success.
+func initContainerIsStarting(c ContainerStatus) bool {
+	switch {
+	case c.Ready, c.State.Running != nil:
+		return true // doing its job
+	case c.State.Waiting != nil:
+		return waitReasonIsStartup(c.State.Waiting.Reason)
+	case c.State.Terminated != nil:
+		return c.State.Terminated.Reason == "Completed"
+	}
+	return true
+}
+
+// mainContainerIsStarting judges a MAIN container.
+//
+// RUNNING BUT NOT READY IS NOT "STARTING" here, and calling it that would remove
+// the commonest broken-workload signal there is: a container whose readiness
+// probe never passes runs forever without ever becoming Ready. Softening it means
+// converge stops fast-failing on it and burns the whole budget to report a
+// generic timeout instead of naming the workload.
+func mainContainerIsStarting(c ContainerStatus) bool {
+	switch {
+	case c.Ready:
+		return true
+	case c.State.Running != nil:
+		return false
+	case c.State.Waiting != nil:
+		return waitReasonIsStartup(c.State.Waiting.Reason)
+	case c.State.Terminated != nil:
+		return c.State.Terminated.Reason == "Completed"
+	}
+	return true
+}
+
+// waitReasonIsStartup reports whether a container's waiting reason means
+// Kubernetes is still working on it.
+//
+// AN EMPTY REASON COUNTS AS STARTUP. Container statuses are observed in the wild
+// without a reason — reasonOr() in pod.go exists for exactly that — and no
+// evidence is not evidence of failure. The convergence budget bounds it either
+// way; what must not happen is a blank field reading as a broken workload.
+func waitReasonIsStartup(reason string) bool {
+	return reason == "" || startingWaitReasons[reason]
 }

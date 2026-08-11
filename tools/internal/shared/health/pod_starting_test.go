@@ -110,3 +110,81 @@ func TestUnschedulableIsNotStarting(t *testing.T) {
 		t.Error("a scheduled pod with no statuses yet must still count as starting")
 	}
 }
+
+// RUNNING MEANS OPPOSITE THINGS FOR AN INIT AND A MAIN CONTAINER, and flattening
+// the two lists reintroduced the incident this file exists to prevent: a
+// non-sidecar init container reports ready=false for its whole run, so a pod
+// sitting in a perfectly normal `wait-for-db` init was recorded as a hard failure
+// and aborted converge.
+func TestARunningInitContainerIsANormalStartup(t *testing.T) {
+	s := PodStatus{
+		Phase: "Pending",
+		InitContainerStatuses: []ContainerStatus{
+			{Name: "wait-for-db", Ready: false, State: ContainerState{Running: &struct{}{}}},
+		},
+		ContainerStatuses: []ContainerStatus{waiting("main", "PodInitializing")},
+	}
+	if !PodIsStarting(s) {
+		t.Error("a pod running its init container was judged broken — that is the incident this file " +
+			"was written to fix, reintroduced by judging init and main containers alike")
+	}
+	// The MAIN container's Running-but-not-Ready must still be a failure, or the
+	// separation has softened both instead of one.
+	m := PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{
+		{Name: "main", Ready: false, State: ContainerState{Running: &struct{}{}}},
+	}}
+	if PodIsStarting(m) {
+		t.Error("a main container Running without ever becoming Ready must still fail")
+	}
+}
+
+// An init container that FAILED is still a failure, whatever it is doing now.
+func TestAFailedInitContainerIsNotStarting(t *testing.T) {
+	s := PodStatus{Phase: "Pending", InitContainerStatuses: []ContainerStatus{
+		{Name: "migrate", State: ContainerState{Terminated: &StateDetail{Reason: "Error"}}},
+	}}
+	if PodIsStarting(s) {
+		t.Error("an init container that terminated with an error read as starting")
+	}
+	s.InitContainerStatuses = []ContainerStatus{waiting("migrate", "CrashLoopBackOff")}
+	if PodIsStarting(s) {
+		t.Error("a CrashLoopBackOff init container read as starting")
+	}
+}
+
+// A container status published with no waiting reason is no evidence either way —
+// reasonOr() exists because that is observed in practice — and a blank field must
+// not read as a broken workload.
+func TestAnEmptyWaitingReasonIsNotAFailure(t *testing.T) {
+	if !PodIsStarting(PodStatus{Phase: "Pending", ContainerStatuses: []ContainerStatus{waiting("main", "")}}) {
+		t.Error("a container waiting with no reason was judged broken; the budget bounds it, a blank field should not condemn it")
+	}
+}
+
+// The remaining shapes, so every arm of both per-container judgements is driven:
+// an init container waiting on a startup reason, a main container that completed
+// (a Job-shaped pod), and a status carrying no state at all.
+func TestPodIsStartingCoversTheRemainingContainerShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    PodStatus
+		want bool
+	}{
+		{"init container pulling its image", PodStatus{Phase: "Pending",
+			InitContainerStatuses: []ContainerStatus{waiting("init", "ContainerCreating")}}, true},
+		{"init container stuck on a bad image", PodStatus{Phase: "Pending",
+			InitContainerStatuses: []ContainerStatus{waiting("init", "ImagePullBackOff")}}, false},
+		{"init container already Ready (a sidecar)", PodStatus{Phase: "Pending",
+			InitContainerStatuses: []ContainerStatus{{Name: "sidecar", Ready: true}},
+			ContainerStatuses:     []ContainerStatus{waiting("main", "PodInitializing")}}, true},
+		{"main container completed", PodStatus{Phase: "Running",
+			ContainerStatuses: []ContainerStatus{{Name: "main",
+				State: ContainerState{Terminated: &StateDetail{Reason: "Completed"}}}}}, true},
+		{"status with no state reported yet", PodStatus{Phase: "Pending",
+			ContainerStatuses: []ContainerStatus{{Name: "main"}}}, true},
+	} {
+		if got := PodIsStarting(tc.s); got != tc.want {
+			t.Errorf("%s: PodIsStarting = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

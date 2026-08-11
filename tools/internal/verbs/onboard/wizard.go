@@ -77,6 +77,11 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
+// tokensPromptFineGrained is the permission set an operator is told to switch on,
+// kept beside the query string that pre-fills them so the sentence and the URL
+// cannot drift. TestDispatchTokenPromptNamesPullRequests reads it.
+const tokensPromptFineGrained = "Contents + Actions + Workflows + Pull requests: Read and write"
+
 // ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for
 // the e2e dispatch token: name, resource owner, 90-day expiry, and the four
 // repository permissions the e2e run needs — Contents (force-push the
@@ -95,11 +100,6 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 // at `gh pr create` with "Resource not accessible by integration", which is the
 // exact failure the new scope was documented to prevent. Two places state this
 // contract and only one of them is executable: keep them together.
-// tokensPromptFineGrained is the permission set an operator is told to switch on,
-// kept beside the query string that pre-fills them so the sentence and the URL
-// cannot drift. TestDispatchTokenPromptNamesPullRequests reads it.
-const tokensPromptFineGrained = "Contents + Actions + Workflows + Pull requests: Read and write"
-
 func ghFineGrainedDispatchURL(name, owner string) string {
 	q := url.Values{}
 	q.Set("name", name)

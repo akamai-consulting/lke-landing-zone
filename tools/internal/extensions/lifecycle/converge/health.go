@@ -1497,7 +1497,6 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 	return "", ""
 }
 
-// countReadyEndpoints sums ready endpoints across a Service's EndpointSlices.
 // endpointCounts returns (ready, total) for a Service's EndpointSlices. Both come
 // from ONE list call: two calls could observe different moments of a rollout and
 // report ready>total, which would read as nonsense in the message.

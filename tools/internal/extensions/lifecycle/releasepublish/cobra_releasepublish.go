@@ -93,7 +93,7 @@ func AssertInstancePRGatesCmd() *cobra.Command {
 	var interval, timeout int
 	c := &cobra.Command{
 		Use:   "assert-instance-pr-gates",
-		Short: "prove the instance's pull_request-gated CI (tf-lint + checkov) actually runs and passes",
+		Short: "prove the instance's pull_request-gated CI (tf-lint, checkov, repo-readiness) actually runs and passes",
 		Long: "Opens a throwaway PR on the instance repo touching a path the terraform\n" +
 			"pipeline's paths: filter watches, waits for the delivered pull_request-gated\n" +
 			"checks, and fails if they did not appear or did not pass — then closes the PR\n" +

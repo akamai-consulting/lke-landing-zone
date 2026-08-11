@@ -18,8 +18,8 @@ package releasepublish
 // structurally cannot: that the commands RESOLVE AND SUCCEED in the pinned image, on
 // the real scaffold. It runs after pin-instance-images so TF_IMAGE is this commit's.
 //
-// IT ASSERTS ONLY THE TWO LINT GATES, AND THE PR IS OPENED AS A DRAFT SO ONLY
-// THOSE TWO CAN RUN. Not tidiness — a correctness requirement. The same paths:
+// IT ASSERTS THE pull_request-GATED JOBS, AND THE PR IS OPENED AS A DRAFT SO ONLY
+// THOSE CAN RUN. Not tidiness — a correctness requirement. The same paths:
 // filter also selects `Plan Cluster (PR)`, and that job runs `llz ci tf-import`,
 // which WRITES cluster/<env>/terraform.tfstate. The e2e's provision job dispatches
 // an apply against that very state the moment this one returns, the two run under
@@ -58,10 +58,23 @@ import (
 )
 
 // DefaultPRGateChecks are the delivered check names this verb requires. They are
-// the `name:` of the two jobs in instance-template/.github/workflows/llz-terraform.yml
-// that are pull_request-gated; renaming a job there without renaming it here makes
-// this verb report "never appeared", which is the correct and loud answer.
-var DefaultPRGateChecks = []string{"Terraform Lint", "Checkov IaC Security Scan"}
+// the `name:` of the pull_request-gated jobs in
+// instance-template/.github/workflows/llz-terraform.yml; renaming a job there
+// without renaming it here makes this verb report "never appeared", which is the
+// correct and loud answer — and TestPRGateCheckNamesMatchTheDeliveredJobs fails
+// in the template repo first, so the rename never reaches an e2e.
+//
+// REPO READINESS IS ASSERTED TOO, not just the two linters. It is a
+// pull_request-gated job that had never run anywhere either — the same starting
+// position as tf-lint and checkov — and it was added by the very change set that
+// built this probe. Triggering it on the throwaway PR while asserting nothing
+// about its verdict would leave the newest delivered gate in exactly the
+// unobserved state this verb exists to end.
+var DefaultPRGateChecks = []string{
+	"Terraform Lint",
+	"Checkov IaC Security Scan",
+	"Repo readiness (upgrade prerequisites)",
+}
 
 // DefaultPRGateTouchPath is a file inside the terraform pipeline's paths: filter
 // (`terraform-iac-bootstrap/**`). Touching it is what SELECTS the gated jobs — a PR
@@ -471,7 +484,7 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"excluded it, which IS a regression in the delivered gating: check the pull_request / head-repo "+
 			"conditions on %s#%s", strings.Join(parts, ", "), o.Instance, pr)
 	}
-	fmt.Printf("Both PR-gated CI checks passed on %s#%s\n", o.Instance, pr)
+	fmt.Printf("All %d PR-gated CI check(s) passed on %s#%s\n", len(o.Checks), o.Instance, pr)
 	return nil
 }
 

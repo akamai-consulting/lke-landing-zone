@@ -123,10 +123,33 @@ func gatesBaseOpts() PRGatesOpts {
 	}
 }
 
-const bothPass = `[{"name":"Terraform Lint","state":"SUCCESS"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`
+// allPass covers EVERY name in DefaultPRGateChecks. Built from that slice rather
+// than typed out, so adding a delivered gate cannot leave these fixtures one
+// check short and turn every test in this file into a "never ran" failure.
+var allPass = func() string {
+	parts := make([]string, 0, len(DefaultPRGateChecks))
+	for _, n := range DefaultPRGateChecks {
+		parts = append(parts, fmt.Sprintf(`{"name":%q,"state":"SUCCESS"}`, n))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}()
+
+// passExcept renders the same payload with one check forced to another state, so
+// a test can drive a single verdict without restating the whole set.
+func passExcept(name, state string) string {
+	parts := make([]string, 0, len(DefaultPRGateChecks))
+	for _, n := range DefaultPRGateChecks {
+		st := "SUCCESS"
+		if n == name {
+			st = state
+		}
+		parts = append(parts, fmt.Sprintf(`{"name":%q,"state":%q}`, n, st))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
 
 func TestBothGatesRanAndPassed(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -143,11 +166,9 @@ func TestBothGatesRanAndPassed(t *testing.T) {
 // paths: filter instead of to the broken job.
 func TestFailingChecksAreNotReportedAsMissing(t *testing.T) {
 	f := &fakeForge{
-		t: t,
-		checkPolls: []string{
-			`[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
-		},
-		checksErr: errors.New("exit status 1"), // gh's verdict, not an I/O error
+		t:          t,
+		checkPolls: []string{passExcept("Terraform Lint", "FAILURE")},
+		checksErr:  errors.New("exit status 1"), // gh's verdict, not an I/O error
 	}
 	defer f.install()()
 
@@ -186,10 +207,7 @@ func TestMissingGateNamesWhatDidAppear(t *testing.T) {
 }
 
 func TestWaitsForPendingThenSucceeds(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"QUEUED"}]`,
-		bothPass,
-	}}
+	f := &fakeForge{t: t, checkPolls: []string{passExcept("Terraform Lint", "IN_PROGRESS"), allPass}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -204,9 +222,7 @@ func TestWaitsForPendingThenSucceeds(t *testing.T) {
 // its LAST observation rather than an error, so this pins that the caller still
 // fails.
 func TestPendingForeverFails(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
-	}}
+	f := &fakeForge{t: t, checkPolls: []string{passExcept("Terraform Lint", "IN_PROGRESS")}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err == nil {
@@ -215,7 +231,7 @@ func TestPendingForeverFails(t *testing.T) {
 }
 
 func TestKeepLeavesThePROpen(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	o := gatesBaseOpts()
@@ -232,7 +248,7 @@ func TestKeepLeavesThePROpen(t *testing.T) {
 // resumable, not fatal.
 func TestExistingPRIsReused(t *testing.T) {
 	f := &fakeForge{
-		t: t, checkPolls: []string{bothPass},
+		t: t, checkPolls: []string{allPass},
 		prCreateErr: errors.New("a pull request already exists"),
 		prViewOut:   "7\n",
 	}
@@ -244,7 +260,7 @@ func TestExistingPRIsReused(t *testing.T) {
 }
 
 func TestRequiredFlags(t *testing.T) {
-	defer (&fakeForge{t: t, checkPolls: []string{bothPass}}).install()()
+	defer (&fakeForge{t: t, checkPolls: []string{allPass}}).install()()
 
 	for _, tc := range []struct {
 		name, want string
@@ -268,7 +284,7 @@ func TestRequiredFlags(t *testing.T) {
 // The touched file must be the one under the paths: filter — touching anything else
 // opens a PR that triggers nothing and the verb would report a phantom regression.
 func TestTouchesThePathUnderTheFilter(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	var touched string
@@ -375,7 +391,7 @@ func TestRedactStripsTheToken(t *testing.T) {
 }
 
 func TestCloneFailureDoesNotLeakTheToken(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	orig := gatesGit
@@ -403,7 +419,7 @@ func TestCloneFailureDoesNotLeakTheToken(t *testing.T) {
 // bare name found nothing and reported the verb's own regression forever.
 func TestReusableWorkflowPrefixedChecksMatch(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"call / Terraform Lint","state":"SUCCESS"},{"name":"call / Checkov IaC Security Scan","state":"SUCCESS"}]`,
+		strings.ReplaceAll(allPass, `{"name":"`, `{"name":"call / `),
 	}}
 	defer f.install()()
 
@@ -451,7 +467,7 @@ func TestTouchPathIsNotAGeneratedTFRoot(t *testing.T) {
 // may be healthy and merely queued.
 func TestTimeoutIsNotReportedAsAFailingGate(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+		passExcept("Terraform Lint", "IN_PROGRESS"),
 	}}
 	defer f.install()()
 
@@ -470,7 +486,7 @@ func TestTimeoutIsNotReportedAsAFailingGate(t *testing.T) {
 // The branch is named after the commit, so a retry at the same sha meets its own
 // leaked branch; a plain push dies on non-fast-forward.
 func TestPushIsForcedSoARetryAtTheSameSHAWorks(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -497,7 +513,7 @@ func TestPushIsForcedSoARetryAtTheSameSHAWorks(t *testing.T) {
 // concurrency group, over a backend with no lock. Drop --draft and the two race,
 // last write wins.
 func TestPRIsOpenedAsADraft(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -541,7 +557,7 @@ func TestUnreadableChecksAreNotReportedAsMissing(t *testing.T) {
 
 // ...but ONE bad read must not condemn a run that went on to observe cleanly.
 func TestATransientUnreadablePollDoesNotPoisonACleanRun(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{"<html>502</html>", bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{"<html>502</html>", allPass}}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -554,7 +570,7 @@ func TestATransientUnreadablePollDoesNotPoisonACleanRun(t *testing.T) {
 // naming neither what gh printed nor what the fallback did.
 func TestPRCreateWithNoURLIsDiagnosable(t *testing.T) {
 	f := &fakeForge{
-		t: t, checkPolls: []string{bothPass},
+		t: t, checkPolls: []string{allPass},
 		prCreateOut: "Warning: 1 uncommitted change\n",
 		prViewOut:   "",
 	}
@@ -645,7 +661,7 @@ func TestUnparseableOutputIsStillAnIOFailure(t *testing.T) {
 // would be the bash bug wearing the new code's clothes.
 func TestABlankPollDoesNotEraseAnEarlierObservation(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		passExcept("Terraform Lint", "FAILURE"),
 		"", // gh goes quiet on a later poll
 	}}
 	defer f.install()()
@@ -664,7 +680,7 @@ func TestABlankPollDoesNotEraseAnEarlierObservation(t *testing.T) {
 // e2e-instantiate.yml exports GH_HOST at workflow level — the flag was inert and
 // the lane was carrying it.
 func TestHostReachesGH(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}}
 	defer f.install()()
 
 	o := gatesBaseOpts()
@@ -697,7 +713,7 @@ func slicesContains(hay []string, needle string) bool {
 // debug a job that never got to run.
 func TestCancelledIsNotReportedAsABrokenGate(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"CANCELLED"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+		passExcept("Terraform Lint", "CANCELLED"),
 	}}
 	defer f.install()()
 
@@ -717,7 +733,7 @@ func TestCancelledIsNotReportedAsABrokenGate(t *testing.T) {
 // gating, and a different one from a command that failed inside the job.
 func TestSkippedPointsAtTheGatingCondition(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"SKIPPED"},{"name":"Checkov IaC Security Scan","state":"SUCCESS"}]`,
+		passExcept("Terraform Lint", "SKIPPED"),
 	}}
 	defer f.install()()
 
@@ -735,7 +751,7 @@ func TestSkippedPointsAtTheGatingCondition(t *testing.T) {
 // case this lane's own docs describe.
 func TestBranchIsDeletedEvenWhenThePRIsNeverOpened(t *testing.T) {
 	f := &fakeForge{
-		t: t, checkPolls: []string{bothPass},
+		t: t, checkPolls: []string{allPass},
 		prCreateErr: errors.New("gh pr create: exit status 1: GraphQL: Resource not accessible by integration"),
 		prViewOut:   "",
 	}
@@ -781,7 +797,7 @@ func TestAnUnreadablePollThenABlankOneStillDiagnosesCorrectly(t *testing.T) {
 // `branches: [main, master]`. Against a master-default instance the verb
 // force-pushed a branch and could then never open its PR.
 func TestBaseComesFromTheInstanceDefaultBranch(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}, repoDefaultBranch: "master"}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
@@ -808,7 +824,7 @@ func TestBaseComesFromTheInstanceDefaultBranch(t *testing.T) {
 
 // An explicit --base must still win, for an instance whose PR target is neither.
 func TestExplicitBaseIsNotOverridden(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}, repoDefaultBranch: "master"}
 	defer f.install()()
 
 	o := gatesBaseOpts()
@@ -828,7 +844,7 @@ func TestExplicitBaseIsNotOverridden(t *testing.T) {
 // stopped being able to ask — the I/O-as-verdict mistake, in the third branch.
 func TestATimeoutSaysWhenThePollsWereFailing(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		passExcept("Terraform Lint", "IN_PROGRESS"),
 		"", // gh stops answering
 	}}
 	f.checksErrAfter = 1
@@ -852,7 +868,7 @@ func TestATimeoutSaysWhenThePollsWereFailing(t *testing.T) {
 // twenty-MINUTE wait. A zero interval is worse: it removes the sleep and fires
 // the whole budget at the forge back to back.
 func TestPollBudgetFlagsAreValidated(t *testing.T) {
-	defer (&fakeForge{t: t, checkPolls: []string{bothPass}}).install()()
+	defer (&fakeForge{t: t, checkPolls: []string{allPass}}).install()()
 
 	for _, tc := range []struct {
 		name, want string
@@ -879,9 +895,7 @@ func TestPollBudgetFlagsAreValidated(t *testing.T) {
 
 // A programmatic caller that never went through a flag must not busy-spin either.
 func TestZeroIntervalGetsAFloorNotATightLoop(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
-	}}
+	f := &fakeForge{t: t, checkPolls: []string{passExcept("Terraform Lint", "IN_PROGRESS")}}
 	defer f.install()()
 
 	o := gatesBaseOpts()
@@ -908,7 +922,7 @@ func TestZeroIntervalGetsAFloorNotATightLoop(t *testing.T) {
 // and never named the gate that actually broke.
 func TestAFailureOutranksAnInconclusiveSibling(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Checkov IaC Security Scan","state":"CANCELLED"}]`,
+		strings.Replace(passExcept("Terraform Lint", "FAILURE"), `"Checkov IaC Security Scan","state":"SUCCESS"`, `"Checkov IaC Security Scan","state":"CANCELLED"`, 1),
 	}}
 	defer f.install()()
 
@@ -929,7 +943,7 @@ func TestAFailureOutranksAnInconclusiveSibling(t *testing.T) {
 // I/O-as-verdict trap through the third door.
 func TestATimeoutSaysWhenThePollsWereUnparseable(t *testing.T) {
 	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		passExcept("Terraform Lint", "IN_PROGRESS"),
 		"<html>502 Bad Gateway</html>",
 	}}
 	defer f.install()()
@@ -954,7 +968,7 @@ func TestATimeoutSaysWhenThePollsWereUnparseable(t *testing.T) {
 // green, inheriting one.
 func TestTheResumeFallbackOnlyAcceptsAnOpenPR(t *testing.T) {
 	f := &fakeForge{
-		t: t, checkPolls: []string{bothPass},
+		t: t, checkPolls: []string{allPass},
 		prCreateErr: errors.New("gh pr create: a pull request already exists"),
 		prViewOut:   "7\n",
 	}
@@ -988,9 +1002,7 @@ func TestTheResumeFallbackOnlyAcceptsAnOpenPR(t *testing.T) {
 // arithmetic the 900s budget was chosen to fit — and the timeout message then
 // reports less waiting than actually happened.
 func TestThePollLoopDoesNotSleepAfterItsLastPoll(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{
-		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
-	}}
+	f := &fakeForge{t: t, checkPolls: []string{passExcept("Terraform Lint", "IN_PROGRESS")}}
 	defer f.install()()
 
 	o := gatesBaseOpts()
@@ -1013,7 +1025,7 @@ func TestThePollLoopDoesNotSleepAfterItsLastPoll(t *testing.T) {
 // a diff carrying every commit on default-but-not-in-base, or `gh pr create`
 // refusing with "No commits between".
 func TestTheCloneLandsOnTheBaseBranch(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	f := &fakeForge{t: t, checkPolls: []string{allPass}, repoDefaultBranch: "master"}
 	defer f.install()()
 
 	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
