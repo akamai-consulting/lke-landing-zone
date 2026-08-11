@@ -214,7 +214,21 @@ func copierRenderArgv(a *answers.File, ref, dst string) []string {
 			instanceRepo = a.InstanceRepo
 		}
 	}
-	return []string{"copier", "copy", "--trust", "--force", "--skip-tasks", "--vcs-ref", ref,
+	// NO --skip-tasks. This render is the SOURCE the overwrite pass copies every
+	// `managed` file from, so it has to be the same artifact a fresh `llz new` at
+	// this ref produces — and copier's `_tasks` are part of producing it. They
+	// deliver docs/, prune it to the operator set, and repoint the root Markdown
+	// links that target template-only paths.
+	//
+	// It skipped them, so the overwrite pass sourced AGENTS.md from a render where
+	// that repoint had never run, and put the pre-repoint copy back over the correct
+	// one `copier update` had just produced. Every upgraded instance ended up with
+	// AGENTS.md pointing at a relative docs/adopter-guide.md that deliver-docs
+	// prunes out of an instance — a dead link that a freshly scaffolded instance
+	// never had, and that survived every subsequent upgrade because the same pass
+	// re-applied it each time. `llz ci upgrade-test`'s converges-with-fresh check is
+	// what compares the two instances; it found this on its first run.
+	return []string{"copier", "copy", "--trust", "--force", "--vcs-ref", ref,
 		"--data", "upstream_org=" + upstreamOrg,
 		"--data", "instance_repo=" + instanceRepo,
 		"--data", "llz_version=" + ref,
