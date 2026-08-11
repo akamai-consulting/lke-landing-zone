@@ -26,6 +26,16 @@ type ArgoApp struct {
 	// past (#394). Empty when nothing is individually OutOfSync (an App can be
 	// OutOfSync for a resource Argo cannot attribute, e.g. a pruned extra).
 	Drifted []string
+	// SyncErr is the message of a sync operation that is FAILING AND RETRYING —
+	// phase still "Running", tasks reported unsuccessful. See ParseArgoApp.
+	SyncErr string
+}
+
+// SyncTasksFailing reports whether an operationState message describes a sync
+// whose tasks failed, as opposed to one merely in flight. Argo phrases both under
+// phase "Running"; only the failing one carries this sentence.
+func SyncTasksFailing(msg string) bool {
+	return strings.Contains(msg, "synchronization tasks completed unsuccessfully")
 }
 
 // maxDriftedNamed caps how many drifted resources a DRIFT line names. A report
@@ -142,6 +152,17 @@ func classifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 	}
 	if phase1 && MatchPrefix(a.Name, Phase1PendingApps()) {
 		return CatPending, label + " — waiting on OpenBao bootstrap"
+	}
+	// BEFORE the drift branch. An Application whose sync keeps failing is not
+	// "drift only, workload functional" — the resources it could not apply may
+	// never have existed. Reported as PENDING rather than FAIL because Argo is
+	// still retrying and the early attempts of a young cluster do clear (a
+	// namespace that arrives a wave later); the convergence budget bounds it, and
+	// the budget-exhaustion report names what was outstanding. What must not
+	// happen is the message being discarded and the app called functional.
+	if a.SyncErr != "" {
+		return CatPending, label + " — sync is FAILING and retrying: " + FirstLine(a.SyncErr) +
+			summarizeDrifted(a.Drifted)
 	}
 	if a.Health == "Healthy" {
 		return CatDrift, label + " — drift only; workload functional" + summarizeDrifted(a.Drifted)
@@ -287,6 +308,22 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 	if j.Status.OperationState.Phase == "Failed" || j.Status.OperationState.Phase == "Error" {
 		opErr = j.Status.OperationState.Message
 	}
+	// A RETRYING SYNC KEEPS PHASE "Running" WHILE FAILING, and discarding its
+	// message cost a release-e2e round. Argo retries a failed sync in place: the
+	// phase stays Running and the message becomes
+	//
+	//	one or more synchronization tasks completed unsuccessfully, reason:
+	//	admission webhook "mutate.kyverno.svc-ignore" denied the request …
+	//	MANIFEST_UNKNOWN … Retrying attempt #15
+	//
+	// Because the phase was not Failed, that text was dropped; the app then read
+	// as OutOfSync/Healthy and was graded "drift only; workload functional" — of
+	// an Application whose Deployment had never been created. The gate looked past
+	// the actual blocker and waited out its budget on a downstream symptom.
+	syncErr := ""
+	if j.Status.OperationState.Phase == "Running" && SyncTasksFailing(j.Status.OperationState.Message) {
+		syncErr = j.Status.OperationState.Message
+	}
 	// A resource with an EMPTY status is not drift: Argo leaves .status blank on
 	// resources it does not diff (hooks, and children it only observes). Only an
 	// explicit non-Synced value names a difference.
@@ -309,6 +346,7 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 		SpecErr:   strings.Join(specErrs, " | "),
 		OpErr:     opErr,
 		Drifted:   drifted,
+		SyncErr:   syncErr,
 	}, nil
 }
 

@@ -154,7 +154,21 @@ func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pend
 	if totalCount > 0 {
 		return CatPending, fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount)
 	}
-	return CatFail, "Service " + key + " has no endpoints at all (selector drift, or nothing backing it)"
+	// ZERO ENDPOINTS IS ALSO PENDING, and the earlier draft of this function got
+	// that wrong in a way worth recording. It assumed "endpoints exist but are
+	// notReady" covered the still-starting case — but a pod only appears in an
+	// EndpointSlice once it HAS a PodIP, so a Service whose pods are still
+	// Pending/ContainerCreating has no endpoints AT ALL. The young-cluster abort
+	// this whole change set exists to stop would have survived it, now wearing a
+	// more confident message ("selector drift, or nothing backing it").
+	//
+	// Nothing observable here distinguishes drift from not-created-yet: both are
+	// an empty slice. So the poll defers, and the convergence BUDGET is what
+	// decides — a Service that still has no endpoints when the budget runs out is
+	// named in the exhaustion report (reportConvergePending), which is the same
+	// information arriving a few minutes later instead of aborting a cluster that
+	// is merely young.
+	return CatPending, "Service " + key + " has no endpoints yet — backing pods not created, or selector drift; the budget decides"
 }
 
 // ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is

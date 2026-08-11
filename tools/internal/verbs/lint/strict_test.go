@@ -198,3 +198,22 @@ func TestStrictDoesNotSendASpecLessInstanceBackToTheRender(t *testing.T) {
 		t.Errorf("sent a spec-less instance back to a render that no-ops: %v", err)
 	}
 }
+
+// --strict read as a property of `llz check` while protecting only tf-lint and
+// checkov. stepGoFmt's `len(dirs) == 0 || !haveTool(...)` short-circuits, so a
+// missing gofmt was never RECORDED and the vacuity census saw a clean pass; the
+// same shape left actions-lint scanning no workflows and exiting 0.
+func TestStrictAlsoCoversTheNonTerraformSteps(t *testing.T) {
+	dir := t.TempDir() // no Go tree, no .github/workflows
+
+	for _, step := range []string{"actions-lint"} {
+		t.Setenv("LLZ_ACTIONLINT", "true")
+		if err := runCheck(t, dir, step); err != nil {
+			t.Fatalf("without --strict %s must stay a pass: %v", step, err)
+		}
+		if err := runCheck(t, dir, step, "--strict"); err == nil {
+			t.Errorf("`llz check %s --strict` passed having examined nothing — the flag reads as a "+
+				"property of `llz check`, so it has to hold for every step that scans a target set", step)
+		}
+	}
+}

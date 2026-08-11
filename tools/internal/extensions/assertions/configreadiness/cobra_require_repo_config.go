@@ -117,6 +117,20 @@ func ReportRepoConfig(reqs []envreq.Requirement, getenv func(string) string, out
 		"or set them by hand (Settings → Secrets and variables → Actions). "+
 		"A release can make a value newly required — this check is why you are hearing it now "+
 		"rather than from a failed apply.\n")
+	// THE ONE FALSE POSITIVE THIS CHECK CAN PRODUCE, named so nobody has to
+	// rediscover it. These values are repo-level BY DESIGN (envreq's table, and
+	// `llz tokens` pushes them there) — one instance has one state-encryption
+	// passphrase, one state bucket, one image pin. An instance that instead placed
+	// them in an infra-<deployment> Environment by hand is configured against that
+	// design, and this job — which has no `environment:`, because it cannot have
+	// one and still be honest about what it can see — will report them missing
+	// while `llz doctor` reports them present, since doctor falls back env->repo.
+	// Saying so here is the difference between a two-minute fix and an argument
+	// with the tool.
+	fmt.Fprintf(errOut, "::error::If a value above IS set but in an infra-<deployment> Environment: these "+
+		"five are REPO-level by design, and this job has no `environment:` so it cannot see an env-scoped "+
+		"copy. Move it to repo scope (the tokens wizard does this) — `llz doctor` will disagree with this check "+
+		"until you do, because it falls back from environment to repo scope and this cannot.\n")
 	return fmt.Errorf("%d required repo-level value(s) missing: %s", len(missing), strings.Join(namesOf(missing), ", "))
 }
 

@@ -183,6 +183,13 @@ func runConverge(budget, interval, retryDelay int) error {
 		case health.ConvergePoll:
 			prevNonOK, prevAttempt = res.nonOK, attempt
 			if time.Now().After(deadline) {
+				// NAME WHAT WAS STILL PENDING. Deferring a verdict to the budget is
+				// only honest if the budget's report says what it was waiting for —
+				// otherwise the checks that now pend (a pod still being created, a
+				// Service whose pods have no IP yet) trade a precise CatFail for a
+				// timeout that names nothing, which is a worse answer, not a kinder
+				// one. This is the other half of those classifier changes.
+				reportConvergePending(res.nonOK)
 				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
 				return fmt.Errorf("budget of %ds exhausted with the cluster still in-progress", budget)
 			}

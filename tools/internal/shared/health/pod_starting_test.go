@@ -188,3 +188,25 @@ func TestPodIsStartingCoversTheRemainingContainerShapes(t *testing.T) {
 		}
 	}
 }
+
+// The last arms of the two per-container judgements: an init container waiting on
+// a reason that waiting cannot fix, and a main container that terminated cleanly
+// while its pod is still Pending.
+func TestPerContainerJudgementsCoverTheirRemainingArms(t *testing.T) {
+	if initContainerIsStarting(ContainerStatus{Name: "i", Ready: true}) != true {
+		t.Error("a Ready init container (a sidecar) is fine")
+	}
+	if initContainerIsStarting(waiting("i", "ImagePullBackOff")) {
+		t.Error("an init container that cannot pull its image is not starting")
+	}
+	if !initContainerIsStarting(ContainerStatus{Name: "i"}) {
+		t.Error("an init container with no state reported yet is starting")
+	}
+	if mainContainerIsStarting(ContainerStatus{Name: "m",
+		State: ContainerState{Terminated: &StateDetail{Reason: "Error"}}}) {
+		t.Error("a main container that terminated with an error is not starting")
+	}
+	if !mainContainerIsStarting(ContainerStatus{Name: "m"}) {
+		t.Error("a main container with no state reported yet is starting")
+	}
+}

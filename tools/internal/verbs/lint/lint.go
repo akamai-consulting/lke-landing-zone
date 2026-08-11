@@ -118,6 +118,12 @@ var scan struct {
 	usedTFDirs   bool
 	tfDirCount   int
 	tfFileCount  int
+	// usedTargets/targetCount are the generic form of the same census, for steps
+	// that scan something other than Terraform roots (Go dirs, workflow files).
+	// Without them --strict protected only tf-lint and checkov while reading as a
+	// property of `llz check`.
+	usedTargets bool
+	targetCount int
 }
 
 // ── argv builders (pure; covered by checks_test.go) ──────────────────────────
@@ -222,7 +228,13 @@ func goModuleDirs() []string {
 func stepGoFmt(g cliopts.Opts) error {
 	gofmtBin := tool("gofmt", "LLZ_GOFMT")
 	dirs := goModuleDirs()
-	if len(dirs) == 0 || !haveTool(gofmtBin) {
+	// ORDER MATTERS FOR --strict: `||` short-circuits, so testing the empty dir set
+	// first meant haveTool never ran and a missing gofmt was never RECORDED — the
+	// vacuity census saw a clean pass. Ask about the tool unconditionally, then
+	// record an empty target set the same way tfDirs does.
+	haveGofmt := haveTool(gofmtBin)
+	scan.usedTargets, scan.targetCount = true, len(dirs)
+	if len(dirs) == 0 || !haveGofmt {
 		return nil
 	}
 	argv := goFmtListArgv(gofmtBin, dirs)
@@ -309,6 +321,8 @@ func stepActionsLint(g cliopts.Opts) error {
 	if err != nil {
 		return err
 	}
+	// Recorded so --strict can refuse a run that linted no workflows at all.
+	scan.usedTargets, scan.targetCount = true, len(files)
 	if len(files) == 0 {
 		return nil
 	}
@@ -620,6 +634,7 @@ func CheckCmd() *cobra.Command {
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				scan.missingTools, scan.usedTFDirs = nil, false
 				scan.tfDirCount, scan.tfFileCount = 0, 0
+				scan.usedTargets, scan.targetCount = false, 0
 				if err := s.fn(cliopts.Global); err != nil {
 					return err
 				}
@@ -632,6 +647,10 @@ func CheckCmd() *cobra.Command {
 						"examined nothing is a FAILURE, not a pass — a green gate that scanned nothing is the "+
 						"thing this flag exists to prevent. Fix the image (TF_IMAGE) rather than dropping --strict",
 						s.use, strings.Join(scan.missingTools, ", "))
+				}
+				if scan.usedTargets && scan.targetCount == 0 {
+					return fmt.Errorf("::error::%s found nothing to examine — no target files in this "+
+						"checkout. Under --strict, scanning nothing is a FAILURE", s.use)
 				}
 				if scan.usedTFDirs && scan.tfFileCount == 0 {
 					// TWO DIFFERENT TREES, and saying the wrong one wastes the

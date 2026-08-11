@@ -100,14 +100,22 @@ func TestCheckServicesPendsAServiceWhoseEndpointsAreNotReadyYet(t *testing.T) {
 	if !pended {
 		t.Errorf("pending = %v, want otel-collector recorded as backing pods still starting", r.Pending)
 	}
-	// ...and the genuinely unbacked Service must still fail, or the gate is gone.
-	var orphanFailed bool
-	for _, f := range r.Failed {
-		if contains(f, "orphan") {
-			orphanFailed = true
+	// ...and the Service with NO endpoints is pending too, but under its own
+	// words: nothing observable distinguishes "pods have no PodIP yet" from
+	// "selector matches nothing", so the convergence budget decides and its
+	// exhaustion report names the Service. See
+	// TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
+	var orphanPended bool
+	for _, p := range r.Pending {
+		if contains(p, "orphan") && contains(p, "selector drift") {
+			orphanPended = true
 		}
 	}
-	if !orphanFailed {
-		t.Errorf("failed = %v, want the Service with no endpoints at all to fail", r.Failed)
+	if !orphanPended {
+		t.Errorf("pending = %v, want the endpoint-less Service deferred to the budget while naming "+
+			"selector drift as a possible cause", r.Pending)
+	}
+	if len(r.Failed) != 0 {
+		t.Errorf("failed = %v, want nothing hard-failed on a young cluster", r.Failed)
 	}
 }

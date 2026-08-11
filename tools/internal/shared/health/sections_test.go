@@ -112,8 +112,12 @@ func TestClassifyServiceEndpoints(t *testing.T) {
 	if cat, _ := ClassifyServiceEndpoints("external-dns/external-dns", 0, 0, false); cat != CatDeferred {
 		t.Error("0 endpoints on a deferred workload defers")
 	}
-	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatFail {
-		t.Error("0 endpoints otherwise fails")
+	// 0 endpoints is PENDING now, not FAIL — a Service whose pods have no PodIP
+	// yet is indistinguishable from one whose selector matches nothing, so the
+	// convergence budget decides and its exhaustion report names the Service.
+	// See TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell.
+	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatPending {
+		t.Error("0 endpoints should defer to the budget rather than assert selector drift")
 	}
 }
 

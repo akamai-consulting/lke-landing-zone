@@ -39,6 +39,32 @@ var pinImages = []pinImage{
 	{Var: "KUBE_IMAGE", Name: "ci-kubernetes"},
 }
 
+// requiredShaImages are images the run CONSUMES for this commit but pins no
+// repo VARIABLE at — so they have no entry above, and were therefore neither
+// waited for nor counted as "missing" when deciding to trigger a build.
+//
+// THE ROUND THAT COST. `llz` is the in-cluster image: e2e-instantiate renders
+// LLZ_IMAGE_REF to ghcr.io/<owner>/llz:sha-<commit>, every carved Application's
+// kustomize images: transformer retags onto it, and Kyverno's
+// verify-llz-image-signature policy verifies that exact reference at admission.
+// This verb checked ci-tofu and ci-kubernetes, found both published, reported
+// success — and the llz image for that commit had never been built. The cluster
+// then came up and Kyverno correctly refused FOUR workloads:
+//
+//	resource Deployment/llz-reconciler/llz-reconciler was blocked …
+//	  failed to verify image ghcr.io/akamai-consulting/llz:sha-4481768c…:
+//	  MANIFEST_UNKNOWN: manifest unknown
+//
+// plus obj-proxy's DaemonSet and two CronJobs. No llz-reconciler Deployment
+// means no apl-overlay push, so loki-s3-linode-credentials was never built and
+// convergence waited out its entire 1200s budget on a downstream symptom, ~40
+// minutes and a real cluster after the actual cause.
+//
+// The verb's own name is why this was invisible: it PINS two variables, so two
+// images looked like the whole job. What it really owes the run is "every image
+// this commit's cluster will be asked to pull".
+var requiredShaImages = []string{"llz"}
+
 // Seams (package vars) so tests drive the flow without gh/docker/a registry.
 var (
 	// pinGH runs `gh <args>` with GH_TOKEN set to token (template vs instance
@@ -210,18 +236,57 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 		}
 		fmt.Printf("Pinned %s %s=%s\n", o.Instance, im.Var, ref)
 	}
+	return waitForRequiredImages(o, wantSha)
+}
+
+// waitForRequiredImages blocks until every image the CLUSTER will pull for this
+// commit is published. Nothing pins a variable at these, so the loop above never
+// looked at them — see requiredShaImages for the release-e2e round that cost.
+func waitForRequiredImages(o PinImagesOpts, wantSha bool) error {
+	if !wantSha {
+		// Pinning :latest — the cluster is rendered against a moving tag that
+		// already exists, so there is nothing commit-specific to wait for.
+		return nil
+	}
+	for _, name := range requiredShaImages {
+		ref := fmt.Sprintf("ghcr.io/%s/%s:sha-%s", o.Owner, name, o.SHA)
+		fmt.Printf("Waiting for %s to publish (consumed in-cluster; Kyverno verifies it at admission)…\n", ref)
+		ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, o.Retries, o.Interval)
+		if ok {
+			continue
+		}
+		hint := "the build may still be queued, or the run was never triggered"
+		if failedURL != "" {
+			hint = "Build Container Images FAILED for this commit — " + failedURL
+		}
+		return fmt.Errorf("%s is not published, and the cluster is about to be rendered against it: %s.\n"+
+			"Kyverno's verify-llz-image-signature policy will refuse every workload that references it "+
+			"(llz-reconciler, obj-proxy, harbor-robot-provisioner, broad-pat-rotator), and convergence will "+
+			"then wait out its whole budget on the downstream symptom — a missing apl-overlay push — rather "+
+			"than on this", ref, hint)
+	}
 	return nil
 }
 
 // anyShaImageMissing reports whether any pinned image's sha-<sha> tag is not yet
 // published — the signal that a build is incomplete or failed.
 func anyShaImageMissing(owner, sha string) bool {
-	for _, im := range pinImages {
-		if !pinManifestExists(fmt.Sprintf("ghcr.io/%s/%s:sha-%s", owner, im.Name, sha)) {
+	for _, name := range shaImageNames() {
+		if !pinManifestExists(fmt.Sprintf("ghcr.io/%s/%s:sha-%s", owner, name, sha)) {
 			return true
 		}
 	}
 	return false
+}
+
+// shaImageNames is every image this commit must have published: the ones a
+// variable is pinned at, plus the ones only the cluster consumes.
+func shaImageNames() []string {
+	names := make([]string, 0, len(pinImages)+len(requiredShaImages))
+	for _, im := range pinImages {
+		names = append(names, im.Name)
+	}
+	return append(names, requiredShaImages...)
 }
 
 // imageRef is the tag to pin: the exact sha when this commit built an image,
