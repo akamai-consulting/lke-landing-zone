@@ -78,3 +78,35 @@ func TestTerminatedContainersAreJudgedByReason(t *testing.T) {
 		t.Error("a container that terminated with an error is not starting")
 	}
 }
+
+// A container that RUNS but never becomes Ready is the commonest broken-workload
+// signal there is — a readiness probe that never passes. Reading it as "starting"
+// would stop converge fast-failing on it and trade a precise verdict for a
+// generic budget timeout.
+func TestRunningButNeverReadyIsNotStarting(t *testing.T) {
+	s := PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{
+		{Name: "main", Ready: false, State: ContainerState{Running: &struct{}{}}},
+	}}
+	if PodIsStarting(s) {
+		t.Error("a Running-but-not-Ready container was softened to pending — that is a failing readiness " +
+			"probe, and the gate must keep failing on it")
+	}
+}
+
+// An UNSCHEDULABLE pod publishes no container statuses, so without reading
+// conditions it is indistinguishable from a pod the kubelet has not reported on
+// yet — and would read as starting forever. Waiting does not schedule a pod that
+// nothing can schedule (node pool full, unsatisfiable taint/selector, unbound PVC).
+func TestUnschedulableIsNotStarting(t *testing.T) {
+	s := PodStatus{Phase: "Pending", Conditions: []Condition{
+		{Type: "PodScheduled", Status: "False", Reason: "Unschedulable",
+			Message: "0/5 nodes are available: insufficient cpu"},
+	}}
+	if PodIsStarting(s) {
+		t.Error("an Unschedulable pod read as starting — the node pool being full would never fail the gate")
+	}
+	// ...while a pod merely awaiting its first status still does.
+	if !PodIsStarting(PodStatus{Phase: "Pending", Conditions: []Condition{{Type: "PodScheduled", Status: "True"}}}) {
+		t.Error("a scheduled pod with no statuses yet must still count as starting")
+	}
+}

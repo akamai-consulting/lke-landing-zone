@@ -84,6 +84,16 @@ func MissingRepoConfig(reqs []envreq.Requirement, getenv func(string) string) []
 // require-secret records: GitHub parses an annotation only at the start of a
 // line, and a returned error reaches stderr behind main's "llz: " prefix.
 func ReportRepoConfig(reqs []envreq.Requirement, getenv func(string) string, out, errOut io.Writer) error {
+	// FAIL CLOSED ON VACUITY, like every other gate on this branch. An empty
+	// requirement set means the table moved or the filter stopped matching — not
+	// that the instance is configured — and reporting success for having checked
+	// nothing is the exact shape this whole change set exists to remove.
+	if len(reqs) == 0 {
+		fmt.Fprintf(errOut, "::error::no repo-level required values resolved — the requirement table moved "+
+			"or the filter no longer matches it. This check examined NOTHING; treating that as a pass is "+
+			"how a gate goes quiet.\n")
+		return fmt.Errorf("no repo-level requirements resolved — refusing to pass having checked nothing")
+	}
 	missing := MissingRepoConfig(reqs, getenv)
 	for _, r := range reqs {
 		if !contains(missing, r.Name) {

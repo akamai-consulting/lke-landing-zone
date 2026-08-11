@@ -137,3 +137,18 @@ func TestRequireRepoConfigCmdWiring(t *testing.T) {
 			"gets silently disabled")
 	}
 }
+
+// FAIL CLOSED ON VACUITY, like every other gate on this branch. An empty
+// requirement set means the table moved or the filter stopped matching it — not
+// that the instance is configured — and passing for having checked nothing is
+// the exact shape this whole change set exists to remove.
+func TestReportRepoConfigRefusesAnEmptyRequirementSet(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := ReportRepoConfig(nil, func(string) string { return "v" }, &out, &errOut)
+	if err == nil {
+		t.Fatal("an empty requirement set passed — the gate would go quiet the day the table moved")
+	}
+	if !strings.Contains(errOut.String(), "::error::") {
+		t.Errorf("the vacuity failure should annotate, got: %q", errOut.String())
+	}
+}

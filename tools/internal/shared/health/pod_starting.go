@@ -47,6 +47,16 @@ func PodIsStarting(s PodStatus) bool {
 	if s.Phase == "Succeeded" || s.Phase == "Failed" {
 		return false
 	}
+	// UNSCHEDULABLE IS NOT STARTING. A pod no node will accept — node pool full,
+	// an unsatisfiable taint or selector, an unbound PVC — never publishes
+	// container statuses, so without this it would look identical to a pod the
+	// kubelet has merely not reported on yet, and read as "starting" forever.
+	// Waiting does not schedule a pod nothing can schedule.
+	for _, c := range s.Conditions {
+		if c.Type == "PodScheduled" && c.Status == "False" {
+			return false
+		}
+	}
 	all := append(append([]ContainerStatus{}, s.InitContainerStatuses...), s.ContainerStatuses...)
 	// Scheduled but no statuses published yet — the kubelet has not reported in.
 	// That is the earliest moment of a pod's life, not a failure.
@@ -55,8 +65,17 @@ func PodIsStarting(s PodStatus) bool {
 	}
 	for _, c := range all {
 		switch {
-		case c.Ready, c.State.Running != nil:
+		case c.Ready:
 			continue // already up
+		case c.State.Running != nil:
+			// RUNNING BUT NOT READY IS NOT "STARTING", and calling it that would
+			// have removed the commonest broken-workload signal there is: a
+			// container whose readiness probe never passes runs forever without
+			// ever being Ready. Softening it to pending means converge stops
+			// fast-failing on it and instead burns the whole budget to report a
+			// generic timeout. The gate judged this case before and still does —
+			// only the CREATION states were ever the bug.
+			return false
 		case c.State.Waiting != nil:
 			if !startingWaitReasons[c.State.Waiting.Reason] {
 				return false // a waiting reason that waiting will not fix
