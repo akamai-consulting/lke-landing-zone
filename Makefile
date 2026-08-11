@@ -10,7 +10,7 @@ SHELL := /bin/bash
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
 
-KUBECTL_VERSION  := 1.31.0
+KUBECTL_VERSION  := 1.34.10
 
 # Both forms are checked against dockerfiles/Dockerfile's ARG block by
 # version-pins. That was NOT true when this line was added: the guard's separator

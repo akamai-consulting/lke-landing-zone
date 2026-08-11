@@ -96,7 +96,7 @@ func reImageTag(image string) *regexp.Regexp {
 // which is not [0-9v], so the whole match failed and the site was silently not a
 // site. `Makefile` is a scanRoot and the header above claims "a restatement
 // nobody knew about still gets checked because the scan is by pattern" — but the
-// Makefile's own `KUBECTL_VERSION := 1.31.0`, the idiomatic Make form, was
+// Makefile's own `KUBECTL_VERSION := <version>`, the idiomatic Make form, was
 // invisible to it. Demonstrated by setting a pin to a wrong value twice: written
 // `=` the gate failed and named the line; written `:=` the same wrong value
 // reported "OK — 9 restatements agree".
@@ -280,7 +280,7 @@ func collectPinSites(repo capability.Repo, files []string, args map[string]strin
 			}
 		}
 
-		// 4. Bare ARG restatements: KUBECTL_VERSION: "1.31.0".
+		// 4. Bare ARG restatements: KUBECTL_VERSION: "<version>".
 		if isAuthority {
 			continue // the ARG lines themselves are the authority, not restatements
 		}

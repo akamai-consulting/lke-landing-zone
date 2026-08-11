@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           ALL='[
             {"key":"terraform","image":"ci-tofu","target":"ci-tofu","version":"1.12.5","alias":"ci-terraform"},
-            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0","alias":""},
+            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.34.10","alias":""},
             {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":"","alias":""},
             {"key":"llz","image":"llz","target":"llz","version":"","alias":""}
           ]'
