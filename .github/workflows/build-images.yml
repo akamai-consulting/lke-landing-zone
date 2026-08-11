@@ -179,19 +179,33 @@ jobs:
             TAGS+=(--tag "${REPO}/${ALIAS}:latest" --tag "${REPO}/${ALIAS}:sha-${SHA}")
             [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${ALIAS}:${VERSION}")
           fi
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg "LLZ_VERSION=dev-${SHA}" \
-            "${TAGS[@]}" \
-            --cache-from "type=gha,scope=${IMAGE}" \
-            --cache-to   "type=gha,scope=${IMAGE},mode=max" \
-            --file dockerfiles/Dockerfile --target "${TARGET}" \
-            dockerfiles
+          # RETRIED, because the failure this absorbs is not ours and not rare.
+          # GHCR answers a burst of pushes with `403 Forbidden` / 429 — a
+          # SECONDARY rate limit that `gh api rate_limit` does not show, so it
+          # reads as a permissions error and sends people to package settings.
+          # Measured: three build-images runs inside two hours (twelve pushes)
+          # and the `llz` row 403'd on `:latest` while the other three images in
+          # the SAME run pushed fine. That left the commit's llz image
+          # unpublished, Kyverno then refused every workload referencing it, and a
+          # release-e2e spent its whole convergence budget on the consequence.
+          # The build itself is cached, so a retry re-pushes rather than rebuilds.
+          for attempt in 1 2 3; do
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              --provenance=true \
+              --sbom=true \
+              --metadata-file /tmp/build-meta.json \
+              --build-context tools-src=tools \
+              --build-arg "LLZ_VERSION=dev-${SHA}" \
+              "${TAGS[@]}" \
+              --cache-from "type=gha,scope=${IMAGE}" \
+              --cache-to   "type=gha,scope=${IMAGE},mode=max" \
+              --file dockerfiles/Dockerfile --target "${TARGET}" \
+              dockerfiles && break
+            [ "${attempt}" -eq 3 ] && { echo "::error::${IMAGE} failed to push after 3 attempts — if the log says 403/429 this is GHCR's secondary rate limit, not a permissions problem; space the builds out and re-run."; exit 1; }
+            echo "::warning::${IMAGE} push attempt ${attempt} failed — retrying (GHCR's secondary rate limit answers a burst with 403/429)." && sleep $((attempt * 90))
+          done
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       # Signed per REPOSITORY, not per digest: cosign stores the signature as a
