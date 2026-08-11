@@ -191,13 +191,38 @@ func renderUpgradeScaffold(ref string) (string, func(), error) {
 	}
 	Cleanup := func() { _ = os.RemoveAll(tmp) }
 	dst := filepath.Join(tmp, "scaffold")
+	// THE GUARANTEE THIS RENDER DEPENDS ON, held where the dependency is rather
+	// than in a caller. copierRenderArgv deliberately no longer passes
+	// --skip-tasks, so this render's correctness now rests on copier's `_tasks`
+	// actually running — and they invoke `llz` BY NAME, falling back to a warning
+	// when `command -v llz` comes up empty. Taking that fallback here does not
+	// merely skip the root-link repoint: it leaves the render's docs/ UNPRUNED, and
+	// the overwrite pass below then copies the whole template docs tree into the
+	// instance. proc.SelfOnPATH publishes the running binary under the name the
+	// tasks look up, so the render cannot degrade just because the operator invoked
+	// llz by path. See its doc comment for why $(dirname $self) is not enough.
+	restorePATH, err := selfOnPATH("llz")
+	if err != nil {
+		Cleanup()
+		return "", nil, err
+	}
+	defer restorePATH()
 	argv := copierRenderArgv(a, ref, dst)
-	if err := proc.Run(argv, ""); err != nil {
+	if err := runProc(argv, ""); err != nil {
 		Cleanup()
 		return "", nil, fmt.Errorf("render target scaffold for manifest policy: %w", err)
 	}
 	return dst, Cleanup, nil
 }
+
+// Seams. renderUpgradeScaffold's contract is an ORDERING — `llz` is resolvable
+// before copier starts — and an ordering is only provable by observing both
+// halves. Without these a test would have to run a real copier render over the
+// network to learn whether the arming happened at all.
+var (
+	selfOnPATH = proc.SelfOnPATH
+	runProc    = proc.Run
+)
 
 func copierRenderArgv(a *answers.File, ref, dst string) []string {
 	source := "gh:" + UpdateRepo()

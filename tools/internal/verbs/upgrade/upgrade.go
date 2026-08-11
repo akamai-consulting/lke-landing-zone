@@ -79,6 +79,18 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 		}
 		defer owned.Cleanup()
 	}
+	// This render runs copier's `_tasks` too — it is the one that delivers docs/
+	// and repoints the root Markdown links in the INSTANCE — and they invoke `llz`
+	// by name. An operator running an llz that is not on PATH (by absolute path,
+	// straight out of a build directory) would otherwise get the tasks' no-llz
+	// fallback and an unpruned docs tree, from the command whose whole job is
+	// delivering the template correctly. ApplyManifestPolicy's clean render arms
+	// this independently; SelfOnPATH no-ops the second time.
+	restorePATH, err := proc.SelfOnPATH("llz")
+	if err != nil {
+		return err
+	}
+	defer restorePATH()
 	if err := proc.RunEcho(dryRun, copier.UpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}

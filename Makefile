@@ -268,7 +268,8 @@ COVERAGE_MINS := \
 	internal/shared/baoread=79 \
 	internal/shared/ghaout=81 \
 	internal/extensions/lifecycle/credrotate=63 \
-	internal/extensions/lifecycle/database=64
+	internal/extensions/lifecycle/database=64 \
+	internal/shared/proc=57
 
 help:
 	@echo "lke-landing-zone — template repository targets"
