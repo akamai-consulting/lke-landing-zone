@@ -43,12 +43,38 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	}
 }
 
-func TestCopierRenderArgvUsesAnswersAndSkipsTasks(t *testing.T) {
+func TestCopierRenderArgvUsesAnswers(t *testing.T) {
 	got := copierRenderArgv(&answers.File{SrcPath: "gh:my-org/lke-landing-zone", UpstreamOrg: "my-org", InstanceRepo: "my-org/inst"}, "v1.2.3", "/tmp/render")
 	joined := strings.Join(got, " ")
-	for _, want := range []string{"copier copy", "--skip-tasks", "--force", "--vcs-ref v1.2.3", "upstream_org=my-org", "instance_repo=my-org/inst", "llz_version=v1.2.3", "gh:my-org/lke-landing-zone", "/tmp/render"} {
+	for _, want := range []string{"copier copy", "--force", "--vcs-ref v1.2.3", "upstream_org=my-org", "instance_repo=my-org/inst", "llz_version=v1.2.3", "gh:my-org/lke-landing-zone", "/tmp/render"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("copierRenderArgv missing %q in %q", want, joined)
+		}
+	}
+}
+
+// THE RENDER MUST RUN copier's _tasks, and this test used to assert the reverse.
+//
+// This render is the SOURCE every `managed` file is copied from during an upgrade,
+// so it has to be the same artifact a fresh `llz new` at this ref produces — and
+// the tasks are part of producing it: they deliver docs/, prune it to the operator
+// set, and repoint the root-Markdown links that target template-only paths.
+//
+// With --skip-tasks it was not that artifact. The overwrite pass took AGENTS.md
+// from a render where the link repoint had never run and laid it over the correct
+// copy `copier update` had just produced, so every upgraded instance carried a
+// dead relative link to docs/adopter-guide.md — a file deliver-docs prunes out of
+// an instance — while every freshly scaffolded one was right. It survived each
+// subsequent upgrade because the same pass re-applied it. `llz ci upgrade-test`'s
+// converges-with-fresh check compares the two instances and found it immediately.
+func TestCopierRenderArgvRunsTasks(t *testing.T) {
+	got := copierRenderArgv(&answers.File{SrcPath: "/tmp/tmpl"}, "v1.2.3", "/tmp/render")
+	for _, a := range got {
+		if a == "--skip-tasks" {
+			t.Fatalf("copierRenderArgv passes --skip-tasks: %v\n"+
+				"The clean render is what `managed` files are overwritten FROM, so anything copier's tasks\n"+
+				"write is absent from it — and the overwrite pass then reverts that content in every\n"+
+				"upgraded instance while a fresh scaffold keeps it.", got)
 		}
 	}
 }

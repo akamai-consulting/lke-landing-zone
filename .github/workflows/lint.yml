@@ -467,6 +467,10 @@ jobs:
     name: Instantiate (copier render)
     runs-on: ubuntu-latest
     # Bounded from measured history (p50 0.7 / max 0.7 (real copier render)); GitHub's default is 6h.
+    # That history PREDATES the depth-3 upgrade-test below, which adds one scaffold
+    # + one real `llz upgrade` per release covered (~2.5 min for all three, measured
+    # locally; CI is slower). 20 still holds with room — recorded here so the next
+    # reader does not size a change against a p50 that no longer describes the job.
     timeout-minutes: 20
     permissions:
       contents: read
@@ -489,16 +493,28 @@ jobs:
       - name: Instantiate the template + assert render + structure + actionlint
         run: SKIP_TF=1 template-scripts/ci/instance-test.sh
 
-      # The day-2 half. instance-test proves `copier copy`; this proves `copier
-      # update` — which appeared in no workflow, target or script until now, so
+      # The day-2 half. instance-test proves `copier copy`; this proves the
+      # UPGRADE — which appeared in no workflow, target or script until now, so
       # the path every adopter takes on their second week was gated by nobody.
       #
+      # THE DEFAULT DEPTH IS 3 AND IS NOT PASSED HERE: the gate's own default is
+      # what a maintainer gets from `make upgrade-test`, and pinning a different
+      # number in CI is how the two quietly stop testing the same thing. Three
+      # releases back, because the instance that breaks is the one that SKIPPED
+      # releases — a file whose manifest class changed in vN-2 meeting a file
+      # whose content moved in vN-1 — and one hop only ever covered the adopter
+      # who upgrades every week.
+      #
       # `llz` here is setup-llz's build of THIS tree, which is the whole point:
-      # the gate runs `llz upgrade`'s own copier argv, so a released binary would
-      # answer for code that is not under test. The checkout above is already
-      # fetch-depth: 0, so the release tags this scaffolds from are present — the
-      # gate self-skips rather than fails if they ever are not.
-      - name: Upgrade the previous release to this commit
+      # the gate now runs the real `llz upgrade`, whose manifest-policy and
+      # removals passes are Go in this repo, so a released binary would answer for
+      # code that is not under test. It is also what copier's `_tasks` resolve as
+      # `llz` — install-path above puts it on PATH, and the gate fails closed
+      # rather than comparing two instances that both took the no-llz fallback.
+      # The checkout above is already fetch-depth: 0, so the release tags this
+      # scaffolds from are present — the gate self-skips rather than fails if they
+      # ever are not.
+      - name: Upgrade the last three releases to this commit
         run: llz ci upgrade-test --template .
 
   # ── Terraform ────────────────────────────────────────────────────────────────
