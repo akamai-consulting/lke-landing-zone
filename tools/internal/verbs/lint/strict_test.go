@@ -172,3 +172,29 @@ func TestStrictDistinguishesAnUnrenderedTreeFromNoTreeAtAll(t *testing.T) {
 		t.Errorf("an unrendered instance should be told the roots are there but empty, got: %v", err)
 	}
 }
+
+// The delivered job renders with --if-spec, which NO-OPS without a spec — so on
+// a spec-less instance with no committed Terraform, telling the operator to run
+// that render sends them back to the command that just did nothing.
+func TestStrictDoesNotSendASpecLessInstanceBackToTheRender(t *testing.T) {
+	t.Setenv("LLZ_TFLINT", "true")
+	dir := t.TempDir()
+	d := filepath.Join(dir, "terraform-iac-bootstrap", "cluster")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, ".terraform.lock.hcl"), []byte("# pins\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runCheck(t, dir, "tf-lint", "--strict")
+	if err == nil {
+		t.Fatal("--strict must fail with nothing to scan")
+	}
+	if !strings.Contains(err.Error(), "NO LandingZone spec") {
+		t.Errorf("a spec-less instance should be told the render cannot help it, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "run it before this check") {
+		t.Errorf("sent a spec-less instance back to a render that no-ops: %v", err)
+	}
+}

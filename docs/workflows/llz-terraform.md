@@ -216,8 +216,8 @@ instances without a spec.
 
 ## Job: `repo-readiness`
 
-Runs on every internal PR that touches a Terraform path, a delivered workflow, or
-`.copier-answers.yml`. Two cheap checks, neither needing cloud credentials:
+Runs on every internal PR that touches a Terraform path or a delivered workflow.
+Two cheap checks, neither needing cloud credentials:
 
 1. `llz ci require-repo-config` — every **required repo-level** secret and
    variable is set.
@@ -231,7 +231,20 @@ existed on their repo. `llz upgrade` now runs the readiness check as an advisory
 — that covers the operator who upgrades *with* `llz upgrade`. This job covers the
 one who does not: a hand-driven `copier update`, a bot PR, an edited pin. Being
 told what a release newly requires should not depend on which command performed
-the upgrade, which is why `.copier-answers.yml` is in the `paths:` filter.
+the upgrade.
+
+`.copier-answers.yml` is deliberately **not** in the `paths:` filter, and that is
+a stated trade-off. Listing it would put this job on a pin-only upgrade PR — but
+a `paths:` filter selects the *workflow*, not a job, so it would also select
+`Plan Cluster (PR)`, handing an automated PR the unserialized
+`llz ci tf-import` state write that the draft-PR skip exists to prevent. A real
+`copier update` rewrites the managed `llz-*.yml` workflows and the composite
+actions, which **are** in the filter, so every upgrade that changes anything an
+instance runs still lands here. The residual gap is an upgrade whose only change
+is the recorded pin; that is caught at the next CI-touching PR, and by
+`llz upgrade`'s own post-upgrade readiness advisory meanwhile. Closing it
+properly needs per-job path filtering, or a `tf-import` that does not write on
+pull requests.
 
 **It only checks the repo-level half, and that bound is structural.**
 `GITHUB_TOKEN` cannot list repository secrets — that needs admin — so presence is

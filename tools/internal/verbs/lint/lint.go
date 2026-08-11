@@ -647,9 +647,24 @@ func CheckCmd() *cobra.Command {
 						where = "there is no terraform-iac-bootstrap/ root here at all — check the working directory, " +
 							"or whether this is an instance checkout"
 					}
-					return fmt.Errorf("::error::%s found no *.tf to scan under terraform-iac-bootstrap/: %s. "+
-						"An instance commits zero Terraform, so the roots arrive from `llz render --tfvars-only "+
-						"--if-spec`. Under --strict, scanning nothing is a FAILURE", s.use, where)
+					// AND SAY WHEN `llz render` CANNOT HELP, or the advice is a
+					// loop. The delivered job renders with --if-spec, which
+					// NO-OPS on an instance with no LandingZone spec — so telling
+					// that operator to run the render sends them back to the
+					// command that just did nothing. A pre-spec instance is
+					// supposed to commit its Terraform; if it has neither a spec
+					// nor committed roots, the tree is the problem, not the order
+					// of the steps.
+					fix := "An instance commits zero Terraform, so the roots arrive from " +
+						"`llz render --tfvars-only --if-spec` — run it before this check."
+					if !render.SpecPresent() {
+						fix = "This instance has NO LandingZone spec, so `llz render` cannot produce the roots " +
+							"(--if-spec makes it a no-op). A pre-spec instance is expected to COMMIT its " +
+							"Terraform; finding neither a spec nor committed roots means the tree is " +
+							"incomplete — adopt the spec (`llz env add`) or restore the committed roots."
+					}
+					return fmt.Errorf("::error::%s found no *.tf to scan under terraform-iac-bootstrap/: %s. %s "+
+						"Under --strict, scanning nothing is a FAILURE", s.use, where, fix)
 				}
 				return nil
 			},

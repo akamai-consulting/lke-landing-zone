@@ -161,6 +161,16 @@ func resolve(root *cobra.Command, argv []string) (*cobra.Command, error) {
 	if !cmd.Runnable() {
 		return cmd, fmt.Errorf("%q is a command group and needs a subcommand", cmd.CommandPath())
 	}
+	// FLAG NAMES ARE JUDGED EVEN WHEN ARITY CANNOT BE, and that gap mattered.
+	// This resolver used to return clean the moment it saw a `-`-prefixed word, so
+	// no delivered flag was ever checked — a workflow could call `llz check
+	// tf-lint --strcit` and the gate would pass, leaving the typo to fail at
+	// runtime in jobs that (per this file's own header) nothing triggers. Arity
+	// genuinely cannot be judged here; a flag NAME can, because cobra knows every
+	// flag the command registers.
+	if err := unknownFlag(cmd, rest); err != nil {
+		return cmd, err
+	}
 	// ARGUMENTS ARE ONLY JUDGED WHEN THEY CAN BE. `rest` is what the SHELL would
 	// have split and expanded — this test has neither a shell nor the Actions
 	// expression evaluator, so `--title "apply-cluster (LKE-E create) timing"`
@@ -185,6 +195,47 @@ func resolve(root *cobra.Command, argv []string) (*cobra.Command, error) {
 		return cmd, err
 	}
 	return cmd, nil
+}
+
+// unknownFlag reports the first `-`-prefixed word in rest that the resolved
+// command does not register, looking at the command's own flags, its persistent
+// ones and everything it inherits from the root.
+//
+// WHAT IT DELIBERATELY DOES NOT JUDGE: anything after a bare `--` (those are
+// arguments for a wrapped tool — `llz ci tf-plan … -- -var-file=x`, where
+// `-var-file` is OpenTofu's, not llz's), any word carrying an unexpanded `${{ }}`
+// expression, and bare `-` (stdin by convention). A single dash followed by
+// several letters is a shorthand cluster and is not decomposed — the delivered
+// tree uses long flags, and guessing at cluster semantics would invent failures.
+func unknownFlag(cmd *cobra.Command, rest []string) error {
+	for _, w := range rest {
+		if w == "--" {
+			return nil // everything after this belongs to another program
+		}
+		if !strings.HasPrefix(w, "-") || w == "-" || strings.Contains(w, ghExprToken) {
+			continue
+		}
+		name := strings.TrimLeft(w, "-")
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		if name == "" {
+			continue
+		}
+		if strings.HasPrefix(w, "--") {
+			if cmd.Flags().Lookup(name) == nil && cmd.InheritedFlags().Lookup(name) == nil &&
+				cmd.PersistentFlags().Lookup(name) == nil {
+				return fmt.Errorf("unknown flag %q for %q", "--"+name, cmd.CommandPath())
+			}
+			continue
+		}
+		// Single dash: only judge the unambiguous single-letter form.
+		if len(name) == 1 && cmd.Flags().ShorthandLookup(name) == nil &&
+			cmd.InheritedFlags().ShorthandLookup(name) == nil {
+			return fmt.Errorf("unknown shorthand flag %q for %q", "-"+name, cmd.CommandPath())
+		}
+	}
+	return nil
 }
 
 func TestDeliveredWorkflowCommands(t *testing.T) {

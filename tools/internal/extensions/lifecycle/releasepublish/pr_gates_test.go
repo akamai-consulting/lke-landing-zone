@@ -35,7 +35,7 @@ type fakeForge struct {
 	prCreateErr error
 	// prCreateOut overrides what `gh pr create` prints (empty = a normal PR URL).
 	prCreateOut string
-	// prViewOut is what the fallback `gh pr view` returns.
+	// prViewOut is what the fallback `gh pr list --state open` returns.
 	prViewOut string
 	// checksErr is returned alongside every checks payload — gh's non-zero exit.
 	checksErr error
@@ -65,7 +65,7 @@ func (f *fakeForge) install() func() {
 				return []byte(f.prCreateOut), nil
 			}
 			return []byte("https://github.com/o/r/pull/7\n"), nil
-		case len(args) >= 2 && args[0] == "pr" && args[1] == "view":
+		case len(args) >= 2 && args[0] == "pr" && args[1] == "list":
 			return []byte(f.prViewOut), nil
 		case len(args) >= 2 && args[0] == "repo" && args[1] == "view":
 			return []byte(f.repoDefaultBranch), nil
@@ -944,4 +944,41 @@ func TestATimeoutSaysWhenThePollsWereUnparseable(t *testing.T) {
 	if !strings.Contains(err.Error(), "502 Bad Gateway") {
 		t.Errorf("the unparseable polls went unmentioned, so the timeout reads as certain: %v", err)
 	}
+}
+
+// THE RE-RUN FALSE GREEN. The branch is named after the commit under test and
+// this verb closes its PR on the way out, so a second run at the same sha finds a
+// CLOSED PR on exactly that branch. `gh pr view <branch>` resolves closed PRs, so
+// the re-run would have adopted the previous run's number and reported its old,
+// already-settled checks as this run's verdict — a gate that refuses vacuous
+// green, inheriting one.
+func TestTheResumeFallbackOnlyAcceptsAnOpenPR(t *testing.T) {
+	f := &fakeForge{
+		t: t, checkPolls: []string{bothPass},
+		prCreateErr: errors.New("gh pr create: a pull request already exists"),
+		prViewOut:   "7\n",
+	}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("an already-open PR should still be reused: %v", err)
+	}
+	for _, c := range f.ghCalls {
+		if len(c) < 2 || c[0] != "pr" {
+			continue
+		}
+		if c[1] == "view" {
+			t.Errorf("used `gh pr view`, which resolves CLOSED pull requests too: %v", c)
+		}
+		if c[1] == "list" {
+			if !slicesContains(c, "--state") || !slicesContains(c, "open") {
+				t.Errorf("the resume lookup is not constrained to OPEN pull requests: %v", c)
+			}
+			if !slicesContains(c, "--head") {
+				t.Errorf("the resume lookup is not scoped to this run's branch: %v", c)
+			}
+			return
+		}
+	}
+	t.Error("no resume lookup was issued after `gh pr create` failed")
 }

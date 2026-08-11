@@ -519,7 +519,17 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	// A re-run of the same commit finds its branch and PR already there; `gh pr
 	// create` then fails with "already exists". Ask for the existing one rather
 	// than treating a resumable state as fatal.
-	viewOut, viewErr := gatesGH(o.Token, o.Host, "pr", "view", branch, "--repo", o.Instance, "--json", "number", "--jq", ".number")
+	//
+	// `pr list --state open`, NOT `pr view <branch>`, AND THAT IS A FALSE-GREEN
+	// FIX. The branch is named after the commit under test and this verb CLOSES
+	// its PR on the way out, so a second run at the same sha leaves a closed PR
+	// on exactly that branch. `gh pr view <branch>` resolves closed PRs happily —
+	// so the re-run would have adopted the PREVIOUS run's number and reported its
+	// old, already-settled checks as this run's verdict. A gate whose entire
+	// purpose is refusing a green that proves nothing must not be able to inherit
+	// one.
+	viewOut, viewErr := gatesGH(o.Token, o.Host, "pr", "list", "--repo", o.Instance,
+		"--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number")
 	if viewErr == nil {
 		if pr := prNumber(viewOut); pr != "" {
 			return pr, nil
@@ -535,8 +545,8 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 		if viewErr != nil {
 			fallback = "failed: " + viewErr.Error()
 		}
-		err = fmt.Errorf("`gh pr create` succeeded but printed no PR URL (got %q), and `gh pr view %s` %s",
-			strings.TrimSpace(string(out)), branch, fallback)
+		err = fmt.Errorf("`gh pr create` succeeded but printed no PR URL (got %q), and no OPEN pull request "+
+			"was found for head %s (%s)", strings.TrimSpace(string(out)), branch, fallback)
 	}
 	return "", fmt.Errorf("assert-instance-pr-gates: opening a PR on %s: %w", o.Instance, redact(err, o.Token))
 }
@@ -646,7 +656,7 @@ func truncate(s string, n int) string {
 }
 
 // prNumber pulls the PR number out of `gh pr create` (which prints the PR URL) or
-// `gh pr view --jq .number` (which prints the bare number).
+// `gh pr list --jq .[0].number` (which prints the bare number).
 func prNumber(out []byte) string {
 	s := strings.TrimSpace(string(out))
 	if s == "" {
