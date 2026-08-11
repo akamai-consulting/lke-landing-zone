@@ -106,7 +106,15 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     # Bounded from measured history (max 7.5 (devcontainer, multi-arch+QEMU)); GitHub's default is 6h.
-    timeout-minutes: 30
+    # 45, RECOMPUTED FOR THE RETRY. The push step now makes up to three attempts
+    # with 90s + 180s of backoff between them, so a cold-cache multi-arch row that
+    # needs its retries can spend ~4.5 minutes waiting on top of the build. At 30
+    # it would be killed by the runner MID-RETRY — emitting neither the retry
+    # warnings nor the "this is GHCR's secondary rate limit, not a permissions
+    # problem" error — and the image would stay unpublished, which is exactly the
+    # state pin-instance-images' requiredShaImages wait then blocks an e2e on. A
+    # retry budget is only real if the job can outlive it.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write

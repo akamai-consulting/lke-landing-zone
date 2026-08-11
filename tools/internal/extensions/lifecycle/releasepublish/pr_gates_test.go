@@ -1105,3 +1105,40 @@ func TestSomeChecksButNotOursStillPointsAtTheFilter(t *testing.T) {
 		t.Errorf("the checks that did appear should be listed: %v", err)
 	}
 }
+
+// A gate that RAN AND FAILED must be named even when a sibling is still stuck.
+// The timeout branch used to be checked first, so this reported "This is a
+// TIMEOUT, not a failing gate" and never mentioned the broken one — the same
+// ordering bug already fixed one branch lower for inconclusive states.
+func TestAFailureOutranksAStuckSibling(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		strings.Replace(passExcept("Terraform Lint", "FAILURE"),
+			`"Checkov IaC Security Scan","state":"SUCCESS"`,
+			`"Checkov IaC Security Scan","state":"IN_PROGRESS"`, 1),
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a FAILURE must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "Terraform Lint=FAILURE") {
+		t.Errorf("the gate that actually failed was not named: %v", err)
+	}
+	if strings.Contains(err.Error(), "TIMEOUT") {
+		t.Errorf("a stuck sibling hid a definite failure: %v", err)
+	}
+}
+
+// ...and `failures` must not count an unfinished check, which it previously
+// avoided only because the caller checked pending first.
+func TestFailuresExcludesUnfinishedChecks(t *testing.T) {
+	for _, st := range []string{"IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"} {
+		if got := failures([]check{{Name: "a", State: st}}); len(got) != 0 {
+			t.Errorf("%s counted as a failing gate: %+v", st, got)
+		}
+	}
+	if got := failures([]check{{Name: "a", State: "FAILURE"}}); len(got) != 1 {
+		t.Errorf("FAILURE must still count, got %+v", got)
+	}
+}

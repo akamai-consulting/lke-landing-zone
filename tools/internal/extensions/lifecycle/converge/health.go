@@ -1472,7 +1472,7 @@ func checkPods(r *health.Report, phase1 bool) {
 			// a pod wedged in ContainerCreating by a FailedMount or
 			// FailedAttachVolume never leaves that state, and calling it "still
 			// starting" in steady-state health means it never alerts.
-			case health.Budgeted && health.PodIsStarting(p.Status):
+			case health.Budgeted && (health.PodIsStarting(p.Status) || health.PodIsWarmingUp(p.Status)):
 				// STARTING IS NOT FAILED, and reading PodIsFailing as a verdict
 				// cost a release-e2e round: a pod mid-ContainerCreating on a
 				// four-minute-old cluster was recorded CatFail, twice sixty

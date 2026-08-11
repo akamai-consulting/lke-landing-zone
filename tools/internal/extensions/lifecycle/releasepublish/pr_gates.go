@@ -296,14 +296,26 @@ func inconclusive(found []check) []check {
 	return out
 }
 
-// failures returns the found checks that ran and did not succeed — a verdict
-// ABOUT THE GATE, as distinct from the inconclusive states above.
+// failures returns the found checks that RAN, FINISHED, and did not succeed — a
+// verdict about the gate, as distinct from the inconclusive states above and from
+// the ones that have not finished at all.
+//
+// EXCLUDING THE PENDING STATES IS LOAD-BEARING, and it was previously done for it
+// by branch ORDER: the caller checked "still pending" first, so `failures` never
+// saw an IN_PROGRESS check. Moving the failure branch above the timeout one — so
+// a real failure outranks a merely stuck sibling — made that accident visible,
+// and every unfinished check briefly counted as a broken gate. A predicate that
+// only holds because of the order it is called in is a predicate waiting to be
+// reordered.
 func failures(found []check) []check {
 	var out []check
 	for _, c := range found {
-		if !strings.EqualFold(c.State, "SUCCESS") && !inconclusiveStates[strings.ToUpper(c.State)] {
-			out = append(out, c)
+		switch {
+		case strings.EqualFold(c.State, "SUCCESS"), isPending(c.State),
+			inconclusiveStates[strings.ToUpper(c.State)]:
+			continue
 		}
+		out = append(out, c)
 	}
 	return out
 }
@@ -443,10 +455,24 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			strings.Join(obs.missing, " / "), o.Instance, pr,
 			time.Duration(o.Retries-1)*o.Interval, o.TouchPath, seenMsg)
 	}
+	if bad := failures(obs.found); len(bad) > 0 {
+		var parts []string
+		for _, c := range bad {
+			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
+		}
+		return fmt.Errorf("::error title=Instance PR gates failed::a delivered CI gate does not work in the "+
+			"scaffold it ships to (%s). See %s#%s", strings.Join(parts, ", "), o.Instance, pr)
+	}
 	// PENDING IS NOT FAILED. Reporting a check that simply never finished as "a
 	// delivered CI gate does not work in the scaffold it ships to" sends an operator
 	// to debug a job that may be perfectly healthy and merely slow, or queued behind
 	// a busy runner. The two need different words because they need different work.
+	//
+	// AFTER the failure branch, for the reason the inconclusive branch already
+	// records: a gate that RAN AND FAILED alongside one that is merely stuck was
+	// reported as "This is a TIMEOUT, not a failing gate" and never named. A
+	// failure is knowledge; an unfinished check is its absence. Same ordering bug,
+	// one branch up, left unfixed when the other was pinned.
 	if stuck := pendingAfterWait(obs.found); len(stuck) > 0 {
 		// The I/O context belongs HERE TOO, not only on the never-appeared branch.
 		// A good first observation followed by a run of failing polls leaves the
@@ -457,14 +483,6 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
 			time.Duration(o.Retries-1)*o.Interval, gateContext(obs, o.Token), o.Instance, pr)
-	}
-	if bad := failures(obs.found); len(bad) > 0 {
-		var parts []string
-		for _, c := range bad {
-			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
-		}
-		return fmt.Errorf("::error title=Instance PR gates failed::a delivered CI gate does not work in the "+
-			"scaffold it ships to (%s). See %s#%s", strings.Join(parts, ", "), o.Instance, pr)
 	}
 	// AFTER the failure branch, and that ordering was wrong the first time. A run
 	// with one FAILURE and one CANCELLED check reported "This is NOT a failing

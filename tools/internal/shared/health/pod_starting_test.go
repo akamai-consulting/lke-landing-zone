@@ -210,3 +210,35 @@ func TestPerContainerJudgementsCoverTheirRemainingArms(t *testing.T) {
 		t.Error("a main container with no state reported yet is starting")
 	}
 }
+
+// The pod and Service classifiers must agree about the SAME physical state.
+// ClassifyServiceEndpoints reads "endpoints exist, none Ready" as a rollout;
+// checkPods read those same pods as a hard failure, so a workload whose readiness
+// probe legitimately takes longer than a poll apart (keycloak, harbor-core) still
+// tripped the hard-failed-twice abort this change set exists to prevent.
+func TestPodIsWarmingUpMatchesTheServiceClassifier(t *testing.T) {
+	running := func(ready bool, restarts int) ContainerStatus {
+		return ContainerStatus{Name: "main", Ready: ready, RestartCount: restarts,
+			State: ContainerState{Running: &struct{}{}}}
+	}
+	if !PodIsWarmingUp(PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{running(false, 0)}}) {
+		t.Error("a Running, never-restarted container that has not answered its probe yet is warming up")
+	}
+	// A container that has RESTARTED is cycling — a verdict, not a wait.
+	if PodIsWarmingUp(PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{running(false, 3)}}) {
+		t.Error("a restarting container was called warming up; restarts are what separate the two")
+	}
+	// All Ready is not warming up (it is simply fine), and neither is a pod that
+	// has not reached Running.
+	if PodIsWarmingUp(PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{running(true, 0)}}) {
+		t.Error("a fully Ready pod is not warming up")
+	}
+	if PodIsWarmingUp(PodStatus{Phase: "Pending", ContainerStatuses: []ContainerStatus{waiting("m", "ContainerCreating")}}) {
+		t.Error("a Pending pod is PodIsStarting's case, not this one")
+	}
+	// And warming up must NOT swallow a real failure signal on a sibling.
+	if PodIsWarmingUp(PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{
+		running(false, 0), waiting("side", "CrashLoopBackOff")}}) {
+		t.Error("a CrashLoopBackOff sibling was masked by a warming-up container")
+	}
+}

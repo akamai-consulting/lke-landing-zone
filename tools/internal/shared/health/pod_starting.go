@@ -126,3 +126,41 @@ func mainContainerIsStarting(c ContainerStatus) bool {
 func waitReasonIsStartup(reason string) bool {
 	return reason == "" || startingWaitReasons[reason]
 }
+
+// PodIsWarmingUp reports whether a pod is RUNNING but has not passed its
+// readiness probes yet, with nothing suggesting it never will.
+//
+// THE TWO CLASSIFIERS HAD TO AGREE. ClassifyServiceEndpoints treats "endpoints
+// exist, none Ready" as a rollout in progress; checkPods treated the very same
+// pods as a hard failure, because PodIsStarting deliberately excludes
+// Running-but-not-Ready (a readiness probe that NEVER passes is the commonest
+// broken workload there is). Both readings are right about different pods and
+// wrong about each other's, and the disagreement left a workload whose probe
+// legitimately takes more than a poll apart — keycloak, harbor-core — still
+// tripping converge's hard-failed-twice abort. That is the incident this whole
+// change set exists to prevent, surviving in the check that reported it.
+//
+// A NEVER-RESTARTED container is the discriminator. A container that is Running
+// with restartCount 0 and no failure waiting-reason has simply not answered its
+// probe yet; one that has restarted is cycling, which is a verdict. Callers gate
+// this on health.Budgeted, so it only ever softens a bounded poll — steady-state
+// health still fails a workload that is not Ready.
+func PodIsWarmingUp(s PodStatus) bool {
+	if s.Phase != "Running" {
+		return false
+	}
+	notReady := false
+	for _, c := range append(append([]ContainerStatus{}, s.InitContainerStatuses...), s.ContainerStatuses...) {
+		if c.Ready {
+			continue
+		}
+		if c.RestartCount > 0 {
+			return false // cycling, not warming up
+		}
+		if c.State.Waiting != nil && !waitReasonIsStartup(c.State.Waiting.Reason) {
+			return false
+		}
+		notReady = true
+	}
+	return notReady
+}
