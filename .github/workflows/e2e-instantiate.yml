@@ -75,7 +75,7 @@ on:
         default: ''
     secrets:
       E2E_DISPATCH_TOKEN:
-        description: 'PAT/app token with contents:write + actions:read/write + Variables:read/write on the E2E instance repo'
+        description: 'PAT/app token with contents:write + pull-requests:write + actions:read/write + Variables:read/write on the E2E instance repo'
         required: true
 
 permissions:
@@ -136,7 +136,13 @@ jobs:
             fi
           }
           require E2E_INSTANCE_REPO  "${INSTANCE_REPO}"       vars    "owner/name of the throwaway E2E instance repo (its default branch is force-pushed every run)"
-          require E2E_DISPATCH_TOKEN "${E2E_DISPATCH_TOKEN}"  secrets "PAT/app token with contents:write + actions:read/write on the instance repo"
+          # pull-requests:write is NOT optional and is the newest of these: the
+          # PR-gate probe below opens a throwaway PR on the instance. A token
+          # provisioned from the older contents+actions wording passes this
+          # presence check and then dies ~10 minutes in at `gh pr create` with a
+          # bare "Resource not accessible" — so the scope belongs in the sentence
+          # an operator reads while creating the token, not only in a failure.
+          require E2E_DISPATCH_TOKEN "${E2E_DISPATCH_TOKEN}"  secrets "PAT/app token with contents:write + pull-requests:write + actions:read/write on the instance repo"
           if [[ "${missing}" -ne 0 ]]; then
             echo "::error::E2E config is incomplete on ${GITHUB_REPOSITORY}. Fix the items above, then re-run. See the header of .github/workflows/release-e2e.yml for the full setup."
             exit 1
@@ -488,9 +494,13 @@ jobs:
       # that the commands RESOLVE AND SUCCEED in the pinned image, on the real
       # scaffold. It runs after the image pin above so TF_IMAGE is this commit's.
       #
-      # Asserts only the two lint gates. The PR also triggers Plan Cluster, which
-      # wants cloud credentials and state — out of scope here, and asserting on it
-      # would make this step fail for reasons that have nothing to do with it.
+      # THE PR IS OPENED AS A DRAFT, which is what keeps Plan Cluster off it. That
+      # job runs `llz ci tf-import` — a WRITE to cluster/e2e/terraform.tfstate —
+      # and the provision job dispatches an apply against that same state as soon
+      # as this one returns, under a different concurrency group, over a backend
+      # with no lock. A plan still in flight would race the apply, last write wins,
+      # and closing the PR does not cancel it. llz-terraform.yml's plan job skips
+      # drafts; the two lint gates are local and read-only, so they still run.
       #
       # The logic lives in unit-tested Go (llz ci assert-instance-pr-gates), not
       # inline bash: branch-create / PR-open / poll / assert / cleanup is logic, and

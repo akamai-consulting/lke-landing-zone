@@ -37,8 +37,23 @@ on:
       # They are all `managed`, so a `copier update` moves them together anyway.
       - '.github/workflows/llz-*.yml'
       - '.github/actions/**'
+      # THE TEMPLATE PIN. An upgrade normally rewrites the managed workflows above
+      # and so already selects this pipeline — but not always: a pin-only edit, a
+      # `copier update` that merged to nothing, a bot PR that bumps the ref. Those
+      # are the upgrades most likely to go unreviewed, and they are exactly the
+      # ones that can make a value newly required (v0.0.42 and
+      # TF_STATE_ENCRYPTION_PASSPHRASE). Listing the pin is what puts the
+      # repo-readiness job on every one of them.
+      - '.copier-answers.yml'
   pull_request:
     branches: [main, master]
+    # ready_for_review is NOT in GitHub's default set (opened / synchronize /
+    # reopened) and is load-bearing here: llz-terraform.yml's plan job skips DRAFT
+    # pull requests, because it writes Terraform state (`llz ci tf-import`) with
+    # nothing serializing it against a concurrent apply. Without this type, taking
+    # a PR out of draft fires no event at all, so the plan an operator just asked
+    # for would never run — they would have to push an empty commit to get it.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
@@ -54,6 +69,14 @@ on:
       # They are all `managed`, so a `copier update` moves them together anyway.
       - '.github/workflows/llz-*.yml'
       - '.github/actions/**'
+      # THE TEMPLATE PIN. An upgrade normally rewrites the managed workflows above
+      # and so already selects this pipeline — but not always: a pin-only edit, a
+      # `copier update` that merged to nothing, a bot PR that bumps the ref. Those
+      # are the upgrades most likely to go unreviewed, and they are exactly the
+      # ones that can make a value newly required (v0.0.42 and
+      # TF_STATE_ENCRYPTION_PASSPHRASE). Listing the pin is what puts the
+      # repo-readiness job on every one of them.
+      - '.copier-answers.yml'
   workflow_dispatch:
     inputs:
       action:

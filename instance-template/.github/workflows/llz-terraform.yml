@@ -141,10 +141,26 @@ jobs:
   # Posts a plan summary; never applies.
   # SECURITY: this job consumes production secrets, so the head-repo check below
   # restricts it to internal PRs — fork PRs must not reach them.
+  #
+  # NOT ON DRAFTS, and that is about STATE, not cost. "Never applies" is true of
+  # `tofu plan` and NOT of this job: the import step below runs `llz ci tf-import`,
+  # which WRITES cluster/<deployment>/terraform.tfstate. Nothing serializes that
+  # against a concurrent apply — this job's concurrency group is
+  # terraform-infra-pr (inputs.region is empty on a PR) while a dispatched
+  # apply's is terraform-infra-<deployment>, and the s3 backend sets no
+  # use_lockfile, so there is no lock underneath either. Two writers, last one
+  # wins. Skipping drafts gives anyone who must not disturb live state a way to
+  # say so — which the release-e2e PR-gate probe uses: it opens its throwaway PR
+  # as a draft precisely so its lint check cannot collide with the apply that
+  # follows it. Mark the PR ready for review to get the plan (terraform.yml lists
+  # ready_for_review in its trigger types, so that alone re-runs this).
   plan-cluster-pr:
     name: Plan Cluster (PR)
     needs: discover
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
@@ -202,6 +218,72 @@ jobs:
           llz ci tf-plan --out "plan-cluster-${REGION}.txt" --title "Cluster plan (${REGION})" \
             -- -var-file="$TFVARS" -out="tfplan-cluster-${REGION}.bin"
 
+  # ── Repo readiness (upgrade prerequisites) ──────────────────────────────────
+  # WHAT A RELEASE NOW REQUIRES THAT THE LAST ONE DID NOT, asked at PR time.
+  #
+  # v0.0.42 made TF_STATE_ENCRYPTION_PASSPHRASE required and nothing said so. A
+  # live adopter took the upgrade and learned about it from a failed `Terraform
+  # init` — against a secret that had never existed on their repo. `llz upgrade`
+  # now runs the readiness check as an advisory, which covers the operator who
+  # upgrades WITH `llz upgrade`; this job covers the one who does not (a
+  # `copier update` by hand, a bot PR, an edited pin). Being told should not
+  # depend on which command performed the upgrade.
+  #
+  # NO `environment:` ON PURPOSE, and it bounds what this can honestly check.
+  # GITHUB_TOKEN cannot list repository secrets (that needs admin), so presence is
+  # observed the only way Actions allows: map the value into env: and see whether
+  # it arrived. A job without an environment resolves REPO-level secrets only —
+  # so `llz ci require-repo-config` checks exactly the repo-level required set and
+  # leaves the infra-<deployment> ones to apply-vpc's pre-flight, which runs
+  # inside the environment. Checking those here would fail every correctly
+  # configured instance, and a gate that cries wolf gets deleted.
+  #
+  # The SET comes from the requirement table inside llz, not from this file — a
+  # newly required value is checked the release it lands. The env: block below is
+  # the one thing that must be maintained by hand (Actions cannot splat secrets),
+  # and TestDeliveredJobCoversRepoLevelRequirements fails in the template repo the
+  # moment the table names something this block does not.
+  repo-readiness:
+    name: Repo readiness (upgrade prerequisites)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    env:
+      # Repo-level REQUIRED secrets. Variables (TF_STATE_BUCKET, TF_STATE_ENDPOINT)
+      # already arrive from the workflow-level env: block; TF_IMAGE/KUBE_IMAGE are
+      # named here because a var is not automatically an env var.
+      TF_STATE_ENCRYPTION_PASSPHRASE: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+      TF_IMAGE:   ${{ vars.TF_IMAGE }}
+      KUBE_IMAGE: ${{ vars.KUBE_IMAGE }}
+    steps:
+      - name: Checkout the instance (the template pin)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Required repo-level secrets and variables are set
+        run: llz ci require-repo-config
+
+      # THE IMAGE EVERY JOB IN THIS PIPELINE RUNS IN, checked on the cheapest job
+      # rather than only on apply-vpc. assert-image-fresh used to run in exactly
+      # one place — the first job of an APPLY — so a TF_IMAGE that had not been
+      # re-pinned since the instance was scaffolded stayed invisible across every
+      # pull request. Measured on a live adopter: TF_IMAGE still named a
+      # deprecated image (`ci-terraform`) at a tag from three releases back,
+      # months and several upgrades later, with nothing in CI saying a word. Being
+      # red here after an upgrade is CORRECT — every job above and below is
+      # executing a binary that does not match the pin — and `llz tokens --env
+      # <deployment> --yes` clears it in one command.
+      #
+      # GH_TOKEN: the pin is a release TAG and the baked llz is a COMMIT, so the
+      # guard resolves the tag against the (public) template repo to compare them.
+      # Public read is all it needs; without it the guard warns and passes.
+      - name: ci images match the instance's template pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: llz ci assert-image-fresh
+
   # ── tflint ───────────────────────────────────────────────────────────────────
   # Local HCL only — no provider credentials or remote state needed.
   tf-lint:
@@ -216,6 +298,22 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # THE CHECKOUT CARRIES NO TERRAFORM. terraform-iac-bootstrap/.gitignore
+      # excludes `*/*.tf` — an instance commits ZERO Terraform code; the roots are
+      # build artifacts `llz render` generates from the embedded tfroots package.
+      # Every OTHER Terraform job gets them because it inits through the
+      # terraform-init composite, which renders first. These two do not init, so
+      # without this step tflint and checkov walk four directories holding nothing
+      # but a .terraform.lock.hcl, find no HCL, and exit 0 — a gate that PASSES
+      # HAVING READ NOTHING, which is the same vacuous green the `make tf-lint`
+      # spelling produced and is the whole reason these jobs are being fixed.
+      # --tfvars-only skips the committed apl-values tree (a lint job has no
+      # business rewriting it); the *.tf roots are written on both paths.
+      # No deployment argument: linting is env-independent, so render them all.
+      # --if-spec makes a legacy pre-spec instance (which commits its Terraform)
+      # a no-op rather than an error, without a shell conditional per call site.
+      - name: Render the Terraform roots from the LandingZone spec
+        run: llz render --tfvars-only --if-spec
       # `llz check`, not `make`: an instance has no Makefile. These checks were
       # ported out of the template's Makefile into the llz binary (see
       # verbs/lint/lint.go) so they travel with the image instead of via `copier
@@ -240,6 +338,11 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Same reason as tf-lint above: the roots are rendered, not committed, and a
+      # checkov run over an empty tree reports "Passed checks: 0" and exits 0.
+      # See .checkov.yaml for what a scan over the RENDERED roots actually covers.
+      - name: Render the Terraform roots from the LandingZone spec
+        run: llz render --tfvars-only --if-spec
       - name: Checkov
         run: llz check checkov
 
@@ -463,10 +566,7 @@ jobs:
       # below reads <region>.tfvars and runs BEFORE the terraform-init composite
       # that would otherwise render it.
       - name: Render tfvars from the LandingZone spec (spec-driven instances)
-        run: |
-          if [ -f landingzone.yaml ]; then
-            llz render "$REGION" --tfvars-only
-          fi
+        run: llz render "$REGION" --tfvars-only --if-spec
 
       # Catches account-quota exhaustion BEFORE the apply, rather than as a
       # 30-minute cluster-create hang. NodeBalancers/VPCs are counted

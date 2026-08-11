@@ -47,8 +47,10 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 # This (template) repo only needs two values that can't be derived:
 #   vars:    E2E_INSTANCE_REPO (owner/name of the throwaway instance repo)
 #   secrets: E2E_DISPATCH_TOKEN — PAT/app token with contents:write +
-#            actions:read/write + Variables:read/write on E2E_INSTANCE_REPO
-#            (Variables:write is what lets the instantiate job pin TF_IMAGE/KUBE_IMAGE).
+#            pull-requests:write + actions:read/write + Variables:read/write on
+#            E2E_INSTANCE_REPO (Variables:write is what lets the instantiate job
+#            pin TF_IMAGE/KUBE_IMAGE; pull-requests:write is what lets it open the
+#            throwaway PR that proves the instance's PR-gated CI actually runs).
 # Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
 # set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
 #

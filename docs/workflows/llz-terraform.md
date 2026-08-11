@@ -21,8 +21,8 @@ Sections below are organised by job, and within a job by step name.
 - [Job: `push-noop-notice`](#job-push-noop-notice)
 - [Job: `discover`](#job-discover)
 - [Job: `plan-cluster-pr`](#job-plan-cluster-pr)
-- [Job: `tf-lint`](#job-tf-lint)
-- [Job: `checkov`](#job-checkov)
+- [Job: `repo-readiness`](#job-repo-readiness)
+- [Jobs: `tf-lint` and `checkov`](#jobs-tf-lint-and-checkov)
 - [Job: `promote-pipeline-drift`](#job-promote-pipeline-drift)
 - [Job: `apply-vpc`](#job-apply-vpc)
 - [Job: `apply-cluster`](#job-apply-cluster)
@@ -179,8 +179,8 @@ scheduled-check matrices, so the PR plan covers exactly the deployments those do
 
 ## Job: `plan-cluster-pr`
 
-Runs for every PR that touches a Terraform path. Posts a plan summary; never
-applies. Uses read-only remote state credentials.
+Runs for every **ready-for-review** PR that touches a Terraform path. Posts a
+plan summary; never applies.
 
 **Security.** Plan jobs consume production secrets (`LINODE_API_TOKEN`,
 `TF_STATE_*`). They are restricted to internal PRs only —
@@ -188,6 +188,22 @@ applies. Uses read-only remote state credentials.
 PRs are skipped, preventing untrusted code from reading secrets via the runner
 environment. See GitHub's "Keeping your GitHub Actions and workflows secure /
 Preventing pwn requests".
+
+**Drafts are skipped, and the reason is state, not cost.** "Never applies" is
+true of `tofu plan` and *not* of this job: the `Import VPC and subnet if not in
+state` step runs `llz ci tf-import`, which **writes**
+`cluster/<deployment>/terraform.tfstate`. Nothing serializes that against a
+concurrent apply — this job's concurrency group is `terraform-infra-pr`
+(`inputs.region` is empty on a PR) while a dispatched apply's is
+`terraform-infra-<deployment>`, and the S3 backend sets no `use_lockfile`, so
+there is no lock underneath either. Two writers, last one wins. Marking a PR
+draft is therefore how you say "do not touch live state yet"; `terraform.yml`
+lists `ready_for_review` in its `pull_request` trigger types, so taking the PR
+out of draft runs the plan without needing an empty commit.
+
+The release-e2e PR-gate probe (`llz ci assert-instance-pr-gates`) relies on this:
+it opens its throwaway PR as a draft so the two lint jobs below run while this
+one cannot collide with the apply the e2e dispatches immediately afterwards.
 
 ### Step: `Terraform init — cluster`
 
@@ -198,27 +214,81 @@ instances without a spec.
 
 ---
 
-## Job: `tf-lint`
+## Job: `repo-readiness`
 
-Static analysis of Terraform HCL using rules in `.tflintrc.hcl`. Needs neither
-provider credentials nor remote state — runs against local HCL only.
+Runs on every internal PR that touches a Terraform path, a delivered workflow, or
+`.copier-answers.yml`. Two cheap checks, neither needing cloud credentials:
+
+1. `llz ci require-repo-config` — every **required repo-level** secret and
+   variable is set.
+2. `llz ci assert-image-fresh` — `TF_IMAGE`/`KUBE_IMAGE` name this instance's
+   template pin.
+
+**Why it exists.** v0.0.42 made `TF_STATE_ENCRYPTION_PASSPHRASE` required and
+nothing said so; a live adopter took the upgrade and learned about it from a
+failed `Terraform init` on the following PR, against a secret that had never
+existed on their repo. `llz upgrade` now runs the readiness check as an advisory
+— that covers the operator who upgrades *with* `llz upgrade`. This job covers the
+one who does not: a hand-driven `copier update`, a bot PR, an edited pin. Being
+told what a release newly requires should not depend on which command performed
+the upgrade, which is why `.copier-answers.yml` is in the `paths:` filter.
+
+**It only checks the repo-level half, and that bound is structural.**
+`GITHUB_TOKEN` cannot list repository secrets — that needs admin — so presence is
+observed the only way Actions permits: map the value into `env:` and see whether
+it arrived. A job with no `environment:` resolves repo-level secrets only, so an
+`infra-<deployment>`-scoped requirement would read as missing on a perfectly
+configured instance. Those are covered where they can be, in `apply-vpc`'s
+pre-flight, inside the environment.
+
+The *set* comes from llz's requirement table, so a newly required value is
+checked the release it lands. The `env:` block is the one hand-maintained copy
+(Actions cannot splat secrets); `TestDeliveredJobCoversRepoLevelRequirements` in
+the template repo fails the moment the table names something the block does not.
+
+**`assert-image-fresh` used to run in exactly one place** — the first job of an
+*apply* — so a `TF_IMAGE` that had never been re-pinned stayed invisible across
+every pull request. Measured on a live adopter: `TF_IMAGE` still named the
+deprecated `ci-terraform` image at a tag from three releases back, months and
+several upgrades later, with nothing in CI saying a word. Going red here right
+after an upgrade is **correct** — every job in this pipeline runs inside that
+image — and `llz tokens --env <deployment> --yes` clears it in one command.
 
 ---
 
-## Job: `checkov`
+## Jobs: `tf-lint` and `checkov`
 
-Checks both Terraform modules for security misconfigurations: public bucket
-exposure, missing encryption, overly permissive IAM, and provider-specific best
-practices. Runs against local HCL; no credentials required.
+Static analysis of the instance's Terraform roots — `tflint` against the rules in
+`.tflintrc.hcl`, `checkov` against `.checkov.yaml`. Both run `llz check <step>`
+(an instance ships no Makefile) and need neither provider credentials nor remote
+state.
+
+**Both render first, and that step is what makes them mean anything.** An
+instance commits **zero** Terraform: `terraform-iac-bootstrap/.gitignore`
+excludes `*/*.tf`, and the roots are build artifacts `llz render` generates from
+the embedded `tfroots` package. Every other Terraform job gets them for free
+because it inits through the `terraform-init` composite, which renders first —
+these two do not init. Without an explicit `llz render --tfvars-only --if-spec`
+they walk four directories holding nothing but a `.terraform.lock.hcl`, find no
+HCL, and exit 0: a gate that passes having read nothing, which is exactly the
+vacuous green that let `make tf-lint` ship broken for several releases.
+`--if-spec` keeps a legacy pre-spec instance a no-op rather than an error.
+
+`.checkov.yaml`'s header records what the scan over the rendered roots actually
+covers — one real assertion and three `CKV_TF_1` module-pin skips across four
+roots — so a green run is not mistaken for coverage of the modules themselves.
+Checkov does not follow the `git::ssh://` module sources (no SSH key in the job)
+and `--download-external-modules` is deliberately not set; the template repo
+scans `terraform-modules/*` directly, where those resources are authored.
 
 ### The retired SARIF upload step
 
 An "Upload Checkov SARIF report" step ran after the scan, uploading
-`results_*.sarif`. The `make` target never passed `-o sarif` or an output path,
-so that file was never produced; `if-no-files-found: ignore` kept the step
+`results_*.sarif`. The scan step never passed `-o sarif` or an output path, so
+that file was never produced; `if-no-files-found: ignore` kept the step
 permanently green, and nothing downloaded the artifact or fed it to
 `codeql-action/upload-sarif`. It read as security coverage and was none. The scan
-itself still **gates** — the make target exits non-zero on a finding, which is
+itself still **gates** — `llz check checkov` exits non-zero on a finding, which is
 what actually enforces. Re-add the upload only together with
 `-o sarif --output-file-path` and a real consumer.
 
