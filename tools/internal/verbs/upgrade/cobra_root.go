@@ -12,7 +12,7 @@ import (
 
 func UpgradeCmd() *cobra.Command {
 	var ref string
-	var commit, noRender bool
+	var commit, noRender, noDoctor bool
 	c := &cobra.Command{
 		Use: "upgrade", Short: "copier update to a new template release (conflict-gated, re-rendered, summarized, optionally committed)",
 		Long: "Updates the instance from its pinned template: `copier update` (which\n" +
@@ -25,11 +25,12 @@ func UpgradeCmd() *cobra.Command {
 			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return Run(cliopts.Global.DryRun, ref, commit, noRender)
+			return Run(cliopts.Global.DryRun, ref, commit, noRender, noDoctor)
 		},
 	}
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to update + re-pin to (default: this llz binary's version)")
 	c.Flags().BoolVar(&commit, "commit", false, "stage + record the upgrade as one labeled git commit")
 	c.Flags().BoolVar(&noRender, "no-render", false, "skip the post-update `llz render` (leaves apl-values pointing at the OLD ref — run `llz render` yourself)")
+	c.Flags().BoolVar(&noDoctor, "no-doctor", false, "skip the post-upgrade readiness check (it is advisory and never fails the upgrade; use offline)")
 	return c
 }

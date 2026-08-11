@@ -32,6 +32,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/manifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/selfupgrade"
 	"sigs.k8s.io/yaml"
 )
@@ -41,7 +42,7 @@ import (
 // caller-side-assembly rule promote.Deps established.
 var SustainDeps func() sustain.Deps
 
-func Run(dryRun bool, ref string, commit, noRender bool) error {
+func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// Same prerequisite as `llz new`, and worse to discover late: this one runs
 	// snapshot/restore around copier, so failing at the exec is failing mid-flight.
 	if err := copier.Require(dryRun, "`llz upgrade`"); err != nil {
@@ -175,6 +176,22 @@ func Run(dryRun bool, ref string, commit, noRender bool) error {
 	// A single labeled commit so the operator reviews ONE diff and history reads
 	// "template vX → vY", not N unrelated file changes. Opt-in (--commit) — we
 	// never silently commit someone's working tree.
+	// ── Lever 4: what the new release now REQUIRES that the old one did not ──
+	// Lever 3 covers values the upgrade invalidates; this covers values it makes
+	// NEWLY MANDATORY, which nothing here can compute — the required set lives in
+	// the readiness check, and knowing which of them are actually set means asking
+	// GitHub. v0.0.42 made TF_STATE_ENCRYPTION_PASSPHRASE required and said
+	// nothing, so the first an operator heard of it was a failed pipeline run
+	// against a secret that had never existed.
+	//
+	// ADVISORY, NEVER FATAL. `llz upgrade` is otherwise local, and an operator
+	// upgrading offline or without gh auth must still get their upgrade — so the
+	// readiness check's error is REPORTED and discarded, not returned. --no-doctor
+	// skips it outright.
+	if !noDoctor && !dryRun {
+		runPostUpgradeDoctor()
+	}
+
 	if commit {
 		return commitUpgrade(dryRun, oldRef, newRef)
 	}
@@ -264,6 +281,34 @@ func printSummary(oldRef, newRef string) {
 		fmt.Printf("new files:\n%s\n", untracked)
 	} else {
 		fmt.Println(color.Dim("  no file changes — already up to date."))
+	}
+}
+
+// runPostUpgradeDoctor runs the readiness check and reports it as ADVICE.
+//
+// It is the same check `llz doctor` runs with no arguments — same repo, same
+// default env — so an operator sees here exactly what they would see there, and
+// the two can never disagree about what "ready" means.
+//
+// Its error is deliberately swallowed. A missing secret means the INSTANCE is not
+// ready; it does not mean the upgrade failed, and returning it would fail a
+// command whose work is already committed to the tree — worse, it would break
+// `--commit` after the copier update had landed. So it says the thing loudly and
+// lets the operator act.
+//
+// Package var so tests substitute it: the real one shells out to gh and the
+// Linode API, which a unit test has no business doing.
+// postUpgradeDoctorEnv must stay whatever `llz doctor` defaults --env to, so the
+// two check the same deployment. TestPostUpgradeDoctorMatchesDoctorDefaults
+// couples them.
+const postUpgradeDoctorEnv = "e2e"
+
+var runPostUpgradeDoctor = func() {
+	fmt.Fprintf(os.Stderr, "\n%s readiness after the upgrade (a new release can require secrets the old one did not):\n\n",
+		color.Bold("Checking"))
+	if err := onboard.RunDoctor("", postUpgradeDoctorEnv, false, false, "", ""); err != nil {
+		fmt.Fprintf(os.Stderr, "\n%s the upgrade itself succeeded — the readiness gaps above are the instance's, not the upgrade's.\n", color.Yellow("!"))
+		fmt.Fprintf(os.Stderr, "  Fix them, then re-check with %s\n", color.Cyan("llz doctor"))
 	}
 }
 
