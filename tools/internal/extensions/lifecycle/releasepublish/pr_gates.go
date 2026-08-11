@@ -432,7 +432,7 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		return fmt.Errorf("::error title=Instance PR gates did not finish::%s still %s after %s%s. "+
 			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
-			time.Duration(o.Retries)*o.Interval, gateContext(obs, o.Token), o.Instance, pr)
+			time.Duration(o.Retries-1)*o.Interval, gateContext(obs, o.Token), o.Instance, pr)
 	}
 	if bad := failures(obs.found); len(bad) > 0 {
 		var parts []string
@@ -576,8 +576,19 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 // So empty stdout is recorded as an OBSERVATION OF ZERO CHECKS; only non-empty
 // output this verb cannot parse counts as unreadable. gh's own error is kept
 // separately, as context for whichever verdict the caller reaches.
+// SLEEPS BETWEEN POLLS, NOT AFTER THE LAST ONE. With a trailing sleep the loop
+// spends Retries*Interval waiting on top of Retries polls, so a 900s budget
+// actually consumed 900s PLUS the polling — overrunning the job-timeout
+// arithmetic that budget was chosen to fit, and making the timeout message
+// understate the wait it reports. The last iteration has nothing left to wait
+// for.
 func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 	obs := gateObservation{missing: append([]string(nil), o.Checks...)}
+	sleepUnlessLast := func(i int) {
+		if i < o.Retries-1 {
+			gatesSleep(o.Interval)
+		}
+	}
 	for i := 0; i < o.Retries; i++ {
 		// Exit status ignored as a verdict — see the file header — but kept as
 		// context: it is the only place gh explains an empty answer.
@@ -610,13 +621,13 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 			if obs.raw == nil {
 				obs.raw = []byte("[]")
 			}
-			gatesSleep(o.Interval)
+			sleepUnlessLast(i)
 			continue
 		}
 		f, m, err := partitionChecks(out, o.Checks)
 		if err != nil {
 			obs.parseErr = fmt.Errorf("%w (gh printed %q)", err, truncate(strings.TrimSpace(string(out)), 300))
-			gatesSleep(o.Interval)
+			sleepUnlessLast(i)
 			continue
 		}
 		obs.found, obs.missing, obs.raw = f, m, out
@@ -624,7 +635,7 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 		if len(m) == 0 && settled(f) {
 			return obs
 		}
-		gatesSleep(o.Interval)
+		sleepUnlessLast(i)
 	}
 	return obs
 }

@@ -221,8 +221,8 @@ Two cheap checks, neither needing cloud credentials:
 
 1. `llz ci require-repo-config` — every **required repo-level** secret and
    variable is set.
-2. `llz ci assert-image-fresh` — `TF_IMAGE`/`KUBE_IMAGE` name this instance's
-   template pin.
+2. `llz ci assert-image-fresh` — the image this job is *running in* was built
+   from this instance's template pin.
 
 **Why it exists.** v0.0.42 made `TF_STATE_ENCRYPTION_PASSPHRASE` required and
 nothing said so; a live adopter took the upgrade and learned about it from a
@@ -258,6 +258,14 @@ The *set* comes from llz's requirement table, so a newly required value is
 checked the release it lands. The `env:` block is the one hand-maintained copy
 (Actions cannot splat secrets); `TestDeliveredJobCoversRepoLevelRequirements` in
 the template repo fails the moment the table names something the block does not.
+
+**What `assert-image-fresh` does and does not prove.** It compares the baked
+`llz` stamp of the image the job is *executing in* against the pin in
+`.copier-answers.yml` — so it catches a stale `TF_IMAGE`, which is the one every
+job in this pipeline runs inside. It does **not** pull `KUBE_IMAGE` and cannot
+speak for it; that variable is only presence-checked, by `require-repo-config`.
+A `KUBE_IMAGE` left behind at an old tag therefore still passes here and surfaces
+later, in the jobs that actually run it.
 
 **`assert-image-fresh` used to run in exactly one place** — the first job of an
 *apply* — so a `TF_IMAGE` that had never been re-pinned stayed invisible across

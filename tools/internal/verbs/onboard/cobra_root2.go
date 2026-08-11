@@ -1,9 +1,12 @@
 package onboard
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/spf13/cobra"
 )
@@ -37,10 +40,24 @@ const FallbackDoctorEnv = "e2e"
 // stat'ed the tree and parsed YAML would put that cost on `llz --help`.
 func DefaultDoctorEnv() string {
 	tfDir, _, _ := instancelayout.Detect()
-	if lz, err := clusterspec.LoadInstance(filepath.Dir(tfDir)); err == nil {
+	root := filepath.Dir(tfDir)
+	lz, err := clusterspec.LoadInstance(root)
+	if err == nil {
 		if names := lz.EnvNames(); len(names) > 0 {
 			return names[0] // EnvNames is sorted, so this is stable across runs
 		}
+	}
+	// A SPEC THAT EXISTS BUT WILL NOT LOAD MUST NOT FALL BACK IN SILENCE. The
+	// fallback is right for a checkout that HAS no spec; for one whose spec is
+	// unreadable it silently reproduces the wrong-deployment advice this function
+	// exists to remove — and the likeliest moment for an unparseable spec is
+	// immediately after a `copier update`, which is exactly when `llz upgrade`
+	// calls this. Saying so costs one line and turns a confusing report into a
+	// diagnosable one.
+	if err != nil && clusterspec.InstancePresent(root) {
+		fmt.Fprintf(os.Stderr, "%s this instance has a %s that could not be read (%v) — reporting on the "+
+			"%q deployment instead, which is almost certainly not yours. Fix the spec, or pass --env.\n",
+			color.Yellow("!"), clusterspec.LandingZoneFile, err, FallbackDoctorEnv)
 	}
 	return FallbackDoctorEnv
 }

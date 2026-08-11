@@ -982,3 +982,27 @@ func TestTheResumeFallbackOnlyAcceptsAnOpenPR(t *testing.T) {
 	}
 	t.Error("no resume lookup was issued after `gh pr create` failed")
 }
+
+// The loop must sleep BETWEEN polls, not after the last one. A trailing sleep
+// spends Retries*Interval on top of Retries polls, overrunning the job-timeout
+// arithmetic the 900s budget was chosen to fit — and the timeout message then
+// reports less waiting than actually happened.
+func TestThePollLoopDoesNotSleepAfterItsLastPoll(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+	}}
+	defer f.install()()
+
+	o := gatesBaseOpts()
+	o.Retries = 4
+	if err := RunAssertInstancePRGates(o); err == nil {
+		t.Fatal("unsettled checks must fail the verb")
+	}
+	if f.polls != o.Retries {
+		t.Fatalf("polled %d time(s), want %d", f.polls, o.Retries)
+	}
+	if f.slept != o.Retries-1 {
+		t.Errorf("slept %d time(s) for %d poll(s) — a sleep after the final poll is budget spent "+
+			"waiting for something nobody will ask about", f.slept, o.Retries)
+	}
+}
