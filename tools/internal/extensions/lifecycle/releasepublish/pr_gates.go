@@ -153,7 +153,8 @@ func ghError(args []string, err error) error {
 type PRGatesOpts struct {
 	Instance  string        // owner/name of the throwaway instance repo
 	SHA       string        // the template commit under test — names the branch
-	Host      string        // forge host for the clone URL (github.com, or a GHES appliance)
+	Host      string        // forge host for the clone URL and every gh call (github.com, or a GHES appliance)
+	Base      string        // base branch for the throwaway PR; empty = ask the repo for its default
 	Token     string        // contents:write + pull-requests:write on the instance repo
 	TouchPath string        // repo-relative file to touch so the paths: filter selects the jobs
 	Checks    []string      // check names that must appear AND succeed
@@ -247,9 +248,12 @@ func namesOf(cs []check) []string {
 
 // inconclusiveStates are terminal states that are NOT a verdict on the gate.
 //
-// CANCELLED is the one that matters and the one that was miscounted: the gated
-// jobs share a concurrency group, so a newer run supersedes an older one and
-// GitHub reports the older checks CANCELLED. SKIPPED and NEUTRAL mean the job did
+// CANCELLED is the one that matters and the one that was miscounted. It is NOT
+// concurrency-group supersession — llz-terraform.yml sets cancel-in-progress:
+// false, so that group queues and never cancels, and an earlier draft of this
+// comment said the opposite. It is a run somebody or something cancelled: a
+// force-push to the throwaway branch while the checks were in flight, a manual
+// cancel, or the whole workflow run being cancelled. SKIPPED and NEUTRAL mean the job did
 // not execute — its `if:` excluded it — which is a real regression in the
 // delivered gating but a different one from "the check ran and the command
 // inside it failed". Both still FAIL the verb (nothing was proven either way);
@@ -331,6 +335,15 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 	if o.Retries < 1 {
 		o.Retries = 60
 	}
+	// A zero interval turns the retry budget into back-to-back `gh` calls at the
+	// forge. The cobra layer rejects it outright; this is the floor for a
+	// programmatic caller that never went through a flag.
+	if o.Interval <= 0 {
+		o.Interval = 20 * time.Second
+	}
+	if o.Base == "" {
+		o.Base = defaultBranch(o)
+	}
 
 	work, err := gatesTempDir()
 	if err != nil {
@@ -392,11 +405,7 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		// on the 'x' branch" is a confirmation of the diagnosis, not competition
 		// with it — and it is the difference between a filter that missed and a PR
 		// that was never opened against the right base.
-		for _, ctx := range []error{obs.ghErr, obs.priorUnreadable} {
-			if ctx != nil {
-				seenMsg += " — " + strings.TrimSpace(redact(ctx, o.Token).Error())
-			}
-		}
+		seenMsg += gateContext(obs, o.Token)
 		return fmt.Errorf("::error title=Instance PR gates never ran::%s did not appear on %s#%s. "+
 			"The jobs are pull_request-gated behind a paths: filter — either the filter no longer covers %s, "+
 			"or the jobs were removed or renamed (%s)",
@@ -407,10 +416,15 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 	// to debug a job that may be perfectly healthy and merely slow, or queued behind
 	// a busy runner. The two need different words because they need different work.
 	if stuck := pendingAfterWait(obs.found); len(stuck) > 0 {
-		return fmt.Errorf("::error title=Instance PR gates did not finish::%s still %s after %s. "+
+		// The I/O context belongs HERE TOO, not only on the never-appeared branch.
+		// A good first observation followed by a run of failing polls leaves the
+		// checks looking permanently pending, and reporting that as a plain
+		// timeout is the same I/O-as-verdict mistake this file records fixing
+		// twice already: the checks may well have settled while we could not ask.
+		return fmt.Errorf("::error title=Instance PR gates did not finish::%s still %s after %s%s. "+
 			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
-			time.Duration(o.Retries)*o.Interval, o.Instance, pr)
+			time.Duration(o.Retries)*o.Interval, gateContext(obs, o.Token), o.Instance, pr)
 	}
 	// BEFORE the failure branch, for the same reason PENDING is: a check that was
 	// cancelled or never executed proves nothing about the gate, and calling it a
@@ -421,10 +435,11 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
 		}
 		return fmt.Errorf("::error title=Instance PR gates returned no verdict::%s. This is NOT a failing gate. "+
-			"CANCELLED usually means a newer run superseded this one in the shared terraform-infra-pr "+
-			"concurrency group — re-run. SKIPPED or NEUTRAL means the job's `if:` excluded it, which IS a "+
-			"regression in the delivered gating: check the pull_request / head-repo conditions on %s#%s",
-			strings.Join(parts, ", "), o.Instance, pr)
+			"CANCELLED means the run was cancelled while the checks were in flight — a force-push to the "+
+			"throwaway branch, or a manual cancel; the pipeline's concurrency group does NOT cancel "+
+			"(cancel-in-progress: false), so re-running is the fix. SKIPPED or NEUTRAL means the job's `if:` "+
+			"excluded it, which IS a regression in the delivered gating: check the pull_request / head-repo "+
+			"conditions on %s#%s", strings.Join(parts, ", "), o.Instance, pr)
 	}
 	if bad := failures(obs.found); len(bad) > 0 {
 		var parts []string
@@ -483,7 +498,7 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	}
 	// --draft is load-bearing, not cosmetic: it is what keeps the state-writing
 	// Plan Cluster job off this PR. See the file header.
-	out, err := gatesGH(o.Token, o.Host, "pr", "create", "--repo", o.Instance, "--base", "main", "--head", branch,
+	out, err := gatesGH(o.Token, o.Host, "pr", "create", "--repo", o.Instance, "--base", o.Base, "--head", branch,
 		"--draft",
 		"--title", "e2e: PR-gated CI gates",
 		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Draft on purpose — a draft PR does not run the state-writing plan job.")
@@ -656,4 +671,38 @@ func redact(err error, token string) error {
 		return fmt.Errorf("%s", strings.ReplaceAll(s, token, "***"))
 	}
 	return err
+}
+
+// gateContext renders whatever I/O trouble the poll loop met, as a suffix for
+// whichever verdict the caller reached. Empty when the polling was clean.
+//
+// It is shared by the never-appeared and the timeout branches on purpose: both
+// verdicts are only as good as the reads behind them, and an operator told
+// "still pending after 15m" deserves to know the last four polls errored.
+func gateContext(obs gateObservation, token string) string {
+	var out string
+	for _, ctx := range []error{obs.ghErr, obs.priorUnreadable} {
+		if ctx != nil {
+			out += " — " + strings.TrimSpace(redact(ctx, token).Error())
+		}
+	}
+	return out
+}
+
+// defaultBranch asks the instance repo which branch to open the PR against.
+//
+// `--base main` WAS HARDCODED, and the delivered terraform.yml watches
+// `branches: [main, master]` — so against a master-default instance this verb
+// force-pushed a throwaway branch and could then never open a PR for it, leaving
+// the branch behind and reporting a forge error instead of a verdict. Asking is
+// one API call and cannot be wrong; "main" remains the fallback when the call
+// fails, which is the previous behavior rather than a new failure mode.
+func defaultBranch(o PRGatesOpts) string {
+	out, err := gatesGH(o.Token, o.Host, "repo", "view", o.Instance, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
+	if name := strings.TrimSpace(string(out)); err == nil && name != "" {
+		return name
+	}
+	fmt.Fprintf(os.Stderr, "::warning::could not read %s's default branch (%v) — opening the throwaway PR against `main`\n",
+		o.Instance, redact(err, o.Token))
+	return "main"
 }

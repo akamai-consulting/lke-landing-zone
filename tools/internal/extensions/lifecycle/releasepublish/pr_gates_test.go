@@ -39,8 +39,13 @@ type fakeForge struct {
 	prViewOut string
 	// checksErr is returned alongside every checks payload — gh's non-zero exit.
 	checksErr error
-	polls     int
-	slept     int
+	// checksErrAfter, when >0, makes `gh pr checks` start ERRORING from that poll
+	// onwards — gh going quiet mid-run, rather than at the start.
+	checksErrAfter int
+	// repoDefaultBranch is what `gh repo view --json defaultBranchRef` returns.
+	repoDefaultBranch string
+	polls             int
+	slept             int
 }
 
 // install swaps the package seams and returns a restore func.
@@ -62,12 +67,17 @@ func (f *fakeForge) install() func() {
 			return []byte("https://github.com/o/r/pull/7\n"), nil
 		case len(args) >= 2 && args[0] == "pr" && args[1] == "view":
 			return []byte(f.prViewOut), nil
+		case len(args) >= 2 && args[0] == "repo" && args[1] == "view":
+			return []byte(f.repoDefaultBranch), nil
 		case len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
 			i := f.polls
 			if i >= len(f.checkPolls) {
 				i = len(f.checkPolls) - 1
 			}
 			f.polls++
+			if f.checksErrAfter > 0 && f.polls > f.checksErrAfter {
+				return nil, errors.New("gh pr checks: could not answer: dial tcp: i/o timeout")
+			}
 			return []byte(f.checkPolls[i]), f.checksErr
 		}
 		return nil, nil
@@ -764,5 +774,131 @@ func TestAnUnreadablePollThenABlankOneStillDiagnosesCorrectly(t *testing.T) {
 	// operator chasing a paths: filter never learns a poll was garbage.
 	if !strings.Contains(err.Error(), "unreadable") {
 		t.Errorf("the earlier unreadable poll was dropped from the diagnosis: %v", err)
+	}
+}
+
+// --base was hardcoded to "main" while the delivered terraform.yml watches
+// `branches: [main, master]`. Against a master-default instance the verb
+// force-pushed a branch and could then never open its PR.
+func TestBaseComesFromTheInstanceDefaultBranch(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	for _, c := range f.ghCalls {
+		if len(c) < 2 || c[0] != "pr" || c[1] != "create" {
+			continue
+		}
+		for i, a := range c {
+			if a == "--base" && i+1 < len(c) {
+				if c[i+1] != "master" {
+					t.Errorf("PR opened against %q, but the instance's default branch is master — "+
+						"`gh pr create` would reject it and the pushed branch would leak", c[i+1])
+				}
+				return
+			}
+		}
+		t.Errorf("`gh pr create` carried no --base: %v", c)
+		return
+	}
+	t.Error("no `gh pr create` was issued")
+}
+
+// An explicit --base must still win, for an instance whose PR target is neither.
+func TestExplicitBaseIsNotOverridden(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}, repoDefaultBranch: "master"}
+	defer f.install()()
+
+	o := gatesBaseOpts()
+	o.Base = "release/v2"
+	if err := RunAssertInstancePRGates(o); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	for _, c := range f.ghCalls {
+		if len(c) >= 2 && c[0] == "repo" && c[1] == "view" {
+			t.Error("--base was given, but the verb still asked the forge for the default branch")
+		}
+	}
+}
+
+// A good first observation followed by failing polls leaves the checks looking
+// permanently pending. Reporting that as a plain timeout hides that we simply
+// stopped being able to ask — the I/O-as-verdict mistake, in the third branch.
+func TestATimeoutSaysWhenThePollsWereFailing(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		"", // gh stops answering
+	}}
+	f.checksErrAfter = 1
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("unsettled checks must fail the verb")
+	}
+	if !strings.Contains(err.Error(), "TIMEOUT") {
+		t.Errorf("expected the timeout verdict, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "could not answer") {
+		t.Errorf("the failing polls were not mentioned, so the timeout reads as certain: %v", err)
+	}
+}
+
+// `Retries = timeout / interval` is INTEGER division, so a timeout shorter than
+// one poll rounds to zero attempts — which RunAssertInstancePRGates then promotes
+// to its 60-retry default, turning `--timeout 10 --interval 20` into a
+// twenty-MINUTE wait. A zero interval is worse: it removes the sleep and fires
+// the whole budget at the forge back to back.
+func TestPollBudgetFlagsAreValidated(t *testing.T) {
+	defer (&fakeForge{t: t, checkPolls: []string{bothPass}}).install()()
+
+	for _, tc := range []struct {
+		name, want string
+		args       []string
+	}{
+		{"timeout below one interval", "shorter than one --interval",
+			[]string{"--instance", "o/r", "--sha", "abcdef1234", "--timeout", "10", "--interval", "20"}},
+		{"zero interval", "at least 1 second",
+			[]string{"--instance", "o/r", "--sha", "abcdef1234", "--interval", "0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GH_TOKEN", "tok")
+			c := AssertInstancePRGatesCmd()
+			c.SetArgs(tc.args)
+			c.SetOut(os.Stderr)
+			c.SilenceErrors = true
+			err := c.Execute()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("expected a %q rejection, got: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// A programmatic caller that never went through a flag must not busy-spin either.
+func TestZeroIntervalGetsAFloorNotATightLoop(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+	}}
+	defer f.install()()
+
+	o := gatesBaseOpts()
+	o.Interval = 0
+	o.Retries = 2
+	var slept []time.Duration
+	orig := gatesSleep
+	gatesSleep = func(d time.Duration) { slept = append(slept, d) }
+	defer func() { gatesSleep = orig }()
+
+	_ = RunAssertInstancePRGates(o)
+	for _, d := range slept {
+		if d <= 0 {
+			t.Fatalf("the poll loop slept %v — a zero interval polls the forge in a tight loop", d)
+		}
+	}
+	if len(slept) == 0 {
+		t.Fatal("the poll loop never slept at all")
 	}
 }

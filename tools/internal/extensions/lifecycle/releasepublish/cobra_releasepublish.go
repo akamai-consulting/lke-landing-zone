@@ -7,6 +7,7 @@ package releasepublish
 // declares that only one of the three has no lifecycle state to attach to.
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -101,16 +102,33 @@ func AssertInstancePRGatesCmd() *cobra.Command {
 			"them: they shipped broken for several releases. Reads GH_TOKEN from the\n" +
 			"environment (contents:write + pull-requests:write on the instance repo).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			// VALIDATED, because integer division turns a typo into a silent,
+			// wrong wait. `timeout / interval` truncates to 0 whenever the timeout
+			// is shorter than one poll, and RunAssertInstancePRGates then promotes
+			// a 0 to its 60-retry default — so `--timeout 10 --interval 20` waits
+			// twenty MINUTES rather than ten seconds. `--interval 0` is worse: it
+			// removes the sleep entirely and fires the whole retry budget as
+			// back-to-back `gh` calls at the forge.
+			if interval < 1 {
+				return fmt.Errorf("--interval must be at least 1 second (got %d) — a zero interval "+
+					"removes the sleep and polls the forge in a tight loop", interval)
+			}
+			if timeout < interval {
+				return fmt.Errorf("--timeout (%ds) is shorter than one --interval (%ds), which would round "+
+					"the poll budget down to zero attempts", timeout, interval)
+			}
 			o.Token = os.Getenv("GH_TOKEN")
 			o.Interval = time.Duration(interval) * time.Second
-			o.Retries = timeout / Max1(interval)
+			o.Retries = timeout / interval
 			return RunAssertInstancePRGates(o)
 		},
 	}
 	c.Flags().StringVar(&o.Instance, "instance", "", "instance repo owner/name to open the throwaway PR on")
 	c.Flags().StringVar(&o.SHA, "sha", "", "the template commit under test — names the throwaway branch")
-	c.Flags().StringVar(&o.Host, "host", "github.com", "forge host for the clone URL (the GHES appliance on that lane)")
+	c.Flags().StringVar(&o.Host, "host", "github.com", "forge host for the clone URL and every gh call (the GHES appliance on that lane)")
+	c.Flags().StringVar(&o.Base, "base", "", "base branch to open the throwaway PR against (default: the instance repo's own default branch)")
 	c.Flags().StringVar(&o.TouchPath, "touch-path", DefaultPRGateTouchPath, "repo-relative file to touch so the paths: filter selects the gated jobs")
 	c.Flags().StringSliceVar(&o.Checks, "check", DefaultPRGateChecks, "check name that must appear AND succeed (repeatable)")
 	c.Flags().BoolVar(&o.Keep, "keep", false, "leave the branch and PR behind instead of closing them, to inspect a failure by hand")
