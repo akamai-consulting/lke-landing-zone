@@ -443,25 +443,39 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 	fmt.Printf("upgrade-test: %s → %s (%d file(s) in the reference scaffold)\n",
 		strings.Join(froms, ", "), ShortRef(to), len(freshFiles))
 
-	var failures []string
+	// A HARNESS FAILURE CANCELS ITS HOP, NOT THE RUN — which is what runUpgradeHop's
+	// doc comment already promised and the loop did not do. Returning here threw
+	// away every check failure the earlier hops had already found: a convergence gap
+	// at v0.0.42 vanished because the v0.0.40 scaffold later failed to render, so the
+	// run reported the harness problem and stayed silent about the real defect it
+	// had already measured. The two are also different verdicts — "the upgrade is
+	// broken" versus "could not tell" — and both have to reach the summary.
+	var failures, harnessErrs []string
 	for _, from := range froms {
 		fmt.Printf("\n── from %s ──\n", from)
 		hopFailures, err := runUpgradeHop(hopOpts{
 			root: root, build: build, from: from, to: to, llzBin: llzBin,
 			freshFiles: freshFiles, policy: policy,
 		})
-		if err != nil {
-			return err
-		}
 		failures = append(failures, hopFailures...)
+		if err != nil {
+			// One line here, the full text in the summary: these carry a 20-line
+			// copier tail, and printing it twice buries the check failures between
+			// two copies of the same wall of output.
+			fmt.Fprintf(os.Stderr, "  %s harness: could not measure this hop — see the summary\n", color.Yellow("!"))
+			harnessErrs = append(harnessErrs, fmt.Sprintf("from %s: %v", from, err))
+		}
 	}
 
-	if len(failures) == 0 {
+	if len(failures) == 0 && len(harnessErrs) == 0 {
 		fmt.Printf("\nupgrade-test: OK — an instance at %s upgrades to %s cleanly, unattended, "+
 			"and ends up identical to a fresh scaffold.\n", strings.Join(froms, "/"), ShortRef(to))
 		return nil
 	}
-	return UpgradeTestFailure(failures)
+	// A hop that could not be measured must not be summarised as OK either: the
+	// releases it covered went unchecked, and saying nothing about that is how a
+	// gate reports coverage it does not have.
+	return UpgradeTestFailure(failures, harnessErrs)
 }
 
 type hopOpts struct {
@@ -531,8 +545,8 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 				"    than a cli.Prompt — so the command works by hand and dies in CI, in a script, and\n" +
 				"    over ssh. Fix: add --defaults to the update argv (copier.UpdateArgv)."
 		}
-		failures = append(failures, fmt.Sprintf("upgrade-is-noninteractive: `llz upgrade --ref %s` failed:\n%s%s",
-			ShortRef(o.to), detail, hint))
+		failures = append(failures, fmt.Sprintf("upgrade-is-noninteractive [from %s]: `llz upgrade --ref %s` failed:\n%s%s",
+			o.from, ShortRef(o.to), detail, hint))
 	} else {
 		fmt.Printf("  ✓ upgrade-is-noninteractive — `llz upgrade` ran with stdin closed\n")
 	}
@@ -547,16 +561,29 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 	// llz; that path renders a DIFFERENT instance, and comparing two equally
 	// degraded trees is how a convergence check reports success having exercised
 	// none of the delivery it exists to measure.
+	// A DEGRADED RENDER **HERE** IS A FINDING, NOT A HARNESS PROBLEM. The identical
+	// call on the fresh scaffold before the loop already covers "this machine cannot
+	// render at all"; by the time we reach this line that render has succeeded, so
+	// tasks that degraded during the UPGRADE mean the upgrade did not deliver — the
+	// exact class this gate exists for, and the one `llz upgrade` publishes itself
+	// on PATH to prevent. Bucketing it as a harness error reported a real regression
+	// as "could not be measured" and sent the operator to inspect their --llz binary
+	// for a defect in the product.
 	if err := assertTasksRan(o.root, inst); err != nil {
-		return nil, err
+		failures = append(failures, fmt.Sprintf("tasks-delivered [from %s]: %v\n"+
+			"    The upgraded instance did not receive the delivery copier's `_tasks` perform.\n"+
+			"    `llz upgrade` puts its own binary on PATH for them (proc.SelfOnPATH); when that\n"+
+			"    stops working the tasks fall back to a warning and the instance keeps an unpruned\n"+
+			"    docs/ tree plus un-repointed root links.", o.from, err))
+		return failures, nil
 	}
 
 	after, err := ReadAnswerMap(answersPath)
 	if err != nil {
-		return nil, fmt.Errorf("read upgraded answers: %w", err)
+		return failures, fmt.Errorf("read upgraded answers: %w", err)
 	}
 	if regressions := AnswerRegressions(before, after); len(regressions) > 0 {
-		failures = append(failures, "answers-preserved: the upgrade rewrote answers it does not own:\n      "+
+		failures = append(failures, "answers-preserved [from "+o.from+"]: the upgrade rewrote answers it does not own:\n      "+
 			strings.Join(regressions, "\n      ")+
 			"\n    copier falls back to the template DEFAULT for an answer it cannot keep — including\n"+
 			"    one the CURRENT template's validator rejects. instance_repo is the ArgoCD repoURL\n"+
@@ -567,20 +594,20 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 	}
 
 	if got := after["llz_version"]; got != o.to {
-		failures = append(failures, fmt.Sprintf("pin-advanced: llz_version is %q, want %q — the upgrade did not re-pin, so "+
-			"every rendered `?ref=` still resolves to the old release", got, o.to))
+		failures = append(failures, fmt.Sprintf("pin-advanced [from %s]: llz_version is %q, want %q — the upgrade did not re-pin, so "+
+			"every rendered `?ref=` still resolves to the old release", o.from, got, o.to))
 	} else {
 		fmt.Printf("  ✓ pin-advanced — llz_version is now %s\n", ShortRef(o.to))
 	}
 
 	markers, rejects, err := MergeConflictArtifacts(inst)
 	if err != nil {
-		return nil, fmt.Errorf("scan the upgraded instance: %w", err)
+		return failures, fmt.Errorf("scan the upgraded instance: %w", err)
 	}
 	switch {
 	case len(markers) > 0 || len(rejects) > 0:
 		var b strings.Builder
-		b.WriteString("clean-merge: the 3-way merge left artifacts behind:")
+		b.WriteString("clean-merge [from " + o.from + "]: the 3-way merge left artifacts behind:")
 		for _, m := range markers {
 			b.WriteString("\n      conflict marker  " + m)
 		}
@@ -597,7 +624,7 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 	// 3. THE delivery check: is this now the same instance a new adopter gets?
 	upgradedFiles, err := DigestTree(inst)
 	if err != nil {
-		return nil, fmt.Errorf("digest the upgraded instance: %w", err)
+		return failures, fmt.Errorf("digest the upgraded instance: %w", err)
 	}
 	gaps := ConvergenceGaps(o.freshFiles, upgradedFiles, o.policy.Classify)
 	if len(gaps) > 0 {
@@ -687,11 +714,31 @@ func countFiles(root string) (int, error) {
 	return n, err
 }
 
-func UpgradeTestFailure(failures []string) error {
+// UpgradeTestFailure reports both verdicts a run can produce, because they are
+// different claims. A CHECK failure says the upgrade is broken. A HARNESS failure
+// says that hop could not be measured — the releases it covered went unchecked,
+// which is not the same as passing and must not be summarised as OK.
+func UpgradeTestFailure(failures, harnessErrs []string) error {
 	for _, f := range failures {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", color.Red("✗"), f)
 	}
-	return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken", len(failures))
+	for _, h := range harnessErrs {
+		fmt.Fprintf(os.Stderr, "  %s harness: %s\n", color.Yellow("!"), h)
+	}
+	switch {
+	case len(failures) == 0 && len(harnessErrs) == 0:
+		// Not reachable through RunUpgradeTest, which returns early on a clean run —
+		// but a helper that turns "nothing went wrong" into an error is a trap for
+		// the next caller, and the arm costs one line.
+		return nil
+	case len(failures) == 0:
+		return fmt.Errorf("upgrade-test: %d hop(s) could not be measured — the gate reached no verdict on them", len(harnessErrs))
+	case len(harnessErrs) == 0:
+		return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken", len(failures))
+	default:
+		return fmt.Errorf("upgrade-test: %d check(s) failed — the day-2 path an adopter takes is broken; "+
+			"a further %d hop(s) could not be measured at all", len(failures), len(harnessErrs))
+	}
 }
 
 func ShortRef(r string) string {

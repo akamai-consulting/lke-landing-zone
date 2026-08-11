@@ -196,7 +196,7 @@ func FormatConvergenceGaps(from string, gaps []ConvergenceGap) string {
 	b.WriteString("\n    An upgraded instance and a fresh one are supposed to be the same instance. Where they differ,\n" +
 		"    an adopter who upgraded is running content a new adopter never receives — and nothing else in\n" +
 		"    CI compares the two, so the difference persists across every subsequent release.\n" +
-		"      missing/stale [managed]  the overwrite pass did not deliver it — see selfupgrade.ApplyManifestPolicy\n" +
+		"      missing/stale [managed]  the overwrite pass did not deliver it — see selfupgrade.ManifestPolicy.Apply\n" +
 		"                               (a render that SKIPS copier's _tasks is missing whatever those tasks write)\n" +
 		"      stale         [merge]    the 3-way merge resolved against the wrong base; with no local edits it\n" +
 		"                               must yield the new render exactly\n" +

@@ -84,18 +84,34 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// by name. An operator running an llz that is not on PATH (by absolute path,
 	// straight out of a build directory) would otherwise get the tasks' no-llz
 	// fallback and an unpruned docs tree, from the command whose whole job is
-	// delivering the template correctly. ApplyManifestPolicy's clean render arms
-	// this independently; SelfOnPATH no-ops the second time.
+	// delivering the template correctly. The clean render below arms this
+	// independently; SelfOnPATH no-ops the second time (os.SameFile).
 	restorePATH, err := proc.SelfOnPATH("llz")
 	if err != nil {
 		return err
 	}
 	defer restorePATH()
+	// RENDER BEFORE MUTATING. The clean render shells out to copier, which runs the
+	// template's `_tasks` — arbitrary shell that can fail for reasons this instance
+	// has no control over. Doing it after `copier update` meant such a failure left
+	// the instance half-upgraded: merged by copier, missing the `managed` overwrite
+	// and the declared removals, with nothing to roll back to. Now the fragile step
+	// runs while the instance is still untouched, so a failure here costs the
+	// operator a re-run rather than a wedged tree.
+	var policyRender *selfupgrade.ManifestPolicy
+	if policyErr == nil {
+		// Not wrapped: renderUpgradeScaffold already says "render target scaffold for
+		// manifest policy", and wrapping produced that phrase twice in one message.
+		if policyRender, err = selfupgrade.PrepareManifestPolicy(dryRun, ref); err != nil {
+			return err
+		}
+		defer policyRender.Cleanup()
+	}
 	if err := proc.RunEcho(dryRun, copier.UpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
-	if policyErr == nil {
-		if err := selfupgrade.ApplyManifestPolicy(dryRun, ref, owned); err != nil {
+	if policyRender != nil {
+		if err := policyRender.Apply(owned); err != nil {
 			return fmt.Errorf("apply manifest policy: %w", err)
 		}
 	}

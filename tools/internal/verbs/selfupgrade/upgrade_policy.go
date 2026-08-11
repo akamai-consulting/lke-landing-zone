@@ -157,8 +157,56 @@ func walkUpgradeFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func ApplyManifestPolicy(dryRun bool, ref string, before UpgradeSnapshot) error {
+// ManifestPolicy is a clean render of the target ref, already on disk, waiting to
+// be applied to the instance.
+//
+// IT IS TWO STEPS BECAUSE THE ORDER IS THE SAFETY PROPERTY. The render is the
+// failure-prone half: it shells out to copier, which runs the template's `_tasks`
+// — arbitrary shell, `cp -a <src>/docs/.` among them, which exits non-zero on a
+// fork whose template carries no docs/. The apply is the destructive half.
+// Rendering INSIDE the apply put the fragile step after `copier update` had
+// already rewritten the instance, so a task that failed left a half-upgraded tree:
+// copier's merge applied, the `managed` overwrite and `.template-removals` not,
+// and no rollback. `llz upgrade` now renders first and only touches the instance
+// once it holds a scaffold it can finish with.
+//
+// Reading .copier-answers.yml BEFORE the update rather than after is not a
+// behaviour change: copierRenderArgv consumes exactly _src_path, upstream_org and
+// instance_repo, which are the operator's answers rather than the pin, and
+// `llz ci upgrade-test`'s answers-preserved check is the assertion that an upgrade
+// does not move them. llz_version is passed explicitly as ref.
+type ManifestPolicy struct {
+	dryRun    bool
+	ref       string
+	cleanRoot string
+	cleanup   func()
+}
+
+// PrepareManifestPolicy renders the target ref's clean scaffold. Call it BEFORE
+// mutating the instance; call Cleanup when done regardless of outcome.
+func PrepareManifestPolicy(dryRun bool, ref string) (*ManifestPolicy, error) {
+	p := &ManifestPolicy{dryRun: dryRun, ref: ref, cleanup: func() {}}
 	if dryRun {
+		return p, nil
+	}
+	cleanRoot, cleanup, err := renderUpgradeScaffold(ref)
+	if err != nil {
+		return nil, err
+	}
+	p.cleanRoot, p.cleanup = cleanRoot, cleanup
+	return p, nil
+}
+
+func (p *ManifestPolicy) Cleanup() {
+	if p != nil && p.cleanup != nil {
+		p.cleanup()
+	}
+}
+
+// Apply restores the `owned` files copier overwrote, then overwrites every
+// `managed` file from the pre-rendered scaffold.
+func (p *ManifestPolicy) Apply(before UpgradeSnapshot) error {
+	if p.dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would restore %d owned file(s) after copier update\n", len(before.files))
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would overwrite managed files from a clean target-template render")
 		return nil
@@ -166,17 +214,12 @@ func ApplyManifestPolicy(dryRun bool, ref string, before UpgradeSnapshot) error 
 	if err := before.restore(); err != nil {
 		return fmt.Errorf("restore owned files: %w", err)
 	}
-	cleanRoot, Cleanup, err := renderUpgradeScaffold(ref)
-	if err != nil {
-		return err
-	}
-	defer Cleanup()
-	count, err := overwriteManagedFromScaffold(cleanRoot)
+	count, err := overwriteManagedFromScaffold(p.cleanRoot)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s restored %d owned file(s); overwrote %d managed file(s) from %s\n",
-		color.Dim("→"), len(before.files), count, ref)
+		color.Dim("→"), len(before.files), count, p.ref)
 	return nil
 }
 
