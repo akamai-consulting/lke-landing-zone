@@ -18,9 +18,18 @@ package releasepublish
 // structurally cannot: that the commands RESOLVE AND SUCCEED in the pinned image, on
 // the real scaffold. It runs after pin-instance-images so TF_IMAGE is this commit's.
 //
-// IT ASSERTS ONLY THE TWO LINT GATES. The PR also triggers Plan Cluster, which wants
-// cloud credentials and state — out of scope here, and asserting on it would make
-// this verb fail for reasons that have nothing to do with it.
+// IT ASSERTS ONLY THE TWO LINT GATES, AND THE PR IS OPENED AS A DRAFT SO ONLY
+// THOSE TWO CAN RUN. Not tidiness — a correctness requirement. The same paths:
+// filter also selects `Plan Cluster (PR)`, and that job runs `llz ci tf-import`,
+// which WRITES cluster/<env>/terraform.tfstate. The e2e's provision job dispatches
+// an apply against that very state the moment this one returns, the two run under
+// DIFFERENT concurrency groups (terraform-infra-pr vs terraform-infra-<env>), and
+// the s3 backend has no lock — so a plan still in flight and the apply would race
+// each other's state writes, last write wins. Closing the PR does not cancel a
+// running job either. The delivered pipeline therefore skips its credential- and
+// state-touching plan on DRAFT pull requests (llz-terraform.yml plan-cluster-pr),
+// and this verb opens a draft: the two cheap, local, read-only lint jobs still run,
+// and nothing this verb triggers can touch Terraform state.
 //
 // ── THE BUG THE BASH HAD, AND WHY THE PORT IS NOT A TRANSCRIPTION ──────────────
 // The inline version polled with `gh pr checks ... || echo '[]'`. `gh pr checks`
@@ -37,7 +46,9 @@ package releasepublish
 // without a forge.
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -73,11 +84,20 @@ var (
 	// gatesGH runs `gh <args>` with GH_TOKEN set. Stdout comes back even when the
 	// command exits non-zero — see the header: `gh pr checks` uses its exit status
 	// to report the CHECKS' verdict, not its own success.
+	//
+	// STDERR IS FOLDED INTO THE ERROR, and that is the whole diagnostic. `Output()`
+	// captures stdout only, so without this every `gh` failure — an under-scoped
+	// token, an unparseable flag, a repo that does not exist — collapses into the
+	// identical, useless `exit status 1`, while the one line gh wrote saying which
+	// of those it was is discarded. The ARGV is deliberately not echoed: `gh` takes
+	// its credential from the environment, but keeping the two error builders in
+	// this file to the same rule is what stops the next one from echoing a command
+	// line that does carry one (see gatesGit).
 	gatesGH = func(token string, args ...string) ([]byte, error) {
 		cmd := exec.Command("gh", args...)
 		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
 		out, err := cmd.Output()
-		return out, err
+		return out, ghError(args, err)
 	}
 	// gatesGit runs `git -C dir <args>`. Errors fold in stderr but NEVER the argv:
 	// the clone URL carries the token, so an echoed command line would print a
@@ -104,6 +124,20 @@ var (
 		return err
 	}
 )
+
+// ghError names the failed `gh` call and folds its STDERR into the message.
+// Pure, so the folding is tested without a forge — see TestGHErrorCarriesStderr.
+// nil in, nil out: a successful call must not be turned into an error.
+func ghError(args []string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(bytes.TrimSpace(ee.Stderr)) > 0 {
+		err = fmt.Errorf("%w: %s", err, truncate(strings.TrimSpace(string(ee.Stderr)), 500))
+	}
+	return fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+}
 
 // PRGatesOpts is the verb's input.
 type PRGatesOpts struct {
@@ -283,11 +317,19 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		}()
 	}
 
-	found, missing, raw := awaitGateChecks(o, pr)
+	found, missing, raw, parseErr := awaitGateChecks(o, pr)
 	for _, c := range found {
 		fmt.Printf("  %s: %s\n", c.Name, c.State)
 	}
 
+	// FIRST, because it invalidates every verdict below. A poll loop that never once
+	// read `gh` cleanly knows nothing about the checks — reporting that silence as
+	// "the gates never ran" blames the instance's CI for this verb's own blindness.
+	if parseErr != nil && raw == nil {
+		return fmt.Errorf("::error title=Instance PR gates could not be read::could not read the checks on %s#%s "+
+			"after %d attempt(s) — this says nothing about the gates themselves: %w",
+			o.Instance, pr, o.Retries, redact(parseErr, o.Token))
+	}
 	if len(missing) > 0 {
 		seen := observedNames(raw)
 		seenMsg := "no checks appeared at all"
@@ -364,19 +406,36 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 			return "", fmt.Errorf("assert-instance-pr-gates: %w", redact(err, o.Token))
 		}
 	}
+	// --draft is load-bearing, not cosmetic: it is what keeps the state-writing
+	// Plan Cluster job off this PR. See the file header.
 	out, err := gatesGH(o.Token, "pr", "create", "--repo", o.Instance, "--base", "main", "--head", branch,
+		"--draft",
 		"--title", "e2e: PR-gated CI gates",
-		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image.")
+		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Draft on purpose — a draft PR does not run the state-writing plan job.")
 	if pr := prNumber(out); pr != "" {
 		return pr, nil
 	}
 	// A re-run of the same commit finds its branch and PR already there; `gh pr
 	// create` then fails with "already exists". Ask for the existing one rather
 	// than treating a resumable state as fatal.
-	if out, viewErr := gatesGH(o.Token, "pr", "view", branch, "--repo", o.Instance, "--json", "number", "--jq", ".number"); viewErr == nil {
-		if pr := prNumber(out); pr != "" {
+	viewOut, viewErr := gatesGH(o.Token, "pr", "view", branch, "--repo", o.Instance, "--json", "number", "--jq", ".number")
+	if viewErr == nil {
+		if pr := prNumber(viewOut); pr != "" {
 			return pr, nil
 		}
+	}
+	// err IS NIL ON A REACHABLE PATH — `gh pr create` exits 0 but prints something
+	// prNumber cannot read (a survey prompt, a "no commits between" notice, an
+	// enterprise banner). Wrapping a nil error with %w renders the literal
+	// `%!w(<nil>)` and says nothing about what actually happened, so synthesize the
+	// error from what we DID see instead.
+	if err == nil {
+		fallback := fmt.Sprintf("returned %q", strings.TrimSpace(string(viewOut)))
+		if viewErr != nil {
+			fallback = "failed: " + viewErr.Error()
+		}
+		err = fmt.Errorf("`gh pr create` succeeded but printed no PR URL (got %q), and `gh pr view %s` %s",
+			strings.TrimSpace(string(out)), branch, fallback)
 	}
 	return "", fmt.Errorf("assert-instance-pr-gates: opening a PR on %s: %w", o.Instance, redact(err, o.Token))
 }
@@ -385,23 +444,49 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 // budget runs out. It returns the LAST observation rather than an error on timeout:
 // "still pending after N polls" and "never appeared" are reported by the caller from
 // the same data, so a timeout cannot masquerade as a clean run.
-func awaitGateChecks(o PRGatesOpts, pr string) (found []check, missing []string, raw []byte) {
+//
+// parseErr IS RETURNED, NOT DROPPED, and it is the same lesson twice. An earlier
+// draft ignored partitionChecks' error on every poll, so output `gh` produced but
+// this verb could not read — a changed --json shape, an HTML error page, a proxy
+// banner ahead of the JSON — left `missing` untouched and `raw` nil, and the caller
+// reported that as "the gates never ran". That is the exact misdiagnosis the file
+// header records the bash version making: an I/O problem dressed up as a verdict
+// about the instance's CI, pointing an operator at a paths: filter that is fine.
+// nil once ANY poll parses, so a single transient bad read is not held against a
+// run that went on to observe cleanly.
+func awaitGateChecks(o PRGatesOpts, pr string) (found []check, missing []string, raw []byte, parseErr error) {
 	missing = append([]string(nil), o.Checks...)
 	for i := 0; i < o.Retries; i++ {
 		// Exit status ignored on purpose — see the file header.
-		out, _ := gatesGH(o.Token, "pr", "checks", pr, "--repo", o.Instance, "--json", "name,state")
-		if len(out) > 0 {
+		out, ghErr := gatesGH(o.Token, "pr", "checks", pr, "--repo", o.Instance, "--json", "name,state")
+		switch {
+		case len(out) > 0:
 			f, m, err := partitionChecks(out, o.Checks)
-			if err == nil {
-				found, missing, raw = f, m, out
-				if len(m) == 0 && settled(f) {
-					return found, missing, raw
-				}
+			if err != nil {
+				parseErr = fmt.Errorf("%w (gh printed %q)", err, truncate(strings.TrimSpace(string(out)), 300))
+				break
 			}
+			found, missing, raw, parseErr = f, m, out, nil
+			if len(m) == 0 && settled(f) {
+				return found, missing, raw, nil
+			}
+		case ghErr != nil:
+			// No stdout at all AND a failure: gh itself could not answer. Held the
+			// same way — a later successful poll clears it.
+			parseErr = ghErr
 		}
 		gatesSleep(o.Interval)
 	}
-	return found, missing, raw
+	return found, missing, raw, parseErr
+}
+
+// truncate bounds an untrusted payload before it lands in an error message, so a
+// megabyte of HTML cannot bury the sentence explaining it.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // prNumber pulls the PR number out of `gh pr create` (which prints the PR URL) or

@@ -55,7 +55,7 @@ func EnvVPCCmd() *cobra.Command {
 	}
 }
 func RenderCmd() *cobra.Command {
-	var tfvarsOnly, check, diff bool
+	var tfvarsOnly, check, diff, ifSpec bool
 	c := &cobra.Command{
 		Use:   "render [env]",
 		Short: "reconcile the LandingZone spec into <env>.tfvars (spec-driven instances)",
@@ -64,13 +64,25 @@ func RenderCmd() *cobra.Command {
 			"terraform-iac-bootstrap/*/<env>.tfvars files the terraform plan/apply consume.\n" +
 			"With no [env], renders every environment in the spec. --check validates the\n" +
 			"spec without writing; --diff previews what a render WOULD change (also\n" +
-			"writes nothing). A no-op contract: callers gate on the presence of a spec\n" +
-			"(CI does), so instances that have not adopted it are unaffected.",
+			"writes nothing). --if-spec makes a pre-spec instance a no-op instead of an\n" +
+			"error, so a caller does not have to test for the spec file itself.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := ""
 			if len(args) == 1 {
 				env = args[0]
+			}
+			// THE NO-OP CONTRACT, MOVED OFF THE CALLER. It used to read "callers
+			// gate on the presence of a spec (CI does)", and CI did — by repeating
+			//     if [ -f landingzone.yaml ]; then llz render …; fi
+			// at every call site. That is a three-line shell conditional per site
+			// restating a rule this binary already knows, in the one place the repo
+			// measures and refuses to grow (untestable-loc's workflow-inline-bash).
+			// Same rule, one copy, and it resolves the spec the way Run does rather
+			// than by testing for a filename relative to whatever cwd a step had.
+			if ifSpec && !SpecPresent() {
+				fmt.Fprintln(os.Stderr, "llz render: no LandingZone spec — nothing to render (pre-spec instance)")
+				return nil
 			}
 			return Run(cliopts.Global.DryRun, env, tfvarsOnly, check, diff)
 		},
@@ -78,5 +90,6 @@ func RenderCmd() *cobra.Command {
 	c.Flags().BoolVar(&tfvarsOnly, "tfvars-only", false, "render only the tfvars (skip the committed manifest kustomizations)")
 	c.Flags().BoolVar(&check, "check", false, "validate the spec and exit non-zero on any error; write nothing")
 	c.Flags().BoolVar(&diff, "diff", false, "preview which files a render would create/change (writes nothing)")
+	c.Flags().BoolVar(&ifSpec, "if-spec", false, "no-op (exit 0) when the instance has no LandingZone spec, instead of failing")
 	return c
 }

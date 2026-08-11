@@ -12,6 +12,8 @@ package releasepublish
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +31,8 @@ type fakeForge struct {
 	gitCalls [][]string
 	// prCreateErr makes `gh pr create` fail, exercising the pr-view fallback.
 	prCreateErr error
+	// prCreateOut overrides what `gh pr create` prints (empty = a normal PR URL).
+	prCreateOut string
 	// prViewOut is what the fallback `gh pr view` returns.
 	prViewOut string
 	// checksErr is returned alongside every checks payload — gh's non-zero exit.
@@ -48,6 +52,9 @@ func (f *fakeForge) install() func() {
 		case len(args) >= 2 && args[0] == "pr" && args[1] == "create":
 			if f.prCreateErr != nil {
 				return nil, f.prCreateErr
+			}
+			if f.prCreateOut != "" {
+				return []byte(f.prCreateOut), nil
 			}
 			return []byte("https://github.com/o/r/pull/7\n"), nil
 		case len(args) >= 2 && args[0] == "pr" && args[1] == "view":
@@ -455,6 +462,110 @@ func TestPushIsForcedSoARetryAtTheSameSHAWorks(t *testing.T) {
 		return
 	}
 	t.Error("no push was issued")
+}
+
+// ── the second review's findings, pinned ─────────────────────────────────────
+
+// THE PR MUST BE A DRAFT, and this is a correctness test rather than a style one.
+// The same paths: filter selects `Plan Cluster (PR)`, which runs `llz ci tf-import`
+// — a WRITE to cluster/<env>/terraform.tfstate. The e2e's provision job dispatches
+// an apply against that state as soon as this verb returns, under a different
+// concurrency group, over a backend with no lock. Drop --draft and the two race,
+// last write wins.
+func TestPRIsOpenedAsADraft(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	for _, c := range f.ghCalls {
+		if len(c) < 2 || c[0] != "pr" || c[1] != "create" {
+			continue
+		}
+		if !slicesContains(c, "--draft") {
+			t.Errorf("`gh pr create` is not --draft (%v) — the throwaway PR would also fire the "+
+				"state-writing Plan Cluster job, which races the provision apply on the same tfstate", c)
+		}
+		return
+	}
+	t.Error("no `gh pr create` was issued")
+}
+
+// Output this verb cannot READ says nothing about the gates. Reporting it as
+// "never appeared" is the bash version's misdiagnosis wearing a different hat:
+// an operator is sent to inspect a paths: filter that is fine.
+func TestUnreadableChecksAreNotReportedAsMissing(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"<html>502 Bad Gateway</html>"}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("unparseable gh output must fail the verb, not pass vacuously")
+	}
+	if strings.Contains(err.Error(), "never ran") || strings.Contains(err.Error(), "paths: filter") {
+		t.Errorf("output that could not be parsed was blamed on the instance's CI: %v", err)
+	}
+	if !strings.Contains(err.Error(), "could not read the checks") {
+		t.Errorf("expected an I/O diagnosis, got: %v", err)
+	}
+	// The payload has to reach the operator, or the message is unactionable.
+	if !strings.Contains(err.Error(), "502 Bad Gateway") {
+		t.Errorf("the unreadable payload should be quoted, got: %v", err)
+	}
+}
+
+// ...but ONE bad read must not condemn a run that went on to observe cleanly.
+func TestATransientUnreadablePollDoesNotPoisonACleanRun(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"<html>502</html>", bothPass}}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("a transient bad poll followed by a clean one should pass: %v", err)
+	}
+}
+
+// `gh pr create` can exit 0 and print something that is not a PR URL. The error
+// built from that used to `%w` a nil err, rendering the literal `%!w(<nil>)` and
+// naming neither what gh printed nor what the fallback did.
+func TestPRCreateWithNoURLIsDiagnosable(t *testing.T) {
+	f := &fakeForge{
+		t: t, checkPolls: []string{bothPass},
+		prCreateOut: "Warning: 1 uncommitted change\n",
+		prViewOut:   "",
+	}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a PR that could not be identified must fail the verb")
+	}
+	if strings.Contains(err.Error(), "%!w") || strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("a nil error was formatted as the cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "uncommitted change") {
+		t.Errorf("what gh actually printed should be quoted, got: %v", err)
+	}
+}
+
+// Every `gh` failure used to collapse to `exit status 1` — the same words for an
+// under-scoped token, a bad flag and a missing repo — because Output() drops
+// stderr, which is where gh writes the one line that tells them apart.
+func TestGHErrorCarriesStderr(t *testing.T) {
+	if got := ghError([]string{"pr", "create"}, nil); got != nil {
+		t.Fatalf("a successful call must not become an error: %v", got)
+	}
+	ee := &exec.ExitError{
+		ProcessState: &os.ProcessState{},
+		Stderr:       []byte("GraphQL: Resource not accessible by integration (createPullRequest)\n"),
+	}
+	got := ghError([]string{"pr", "create", "--repo", "o/r"}, ee).Error()
+	if !strings.Contains(got, "Resource not accessible by integration") {
+		t.Errorf("stderr was dropped, so the real cause is invisible: %s", got)
+	}
+	if !strings.Contains(got, "pr create") {
+		t.Errorf("the failing gh call should be named: %s", got)
+	}
 }
 
 func slicesContains(hay []string, needle string) bool {

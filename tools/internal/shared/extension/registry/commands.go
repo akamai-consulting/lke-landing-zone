@@ -146,6 +146,7 @@ var commands = []Command{
 	{"clusteraccess", clusteraccess.FetchKubeconfigStateCmd},
 	{"clusteraccess", clusteraccess.RunnerACLCmd},
 	{"configreadiness", configreadiness.PreflightCmd},
+	{"configreadiness", configreadiness.RequireRepoConfigCmd},
 	{"converge", converge.ConvergeCmd},
 	{"converge", converge.HealthCmd},
 	{"converge", converge.HealthInClusterCmd},

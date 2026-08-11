@@ -173,6 +173,18 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// then have to re-review.
 	printSummary(oldRef, newRef)
 
+	return finishUpgrade(dryRun, commit, noDoctor, oldRef, newRef)
+}
+
+// finishUpgrade is the tail of Run: the advisory readiness check, then the
+// optional commit.
+//
+// SPLIT OUT SO IT CAN BE TESTED, and the property under test is an ordering one
+// that no assertion about the seam alone can reach — that a readiness check which
+// REPORTS PROBLEMS still leaves the upgrade successful, and still lets --commit
+// commit. Everything above it in Run shells out to copier and the network, so the
+// only way to exercise this behavior was to stop making it part of that.
+func finishUpgrade(dryRun, commit, noDoctor bool, oldRef, newRef string) error {
 	// ── Lever 4: what the new release now REQUIRES that the old one did not ──
 	// Lever 3 covers values the upgrade invalidates; this covers values it makes
 	// NEWLY MANDATORY, which nothing here can compute — the required set lives in
@@ -184,7 +196,8 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// ADVISORY, NEVER FATAL. `llz upgrade` is otherwise local, and an operator
 	// upgrading offline or without gh auth must still get their upgrade — so the
 	// readiness check's error is REPORTED and discarded, not returned. --no-doctor
-	// skips it outright.
+	// skips it outright. Skipped on --dry-run too: nothing has been rendered, so
+	// the readiness it would report is the tree's current one, not the upgrade's.
 	if !noDoctor && !dryRun {
 		runPostUpgradeDoctor()
 	}
@@ -298,17 +311,23 @@ func printSummary(oldRef, newRef string) {
 //
 // Package var so tests substitute it: the real one shells out to gh and the
 // Linode API, which a unit test has no business doing.
-// postUpgradeDoctorEnv must stay whatever `llz doctor` defaults --env to, so the
-// two check the same deployment. TestPostUpgradeDoctorMatchesDoctorDefaults
-// couples them.
-const postUpgradeDoctorEnv = "e2e"
-
+//
+// THE DEPLOYMENT IT ASKS ABOUT IS THE INSTANCE'S OWN, resolved by the same
+// function `llz doctor` resolves its --env default with — so an operator told to
+// "re-check with llz doctor" gets the identical answer. This was a hardcoded
+// "e2e", which is the TEMPLATE's throwaway lane and a deployment no adopter has.
+// Run against a live adopter mid-upgrade it produced one correct finding (a
+// missing TF_STATE_ENCRYPTION_PASSPHRASE, newly required by that very release)
+// wrapped in three wrong instructions: a report headed infra-e2e, a fix reading
+// `llz tokens --env e2e --yes`, and a closing "run `llz env add e2e` first".
+// An advisory nobody trusts is an advisory nobody reads.
 var runPostUpgradeDoctor = func() {
+	env := onboard.DefaultDoctorEnv()
 	fmt.Fprintf(os.Stderr, "\n%s readiness after the upgrade (a new release can require secrets the old one did not):\n\n",
 		color.Bold("Checking"))
-	if err := onboard.RunDoctor("", postUpgradeDoctorEnv, false, false, "", ""); err != nil {
+	if err := onboard.RunDoctor("", env, false, false, "", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "\n%s the upgrade itself succeeded — the readiness gaps above are the instance's, not the upgrade's.\n", color.Yellow("!"))
-		fmt.Fprintf(os.Stderr, "  Fix them, then re-check with %s\n", color.Cyan("llz doctor"))
+		fmt.Fprintf(os.Stderr, "  Fix them, then re-check with %s\n", color.Cyan("llz doctor --env "+env))
 	}
 }
 
@@ -367,7 +386,11 @@ func conflictMarkerLines(content string) []int {
 	return lines
 }
 
-func commitUpgrade(dryRun bool, oldRef, newRef string) error {
+// Package var for the same reason runPostUpgradeDoctor is one: the real
+// implementation runs `git add -A` + `git commit` in the caller's working tree,
+// which a unit test must not do — and the ordering test needs to observe THAT it
+// was reached, not perform it.
+var commitUpgrade = func(dryRun bool, oldRef, newRef string) error {
 	if strings.TrimSpace(gitcmd.Out("status", "--porcelain")) == "" {
 		fmt.Fprintln(os.Stderr, color.Green("✓")+" already up to date — nothing to commit.")
 		return nil
