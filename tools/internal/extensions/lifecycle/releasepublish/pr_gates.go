@@ -93,9 +93,19 @@ var (
 	// its credential from the environment, but keeping the two error builders in
 	// this file to the same rule is what stops the next one from echoing a command
 	// line that does carry one (see gatesGit).
-	gatesGH = func(token string, args ...string) ([]byte, error) {
+	// GH_HOST IS PASSED, NOT ASSUMED. --host reached the clone URL and nothing
+	// else, so every `gh` call went to whatever host the ambient environment
+	// named. That worked only because e2e-instantiate.yml happens to export
+	// GH_HOST at workflow level — i.e. the flag was inert and the lane was
+	// carrying it, which is exactly the arrangement that breaks the first time
+	// this verb is called from anywhere else (a GHES lane, an operator's laptop,
+	// a future caller). The flag now means what it says.
+	gatesGH = func(token, host string, args ...string) ([]byte, error) {
 		cmd := exec.Command("gh", args...)
 		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+		if host != "" {
+			cmd.Env = append(cmd.Env, "GH_HOST="+host)
+		}
 		out, err := cmd.Output()
 		return out, ghError(args, err)
 	}
@@ -313,45 +323,54 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 		// costs nothing — while failing the verb on a cleanup error would turn a
 		// PASSING assertion into a red e2e for a reason that is not the subject.
 		defer func() {
-			_, _ = gatesGH(o.Token, "pr", "close", pr, "--repo", o.Instance, "--delete-branch")
+			_, _ = gatesGH(o.Token, o.Host, "pr", "close", pr, "--repo", o.Instance, "--delete-branch")
 		}()
 	}
 
-	found, missing, raw, parseErr := awaitGateChecks(o, pr)
-	for _, c := range found {
+	obs := awaitGateChecks(o, pr)
+	for _, c := range obs.found {
 		fmt.Printf("  %s: %s\n", c.Name, c.State)
 	}
 
 	// FIRST, because it invalidates every verdict below. A poll loop that never once
 	// read `gh` cleanly knows nothing about the checks — reporting that silence as
 	// "the gates never ran" blames the instance's CI for this verb's own blindness.
-	if parseErr != nil && raw == nil {
+	// Note this cannot fire for a PR that simply has no checks: that path records an
+	// empty observation, so raw is non-nil and the "never ran" branch owns it.
+	if obs.parseErr != nil && obs.raw == nil {
 		return fmt.Errorf("::error title=Instance PR gates could not be read::could not read the checks on %s#%s "+
 			"after %d attempt(s) — this says nothing about the gates themselves: %w",
-			o.Instance, pr, o.Retries, redact(parseErr, o.Token))
+			o.Instance, pr, o.Retries, redact(obs.parseErr, o.Token))
 	}
-	if len(missing) > 0 {
-		seen := observedNames(raw)
+	if len(obs.missing) > 0 {
+		seen := observedNames(obs.raw)
 		seenMsg := "no checks appeared at all"
 		if len(seen) > 0 {
 			seenMsg = "checks that DID appear: " + strings.Join(seen, ", ")
 		}
+		// gh's own words on an empty answer, when there are any. "no checks reported
+		// on the 'x' branch" is a confirmation of the diagnosis, not competition
+		// with it — and it is the difference between a filter that missed and a PR
+		// that was never opened against the right base.
+		if obs.ghErr != nil {
+			seenMsg += " — " + strings.TrimSpace(redact(obs.ghErr, o.Token).Error())
+		}
 		return fmt.Errorf("::error title=Instance PR gates never ran::%s did not appear on %s#%s. "+
 			"The jobs are pull_request-gated behind a paths: filter — either the filter no longer covers %s, "+
 			"or the jobs were removed or renamed (%s)",
-			strings.Join(missing, " / "), o.Instance, pr, o.TouchPath, seenMsg)
+			strings.Join(obs.missing, " / "), o.Instance, pr, o.TouchPath, seenMsg)
 	}
 	// PENDING IS NOT FAILED. Reporting a check that simply never finished as "a
 	// delivered CI gate does not work in the scaffold it ships to" sends an operator
 	// to debug a job that may be perfectly healthy and merely slow, or queued behind
 	// a busy runner. The two need different words because they need different work.
-	if stuck := pendingAfterWait(found); len(stuck) > 0 {
+	if stuck := pendingAfterWait(obs.found); len(stuck) > 0 {
 		return fmt.Errorf("::error title=Instance PR gates did not finish::%s still %s after %s. "+
 			"This is a TIMEOUT, not a failing gate — raise --timeout, or look for a queued/stuck run on %s#%s",
 			strings.Join(namesOf(stuck), " / "), strings.ToLower(stuck[0].State),
 			time.Duration(o.Retries)*o.Interval, o.Instance, pr)
 	}
-	if bad := failures(found); len(bad) > 0 {
+	if bad := failures(obs.found); len(bad) > 0 {
 		var parts []string
 		for _, c := range bad {
 			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
@@ -408,7 +427,7 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	}
 	// --draft is load-bearing, not cosmetic: it is what keeps the state-writing
 	// Plan Cluster job off this PR. See the file header.
-	out, err := gatesGH(o.Token, "pr", "create", "--repo", o.Instance, "--base", "main", "--head", branch,
+	out, err := gatesGH(o.Token, o.Host, "pr", "create", "--repo", o.Instance, "--base", "main", "--head", branch,
 		"--draft",
 		"--title", "e2e: PR-gated CI gates",
 		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Draft on purpose — a draft PR does not run the state-writing plan job.")
@@ -418,7 +437,7 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	// A re-run of the same commit finds its branch and PR already there; `gh pr
 	// create` then fails with "already exists". Ask for the existing one rather
 	// than treating a resumable state as fatal.
-	viewOut, viewErr := gatesGH(o.Token, "pr", "view", branch, "--repo", o.Instance, "--json", "number", "--jq", ".number")
+	viewOut, viewErr := gatesGH(o.Token, o.Host, "pr", "view", branch, "--repo", o.Instance, "--json", "number", "--jq", ".number")
 	if viewErr == nil {
 		if pr := prNumber(viewOut); pr != "" {
 			return pr, nil
@@ -454,30 +473,62 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 // about the instance's CI, pointing an operator at a paths: filter that is fine.
 // nil once ANY poll parses, so a single transient bad read is not held against a
 // run that went on to observe cleanly.
-func awaitGateChecks(o PRGatesOpts, pr string) (found []check, missing []string, raw []byte, parseErr error) {
-	missing = append([]string(nil), o.Checks...)
+//
+// GARBAGE IS NOT SILENCE, AND THE DISTINCTION IS THE WHOLE VERB. `gh pr checks`
+// on a PR with NO checks at all exits non-zero with EMPTY stdout — and a PR that
+// triggered nothing is precisely the regression this verb hunts (a paths: filter
+// that stopped covering the touched path). The first draft of the parseErr
+// handling treated empty-stdout-plus-error as "could not read", which put the
+// I/O diagnosis in front of the "never ran" one in the one case that matters:
+// the verb would have reported its own blindness instead of the missing gates.
+// So empty stdout is recorded as an OBSERVATION OF ZERO CHECKS; only non-empty
+// output this verb cannot parse counts as unreadable. gh's own error is kept
+// separately, as context for whichever verdict the caller reaches.
+func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
+	obs := gateObservation{missing: append([]string(nil), o.Checks...)}
 	for i := 0; i < o.Retries; i++ {
-		// Exit status ignored on purpose — see the file header.
-		out, ghErr := gatesGH(o.Token, "pr", "checks", pr, "--repo", o.Instance, "--json", "name,state")
-		switch {
-		case len(out) > 0:
-			f, m, err := partitionChecks(out, o.Checks)
-			if err != nil {
-				parseErr = fmt.Errorf("%w (gh printed %q)", err, truncate(strings.TrimSpace(string(out)), 300))
-				break
+		// Exit status ignored as a verdict — see the file header — but kept as
+		// context: it is the only place gh explains an empty answer.
+		out, ghErr := gatesGH(o.Token, o.Host, "pr", "checks", pr, "--repo", o.Instance, "--json", "name,state")
+		if len(out) == 0 {
+			// Zero checks reported. Record it as an observation (so the caller
+			// reaches "never appeared" rather than "could not read"), but never
+			// over an earlier REAL observation — checks do not un-appear, and a
+			// late blank answer must not erase what we already saw.
+			obs.ghErr = ghErr
+			if obs.raw == nil {
+				obs.raw = []byte("[]")
 			}
-			found, missing, raw, parseErr = f, m, out, nil
-			if len(m) == 0 && settled(f) {
-				return found, missing, raw, nil
-			}
-		case ghErr != nil:
-			// No stdout at all AND a failure: gh itself could not answer. Held the
-			// same way — a later successful poll clears it.
-			parseErr = ghErr
+			gatesSleep(o.Interval)
+			continue
+		}
+		f, m, err := partitionChecks(out, o.Checks)
+		if err != nil {
+			obs.parseErr = fmt.Errorf("%w (gh printed %q)", err, truncate(strings.TrimSpace(string(out)), 300))
+			gatesSleep(o.Interval)
+			continue
+		}
+		obs.found, obs.missing, obs.raw = f, m, out
+		obs.parseErr, obs.ghErr = nil, nil
+		if len(m) == 0 && settled(f) {
+			return obs
 		}
 		gatesSleep(o.Interval)
 	}
-	return found, missing, raw, parseErr
+	return obs
+}
+
+// gateObservation is the last thing the poll loop saw. It carries the two
+// failure modes SEPARATELY because they demand different words from the caller:
+// parseErr means this verb could not read gh's answer and knows nothing about the
+// gates; ghErr is gh's own complaint about a PR that reported no checks, which is
+// a fact ABOUT the gates and belongs in that diagnosis rather than in place of it.
+type gateObservation struct {
+	found    []check
+	missing  []string
+	raw      []byte // last payload; non-nil once anything at all was observed
+	parseErr error  // gh produced output this verb could not parse
+	ghErr    error  // gh could not answer (context, not a verdict)
 }
 
 // truncate bounds an untrusted payload before it lands in an error message, so a

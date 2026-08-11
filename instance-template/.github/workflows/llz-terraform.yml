@@ -154,6 +154,15 @@ jobs:
   # as a draft precisely so its lint check cannot collide with the apply that
   # follows it. Mark the PR ready for review to get the plan (terraform.yml lists
   # ready_for_review in its trigger types, so that alone re-runs this).
+  #
+  # THE TRIGGER LIVES IN A DIFFERENT MANIFEST CLASS FROM THIS SKIP, which is worth
+  # knowing when an upgrade behaves oddly. This file is `managed` — copier
+  # overwrites it, so the skip always arrives. terraform.yml is `merge`, so its
+  # `types: [… ready_for_review]` arrives through a 3-way merge that a local edit
+  # can decline. With the skip and without the trigger, taking a PR out of draft
+  # fires no event and the plan never runs. If that happens, the fix is one line
+  # in terraform.yml; TestDraftSkipHasItsReadyForReviewTrigger keeps the TEMPLATE
+  # from ever shipping the two halves out of step.
   plan-cluster-pr:
     name: Plan Cluster (PR)
     needs: discover
@@ -253,10 +262,27 @@ jobs:
       contents: read
     timeout-minutes: 10
     env:
-      # Repo-level REQUIRED secrets. Variables (TF_STATE_BUCKET, TF_STATE_ENDPOINT)
-      # already arrive from the workflow-level env: block; TF_IMAGE/KUBE_IMAGE are
-      # named here because a var is not automatically an env var.
+      # EVERY repo-level REQUIRED value, mapped under ITS OWN NAME — all of them,
+      # even where the workflow-level env: block already carries one. `llz ci
+      # require-repo-config` looks each requirement up BY NAME, and this block is
+      # the only place a reader can check that against the table.
+      #
+      # TF_STATE_ENDPOINT is why that rule is stated rather than assumed: the
+      # workflow-level block exports it as AWS_ENDPOINT_URL_S3, NOT under its own
+      # name, so a job relying on inheritance would have reported it missing on
+      # EVERY correctly configured instance — the cry-wolf outcome this job's
+      # header says it was designed to avoid, in the same commit that said so.
+      # TestDeliveredJobCoversRepoLevelRequirements now reads THIS block rather
+      # than the whole file, which is what would have caught it.
       TF_STATE_ENCRYPTION_PASSPHRASE: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+      TF_STATE_BUCKET:   ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_ENDPOINT: ${{ vars.TF_STATE_ENDPOINT }}
+      # TF_IMAGE's presence is really proven one step earlier, by this job's
+      # container having started at all: an unset TF_IMAGE fails every job in the
+      # pipeline at image pull, before any step exists to annotate it. Mapped
+      # anyway so the table-driven loop finds it rather than reporting a value
+      # that is self-evidently set. KUBE_IMAGE is the one of the pair this
+      # workflow never otherwise consumes, so it is the one really under test.
       TF_IMAGE:   ${{ vars.TF_IMAGE }}
       KUBE_IMAGE: ${{ vars.KUBE_IMAGE }}
     steps:

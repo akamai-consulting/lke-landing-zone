@@ -67,20 +67,113 @@ func TestDeliveredJobCoversRepoLevelRequirements(t *testing.T) {
 		t.Fatal("the requirement table lists no repo-level required values — " +
 			"either the table moved or the filter is wrong; this gate would pass vacuously")
 	}
+
+	// SCOPED TO THE JOB'S OWN env:, not to the file. Searching the whole file is
+	// what the first draft did, and it passed while TF_STATE_ENDPOINT was
+	// unreachable from this job: the workflow-level block exports that variable as
+	// AWS_ENDPOINT_URL_S3, so `vars.TF_STATE_ENDPOINT` appeared in the file under a
+	// DIFFERENT name and the substring matched anyway. The verb looks values up by
+	// name, in the environment of the step it runs in — so that is the text this
+	// gate has to read, or it is checking a coincidence.
+	env := jobEnvBlock(t, body, "repo-readiness")
 	for _, n := range names {
-		// The secret form (`secrets.X`) or the variable form (`vars.X`) — the job
-		// needs whichever kind the table says it is, and both spellings put the
-		// value in the environment the verb reads.
-		if !strings.Contains(body, "secrets."+n) && !strings.Contains(body, "vars."+n) {
-			t.Errorf("%s is a REQUIRED repo-level value but no job in the delivered pipeline maps it into env: — "+
-				"`llz ci require-repo-config` reads it from the environment, so it would report a correctly "+
-				"configured instance as missing it. Add it to the repo-readiness job's env: block.",
-				n)
+		// A requirement arrives as `NAME: ${{ secrets.NAME }}` or `${{ vars.NAME }}`
+		// depending on its kind; both put the value in the environment under NAME,
+		// which is all the verb needs.
+		mapped := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(n) + `:\s*\$\{\{\s*(secrets|vars)\.` + regexp.QuoteMeta(n) + `\s*\}\}`)
+		if !mapped.MatchString(env) {
+			t.Errorf("%s is a REQUIRED repo-level value but the repo-readiness job does not map it into env: "+
+				"as `%s: ${{ secrets.%s }}` (or vars.%s) — `llz ci require-repo-config` reads it from the "+
+				"environment BY NAME, so it would report a correctly configured instance as missing it.\n"+
+				"repo-readiness env: block was:\n%s",
+				n, n, n, n, env)
 		}
 	}
 }
 
-// ── Gate 2: which delivered entry points are exercised at all ────────────────
+// jobEnvBlock returns the `env:` mapping of one job in a workflow file. Both
+// blocks are located by indentation, which is what YAML nesting is — a job is a
+// 4-space key under `jobs:`, its `env:` a 6-space key under that, and each block
+// ends at the next key of its own depth or shallower.
+func jobEnvBlock(t *testing.T, body, job string) string {
+	t.Helper()
+	jobRe := regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(job) + `:\s*$`)
+	loc := jobRe.FindStringIndex(body)
+	if loc == nil {
+		t.Fatalf("no `%s:` job in %s — the gate it backs is gone, and this test would pass "+
+			"having read nothing", job, deliveredPipeline)
+	}
+	rest := body[loc[1]:]
+	if end := regexp.MustCompile(`(?m)^  [a-zA-Z_-]+:`).FindStringIndex(rest); end != nil {
+		rest = rest[:end[0]] // stop at the next job
+	}
+	envLoc := regexp.MustCompile(`(?m)^    env:\s*$`).FindStringIndex(rest)
+	if envLoc == nil {
+		t.Fatalf("job %q has no `env:` block, so it maps no secret into the environment "+
+			"`llz ci require-repo-config` reads", job)
+	}
+	envBody := rest[envLoc[1]:]
+	if end := regexp.MustCompile(`(?m)^    [a-zA-Z_-]+:`).FindStringIndex(envBody); end != nil {
+		envBody = envBody[:end[0]] // stop at the job's next key (steps:, if:, …)
+	}
+	return envBody
+}
+
+// ── Gate 2: the draft skip and the trigger that makes it recoverable ─────────
+
+// deliveredCaller is the thin stub that owns the pull_request TRIGGER, in a
+// different manifest class from the pipeline body that owns the draft SKIP.
+const deliveredCaller = "../../../instance-template/.github/workflows/terraform.yml"
+
+// TestDraftSkipHasItsReadyForReviewTrigger couples two files that a copier
+// upgrade moves by DIFFERENT rules.
+//
+// plan-cluster-pr skips draft PRs because it writes Terraform state with nothing
+// serializing it against a concurrent apply. That skip is only recoverable
+// because `ready_for_review` is in terraform.yml's trigger types — it is NOT in
+// GitHub's default set (opened / synchronize / reopened), so without it taking a
+// PR out of draft fires no event at all and the plan an operator just asked for
+// never runs. They would have to push an empty commit, with nothing on screen
+// explaining why.
+//
+// THE TWO FILES ARE NOT DELIVERED ALIKE. llz-terraform.yml is `managed` — copier
+// overwrites it from a clean render, so the skip always lands. terraform.yml is
+// `merge` — it carries jinja and an adopter may have edited it, so the trigger
+// arrives through a 3-way merge that can decline. An adopter can therefore end up
+// with the skip and not the trigger. This test cannot reach that adopter; what it
+// can do is guarantee the template never SHIPS the halves out of step, so the
+// only way to reach the broken combination is a local edit — which `llz upgrade`
+// reports as a conflict.
+func TestDraftSkipHasItsReadyForReviewTrigger(t *testing.T) {
+	body, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	caller, err := os.ReadFile(deliveredCaller)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredCaller, err)
+	}
+	skipsDrafts := strings.Contains(string(body), "github.event.pull_request.draft == false")
+	hasTrigger := regexp.MustCompile(`(?m)^\s*types:.*ready_for_review`).MatchString(string(caller))
+
+	switch {
+	case skipsDrafts && !hasTrigger:
+		t.Error("llz-terraform.yml skips DRAFT pull requests, but terraform.yml does not list " +
+			"`ready_for_review` in its pull_request trigger types. Marking a PR ready for review then " +
+			"fires no event, so the plan never runs and an operator has to push an empty commit to get " +
+			"one — with nothing saying why. Add ready_for_review to the trigger types.")
+	case !skipsDrafts && hasTrigger:
+		t.Error("terraform.yml lists `ready_for_review` but nothing gates on draft any more — " +
+			"either the skip was removed and this trigger type is now dead weight, or the gate moved " +
+			"and this test is no longer watching it")
+	case !skipsDrafts && !hasTrigger:
+		t.Error("the draft skip is gone from llz-terraform.yml. It is what keeps the state-writing " +
+			"Plan Cluster job off the release-e2e PR-gate probe's throwaway PR, which otherwise races " +
+			"the provision apply on the same tfstate — see pr_gates.go's header.")
+	}
+}
+
+// ── Gate 3: which delivered entry points are exercised at all ────────────────
 
 // exercisedEntryPoints records, per delivered entry-point workflow, WHY it is
 // considered covered — or, for an exclusion, why it is knowingly not.

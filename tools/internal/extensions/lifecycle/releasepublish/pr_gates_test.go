@@ -27,6 +27,8 @@ type fakeForge struct {
 	checkPolls []string
 	// ghCalls records every gh argv, so a test can assert cleanup happened.
 	ghCalls [][]string
+	// ghHosts records the host passed alongside each gh argv.
+	ghHosts []string
 	// gitCalls records every git argv.
 	gitCalls [][]string
 	// prCreateErr makes `gh pr create` fail, exercising the pr-view fallback.
@@ -46,7 +48,8 @@ func (f *fakeForge) install() func() {
 	origGH, origGit, origSleep := gatesGH, gatesGit, gatesSleep
 	origTemp, origAppend, origRemove := gatesTempDir, gatesAppend, gatesRemoveAll
 
-	gatesGH = func(_ string, args ...string) ([]byte, error) {
+	gatesGH = func(_, host string, args ...string) ([]byte, error) {
+		f.ghHosts = append(f.ghHosts, host)
 		f.ghCalls = append(f.ghCalls, args)
 		switch {
 		case len(args) >= 2 && args[0] == "pr" && args[1] == "create":
@@ -565,6 +568,97 @@ func TestGHErrorCarriesStderr(t *testing.T) {
 	}
 	if !strings.Contains(got, "pr create") {
 		t.Errorf("the failing gh call should be named: %s", got)
+	}
+}
+
+// ── the third review's findings, pinned ──────────────────────────────────────
+
+// A PR THAT TRIGGERED NOTHING IS THE REGRESSION THIS VERB HUNTS, and it is also
+// the case where `gh pr checks` exits non-zero with EMPTY stdout. Treating that
+// as "could not read the checks" put the verb's own blindness in front of the
+// one diagnosis it exists to deliver: an operator would be told the tooling
+// failed instead of that the paths: filter no longer selects the gated jobs.
+// Garbage is unreadable; silence is an observation of zero checks.
+func TestAPRWithNoChecksIsReportedAsNeverRan(t *testing.T) {
+	f := &fakeForge{
+		t: t, checkPolls: []string{""},
+		checksErr: errors.New("gh pr checks: exit status 1: no checks reported on the 'e2e/ci-gates-abcdef12' branch"),
+	}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a PR that triggered no checks at all must fail — it is the regression this verb hunts")
+	}
+	if !strings.Contains(err.Error(), "never ran") {
+		t.Errorf("a PR with zero checks was not reported as the gates never running: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not read the checks") {
+		t.Errorf("zero checks was reported as an I/O failure, which blames the tooling for a real "+
+			"regression in the delivered CI: %v", err)
+	}
+	if !strings.Contains(err.Error(), DefaultPRGateTouchPath) {
+		t.Errorf("the diagnosis should still name the touched path: %v", err)
+	}
+	// gh's own sentence is the confirmation, and it must survive into the message
+	// rather than compete with it.
+	if !strings.Contains(err.Error(), "no checks reported") {
+		t.Errorf("gh's explanation of the empty answer was dropped: %v", err)
+	}
+}
+
+// ...but genuinely unreadable output must STILL be reported as unreadable. The
+// two branches are one `len(out)` apart, so both directions need holding.
+func TestUnparseableOutputIsStillAnIOFailure(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{"<html>502 Bad Gateway</html>"}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil || !strings.Contains(err.Error(), "could not read the checks") {
+		t.Fatalf("non-empty output that cannot be parsed must be an I/O diagnosis, got: %v", err)
+	}
+}
+
+// A blank poll after a real observation must not erase what was already seen —
+// checks do not un-appear, and reporting "never ran" for a gate we watched fail
+// would be the bash bug wearing the new code's clothes.
+func TestABlankPollDoesNotEraseAnEarlierObservation(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		`[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Checkov IaC Security Scan","state":"IN_PROGRESS"}]`,
+		"", // gh goes quiet on a later poll
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a FAILURE check must still fail the verb")
+	}
+	if strings.Contains(err.Error(), "never ran") {
+		t.Errorf("a later blank poll erased the observation that the gates DID run: %v", err)
+	}
+}
+
+// --host reached the clone URL and nothing else, so every `gh` call went to
+// whatever host the ambient environment named. It only worked because
+// e2e-instantiate.yml exports GH_HOST at workflow level — the flag was inert and
+// the lane was carrying it.
+func TestHostReachesGH(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{bothPass}}
+	defer f.install()()
+
+	o := gatesBaseOpts()
+	o.Host = "ghes.example.com"
+	if err := RunAssertInstancePRGates(o); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if len(f.ghHosts) == 0 {
+		t.Fatal("no gh calls were made")
+	}
+	for i, h := range f.ghHosts {
+		if h != "ghes.example.com" {
+			t.Errorf("gh call %d (%v) went to host %q, not the --host the caller asked for — "+
+				"a GHES lane would silently address github.com", i, f.ghCalls[i], h)
+		}
 	}
 }
 
