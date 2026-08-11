@@ -124,9 +124,24 @@ func ClassifyCronWorkflow(key, submissionErr string, suspended bool, ageDays, st
 	}
 }
 
-// ClassifyServiceEndpoints classifies a Service by its ready endpoint count:
-// >0 passes; zero routes through Phase-1 then operator-deferred before failing.
-func ClassifyServiceEndpoints(key string, readyCount int, phase1Pending bool) (Category, string) {
+// ClassifyServiceEndpoints classifies a Service by its endpoint counts:
+// >0 ready passes; zero routes through Phase-1, then operator-deferred, then the
+// endpoints-exist-but-none-ready case, before failing.
+//
+// THE OLD MESSAGE NAMED BOTH CAUSES AND CHOSE THE WRONG VERDICT FOR ONE OF THEM:
+// "selector drift or all backing pods NotReady". Those need opposite answers.
+// Selector drift is a spec error that waiting never fixes. Backing pods that are
+// not Ready YET is what every Service looks like while its Deployment rolls out —
+// and on a four-minute-old cluster it cost a release-e2e round, because two such
+// Services sixty seconds apart tripped converge's hard-failure abort while the
+// cluster was still installing.
+//
+// The endpoint counts tell them apart without guessing. An EndpointSlice lists
+// notReady addresses too, so total>0 with ready==0 means the pods EXIST and have
+// not passed their probes — pending, bounded by the convergence budget. total==0
+// means nothing backs this Service at all, which is the selector-drift case and
+// stays a failure.
+func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pending bool) (Category, string) {
 	if readyCount > 0 {
 		return CatOK, fmt.Sprintf("Service %s (%d ready endpoint(s))", key, readyCount)
 	}
@@ -136,7 +151,10 @@ func ClassifyServiceEndpoints(key string, readyCount int, phase1Pending bool) (C
 	if r, ok := MatchExternalDep(key, ExternalDepWorkloads()); ok {
 		return CatDeferred, "Service " + key + " has 0 ready endpoints — " + r
 	}
-	return CatFail, "Service " + key + " has 0 ready endpoints (selector drift or all backing pods NotReady)"
+	if totalCount > 0 {
+		return CatPending, fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount)
+	}
+	return CatFail, "Service " + key + " has no endpoints at all (selector drift, or nothing backing it)"
 }
 
 // ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is

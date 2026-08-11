@@ -117,6 +117,18 @@ type EndpointSlice struct {
 
 // CountReadyEndpoints counts endpoints across slices whose conditions.ready is
 // true — treating an absent ready field as true (jq `.conditions.ready // true`).
+// CountEndpoints counts EVERY endpoint across slices, ready or not. An
+// EndpointSlice lists notReady addresses too, which is what lets
+// ClassifyServiceEndpoints tell "the pods exist and are still starting" from
+// "nothing backs this Service".
+func CountEndpoints(slices []EndpointSlice) int {
+	n := 0
+	for _, s := range slices {
+		n += len(s.Endpoints)
+	}
+	return n
+}
+
 func CountReadyEndpoints(slices []EndpointSlice) int {
 	n := 0
 	for _, s := range slices {

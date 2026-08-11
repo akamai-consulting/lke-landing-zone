@@ -103,16 +103,16 @@ func TestClassifyCronWorkflow(t *testing.T) {
 }
 
 func TestClassifyServiceEndpoints(t *testing.T) {
-	if cat, _ := ClassifyServiceEndpoints("x/s", 2, false); cat != CatOK {
+	if cat, _ := ClassifyServiceEndpoints("x/s", 2, 2, false); cat != CatOK {
 		t.Error("ready endpoints ok")
 	}
-	if cat, _ := ClassifyServiceEndpoints("openbao/s", 0, true); cat != CatPending {
+	if cat, _ := ClassifyServiceEndpoints("openbao/s", 0, 0, true); cat != CatPending {
 		t.Error("0 endpoints under phase-1 pends")
 	}
-	if cat, _ := ClassifyServiceEndpoints("external-dns/external-dns", 0, false); cat != CatDeferred {
+	if cat, _ := ClassifyServiceEndpoints("external-dns/external-dns", 0, 0, false); cat != CatDeferred {
 		t.Error("0 endpoints on a deferred workload defers")
 	}
-	if cat, _ := ClassifyServiceEndpoints("x/s", 0, false); cat != CatFail {
+	if cat, _ := ClassifyServiceEndpoints("x/s", 0, 0, false); cat != CatFail {
 		t.Error("0 endpoints otherwise fails")
 	}
 }

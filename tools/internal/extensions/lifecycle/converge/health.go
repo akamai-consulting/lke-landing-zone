@@ -965,7 +965,7 @@ func checkWebhooks(r *health.Report) {
 					continue
 				}
 				exists := kubectlprobe.Exists("-n", ns, "get", "svc", svc)
-				ready := countReadyEndpoints(ns, svc)
+				ready, _ := endpointCounts(ns, svc)
 				cat, msg := health.ClassifyWebhookBackend(exists, ready)
 				record(r, cat, fmt.Sprintf("%s %s → %s/%s %s", kind, cfg.Metadata.Name, ns, svc, msg))
 			}
@@ -1307,7 +1307,8 @@ func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
 			}
 			key := ns + "/" + s.Metadata.Name
 			p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingWorkloads())
-			cat, msg := health.ClassifyServiceEndpoints(key, countReadyEndpoints(ns, s.Metadata.Name), p1)
+			ready, total := endpointCounts(ns, s.Metadata.Name)
+			cat, msg := health.ClassifyServiceEndpoints(key, ready, total, p1)
 			if cat != health.CatOK { // only surface non-OK to cut noise (matches script's VERBOSE-gated pass)
 				record(r, cat, msg)
 			}
@@ -1453,6 +1454,18 @@ func checkPods(r *health.Report, phase1 bool) {
 			case extDepMatch(key):
 				reason, _ := health.MatchExternalDep(key, health.ExternalDepWorkloads())
 				record(r, health.CatDeferred, detail+" — "+reason)
+			case health.PodIsStarting(p.Status):
+				// STARTING IS NOT FAILED, and reading PodIsFailing as a verdict
+				// cost a release-e2e round: a pod mid-ContainerCreating on a
+				// four-minute-old cluster was recorded CatFail, twice sixty
+				// seconds apart, and converge aborted with "operator
+				// intervention required" while every Application was still
+				// flipping OutOfSync -> Synced. PodIsFailing answers "is this
+				// pod serving?"; this gate needs "is this pod broken?", and the
+				// two differ exactly here. The budget still bounds it — a pod
+				// that never starts exhausts the budget and is reported as the
+				// timeout it is.
+				record(r, health.CatPending, detail+" — still starting")
 			default:
 				record(r, health.CatFail, detail)
 			}
@@ -1485,9 +1498,12 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 }
 
 // countReadyEndpoints sums ready endpoints across a Service's EndpointSlices.
-func countReadyEndpoints(ns, svc string) int {
-	return health.CountReadyEndpoints(
-		kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
+// endpointCounts returns (ready, total) for a Service's EndpointSlices. Both come
+// from ONE list call: two calls could observe different moments of a rollout and
+// report ready>total, which would read as nonsense in the message.
+func endpointCounts(ns, svc string) (ready, total int) {
+	slices := kubectlprobe.List[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc)
+	return health.CountReadyEndpoints(slices), health.CountEndpoints(slices)
 }
 
 // MOVED HERE from ci_readiness.go rather than injected.
