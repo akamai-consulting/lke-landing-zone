@@ -77,6 +77,14 @@ var DefaultPRGateChecks = []string{"Terraform Lint", "Checkov IaC Security Scan"
 // single run. Four files are tracked under the root: .gitignore, AGENTS.md, and two
 // .terraform.lock.hcl provider pins. AGENTS.md is the only one that is pure prose,
 // so appending to it cannot change what tflint or checkov parse.
+//
+// IT IS ALSO `managed` AND DIGEST-LOCKED (.template-managed.lock), which is
+// latent rather than broken: nothing runs `llz ci managed-fresh` on an instance
+// PR today, so appending to it trips no gate. The day a delivered job DOES check
+// the lock on pull requests, this probe fails itself — the throwaway PR would be
+// reported as drifting from the template it came from. Whoever adds that gate
+// needs to pick a different touch target (a tracked, unlocked file under the
+// same paths: filter) or teach the gate to ignore this probe's branch.
 const DefaultPRGateTouchPath = "terraform-iac-bootstrap/AGENTS.md"
 
 // Seams (package vars) so tests drive the flow without a forge, a clone or a clock.

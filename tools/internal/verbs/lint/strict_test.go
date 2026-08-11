@@ -134,3 +134,41 @@ func TestStrictIsAPersistentFlagOnCheck(t *testing.T) {
 		}
 	}
 }
+
+// The two empty trees need different words. "The root directories exist" is
+// simply false for a checkout that has no terraform-iac-bootstrap/ at all, and
+// sending someone to look for HCL inside directories they do not have wastes the
+// first five minutes of the diagnosis.
+func TestStrictDistinguishesAnUnrenderedTreeFromNoTreeAtAll(t *testing.T) {
+	t.Setenv("LLZ_TFLINT", "true")
+
+	noRoots := t.TempDir()
+	err := runCheck(t, noRoots, "tf-lint", "--strict")
+	if err == nil {
+		t.Fatal("--strict must fail where there is nothing to scan")
+	}
+	if !strings.Contains(err.Error(), "no terraform-iac-bootstrap/ root here at all") {
+		t.Errorf("a checkout with no roots should say so, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "root directories exist") {
+		t.Errorf("claimed the root directories exist where there are none: %v", err)
+	}
+
+	unrendered := t.TempDir()
+	for _, root := range []string{"cluster", "object-storage"} {
+		d := filepath.Join(unrendered, "terraform-iac-bootstrap", root)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, ".terraform.lock.hcl"), []byte("# pins\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = runCheck(t, unrendered, "tf-lint", "--strict")
+	if err == nil {
+		t.Fatal("--strict must fail on an unrendered instance tree")
+	}
+	if !strings.Contains(err.Error(), "root directories exist") {
+		t.Errorf("an unrendered instance should be told the roots are there but empty, got: %v", err)
+	}
+}

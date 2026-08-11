@@ -64,7 +64,7 @@ func tfDirs() []string {
 	// therefore says "2 roots found" about a tree with nothing in it to lint, and
 	// --strict would have signed off on exactly the vacuous green it was added to
 	// refuse. What the linters actually read is the only thing worth counting.
-	scan.usedTFDirs, scan.tfFileCount = true, countTFFiles(dirs)
+	scan.usedTFDirs, scan.tfDirCount, scan.tfFileCount = true, len(dirs), countTFFiles(dirs)
 	return dirs
 }
 
@@ -116,6 +116,7 @@ func haveTool(bin string) bool {
 var scan struct {
 	missingTools []string
 	usedTFDirs   bool
+	tfDirCount   int
 	tfFileCount  int
 }
 
@@ -617,7 +618,8 @@ func CheckCmd() *cobra.Command {
 			Short: s.short,
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				scan.missingTools, scan.usedTFDirs, scan.tfFileCount = nil, false, 0
+				scan.missingTools, scan.usedTFDirs = nil, false
+				scan.tfDirCount, scan.tfFileCount = 0, 0
 				if err := s.fn(cliopts.Global); err != nil {
 					return err
 				}
@@ -632,11 +634,22 @@ func CheckCmd() *cobra.Command {
 						s.use, strings.Join(scan.missingTools, ", "))
 				}
 				if scan.usedTFDirs && scan.tfFileCount == 0 {
-					return fmt.Errorf("::error::%s found no *.tf to scan under terraform-iac-bootstrap/. The root "+
-						"DIRECTORIES exist — every instance has them, they hold the tracked .terraform.lock.hcl — "+
-						"but an instance commits zero Terraform, so until `llz render --tfvars-only --if-spec` has "+
-						"laid the roots down there is nothing here to lint. Under --strict, scanning nothing is a "+
-						"FAILURE", s.use)
+					// TWO DIFFERENT TREES, and saying the wrong one wastes the
+					// operator's first five minutes. The usual case is an
+					// unrendered instance: the root DIRECTORIES are there (they
+					// hold the tracked .terraform.lock.hcl) and hold no HCL. The
+					// other is a checkout that has no terraform-iac-bootstrap/ at
+					// all — a wrong working directory, or not an instance —
+					// where telling someone "the root directories exist" is
+					// simply false.
+					where := "the root directories exist (they hold the tracked .terraform.lock.hcl) but hold no HCL yet"
+					if scan.tfDirCount == 0 {
+						where = "there is no terraform-iac-bootstrap/ root here at all — check the working directory, " +
+							"or whether this is an instance checkout"
+					}
+					return fmt.Errorf("::error::%s found no *.tf to scan under terraform-iac-bootstrap/: %s. "+
+						"An instance commits zero Terraform, so the roots arrive from `llz render --tfvars-only "+
+						"--if-spec`. Under --strict, scanning nothing is a FAILURE", s.use, where)
 				}
 				return nil
 			},

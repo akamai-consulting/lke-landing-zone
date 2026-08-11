@@ -336,6 +336,16 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # NEW FLAGS BELOW, SO THE IMAGE IS CHECKED FIRST — the rule repo-readiness
+      # records. `--if-spec` and `--strict` shipped this release; a TF_IMAGE that
+      # has not been re-pinned since the last upgrade is the NORMAL state right
+      # after one, and that image's baked llz rejects them with `unknown flag`.
+      # assert-image-fresh has shipped for many releases, resolves in the old
+      # image, and names the one-command fix.
+      - name: ci images match the instance's template pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: llz ci assert-image-fresh
       # THE CHECKOUT CARRIES NO TERRAFORM. terraform-iac-bootstrap/.gitignore
       # excludes `*/*.tf` — an instance commits ZERO Terraform code; the roots are
       # build artifacts `llz render` generates from the embedded tfroots package.
@@ -376,6 +386,16 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # NEW FLAGS BELOW, SO THE IMAGE IS CHECKED FIRST — the rule repo-readiness
+      # records. `--if-spec` and `--strict` shipped this release; a TF_IMAGE that
+      # has not been re-pinned since the last upgrade is the NORMAL state right
+      # after one, and that image's baked llz rejects them with `unknown flag`.
+      # assert-image-fresh has shipped for many releases, resolves in the old
+      # image, and names the one-command fix.
+      - name: ci images match the instance's template pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: llz ci assert-image-fresh
       # Same reason as tf-lint above: the roots are rendered, not committed, and a
       # checkov run over an empty tree reports "Passed checks: 0" and exits 0.
       # See .checkov.yaml for what a scan over the RENDERED roots actually covers.
