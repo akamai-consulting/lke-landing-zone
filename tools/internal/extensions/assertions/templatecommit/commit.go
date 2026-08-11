@@ -411,8 +411,32 @@ var ciImageVars = [...]struct{ name, image string }{
 // operator. templateid.DefaultOrg (not the instance's upstream_org) because that is
 // where ciImageVarsForTag/floatingImageVars build every reference they hand out.
 func ComputedImageRef(ref, image string) bool {
-	prefix := CIImageRef(templateid.DefaultOrg, image, "")
-	return strings.HasPrefix(ref, prefix) && len(ref) > len(prefix)
+	for _, name := range append([]string{image}, deprecatedImageNames[image]...) {
+		prefix := CIImageRef(templateid.DefaultOrg, name, "")
+		if strings.HasPrefix(ref, prefix) && len(ref) > len(prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// deprecatedImageNames maps an image to names LLZ used to publish it under and
+// still publishes as aliases (build-images.yml's ALIAS matrix key).
+//
+// THE RENAME BLINDED THE RENAME CHECK. A pin is only reported as skewed if this
+// function agrees it is "ours to re-pin", and matching the CURRENT name alone
+// meant an instance still on `ci-terraform` was judged to hold an operator's own
+// image and skipped — silently, by all three callers, including the `llz tokens`
+// that exists to re-pin it. So the one variable whose staleness actually breaks
+// the pipeline (ci-terraform has no `tofu` binary; the workflows run `tofu`) was
+// the one variable nothing would report. Observed downstream: `llz doctor` listed
+// KUBE_IMAGE and said nothing about a TF_IMAGE pinned at ci-terraform:1.9.8.
+//
+// A name stays here for as long as build-images publishes it — an alias that
+// keeps a stale pin RESOLVING must also keep it VISIBLE, or the deprecation
+// window silently becomes permanent.
+var deprecatedImageNames = map[string][]string{
+	"ci-tofu": {"ci-terraform"}, // ADR 0008; alias published for the deprecation window
 }
 
 // ImagePublished reports whether an image reference resolves in the registry, and
