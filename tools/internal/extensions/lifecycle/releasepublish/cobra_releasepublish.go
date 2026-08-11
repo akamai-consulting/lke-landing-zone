@@ -139,12 +139,12 @@ func AssertInstancePRGatesCmd() *cobra.Command {
 	// queueing with room for this verb to report its own verdict — a longer budget
 	// buys nothing but a later, less specific failure.
 	//
-	// The instantiate job it runs in is `timeout-minutes: 60` precisely so 1200 +
-	// 900 fits alongside the scaffold, render, push and chart-publish steps. It was
-	// 35, i.e. exactly the sum of the two waits with nothing left over, which is
+	// The instantiate job it runs in is `timeout-minutes: 90`, sized for the worst
+	// case of THREE per-image publish waits plus this one (3x1200 + 900 = 75 min).
+	// It was 35 — exactly the sum of two waits with nothing left over — which is
 	// how a slow build would have been killed by the runner PAST this step's own
 	// cleanup: an opaque job timeout and a leaked PR instead of a diagnosis. If
-	// either budget grows, check that one first.
+	// either budget grows, or another required image is added, check that one first.
 	c.Flags().IntVar(&timeout, "timeout", 900, "max seconds to wait for the gated checks to appear and settle")
 	return c
 }

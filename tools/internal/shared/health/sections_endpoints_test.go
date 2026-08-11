@@ -13,9 +13,20 @@ package health
 import "testing"
 
 func TestEndpointsExistButNoneReadyIsPending(t *testing.T) {
+	// Outside a budget, pods that are not Ready are not "starting" — they are
+	// failing their readiness probe, and steady-state health must say so or a
+	// broken workload never alerts.
+	if cat, msg := ClassifyServiceEndpoints("llz-observability/otel-collector", 0, 3, false); cat != CatFail {
+		t.Errorf("a steady-state check must FAIL endpoints that never become Ready, got %v (%s)", cat, msg)
+	}
+	prev := Budgeted
+	Budgeted = true
+	defer func() { Budgeted = prev }()
+
 	cat, msg := ClassifyServiceEndpoints("llz-observability/otel-collector", 0, 3, false)
 	if cat != CatPending {
-		t.Errorf("3 endpoints with none Ready is a rollout in progress, got %v (%s)", cat, msg)
+		t.Errorf("inside a convergence budget, 3 endpoints with none Ready is a rollout in progress, "+
+			"got %v (%s)", cat, msg)
 	}
 	if msg == "" || !contains(msg, "still starting") {
 		t.Errorf("the message should say the pods are starting, got %q", msg)
@@ -57,6 +68,8 @@ func TestNoEndpointsAtAllIsPendingAndSaysWhyItCannotTell(t *testing.T) {
 	}
 }
 
+// Ready endpoints pass in BOTH modes — the budget only decides how to read an
+// absence, never how to read a healthy Service.
 func TestReadyEndpointsStillPass(t *testing.T) {
 	if cat, _ := ClassifyServiceEndpoints("x/s", 2, 3, false); cat != CatOK {
 		t.Errorf("2 ready endpoints must pass, got %v", cat)

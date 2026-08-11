@@ -30,6 +30,13 @@ func TestCheckPodsPendsAStartingPod(t *testing.T) {
 			`{"metadata":{"namespace":"x","name":"broken"},"status":{"phase":"Pending","containerStatuses":[{"name":"c","ready":false,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`,
 		), nil
 	})
+	// Inside a convergence budget a pod being created pends; outside one it is
+	// terminal, because a pod wedged in ContainerCreating by a FailedMount never
+	// leaves that state and must not read as "still starting" forever.
+	prev := health.Budgeted
+	health.Budgeted = true
+	defer func() { health.Budgeted = prev }()
+
 	var r health.Report
 	checkPods(&r, false)
 
@@ -49,6 +56,22 @@ func TestCheckPodsPendsAStartingPod(t *testing.T) {
 	}
 	if pending != 1 {
 		t.Errorf("pending = %v, want the ContainerCreating pod recorded as still starting", r.Pending)
+	}
+
+	// And the steady-state answer, which is the one that alerts.
+	health.Budgeted = false
+	var steady health.Report
+	checkPods(&steady, false)
+	var creatingFailed bool
+	for _, f := range steady.Failed {
+		if contains(f, "platform-logs-collector") {
+			creatingFailed = true
+		}
+	}
+	if !creatingFailed {
+		t.Errorf("outside a convergence budget a ContainerCreating pod must FAIL — wedged by a "+
+			"FailedMount it never leaves that state, and 'still starting' never alerts. failed = %v",
+			steady.Failed)
 	}
 }
 

@@ -152,7 +152,17 @@ func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pend
 		return CatDeferred, "Service " + key + " has 0 ready endpoints — " + r
 	}
 	if totalCount > 0 {
-		return CatPending, fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount)
+		// SAME BUDGET RULE AS THE ZERO-ENDPOINT CASE BELOW. Pods that have not
+		// passed readiness YET is a rollout; pods that never pass it is a broken
+		// workload, and only a budget can tell the two apart. This branch returned
+		// CatPending unconditionally while its neighbour was already gated —
+		// leaving a Service whose pods never become Ready reading "still starting"
+		// forever in one-shot `llz ci health`, which is the regression budgeted.go
+		// exists to prevent, in the file that motivated it.
+		return PendingIfBudgeted(
+			fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount),
+			fmt.Sprintf("Service %s has %d endpoint(s) and NONE Ready — this is a steady-state check, so the "+
+				"backing pods are not starting, they are failing their readiness probe", key, totalCount))
 	}
 	// ZERO ENDPOINTS IS ALSO PENDING, and the earlier draft of this function got
 	// that wrong in a way worth recording. It assumed "endpoints exist but are

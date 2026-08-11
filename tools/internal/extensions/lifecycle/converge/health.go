@@ -1468,7 +1468,11 @@ func checkPods(r *health.Report, phase1 bool) {
 			case extDepMatch(key):
 				reason, _ := health.MatchExternalDep(key, health.ExternalDepWorkloads())
 				record(r, health.CatDeferred, detail+" — "+reason)
-			case health.PodIsStarting(p.Status):
+			// Gated on health.Budgeted for the same reason the Service branches are:
+			// a pod wedged in ContainerCreating by a FailedMount or
+			// FailedAttachVolume never leaves that state, and calling it "still
+			// starting" in steady-state health means it never alerts.
+			case health.Budgeted && health.PodIsStarting(p.Status):
 				// STARTING IS NOT FAILED, and reading PodIsFailing as a verdict
 				// cost a release-e2e round: a pod mid-ContainerCreating on a
 				// four-minute-old cluster was recorded CatFail, twice sixty
