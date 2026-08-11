@@ -1,0 +1,59 @@
+# llz-cert-automation namespace — shipped HERE, by argoWorkflows, and that needs
+# explaining because it is not argoWorkflows' namespace.
+#
+# WHY IT EXISTS. argo-workflows.yaml sets
+#   controller.workflowNamespaces: [llz-openbao, llz-cert-automation, llz-argo-workflows]
+# and argo-helm creates a workflow ServiceAccount/Role/RoleBinding in EVERY
+# namespace on that list. On a MANAGED cluster the llz-cert-automation chart is
+# not deployed — cert-automation is apl-core's there, which is why its sibling
+# `argoEvents` is ManagedSkip — so that namespace never exists, and the
+# llz-argo-workflows Application retried forever with
+#
+#   one or more synchronization tasks completed unsuccessfully, reason:
+#   namespaces "llz-cert-automation" not found, error running rbacReconcile
+#   [OutOfSync: ServiceAccount/llz-cert-automation/argo-workflow, Role/…, RoleBinding/…]
+#
+# It is the same failure the sibling namespace.yaml in this directory already
+# documents ("the namespace MUST exist first — without it Argo dry-run fails
+# 'namespaces … not found', a child ComparisonError that stalls the whole
+# app-of-apps"), written down for one namespace in that list and not the other.
+# Measured on release-e2e: convergence spent its entire budget on it.
+#
+# THIS NAMESPACE STAYS EMPTY, AND THAT IS THE POINT. Every deployment is managed
+# now, so nothing ever runs cert-automation workloads here — the namespace exists
+# solely so argo-helm has somewhere to put RBAC that nothing will use. It is a
+# prop holding up dead configuration.
+#
+# THE REAL FIX IS TO DROP `llz-cert-automation` FROM workflowNamespaces in
+# argo-workflows.yaml. With managed-only there is no cluster where that entry
+# earns its place: the LLZ cert-automation chart is never deployed, so the
+# controller is being asked to manage a namespace that will never hold a Workflow.
+# This file is the stopgap that unblocks convergence without touching the
+# controller's configuration mid-incident; removing the entry (and then this file)
+# is the follow-up, and it should be one change, not two halves.
+#
+# The content still mirrors kubernetes-charts/llz-cert-automation/templates/
+# namespace.yaml — same wave, PSA labels, versions, istio-injection — so that if
+# that chart is ever deployed again the two agree rather than flapping the labels
+# on every reconcile. Cheap insurance; if you change the chart's namespace labels,
+# change these with them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-cert-automation
+  annotations:
+    # -20, ahead of the wave -15 argo-workflows Application whose RBAC targets it.
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    # Mirrors the chart's values (podSecurity.*): baseline enforce because
+    # cert-automation's buildah build-image step runs as root; audit/warn stay at
+    # restricted so the gap remains visible.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.31
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.31
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.31
+    # Argo Workflow pods are short-lived batch workloads; a sidecar prevents them
+    # terminating cleanly.
+    istio-injection: disabled
