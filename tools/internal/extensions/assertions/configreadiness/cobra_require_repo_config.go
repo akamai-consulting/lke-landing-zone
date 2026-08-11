@@ -127,10 +127,14 @@ func ReportRepoConfig(reqs []envreq.Requirement, getenv func(string) string, out
 	// while `llz doctor` reports them present, since doctor falls back env->repo.
 	// Saying so here is the difference between a two-minute fix and an argument
 	// with the tool.
+	// COUNTED, NOT SPELLED. The set comes from envreq's table and the whole point
+	// of this verb is that a newly required value is picked up the release it lands
+	// — at which point a hardcoded "five" is telling the operator something false in
+	// the same message that asks them to trust it.
 	fmt.Fprintf(errOut, "::error::If a value above IS set but in an infra-<deployment> Environment: these "+
-		"five are REPO-level by design, and this job has no `environment:` so it cannot see an env-scoped "+
+		"%d are REPO-level by design, and this job has no `environment:` so it cannot see an env-scoped "+
 		"copy. Move it to repo scope (the tokens wizard does this) — `llz doctor` will disagree with this check "+
-		"until you do, because it falls back from environment to repo scope and this cannot.\n")
+		"until you do, because it falls back from environment to repo scope and this cannot.\n", len(reqs))
 	return fmt.Errorf("%d required repo-level value(s) missing: %s", len(missing), strings.Join(namesOf(missing), ", "))
 }
 

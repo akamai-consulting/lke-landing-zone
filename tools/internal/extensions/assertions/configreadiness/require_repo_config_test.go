@@ -152,3 +152,29 @@ func TestReportRepoConfigRefusesAnEmptyRequirementSet(t *testing.T) {
 		t.Errorf("the vacuity failure should annotate, got: %q", errOut.String())
 	}
 }
+
+// THE MESSAGE MUST NOT CONTRADICT THE TABLE IT DESCRIBES. The remediation line
+// said "these five are REPO-level by design" while the set is computed from
+// envreq's table — so the release that adds a sixth repo-level requirement, which
+// is exactly what this verb exists to pick up automatically, would ship an
+// operator-facing message that miscounts the list printed directly above it.
+func TestRemediationCountsTheRequirementsRatherThanSpellingThem(t *testing.T) {
+	reqs := []envreq.Requirement{
+		{Name: "TF_STATE_ENCRYPTION_PASSPHRASE", Secret: true, Required: true, How: "generated + escrowed (ADR 0007)"},
+		{Name: "TF_STATE_BUCKET", Required: true, How: "the object-storage bucket"},
+		{Name: "A_SIXTH_THING", Required: true, How: "added by a later release"},
+	}
+	var out, errOut strings.Builder
+	if err := ReportRepoConfig(reqs, func(string) string { return "" }, &out, &errOut); err == nil {
+		t.Fatal("nothing is set — that must be an error")
+	}
+	e := errOut.String()
+	if !strings.Contains(e, "these 3 are REPO-level by design") {
+		t.Errorf("remediation does not count the actual requirement set:\n%s", e)
+	}
+	for _, spelled := range []string{"these five are", "these four are", "these six are"} {
+		if strings.Contains(e, spelled) {
+			t.Errorf("remediation spells a hardcoded count (%q) that the table can outgrow:\n%s", spelled, e)
+		}
+	}
+}

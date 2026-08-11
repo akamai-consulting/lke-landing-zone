@@ -1142,3 +1142,81 @@ func TestFailuresExcludesUnfinishedChecks(t *testing.T) {
 		t.Errorf("FAILURE must still count, got %+v", got)
 	}
 }
+
+// THE FALSE GREEN. Re-running a workflow on the same head SHA leaves BOTH runs'
+// rows in `gh pr checks`, in no order this verb controls. Taking the first match
+// meant a stale SUCCESS sitting ahead of the FAILURE that replaced it ended the
+// scan before the failure was ever inspected — and this verb reported that every
+// delivered CI gate passed. A false green here is indistinguishable from a real
+// one, which is the single answer it must never get wrong.
+func TestPartitionChecksTakesTheWorstRowForARepeatedName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		state string
+	}{
+		{
+			name:  "stale SUCCESS ahead of the FAILURE that replaced it",
+			raw:   `[{"name":"Terraform Lint","state":"SUCCESS"},{"name":"Terraform Lint","state":"FAILURE"}]`,
+			state: "FAILURE",
+		},
+		{
+			name:  "order reversed — same verdict",
+			raw:   `[{"name":"Terraform Lint","state":"FAILURE"},{"name":"Terraform Lint","state":"SUCCESS"}]`,
+			state: "FAILURE",
+		},
+		{
+			name:  "a re-run in flight outranks the cancelled row it superseded",
+			raw:   `[{"name":"Terraform Lint","state":"CANCELLED"},{"name":"Terraform Lint","state":"IN_PROGRESS"}]`,
+			state: "IN_PROGRESS",
+		},
+		{
+			name:  "a real failure outranks a merely stuck sibling",
+			raw:   `[{"name":"Terraform Lint","state":"IN_PROGRESS"},{"name":"Terraform Lint","state":"FAILURE"}]`,
+			state: "FAILURE",
+		},
+		{
+			name:  "the caller-job prefix is still matched, and still ranked",
+			raw:   `[{"name":"call / Terraform Lint","state":"SUCCESS"},{"name":"call / Terraform Lint","state":"FAILURE"}]`,
+			state: "FAILURE",
+		},
+		{
+			name:  "all green stays green",
+			raw:   `[{"name":"Terraform Lint","state":"SUCCESS"},{"name":"Terraform Lint","state":"SUCCESS"}]`,
+			state: "SUCCESS",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found, missing, err := partitionChecks([]byte(tc.raw), []string{"Terraform Lint"})
+			if err != nil {
+				t.Fatalf("unexpected: %v", err)
+			}
+			if len(missing) != 0 {
+				t.Fatalf("wanted check reported missing: %v", missing)
+			}
+			if len(found) != 1 {
+				t.Fatalf("a repeated name must collapse to ONE verdict, got %d: %+v", len(found), found)
+			}
+			if found[0].State != tc.state {
+				t.Errorf("kept %q, want %q — the payload's order decided the verdict instead of its severity",
+					found[0].State, tc.state)
+			}
+		})
+	}
+}
+
+// The severity order is the one failures()/inconclusive() already imply. Pinned
+// directly so a reordering is a test failure rather than a silent change in which
+// row wins.
+func TestCheckSeverityOrdersFailureOverPendingOverInconclusiveOverSuccess(t *testing.T) {
+	rank := func(state string) int { return checkSeverity(check{Name: "x", State: state}) }
+	if !(rank("FAILURE") > rank("IN_PROGRESS") && rank("IN_PROGRESS") > rank("CANCELLED") && rank("CANCELLED") > rank("SUCCESS")) {
+		t.Errorf("severity order broken: FAILURE=%d IN_PROGRESS=%d CANCELLED=%d SUCCESS=%d",
+			rank("FAILURE"), rank("IN_PROGRESS"), rank("CANCELLED"), rank("SUCCESS"))
+	}
+	// An unfamiliar terminal state must rank as a failure, matching failures()'s
+	// default branch — an unknown state is not evidence of success.
+	if rank("SOMETHING_NEW") != rank("FAILURE") {
+		t.Error("an unknown terminal state must rank as a failure, not be treated as benign")
+	}
+}
