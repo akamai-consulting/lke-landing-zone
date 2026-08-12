@@ -19,6 +19,7 @@ package upstreamupdates
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -41,11 +42,19 @@ type Classification struct {
 // "landingzone.yaml.example" — a template artifact no plan depends on — select
 // the state write.
 //
+// excludes are exact paths that sit UNDER a prefix but cannot change what is in
+// state. terraform-iac-bootstrap/ is the motivating case: in a rendered instance
+// it holds no committed .tf at all — those are gitignored render output — so what
+// it actually ships is a .gitignore and an AGENTS.md, both `managed`, both
+// rewritten by ordinary template upgrades. Matching them made every upgrade PR
+// that touched a doc classify as a Terraform change and take the unserialized
+// tfstate write this whole mechanism exists to keep away from bot PRs.
+//
 // FAILS CLOSED ON AN EMPTY FILE LIST. A pull request always changes at least one
 // file, so an empty list means the query broke rather than that the PR is empty,
 // and reporting "touches nothing" for it would launder a broken API call into a
 // skipped import on every PR.
-func Classify(files, prefixes []string) (Classification, error) {
+func Classify(files, prefixes, excludes []string) (Classification, error) {
 	if len(files) == 0 {
 		return Classification{}, fmt.Errorf("the pull request listed zero changed files, which cannot happen for a real PR — " +
 			"treat this as a broken query, not as an empty diff")
@@ -56,6 +65,9 @@ func Classify(files, prefixes []string) (Classification, error) {
 	}
 	c := Classification{Files: files}
 	for _, f := range files {
+		if slices.Contains(excludes, f) {
+			continue
+		}
 		for _, p := range prefixes {
 			if (strings.HasSuffix(p, "/") && strings.HasPrefix(f, p)) || f == p {
 				c.Matched = append(c.Matched, f)

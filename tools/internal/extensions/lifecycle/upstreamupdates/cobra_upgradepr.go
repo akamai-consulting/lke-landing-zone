@@ -20,6 +20,27 @@ import (
 var (
 	gitOut = func(args ...string) (string, error) { return gitcmd.Output(".", args...) }
 
+	// An OPEN PULL REQUEST, not merely a branch. Branch existence was the proxy,
+	// and it is wrong in the one direction that matters: this command pushes before
+	// it calls `gh pr create`, so a refused create (a 422, a revoked token, a
+	// network blip) leaves the branch on the remote with no PR attached. Every
+	// later run for that version then saw the branch, reported "already open" and
+	// exited 0 — the silent success this file's header says it exists to prevent,
+	// arrived at through the recovery path.
+	//
+	// Now: branch with an open PR -> leave it alone. Branch with NO open PR -> the
+	// push landed and the create did not, so open the PR for what is already there.
+	remoteHasOpenPR = func(branch string) bool {
+		out, err := kubectlprobe.Exec("gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", "length")
+		if err != nil {
+			// Cannot tell. Treat as "no PR" so the run tries to create one: a
+			// duplicate create fails loudly and is trivially closed, whereas a false
+			// "already open" leaves an upgrade silently unopened month after month.
+			return false
+		}
+		return strings.TrimSpace(string(out)) != "" && strings.TrimSpace(string(out)) != "0"
+	}
+
 	remoteHasBranch = func(branch string) bool {
 		_, err := kubectlprobe.Exec("git", "ls-remote", "--exit-code", "--heads", "origin", branch)
 		return err == nil
@@ -101,7 +122,14 @@ func UpgradePRCmd() *cobra.Command {
 				Dirty:     strings.TrimSpace(dirty),
 				Version:   strings.TrimSpace(version),
 			}
-			s.RemoteHas = s.AfterSHA != s.BeforeSHA && remoteHasBranch(BranchName(s.Version))
+			// Both, because they mean different things. An open PR is "leave it
+			// alone"; a branch without one is an orphan from a failed create, and the
+			// push below must be skipped for it while the create still runs.
+			branch := BranchName(s.Version)
+			if s.AfterSHA != s.BeforeSHA {
+				s.RemoteHas = remoteHasOpenPR(branch)
+				s.OrphanBranch = !s.RemoteHas && remoteHasBranch(branch)
+			}
 
 			d := Decide(s)
 			d.Report(cmd.ErrOrStderr(), s)
@@ -128,8 +156,12 @@ func UpgradePRCmd() *cobra.Command {
 			if base == "" {
 				return fmt.Errorf("no base branch: pass --base or set GITHUB_REF_NAME")
 			}
-			if err := pushBranch(d.Branch); err != nil {
-				return err
+			// Skipped for an orphan: the branch is already on the remote with the
+			// commit on it, and `git switch -c` would fail on a name that exists.
+			if !s.OrphanBranch {
+				if err := pushBranch(d.Branch); err != nil {
+					return err
+				}
 			}
 			if err := createPR("chore(template): upgrade to "+s.Version, prBody, base, d.Branch); err != nil {
 				return err

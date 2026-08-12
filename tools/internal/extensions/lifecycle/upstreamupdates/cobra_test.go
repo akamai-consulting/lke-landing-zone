@@ -191,8 +191,10 @@ func TestUpgradePRNamesTheMissingTokenBeforeDoingAnything(t *testing.T) {
 func TestUpgradePROpensNothingWhenHEADDidNotMove(t *testing.T) {
 	// The no-op path must touch neither the remote nor the PR API — and must
 	// still exit 0, because "already current" is a correct outcome.
-	origGit, origRemote, origPush, origCreate := gitOut, remoteHasBranch, pushBranch, createPR
-	t.Cleanup(func() { gitOut, remoteHasBranch, pushBranch, createPR = origGit, origRemote, origPush, origCreate })
+	origGit, origPR, origRemote, origPush, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR
+	t.Cleanup(func() {
+		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR = origGit, origPR, origRemote, origPush, origCreate
+	})
 
 	gitOut = func(args ...string) (string, error) {
 		switch {
@@ -203,6 +205,7 @@ func TestUpgradePROpensNothingWhenHEADDidNotMove(t *testing.T) {
 		}
 		return "v1.2.3\n", nil
 	}
+	remoteHasOpenPR = func(string) bool { t.Error("must not consult the remote when HEAD did not move"); return false }
 	remoteHasBranch = func(string) bool { t.Error("must not consult the remote when HEAD did not move"); return false }
 	pushBranch = func(string) error { t.Error("must not push when HEAD did not move"); return nil }
 	createPR = func(_, _, _, _ string) error { t.Error("must not open a PR when HEAD did not move"); return nil }
@@ -225,8 +228,10 @@ func TestUpgradePROpensNothingWhenHEADDidNotMove(t *testing.T) {
 }
 
 func TestUpgradePRPushesAndOpensWhenHEADMoved(t *testing.T) {
-	origGit, origRemote, origPush, origCreate := gitOut, remoteHasBranch, pushBranch, createPR
-	t.Cleanup(func() { gitOut, remoteHasBranch, pushBranch, createPR = origGit, origRemote, origPush, origCreate })
+	origGit, origPR, origRemote, origPush, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR
+	t.Cleanup(func() {
+		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR = origGit, origPR, origRemote, origPush, origCreate
+	})
 
 	gitOut = func(args ...string) (string, error) {
 		switch args[0] {
@@ -242,6 +247,7 @@ func TestUpgradePRPushesAndOpensWhenHEADMoved(t *testing.T) {
 		// is ignored.
 		return "v0.0.0-adopter-tag\n", nil
 	}
+	remoteHasOpenPR = func(string) bool { return false }
 	remoteHasBranch = func(string) bool { return false }
 
 	var pushed, title, base, head string
@@ -268,11 +274,13 @@ func TestUpgradePRPushesAndOpensWhenHEADMoved(t *testing.T) {
 	})
 }
 
-func TestUpgradePRLeavesAnExistingRemoteBranchAlone(t *testing.T) {
+func TestUpgradePRLeavesAnOpenUpgradePRAlone(t *testing.T) {
 	// An earlier run's unmerged PR. Force-pushing over it would replace a diff
 	// someone may be halfway through reviewing.
-	origGit, origRemote, origPush, origCreate := gitOut, remoteHasBranch, pushBranch, createPR
-	t.Cleanup(func() { gitOut, remoteHasBranch, pushBranch, createPR = origGit, origRemote, origPush, origCreate })
+	origGit, origPR, origRemote, origPush, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR
+	t.Cleanup(func() {
+		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR = origGit, origPR, origRemote, origPush, origCreate
+	})
 
 	gitOut = func(args ...string) (string, error) {
 		switch args[0] {
@@ -283,8 +291,9 @@ func TestUpgradePRLeavesAnExistingRemoteBranchAlone(t *testing.T) {
 		}
 		return "v1\n", nil
 	}
+	remoteHasOpenPR = func(string) bool { return true }
 	remoteHasBranch = func(string) bool { return true }
-	pushBranch = func(string) error { t.Error("must not push over an existing remote branch"); return nil }
+	pushBranch = func(string) error { t.Error("must not push over a branch with an open PR"); return nil }
 	createPR = func(_, _, _, _ string) error { t.Error("must not open a second PR"); return nil }
 
 	inTempRepo(t, func(string) {
@@ -317,4 +326,42 @@ func TestPinnedVersionReadsTheAnswersFile(t *testing.T) {
 			t.Errorf("a missing answers file must degrade to %q, got %q", "unknown", got)
 		}
 	})
+}
+
+func TestUpgradePRRecoversAnOrphanBranch(t *testing.T) {
+	// The branch is on the remote but NO pull request references it: the push
+	// landed and `gh pr create` did not (a 422, a revoked token, a blip). Branch
+	// existence used to be the proxy for "already open", so every later run for
+	// that version reported "already open" and exited 0 while no PR existed — an
+	// upgrade silently unopened, month after month.
+	//
+	// The recovery is to create the PR for what is already pushed, and NOT to push
+	// again: `git switch -c` fails on a branch name that exists.
+	origGit, origPR, origRemote, origPush, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR
+	t.Cleanup(func() {
+		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR = origGit, origPR, origRemote, origPush, origCreate
+	})
+	gitOut = func(args ...string) (string, error) {
+		if args[0] == "rev-parse" {
+			return "def\n", nil
+		}
+		return "", nil
+	}
+	remoteHasOpenPR = func(string) bool { return false }
+	remoteHasBranch = func(string) bool { return true }
+	pushBranch = func(string) error { t.Error("must not re-push an orphan branch that already exists"); return nil }
+	created := false
+	createPR = func(_, _, _, _ string) error { created = true; return nil }
+
+	inTempRepo(t, func(dir string) {
+		writeAnswers(t, dir, "v3.3.3")
+		t.Setenv("GH_TOKEN", "x")
+		var errBuf bytes.Buffer
+		if err := runCmd(t, UpgradePRCmd(), []string{"--before", "abc", "--base", "main"}, &errBuf); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !created {
+		t.Error("an orphan branch must get its pull request opened, not be reported as already open")
+	}
 }

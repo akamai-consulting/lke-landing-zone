@@ -26,11 +26,12 @@ import (
 
 // State is what the repo looked like after `llz upgrade` ran.
 type State struct {
-	BeforeSHA string // HEAD recorded before the upgrade
-	AfterSHA  string // HEAD now
-	Dirty     string // `git status --porcelain` output; empty when clean
-	Version   string // the llz version the upgrade targeted
-	RemoteHas bool   // the computed branch already exists on the remote
+	BeforeSHA    string // HEAD recorded before the upgrade
+	AfterSHA     string // HEAD now
+	Dirty        string // `git status --porcelain` output; empty when clean
+	Version      string // the llz version the upgrade targeted
+	RemoteHas    bool   // an OPEN pull request already exists for the computed branch
+	OrphanBranch bool   // the branch exists but no PR does — a create that failed after the push
 }
 
 // Decision is what to do about it.
@@ -71,8 +72,8 @@ func Decide(s State) Decision {
 	case s.AfterSHA == s.BeforeSHA:
 		d.Reason = "llz upgrade produced no commit — this instance is already on the target release"
 	case s.RemoteHas:
-		d.Reason = fmt.Sprintf("%s already exists on the remote: an earlier run opened it and it has not been merged. "+
-			"Leaving it alone rather than force-pushing over a diff someone may be reviewing", d.Branch)
+		d.Reason = fmt.Sprintf("%s already has an open pull request: an earlier run opened it and it has not been "+
+			"merged. Leaving it alone rather than force-pushing over a diff someone may be reviewing", d.Branch)
 	default:
 		d.OpenPR = true
 	}

@@ -28,7 +28,7 @@ func TestClassifyMatchesSubtreesAndWholePathsDifferently(t *testing.T) {
 		{"mixed selects", []string{"README.md", "environments/lab.yaml"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := Classify(tc.files, prefixes)
+			c, err := Classify(tc.files, prefixes, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -43,20 +43,20 @@ func TestClassifyFailsClosedOnAnEmptyFileList(t *testing.T) {
 	// A PR always changes at least one file. An empty list means the query broke,
 	// and answering "touches nothing" for it would skip the import on every PR
 	// while looking exactly like a clean tree.
-	if _, err := Classify(nil, []string{"terraform-iac-bootstrap/"}); err == nil {
+	if _, err := Classify(nil, []string{"terraform-iac-bootstrap/"}, nil); err == nil {
 		t.Error("an empty file list must be an error, not a `false`")
 	}
 }
 
 func TestClassifyFailsClosedOnNoPrefixes(t *testing.T) {
 	// A gate that always answers the same way is not a gate.
-	if _, err := Classify([]string{"a.tf"}, nil); err == nil {
+	if _, err := Classify([]string{"a.tf"}, nil, nil); err == nil {
 		t.Error("no prefixes must be an error rather than a permanent `false`")
 	}
 }
 
 func TestClassifyReportNamesWhatMatched(t *testing.T) {
-	c, err := Classify([]string{"README.md", "environments/lab.yaml"}, []string{"environments/"})
+	c, err := Classify([]string{"README.md", "environments/lab.yaml"}, []string{"environments/"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestClassifyReportNamesWhatMatched(t *testing.T) {
 func TestClassifyReportSaysWhatSkippingCosts(t *testing.T) {
 	// The skipped import means the plan can show a pre-existing VPC as "to be
 	// created". A reader who is not told that reads it as a real diff.
-	c, err := Classify([]string{"docs/x.md"}, []string{"environments/"})
+	c, err := Classify([]string{"docs/x.md"}, []string{"environments/"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,5 +162,32 @@ func TestPRBodyCarriesNoBacktickedCLICommand(t *testing.T) {
 	}
 	if !strings.Contains(prBody, "repo-readiness") {
 		t.Error("the body must tell a reviewer which check actually gates the upgrade")
+	}
+}
+
+func TestClassifyExcludesManagedDocsUnderATerraformPrefix(t *testing.T) {
+	// terraform-iac-bootstrap/ ships NO committed .tf in a rendered instance — those
+	// are gitignored render output. What it does ship is a .gitignore and an
+	// AGENTS.md, both `managed`, both rewritten by ordinary template upgrades. Left
+	// matching, every upgrade PR that touched a doc classified as a Terraform change
+	// and took the unserialized tfstate write this gate exists to keep off bot PRs.
+	prefixes := []string{"terraform-iac-bootstrap/"}
+	excludes := []string{"terraform-iac-bootstrap/AGENTS.md", "terraform-iac-bootstrap/.gitignore"}
+
+	c, err := Classify([]string{"terraform-iac-bootstrap/AGENTS.md", "terraform-iac-bootstrap/.gitignore"}, prefixes, excludes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Touches {
+		t.Errorf("an upgrade that only rewrites the managed docs must not select the state write, matched %v", c.Matched)
+	}
+
+	// And the exclusion must not swallow a real change beside them.
+	c, err = Classify([]string{"terraform-iac-bootstrap/AGENTS.md", "terraform-iac-bootstrap/cluster/main.tf"}, prefixes, excludes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Touches {
+		t.Error("a real Terraform change alongside an excluded doc must still select the import")
 	}
 }

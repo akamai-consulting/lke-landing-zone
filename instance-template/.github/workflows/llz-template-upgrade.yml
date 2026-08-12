@@ -121,11 +121,27 @@ jobs:
 
       # See the header: without this, `llz upgrade` re-renders the current pin to
       # itself and reports an empty diff as "nothing upstream".
+      # BEFORE self-update and before either upgrade path, which is the whole point:
+      # the checkout falls back to github.token so the job STARTS with an unset
+      # secret, but every step after it runs with GH_TOKEN empty and dies on gh's
+      # generic auth error — so `llz ci upgrade-pr`'s precise "set
+      # LLZ_AUTOMATION_TOKEN, and here is why GITHUB_TOKEN cannot substitute" was
+      # unreachable. The message existed and nothing could ever print it.
+      #
+      # Its own step, and its `run:` deliberately ends in `}` rather than a command:
+      # TestDeliveredWorkflowCommands resolves every CLI invocation in a run: script
+      # against the real cobra tree from the RAW yaml, so a single-quoted scalar
+      # ending in one tokenises the closing quote into the verb.
+      - name: Check the automation token is present
+        env:
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+        run: 'test -n "$GH_TOKEN" || { echo "::error title=Missing LLZ_AUTOMATION_TOKEN::The automated template upgrade is armed but this repository secret is unset, so the branch cannot be pushed and no pull request can be opened. GITHUB_TOKEN is not a substitute, because a pull request it opens runs none of the checks that make the upgrade reviewable. See docs/secrets.md."; exit 1; }'
+
       - name: Install the latest llz release
         if: inputs.ref == ''
         env:
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
-        run: llz self-update
+        run: llz self-update 
 
       - name: Record the starting pin
         id: before
@@ -158,7 +174,9 @@ jobs:
           # for exactly this reason; this file did not, one directory over.
           # actionlint does not scan instance-template/, so nothing objected.
           REF: ${{ inputs.ref }}
-        run: llz upgrade --ref "$REF" --commit --no-doctor
+        # Same guard: this path skips self-update, so it is the first step that
+        # would otherwise meet an unset secret.
+        run: llz upgrade --ref "$REF" --commit --no-doctor 
 
       # Everything that used to be ~55 lines of shell — did HEAD move, is the tree
       # dirty, what is the branch called, does it already exist on the remote, the

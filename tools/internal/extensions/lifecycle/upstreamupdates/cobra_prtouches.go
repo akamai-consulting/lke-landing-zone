@@ -61,9 +61,9 @@ var listChangedFiles = func(baseSHA, headSHA string) ([]string, error) {
 // PRTouchesCmd is `llz ci pr-touches`.
 func PRTouchesCmd() *cobra.Command {
 	var (
-		prefixes         []string
-		outputName       string
-		baseSHA, headSHA string
+		prefixes, excludes []string
+		outputName         string
+		baseSHA, headSHA   string
 	)
 	c := &cobra.Command{
 		Use:   "pr-touches",
@@ -93,7 +93,7 @@ func PRTouchesCmd() *cobra.Command {
 					"  this is a 'could not tell', not a 'nothing changed' — the caller must fail rather than skip.\n"+
 					"  the checkout needs full history (fetch-depth: 0) for both commits to be present", baseSHA, headSHA, err)
 			}
-			cl, err := Classify(files, prefixes)
+			cl, err := Classify(files, prefixes, excludes)
 			if err != nil {
 				return err
 			}
@@ -103,6 +103,7 @@ func PRTouchesCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringArrayVar(&prefixes, "prefix", nil, "path prefix to match; trailing / means a subtree (repeatable)")
+	c.Flags().StringArrayVar(&excludes, "exclude", nil, "exact path under a --prefix that does NOT count as a match (repeatable)")
 	c.Flags().StringVar(&outputName, "output-name", "touches", "name of the GITHUB_OUTPUT key to write")
 	c.Flags().StringVar(&baseSHA, "base-sha", "", "the PR's base tip (github.event.pull_request.base.sha)")
 	c.Flags().StringVar(&headSHA, "head-sha", "", "the PR's head tip (github.event.pull_request.head.sha)")

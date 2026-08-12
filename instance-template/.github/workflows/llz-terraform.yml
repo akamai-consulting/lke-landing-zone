@@ -217,16 +217,23 @@ jobs:
         # there reds a required check on every instance first upgrade PR, which
         # cannot be fixed by merging, because merging is what it blocks.
         #
-        # It probes with --help rather than wrapping the real call in `|| false`:
-        # the second would swallow a genuine git failure into the same quiet
-        # `false`, and "could not tell" must stay loud. Verb missing -> skip the
-        # import and say so. Verb present and failing -> the step fails, the job
-        # fails, and the import is skipped anyway because the output is not 'true'.
+        # IT GREPS `ci --help` RATHER THAN RUNNING `pr-touches --help`, and the
+        # difference is the whole probe. Cobra handles --help BEFORE it validates
+        # the subcommand, so invoking a NONEXISTENT verb with --help exits 0 —
+        # measured, not assumed. A probe built on that is inert: it never fires, the real call
+        # then dies on "unknown command", and the deadlock it was written to prevent
+        # stays exactly where it was. The subcommand listing does distinguish them.
+        #
+        # It is a probe rather than wrapping the real call in `|| false`, because
+        # that would swallow a genuine git failure into the same quiet answer, and
+        # "could not tell" must stay loud. Verb missing -> skip the import and say
+        # so. Verb present and failing -> the step fails, the job fails, and the
+        # import is skipped anyway because the output is not 'true'.
         #
         # One physical line because inline workflow bash is a ratcheted budget
         # (.untestable-budget.yaml) that charges block scalars by the line; the
         # reasoning lives here, where it costs nothing.
-        run: 'llz ci pr-touches --help >/dev/null 2>&1 || { echo "terraform=false" >> "$GITHUB_OUTPUT"; echo "::warning title=Pre-upgrade image::vars.TF_IMAGE has no llz ci pr-touches verb, so the VPC/subnet import is skipped and the plan may show existing resources as new. Expected on the PR that advances the template pin; it resolves once TF_IMAGE moves."; exit 0; }; llz ci pr-touches --output-name terraform --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/'
+        run: 'llz ci --help 2>/dev/null | grep -qE "^[[:space:]]+pr-touches[[:space:]]" || { echo "terraform=false" >> "$GITHUB_OUTPUT"; echo "::warning title=Pre-upgrade image::vars.TF_IMAGE has no llz ci pr-touches verb, so the VPC/subnet import is skipped and the plan may show existing resources as new. Expected on the PR that advances the template pin; it resolves once TF_IMAGE moves."; exit 0; }; llz ci pr-touches --output-name terraform --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/ --exclude terraform-iac-bootstrap/AGENTS.md --exclude terraform-iac-bootstrap/.gitignore'
 
   # ── Plan on PRs ─────────────────────────────────────────────────────────────
   # Posts a plan summary; never applies.

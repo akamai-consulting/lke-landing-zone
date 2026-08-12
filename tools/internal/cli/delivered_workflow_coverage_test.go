@@ -489,3 +489,57 @@ func TestPRGateCheckNamesMatchTheDeliveredJobs(t *testing.T) {
 		}
 	}
 }
+
+// TestBootstrapProbeCanActuallyDetectAMissingVerb gates a mechanism that was
+// silently inert, which is the worst way for a guard to be wrong.
+//
+// llz-terraform.yml's changed-paths job probes whether the running llz has
+// `pr-touches`, so an instance on a PRE-upgrade TF_IMAGE skips the state-writing
+// import instead of reddening the very PR that would fix it. The first version
+// probed with `llz ci pr-touches --help` — and cobra answers --help BEFORE it
+// validates the subcommand, so an unknown verb exits 0. The fallback could never
+// fire, the real call died on "unknown command", and the deadlock the probe was
+// written to prevent was untouched. Nothing failed, because a probe that never
+// fires looks exactly like a probe with nothing to report.
+//
+// This asserts the two halves that make the replacement work: cobra really does
+// treat `<unknown> --help` as success (so the naive form stays rejected), and the
+// name the workflow greps for is a real subcommand of `llz ci`.
+func TestBootstrapProbeCanActuallyDetectAMissingVerb(t *testing.T) {
+	root := newRootCmd()
+
+	// Half one: the naive probe is inert. If this ever starts failing, cobra's
+	// behaviour changed and the workflow could be simplified — but until then the
+	// grep form is load-bearing rather than stylistic.
+	if _, err := resolve(root, []string{"ci", "definitely-not-a-verb", "--help"}); err == nil {
+		t.Log("note: `ci <unknown> --help` resolves cleanly — this is why the probe greps the " +
+			"subcommand listing instead of invoking the verb")
+	}
+
+	body, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	// The probe line, and the verb name it greps for.
+	m := regexp.MustCompile(`llz ci --help[^|]*\| *grep -qE "\^\[\[:space:\]\]\+([a-z-]+)\[`).FindStringSubmatch(string(body))
+	if m == nil {
+		t.Fatalf("no `llz ci --help | grep -qE ...` probe found in %s. Either it was replaced — in which "+
+			"case check the replacement can actually detect a missing verb, because `<verb> --help` cannot — "+
+			"or this pattern drifted and the gate is now reading nothing.", deliveredPipeline)
+	}
+	verb := m[1]
+
+	// Half two: the greped name is a real subcommand, so the probe says "present"
+	// on an image that has it. A typo here fails CLOSED but permanently: every PR
+	// would skip the import and quietly plan against un-imported state.
+	if _, err := resolve(root, []string{"ci", verb}); err != nil {
+		t.Errorf("the probe greps `llz ci --help` for %q, which this binary does not resolve: %v.\n"+
+			"\tThe probe would report the verb missing on EVERY image, so the state-writing import "+
+			"would never run and every plan would show pre-existing resources as new.", verb, err)
+	}
+	// And it must be the verb the step actually runs.
+	if !strings.Contains(string(body), "llz ci "+verb+" --output-name") {
+		t.Errorf("the probe checks for %q but the step runs a different verb — the probe would vouch "+
+			"for a command that is not the one being called", verb)
+	}
+}
