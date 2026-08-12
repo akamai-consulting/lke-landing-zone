@@ -358,10 +358,48 @@ func PushSecrets(o Opts, env string) error {
 	// passphrase's own Prompt text says `openssl rand -base64 32` — so an operator
 	// re-running Gather to add one missing token can paste a NEW passphrase over
 	// the live one and make every state file unreadable. Ask before pushing.
-	if repo, rerr := answers.ResolveInstanceRepo("", false); rerr == nil {
+	//
+	// FAILING TO RESOLVE THE REPO USED TO SKIP THE GUARD ENTIRELY, which inverts
+	// it. DropStatePassphraseIfLive is fail-CLOSED by construction — it refuses
+	// even when it merely cannot confirm whether a live passphrase exists, because
+	// overwriting one makes every existing state file permanently unreadable — and
+	// `if rerr == nil` handed the case where we know least (no --repo, no readable
+	// .copier-answers.yml) the one path that proceeded unchecked.
+	//
+	// TO BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT FIX: the unguarded push was
+	// not reachable. branchpolicy.Lock resolves the repo through
+	// instanceRepoFromAnswers(), which reads the same answers.Read(".") and returns
+	// "" under exactly the conditions that make ResolveInstanceRepo error — so Lock
+	// already refused first, and the push loop never ran. No state file was ever at
+	// risk through this path.
+	//
+	// It is still worth closing, for two reasons. The refusal an operator actually
+	// got was "cannot lock branch policy: instance repo unknown", which names
+	// neither the passphrase nor the hazard, so the one diagnostic printed for a
+	// genuinely dangerous input described a different subsystem. And the safety
+	// depended on two guards failing on the same file by coincidence rather than by
+	// design: give Lock any fallback resolver — inferring the repo from the working
+	// directory the way `gh` does, which is the obvious fix for PushSecrets' own
+	// repo-targeting gap — and this becomes live, silently, in the commit that adds
+	// the fallback. Ordering the check first makes it independent of that.
+	//
+	// Gated on the passphrase actually being in the batch, mirroring
+	// DropStatePassphraseIfLive's own first check: a push that does not carry one
+	// has nothing to clobber and must not be blocked by a missing answers file.
+	repo, rerr := answers.ResolveInstanceRepo("", false)
+	switch _, carriesPassphrase := secrets[statepassphrase.SecretName]; {
+	case rerr == nil:
 		if err := statepassphrase.DropStatePassphraseIfLive(repo, env, secrets, false); err != nil {
 			return err
 		}
+	case carriesPassphrase:
+		//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded remediation block, not a sentence fragment
+		return fmt.Errorf("cannot tell which repo this push targets (%v), so %s cannot be checked\n"+
+			"  against the live one before overwriting it — and replacing a live passphrase makes\n"+
+			"  every existing Terraform state file permanently unreadable. Refusing to push.\n"+
+			"  Run this from a checkout with a readable .copier-answers.yml, or remove\n"+
+			"  %s from .llz/secrets.env if the repo's copy is already the right one.",
+			rerr, statepassphrase.SecretName, statepassphrase.SecretName)
 	}
 
 	type item struct {

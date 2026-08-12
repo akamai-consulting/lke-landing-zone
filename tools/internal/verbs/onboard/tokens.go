@@ -108,6 +108,23 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	}
 	if len(missing) == 0 && len(repin) == 0 {
 		_ = WriteEnvFile(".llz/vars.env", vars)
+		// A DEAD CREDENTIAL IS NOT A GREEN RUN. This branch used to print the ✓ and
+		// return nil however the validity probe went, so a revoked-but-present token
+		// produced the dim "fix the invalid credential(s)" line, then a green
+		// "everything is set", then — because TokensCmd calls PrintNextSteps on a nil
+		// return — "Next steps: llz build". Three outputs, the last two contradicting
+		// the first, and exit 0 for a tool whose next step cannot work. `llz doctor`
+		// already errors in exactly this state (DoctorE2E's `invalid > 0` arm), and
+		// `llz up` chains tokens → doctor → build, so the disagreement only bought one
+		// more stage before the same stop.
+		//
+		// ONLY ON THIS PATH, deliberately. invalidN is measured before the interactive
+		// section; past this point the operator may have just pasted a replacement for
+		// the very token that probed dead, and failing on a stale measurement would
+		// reject the fix. Here nothing was prompted, so the measurement still holds.
+		if err := InvalidCredentialsError(invalidN, instanceRepo); err != nil {
+			return err
+		}
 		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo))
 		return nil
 	}
@@ -401,8 +418,8 @@ func DoctorE2E(repo, env string, admin bool) error {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
 	}
-	if invalid > 0 {
-		return fmt.Errorf("%d probeable credential(s) are invalid — rotate them (see the validity report above)", invalid)
+	if err := InvalidCredentialsError(invalid, instanceRepo); err != nil {
+		return err
 	}
 	if pinErr != nil {
 		return pinErr
@@ -449,6 +466,24 @@ func repoSlug(repo string) string {
 		return strings.ToLower(name)
 	}
 	return strings.ToLower(repo)
+}
+
+// InvalidCredentialsError is the single refusal `llz tokens` and `llz doctor`
+// both return when the validity probe found present-but-dead credentials. nil
+// when there are none, so callers can `if err := ...; err != nil`.
+//
+// ONE FUNCTION BECAUSE THE TWO COMMANDS DISAGREED. `llz doctor` errored on
+// invalid > 0; `llz tokens`, on the path where nothing is missing, printed the
+// dim "fix the invalid credential(s)" line and then returned nil anyway — which
+// TokensCmd reads as success and answers with "Next steps: llz build". Same
+// probe, same instance, same moment, opposite verdicts, and the one that exits 0
+// is the one an operator runs first. Restating the rule in both places is what
+// let them drift; there is now one place to change and one place to test.
+func InvalidCredentialsError(n int, repo string) error {
+	if n <= 0 {
+		return nil
+	}
+	return fmt.Errorf("%d probeable credential(s) on %s are invalid — rotate them (see the validity report above)", n, repo)
 }
 
 // NothingToProvisionNote is what `llz tokens` says when it finds every required
