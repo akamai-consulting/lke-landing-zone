@@ -57,6 +57,13 @@ var ungated = map[string]string{
 	"internal/shared/forge":        "unruled — the largest of these by far; candidate for coverage-bank",
 	"internal/shared/tfroots":      "unruled — nobody has decided; candidate for coverage-bank",
 	"internal/shared/validate":     "unruled — nobody has decided; candidate for coverage-bank",
+	// NOT "unruled" — ruled out. The package declares data and no functions at all
+	// (`go test -cover` reports "[no statements]"), so a floor would be a number
+	// with nothing behind it. Its tests assert facts ABOUT that data — that
+	// docs/local.md is delivered and classed `owned` — which is exactly the kind of
+	// invariant a percentage cannot express.
+	"internal/shared/platform": "data declarations only, no statements to cover — its tests assert " +
+		"the delivered keep-set and manifest classes, which a coverage number cannot",
 }
 
 func TestEveryTestedPackageIsGatedOrListed(t *testing.T) {

@@ -293,6 +293,8 @@ This instance carries the day-to-day operator docs locally:
 - **quickstart.md** — stand up and operate this instance
 - **runbooks/** — incident recovery
 - **playbooks/** — routine operational how-tos
+- **local.md** — *yours*: link this instance's own charts, runbooks and notes
+  here. It is the only file under `+"`docs/`"+` an upgrade will not overwrite.
 
 The full documentation set for **your pinned template version** — architecture,
 secrets, the LandingZone spec, adopter guide, environments/promotion, design docs,

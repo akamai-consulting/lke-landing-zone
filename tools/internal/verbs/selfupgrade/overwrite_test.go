@@ -25,7 +25,7 @@ func TestOverwriteManagedFromScaffoldOnlyCopiesManagedFiles(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "owned.txt"), "operator owned\n")
 	chdir(t, dir)
 
-	count, err := overwriteManagedFromScaffold(clean)
+	count, _, err := overwriteManagedFromScaffold(clean)
 	if err != nil {
 		t.Fatal(err)
 	}
