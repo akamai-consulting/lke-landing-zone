@@ -45,6 +45,16 @@ func buildArgv(env string, assertInvariants bool) []string {
 	return argv
 }
 
+// ghCanAuth reports whether anything can authenticate a dispatch — an env token
+// or a logged-in gh. Seamed so the check is testable without a real gh.
+var ghCanAuth = func() bool {
+	if os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" {
+		return true
+	}
+	_, err := kubectlprobe.Exec("gh", "auth", "status")
+	return err == nil
+}
+
 // statusArgv is the read-only convergence check set (matches the verify steps in
 // docs/runbooks/bootstrap-openbao.md).
 //
@@ -82,14 +92,23 @@ func cmdBuild(args []string, g globalOpts, skipPreflight, watch, assertInvariant
 		return fmt.Errorf("--watch requires --yes: without it nothing is dispatched, so there is no run to follow")
 	}
 	// Checked HERE rather than left to `gh`, because the downstream symptom is a
-	// misdiagnosis. With no token the dispatch is refused, no run is created, and
-	// the watcher reports "GitHub never registered the run" — which reads as a
+	// misdiagnosis. With no credential the dispatch is refused, no run is created,
+	// and the watcher reports "GitHub never registered the run" — which reads as a
 	// GitHub problem and sends the reader to the Actions tab instead of to the
-	// repository secret that is actually missing. Only under --watch: an operator
-	// at a terminal has an authenticated gh, and this is the unattended path.
-	if watch && os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" {
-		return fmt.Errorf("--watch needs GH_TOKEN (or GITHUB_TOKEN) in the environment and neither is set — " +
-			"in CI that is the LLZ_AUTOMATION_TOKEN repository secret, which an armed scheduled-apply requires; see docs/secrets.md")
+	// repository secret that is actually missing.
+	//
+	// `gh auth status` IS a credential, and the first cut of this check forgot it:
+	// it looked at the two env vars only, so an operator who had run `gh auth
+	// login` — the ordinary local setup, and the one the quickstart tells them to
+	// do — was refused with a message about a CI secret, for a dispatch that would
+	// have worked. The check must reject only the case where nothing can
+	// authenticate.
+	if watch && !ghCanAuth() {
+		return fmt.Errorf("--watch found no GitHub credential: GH_TOKEN and GITHUB_TOKEN are unset and " +
+			"`gh auth status` reports none.\n" +
+			"  locally: run `gh auth login`.\n" +
+			"  in CI: that is the LLZ_AUTOMATION_TOKEN repository secret, which an armed scheduled-apply " +
+			"requires; see docs/secrets.md")
 	}
 	// The dispatch is fire-and-forget — GitHub accepts any `region` string and
 	// fails later, in CI, on the tree it checked out. Ask the remote first

@@ -162,9 +162,20 @@ func Begin(dryRun, yes bool, workflow string) Watch {
 	if dryRun || !yes || !kubectlprobe.Lookable("gh") {
 		return Watch{}
 	}
-	repo, err := answers.ResolveInstanceRepo("", false)
-	if err != nil {
-		return Watch{}
+	// GH_REPO FIRST, because that is what the dispatch itself targets — `gh`
+	// honours it over anything in the checkout. The pin in .copier-answers.yml is
+	// the fallback, and the two diverge exactly when a repo has been renamed or
+	// transferred: the dispatch then lands in the new repo while the watcher polls
+	// the old name. Report() only lost a link to that; Wait() would fail an armed
+	// scheduled apply, or worse, follow an unrelated run in a repo that still
+	// answers to the old name.
+	repo := os.Getenv("GH_REPO")
+	if repo == "" {
+		r, err := answers.ResolveInstanceRepo("", false)
+		if err != nil {
+			return Watch{}
+		}
+		repo = r
 	}
 	w := Watch{repo: repo, workflow: workflow, armed: true}
 	// The HIGHEST id present, not runs[0]: the API returns newest-first, but the
@@ -318,6 +329,12 @@ func (w Watch) Wait() error {
 			continue
 		}
 		if status != "completed" {
+			// RESET, because a `module=all` chain parks more than once: apply-vpc,
+			// apply-cluster, apply-object-storage and bootstrap-openbao each carry
+			// their own `environment:`. A cumulative counter turned the grace into a
+			// budget across the whole run, so a chain whose approvals were all GIVEN
+			// still failed with "no one has given it" — blaming a human who had.
+			waiting = 0
 			sleepFn(runWatchInterval)
 			continue
 		}

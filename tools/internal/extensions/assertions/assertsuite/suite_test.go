@@ -323,42 +323,54 @@ func TestNoResolverRunsEveryLane(t *testing.T) {
 	}
 }
 
-// TestSkipMutatingDropsExactlyTheMutatingLanes pins the property the promotion
-// and scheduled-apply paths depend on.
+// TestMutatingFlagAgreesWithTheLaneItDescribes couples the two halves of one
+// declaration instead of restating either.
 //
-// Those callers set the same gate release-e2e sets, and until this flag existed
-// that meant a promotion into prod forced a real broad-PAT rotation (mint →
-// OpenBao → GitHub publish → REVOKE) and submitted a health Workflow, on every
-// stage and every week. broadpat.go's own safety argument was "it is wired behind
-// the e2e gate, which only release-e2e sets" — a sentence that stopped being true
-// the moment a second caller set it, with nothing failing to say so.
-func TestSkipMutatingDropsExactlyTheMutatingLanes(t *testing.T) {
+// Every mutating lane already says so in its own `Why`, in caps, because that
+// string is what prints beside a failure. The `Mutating` bool is what
+// `--skip-mutating` reads. Those are two copies of one fact, and the first cut of
+// this gate hardcoded the set — which pinned the state of the tree at the moment
+// it was written rather than checking it. It was written with two of the four
+// lanes marked, so it asserted the bug was correct and would have failed on the
+// fix.
+//
+// Deriving from the prose means a lane added later, or a `Why` edited to say
+// MUTATING, forces the flag to move with it — and a lane marked without saying so
+// is caught too, because a caller reading the printed rationale would have no idea
+// it was skipped.
+func TestMutatingFlagAgreesWithTheLaneItDescribes(t *testing.T) {
 	all := Lanes("e2e")
-	var mutating []string
+	if len(all) < 5 {
+		t.Fatalf("only %d lane(s) — the table is not being read, so this gate would pass having "+
+			"compared nothing", len(all))
+	}
+	says, marked := 0, 0
 	for _, l := range all {
+		declares := strings.Contains(l.Why, "MUTATING")
+		if declares {
+			says++
+		}
 		if l.Mutating {
-			mutating = append(mutating, l.Name)
+			marked++
+		}
+		switch {
+		case declares && !l.Mutating:
+			t.Errorf("lane %q says MUTATING in its Why but is not marked Mutating, so --skip-mutating "+
+				"still runs it: a promotion stage and the weekly apply would exercise it against "+
+				"production. Why: %s", l.Name, l.Why)
+		case !declares && l.Mutating:
+			t.Errorf("lane %q is marked Mutating but its Why does not say so — a reader of the printed "+
+				"rationale has no way to know it is skipped on every promotion", l.Name)
 		}
 	}
-	// Fail closed on vacuity: if nothing is marked, the flag is a no-op and every
-	// caller that relies on it is unprotected while looking protected.
-	if len(mutating) == 0 {
-		t.Fatal("no lane is marked Mutating — --skip-mutating would drop nothing, so every promotion " +
-			"would run the rotation and submission lanes while appearing to have opted out")
+	// Fail closed on vacuity in both directions: zero marked lanes makes
+	// --skip-mutating a no-op that leaves every caller unprotected while looking
+	// protected, and zero declaring lanes means the Why convention was dropped.
+	if says == 0 || marked == 0 {
+		t.Fatalf("%d lane(s) declare MUTATING and %d are marked — a suite with neither is one where "+
+			"--skip-mutating protects nothing", says, marked)
 	}
-	// The two the delivered cluster-health workflow excludes by hand.
-	want := map[string]bool{"health-workflow": true, "broad-pat": true}
-	for _, name := range mutating {
-		if !want[name] {
-			t.Errorf("lane %q is newly marked Mutating — confirm the promotion and scheduled-apply paths "+
-				"should stop running it, then add it here", name)
-		}
-		delete(want, name)
-	}
-	for name := range want {
-		t.Errorf("lane %q is no longer marked Mutating; it forces a real rotation/submission and would "+
-			"now run on every promotion stage and every weekly apply", name)
-	}
+	t.Logf("%d of %d lanes are mutating", marked, len(all))
 }
 
 func TestSkipMutatingFailsRatherThanRunningNothing(t *testing.T) {

@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: false
+      assert-loki:
+        description: 'DEPRECATED and IGNORED. Kept declared so a `merge`-class cluster-health.yml stub that still passes the old key does not fail the RUN — GitHub rejects an undeclared input at startup, with no jobs and no logs. The battery it used to gate now runs under fail-on-unhealthy. Remove after one release.'
+        required: false
+        type: boolean
+        default: false
       fail-on-unhealthy:
         description: 'Fail the job when `llz ci health` exits non-zero. Leave false for recovery/diagnostic runs, where the report is the deliverable.'
         required: false

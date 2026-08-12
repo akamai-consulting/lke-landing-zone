@@ -139,8 +139,9 @@ here — `llz-cluster-health.yml` still carries a hand-written `--only` naming t
 non-mutating lanes, and the safety of the rest rested on a comment in
 `broadpat.go` saying they are "wired behind the e2e gate, which only release-e2e
 sets". The moment a second caller set that gate, that sentence stopped being true
-and nothing failed. `TestSkipMutatingDropsExactlyTheMutatingLanes` now fails if
-the marked set changes.
+and nothing failed. `TestMutatingFlagAgreesWithTheLaneItDescribes` now derives
+the set from each lane's own `Why` rather than restating it, so a lane added later
+— or a `Why` edited to say MUTATING — forces the flag to move with it.
 
 That is also why the cron sits two hours after `scheduled-checks.yml`'s weekly
 health probe: reading back through a red Sunday, the health verdict that preceded

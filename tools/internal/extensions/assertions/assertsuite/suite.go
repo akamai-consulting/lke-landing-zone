@@ -177,14 +177,14 @@ func Lanes(region string) []Lane {
 				"and both ship failurePolicy: Ignore so a downed Kyverno ADMITS everything silently.",
 		},
 		{
-			Name: "net-enforcement", Gating: true,
+			Name: "net-enforcement", Gating: true, Mutating: true,
 			Steps: []Step{step("assert-network", "assert-network-enforcement")},
 			Why: "MUTATING (its own scratch namespace, deleted on every path). The two enforcement properties that cannot be dry-run: a dropped packet is only knowable by sending one. " +
 				"Proves the CNI enforces NetworkPolicy at all — without which every default-deny in this repo is decorative — and that Istio refuses plaintext on a STRICT-mesh port. " +
 				"Each negative is paired with a POSITIVE CONTROL from the same pod, so a probe that simply could not reach anything reports INCONCLUSIVE instead of passing as enforcement.",
 		},
 		{
-			Name: "obj-encryption", Gating: true,
+			Name: "obj-encryption", Gating: true, Mutating: true,
 			Steps: []Step{regionStep("obj-encryption", "assert-obj-encryption")},
 			Why: "Objects actually land ENCRYPTED. Separate from obj-storage on purpose: assert-obj-roundtrip proves a consumer can WRITE, " +
 				"and a plaintext write passes it perfectly. This proves the SSE-C gateway is in the path — the registry pods carry the CA, " +

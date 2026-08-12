@@ -1375,7 +1375,16 @@ categories:
     #                       TestBuildArgvFieldsAreDeclaredInputsOfTerraformYml
     #                       checks against the real declaration rather than a
     #                       second copy. Net for the change is -58.
-    budget: 1890
+    #   1,900 / 112 files  +10 for ghCanAuth, from review: the --watch credential
+    #                       check looked at GH_TOKEN/GITHUB_TOKEN only, so an
+    #                       operator who had run `gh auth login` — the local setup
+    #                       the quickstart prescribes — was refused with a message
+    #                       about a CI secret, for a dispatch that would have
+    #                       worked. It is a seam in the wiring layer because it
+    #                       guards a wiring decision (may this argv be dispatched
+    #                       at all) and because a test must be able to answer it
+    #                       both ways without a real gh. Net for the change is -48.
+    budget: 1900
     exact: true
     include:
       - "tools/internal/cli/*.go"

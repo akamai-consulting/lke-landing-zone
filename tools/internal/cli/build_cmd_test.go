@@ -24,6 +24,36 @@ func TestCmdBuildSkipPreflightBypassesTheCheck(t *testing.T) {
 	}
 }
 
+func TestBuildWatchAcceptsAnAuthenticatedGH(t *testing.T) {
+	// The ordinary LOCAL setup: no env token, but `gh auth login` has been run —
+	// which is what the quickstart tells an operator to do. The first cut of the
+	// credential check looked at the two env vars only, so it refused that
+	// operator with a message about a CI secret, for a dispatch that would have
+	// worked perfectly.
+	orig := ghCanAuth
+	t.Cleanup(func() { ghCanAuth = orig })
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	ghCanAuth = func() bool { return true }
+	dir := t.TempDir()
+	writeMiniInstance(t, dir)
+	chdir(t, dir)
+	stubGitHub(t, nil)
+	// Reaches the dispatch rather than being refused up front; --dry-run keeps it
+	// from actually running anything.
+	if err := cmdBuild([]string{"lab"}, globalOpts{Yes: true, DryRun: true}, true, true, false); err != nil &&
+		strings.Contains(err.Error(), "no GitHub credential") {
+		t.Errorf("an authenticated gh must satisfy --watch, got %v", err)
+	}
+
+	ghCanAuth = func() bool { return false }
+	err := cmdBuild([]string{"lab"}, globalOpts{Yes: true, DryRun: true}, true, true, false)
+	if err == nil || !strings.Contains(err.Error(), "no GitHub credential") {
+		t.Errorf("with nothing able to authenticate, --watch must be refused, got %v", err)
+	}
+}
+
 func TestBuildWatchRequiresYes(t *testing.T) {
 	// Without --yes nothing is dispatched, so --watch would follow a run that was
 	// never created. Caught before the dispatch, where the message can still say

@@ -244,6 +244,11 @@ jobs:
     # import step below requires the output to equal 'true', and a failed job's
     # output is empty, so the state write is skipped while the plan still runs.
     #
+    # `discover` is re-required EXPLICITLY, because !cancelled() relaxes the whole
+    # needs: set and not just the one job it was added for. Without it a failed
+    # discover reaches the matrix as fromJSON('') — an evaluation error on the job
+    # itself rather than the clean skip a plain needs: would have given.
+    #
     # THE CASE THIS EXISTS FOR IS THE FIRST UPGRADE. `vars.TF_IMAGE` still points
     # at the PRE-upgrade image on the very PR that would advance it — `llz upgrade`
     # says so and cannot push a repo variable — so `llz ci pr-touches` is a verb
@@ -252,6 +257,7 @@ jobs:
     # available after merging the thing that cannot merge.
     if: >
       !cancelled() &&
+      needs.discover.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false
