@@ -89,8 +89,35 @@ resource "linode_lke_cluster" "this" {
   # treats them as drift and nulls them out — which the API interprets as
   # "delete the pool" (observed in practice: a live pool was destroyed
   # this way).
+  # vpc_id/subnet_id are CREATE-TIME ONLY on the Linode API, and ignoring their
+  # drift is the only honest posture.
+  #
+  # The provider marks both as plain optional attributes, so a mismatch between
+  # state and the live cluster plans as a benign-looking `update in-place`:
+  #
+  #     ~ subnet_id = 814117 -> 806378
+  #     ~ vpc_id    = 580281 -> 575244
+  #
+  # That plan cannot do what it says. `PUT /lke/clusters/{id}` does not accept
+  # either field, so the apply either no-ops (and the identical diff returns on
+  # every subsequent plan, forever) or — worse, if Linode ever makes it real —
+  # moves a live cluster's nodes to a different subnet, which is a full node
+  # recycle presented as an in-place update. Neither is something an operator
+  # asked for by running `plan`.
+  #
+  # HOW A CLUSTER GETS INTO THAT STATE: the vpc_id argument above is newer than
+  # the module. A cluster created when only subnet_id was passed did NOT attach
+  # this VPC — LKE-E silently provisioned its own `lke<clusterID>` VPC (see the
+  # comment on vpc_id) — so the module's VPC sits orphaned and the cluster lives
+  # somewhere else. The first plan after upgrading past that fix is where it
+  # shows up, on a cluster that has been running fine for months.
+  #
+  # So: bind on CREATE (ignore_changes does not apply to creates, so a new
+  # cluster still gets the VPC this module made) and never fight it afterwards.
+  # The `check` block below is what makes the resulting mismatch visible, since
+  # ignoring drift silently is how it stayed unnoticed in the first place.
   lifecycle {
-    ignore_changes = [control_plane[0].acl, pool]
+    ignore_changes = [control_plane[0].acl, pool, vpc_id, subnet_id]
   }
 
   # Fail fast: force the node firewall (and, via vpc_id/subnet_id above, the VPC
@@ -102,4 +129,45 @@ resource "linode_lke_cluster" "this" {
   # cluster create is already in flight. Ordering firewall/VPC first surfaces
   # those cheap, instant failures before the expensive create begins.
   depends_on = [linode_firewall.this]
+}
+
+# Report — do not fail — when the cluster is not in the VPC this module built.
+#
+# A `check` block rather than a precondition/postcondition on purpose. The
+# condition is unfixable by any apply (vpc_id is create-time only), so asserting
+# it would wedge every future apply on an instance whose only real fault is that
+# it was created before the vpc_id argument existed. Blocking an operator from
+# applying an unrelated change until they recreate their cluster is a worse
+# outcome than the drift. A check warns each plan and lets the work proceed.
+#
+# It is worth warning about loudly, though, because two things downstream read
+# the module's VPC and both go quietly wrong when the cluster is not in it:
+#
+#   - `vpc_subnet_cidr` builds the node firewall's allow-vpc-intra-tcp/udp rules
+#     (firewall.tf) and is patched into the cloud-firewall-controller's VPC_CIDR.
+#     Pointed at the wrong VPC's range, those rules cover addresses no node has,
+#     so Cilium's VXLAN (8472) and health (4240) traffic is not actually allowed
+#     by the rules that exist to allow it.
+#   - `vpc_id`/`vpc_subnet_id` fill spec.cluster.databases.<name>.vpcId/subnetId.
+#     A Managed Postgres has no public endpoint, so attaching it to a VPC the
+#     nodes are not in yields a database the cluster cannot reach at all.
+#
+# Both are silent: nothing errors at apply time, and the diagnosis starts from a
+# symptom several layers away. Hence the ID in the message — the fix begins with
+# knowing which VPC the cluster is really in.
+check "cluster_is_in_this_modules_vpc" {
+  assert {
+    condition = tostring(linode_lke_cluster.this.vpc_id) == tostring(local.vpc_id)
+    error_message = format(
+      "cluster %s is attached to VPC %s, but this module manages VPC %s (subnet %s, %s).\n%s\n%s\n%s",
+      var.cluster_label,
+      tostring(linode_lke_cluster.this.vpc_id),
+      tostring(local.vpc_id),
+      linode_vpc_subnet.nodes.id,
+      var.vpc_subnet_cidr,
+      "  This cluster predates the module setting vpc_id, so LKE-E provisioned its own VPC and the one here is orphaned.",
+      "  Terraform CANNOT correct it: vpc_id is create-time only, so the move is a no-op the plan keeps re-proposing.",
+      "  Check before trusting vpc_subnet_cidr: `linode-cli vpcs subnets-list <live-vpc-id>`. If its range differs from the CIDR above, the node firewall's intra-VPC rules and any VPC-attached database are pointed at the wrong network.",
+    )
+  }
 }
