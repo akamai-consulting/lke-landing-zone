@@ -214,12 +214,17 @@ func (p *ManifestPolicy) Apply(before UpgradeSnapshot) error {
 	if err := before.restore(); err != nil {
 		return fmt.Errorf("restore owned files: %w", err)
 	}
-	count, err := overwriteManagedFromScaffold(p.cleanRoot)
+	count, dropped, err := overwriteManagedFromScaffold(p.cleanRoot)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s restored %d owned file(s); overwrote %d managed file(s) from %s\n",
 		color.Dim("→"), len(before.files), count, p.ref)
+	// Advisory. The tree is already rewritten by this point and "your links moved"
+	// is not a reason to fail an upgrade that otherwise worked.
+	if s := FormatDroppedRefs(dropped); s != "" {
+		fmt.Fprintf(os.Stderr, "%s %s\n", color.Yellow("!"), s)
+	}
 	return nil
 }
 
@@ -303,14 +308,15 @@ func copierRenderArgv(a *answers.File, ref, dst string) []string {
 		source, dst}
 }
 
-func overwriteManagedFromScaffold(cleanRoot string) (int, error) {
+func overwriteManagedFromScaffold(cleanRoot string) (int, []DroppedRef, error) {
+	var dropped []DroppedRef
 	m, err := manifest.Load(cleanRoot)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	files, err := manifest.ScaffoldFiles(cleanRoot)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	count := 0
 	for _, rel := range files {
@@ -323,12 +329,21 @@ func overwriteManagedFromScaffold(cleanRoot string) (int, error) {
 		if err != nil || info.IsDir() {
 			continue
 		}
+		// Read the file the upgrade is about to replace, so the references it
+		// carried can be compared against the ones it will carry. This is the only
+		// moment both versions exist — see dropped_refs.go.
+		before, _ := os.ReadFile(filepath.FromSlash(rel))
 		if err := copyUpgradeFile(src, filepath.FromSlash(rel), info.Mode().Perm()); err != nil {
-			return count, err
+			return count, dropped, err
+		}
+		if len(before) > 0 {
+			if after, err := os.ReadFile(filepath.FromSlash(rel)); err == nil {
+				dropped = append(dropped, droppedRefs(rel, before, after, ".")...)
+			}
 		}
 		count++
 	}
-	return count, nil
+	return count, dropped, nil
 }
 
 func copyUpgradeFile(src, dst string, mode os.FileMode) error {

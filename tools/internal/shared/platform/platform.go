@@ -57,6 +57,11 @@ var DeliveredDocs = map[string]bool{
 	"runbooks":      true, // incident recovery
 	"playbooks":     true, // routine operational how-tos
 	"README.md":     true, // the pointer deliver-docs writes (kept if it already exists)
+	// The instance's OWN index. `owned` in .template-manifest, so unlike every
+	// other entry here it is seeded once and never overwritten — it is the only
+	// place an adopter can link their own docs from and keep them across an
+	// upgrade. Delivered like the rest, then left alone forever.
+	"local.md": true,
 }
 
 // RenderTimeArtifact names paths that exist in a RENDERED instance but not in the

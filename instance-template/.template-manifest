@@ -86,6 +86,14 @@ owned    environments/*.yaml
 # root docs/ tree by copier.yml `_tasks` (OUTSIDE the scaffold), so they refresh
 # on update — overwrite-managed, never hand-edited in an instance.
 managed  docs/**
+# ...except the instance's own index, which is the ONE documentation file the
+# template seeds and then never touches. Every other docs entry point is
+# `managed`, so an adopter who extends the platform had nowhere to link their own
+# charts/runbooks from that survived an upgrade: a real instance lost its local
+# managed-apps references from six managed files in a single release, leaving the
+# playbook present but unreachable. `owned` = seed once, never update.
+# (Last-match-wins, so this MUST stay after the `managed docs/**` above.)
+owned    docs/local.md
 # Instance landing page — links to the local docs/ tree + the common `llz` flow.
 # Template-owned (like the other READMEs) so improvements reach instances on update;
 # instance-specific notes belong in docs/ or a separate file, not here.
