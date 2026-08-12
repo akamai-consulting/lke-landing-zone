@@ -162,15 +162,28 @@ jobs:
     name: Classify the PR's diff
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # `contents: read` AND NOTHING MORE, which is a constraint rather than a
+    # preference. A callee job may never ask for more than the CALLING job holds,
+    # and GitHub validates that while parsing the graph — before any `if:` runs. So
+    # a `pull-requests: read` here (which the pulls API would need) turns every
+    # caller of this workflow into a startup_failure: no jobs, no logs, no
+    # annotations, on PR plans, dispatched applies and promotion stages alike.
+    # terraform.yml's `call:` job and promote.yml's stages all hold `contents: read`.
+    # `llz ci pr-touches` therefore diffs the local checkout instead.
     permissions:
       contents: read
-      pull-requests: read
     timeout-minutes: 5
     outputs:
       terraform: ${{ steps.classify.outputs.terraform }}
     container:
       image: ${{ vars.TF_IMAGE }}
     steps:
+      # FULL HISTORY: the diff is against the PR's base commit, which a shallow
+      # clone does not contain.
+      - name: Checkout the instance
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       # The prefixes are the three trees that decide what ends up in Terraform
       # state: the roots themselves, and the spec `llz render` turns into the
       # per-deployment tfvars they read. A spec edit changes the plan without
@@ -185,9 +198,7 @@ jobs:
       # unserialized write this job exists to prevent.
       - name: Does this PR change what Terraform state should contain?
         id: classify
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: llz ci pr-touches --output-name terraform --pr ${{ github.event.pull_request.number }} --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/
+        run: llz ci pr-touches --output-name terraform --base-sha ${{ github.event.pull_request.base.sha }} --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/
 
   # ── Plan on PRs ─────────────────────────────────────────────────────────────
   # Posts a plan summary; never applies.

@@ -47,21 +47,31 @@ func inTempRepo(t *testing.T, fn func(dir string)) {
 	fn(dir)
 }
 
+// writeAnswers seeds the pin the upgrade would have just rewritten — the single
+// source `upgrade-pr` reads the version from.
+func writeAnswers(t *testing.T, dir, version string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".copier-answers.yml"),
+		[]byte("_commit: abc\nllz_version: \""+version+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ── pr-touches ──────────────────────────────────────────────────────────────
 
 func TestPRTouchesWritesTheOutputAndFailsClosedOnAPIError(t *testing.T) {
-	orig := listPRFiles
-	t.Cleanup(func() { listPRFiles = orig })
+	orig := listChangedFiles
+	t.Cleanup(func() { listChangedFiles = orig })
 
 	t.Run("writes true", func(t *testing.T) {
-		listPRFiles = func(string, int) ([]string, error) {
+		listChangedFiles = func(string) ([]string, error) {
 			return []string{"terraform-iac-bootstrap/cluster/main.tf"}, nil
 		}
 		inTempRepo(t, func(dir string) {
 			var errBuf bytes.Buffer
 			c := PRTouchesCmd()
 			c.SetOut(&bytes.Buffer{})
-			if err := runCmd(t, c, []string{"--repo", "a/b", "--pr", "1",
+			if err := runCmd(t, c, []string{"--base-sha", "abc123",
 				"--prefix", "terraform-iac-bootstrap/", "--output-name", "terraform"}, &errBuf); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -76,13 +86,13 @@ func TestPRTouchesWritesTheOutputAndFailsClosedOnAPIError(t *testing.T) {
 		// The whole design. A defaulted `false` here turns a GitHub blip into a
 		// silently skipped state-import on every PR, which looks exactly like a
 		// clean tree.
-		listPRFiles = func(string, int) ([]string, error) { return nil, errBoom{} }
+		listChangedFiles = func(string) ([]string, error) { return nil, errBoom{} }
 		inTempRepo(t, func(dir string) {
 			var errBuf bytes.Buffer
 			c := PRTouchesCmd()
 			c.SetOut(&bytes.Buffer{})
 			c.SilenceUsage, c.SilenceErrors = true, true
-			err := runCmd(t, c, []string{"--repo", "a/b", "--pr", "1", "--prefix", "x/"}, &errBuf)
+			err := runCmd(t, c, []string{"--base-sha", "abc123", "--prefix", "x/"}, &errBuf)
 			if err == nil {
 				t.Fatal("an API failure must fail the command")
 			}
@@ -100,15 +110,16 @@ type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
 
-func TestPRTouchesRequiresARepoAndPR(t *testing.T) {
+func TestPRTouchesRequiresABaseSHA(t *testing.T) {
+	// Without it there is nothing to diff against, and every PR would classify the
+	// same way — a gate that always answers identically is not a gate.
 	inTempRepo(t, func(string) {
-		t.Setenv("GITHUB_REPOSITORY", "")
 		var errBuf bytes.Buffer
 		c := PRTouchesCmd()
 		c.SetOut(&bytes.Buffer{})
 		c.SilenceUsage, c.SilenceErrors = true, true
-		if err := runCmd(t, c, []string{"--pr", "1", "--prefix", "x/"}, &errBuf); err == nil {
-			t.Error("no repo must be refused rather than guessed")
+		if err := runCmd(t, c, []string{"--prefix", "x/"}, &errBuf); err == nil {
+			t.Error("a missing --base-sha must be refused rather than guessed")
 		}
 	})
 }
@@ -193,7 +204,12 @@ func TestUpgradePRPushesAndOpensWhenHEADMoved(t *testing.T) {
 		case "status":
 			return "", nil
 		}
-		return "v9.9.9\n", nil
+		// A git tag must NEVER reach the branch name: an instance repo carries the
+		// ADOPTER's tags, not llz's, and naming the branch after one makes it
+		// identical between llz releases — so the second upgrade finds the first
+		// branch still open and declines forever. This stub returns one to prove it
+		// is ignored.
+		return "v0.0.0-adopter-tag\n", nil
 	}
 	remoteHasBranch = func(string) bool { return false }
 
@@ -201,7 +217,8 @@ func TestUpgradePRPushesAndOpensWhenHEADMoved(t *testing.T) {
 	pushBranch = func(b string) error { pushed = b; return nil }
 	createPR = func(ti, _, ba, he string) error { title, base, head = ti, ba, he; return nil }
 
-	inTempRepo(t, func(string) {
+	inTempRepo(t, func(dir string) {
+		writeAnswers(t, dir, "v9.9.9")
 		t.Setenv("GH_TOKEN", "x")
 		var errBuf bytes.Buffer
 		c := UpgradePRCmd()

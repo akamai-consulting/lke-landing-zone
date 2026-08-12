@@ -169,3 +169,44 @@ func TestUnparseableWorkflowIsAnError(t *testing.T) {
 		t.Fatal("unparseable YAML must fail rather than be skipped")
 	}
 }
+
+// TestReadEscalationIsAFinding pins the gap that let a real breakage ship.
+//
+// The guard compared only `level == "write"`, so a callee job asking
+// `pull-requests: read` under a caller holding `contents: read` passed — and
+// GitHub refuses to start that run exactly as it refuses a write escalation.
+// llz-terraform.yml's changed-paths job did precisely this, and the guard
+// reported "OK — 20 local reusable call(s) cover their callee" while every
+// dispatch of that pipeline would have died at startup with no jobs and no logs.
+func TestReadEscalationIsAFinding(t *testing.T) {
+	caller := perms{"contents": "read"}
+	if caller.holds("pull-requests", "read") {
+		t.Error("contents:read does NOT cover pull-requests:read — GitHub sees pull-requests:none " +
+			"and refuses to start the run")
+	}
+	if !caller.holds("contents", "read") {
+		t.Error("contents:read must cover contents:read")
+	}
+	// none is not an ask.
+	if !caller.holds("packages", "") {
+		t.Error("an unrequested scope cannot be an escalation")
+	}
+	// write covers read; read does not cover write.
+	w := perms{"contents": "write"}
+	if !w.holds("contents", "read") {
+		t.Error("write must cover read")
+	}
+	if caller.holds("contents", "write") {
+		t.Error("read must not cover write")
+	}
+	// The wildcards still work, in both directions.
+	if !(perms{"*": "read"}).holds("pull-requests", "read") {
+		t.Error("read-all must cover any read")
+	}
+	if (perms{"*": "read"}).holds("contents", "write") {
+		t.Error("read-all must not cover a write")
+	}
+	if !(perms{"*": "write"}).holds("anything", "write") {
+		t.Error("write-all must cover any write")
+	}
+}

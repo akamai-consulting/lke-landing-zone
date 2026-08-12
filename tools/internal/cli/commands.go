@@ -104,7 +104,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight, watch, assertInvariant
 	// The dispatch is the point of no return AND the point the operator loses
 	// sight of the flow — `gh workflow run` prints no run id. Baseline BEFORE the
 	// dispatch: "newest run" afterwards is only ours if it is newer than what was
-	// there before. See build_watch.go.
+	// there before. See internal/shared/dispatchwatch.
 	w := dispatchwatch.Begin(g.DryRun, g.Yes, "terraform.yml")
 	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env, assertInvariants)...); err != nil {
 		return err

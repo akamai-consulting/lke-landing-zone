@@ -36,7 +36,7 @@
 // its own, which is the condition ADR 0013 and the extension model both exist to
 // end. The remaining ~920 lines that are commands rather than wiring (ci_teardown,
 // import, promote, apl_app, ext, ci_guards, ci_gen_toc, ci_managedlock,
-// build_watch, ci_build_failure_summary) are the extraction backlog, and the
+// ci_build_failure_summary) are the extraction backlog, and the
 // budget is what keeps pressure on them.
 // ─────────────────────────────────────────────────────────────────────────────
 package cli

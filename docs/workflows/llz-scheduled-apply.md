@@ -62,7 +62,7 @@ was *accepted*, which says nothing about whether the apply succeeded.
 `--watch` (added with this workflow) blocks on the resulting run and exits
 non-zero unless it concluded `success`. Identifying *which* run is the whole
 problem — GitHub registers it asynchronously, so "newest dispatch run" is a
-completed run from days ago for the first few seconds. `build_watch.go` records
+completed run from days ago for the first few seconds. `internal/shared/dispatchwatch` records
 the newest run id **before** dispatching and accepts only a strictly higher one;
 `--watch` reuses that machinery rather than re-deriving it.
 
@@ -75,11 +75,26 @@ Every "could not tell" is an error, not a pass:
 | GitHub never registered the run | fail, explicitly as a *lost handle*, not a failed apply — so nobody re-dispatches on top of a live apply |
 | status unreadable for one poll | retry, bounded by the attempt budget |
 | still running when the budget expires | fail |
+| parked on a deployment approval | fail after a ~5-minute grace, **naming the approval** — see below |
 | watcher never armed | fail |
 
 The budget is counted in **attempts, not wall-clock**, because `sleepFn` is a test
 seam: a `time.Now()` deadline plus a no-op sleep is a busy-spin that never
 terminates. Same lesson as `bootstrapDeps`.
+
+**The approval arm has its own, much shorter budget**, and that is the one that
+matters here. `apply-cluster` sits behind `environment: infra-<deployment>`, and
+this repo's own docs tell adopters to put required reviewers on
+infra-staging / infra-prod — so an unattended 04:00 dispatch parks on `waiting` by
+design. On the shared 3h budget that would report "did not finish within the watch
+budget", which names the wrong problem and holds a runner for three hours to reach
+it. A ~5-minute grace still covers a human who is watching and approves promptly;
+past that the failure says the run needs an approval nobody is going to give.
+
+So an armed scheduled apply and required reviewers on the same environment are in
+tension **by design** — the workflow now says so out loud rather than timing out.
+Either leave the reviewers and treat the weekly run as a drift *report* that fails
+loudly, or drop them for deployments meant to apply on a timer.
 
 ## Why it ships disarmed
 
@@ -133,7 +148,7 @@ The release-e2e lane does **not** drive this workflow; it dispatches
 leaves untested is the stub's own trigger surface and the armed/verdict gating.
 `reusable-workflow-caller-permissions` covers the `startup_failure` class
 statically — the failure that left `secret-rotation.yml` dead for months — and
-the `--watch` fail-closed arms are unit-tested in `build_watch_wait_test.go`.
+the `--watch` fail-closed arms are unit-tested in `internal/shared/dispatchwatch/wait_test.go`.
 
 See `tools/internal/cli/delivered_workflow_coverage_test.go`'s
 `exercisedEntryPoints` for the written-down version of that decision.

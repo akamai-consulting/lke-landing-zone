@@ -5,9 +5,7 @@ package upstreamupdates
 // is in prtouches.go and is tested without a network.
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -15,28 +13,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// listPRFiles returns every path a pull request changed. Seamed so the command
-// is testable without GitHub.
+// listChangedFiles returns every path a pull request changed, computed from the
+// LOCAL CHECKOUT rather than from the pulls API. Seamed so the command is
+// testable without git.
 //
-// --paginate with per_page=100, not a bare call: the files endpoint defaults to
-// 30 per page, and a template-upgrade PR routinely changes more than that. A
-// truncated first page would drop exactly the Terraform files this is looking
-// for and answer `false` with total confidence.
-var listPRFiles = func(repo string, pr int) ([]string, error) {
-	b, err := kubectlprobe.Exec("gh", "api", "--paginate",
-		fmt.Sprintf("repos/%s/pulls/%d/files?per_page=100", repo, pr))
+// WHY NOT `gh api repos/{}/pulls/{}/files`, WHICH IS THE OBVIOUS CALL. That
+// endpoint needs `pull-requests: read`, and this verb runs in a job of a called
+// reusable workflow. A callee job may never ask for more than the CALLING job
+// holds — GitHub validates that while parsing the graph, before any `if:` is
+// evaluated — and every caller of llz-terraform.yml holds `contents: read`. So
+// the API version turned the whole pipeline into a `startup_failure`: no jobs, no
+// logs, no annotations, on every PR plan, every dispatched apply and every
+// promotion stage. It shipped, and the caller-permissions guard passed it,
+// because that guard only compared WRITE escalations.
+//
+// The fix could have been `pull-requests: read` on each caller. It was not, for a
+// delivery reason: terraform.yml is a `merge`-class file, so that line arrives
+// through a 3-way merge an adopter's local edit can decline — and the failure it
+// would reintroduce is the silent one. Staying inside `contents: read` needs no
+// caller to cooperate.
+//
+// Three-dot: the PR's own changes against the merge base, so a base branch that
+// moved since the PR opened does not read as part of its diff.
+var listChangedFiles = func(baseSHA string) ([]string, error) {
+	b, err := kubectlprobe.Exec("git", "diff", "--name-only", baseSHA+"...HEAD")
 	if err != nil {
 		return nil, err
 	}
-	var files []struct {
-		Filename string `json:"filename"`
-	}
-	if err := json.Unmarshal(b, &files); err != nil {
-		return nil, fmt.Errorf("decode files response: %w", err)
-	}
-	out := make([]string, 0, len(files))
-	for _, f := range files {
-		out = append(out, f.Filename)
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.TrimSpace(line); f != "" {
+			out = append(out, f)
+		}
 	}
 	return out, nil
 }
@@ -46,8 +54,7 @@ func PRTouchesCmd() *cobra.Command {
 	var (
 		prefixes   []string
 		outputName string
-		repo       string
-		pr         int
+		baseSHA    string
 	)
 	c := &cobra.Command{
 		Use:   "pr-touches",
@@ -65,19 +72,16 @@ func PRTouchesCmd() *cobra.Command {
 			"every PR and looks exactly like a clean tree.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if repo == "" {
-				repo = os.Getenv("GITHUB_REPOSITORY")
+			if baseSHA == "" {
+				return fmt.Errorf("--base-sha is required: it is the commit this pull request is diffed against " +
+					"(github.event.pull_request.base.sha). Without it there is nothing to compare and every PR " +
+					"would classify the same way")
 			}
-			if repo == "" {
-				return fmt.Errorf("no repository: pass --repo or set GITHUB_REPOSITORY")
-			}
-			if pr == 0 {
-				return fmt.Errorf("no pull request: pass --pr")
-			}
-			files, err := listPRFiles(repo, pr)
+			files, err := listChangedFiles(baseSHA)
 			if err != nil {
-				return fmt.Errorf("list files for %s#%d: %w\n"+
-					"  this is a 'could not tell', not a 'nothing changed' — the caller must fail rather than skip", repo, pr, err)
+				return fmt.Errorf("diff against %s: %w\n"+
+					"  this is a 'could not tell', not a 'nothing changed' — the caller must fail rather than skip.\n"+
+					"  the checkout needs full history (fetch-depth: 0) for the base commit to be present", baseSHA, err)
 			}
 			cl, err := Classify(files, prefixes)
 			if err != nil {
@@ -90,7 +94,6 @@ func PRTouchesCmd() *cobra.Command {
 	}
 	c.Flags().StringArrayVar(&prefixes, "prefix", nil, "path prefix to match; trailing / means a subtree (repeatable)")
 	c.Flags().StringVar(&outputName, "output-name", "touches", "name of the GITHUB_OUTPUT key to write")
-	c.Flags().StringVar(&repo, "repo", "", "owner/repo (default: $GITHUB_REPOSITORY)")
-	c.Flags().IntVar(&pr, "pr", 0, "pull request number")
+	c.Flags().StringVar(&baseSHA, "base-sha", "", "commit the PR is diffed against (github.event.pull_request.base.sha)")
 	return c
 }

@@ -147,3 +147,42 @@ func TestWaitOnADisarmedWatchIsAnError(t *testing.T) {
 		t.Error("a disarmed watch must not report success")
 	}
 }
+
+func TestWaitFailsFastOnADeploymentApproval(t *testing.T) {
+	// GitHub parks a run on `waiting` when an environment needs an approval, and
+	// the delivered docs tell adopters to require reviewers on infra-staging /
+	// infra-prod — so an unattended 04:00 dispatch lands here BY DESIGN.
+	//
+	// The bug this pins is not that it fails; it is WHICH failure. On the shared
+	// 3h budget the message would be "did not finish within the watch budget",
+	// which names the wrong problem and costs a runner three hours to say it.
+	w := armedWatch(t)
+	stubRunConclusion(t, 500, []conclusionAnswer{{status: "waiting", ok: true}})
+
+	err := captureStderrErr(t, w.Wait)
+	if err == nil {
+		t.Fatal("a run parked on an approval must fail rather than hang")
+	}
+	if !strings.Contains(err.Error(), "waiting for a deployment approval") {
+		t.Errorf("error must name the approval, not the budget, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "watch budget") {
+		t.Errorf("the approval case must NOT be reported as budget exhaustion: %v", err)
+	}
+}
+
+func TestWaitToleratesABriefApprovalThenProceeds(t *testing.T) {
+	// The short grace is what keeps this usable when a human IS watching and
+	// approves promptly; without it an operator-triggered run with an approval
+	// gate would fail on the first poll.
+	w := armedWatch(t)
+	stubRunConclusion(t, 20, []conclusionAnswer{
+		{status: "waiting", ok: true},
+		{status: "waiting", ok: true},
+		{status: "in_progress", ok: true},
+		{status: "completed", conclusion: "success", ok: true},
+	})
+	if err := captureStderrErr(t, w.Wait); err != nil {
+		t.Fatalf("an approval given during the grace must not fail the command, got %v", err)
+	}
+}

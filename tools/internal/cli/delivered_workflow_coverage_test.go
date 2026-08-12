@@ -367,7 +367,7 @@ var exercisedEntryPoints = map[string]string{
 		"directly — running it here would be the same apply through one more hop, on a schedule the lane " +
 		"does not have. What is unproven is the stub's own trigger surface and the armed/verdict gating; " +
 		"reusable-workflow-caller-permissions covers the startup_failure class statically, and the " +
-		"llz build --watch fail-closed arms are unit-tested in build_watch_wait_test.go.",
+		"llz build --watch fail-closed arms are unit-tested in internal/shared/dispatchwatch.",
 	"template-upgrade.yml": "NOT DRIVEN by the release lane: it upgrades an instance to the LATEST published " +
 		"release, and the lane's instance is scaffolded from the commit under test — so the workflow would " +
 		"either no-op or drag the fixture onto a different version mid-run. The `llz upgrade` it wraps is " +

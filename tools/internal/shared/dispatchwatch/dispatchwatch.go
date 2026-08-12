@@ -112,6 +112,11 @@ var runConclusion = func(repo string, id uint64) (status, conclusion string, ok 
 var (
 	runWatchInterval = 30 * time.Second
 	runWatchAttempts = 360
+	// runWaitingAttempts bounds the SEPARATE budget for a run parked on a
+	// deployment approval — ~5 minutes. Long enough for a human already watching
+	// to click approve, short enough that a 04:00 cron fails with the right
+	// diagnosis instead of holding a runner for three hours to reach the wrong one.
+	runWaitingAttempts = 10
 )
 
 // Watch carries what must be known BEFORE a dispatch to identify the run
@@ -231,11 +236,30 @@ func (w Watch) Wait() error {
 	}
 	fmt.Fprintf(os.Stderr, "%s following run %d — %s\n", color.Dim("watch:"), run.ID, color.Cyan(run.URL))
 
+	waiting := 0
 	for i := 0; i < runWatchAttempts; i++ {
 		status, conclusion, ok := runConclusion(w.repo, run.ID)
 		if !ok {
 			// One unreadable poll is a blip (rate limit, transient 5xx); the loop
 			// simply tries again and the attempt budget bounds how long that lasts.
+			sleepFn(runWatchInterval)
+			continue
+		}
+		// `waiting` is GitHub's status for a run parked on an environment approval,
+		// and it needs its own, much shorter budget. The docs tell adopters to put
+		// required reviewers on infra-staging / infra-prod, so an unattended 04:00
+		// dispatch parks there by design — and spending the full 3h attempt budget
+		// on it would report "did not finish within the watch budget", which names
+		// the wrong problem entirely and costs a runner three hours to say it.
+		// The short grace still covers someone approving promptly.
+		if status == "waiting" {
+			waiting++
+			if waiting > runWaitingAttempts {
+				return fmt.Errorf("run %d is waiting for a deployment approval and no one has given it — %s\n"+
+					"    an unattended dispatch cannot approve itself. Either approve the run, or remove the required\n"+
+					"    reviewers from the environment this deployment applies into if it is meant to run on a timer",
+					run.ID, run.URL)
+			}
 			sleepFn(runWatchInterval)
 			continue
 		}

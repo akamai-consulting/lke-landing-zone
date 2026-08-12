@@ -86,13 +86,15 @@ func UpgradePRCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read working tree status: %w", err)
 			}
-			version, err := gitOut("describe", "--tags", "--abbrev=0")
-			if err != nil || strings.TrimSpace(version) == "" {
-				// The pin, not a git tag, is the version that matters — an instance repo
-				// carries no llz tags at all. Read it back from the answers file the
-				// upgrade just rewrote.
-				version = pinnedVersion()
-			}
+			// THE PIN, AND ONLY THE PIN. This used to try `git describe --tags` first
+			// and fall back here, which contradicted the comment explaining it and was
+			// wrong in a way that stayed green: an instance repo carries no llz tags,
+			// but it may well carry the ADOPTER's own tags, and with fetch-depth: 0
+			// one of those wins. The branch is then named after their release rather
+			// than the llz release — and because that name does not change when llz
+			// does, the next month's upgrade finds the branch still on the remote and
+			// declines "already open" forever, silently, while reporting success.
+			version := pinnedVersion()
 			s := State{
 				BeforeSHA: strings.TrimSpace(beforeSHA),
 				AfterSHA:  strings.TrimSpace(after),

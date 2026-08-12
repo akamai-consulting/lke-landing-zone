@@ -133,6 +133,14 @@ jobs:
           # with GITHUB_TOKEN, so the dispatch would be accepted and create no run —
           # and --watch would then correctly fail with "never registered the run".
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+          # Without GH_REPO, `gh workflow run` resolves the repo by shelling out to
+          # git in the workspace — which in a container job is a checkout owned by a
+          # different uid, so git refuses it ("dubious ownership") and the dispatch
+          # fails on the one step this whole workflow exists to run. Every other
+          # delivered workflow that drives gh sets this for the same reason
+          # (llz-bootstrap-openbao, llz-breakglass-openbao, llz-secret-rotation,
+          # llz-scheduled-checks).
+          GH_REPO: ${{ github.repository }}
           DEPLOYMENT: ${{ matrix.deployment }}
         # The missing-token case is checked inside `llz build --watch` rather than
         # here: with no token the dispatch is refused, no run is created, and the

@@ -87,6 +87,21 @@ whose diff touches `terraform-iac-bootstrap/`, `landingzone.yaml` or
 `environments/`. An upgrade PR rewrites `llz-*.yml` and the pin, gets its plan and
 its repo-readiness, and writes no state.
 
+**That job diffs the local checkout rather than calling the pulls API**, and the
+reason is worth knowing before someone "simplifies" it back. `gh api
+repos/{}/pulls/{}/files` needs `pull-requests: read`, and a job of a *called*
+reusable workflow may never ask for more than the CALLING job holds — GitHub
+validates that while parsing the graph, before any `if:` is evaluated. Every
+caller of `llz-terraform.yml` holds `contents: read`, so the API version turned
+the whole pipeline into a `startup_failure`: no jobs, no logs, no annotations, on
+PR plans, dispatched applies and promotion stages alike.
+
+Granting `pull-requests: read` to each caller would also have worked, and was
+rejected on delivery grounds: `terraform.yml` is a `merge`-class file, so that
+line arrives through a 3-way merge an adopter's local edit can decline — and what
+it would reintroduce is the silent failure. Staying inside `contents: read` needs
+no caller to cooperate.
+
 Two consequences worth knowing:
 
 - **The template pin came back into `terraform.yml`'s `paths:` filter.** It had
