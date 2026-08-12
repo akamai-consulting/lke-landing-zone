@@ -102,6 +102,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 )
 
@@ -169,6 +170,7 @@ var declarations = []func() extension.Extension{
 	manifestguard.Extension,
 	plaintext.Extension,
 	promote.Extension,
+	upstreamupdates.Extension,
 	releasepublish.Extension,
 	reconcilelanes.Extension,
 	statepassphrase.Extension,
@@ -254,7 +256,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// thirty-three of the sixty-four — half of them: `assert-storage` lives in assertions/volumes,
+// thirty-three of the sixty-five — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

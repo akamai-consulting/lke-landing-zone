@@ -43,6 +43,9 @@ on:
       E2E_DISPATCH_TOKEN:
         description: 'Classic PAT for the e2e harness (template-repo admin only; absent on adopter instances). Measured for expiry by token-inventory when set, skipped entirely when not.'
         required: false
+      LLZ_AUTOMATION_TOKEN:
+        description: 'Fine-grained PAT the opt-in scheduled-apply / template-upgrade workflows run on; absent unless one of them is armed. Measured for expiry by token-inventory when set, skipped entirely when not — those workflows run monthly at most, so this daily measurement is the only thing that sees the expiry coming.'
+        required: false
 
 permissions:
   contents: read
@@ -258,6 +261,10 @@ jobs:
       # drops them rather than reporting a permanent `unknown`.
       GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
       E2E_DISPATCH_TOKEN:          ${{ secrets.E2E_DISPATCH_TOKEN }}
+      # Set only on an instance that armed scheduled-apply or template-upgrade.
+      # Measured here rather than in those workflows because they run monthly at
+      # most: the daily inventory is the only thing that sees the expiry coming.
+      LLZ_AUTOMATION_TOKEN:        ${{ secrets.LLZ_AUTOMATION_TOKEN }}
       TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3:         ${{ vars.TF_STATE_ENDPOINT }}
     steps:

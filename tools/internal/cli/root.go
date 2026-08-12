@@ -287,18 +287,25 @@ func newCmd() *cobra.Command {
 // ── run ──────────────────────────────────────────────────────────────────────
 
 func buildCmd() *cobra.Command {
-	var skipPreflight bool
+	var skipPreflight, watch bool
 	c := &cobra.Command{
 		Use: "build <env>", Short: "dispatch the terraform.yml apply (module=all) (--yes)",
 		Long: "Dispatches terraform.yml (action=apply module=all) for a deployment. GitHub\n" +
 			"runs the workflow from the repo's default branch and renders the tfvars from\n" +
 			"the spec IN THAT CHECKOUT, so the build preflights that the deployment exists\n" +
 			"locally AND on that branch — a spec that was committed but never pushed would\n" +
-			"otherwise fail minutes later, in CI. --skip-preflight bypasses the check.",
+			"otherwise fail minutes later, in CI. --skip-preflight bypasses the check.\n\n" +
+			"--watch blocks until the dispatched run finishes and exits non-zero unless it\n" +
+			"succeeded, which is what makes this usable as an unattended CI step (the\n" +
+			"scheduled-apply workflow drives it). Without it the dispatch is fire-and-forget\n" +
+			"and the command only prints where the run went.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdBuild(args, cliopts.Global, skipPreflight) },
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cmdBuild(args, cliopts.Global, skipPreflight, watch)
+		},
 	}
 	c.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "dispatch without checking the deployment is on the branch CI builds from")
+	c.Flags().BoolVar(&watch, "watch", false, "block until the dispatched run finishes; exit non-zero unless it succeeded (requires --yes)")
 	return c
 }
 

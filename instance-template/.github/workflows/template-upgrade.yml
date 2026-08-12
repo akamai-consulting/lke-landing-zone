@@ -1,0 +1,47 @@
+name: Template Upgrade
+
+# Thin caller for the reusable LLZ workflow — the body (self-update, `llz
+# upgrade`, branch, pull request) lives in .github/workflows/llz-template-upgrade.yml,
+# which copier delivers into THIS repo.
+# ADOPTERS: no fork needed for secrets — local reusable, `secrets: inherit` is
+# same-repo (#201).
+#
+# WHAT THIS CLOSES. Upstream template releases reach an instance only when an
+# operator runs `llz upgrade` on their own machine. Nothing in CI does it, so the
+# monthly template-drift report (scheduled-checks.yml) could say "12 commits
+# behind" indefinitely with no mechanism to act on it. This workflow performs the
+# upgrade the drift report has been describing, and opens it as an ordinary pull
+# request — which is the point: the PR runs the same plan, lint and repo-readiness
+# gates a human's upgrade would, and a human still merges it.
+#
+# IT IS OFF UNTIL YOU TURN IT ON. Set the repo variable LLZ_TEMPLATE_UPGRADE=true
+# to arm it. Unarmed runs exit having done nothing and say how to arm them.
+#
+# ORDERED AFTER THE DRIFT REPORT ON PURPOSE — see the cron comment below.
+
+on:
+  schedule:
+    # Monthly, 1st @ 08:00 UTC — one hour after scheduled-checks' template-drift
+    # report (0 7 1 * *). The drift report is the diagnosis and this is the
+    # remedy, so running them in that order on the same morning means the PR and
+    # the report an operator reads it against describe the same upstream state.
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Template release to upgrade to (default: the latest published release)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Local reusable — the body ships in this repo and is re-rendered by
+    # `llz upgrade`, so updates arrive as reviewable template-version PRs.
+    uses: ./.github/workflows/llz-template-upgrade.yml
+    with:
+      ref: ${{ inputs.ref || '' }}
+    secrets: inherit

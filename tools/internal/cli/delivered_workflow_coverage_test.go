@@ -174,6 +174,75 @@ func TestDraftSkipHasItsReadyForReviewTrigger(t *testing.T) {
 	}
 }
 
+// TestPinInTriggerImpliesImportIsPathGated couples the SECOND pair of halves
+// that a copier upgrade moves by different rules — and the pair whose broken
+// combination is silent rather than merely annoying.
+//
+// terraform.yml (`merge`) lists .copier-answers.yml in its pull_request paths so
+// a pin-only upgrade PR reaches `repo-readiness`, which is where a newly
+// mandatory secret gets caught. A paths: filter selects the WORKFLOW, not a job,
+// so that entry also selects `Plan Cluster (PR)` — whose tf-import step WRITES
+// cluster/<deployment>/terraform.tfstate against no lock. llz-terraform.yml
+// (`managed`) is what keeps that safe, by gating the step on changed-paths.
+//
+// EITHER HALF ALONE IS WRONG, IN OPPOSITE DIRECTIONS. Pin listed + import
+// ungated is the hazard restored: every automated upgrade PR takes an
+// unserialized write at a bot's cadence rather than a human's. Import gated + pin
+// unlisted is merely the old gap back, with the machinery to close it sitting
+// unused. Neither shows up as a failure anywhere else — the first looks like a
+// normal green PR right up until it races an apply.
+func TestPinInTriggerImpliesImportIsPathGated(t *testing.T) {
+	body, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	caller, err := os.ReadFile(deliveredCaller)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredCaller, err)
+	}
+
+	pinListed := regexp.MustCompile(`(?m)^\s*-\s*'\.copier-answers\.yml'`).MatchString(string(caller))
+
+	// Read the REAL step, not a substring that happens to appear in a comment:
+	// find the tf-import step and require the `if:` on changed-paths inside it.
+	// A test that grepped the whole file for the two strings would pass on the
+	// prose above them, which is exactly how a gate stops watching anything.
+	importStep := regexp.MustCompile(
+		`(?s)- name: Import VPC and subnet if not in state\n(.*?)\n      - name: `,
+	).FindStringSubmatch(string(body))
+	if importStep == nil {
+		t.Fatalf("no `Import VPC and subnet if not in state` step in %s — it was renamed or removed, "+
+			"and this test would otherwise pass having read nothing. If the state write is genuinely "+
+			"gone, delete this gate and say so; if it moved, re-point the pattern.", deliveredPipeline)
+	}
+	importGated := strings.Contains(importStep[1], "needs.changed-paths.outputs.terraform == 'true'")
+
+	// And the job that produces the output must exist, or the `if:` above is a
+	// reference to nothing — which GitHub evaluates to empty, i.e. never equal to
+	// 'true', i.e. an import that silently stops running on EVERY PR.
+	if importGated && !regexp.MustCompile(`(?m)^  changed-paths:`).MatchString(string(body)) {
+		t.Error("the tf-import step gates on needs.changed-paths.outputs.terraform, but there is no " +
+			"`changed-paths:` job to produce it. That expression evaluates to empty on every PR, so the " +
+			"import never runs and every plan silently reports a pre-existing VPC as 'to be created'.")
+	}
+
+	switch {
+	case pinListed && !importGated:
+		t.Error("terraform.yml lists '.copier-answers.yml' in its pull_request paths, but " +
+			"llz-terraform.yml's tf-import step is no longer gated on changed-paths. Every automated " +
+			"template-upgrade PR now selects Plan Cluster (PR) and writes cluster/<deployment>/" +
+			"terraform.tfstate with nothing serializing it against a concurrent apply — the exact " +
+			"hazard the pin was removed from this filter to avoid. Restore the step's `if:`, or drop " +
+			"the pin from the filter.")
+	case !pinListed && importGated:
+		t.Error("llz-terraform.yml gates tf-import on changed-paths — the mechanism that makes the " +
+			"template pin safe to watch — but terraform.yml no longer lists '.copier-answers.yml' in " +
+			"its pull_request paths. A pin-only upgrade PR therefore runs no repo-readiness, which is " +
+			"where a newly mandatory secret is caught (v0.0.42 / TF_STATE_ENCRYPTION_PASSPHRASE). " +
+			"Either add the pin back or remove the now-pointless gate.")
+	}
+}
+
 // ── Gate 3: which delivered entry points are exercised at all ────────────────
 
 // exercisedEntryPoints records, per delivered entry-point workflow, WHY it is
@@ -215,6 +284,16 @@ var exercisedEntryPoints = map[string]string{
 		"gate would fail the gate. It is exercised by hand during gameday exercises.",
 	"promote.yml": "NOT DRIVEN: rendered per-instance from promotion_rank and a no-op for the <2 ranked " +
 		"deployments the e2e instance has. promote-pipeline-drift checks it is in sync on every PR.",
+	"scheduled-apply.yml": "NOT DRIVEN: it dispatches terraform.yml, which the release lane already drives " +
+		"directly — running it here would be the same apply through one more hop, on a schedule the lane " +
+		"does not have. What is unproven is the stub's own trigger surface and the armed/verdict gating; " +
+		"reusable-workflow-caller-permissions covers the startup_failure class statically, and the " +
+		"llz build --watch fail-closed arms are unit-tested in build_watch_wait_test.go.",
+	"template-upgrade.yml": "NOT DRIVEN by the release lane: it upgrades an instance to the LATEST published " +
+		"release, and the lane's instance is scaffolded from the commit under test — so the workflow would " +
+		"either no-op or drag the fixture onto a different version mid-run. The `llz upgrade` it wraps is " +
+		"covered by `llz ci upgrade-test`, which performs a real upgrade across the last 3 releases on " +
+		"every lint run.",
 }
 
 // workflowCallOnly matches a delivered body that is only ever invoked by another

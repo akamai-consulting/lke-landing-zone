@@ -137,6 +137,58 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/llz-discover-deployments.yml
 
+  # ── Which PRs may WRITE Terraform state ─────────────────────────────────────
+  # This job exists for exactly one downstream `if:` — the tf-import step in
+  # plan-cluster-pr, the only thing on the PR path that writes
+  # cluster/<deployment>/terraform.tfstate.
+  #
+  # WHY A STEP GATE AND NOT A JOB GATE. The obvious fix is to skip the whole plan
+  # job on a PR that touches no Terraform. That would also skip it for a change to
+  # llz-*.yml or .github/actions/**, and terraform.yml lists those paths ON
+  # PURPOSE: an upgrade that rewrites the apply logic is exactly the change an
+  # operator most wants a plan run against, and watching only the caller while
+  # ignoring the body it calls is a gap that already shipped once. So the JOB still
+  # runs for all of them; only the state-writing STEP is narrowed to the PRs whose
+  # diff can actually change what is in state. `tofu plan` itself refreshes in
+  # memory and persists nothing, so it was never the hazard.
+  #
+  # WHAT THIS UNLOCKS. With the write confined to Terraform/spec PRs, the template
+  # pin is safe to put back in terraform.yml's pull_request paths: filter — the
+  # bot/pin-only upgrade PR gets repo-readiness (which is where a newly-mandatory
+  # secret is caught) without handing an automated non-draft PR an unserialized
+  # write against a live apply. The two halves are coupled by
+  # TestPinInTriggerImpliesImportIsPathGated; move one and that test names the other.
+  changed-paths:
+    name: Classify the PR's diff
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    outputs:
+      terraform: ${{ steps.classify.outputs.terraform }}
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    steps:
+      # The prefixes are the three trees that decide what ends up in Terraform
+      # state: the roots themselves, and the spec `llz render` turns into the
+      # per-deployment tfvars they read. A spec edit changes the plan without
+      # touching a single .tf file, so leaving it out would skip the import on
+      # exactly the PRs an operator writes by hand. Note `landingzone.yaml` has no
+      # trailing slash — it is one file, and matching it as a prefix would let
+      # landingzone.yaml.example select the state write.
+      #
+      # `llz ci pr-touches` FAILS rather than answering false when it cannot tell.
+      # That is the whole design: a defaulted `false` turns a GitHub blip into a
+      # silently unplanned merge, and a defaulted `true` turns it into the
+      # unserialized write this job exists to prevent.
+      - name: Does this PR change what Terraform state should contain?
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: llz ci pr-touches --output-name terraform --pr ${{ github.event.pull_request.number }} --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/
+
   # ── Plan on PRs ─────────────────────────────────────────────────────────────
   # Posts a plan summary; never applies.
   # SECURITY: this job consumes production secrets, so the head-repo check below
@@ -165,7 +217,7 @@ jobs:
   # from ever shipping the two halves out of step.
   plan-cluster-pr:
     name: Plan Cluster (PR)
-    needs: discover
+    needs: [discover, changed-paths]
     if: >
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -204,7 +256,26 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         run: tofu validate
 
+      # THE ONLY STATE WRITE ON THE PR PATH, and the reason this step carries an
+      # `if:` that the plan below does not. `llz ci tf-import` WRITES
+      # cluster/<deployment>/terraform.tfstate, and nothing serializes that against
+      # a concurrent apply: this job's concurrency group is terraform-infra-pr
+      # (inputs.region is empty on a PR) while a dispatched apply's is
+      # terraform-infra-<deployment>, and the s3 backend sets no use_lockfile. Two
+      # writers, last one wins.
+      #
+      # The draft skip above is one half of the answer — it gives a human a way to
+      # say "do not disturb live state". This is the other half, for the PRs no
+      # human opens: a template-upgrade or Renovate PR rewrites llz-*.yml and
+      # nothing else, is not a draft, and would otherwise take that write on a
+      # schedule rather than by accident.
+      #
+      # Skipping it costs plan ACCURACY, not plan coverage: without the import a
+      # pre-existing VPC/subnet reads as absent, so the plan says "will create" for
+      # something that is already there. That is a legible, harmless wrong answer on
+      # a PR that changes no Terraform — and changed-paths says so in the run summary.
       - name: Import VPC and subnet if not in state
+        if: needs.changed-paths.outputs.terraform == 'true'
         working-directory: terraform-iac-bootstrap/cluster
         env:
           LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}

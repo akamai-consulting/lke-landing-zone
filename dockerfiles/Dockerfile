@@ -273,8 +273,22 @@ COPY --from=toolbox /out/bin/kustomize /usr/local/bin/kustomize
 COPY --from=toolbox /out/bin/uv        /usr/local/bin/uv
 COPY --from=toolbox /out/bin/uvx       /usr/local/bin/uvx
 
-# checkov (Python IaC security scanner)
-RUN uv pip install --system --break-system-packages --no-cache "checkov>=3.2.0,<4.0.0"
+# checkov (Python IaC security scanner) + copier.
+#
+# copier is here for ONE delivered workflow: llz-template-upgrade.yml runs
+# `llz upgrade` in this image, and `copier.Require` is a hard prereq — without the
+# binary the automated upgrade fails at its first step with a prereq error rather
+# than doing anything useful. It was previously installed only in the devcontainer
+# stage, on the assumption that `llz upgrade` is always an operator's local
+# command; the scheduled upgrade PR is the case that stopped being true.
+#
+# PINNED TO THE SAME RANGE AS THE DEVCONTAINER (>=9.4,<10) on purpose: the two
+# images render the same template through the same code path, and a copier major
+# skew between them would make an upgrade behave differently in CI than the local
+# `llz upgrade` an operator runs to reproduce it.
+RUN uv pip install --system --break-system-packages --no-cache \
+      "checkov>=3.2.0,<4.0.0" \
+      "copier>=9.4,<10"
 
 # GitHub CLI (apt repo — arch + updates handled by apt). CI jobs use `gh secret
 # set` to persist unseal keys + rotated credentials; baked in so jobs need no

@@ -62,7 +62,12 @@ import (
 // spec component, and which an instance therefore cannot turn off. MEASURED, not
 // chosen.
 var componentless = map[string]bool{
-	"assert-identity":             true,
+	"assert-identity": true,
+	// No component: an instance's opt-in to the automated upstream-update
+	// workflows is a repo VARIABLE (LLZ_SCHEDULED_APPLY / LLZ_TEMPLATE_UPGRADE),
+	// not a spec component — the choice is about who may change this repo, which is
+	// not a property of the cluster the spec describes.
+	"upstream-updates":            true,
 	"assert-network":              true,
 	"assert-objstore":             true,
 	"assert-platform":             true,

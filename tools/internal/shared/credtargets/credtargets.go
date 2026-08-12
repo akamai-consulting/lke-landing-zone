@@ -255,6 +255,20 @@ var GHPATTargets = []PATTargetSpec{
 	// Only a PRIVATE fork/image needs a GHCR read credential; the first-party
 	// charts are public, so a stock instance leaves it empty by design.
 	{Name: "GHCR_READ_TOKEN", Optional: true},
+	// The automation PAT the two scheduled upstream-update workflows run on —
+	// scheduled-apply.yml dispatches terraform.yml with it, template-upgrade.yml
+	// pushes a branch and opens a PR with it. Both are opt-in behind a repo
+	// variable, so an instance that has armed neither correctly has no such
+	// secret: `optional`.
+	//
+	// IT IS MEASURED RATHER THAN EXEMPT because it is a PAT with a real expiry,
+	// and its expiry is silent in the worst possible way. Neither workflow runs
+	// more often than monthly, and an expired token fails them at a step whose
+	// output nobody is watching between crons — so the first symptom of a lapse
+	// is an instance that has quietly stopped receiving upstream updates, which
+	// is indistinguishable from an instance that was already up to date. That is
+	// the ADR 0009 shape exactly: not a leak, a credential that fell off the pane.
+	{Name: "LLZ_AUTOMATION_TOKEN", Optional: true},
 }
 
 // SecretProbeVerdict decides whether the write-time lane can be trusted this

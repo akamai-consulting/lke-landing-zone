@@ -1,0 +1,172 @@
+name: llz-scheduled-apply (reusable)
+
+# Reusable (`workflow_call`) body for the scheduled Terraform apply + converge.
+# The trigger surface (cron, dispatch input) lives in the thin caller
+# scheduled-apply.yml, which is where the rationale for the whole workflow is
+# written. Maintainer rationale lives in the TEMPLATE repo:
+# docs/workflows/llz-scheduled-apply.md
+#
+# WHY IT DISPATCHES INSTEAD OF CALLING. terraform.yml's pipeline gates every apply
+# job on `github.event_name == 'workflow_dispatch'`. Calling llz-terraform.yml
+# directly from here would arrive as `schedule`, so the natural-looking `uses:`
+# would run a job graph in which every apply job silently skips — a green run that
+# applied nothing. Relaxing those guards to admit `schedule` was the alternative,
+# and it widens the set of events that can reach a production apply in the most
+# dangerous workflow an instance carries. Dispatching keeps that guard exactly as
+# strict as it is today: this workflow reaches the apply the same way an operator
+# does, through `llz build`, and the `environment: infra-<deployment>` approval on
+# apply-cluster still applies to the run it creates.
+#
+# THE COST OF THAT CHOICE IS A PAT. GITHUB_TOKEN cannot trigger a workflow — an
+# event it raises creates no run, by GitHub's own recursion guard — so the
+# dispatch needs LLZ_AUTOMATION_TOKEN. See docs/secrets.md for its scopes and
+# rotation.
+
+on:
+  workflow_call:
+    inputs:
+      deployment:
+        description: "Single deployment to apply, or empty for every discovered one"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      # Declared even though the caller uses `secrets: inherit`, because an
+      # undeclared name is invisible to actionlint — it types the `secrets` context
+      # from these declarations, so a typo'd `secrets.LLZ_AUTOMATON_TOKEN` would
+      # render as an empty string at runtime and fail as "token unset" rather than
+      # as the misspelling it is.
+      LLZ_AUTOMATION_TOKEN:
+        description: 'Fine-grained PAT (Actions: read/write) used to dispatch terraform.yml. GITHUB_TOKEN cannot do this: GitHub suppresses workflow runs from events it raises.'
+        required: false
+
+permissions:
+  contents: read
+
+# Serialized against itself: a weekly apply that is still running when the next
+# fires would have two `llz build` dispatches racing on one deployment's state.
+# cancel-in-progress stays FALSE — cancelling mid-apply is how you get a half-built
+# cluster and a lock nobody releases.
+concurrency:
+  group: scheduled-apply
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Opt-in ──────────────────────────────────────────────────────────────────
+  # `vars.LLZ_SCHEDULED_APPLY` is read directly in each job's `if:` rather than by
+  # an `armed` job that computes an output. The job version was 25 lines of shell
+  # to decide something GitHub can evaluate itself, and inline workflow bash is a
+  # budgeted, ratcheted resource in this repo (.untestable-budget.yaml) — spending
+  # it on a string comparison is exactly the trade that budget exists to refuse.
+  #
+  # A delivered workflow that applied production infrastructure the moment an
+  # adopter upgraded would be a template release changing an instance's behaviour
+  # unasked — the one thing the managed/owned split exists to prevent. Hence
+  # opt-in, and hence the notice job below, so a disarmed run says why rather than
+  # showing a wall of skipped jobs.
+  disarmed-notice:
+    name: Scheduled apply is not armed
+    if: vars.LLZ_SCHEDULED_APPLY != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Explain the no-op
+        run: echo "::notice title=Not armed::This instance has not opted in, so nothing was applied. Set the repository variable LLZ_SCHEDULED_APPLY=true to arm it, after reading .github/workflows/scheduled-apply.yml — it applies real infrastructure."
+
+  discover:
+    if: vars.LLZ_SCHEDULED_APPLY == 'true'
+    uses: ./.github/workflows/llz-discover-deployments.yml
+
+  apply:
+    name: Apply + converge (${{ matrix.deployment }})
+    needs: [discover]
+    # fromJSON on the discover output, narrowed to one deployment when the caller
+    # asked for one. `|| ''` guards the cron path, where the input is unset.
+    if: >
+      vars.LLZ_SCHEDULED_APPLY == 'true' &&
+      needs.discover.outputs.deployments != '[]' &&
+      (inputs.deployment == '' || contains(fromJSON(needs.discover.outputs.deployments), inputs.deployment))
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    # The dispatched run does the real work and carries its own timeouts; this
+    # bound is on WATCHING it. ~3h matches llz build --watch's own attempt budget,
+    # so the CLI reports "still running" before the runner is killed out from under
+    # it — a killed job says nothing, a failed watch says which run to go look at.
+    timeout-minutes: 200
+    strategy:
+      # One at a time. Applies are ~40 minutes of Linode API traffic each, and a
+      # fan-out would run them under one account's rate budget while the assert
+      # suite is also probing. Nothing here is urgent enough to parallelise.
+      max-parallel: 1
+      # A single deployment's failure must not cancel the others: an unhealthy
+      # secondary is not a reason to leave primary unapplied.
+      fail-fast: false
+      matrix:
+        deployment: ${{ inputs.deployment != '' && fromJSON(format('["{0}"]', inputs.deployment)) || fromJSON(needs.discover.outputs.deployments) }}
+    steps:
+      - name: Checkout the instance
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # `llz build` preflights that the deployment exists on the branch CI builds
+      # from, dispatches terraform.yml (action=apply module=all), then --watch
+      # blocks on the resulting run and exits non-zero unless it concluded success.
+      # module=all is what chains apply-cluster -> bootstrap-openbao, whose final
+      # step is `llz ci converge` plus the assert suite — so a green step here means
+      # "applied AND converged", not "dispatched".
+      - name: Apply and converge
+        env:
+          # Not github.token: GitHub suppresses workflow runs from events raised
+          # with GITHUB_TOKEN, so the dispatch would be accepted and create no run —
+          # and --watch would then correctly fail with "never registered the run".
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+          DEPLOYMENT: ${{ matrix.deployment }}
+        # The missing-token case is checked inside `llz build --watch` rather than
+        # here: with no token the dispatch is refused, no run is created, and the
+        # watcher would otherwise report "GitHub never registered the run" — which
+        # reads as a GitHub outage and sends the reader to the Actions tab instead
+        # of to the unset repository secret.
+        run: llz build "$DEPLOYMENT" --yes --watch
+
+  # ── Verdict ─────────────────────────────────────────────────────────────────
+  # `needs.apply.result` collapses the whole matrix to one value, so this is the
+  # check to make required if you want a red scheduled apply to be noticed.
+  # WITHOUT THIS JOB a matrix that produced zero legs — no deployments discovered,
+  # a narrowing input that matched nothing — reports success for having applied
+  # nothing at all, which looks identical to a clean week.
+  # The two failure arms are expressed as `if:` conditions rather than as shell
+  # branches, so the job that fires IS the diagnosis and its name is the message.
+  # `needs.apply.result` collapses the whole matrix to one value.
+  verdict-nothing-applied:
+    name: Scheduled apply applied NOTHING
+    needs: [discover, apply]
+    # The vacuity arm, and the reason this pair of jobs exists at all. A matrix
+    # with zero legs — no deployments discovered, or a narrowing input matching
+    # none — succeeds for having done nothing, which on a dashboard is
+    # indistinguishable from a clean week. An armed instance with nothing to apply
+    # is a misconfiguration, not a quiet success.
+    if: >
+      always() && vars.LLZ_SCHEDULED_APPLY == 'true' &&
+      (needs.discover.outputs.deployments == '[]' || needs.apply.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - run: 'echo "::error title=Nothing applied::Scheduled apply is armed but ran no legs — either no deployments were discovered, or the narrowing input matched none of them. Discovered: ${{ needs.discover.outputs.deployments }}"; exit 1' 
+
+  verdict-apply-failed:
+    name: Scheduled apply FAILED
+    needs: [apply]
+    if: always() && vars.LLZ_SCHEDULED_APPLY == 'true' && (needs.apply.result == 'failure' || needs.apply.result == 'cancelled')
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - run: 'echo "::error title=Apply failed::At least one deployment failed to apply or converge (${{ needs.apply.result }}). The failing leg log names the dispatched terraform.yml run — open that."; exit 1' 

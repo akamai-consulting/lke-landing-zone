@@ -86,6 +86,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 )
 
 // Command pairs an extension name with one constructor it owns.
@@ -251,6 +252,8 @@ var commands = []Command{
 	{"versionpins", versionpins.Cmd},
 	{"setupgosite", setupgosite.Cmd},
 	{"callerperms", callerperms.Cmd},
+	{"upstreamupdates", upstreamupdates.PRTouchesCmd},
+	{"upstreamupdates", upstreamupdates.UpgradePRCmd},
 	{"sourceref", sourceref.Cmd},
 	{"sourceref", sourceref.SymbolsCmd},
 	{"workflowshells", workflowshells.Cmd},

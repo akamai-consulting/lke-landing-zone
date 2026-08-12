@@ -1347,7 +1347,26 @@ categories:
     #                       import and a field) — the same omission, in a second
     #                       package, that killed the team-write lane. The literals
     #                       are now held by deps_literals_test.go.
-    budget: 1948
+    #   1,876 / 112 files  build_watch -> internal/shared/dispatchwatch. -72, and
+    #                       a paydown that the change forcing it made overdue:
+    #                       `llz build --watch` needed the dispatched run followed
+    #                       to a conclusion (the scheduled-apply workflow's exit
+    #                       code is the only signal anyone sees), which is real
+    #                       logic and the wiring layer is not where it belongs.
+    #                       root.go's header had named build_watch as extraction
+    #                       backlog since the CLI left package main; growing it
+    #                       was what finally made the backlog cost something.
+    #   1,884 / 112 files  +8 spent deliberately against that -72: three lines
+    #                       registering `pr-touches` and `upgrade-pr` (an import
+    #                       and two AddCommands, the usual cost of a verb), and
+    #                       five for cmdBuild's GH_TOKEN guard under --watch. The
+    #                       guard belongs in the command rather than the watcher
+    #                       because it must fire BEFORE the dispatch: after it,
+    #                       the missing token presents as "GitHub never registered
+    #                       the run", which sends the reader to the Actions tab
+    #                       instead of to the unset secret. Net for the change is
+    #                       -64.
+    budget: 1884
     exact: true
     include:
       - "tools/internal/cli/*.go"

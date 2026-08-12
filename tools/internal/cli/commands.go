@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
@@ -17,6 +18,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/onboard"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/dispatchwatch"
 )
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
@@ -46,13 +48,31 @@ func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
 	return environments.Run(g.DryRun, name, o)
 }
 
-func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
+func cmdBuild(args []string, g globalOpts, skipPreflight, watch bool) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: llz build <env>")
 	}
 	env := args[0]
 	if err := validate.EnvName(env); err != nil {
 		return err
+	}
+	// Rejected UP FRONT rather than after the dispatch, because the disarmed
+	// watcher is indistinguishable from a clean run at the point it matters. The
+	// caller that wants --watch is an unattended CI step whose exit code is the
+	// only signal anyone sees; handing it a dispatch it cannot follow is how a
+	// scheduled apply reports success for an apply that failed.
+	if watch && !g.Yes {
+		return fmt.Errorf("--watch requires --yes: without it nothing is dispatched, so there is no run to follow")
+	}
+	// Checked HERE rather than left to `gh`, because the downstream symptom is a
+	// misdiagnosis. With no token the dispatch is refused, no run is created, and
+	// the watcher reports "GitHub never registered the run" — which reads as a
+	// GitHub problem and sends the reader to the Actions tab instead of to the
+	// repository secret that is actually missing. Only under --watch: an operator
+	// at a terminal has an authenticated gh, and this is the unattended path.
+	if watch && os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" {
+		return fmt.Errorf("--watch needs GH_TOKEN (or GITHUB_TOKEN) in the environment and neither is set — " +
+			"in CI that is the LLZ_AUTOMATION_TOKEN repository secret, which an armed scheduled-apply requires; see docs/secrets.md")
 	}
 	// The dispatch is fire-and-forget — GitHub accepts any `region` string and
 	// fails later, in CI, on the tree it checked out. Ask the remote first
@@ -68,11 +88,16 @@ func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 	// sight of the flow — `gh workflow run` prints no run id. Baseline BEFORE the
 	// dispatch: "newest run" afterwards is only ours if it is newer than what was
 	// there before. See build_watch.go.
-	watch := beginDispatchWatch(g, "terraform.yml")
+	w := dispatchwatch.Begin(g.DryRun, g.Yes, "terraform.yml")
 	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env)...); err != nil {
 		return err
 	}
-	watch.report()
+	if watch {
+		// wait() prints the run it settled on, so report()'s "here is where it went"
+		// would be the same fact twice. The two are alternatives, not a sequence.
+		return w.Wait()
+	}
+	w.Report()
 	return nil
 }
 
@@ -89,7 +114,10 @@ var (
 	// skipPreflight=true: cmdUp already ran buildpreflight.Run itself (upPreflight,
 	// before the token wizard), and running it again here printed the whole
 	// unpublished-edits warning block twice in one `llz up`.
-	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true) }
+	// watch=false: `llz up` is the interactive first-build flow, which ends by
+	// printing the manual-action checklist. Blocking it for ~40 minutes on the
+	// apply would bury that checklist behind a wait the operator did not ask for.
+	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true, false) }
 	// upPreflight is the same dispatch check, run before the chain starts; seamed
 	// alongside the three stages so the order test can drive it.
 	upPreflight = buildpreflight.Run

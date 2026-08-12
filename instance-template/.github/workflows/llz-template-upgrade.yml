@@ -1,0 +1,157 @@
+name: llz-template-upgrade (reusable)
+
+# Reusable (`workflow_call`) body for the automated template upgrade. The trigger
+# surface lives in the thin caller template-upgrade.yml, which is where the
+# rationale for the workflow is written. Maintainer rationale lives in the
+# TEMPLATE repo: docs/workflows/llz-template-upgrade.md
+#
+# WHY `llz self-update` RUNS FIRST, AND WHY IT IS NOT OPTIONAL. `llz upgrade` with
+# no --ref targets the CLI's OWN version (copier.Ref -> ResolveRef -> the binary's
+# anchor Version). The llz in TF_IMAGE is the one this instance is already pinned
+# to — that is what TF_IMAGE being in step with the template release MEANS — so a
+# bare `llz upgrade` here resolves to the current pin and re-renders it to itself.
+# It would exit 0 having produced an empty diff, every month, and read as "no
+# upstream changes" rather than "asked the wrong question". self-update makes the
+# binary the latest release first, so upgrade's own default becomes the right
+# target — the documented operator flow (`llz self-update && llz upgrade`), not a
+# CI-only ref-resolution path that could drift from it.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Template release to upgrade to, or empty for the latest published release"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      # Declared even though the caller uses `secrets: inherit` — actionlint types
+      # the `secrets` context from these declarations, so an undeclared or
+      # misspelled name silently renders empty instead of being caught here.
+      LLZ_AUTOMATION_TOKEN:
+        description: 'Fine-grained PAT (Contents: write, Pull requests: write, Actions: read) used to push the upgrade branch and open its PR. GITHUB_TOKEN cannot be used: a PR it opens runs no checks, so the gates that make the upgrade reviewable would not fire.'
+        required: false
+
+permissions:
+  contents: read
+
+# One upgrade at a time. Two concurrent runs would race on the same branch name
+# and the second would push over the first's commit.
+concurrency:
+  group: template-upgrade
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Opt-in ──────────────────────────────────────────────────────────────────
+  # Read straight from `vars` in each job's `if:`. An `armed` job computing an
+  # output was 25 lines of shell to do a string comparison GitHub can evaluate
+  # itself, and inline workflow bash is a ratcheted budget here
+  # (.untestable-budget.yaml) — a notice job keeps a disarmed run legible for one
+  # line instead of twenty-five.
+  disarmed-notice:
+    name: Automated template upgrade is not armed
+    if: vars.LLZ_TEMPLATE_UPGRADE != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Explain the no-op
+        run: echo "::notice title=Not armed::Set the repository variable LLZ_TEMPLATE_UPGRADE=true to arm the automated upgrade. Until then, upgrade by hand — see docs/quickstart.md."
+
+  upgrade:
+    name: Upgrade the template pin
+    if: vars.LLZ_TEMPLATE_UPGRADE == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      # Host-key prompts hang a container job the first time it talks to a new git
+      # host (.github/workflows/AGENTS.md).
+      GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
+      # The committer identity, as environment rather than `git config` calls: the
+      # commit is made by `llz upgrade --commit` deep inside the CLI, and git reads
+      # these before consulting config, so no shell step is needed to set them.
+      # The GitHub Actions bot is what genuinely made this commit; per AGENTS.md the
+      # one thing it must never be is an AI-agent identity.
+      GIT_AUTHOR_NAME: "github-actions[bot]"
+      GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+      GIT_COMMITTER_NAME: "github-actions[bot]"
+      GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+    steps:
+      # FULL HISTORY: `llz upgrade` runs `copier update`, which performs a 3-way
+      # merge against the commit recorded in .copier-answers.yml. A shallow clone
+      # does not contain that commit, so copier cannot compute the diff and the
+      # update fails in a way that reads like a template problem.
+      - name: Checkout the instance
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          # Not github.token: the PR this job opens must RUN the plan, lint and
+          # repo-readiness gates, and GitHub suppresses workflow runs on events
+          # raised with GITHUB_TOKEN. A PR nothing checks is worse than no PR — it
+          # looks reviewed.
+          token: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+          persist-credentials: true
+
+      # The container runs as a different uid than the checkout's owner, and git
+      # refuses to operate on a tree it considers foreign. Without this every git
+      # command below fails with "detected dubious ownership".
+      #
+      # The missing-token case is checked by `llz ci upgrade-pr`, not by a step
+      # here: it is the command that needs the token, and it can say what the token
+      # is for.
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # See the header: without this, `llz upgrade` re-renders the current pin to
+      # itself and reports an empty diff as "nothing upstream".
+      - name: Install the latest llz release
+        if: inputs.ref == ''
+        env:
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+        run: llz self-update
+
+      - name: Record the starting pin
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # --no-doctor: doctor is an advisory readiness check that wants cluster and
+      # cloud credentials this job deliberately does not hold. Its findings belong
+      # to the human reviewing the PR, and repo-readiness asks the part that gates.
+      #
+      # The `--ref` split is two steps rather than one shell `if`, because inline
+      # workflow bash is a ratcheted budget here and `if:` expresses the same
+      # branch for free.
+      - name: Run the upgrade (latest release)
+        if: inputs.ref == ''
+        env:
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+        run: llz upgrade --commit --no-doctor
+
+      - name: Run the upgrade (pinned ref)
+        if: inputs.ref != ''
+        env:
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+        run: llz upgrade --ref "${{ inputs.ref }}" --commit --no-doctor
+
+      # Everything that used to be ~55 lines of shell — did HEAD move, is the tree
+      # dirty, what is the branch called, does it already exist on the remote, the
+      # PR body — is `llz ci upgrade-pr`. It is Go because each of those has a
+      # wrong answer that looks like success (see upgradepr.go), and because the
+      # PR body full of backticked commands reds TestDeliveredWorkflowCommands when
+      # it lives in a run: heredoc.
+      - name: Open the upgrade pull request
+        env:
+          GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+        run: llz ci upgrade-pr --before "${{ steps.before.outputs.sha }}"
+
+# The step summary is written by `llz ci upgrade-pr` itself — it is the step that
+# knows the verdict, the branch and the residue, and a second summariser here
+# would be a copy of those facts that drifts from them.

@@ -1,0 +1,56 @@
+name: Scheduled Apply
+
+# Thin caller for the reusable LLZ workflow — the body (deployment discovery, the
+# per-deployment `llz build --yes --watch`, and the run-result summary) lives in
+# .github/workflows/llz-scheduled-apply.yml, which copier delivers into THIS repo.
+# ADOPTERS: no fork needed for secrets — local reusable, `secrets: inherit` is
+# same-repo (#201).
+#
+# WHAT THIS CLOSES. A merged change reaches the cluster by three different routes,
+# and only two of them are pull-based. The apl-overlay and the Argo manifests are
+# reconciled continuously from `main` by the in-cluster llz-reconciler and Argo, so
+# they land on merge. Terraform lands on NOTHING: a push to main deliberately
+# neither plans nor applies (see llz-terraform.yml's push-noop-notice), and the
+# apply is a workflow_dispatch an operator fires with `llz build <env> --yes`. So a
+# `llz upgrade` that moves the Terraform module ref sits merged and undeployed
+# until a human remembers. This workflow is that human, on a cadence.
+#
+# IT IS OFF UNTIL YOU TURN IT ON, and that is deliberate. Applying production
+# infrastructure on a schedule is a decision an adopter makes, not one they
+# inherit from a template upgrade. Set the repo variable LLZ_SCHEDULED_APPLY=true
+# to arm it; until then every run exits having done nothing, and says so.
+#
+# RUNNING IT REPEATEDLY IS THE POINT, not a side effect. `tofu apply` is
+# idempotent and the run ends in `llz ci converge` plus the assert suite, so a
+# no-op week still proves the cluster is reachable, converged and matches the
+# committed spec — which catches console edits and drift that no merge-triggered
+# run ever would.
+
+on:
+  schedule:
+    # Weekly Sunday 04:00 UTC — two hours after scheduled-checks' weekly health
+    # probe (0 2 * * 0), so an operator reading back through a red Sunday sees the
+    # health verdict that preceded the apply rather than having to interleave them.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      deployment:
+        # Free-form string, NOT a `choice`: deployments are created dynamically by
+        # `llz env add`, so a fixed list would reject any env an adopter adds.
+        # Empty = every discovered deployment, which is what the cron does.
+        description: "Deployment to apply, or empty for all of them"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Local reusable — the body ships in this repo and is re-rendered by
+    # `llz upgrade`, so updates arrive as reviewable template-version PRs.
+    uses: ./.github/workflows/llz-scheduled-apply.yml
+    with:
+      deployment: ${{ inputs.deployment || '' }}
+    secrets: inherit
