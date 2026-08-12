@@ -94,7 +94,14 @@ var LatestDispatchRun = func(repo, workflow string) ([]Run, bool) {
 	// never mistaken for one. per_page=5 is enough to notice a second dispatch
 	// without paging.
 	path := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=5", repo, workflow)
-	if err := ghapi.GHAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
+	// ONLY the API error is a failure. `len(resp.Runs) == 0` was in this condition,
+	// which meant the comment below — added when the empty case was supposedly
+	// fixed — described behaviour the function did not have: the tail return said
+	// ok=true for an empty page and this early return had already left with false.
+	// A first-ever dispatch, and every instance that has only ever applied through
+	// promote.yml, therefore still failed Wait() with "could not read the run list"
+	// for an apply that was running fine.
+	if err := ghapi.GHAPIJSON(path, &resp); err != nil {
 		return nil, false
 	}
 	out := make([]Run, 0, len(resp.Runs))

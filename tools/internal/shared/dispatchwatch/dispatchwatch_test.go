@@ -1,11 +1,14 @@
 package dispatchwatch
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 )
 
 // stubRunLookup points the poll loop at a fake and makes it instant.
@@ -117,3 +120,37 @@ func Begin2ForTest(repo, workflow string) Watch {
 	}
 	return w
 }
+
+// TestLatestDispatchRunTreatsAnEmptyPageAsAnAnswer covers the REAL function
+// rather than the seam every other test replaces.
+//
+// That gap is why the bug survived a fix: the empty-list case was "fixed" by
+// editing the comment and the tail return while the early return still bailed
+// with ok=false, and no test could see it because they all stub
+// LatestDispatchRun. Here the ghapi transport is stubbed instead, so the
+// function's own branching is what runs.
+func TestLatestDispatchRunTreatsAnEmptyPageAsAnAnswer(t *testing.T) {
+	orig := ghapi.GHAPIJSON
+	t.Cleanup(func() { ghapi.GHAPIJSON = orig })
+
+	ghapi.GHAPIJSON = func(_ string, out any) error {
+		return json.Unmarshal([]byte(`{"workflow_runs":[]}`), out)
+	}
+	runs, ok := LatestDispatchRun("acme/inst", "terraform.yml")
+	if !ok {
+		t.Error("an empty run list is an ANSWER — this workflow has never been dispatched. Reporting it " +
+			"as a failed query makes every first-ever dispatch fail its watch for an apply that is running.")
+	}
+	if len(runs) != 0 {
+		t.Errorf("expected no runs, got %d", len(runs))
+	}
+
+	ghapi.GHAPIJSON = func(string, any) error { return errBoom{} }
+	if _, ok := LatestDispatchRun("acme/inst", "terraform.yml"); ok {
+		t.Error("an unreachable API must still report failure — that is the case Wait() refuses on")
+	}
+}
+
+type errBoom struct{}
+
+func (errBoom) Error() string { return "boom" }
