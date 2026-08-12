@@ -108,7 +108,7 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	}
 	if len(missing) == 0 && len(repin) == 0 {
 		_ = WriteEnvFile(".llz/vars.env", vars)
-		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv))
+		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo))
 		return nil
 	}
 	if o.DryRun {
@@ -480,12 +480,31 @@ func repoSlug(repo string) string {
 // half is precisely what the API withholds. Naming the command out loud is the
 // whole of the remedy, which is why it is unconditional here rather than gated
 // on some heuristic about whether the operator edited anything.
-func NothingToProvisionNote(env string) string {
+//
+// IT NAMES THE CHECKOUT, NOT JUST THE COMMAND, because `llz secrets push` and
+// this command do not resolve their target the same way. RunTokens honours
+// --repo / .copier-answers.yml; PushSecrets builds its argv through
+// ghcli.SecretSetArgv / ghcli.VariableSetArgv, neither of which passes --repo, so
+// it pushes wherever `gh` infers the repo from the working directory. The two
+// agree for the ordinary case — an adopter in their instance checkout — and
+// diverge exactly when this note would otherwise be most confident: a --repo run,
+// and every --admin run, where RunTokens targets the example instance while the
+// working directory is the template. Advice that sends a full set of credentials
+// into the wrong repo is worse than no advice, and repeating the repo here is
+// what makes the sentence true in both modes.
+//
+// Both env files, not just secrets.env: this early return skips pushToRepo
+// entirely, so a hand-edited variable is dropped on the same floor. (Variables
+// alone WOULD be detectable — pushToRepo compares st.Value(k) != vars[k] — but it
+// never runs on this path, and `llz secrets push` re-pushes both files anyway.)
+func NothingToProvisionNote(env, repo string) string {
 	return fmt.Sprintf("Everything required for infra-%s is already set — nothing to provision.\n%s",
 		env, color.Dim(fmt.Sprintf(
-			"  This checks that each credential is PRESENT, not that the pushed value still matches\n"+
-				"  yours — GitHub never reads a secret back. If you edited .llz/secrets.env by hand, that\n"+
-				"  value has NOT been pushed; send it with `llz secrets push %s --yes`.", env)))
+			"  This checks that each credential is PRESENT, not that its pushed value still matches\n"+
+				"  yours — GitHub never reads a secret back. Anything you edited in .llz/secrets.env or\n"+
+				"  .llz/vars.env by hand has NOT been pushed; send it with `llz secrets push %s --yes`,\n"+
+				"  run from a checkout of %s (that command pushes to the repo of the working\n"+
+				"  directory — it takes no --repo).", env, repo)))
 }
 
 // RepinPlanNote is the dry-run tail that keeps a repin-only run from reporting

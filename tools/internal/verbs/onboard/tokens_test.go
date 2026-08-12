@@ -21,17 +21,30 @@ import (
 // went wrong: no route out, no statement of what the check does not cover, and
 // an env name hardcoded to the template's own lane.
 func TestNothingToProvisionNote(t *testing.T) {
-	got := NothingToProvisionNote("prod")
+	got := NothingToProvisionNote("prod", "acme/instance")
 
 	// The route out. This is the whole point of the message: `llz secrets push`
 	// is a sibling verb, and nothing else in a `llz tokens` run mentions it.
 	if !strings.Contains(got, "llz secrets push prod --yes") {
 		t.Errorf("re-run message never names the command that pushes a hand-edited credential:\n%s", got)
 	}
+	// The advice is only safe from a checkout of the repo this run targeted:
+	// PushSecrets goes through ghcli.SecretSetArgv, which passes no --repo, so it
+	// pushes wherever `gh` infers the repo from the working directory. An --admin
+	// or --repo run targets one repo and stands in another, and the difference
+	// between the two is a full set of credentials in the wrong place.
+	if !strings.Contains(got, "acme/instance") {
+		t.Errorf("re-run message recommends a CWD-relative push without naming the repo it must run against:\n%s", got)
+	}
 	// PRESENCE-not-VALUE has to be said, not implied. "Everything is set" is true
 	// and still leaves the operator with the wrong conclusion.
 	if !strings.Contains(got, ".llz/secrets.env") {
 		t.Errorf("re-run message claims everything is set without saying what is NOT checked:\n%s", got)
+	}
+	// vars.env rides the same early return — pushToRepo is skipped for both, so a
+	// hand-edited variable is dropped exactly like a hand-edited secret.
+	if !strings.Contains(got, ".llz/vars.env") {
+		t.Errorf("re-run message covers only secrets, but this branch drops hand-edited variables too:\n%s", got)
 	}
 	// The deployment the operator named, not `e2e`. The old constant reported on
 	// the template's throwaway lane for every adopter who has no such env — the
