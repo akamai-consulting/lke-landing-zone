@@ -108,7 +108,7 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	}
 	if len(missing) == 0 && len(repin) == 0 {
 		_ = WriteEnvFile(".llz/vars.env", vars)
-		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", color.Green("✓"))
+		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv))
 		return nil
 	}
 	if o.DryRun {
@@ -449,6 +449,43 @@ func repoSlug(repo string) string {
 		return strings.ToLower(name)
 	}
 	return strings.ToLower(repo)
+}
+
+// NothingToProvisionNote is what `llz tokens` says when it finds every required
+// credential already accounted for — and, load-bearingly, what it says NEXT.
+//
+// THE OLD TEXT WAS "Everything required for e2e is already set — nothing to
+// do.", and it misled the one operator most likely to reach it, twice.
+//
+// It named `e2e` no matter what --env was passed — the template's own throwaway
+// lane, not the adopter's deployment. That is the same misdirection
+// DefaultDoctorEnv() exists to remove one verb over (see cobra_root2.go), landing
+// here because this string was a constant rather than a format.
+//
+// The worse half is "nothing to do", which is a claim about THIS COMMAND that
+// reads as a claim about the REPO. The readiness behind it is envreq.Satisfied,
+// and that tests PRESENCE — a key in .llz/secrets.env, or a secret NAME on the
+// instance repo — never VALUE, because GitHub does not disclose a secret back.
+// So an operator who rotates a credential the obvious way, by editing
+// .llz/secrets.env, arrives here with everything "satisfied", is told there is
+// nothing to do, and RETURNS BEFORE pushToRepo. Their new value stays on their
+// laptop, CI keeps authenticating with the old one, and the failure surfaces
+// later as a 401 from a build that had no reason to be reading a stale token.
+// The command that would have shipped it — `llz secrets push` — is a sibling
+// verb nothing in this output mentions, so the operator has to already know the
+// answer to find it.
+//
+// Detecting the drift instead of announcing the route is not available: the
+// comparison that would find it is local value vs pushed value, and the pushed
+// half is precisely what the API withholds. Naming the command out loud is the
+// whole of the remedy, which is why it is unconditional here rather than gated
+// on some heuristic about whether the operator edited anything.
+func NothingToProvisionNote(env string) string {
+	return fmt.Sprintf("Everything required for infra-%s is already set — nothing to provision.\n%s",
+		env, color.Dim(fmt.Sprintf(
+			"  This checks that each credential is PRESENT, not that the pushed value still matches\n"+
+				"  yours — GitHub never reads a secret back. If you edited .llz/secrets.env by hand, that\n"+
+				"  value has NOT been pushed; send it with `llz secrets push %s --yes`.", env)))
 }
 
 // RepinPlanNote is the dry-run tail that keeps a repin-only run from reporting
