@@ -114,7 +114,7 @@ func Lock(dryRun bool, repo, env string) error {
 
 	// 4. Add the `main` rule. POST returns 422 if it already exists — tolerate.
 	if out, err := exec.Command("gh", "api", "-X", "POST",
-		"repos/"+repo+"/environments/"+envName+"/Deployment-branch-policies",
+		branchPoliciesPath(repo, envName),
 		"-f", "name="+branch, "-f", "type=branch").CombinedOutput(); err != nil {
 		s := string(out)
 		switch {
@@ -164,7 +164,7 @@ func WarnUnsupported(repo, env string) {
 	fmt.Fprintln(os.Stderr, color.Dim("  feature-branch workflow_dispatch could select "+envName+" and read them."))
 	fmt.Fprintln(os.Stderr, "  Lock it once the plan allows (UI: Settings → Environments → "+envName+" → Deployment branch policy), or:")
 	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X PUT repos/"+repo+"/environments/"+envName+" -F deployment_branch_policy[custom_branch_policies]=true -F deployment_branch_policy[protected_branches]=false"))
-	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/Deployment-branch-policies -f name=main -f type=branch"))
+	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("gh api -X POST "+branchPoliciesPath(repo, envName)+" -f name=main -f type=branch"))
 }
 
 // policyKind classifies the deployment_branch_policy of an environment config.
@@ -182,10 +182,34 @@ func policyKind(envCfg map[string]any) string {
 	return "none"
 }
 
+// branchPoliciesPath is the deployment-branch-policies collection for an
+// environment.
+//
+// LOWERCASE, AND THAT IS THE WHOLE POINT. GitHub's REST paths are CASE-SENSITIVE:
+// this segment was spelled `Deployment-branch-policies` at all three call sites,
+// which is not a route GitHub serves, so every call answered 404 Not Found. The
+// 404 then read as "the environment does not exist" — in a run whose preceding
+// `gh secret set --env infra-prod` calls had all just succeeded against that very
+// environment.
+//
+// It failed in both directions and one of them was silent. HasMainBranchRule 404s
+// too, returns false, and the "already restricted — skipping" short-circuit can
+// never fire — so an instance whose rule was already correct still fell through to
+// the POST and still failed. And because a 404 carries none of the words
+// isPlanLimitErr looks for, it bypassed the ErrUnsupported path that exists to let
+// a repo without a paid plan finish with a warning instead of an error.
+//
+// ONE FUNCTION, THREE CALLERS, so the spelling cannot drift between the read, the
+// write, and the command printed to the operator — all three were wrong together,
+// which is what a copy per call site buys.
+func branchPoliciesPath(repo, envName string) string {
+	return "repos/" + repo + "/environments/" + envName + "/deployment-branch-policies"
+}
+
 // HasMainBranchRule reports whether the env's custom branch policies include a
 // rule named `branch`.
 func HasMainBranchRule(repo, envName, branch string) bool {
-	out, err := ghAPIOut("repos/" + repo + "/environments/" + envName + "/Deployment-branch-policies")
+	out, err := ghAPIOut(branchPoliciesPath(repo, envName))
 	if err != nil {
 		return false
 	}
