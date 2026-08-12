@@ -23,9 +23,26 @@ import (
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
 
-func buildArgv(env string) []string {
-	return []string{"gh", "workflow", "run", "terraform.yml",
+// buildArgv is the dispatch. assertInvariants forwards terraform.yml's
+// `assert_invariants` input, which turns on the post-converge assertion battery
+// inside the bootstrap job that already holds cluster access — the assert-suite
+// lanes, Loki S3-backed, volume encryption/tags/labels, and the Managed Postgres
+// admin credential.
+//
+// A FIELD RATHER THAN ALWAYS-ON, because the two callers want different answers.
+// An operator running `llz build` by hand during a bring-up wants the apply and
+// the converge; the assertions are minutes of extra probing against a cluster
+// they are watching anyway. An unattended run — the scheduled apply, a promotion
+// stage — has nobody watching, and "converged" alone does not say the volumes are
+// still encrypted or that Postgres still accepts the credential it was seeded
+// with. Those are exactly the invariants that rot silently between applies.
+func buildArgv(env string, assertInvariants bool) []string {
+	argv := []string{"gh", "workflow", "run", "terraform.yml",
 		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
+	if assertInvariants {
+		argv = append(argv, "--field", "assert_invariants=true")
+	}
+	return argv
 }
 
 // statusArgv is the read-only convergence check set (matches the verify steps in
@@ -48,7 +65,7 @@ func cmdEnvAdd(g globalOpts, name string, o envdef.Opts) error {
 	return environments.Run(g.DryRun, name, o)
 }
 
-func cmdBuild(args []string, g globalOpts, skipPreflight, watch bool) error {
+func cmdBuild(args []string, g globalOpts, skipPreflight, watch, assertInvariants bool) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: llz build <env>")
 	}
@@ -89,7 +106,7 @@ func cmdBuild(args []string, g globalOpts, skipPreflight, watch bool) error {
 	// dispatch: "newest run" afterwards is only ours if it is newer than what was
 	// there before. See build_watch.go.
 	w := dispatchwatch.Begin(g.DryRun, g.Yes, "terraform.yml")
-	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env)...); err != nil {
+	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env, assertInvariants)...); err != nil {
 		return err
 	}
 	if watch {
@@ -117,7 +134,9 @@ var (
 	// watch=false: `llz up` is the interactive first-build flow, which ends by
 	// printing the manual-action checklist. Blocking it for ~40 minutes on the
 	// apply would bury that checklist behind a wait the operator did not ask for.
-	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true, false) }
+	// assertInvariants=false: `llz up` is an interactive first build the operator
+	// is watching, and its converge already proves the platform came up.
+	upBuild = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, true, false, false) }
 	// upPreflight is the same dispatch check, run before the chain starts; seamed
 	// alongside the three stages so the order test can drive it.
 	upPreflight = buildpreflight.Run

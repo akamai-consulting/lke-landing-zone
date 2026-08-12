@@ -163,6 +163,14 @@ jobs:
 		b.WriteString(fmt.Sprintf("      instance_repo: %s\n", c.instanceRepo))
 		b.WriteString("      action: apply\n")
 		b.WriteString("      module: ${{ inputs.module || 'all' }}\n")
+		// Every stage asserts, not just the last. A promotion is the one moment an
+		// environment provably changes, and converge alone only says the health tree
+		// settled — not that volumes are still encrypted, that Loki is still
+		// S3-backed, or that Managed Postgres still accepts its seeded credential.
+		// Asserting at dev is also what makes the `needs:` chain worth having: a
+		// broken invariant stops the promotion at the first stage instead of riding
+		// it into prod behind three green checks.
+		b.WriteString("      assert_invariants: true\n")
 		b.WriteString(fmt.Sprintf("      region: %s\n", s.name))
 		b.WriteString("    secrets: inherit\n")
 		if i < len(stages)-1 {

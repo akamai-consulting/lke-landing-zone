@@ -125,8 +125,8 @@ on:
         required: false
         type: boolean
         default: false
-      assert_loki:
-        description: 'After converge, assert Loki is S3-backed (llz ci assert-loki). Default false; the release-e2e gate dispatches with this true so the check runs inside the bootstrap converge instead of a separate health pass.'
+      assert_invariants:
+        description: 'After converge, assert the platform invariants hold: the assert-suite lanes, Loki S3-backed, volume encryption, and the Managed Postgres admin credential. Default false. WAS `assert_loki`, which named one of the four things it gates — promoting into an environment skipped the volume-encryption check with nothing saying so.'
         required: false
         type: boolean
         default: false
@@ -150,6 +150,6 @@ jobs:
       confirm_destroy: ${{ inputs.confirm_destroy }}
       drain_data_buckets: ${{ inputs.drain_data_buckets || false }}
       # Default false via the reusable's input; release-e2e's provision dispatch
-      # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
-      assert_loki: ${{ inputs.assert_loki || false }}
+      # passes assert_invariants=true so the assertions run inside the converge job.
+      assert_invariants: ${{ inputs.assert_invariants || false }}
     secrets: inherit

@@ -119,8 +119,14 @@ jobs:
       # from, dispatches terraform.yml (action=apply module=all), then --watch
       # blocks on the resulting run and exits non-zero unless it concluded success.
       # module=all is what chains apply-cluster -> bootstrap-openbao, whose final
-      # step is `llz ci converge` plus the assert suite — so a green step here means
-      # "applied AND converged", not "dispatched".
+      # step is `llz ci converge`.
+      #
+      # --assert-invariants is what makes this worth running on a timer. Converge
+      # proves the health tree settled; it says nothing about whether the volumes
+      # are still encrypted, whether Loki is still S3-backed, or whether Managed
+      # Postgres still accepts the credential it was seeded with. Those rot
+      # silently BETWEEN applies, which is the only failure a weekly no-op run is
+      # in a position to catch. Without it a green week means "nothing crashed".
       - name: Apply and converge
         env:
           # Not github.token: GitHub suppresses workflow runs from events raised
@@ -133,7 +139,7 @@ jobs:
         # watcher would otherwise report "GitHub never registered the run" — which
         # reads as a GitHub outage and sends the reader to the Actions tab instead
         # of to the unset repository secret.
-        run: llz build "$DEPLOYMENT" --yes --watch
+        run: llz build "$DEPLOYMENT" --yes --watch --assert-invariants
 
   # ── Verdict ─────────────────────────────────────────────────────────────────
   # `needs.apply.result` collapses the whole matrix to one value, so this is the

@@ -76,7 +76,7 @@ Then:
 git push origin debug/<what-you-are-chasing>
 gh workflow run cluster-health.yml -R akamai-consulting/lke-landing-zone-example \
   --ref debug/<what-you-are-chasing> \
-  -f region=e2e -f fail-on-unhealthy=false -f assert-loki=false
+  -f region=e2e -f fail-on-unhealthy=false
 ```
 
 `--ref` runs that branch's version of the workflow, and the nested `./` reusable

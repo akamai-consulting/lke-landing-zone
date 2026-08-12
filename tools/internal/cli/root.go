@@ -287,7 +287,7 @@ func newCmd() *cobra.Command {
 // ── run ──────────────────────────────────────────────────────────────────────
 
 func buildCmd() *cobra.Command {
-	var skipPreflight, watch bool
+	var skipPreflight, watch, assertInvariants bool
 	c := &cobra.Command{
 		Use: "build <env>", Short: "dispatch the terraform.yml apply (module=all) (--yes)",
 		Long: "Dispatches terraform.yml (action=apply module=all) for a deployment. GitHub\n" +
@@ -301,11 +301,13 @@ func buildCmd() *cobra.Command {
 			"and the command only prints where the run went.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return cmdBuild(args, cliopts.Global, skipPreflight, watch)
+			return cmdBuild(args, cliopts.Global, skipPreflight, watch, assertInvariants)
 		},
 	}
 	c.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "dispatch without checking the deployment is on the branch CI builds from")
 	c.Flags().BoolVar(&watch, "watch", false, "block until the dispatched run finishes; exit non-zero unless it succeeded (requires --yes)")
+	c.Flags().BoolVar(&assertInvariants, "assert-invariants", false,
+		"after converge, also assert the platform invariants (assert-suite lanes, Loki S3-backed, volume encryption, Postgres admin credential)")
 	return c
 }
 

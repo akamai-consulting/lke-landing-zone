@@ -104,7 +104,7 @@ reconciler already proved.
       components.clusterHealthWorkflow.enabled=true`), so converge validates the
       DEPLOY path (kyverno admits the WorkflowTemplate/RBAC CRs, Argo
       reconciles them), and a new **`llz ci assert-health-workflow`** step in
-      bootstrap-openbao's converge (same `assert_loki` e2e gate) submits a one-shot
+      bootstrap-openbao's converge (same `assert_invariants` gate) submits a one-shot
       Workflow from the template and asserts it Succeeds — validating the RUN path.
       The verb SKIPS (exit 0) when the WorkflowTemplate is absent, so it stays inert
       on a normal instance. Confirmed locally: `env set` + `llz render` wire the

@@ -11,10 +11,14 @@ name: Cluster health (diagnostic + E2E validate)
 #   • Recovery / diagnostic (the all-defaults dispatch): report-only, the job
 #     summary is the deliverable. Set verbose: true to dump describe/logs even
 #     when nothing is failing.
-#   • Gate mode: set fail-on-unhealthy: true (+ assert-loki: true) to make it fail
-#     on an unhealthy cluster. NOTE: release-e2e no longer dispatches this — its
-#     former `validate` job was folded into bootstrap-openbao's converge (which
-#     runs `llz ci converge` + the assert suite inline), so gate mode is now an
+#   • Gate mode: set fail-on-unhealthy: true. The run then fails on an unhealthy
+#     cluster AND asserts the platform invariants (Loki S3-backed, the
+#     observability/reconciler/wave-health suite lanes, alert-eval --strict).
+#     There used to be a second `assert-loki` checkbox for that battery, which
+#     named one of the things it turned on and left gate mode able to pass while
+#     asserting nothing. Gate mode now means one thing.
+#     NOTE: release-e2e no longer dispatches this — its former `validate` job was
+#     folded into bootstrap-openbao's converge, so gate mode is an
 #     OPERATOR-dispatched path only.
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
@@ -41,11 +45,6 @@ on:
         required: false
         type: boolean
         default: false
-      assert-loki:
-        description: 'Also assert Loki is S3-backed (E2E validation)'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -61,5 +60,4 @@ jobs:
       region: ${{ inputs.region }}
       verbose: ${{ inputs.verbose }}
       fail-on-unhealthy: ${{ inputs.fail-on-unhealthy }}
-      assert-loki: ${{ inputs.assert-loki }}
     secrets: inherit

@@ -128,7 +128,7 @@ never transit GitHub.
 
 ### Inputs worth explaining
 
-* **`assert_loki`** — default false for normal instances. The release-e2e gate sets it
+* **`assert_invariants`** — default false for a bare `llz build`. release-e2e and every promote.yml stage set it
   true so the check runs inside the converge that already holds cluster access,
   instead of a separate `validate` pass dispatching `cluster-health.yml`.
 * **`bootstrap_cluster`** — set by `llz-terraform.yml`'s chained call so cluster +
@@ -722,7 +722,7 @@ above) + `llz ci assert-loki`. Running `assert-loki` HERE — inside the converg
 already holds cluster access — drops that whole extra job (its container-init + checkout
 + kubeconfig/ACL cycle) from the e2e critical path. Default-off, so normal instance
 bootstraps are unchanged; only the release-e2e provision dispatch passes
-`assert_loki=true`. Uses the job's default kubeconfig (`$HOME/.kube/config`), same as
+`assert_invariants=true`. Uses the job's default kubeconfig (`$HOME/.kube/config`), same as
 the poll.
 
 These gates ran back-to-back (~80s serial best case; minutes when

@@ -79,6 +79,7 @@ jobs:
       instance_repo: <@ instance_repo @>
       action: apply
       module: ${{ inputs.module || 'all' }}
+      assert_invariants: true
       region: dev
     secrets: inherit
 
@@ -94,6 +95,7 @@ jobs:
       instance_repo: <@ instance_repo @>
       action: apply
       module: ${{ inputs.module || 'all' }}
+      assert_invariants: true
       region: staging
     secrets: inherit
 
@@ -108,5 +110,6 @@ jobs:
       instance_repo: <@ instance_repo @>
       action: apply
       module: ${{ inputs.module || 'all' }}
+      assert_invariants: true
       region: prod
     secrets: inherit

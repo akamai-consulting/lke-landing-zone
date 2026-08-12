@@ -2,7 +2,7 @@ name: llz-cluster-health (reusable)
 
 # Reusable (`workflow_call`) cluster-health check. Vendored verbatim into every
 # instance; the caller stub owns the trigger surface. Two modes: report-only
-# (all defaults) and gate mode (fail-on-unhealthy + assert-loki).
+# (all defaults) and gate mode (fail-on-unhealthy).
 # Maintainer rationale (incidents, PR archaeology, why-not-X) lives in the
 # TEMPLATE repo: docs/workflows/llz-cluster-health.md
 
@@ -20,11 +20,6 @@ on:
         default: false
       fail-on-unhealthy:
         description: 'Fail the job when `llz ci health` exits non-zero. Leave false for recovery/diagnostic runs, where the report is the deliverable.'
-        required: false
-        type: boolean
-        default: false
-      assert-loki:
-        description: 'Also assert Loki is bootstrapped and S3-backed (`llz ci assert-loki`) — the E2E validation gate.'
         required: false
         type: boolean
         default: false
@@ -154,13 +149,13 @@ jobs:
           llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|vault_|llz_)' || true
 
       - name: Assert Loki is bootstrapped
-        if: ${{ inputs.assert-loki }}
+        if: ${{ inputs.fail-on-unhealthy }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"
           llz ci assert-loki
 
-      # E2E validation gate (same assert-loki input): asserts the observability
+      # Gate mode only (fail-on-unhealthy): asserts the observability
       # pipeline is WIRED, and --strict fails on DEAD?/BROKEN alerts. Unlike the
       # best-effort alert-eval above, these are gating.
       #
@@ -182,7 +177,7 @@ jobs:
       # broad-pat forces a PAT rotation). Those are deliberate e2e exercises, not
       # things a scheduled health check should do to a live cluster on a timer.
       - name: Assert observability + reconciler + wave-health (E2E gate)
-        if: ${{ inputs.assert-loki }}
+        if: ${{ inputs.fail-on-unhealthy }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"

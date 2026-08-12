@@ -1366,7 +1366,16 @@ categories:
     #                       the run", which sends the reader to the Actions tab
     #                       instead of to the unset secret. Net for the change is
     #                       -64.
-    budget: 1884
+    #   1,890 / 112 files  +6 for `llz build --assert-invariants`: the flag, its
+    #                       help, the extra cmdBuild parameter and the conditional
+    #                       --field in buildArgv. It belongs in the wiring layer
+    #                       because buildArgv IS the wiring — it translates a flag
+    #                       into a workflow_dispatch field, and the field name is a
+    #                       contract with terraform.yml that
+    #                       TestBuildArgvFieldsAreDeclaredInputsOfTerraformYml
+    #                       checks against the real declaration rather than a
+    #                       second copy. Net for the change is -58.
+    budget: 1890
     exact: true
     include:
       - "tools/internal/cli/*.go"

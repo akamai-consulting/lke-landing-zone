@@ -95,11 +95,21 @@ not.
 
 ## Running it repeatedly is the feature
 
-`tofu apply` is idempotent and the dispatched chain ends in `llz ci converge`
-plus the assert suite. So a week in which nothing changed still proves the
-cluster is reachable, converged, and matches the committed spec — which catches
-console edits, drifted firewall rules and expired credentials that no
-merge-triggered run would ever look at.
+`tofu apply` is idempotent and the dispatched chain ends in `llz ci converge`. So
+a week in which nothing changed still proves the cluster is reachable, converged,
+and matches the committed spec — which catches console edits and drifted firewall
+rules that no merge-triggered run would ever look at.
+
+**It also passes `--assert-invariants`, and that is the half worth arguing for.**
+Converge proves the health tree settled. It says nothing about whether the
+volumes are still encrypted, whether Loki is still S3-backed, or whether Managed
+Postgres still accepts the credential it was seeded with — invariants that rot
+*between* applies, silently, which is precisely the window a weekly no-op run is
+the only thing watching. Without it a green week means "nothing crashed".
+
+That input was called `assert_loki` until this change, and named one of the four
+things it gates. A promotion into prod skipped the volume-encryption check with
+nothing on screen saying so.
 
 That is also why the cron sits two hours after `scheduled-checks.yml`'s weekly
 health probe: reading back through a red Sunday, the health verdict that preceded

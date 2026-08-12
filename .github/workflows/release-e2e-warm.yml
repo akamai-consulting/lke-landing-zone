@@ -11,7 +11,7 @@ name: Release E2E — warm fast path (reuse a live cluster)
 #      LKE-E cluster + its Terraform state (S3, keyed by region=e2e) survive.
 #   2. Iterate: run THIS workflow. It re-instantiates the template at THIS commit
 #      onto the warm E2E instance and re-drives the SAME provision dispatch as the
-#      cold gate (terraform.yml apply, module=all, region=e2e, assert_loki=true).
+#      cold gate (terraform.yml apply, module=all, region=e2e, assert_invariants=true).
 #      Because the cluster already exists in state, `terraform apply` REFRESHES it
 #      instead of recreating it (the 14m create is skipped) AND apl-core is already
 #      installed (helm upgrade is a fast no-op; the apl-pipeline gate passes at
@@ -26,7 +26,7 @@ name: Release E2E — warm fast path (reuse a live cluster)
 #
 # ── Fidelity / scope ─────────────────────────────────────────────────────────
 #   • The provision dispatch is IDENTICAL to the cold gate's (apply, module=all,
-#     region=e2e, assert_loki=true). The ONLY difference from a cold run is that
+#     region=e2e, assert_invariants=true). The ONLY difference from a cold run is that
 #     the cluster pre-exists — nothing about the bootstrap/converge path is skipped
 #     or faked, so a green warm run means the same thing a green cold provision
 #     does, on the code under test. It is NOT a release gate, though: `on:` is
@@ -92,7 +92,7 @@ jobs:
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
   # ── 2. Provision against the WARM cluster — same dispatch as the cold gate ────
   # Byte-identical to release-e2e.yml's `provision` (apply, module=all, region=e2e,
-  # assert_loki=true), minus the dry-run branch (the warm path always applies). On
+  # assert_invariants=true), minus the dry-run branch (the warm path always applies). On
   # a warm cluster the apply refreshes instead of creating and apl-core is already
   # up, so the chain collapses to bootstrap re-apply + nudge + `llz ci converge`.
   provision:
@@ -114,7 +114,7 @@ jobs:
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action=apply --field module=all --field region="${E2E_ENV}" \
-            --field assert_loki=true
+            --field assert_invariants=true
 
   # ── 3. Gate — pass only if the warm provision converged ──────────────────────
   # NO teardown: the cluster is deliberately LEFT RUNNING for the next iteration

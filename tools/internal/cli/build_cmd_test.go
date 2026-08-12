@@ -16,10 +16,10 @@ func TestCmdBuildSkipPreflightBypassesTheCheck(t *testing.T) {
 	chdir(t, dir)
 	stubGitHub(t, nil)
 
-	if err := cmdBuild([]string{"lab"}, globalOpts{}, false, false); err == nil {
+	if err := cmdBuild([]string{"lab"}, globalOpts{}, false, false, false); err == nil {
 		t.Fatal("without --skip-preflight an unknown deployment must be refused")
 	}
-	if err := cmdBuild([]string{"lab"}, globalOpts{}, true, false); err != nil {
+	if err := cmdBuild([]string{"lab"}, globalOpts{}, true, false, false); err != nil {
 		t.Errorf("--skip-preflight must bypass the check, got %v", err)
 	}
 }
@@ -30,7 +30,7 @@ func TestBuildWatchRequiresYes(t *testing.T) {
 	// something useful. Lives here rather than with the watcher's own tests
 	// (internal/shared/dispatchwatch) because the guard is cmdBuild's, not the
 	// watcher's — the watcher cannot refuse a dispatch that already happened.
-	err := cmdBuild([]string{"lab"}, globalOpts{Yes: false}, true, true)
+	err := cmdBuild([]string{"lab"}, globalOpts{Yes: false}, true, true, false)
 	if err == nil || !strings.Contains(err.Error(), "--watch requires --yes") {
 		t.Errorf("--watch without --yes must be refused up front, got %v", err)
 	}

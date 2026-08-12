@@ -243,6 +243,85 @@ func TestPinInTriggerImpliesImportIsPathGated(t *testing.T) {
 	}
 }
 
+// TestBuildArgvFieldsAreDeclaredInputsOfTerraformYml feeds the producer's REAL
+// output into the consumer's REAL declaration, rather than restating either.
+//
+// `llz build` dispatches terraform.yml by writing `--field <name>=<value>`. Every
+// one of those names is an input terraform.yml has to declare, and the two live
+// in different languages in different trees with nothing but this test between
+// them.
+//
+// THE FAILURE IS ASYMMETRIC, WHICH IS WHY IT NEEDS A GATE. `gh workflow run`
+// rejects a field the workflow does not declare, so a typo surfaces loudly at
+// dispatch. But an input that is RENAMED — `assert_loki` to `assert_invariants`,
+// exactly what this change did — leaves the workflow declaring a name nothing
+// sends and `llz build` sending a name nothing reads. `gh` would reject the stale
+// field, but only for the caller that still passes it; the far worse shape is the
+// reverse, where the field is dropped from argv and the flag silently stops
+// turning the assertions on. The run then converges, asserts nothing, and goes
+// green — the precise "green having examined nothing" this repo keeps paying for.
+func TestBuildArgvFieldsAreDeclaredInputsOfTerraformYml(t *testing.T) {
+	caller, err := os.ReadFile(deliveredCaller)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredCaller, err)
+	}
+	// The workflow_dispatch input block: names at six-space indent under `inputs:`.
+	declared := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^      ([a-z_]+):\s*$`).FindAllStringSubmatch(string(caller), -1) {
+		declared[m[1]] = true
+	}
+	if len(declared) < 3 {
+		t.Fatalf("found only %d declared input(s) in %s — the extractor is broken, so this "+
+			"test would pass having compared nothing", len(declared), deliveredCaller)
+	}
+
+	// Both modes, because the assert field only appears in one of them.
+	for _, assertInvariants := range []bool{false, true} {
+		argv := buildArgv("lab", assertInvariants)
+		fields := 0
+		for i, a := range argv {
+			if a != "--field" || i+1 >= len(argv) {
+				continue
+			}
+			name, _, ok := strings.Cut(argv[i+1], "=")
+			if !ok {
+				t.Errorf("argv field %q is not name=value", argv[i+1])
+				continue
+			}
+			fields++
+			if !declared[name] {
+				t.Errorf("`llz build` dispatches --field %s=…, but terraform.yml declares no such "+
+					"workflow_dispatch input (declared: %v).\n"+
+					"\tEither the input was renamed and buildArgv still sends the old name — in which "+
+					"case gh rejects the dispatch — or buildArgv invented a name nothing reads, in "+
+					"which case the run goes green having done none of what the field asked for.",
+					name, sortedKeys(declared))
+			}
+		}
+		if fields == 0 {
+			t.Fatal("buildArgv emitted no --field pairs; the extractor is broken, not the argv")
+		}
+	}
+
+	// And the direction that a name check alone cannot see: the flag must actually
+	// change the argv. A --assert-invariants that quietly emits nothing is the
+	// silent-green case above, and it would satisfy every assertion so far.
+	off, on := buildArgv("lab", false), buildArgv("lab", true)
+	if len(on) <= len(off) {
+		t.Error("--assert-invariants added no field to the dispatch, so the flag is inert: the run " +
+			"would converge and assert nothing while reporting success")
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ── Gate 3: which delivered entry points are exercised at all ────────────────
 
 // exercisedEntryPoints records, per delivered entry-point workflow, WHY it is

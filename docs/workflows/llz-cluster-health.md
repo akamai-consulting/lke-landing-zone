@@ -24,7 +24,7 @@ differ only by flags:
 
 - **recovery / diagnostic** (the all-defaults dispatch): report-only; the job
   summary is the deliverable, and the job never fails.
-- **gate mode** (OPERATOR-dispatched): `fail-on-unhealthy` + `assert-loki`.
+- **gate mode** (OPERATOR-dispatched): `fail-on-unhealthy`.
   NOTE: release-e2e no longer dispatches this — its former `validate` job was
   folded into `bootstrap-openbao`'s converge, which runs the assert suite
   inline.
@@ -71,7 +71,7 @@ actually up. The provisioning gate (`llz ci converge`) already absorbs this
 transient by retrying exit-3 against its budget; the loop gives the one-shot
 validate gate the same tolerance so the two agree. It is bounded by wall clock
 (`SECONDS`) rather than iteration count so a genuinely dead apiserver still
-fails fast enough — well inside the job timeout and before `assert-loki`.
+fails fast enough — well inside the job timeout and before the assertions.
 
 **Why gate mode polls instead of snapshotting.** Gate mode runs
 `llz ci converge --budget 300 --interval 20` rather than taking a one-shot
@@ -106,7 +106,7 @@ silently never-firing rules on prod day-2, not just in the e2e.
 
 ### Steps: Assert Loki / Assert observability + reconciler + wave-health
 
-Both are gated on the same `assert-loki` input — the E2E validation gate. They
+Both are gated on `fail-on-unhealthy` — gate mode. They
 assert the observability pipeline is **wired**: every landing-zone
 `ServiceMonitor` has a live `up` target and every `PrometheusRule` group is
 loaded, and that no deployed alert is DEAD?/BROKEN (`alert-eval --strict`). The

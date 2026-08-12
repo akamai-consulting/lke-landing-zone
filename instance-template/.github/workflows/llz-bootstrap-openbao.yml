@@ -41,8 +41,8 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) for `gh` targeting."
         required: true
         type: string
-      assert_loki:
-        description: 'After converge, also assert Loki is bootstrapped + S3-backed (`llz ci assert-loki`) in the bootstrap job. Default false (normal instances); the release-e2e gate sets it true so the check runs inside the converge that already holds cluster access, instead of a separate validate pass dispatching cluster-health.yml.'
+      assert_invariants:
+        description: 'After converge, assert the platform invariants hold, in the bootstrap job that already holds cluster access: the assert-suite lanes, `llz ci assert-loki` (Loki bootstrapped + S3-backed), volume encryption/tags/labels, and the Managed Postgres admin credential. Default false. RENAMED from `assert_loki`, which named one of the four and so read as a Loki-only toggle — a promotion into prod skipped the volume-encryption invariant with nothing on screen saying so.'
         required: false
         type: boolean
         default: false
@@ -643,7 +643,7 @@ jobs:
       # consumer holds — a reachability check passes straight through that.
       # Self-skips when no Managed Postgres is declared.
       - name: (e2e) assert Managed Postgres accepts its seeded admin credential
-        if: ${{ inputs.assert_loki }}
+        if: ${{ inputs.assert_invariants }}
         run: llz ci assert-database
 
       # ── Revoke root token ────────────────────────────────────────────────────────
@@ -773,13 +773,14 @@ jobs:
       # change, and a red run is not re-runnable: storageClassName is immutable once
       # bound, so it means re-rolling the workload and losing that volume's data.
       - name: (e2e) assert storage invariant — Volume encryption + tags + labels
-        if: ${{ inputs.assert_loki }}
+        if: ${{ inputs.assert_invariants }}
         env:
           LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci assert-volume-encryption
 
       # ── E2E assert suite ──────────────────────────────────────────────────────
-      # Release-e2e only (assert_loki=true); normal instance bootstraps skip it.
+      # Gated on assert_invariants: release-e2e and every promote.yml stage set it;
+      # a bare `llz build <env>` does not.
       #
       # The lane table, the parallel fan-out, the per-lane ::group:: capture and the
       # pass/fail verdict all live in `llz ci assert-suite`
@@ -791,7 +792,7 @@ jobs:
       # per-instance so a new gate reached an instance only when someone edited its
       # vendored workflow. Run `llz ci assert-suite --list` to see the lanes.
       - name: (e2e) assert suite
-        if: ${{ inputs.assert_loki }}
+        if: ${{ inputs.assert_invariants }}
         run: llz ci assert-suite
 
       # Snapshot the loki-gateway resolver + nginx logs WHILE the cluster is still

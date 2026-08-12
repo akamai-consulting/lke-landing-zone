@@ -20,12 +20,12 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #      an instance (instance-template/* → root; the scaffold already names its TF
 #      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
 #   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
-#      region=e2e, assert_loki=true) in that repo + `gh run watch --exit-status`.
+#      region=e2e, assert_invariants=true) in that repo + `gh run watch --exit-status`.
 #      terraform.yml's own chain (apply-cluster → bootstrap-cluster →
 #      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
 #      so a green provision means "converged AND Loki is S3-backed".
-#   3. (health + Loki validation is FOLDED INTO provision via assert_loki — the
+#   3. (health + Loki validation is FOLDED INTO provision via assert_invariants — the
 #      former separate `validate` job that dispatched cluster-health.yml is gone;
 #      its only net-new check, assert-loki, now runs inside the converge above.)
 #   4. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
@@ -262,14 +262,14 @@ jobs:
         run: |
           set -euo pipefail
           ACTION=apply; [[ "${DRY_RUN}" == "true" ]] && ACTION=plan
-          # assert_loki=true folds the former `validate` job in: bootstrap-openbao's
+          # assert_invariants=true folds the former `validate` job in: bootstrap-openbao's
           # converge job runs `llz ci assert-loki` (Loki bootstrapped + S3-backed)
           # inside the cluster access it already holds. Harmless on a plan (the
           # apply-gated bootstrap chain doesn't run).
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
-            --field assert_loki=true
+            --field assert_invariants=true
 
   # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
   # The former `validate` job dispatched the instance's cluster-health.yml in gate
@@ -277,7 +277,7 @@ jobs:
   # `llz ci converge`, which the provision chain (bootstrap-openbao's converge job)
   # already ran — so the only net-new check was `llz ci assert-loki`. That now runs
   # inside the converge job (release-e2e dispatches terraform.yml with
-  # assert_loki=true → llz-terraform.yml → llz-bootstrap-openbao.yml), reusing the
+  # assert_invariants=true → llz-terraform.yml → llz-bootstrap-openbao.yml), reusing the
   # cluster access it already holds. Dropping the separate job removes its
   # container-init + checkout + fresh kubeconfig/ACL cycle (~1-2m) from the gate.
   # The provision job's success now means "converged AND Loki is S3-backed".
@@ -354,7 +354,7 @@ jobs:
           echo "llz-functional=$F provision=$P teardown=$T (dry_run=${DRY_RUN})"
           fail=0
           # F + P gate both modes (F is no-cloud). provision now also asserts Loki
-          # is S3-backed (assert_loki=true → bootstrap-openbao converge), so the
+          # is S3-backed (assert_invariants=true → bootstrap-openbao converge), so the
           # former separate `validate` result folds into P. T only when a cluster
           # was built.
           [[ "$F" == "success" ]] || { echo "::error::llz-functional $F"; fail=1; }

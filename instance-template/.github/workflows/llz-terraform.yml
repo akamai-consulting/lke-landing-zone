@@ -40,8 +40,8 @@ on:
         required: false
         type: string
         default: ''
-      assert_loki:
-        description: 'Forwarded to bootstrap-openbao: after converge, assert Loki is S3-backed (`llz ci assert-loki`). Default false; the release-e2e gate sets it true.'
+      assert_invariants:
+        description: 'After converge, assert the platform invariants hold (assert-suite lanes + Loki S3-backed + volume encryption + Managed Postgres admin credential). Default false.'
         required: false
         type: boolean
         default: false
@@ -818,7 +818,7 @@ jobs:
     with:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
-      assert_loki: ${{ inputs.assert_loki }}
+      assert_invariants: ${{ inputs.assert_invariants }}
       bootstrap_cluster: true
       cluster_id: ${{ needs.apply-cluster.outputs.cluster_id }}
     # Forwards repo + environment-scoped secrets; the callee declares the same

@@ -87,9 +87,24 @@ func TestScaffoldRef(t *testing.T) {
 }
 
 func TestBuildArgv(t *testing.T) {
-	got := buildArgv("lab")
+	got := buildArgv("lab", false)
 	want := []string{"gh", "workflow", "run", "terraform.yml",
 		"--field", "region=lab", "--field", "action=apply", "--field", "module=all"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("buildArgv\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestBuildArgvAssertInvariants(t *testing.T) {
+	// The FIELD NAME is the contract with terraform.yml's workflow_dispatch input,
+	// and a mismatch is silent in the worst way: `gh workflow run` rejects an
+	// unknown --field, but a field spelled to match a REMOVED input (the old
+	// `assert_loki`) would simply never turn the assertions on, and the run would
+	// go green having converged and asserted nothing.
+	got := buildArgv("lab", true)
+	want := []string{"gh", "workflow", "run", "terraform.yml",
+		"--field", "region=lab", "--field", "action=apply", "--field", "module=all",
+		"--field", "assert_invariants=true"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("buildArgv\n got: %v\nwant: %v", got, want)
 	}
