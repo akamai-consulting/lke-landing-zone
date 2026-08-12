@@ -40,6 +40,16 @@ on:
         required: false
         type: string
         default: ''
+      assert_loki:
+        description: 'DEPRECATED alias for assert_invariants, accepted so a `merge`-class caller stub that still passes the old key does not fail the RUN. GitHub rejects an undeclared input at startup — no jobs, no logs — and terraform.yml is exactly the file a 3-way merge can strand on the old name. Remove after one release.'
+        required: false
+        type: boolean
+        default: false
+      assert_mutating:
+        description: 'Also run the assert-suite lanes that MUTATE (real PAT rotation, Workflow submission). release-e2e only. Requires assert_invariants.'
+        required: false
+        type: boolean
+        default: false
       assert_invariants:
         description: 'After converge, assert the platform invariants hold (assert-suite lanes + Loki S3-backed + volume encryption + Managed Postgres admin credential). Default false.'
         required: false
@@ -229,7 +239,19 @@ jobs:
   plan-cluster-pr:
     name: Plan Cluster (PR)
     needs: [discover, changed-paths]
+    # !cancelled() rather than a plain needs, so a FAILED changed-paths does not
+    # take the plan with it. It fails closed in the direction that matters: the
+    # import step below requires the output to equal 'true', and a failed job's
+    # output is empty, so the state write is skipped while the plan still runs.
+    #
+    # THE CASE THIS EXISTS FOR IS THE FIRST UPGRADE. `vars.TF_IMAGE` still points
+    # at the PRE-upgrade image on the very PR that would advance it — `llz upgrade`
+    # says so and cannot push a repo variable — so `llz ci pr-touches` is a verb
+    # that image does not have. With a hard `needs`, the plan job vanished and the
+    # upgrade PR could not go green, which is a bootstrap deadlock: the fix is only
+    # available after merging the thing that cannot merge.
     if: >
+      !cancelled() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false
@@ -829,7 +851,8 @@ jobs:
     with:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
-      assert_invariants: ${{ inputs.assert_invariants }}
+      assert_invariants: ${{ inputs.assert_invariants || inputs.assert_loki }}
+      assert_mutating: ${{ inputs.assert_mutating }}
       bootstrap_cluster: true
       cluster_id: ${{ needs.apply-cluster.outputs.cluster_id }}
     # Forwards repo + environment-scoped secrets; the callee declares the same

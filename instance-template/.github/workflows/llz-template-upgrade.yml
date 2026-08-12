@@ -97,7 +97,14 @@ jobs:
           # repo-readiness gates, and GitHub suppresses workflow runs on events
           # raised with GITHUB_TOKEN. A PR nothing checks is worse than no PR — it
           # looks reviewed.
-          token: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
+          #
+          # The `|| github.token` fallback is about the ERROR, not about working
+          # without the PAT. An unset secret renders empty here, and checkout then
+          # fails with an opaque git auth message on step one — burying the precise
+          # "set LLZ_AUTOMATION_TOKEN, and here is why GITHUB_TOKEN cannot
+          # substitute" that `llz ci upgrade-pr` is written to print. Falling back
+          # lets the job reach that message, which fires before anything is pushed.
+          token: ${{ secrets.LLZ_AUTOMATION_TOKEN || github.token }}
           persist-credentials: true
 
       # The container runs as a different uid than the checkout's owner, and git

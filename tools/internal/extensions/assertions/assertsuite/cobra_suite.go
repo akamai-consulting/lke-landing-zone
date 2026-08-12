@@ -14,6 +14,7 @@ import (
 
 func Cmd() *cobra.Command {
 	var region, only string
+	var skipMutating bool
 	var list bool
 	c := &cobra.Command{
 		Use:   "assert-suite",
@@ -33,11 +34,13 @@ func Cmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return Run(region, cigate.SplitCSVList(only), list)
+			return Run(region, cigate.SplitCSVList(only), list, skipMutating)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment/region passed to the lanes that need it (defaults to $REGION)")
 	c.Flags().StringVar(&only, "only", "", "comma-separated subset of lanes to run (default: all)")
+	c.Flags().BoolVar(&skipMutating, "skip-mutating", false,
+		"drop the lanes that change the cluster or an external system (health-workflow submits a Workflow, broad-pat forces a real PAT rotation) — for a promotion or a scheduled run, which must observe rather than exercise")
 	c.Flags().BoolVar(&list, "list", false, "print the lane table and exit without running anything")
 	return c
 }

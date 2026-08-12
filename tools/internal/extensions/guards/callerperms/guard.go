@@ -250,7 +250,12 @@ func calleeUnion(w workflow) perms {
 			jp = p
 		}
 		for scope, level := range jp {
-			if u[scope] != "write" {
+			// BY RANK, NOT BY STRING. `u[scope] != "write"` let a later job's
+			// explicit `none` overwrite an earlier job's `read`, so what the union
+			// reported depended on Go's map iteration order — the same read level
+			// this guard was just taught to check could vanish before it was
+			// compared. The union is the WIDEST ask across the callee's jobs.
+			if rank(level) > rank(u[scope]) {
 				u[scope] = level
 			}
 		}

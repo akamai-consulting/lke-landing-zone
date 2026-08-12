@@ -269,7 +269,7 @@ jobs:
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
-            --field assert_invariants=true
+            --field assert_invariants=true --field assert_mutating=true
 
   # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
   # The former `validate` job dispatched the instance's cluster-health.yml in gate

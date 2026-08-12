@@ -9,7 +9,7 @@ import (
 )
 
 // stubRunLookup points the poll loop at a fake and makes it instant.
-func stubRunLookup(t *testing.T, attempts int, runs func(repo, workflow string) (Run, bool)) {
+func stubRunLookup(t *testing.T, attempts int, runs func(repo, workflow string) ([]Run, bool)) {
 	t.Helper()
 	origSleep, origLatest, origAttempts := sleepFn, LatestDispatchRun, runPollAttempts
 	t.Cleanup(func() { sleepFn, LatestDispatchRun, runPollAttempts = origSleep, origLatest, origAttempts })
@@ -23,8 +23,8 @@ func TestDispatchWatchRejectsTheRunThatPredatesTheDispatch(t *testing.T) {
 	// workflow_dispatch run is a COMPLETED run from days ago until GitHub registers
 	// the new one. Printing it hands the operator a `gh run watch` that returns
 	// instantly green on somebody else's success.
-	stubRunLookup(t, 2, func(string, string) (Run, bool) {
-		return Run{ID: 100, URL: "https://x/100", Status: "completed"}, true
+	stubRunLookup(t, 2, func(string, string) ([]Run, bool) {
+		return []Run{{ID: 100, URL: "https://x/100", Status: "completed"}}, true
 	})
 
 	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
@@ -39,8 +39,8 @@ func TestDispatchWatchRejectsTheRunThatPredatesTheDispatch(t *testing.T) {
 }
 
 func TestDispatchWatchAcceptsAStrictlyNewerRun(t *testing.T) {
-	stubRunLookup(t, 5, func(string, string) (Run, bool) {
-		return Run{ID: 101, URL: "https://x/101", Status: "queued"}, true
+	stubRunLookup(t, 5, func(string, string) ([]Run, bool) {
+		return []Run{{ID: 101, URL: "https://x/101", Status: "queued"}}, true
 	})
 
 	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}

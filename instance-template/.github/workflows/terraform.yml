@@ -125,6 +125,16 @@ on:
         required: false
         type: boolean
         default: false
+      assert_loki:
+        description: 'DEPRECATED alias for assert_invariants, accepted so a `merge`-class caller stub that still passes the old key does not fail the RUN. GitHub rejects an undeclared input at startup — no jobs, no logs — and terraform.yml is exactly the file a 3-way merge can strand on the old name. Remove after one release.'
+        required: false
+        type: boolean
+        default: false
+      assert_mutating:
+        description: 'Also run the assert-suite lanes that MUTATE — a real broad-PAT rotation and a Workflow submission. release-e2e sets this; leave it off for anything running against a deployment you care about.'
+        required: false
+        type: boolean
+        default: false
       assert_invariants:
         description: 'After converge, assert the platform invariants hold: the assert-suite lanes, Loki S3-backed, volume encryption, and the Managed Postgres admin credential. Default false. WAS `assert_loki`, which named one of the four things it gates — promoting into an environment skipped the volume-encryption check with nothing saying so.'
         required: false
@@ -152,4 +162,7 @@ jobs:
       # Default false via the reusable's input; release-e2e's provision dispatch
       # passes assert_invariants=true so the assertions run inside the converge job.
       assert_invariants: ${{ inputs.assert_invariants || false }}
+      # Forwarded so a stub stranded on the old key still reaches the new input.
+      assert_loki: ${{ inputs.assert_loki || false }}
+      assert_mutating: ${{ inputs.assert_mutating || false }}
     secrets: inherit

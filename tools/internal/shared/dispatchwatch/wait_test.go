@@ -50,8 +50,8 @@ func captureStderrErr(t *testing.T, fn func() error) error {
 // armedWatch is a watch that has already identified run 101 as its own.
 func armedWatch(t *testing.T) Watch {
 	t.Helper()
-	stubRunLookup(t, 5, func(string, string) (Run, bool) {
-		return Run{ID: 101, URL: "https://x/101", Status: "queued"}, true
+	stubRunLookup(t, 5, func(string, string) ([]Run, bool) {
+		return []Run{{ID: 101, URL: "https://x/101", Status: "queued"}}, true
 	})
 	return Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
 }
@@ -95,8 +95,8 @@ func TestWaitFailsWhenTheRunIsNeverIdentified(t *testing.T) {
 	// handle rather than a failed apply — and the message has to say so, or the
 	// operator reads it as "the apply failed" and re-dispatches a second one on
 	// top of an apply that is still running.
-	stubRunLookup(t, 2, func(string, string) (Run, bool) {
-		return Run{}, false
+	stubRunLookup(t, 2, func(string, string) ([]Run, bool) {
+		return nil, false
 	})
 	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
 
@@ -184,5 +184,46 @@ func TestWaitToleratesABriefApprovalThenProceeds(t *testing.T) {
 	})
 	if err := captureStderrErr(t, w.Wait); err != nil {
 		t.Fatalf("an approval given during the grace must not fail the command, got %v", err)
+	}
+}
+
+func TestWaitRefusesToGuessBetweenConcurrentDispatches(t *testing.T) {
+	// Two runs appeared after the baseline: ours, and someone's `llz build prod`
+	// inside the resolve window. The runs API carries no dispatch inputs, so there
+	// is no field that tells them apart — and following the wrong one means the
+	// weekly cron reports PROD's conclusion for DEV's apply, in either direction.
+	// "Cannot tell" must not be answered as if it could.
+	stubRunLookup(t, 3, func(string, string) ([]Run, bool) {
+		return []Run{
+			{ID: 103, URL: "https://x/103", Status: "in_progress"},
+			{ID: 102, URL: "https://x/102", Status: "in_progress"},
+		}, true
+	})
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+
+	err := captureStderrErr(t, w.Wait)
+	if err == nil {
+		t.Fatal("two candidate runs must be an error, not a coin flip")
+	}
+	if !strings.Contains(err.Error(), "more than one") {
+		t.Errorf("error must name the ambiguity, got: %v", err)
+	}
+}
+
+func TestWaitAcceptsASingleCandidateAmongOlderRuns(t *testing.T) {
+	// The ordinary case: the page also carries runs from previous weeks, which the
+	// baseline excludes. Exactly one is new, so there is nothing ambiguous.
+	stubRunLookup(t, 3, func(string, string) ([]Run, bool) {
+		return []Run{
+			{ID: 101, URL: "https://x/101", Status: "in_progress"},
+			{ID: 99, URL: "https://x/99", Status: "completed"},
+			{ID: 98, URL: "https://x/98", Status: "completed"},
+		}, true
+	})
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
+
+	if err := captureStderrErr(t, w.Wait); err != nil {
+		t.Fatalf("one new run among older ones is unambiguous, got %v", err)
 	}
 }

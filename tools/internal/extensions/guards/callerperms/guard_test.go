@@ -1,6 +1,8 @@
 package callerperms
 
 import (
+	"gopkg.in/yaml.v3"
+
 	"bytes"
 	"os"
 	"path/filepath"
@@ -208,5 +210,39 @@ func TestReadEscalationIsAFinding(t *testing.T) {
 	}
 	if !(perms{"*": "write"}).holds("anything", "write") {
 		t.Error("write-all must cover any write")
+	}
+}
+
+// TestCalleeUnionTakesTheWidestAsk pins the union against map iteration order.
+//
+// It used to compare `u[scope] != "write"`, so a callee job declaring an explicit
+// `contents: none` could overwrite a sibling job's `contents: read` — and which
+// one landed depended on the order Go happened to walk the jobs. The guard would
+// then compare the caller against `none` and pass, for a callee that genuinely
+// needs `read`. Run repeatedly because a single pass can get lucky on ordering.
+func TestCalleeUnionTakesTheWidestAsk(t *testing.T) {
+	var w workflow
+	if err := yaml.Unmarshal([]byte(`
+jobs:
+  a:
+    permissions: { contents: read, packages: none }
+  b:
+    permissions: { contents: none, packages: write }
+  c:
+    permissions: { contents: none }
+`), &w); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Jobs) != 3 {
+		t.Fatalf("fixture parsed %d job(s), want 3 — the test would compare nothing", len(w.Jobs))
+	}
+	for i := 0; i < 50; i++ {
+		u := calleeUnion(w)
+		if u["contents"] != "read" {
+			t.Fatalf("contents = %q, want read — an explicit `none` erased a sibling job's read", u["contents"])
+		}
+		if u["packages"] != "write" {
+			t.Fatalf("packages = %q, want write", u["packages"])
+		}
 	}
 }

@@ -61,11 +61,28 @@ type Run struct {
 var (
 	runPollDelay    = 2 * time.Second
 	runPollAttempts = 5
+	// waitPollAttempts is the SEPARATE, longer budget Wait() resolves under: ~90s,
+	// matching release-e2e's dispatch-and-watch.sh.
+	//
+	// Report()'s 10s is tuned for an interactive command that has already done its
+	// job and is only offering a link — giving up early there costs a convenience.
+	// Wait()'s caller has no such fallback: a runs-list that lags past the budget
+	// makes an unattended apply report failure while a real production apply runs
+	// on, unwatched. The two callers want different answers, so they get different
+	// budgets rather than one compromise that serves neither.
+	waitPollAttempts = 45
 )
 
-// LatestDispatchRun returns the newest workflow_dispatch run of workflow.
-// Seamed for tests; ok=false whenever the answer cannot be obtained.
-var LatestDispatchRun = func(repo, workflow string) (Run, bool) {
+// LatestDispatchRun returns the most recent workflow_dispatch runs of workflow,
+// newest first. Seamed for tests; ok=false whenever the answer cannot be obtained.
+//
+// A PAGE RATHER THAN THE SINGLE NEWEST, because "newest run with an id above the
+// baseline" cannot tell OUR dispatch from someone else's. The runs API carries no
+// dispatch inputs, so there is no field to match a deployment on — but if two new
+// runs of terraform.yml appeared since the baseline, that is knowable, and
+// knowing it is the difference between reporting the wrong deployment's
+// conclusion and saying we cannot tell.
+var LatestDispatchRun = func(repo, workflow string) ([]Run, bool) {
 	var resp struct {
 		Runs []struct {
 			ID     uint64 `json:"id"`
@@ -73,18 +90,21 @@ var LatestDispatchRun = func(repo, workflow string) (Run, bool) {
 			Status string `json:"status"`
 		} `json:"workflow_runs"`
 	}
-	// per_page=1: only the newest run can be the one just requested. Scoped to
-	// workflow_dispatch so a push-triggered run on the same workflow is never
-	// mistaken for it.
-	path := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=1", repo, workflow)
+	// Scoped to workflow_dispatch so a push-triggered run on the same workflow is
+	// never mistaken for one. per_page=5 is enough to notice a second dispatch
+	// without paging.
+	path := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?event=workflow_dispatch&per_page=5", repo, workflow)
 	if err := ghapi.GHAPIJSON(path, &resp); err != nil || len(resp.Runs) == 0 {
-		return Run{}, false
+		return nil, false
 	}
-	r := resp.Runs[0]
-	if r.URL == "" {
-		return Run{}, false
+	out := make([]Run, 0, len(resp.Runs))
+	for _, r := range resp.Runs {
+		if r.URL == "" {
+			continue
+		}
+		out = append(out, Run{ID: r.ID, URL: r.URL, Status: r.Status})
 	}
-	return Run{ID: r.ID, URL: r.URL, Status: r.Status}, true
+	return out, len(out) > 0
 }
 
 // runConclusion reads a run's terminal state. Seamed for tests; ok=false
@@ -147,8 +167,15 @@ func Begin(dryRun, yes bool, workflow string) Watch {
 		return Watch{}
 	}
 	w := Watch{repo: repo, workflow: workflow, armed: true}
-	if run, ok := LatestDispatchRun(repo, workflow); ok {
-		w.sinceID = run.ID
+	// The HIGHEST id present, not runs[0]: the API returns newest-first, but the
+	// baseline's whole job is to be an upper bound on "runs that existed before we
+	// dispatched", and taking the max is what makes that true regardless of order.
+	if runs, ok := LatestDispatchRun(repo, workflow); ok {
+		for _, r := range runs {
+			if r.ID > w.sinceID {
+				w.sinceID = r.ID
+			}
+		}
 	}
 	return w
 }
@@ -171,15 +198,37 @@ func (w Watch) isOurs(run Run) bool {
 // resolve polls until the run the dispatch created can be identified. ok=false
 // means GitHub had not registered it within the budget — which is NOT the same
 // as "it failed", and the two callers below treat it differently.
-func (w Watch) resolve() (Run, bool) {
-	for i := 0; i < runPollAttempts; i++ {
+// resolve polls until exactly one candidate run can be identified.
+//
+// ambiguous=true means more than one workflow_dispatch run appeared after the
+// baseline — someone dispatched the same workflow (a different deployment, most
+// likely) inside the window. There is no field to tell them apart, so the honest
+// answer is that we cannot, and Wait() must say so rather than follow whichever
+// one sorted first and report ITS conclusion for OUR apply.
+func (w Watch) resolve(attempts int) (run Run, found, ambiguous bool) {
+	for i := 0; i < attempts; i++ {
 		sleepFn(runPollDelay)
-		run, ok := LatestDispatchRun(w.repo, w.workflow)
-		if ok && w.isOurs(run) {
-			return run, true
+		runs, ok := LatestDispatchRun(w.repo, w.workflow)
+		if !ok {
+			continue
+		}
+		var ours []Run
+		for _, r := range runs {
+			if w.isOurs(r) {
+				ours = append(ours, r)
+			}
+		}
+		switch {
+		case len(ours) == 1:
+			return ours[0], true, false
+		case len(ours) > 1 && w.sinceID != 0:
+			// Only meaningful WITH a baseline: without one, isOurs falls back to
+			// "not completed", which legitimately matches several live runs and
+			// says nothing about who started them.
+			return Run{}, false, true
 		}
 	}
-	return Run{}, false
+	return Run{}, false, false
 }
 
 // report resolves the run the dispatch created and prints where it is and how to
@@ -191,7 +240,7 @@ func (w Watch) Report() {
 		return
 	}
 	fmt.Fprintln(os.Stderr)
-	if run, ok := w.resolve(); ok {
+	if run, ok, _ := w.resolve(runPollAttempts); ok {
 		fmt.Fprintf(os.Stderr, "%s dispatched — the build runs in GitHub Actions and takes ~40 minutes.\n", color.Green("✓"))
 		fmt.Fprintf(os.Stderr, "    %s %s\n", color.Dim("run:"), color.Cyan(run.URL))
 		fmt.Fprintf(os.Stderr, "    %s %s\n", color.Dim("follow:"), color.Cyan(fmt.Sprintf("gh run watch %d --repo %s", run.ID, w.repo)))
@@ -228,7 +277,12 @@ func (w Watch) Wait() error {
 		return fmt.Errorf("--watch cannot follow the run: the dispatch watcher was never armed " +
 			"(needs --yes, a resolvable instance repo, and `gh` on PATH)")
 	}
-	run, ok := w.resolve()
+	run, ok, ambiguous := w.resolve(waitPollAttempts)
+	if ambiguous {
+		return fmt.Errorf("--watch: more than one %s run was dispatched while this one was starting, and the runs API "+
+			"carries no inputs to tell them apart — refusing to report another deployment's conclusion as this one's.\n"+
+			"    check the runs yourself: gh run list --repo %s --workflow %s --limit 5", w.workflow, w.repo, w.workflow)
+	}
 	if !ok {
 		return fmt.Errorf("--watch: dispatched %s but GitHub never registered the run, so its result is "+
 			"unknown — check `gh run list --repo %s --workflow %s --limit 5`. The dispatch DID happen; "+

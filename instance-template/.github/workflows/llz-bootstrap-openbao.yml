@@ -41,6 +41,11 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) for `gh` targeting."
         required: true
         type: string
+      assert_mutating:
+        description: 'Also run the assert-suite lanes that MUTATE — health-workflow submits a Workflow, broad-pat forces a real mint/publish/revoke of the broad Linode PAT. release-e2e sets this; a promotion or a scheduled apply must not, because those exercise production credentials on a timer. Requires assert_invariants.'
+        required: false
+        type: boolean
+        default: false
       assert_invariants:
         description: 'After converge, assert the platform invariants hold, in the bootstrap job that already holds cluster access: the assert-suite lanes, `llz ci assert-loki` (Loki bootstrapped + S3-backed), volume encryption/tags/labels, and the Managed Postgres admin credential. Default false. RENAMED from `assert_loki`, which named one of the four and so read as a Loki-only toggle — a promotion into prod skipped the volume-encryption invariant with nothing on screen saying so.'
         required: false
@@ -791,9 +796,18 @@ jobs:
       # lane could run and never be able to fail the step, and the list shipped
       # per-instance so a new gate reached an instance only when someone edited its
       # vendored workflow. Run `llz ci assert-suite --list` to see the lanes.
+      # SPLIT ON WHETHER THE CALLER MAY MUTATE. release-e2e exists to exercise the
+      # rotation and submission paths end to end; a promotion stage and a weekly
+      # cron must observe and change nothing. --skip-mutating reads the property off
+      # the lane table rather than restating a lane list here, which is the drift
+      # this suite was built to end.
       - name: (e2e) assert suite
-        if: ${{ inputs.assert_invariants }}
+        if: ${{ inputs.assert_invariants && inputs.assert_mutating }}
         run: llz ci assert-suite
+
+      - name: assert suite (observing lanes only)
+        if: ${{ inputs.assert_invariants && !inputs.assert_mutating }}
+        run: llz ci assert-suite --skip-mutating
 
       # Snapshot the loki-gateway resolver + nginx logs WHILE the cluster is still
       # up — before the ACL revoke below cuts apiserver access. Every command is

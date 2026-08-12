@@ -64,6 +64,17 @@ type Lane struct {
 	// Why documents what the lane proves and what stays color.Green without it. Printed
 	// with the lane's group so a failure carries its own rationale.
 	Why string
+	// Mutating marks a lane that CHANGES the cluster or an external system rather
+	// than observing it — submitting a Workflow, forcing a credential rotation.
+	//
+	// A FIELD RATHER THAN A LIST IN EACH CALLER, for the reason this whole table
+	// exists: the lane list used to be written twice and drifted. It was drifting
+	// again — llz-cluster-health.yml carries a hand-written `--only` naming the
+	// non-mutating lanes, and the safety of the mutating ones rested on a comment
+	// in broadpat.go saying they are "wired behind the e2e gate, which only
+	// release-e2e sets". The moment a second caller set that gate, that sentence
+	// stopped being true and nothing failed. Now the property travels with the lane.
+	Mutating bool
 }
 
 // Step is one `llz ci …` invocation inside a lane, and the extension that owns
@@ -213,12 +224,12 @@ func Lanes(region string) []Lane {
 				"It runs as its own step earlier in the job, while the token still exists.",
 		},
 		{
-			Name: "health-workflow", Gating: true,
+			Name: "health-workflow", Gating: true, Mutating: true,
 			Steps: []Step{regionStep("assert-platform", "assert-health-workflow")},
 			Why:   "MUTATING (own namespace). The day-2 RUN path: submits a one-shot Workflow from the llz-cluster-health WorkflowTemplate and requires it to Succeed. Skips clean when the component is disabled.",
 		},
 		{
-			Name: "broad-pat", Gating: true,
+			Name: "broad-pat", Gating: true, Mutating: true,
 			Steps: []Step{regionStep("assert-secrets", "assert-broad-pat-rotation")},
 			Why: "MUTATING (own namespace). Forces one rotation Job and requires action=rotated — exercising mint → OpenBao → GitHub publish → revoke against real backends. " +
 				"Safe by construction: an e2e-unique label and BROAD_PAT_DEPLOYMENTS=e2e scope mint/revoke to the e2e PAT family only.",
@@ -444,11 +455,38 @@ func laneNames(ls []Lane) []string {
 	return out
 }
 
-func Run(region string, only []string, list bool) error {
+func Run(region string, only []string, list, skipMutating bool) error {
 	lanes, err := selectLanes(Lanes(region), only)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::%v\n", err)
 		return err
+	}
+	if skipMutating {
+		kept := lanes[:0]
+		var dropped []string
+		for _, l := range lanes {
+			if l.Mutating {
+				dropped = append(dropped, l.Name)
+				continue
+			}
+			kept = append(kept, l)
+		}
+		lanes = kept
+		// NAMED, NOT SILENT. A caller that skipped a lane and does not say so reads
+		// afterwards exactly like a caller that ran it and passed — which is the
+		// whole class of failure this suite exists to make impossible.
+		if len(dropped) > 0 {
+			fmt.Fprintf(os.Stderr, "::notice title=Mutating lanes skipped::%s — this run observes only. "+
+				"They exercise real rotation and submission paths and are for release-e2e, not a promotion or a timer.\n",
+				strings.Join(dropped, ", "))
+		}
+		// Fail closed on a selection that leaves nothing: --only naming exactly the
+		// mutating lanes plus --skip-mutating would otherwise report a clean suite
+		// having run no lane at all.
+		if len(lanes) == 0 {
+			return fmt.Errorf("--skip-mutating left no lanes to run (dropped: %s) — a suite that examines "+
+				"nothing must not report success", strings.Join(dropped, ", "))
+		}
 	}
 
 	if list {

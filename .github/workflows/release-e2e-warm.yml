@@ -114,7 +114,7 @@ jobs:
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action=apply --field module=all --field region="${E2E_ENV}" \
-            --field assert_invariants=true
+            --field assert_invariants=true --field assert_mutating=true
 
   # ── 3. Gate — pass only if the warm provision converged ──────────────────────
   # NO teardown: the cluster is deliberately LEFT RUNNING for the next iteration

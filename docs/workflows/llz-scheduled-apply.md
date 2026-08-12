@@ -126,6 +126,22 @@ That input was called `assert_loki` until this change, and named one of the four
 things it gates. A promotion into prod skipped the volume-encryption check with
 nothing on screen saying so.
 
+**It does NOT run the two mutating lanes.** `health-workflow` submits a Workflow
+and `broad-pat` forces a real mint → OpenBao → GitHub publish → *revoke* of the
+broad Linode PAT. Those exist to exercise the rotation path on a throwaway e2e
+cluster; running them on every promotion stage and every weekly cron would rotate
+a production credential on a timer nobody asked for. The bootstrap job therefore
+runs `llz ci assert-suite --skip-mutating` unless the caller also sets
+`assert_mutating`, which only release-e2e does.
+
+That property lives on the lane (`Mutating bool` in `suite.go`), not in a list
+here — `llz-cluster-health.yml` still carries a hand-written `--only` naming the
+non-mutating lanes, and the safety of the rest rested on a comment in
+`broadpat.go` saying they are "wired behind the e2e gate, which only release-e2e
+sets". The moment a second caller set that gate, that sentence stopped being true
+and nothing failed. `TestSkipMutatingDropsExactlyTheMutatingLanes` now fails if
+the marked set changes.
+
 That is also why the cron sits two hours after `scheduled-checks.yml`'s weekly
 health probe: reading back through a red Sunday, the health verdict that preceded
 the apply is already in the log.

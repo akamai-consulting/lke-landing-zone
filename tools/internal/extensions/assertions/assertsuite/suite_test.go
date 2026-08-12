@@ -126,11 +126,11 @@ func TestEveryFailingGatingLaneReachesTheVerdict(t *testing.T) {
 
 func TestRunCIAssertSuiteVerdict(t *testing.T) {
 	seamLaneRunner(t, map[string]int{"assert-loki": 1})
-	if err := Run("e2e", []string{"loki"}, false); err == nil {
+	if err := Run("e2e", []string{"loki"}, false, false); err == nil {
 		t.Error("a failing gating lane must fail the suite")
 	}
 	seamLaneRunner(t, map[string]int{})
-	if err := Run("e2e", []string{"loki"}, false); err != nil {
+	if err := Run("e2e", []string{"loki"}, false, false); err != nil {
 		t.Errorf("all-passing lanes must succeed, got %v", err)
 	}
 }
@@ -320,5 +320,55 @@ func TestNoResolverRunsEveryLane(t *testing.T) {
 		if r.Skipped {
 			t.Errorf("%s skipped with no resolver installed", r.Lane.Name)
 		}
+	}
+}
+
+// TestSkipMutatingDropsExactlyTheMutatingLanes pins the property the promotion
+// and scheduled-apply paths depend on.
+//
+// Those callers set the same gate release-e2e sets, and until this flag existed
+// that meant a promotion into prod forced a real broad-PAT rotation (mint →
+// OpenBao → GitHub publish → REVOKE) and submitted a health Workflow, on every
+// stage and every week. broadpat.go's own safety argument was "it is wired behind
+// the e2e gate, which only release-e2e sets" — a sentence that stopped being true
+// the moment a second caller set it, with nothing failing to say so.
+func TestSkipMutatingDropsExactlyTheMutatingLanes(t *testing.T) {
+	all := Lanes("e2e")
+	var mutating []string
+	for _, l := range all {
+		if l.Mutating {
+			mutating = append(mutating, l.Name)
+		}
+	}
+	// Fail closed on vacuity: if nothing is marked, the flag is a no-op and every
+	// caller that relies on it is unprotected while looking protected.
+	if len(mutating) == 0 {
+		t.Fatal("no lane is marked Mutating — --skip-mutating would drop nothing, so every promotion " +
+			"would run the rotation and submission lanes while appearing to have opted out")
+	}
+	// The two the delivered cluster-health workflow excludes by hand.
+	want := map[string]bool{"health-workflow": true, "broad-pat": true}
+	for _, name := range mutating {
+		if !want[name] {
+			t.Errorf("lane %q is newly marked Mutating — confirm the promotion and scheduled-apply paths "+
+				"should stop running it, then add it here", name)
+		}
+		delete(want, name)
+	}
+	for name := range want {
+		t.Errorf("lane %q is no longer marked Mutating; it forces a real rotation/submission and would "+
+			"now run on every promotion stage and every weekly apply", name)
+	}
+}
+
+func TestSkipMutatingFailsRatherThanRunningNothing(t *testing.T) {
+	// --only naming exactly the mutating lanes, plus --skip-mutating, leaves an
+	// empty battery. Reporting success there is "green having examined nothing".
+	err := Run("e2e", []string{"broad-pat", "health-workflow"}, false, true)
+	if err == nil {
+		t.Fatal("an empty lane selection must fail rather than pass")
+	}
+	if !strings.Contains(err.Error(), "no lanes to run") {
+		t.Errorf("error must say the selection was empty, got: %v", err)
 	}
 }
