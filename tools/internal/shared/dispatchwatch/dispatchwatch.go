@@ -288,6 +288,19 @@ func (w Watch) Wait() error {
 		return fmt.Errorf("--watch cannot follow the run: the dispatch watcher was never armed " +
 			"(needs --yes, a resolvable instance repo, and `gh` on PATH)")
 	}
+	// NO BASELINE, NO VERDICT. With sinceID == 0 the pre-dispatch lookup failed (or
+	// this workflow had never been dispatched), and both of resolve's safeguards
+	// collapse at once: isOurs degrades to "not completed", which matches ANY live
+	// run, and the ambiguity guard is disabled because it cannot mean anything
+	// without an ordering. Wait() would then be free to follow a stranger's run and
+	// return nil on ITS success — a fail-open in the one function whose entire
+	// contract is to fail closed. Report() may still guess, because the worst it
+	// can do is print a link to the wrong page.
+	if w.sinceID == 0 {
+		return fmt.Errorf("--watch could not read the run list before dispatching, so it has no baseline to tell "+
+			"this run from any other — refusing to report an unrelated run's result as this apply's.\n"+
+			"    the dispatch DID happen: gh run list --repo %s --workflow %s --limit 5", w.repo, w.workflow)
+	}
 	run, ok, ambiguous := w.resolve(waitPollAttempts)
 	if ambiguous {
 		return fmt.Errorf("--watch: more than one %s run was dispatched while this one was starting, and the runs API "+

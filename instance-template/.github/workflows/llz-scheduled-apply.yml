@@ -173,7 +173,9 @@ jobs:
     permissions: {}
     timeout-minutes: 5
     steps:
-      - run: 'echo "::error title=Nothing applied::Scheduled apply is armed but ran no legs — either no deployments were discovered, or the narrowing input matched none of them. Discovered: ${{ needs.discover.outputs.deployments }}"; exit 1' 
+      - env:
+          DEPLOYMENTS: ${{ needs.discover.outputs.deployments }}
+        run: 'echo "::error title=Nothing applied::Scheduled apply is armed but ran no legs — either no deployments were discovered, or the narrowing input matched none of them. Discovered: $DEPLOYMENTS"; exit 1' 
 
   verdict-apply-failed:
     name: Scheduled apply FAILED
@@ -183,4 +185,6 @@ jobs:
     permissions: {}
     timeout-minutes: 5
     steps:
-      - run: 'echo "::error title=Apply failed::At least one deployment failed to apply or converge (${{ needs.apply.result }}). The failing leg log names the dispatched terraform.yml run — open that."; exit 1' 
+      - env:
+          APPLY_RESULT: ${{ needs.apply.result }}
+        run: 'echo "::error title=Apply failed::At least one deployment failed to apply or converge ($APPLY_RESULT). The failing leg log names the dispatched terraform.yml run — open that."; exit 1' 

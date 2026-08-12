@@ -33,10 +33,19 @@ import (
 // would reintroduce is the silent one. Staying inside `contents: read` needs no
 // caller to cooperate.
 //
-// Three-dot: the PR's own changes against the merge base, so a base branch that
-// moved since the PR opened does not read as part of its diff.
-var listChangedFiles = func(baseSHA string) ([]string, error) {
-	b, err := kubectlprobe.Exec("git", "diff", "--name-only", baseSHA+"...HEAD")
+// BOTH ENDS ARE EXPLICIT, and HEAD is not one of them. On a pull_request event
+// actions/checkout leaves HEAD at the MERGE ref, whose first parent is the base
+// tip — so `base...HEAD` compares the base against a commit that already contains
+// the base's own newer commits, and three-dot degenerates because the merge base
+// of those two IS base. Base-branch drift then reads as part of the PR's diff, and
+// a stale bot upgrade PR classifies terraform=true and takes the unserialized
+// tfstate write this job exists to prevent.
+//
+// base.sha...head.sha is the PR's own changes by construction: three-dot against
+// the real merge base of the two branch tips, and neither end depends on what the
+// checkout happens to have put at HEAD.
+var listChangedFiles = func(baseSHA, headSHA string) ([]string, error) {
+	b, err := kubectlprobe.Exec("git", "diff", "--name-only", baseSHA+"..."+headSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +61,9 @@ var listChangedFiles = func(baseSHA string) ([]string, error) {
 // PRTouchesCmd is `llz ci pr-touches`.
 func PRTouchesCmd() *cobra.Command {
 	var (
-		prefixes   []string
-		outputName string
-		baseSHA    string
+		prefixes         []string
+		outputName       string
+		baseSHA, headSHA string
 	)
 	c := &cobra.Command{
 		Use:   "pr-touches",
@@ -72,16 +81,17 @@ func PRTouchesCmd() *cobra.Command {
 			"every PR and looks exactly like a clean tree.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if baseSHA == "" {
-				return fmt.Errorf("--base-sha is required: it is the commit this pull request is diffed against " +
-					"(github.event.pull_request.base.sha). Without it there is nothing to compare and every PR " +
-					"would classify the same way")
+			if baseSHA == "" || headSHA == "" {
+				return fmt.Errorf("--base-sha and --head-sha are both required: they are the pull request's " +
+					"base and head tips (github.event.pull_request.base.sha / .head.sha). HEAD is NOT a " +
+					"substitute — on a pull_request event it is the merge ref, which already contains the " +
+					"base's newer commits, so the diff would count base-branch drift as this PR's changes")
 			}
-			files, err := listChangedFiles(baseSHA)
+			files, err := listChangedFiles(baseSHA, headSHA)
 			if err != nil {
-				return fmt.Errorf("diff against %s: %w\n"+
+				return fmt.Errorf("diff %s...%s: %w\n"+
 					"  this is a 'could not tell', not a 'nothing changed' — the caller must fail rather than skip.\n"+
-					"  the checkout needs full history (fetch-depth: 0) for the base commit to be present", baseSHA, err)
+					"  the checkout needs full history (fetch-depth: 0) for both commits to be present", baseSHA, headSHA, err)
 			}
 			cl, err := Classify(files, prefixes)
 			if err != nil {
@@ -94,6 +104,7 @@ func PRTouchesCmd() *cobra.Command {
 	}
 	c.Flags().StringArrayVar(&prefixes, "prefix", nil, "path prefix to match; trailing / means a subtree (repeatable)")
 	c.Flags().StringVar(&outputName, "output-name", "touches", "name of the GITHUB_OUTPUT key to write")
-	c.Flags().StringVar(&baseSHA, "base-sha", "", "commit the PR is diffed against (github.event.pull_request.base.sha)")
+	c.Flags().StringVar(&baseSHA, "base-sha", "", "the PR's base tip (github.event.pull_request.base.sha)")
+	c.Flags().StringVar(&headSHA, "head-sha", "", "the PR's head tip (github.event.pull_request.head.sha)")
 	return c
 }

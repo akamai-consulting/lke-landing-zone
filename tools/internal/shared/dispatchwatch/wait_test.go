@@ -227,3 +227,24 @@ func TestWaitAcceptsASingleCandidateAmongOlderRuns(t *testing.T) {
 		t.Fatalf("one new run among older ones is unambiguous, got %v", err)
 	}
 }
+
+func TestWaitRefusesWithoutABaseline(t *testing.T) {
+	// sinceID == 0: the pre-dispatch lookup failed, or nothing had ever been
+	// dispatched. Both of resolve's safeguards collapse together — isOurs degrades
+	// to "any live run" and the ambiguity guard cannot apply — so Wait() would
+	// otherwise follow a stranger's run and return nil on its success. Report()
+	// keeps guessing; the worst IT can do is print the wrong link.
+	stubRunLookup(t, 3, func(string, string) ([]Run, bool) {
+		return []Run{{ID: 7, URL: "https://x/7", Status: "in_progress"}}, true
+	})
+	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 0, armed: true}
+
+	err := captureStderrErr(t, w.Wait)
+	if err == nil {
+		t.Fatal("with no baseline, a stranger's SUCCESSFUL run must not be reported as ours")
+	}
+	if !strings.Contains(err.Error(), "no baseline") {
+		t.Errorf("error must name the missing baseline, got: %v", err)
+	}
+}

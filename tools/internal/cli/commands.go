@@ -128,8 +128,12 @@ func cmdBuild(args []string, g globalOpts, skipPreflight, watch, assertInvariant
 	if err := newinstance.Gated(g.DryRun, g.Yes, buildArgv(env, assertInvariants)...); err != nil {
 		return err
 	}
-	if watch {
-		// wait() prints the run it settled on, so report()'s "here is where it went"
+	// `&& !g.DryRun`: a dry run prints the argv and dispatches nothing, so there is
+	// no run to follow. Without this, `--watch --dry-run` reached Wait() on a watch
+	// Begin() had deliberately disarmed and failed with "needs --yes" — which the
+	// operator had just passed.
+	if watch && !g.DryRun {
+		// Wait() prints the run it settled on, so Report()'s "here is where it went"
 		// would be the same fact twice. The two are alternatives, not a sequence.
 		return w.Wait()
 	}

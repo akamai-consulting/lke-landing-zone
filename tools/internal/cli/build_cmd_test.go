@@ -65,3 +65,21 @@ func TestBuildWatchRequiresYes(t *testing.T) {
 		t.Errorf("--watch without --yes must be refused up front, got %v", err)
 	}
 }
+
+func TestBuildWatchDryRunDispatchesNothingAndSaysSo(t *testing.T) {
+	// --dry-run prints the argv and dispatches nothing, so there is no run to
+	// follow. Wait() ran anyway on a watch Begin() had deliberately disarmed, and
+	// failed with "--watch requires --yes" — advice the operator had just taken.
+	orig := ghCanAuth
+	t.Cleanup(func() { ghCanAuth = orig })
+	ghCanAuth = func() bool { return true }
+
+	dir := t.TempDir()
+	writeMiniInstance(t, dir)
+	chdir(t, dir)
+	stubGitHub(t, nil)
+
+	if err := cmdBuild([]string{"lab"}, globalOpts{Yes: true, DryRun: true}, true, true, false); err != nil {
+		t.Errorf("--watch --dry-run must be a clean no-op, got %v", err)
+	}
+}

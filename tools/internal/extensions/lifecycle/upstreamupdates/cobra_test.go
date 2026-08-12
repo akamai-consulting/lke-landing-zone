@@ -64,14 +64,14 @@ func TestPRTouchesWritesTheOutputAndFailsClosedOnAPIError(t *testing.T) {
 	t.Cleanup(func() { listChangedFiles = orig })
 
 	t.Run("writes true", func(t *testing.T) {
-		listChangedFiles = func(string) ([]string, error) {
+		listChangedFiles = func(_, _ string) ([]string, error) {
 			return []string{"terraform-iac-bootstrap/cluster/main.tf"}, nil
 		}
 		inTempRepo(t, func(dir string) {
 			var errBuf bytes.Buffer
 			c := PRTouchesCmd()
 			c.SetOut(&bytes.Buffer{})
-			if err := runCmd(t, c, []string{"--base-sha", "abc123",
+			if err := runCmd(t, c, []string{"--base-sha", "abc123", "--head-sha", "def456",
 				"--prefix", "terraform-iac-bootstrap/", "--output-name", "terraform"}, &errBuf); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -86,13 +86,13 @@ func TestPRTouchesWritesTheOutputAndFailsClosedOnAPIError(t *testing.T) {
 		// The whole design. A defaulted `false` here turns a GitHub blip into a
 		// silently skipped state-import on every PR, which looks exactly like a
 		// clean tree.
-		listChangedFiles = func(string) ([]string, error) { return nil, errBoom{} }
+		listChangedFiles = func(_, _ string) ([]string, error) { return nil, errBoom{} }
 		inTempRepo(t, func(dir string) {
 			var errBuf bytes.Buffer
 			c := PRTouchesCmd()
 			c.SetOut(&bytes.Buffer{})
 			c.SilenceUsage, c.SilenceErrors = true, true
-			err := runCmd(t, c, []string{"--base-sha", "abc123", "--prefix", "x/"}, &errBuf)
+			err := runCmd(t, c, []string{"--base-sha", "abc123", "--head-sha", "def456", "--prefix", "x/"}, &errBuf)
 			if err == nil {
 				t.Fatal("an API failure must fail the command")
 			}
@@ -110,18 +110,49 @@ type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
 
-func TestPRTouchesRequiresABaseSHA(t *testing.T) {
-	// Without it there is nothing to diff against, and every PR would classify the
-	// same way — a gate that always answers identically is not a gate.
+func TestPRTouchesRequiresBothEnds(t *testing.T) {
+	// BOTH, and neither defaulting to HEAD. On a pull_request event HEAD is the
+	// MERGE ref, which already contains the base's newer commits — so a range
+	// ending at HEAD counts base-branch drift as this PR's diff, and a stale bot
+	// upgrade PR would classify terraform=true and take the unserialized tfstate
+	// write the job exists to prevent.
+	for _, args := range [][]string{
+		{"--prefix", "x/"},
+		{"--base-sha", "abc", "--prefix", "x/"},
+		{"--head-sha", "def", "--prefix", "x/"},
+	} {
+		inTempRepo(t, func(string) {
+			var errBuf bytes.Buffer
+			c := PRTouchesCmd()
+			c.SetOut(&bytes.Buffer{})
+			c.SilenceUsage, c.SilenceErrors = true, true
+			if err := runCmd(t, c, args, &errBuf); err == nil {
+				t.Errorf("%v must be refused: both ends are required", args)
+			}
+		})
+	}
+}
+
+func TestPRTouchesDiffsTheExplicitRange(t *testing.T) {
+	// Pins that neither end is silently replaced by HEAD.
+	orig := listChangedFiles
+	t.Cleanup(func() { listChangedFiles = orig })
+	var gotBase, gotHead string
+	listChangedFiles = func(base, head string) ([]string, error) {
+		gotBase, gotHead = base, head
+		return []string{"README.md"}, nil
+	}
 	inTempRepo(t, func(string) {
 		var errBuf bytes.Buffer
 		c := PRTouchesCmd()
 		c.SetOut(&bytes.Buffer{})
-		c.SilenceUsage, c.SilenceErrors = true, true
-		if err := runCmd(t, c, []string{"--prefix", "x/"}, &errBuf); err == nil {
-			t.Error("a missing --base-sha must be refused rather than guessed")
+		if err := runCmd(t, c, []string{"--base-sha", "base1", "--head-sha", "head1", "--prefix", "x/"}, &errBuf); err != nil {
+			t.Fatal(err)
 		}
 	})
+	if gotBase != "base1" || gotHead != "head1" {
+		t.Errorf("diffed %q...%q, want base1...head1", gotBase, gotHead)
+	}
 }
 
 // ── upgrade-pr ──────────────────────────────────────────────────────────────

