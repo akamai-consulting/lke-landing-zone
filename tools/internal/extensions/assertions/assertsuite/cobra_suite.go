@@ -14,7 +14,7 @@ import (
 
 func Cmd() *cobra.Command {
 	var region, only string
-	var skipMutating bool
+	var day2 bool
 	var list bool
 	c := &cobra.Command{
 		Use:   "assert-suite",
@@ -34,13 +34,13 @@ func Cmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return Run(region, cigate.SplitCSVList(only), list, skipMutating)
+			return Run(region, cigate.SplitCSVList(only), list, day2)
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment/region passed to the lanes that need it (defaults to $REGION)")
 	c.Flags().StringVar(&only, "only", "", "comma-separated subset of lanes to run (default: all)")
-	c.Flags().BoolVar(&skipMutating, "skip-mutating", false,
-		"drop the four lanes that change state rather than observe it — net-enforcement (scratch namespace, live packets), obj-encryption (probe blob through Harbor), health-workflow (submits a Workflow), broad-pat (real mint/publish/revoke of the broad Linode PAT) — for a promotion or a scheduled run, which must observe rather than exercise")
+	c.Flags().BoolVar(&day2, "day2", false,
+		"run ONLY the lanes marked safe and meaningful against a live deployment (loki, scrape-reconciler, openbao-audit, delivery, surfaces, wave-vap) — an allow-list, so a lane added later stays out of promotions and scheduled applies until it is explicitly cleared for them")
 	c.Flags().BoolVar(&list, "list", false, "print the lane table and exit without running anything")
 	return c
 }

@@ -42,7 +42,7 @@ on:
         required: true
         type: string
       assert_mutating:
-        description: 'Also run the FOUR assert-suite lanes that mutate rather than observe: net-enforcement (scratch namespace, live packets), obj-encryption (probe blob through Harbor), health-workflow (submits a Workflow), broad-pat (real mint/publish/revoke of the broad Linode PAT). release-e2e sets this. A promotion or a scheduled apply leaves it off, which trades the CNI-enforcement and object-encryption checks for not rotating a production credential on a timer — set it true on a deployment where that trade is wrong. Requires assert_invariants.'
+        description: 'Run the FULL assert-suite instead of the day-2 allow-list. The default runs only the six lanes cleared for a live deployment; this adds the four that MUTATE real state (net-enforcement, obj-encryption, health-workflow, broad-pat) AND the ones that depend on fixtures only the release-e2e instance has (instance-custom, team-write). release-e2e sets it. A promotion or a scheduled apply leaves it off — with it on, instance-custom alone would block the promotion chain at the dev stage on any real instance. Requires assert_invariants.'
         required: false
         type: boolean
         default: false
@@ -796,18 +796,21 @@ jobs:
       # lane could run and never be able to fail the step, and the list shipped
       # per-instance so a new gate reached an instance only when someone edited its
       # vendored workflow. Run `llz ci assert-suite --list` to see the lanes.
-      # SPLIT ON WHETHER THE CALLER MAY MUTATE. release-e2e exists to exercise the
-      # rotation and submission paths end to end; a promotion stage and a weekly
-      # cron must observe and change nothing. --skip-mutating reads the property off
-      # the lane table rather than restating a lane list here, which is the drift
-      # this suite was built to end.
+      # SPLIT ON WHETHER THE CALLER IS THE E2E FIXTURE OR A LIVE DEPLOYMENT.
+      # release-e2e exists to exercise the rotation and submission paths end to end
+      # against a throwaway cluster it seeded itself; a promotion stage and a weekly
+      # cron run against production and must observe only. --day2 is an ALLOW-list
+      # read off the lane table, so a lane added later stays out of promotions until
+      # someone clears it — the subtractive version kept failing to enumerate the
+      # exclusions, most sharply `instance-custom`, whose namespace only the e2e
+      # harness creates and whose failure blocked the promotion chain at dev.
       - name: (e2e) assert suite
         if: ${{ inputs.assert_invariants && inputs.assert_mutating }}
         run: llz ci assert-suite
 
-      - name: assert suite (observing lanes only)
+      - name: assert suite (day-2 lanes only)
         if: ${{ inputs.assert_invariants && !inputs.assert_mutating }}
-        run: llz ci assert-suite --skip-mutating
+        run: llz ci assert-suite --day2
 
       # Snapshot the loki-gateway resolver + nginx logs WHILE the cluster is still
       # up — before the ACL revoke below cuts apiserver access. Every command is

@@ -64,6 +64,22 @@ type Lane struct {
 	// Why documents what the lane proves and what stays color.Green without it. Printed
 	// with the lane's group so a failure carries its own rationale.
 	Why string
+	// Day2 marks a lane that is meaningful AND safe against a real, live
+	// deployment — as opposed to the release-e2e fixture this battery was written
+	// for.
+	//
+	// AN ALLOW-LIST, AND THAT DIRECTION IS THE POINT. The first cut of the
+	// promotion path subtracted instead (`--skip-mutating`), and subtraction has to
+	// enumerate every reason a lane does not belong in production — which it kept
+	// failing to do. It missed the two extra MUTATING lanes, and then it missed
+	// `instance-custom`, whose namespace `llz-e2e-custom` is seeded ONLY by the
+	// template repo's e2e-instantiate.yml: gating, componentless, so on a real
+	// instance it polls for 300s, fails, and `needs:` blocks the whole promotion
+	// chain at dev. The change as written could never have reached prod.
+	//
+	// A new lane now defaults to FALSE and is simply absent from production runs
+	// until someone says otherwise, instead of joining them silently.
+	Day2 bool
 	// Mutating marks a lane that CHANGES the cluster or an external system rather
 	// than observing it — submitting a Workflow, forcing a credential rotation.
 	//
@@ -132,7 +148,7 @@ func Lanes(region string) []Lane {
 	}
 	return []Lane{
 		{
-			Name: "loki", Gating: true,
+			Name: "loki", Gating: true, Day2: true,
 			// --region because the write PROOF has to resolve this deployment's chunks
 			// bucket from the spec. Without it the proof degrades to a skip, which is
 			// the quiet failure this lane exists to stop having.
@@ -140,7 +156,7 @@ func Lanes(region string) []Lane {
 			Why:   "Loki is bootstrapped and S3-backed. Says nothing about anything REACHING it — that is openbao-audit and delivery.",
 		},
 		{
-			Name: "scrape-reconciler", Gating: true,
+			Name: "scrape-reconciler", Gating: true, Day2: true,
 			Steps: []Step{
 				step("assert-observability", "assert-scrape-targets"),
 				step("assert-reconciler", "assert-reconciler"),
@@ -151,13 +167,13 @@ func Lanes(region string) []Lane {
 				"assert-reconciler-effects finally checks the cluster invariants those lanes maintain. Splitting them would race the gauge's first scrape.",
 		},
 		{
-			Name: "openbao-audit", Gating: true,
+			Name: "openbao-audit", Gating: true, Day2: true,
 			Steps: []Step{step("assert-secrets", "assert-openbao-audit")},
 			Why: "OpenBao's audit records are ARRIVING in Loki. Separate from `loki` on purpose: \"Loki is bootstrapped\" and \"records reach it\" are different failures, " +
 				"and this pipeline shipped to a Service that never existed for its whole life with a NetworkPolicy allow pointed at the same empty namespace.",
 		},
 		{
-			Name: "delivery", Gating: true,
+			Name: "delivery", Gating: true, Day2: true,
 			Steps: []Step{
 				step("assert-observability", "assert-log-ingestion"),
 				step("assert-secrets", "assert-eso-roundtrip"),
@@ -166,7 +182,7 @@ func Lanes(region string) []Lane {
 				"assert-eso-roundtrip proves ESO still RE-READS OpenBao: a Secret it can no longer refresh keeps serving its frozen value and every consumer keeps working.",
 		},
 		{
-			Name: "surfaces", Gating: true,
+			Name: "surfaces", Gating: true, Day2: true,
 			Steps: []Step{
 				step("assert-observability", "assert-alert-delivery"),
 				step("assert-observability", "assert-grafana-dashboards"),
@@ -235,7 +251,7 @@ func Lanes(region string) []Lane {
 				"Safe by construction: an e2e-unique label and BROAD_PAT_DEPLOYMENTS=e2e scope mint/revoke to the e2e PAT family only.",
 		},
 		{
-			Name: "wave-vap", Gating: true,
+			Name: "wave-vap", Gating: true, Day2: true,
 			Steps: []Step{step("assert-network", "assert-wave-health-vap")},
 			Why:   "The llz-wave-health-guard VAP is BOUND and ENFORCING: server-dry-runs a Deployment at sync-wave -5 and requires the guard's own denial.",
 		},
@@ -455,17 +471,17 @@ func laneNames(ls []Lane) []string {
 	return out
 }
 
-func Run(region string, only []string, list, skipMutating bool) error {
+func Run(region string, only []string, list, day2 bool) error {
 	lanes, err := selectLanes(Lanes(region), only)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::%v\n", err)
 		return err
 	}
-	if skipMutating {
+	if day2 {
 		kept := lanes[:0]
 		var dropped []string
 		for _, l := range lanes {
-			if l.Mutating {
+			if !l.Day2 {
 				dropped = append(dropped, l.Name)
 				continue
 			}
@@ -476,16 +492,14 @@ func Run(region string, only []string, list, skipMutating bool) error {
 		// afterwards exactly like a caller that ran it and passed — which is the
 		// whole class of failure this suite exists to make impossible.
 		if len(dropped) > 0 {
-			fmt.Fprintf(os.Stderr, "::notice title=Mutating lanes skipped::%s — this run observes only. "+
-				"They exercise real rotation and submission paths and are for release-e2e, not a promotion or a timer.\n",
+			fmt.Fprintf(os.Stderr, "::notice title=Non-day-2 lanes skipped::%s — this run observes a LIVE deployment. "+
+				"They either mutate real state or depend on fixtures only the release-e2e instance has.\n",
 				strings.Join(dropped, ", "))
 		}
-		// Fail closed on a selection that leaves nothing: --only naming exactly the
-		// mutating lanes plus --skip-mutating would otherwise report a clean suite
-		// having run no lane at all.
+		// Fail closed on a selection that leaves nothing.
 		if len(lanes) == 0 {
-			return fmt.Errorf("--skip-mutating left no lanes to run (dropped: %s) — a suite that examines "+
-				"nothing must not report success", strings.Join(dropped, ", "))
+			return fmt.Errorf("--day2 left no lanes to run (dropped: %s) — a suite that examines nothing "+
+				"must not report success", strings.Join(dropped, ", "))
 		}
 	}
 

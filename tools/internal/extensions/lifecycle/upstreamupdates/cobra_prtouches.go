@@ -103,7 +103,7 @@ func PRTouchesCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringArrayVar(&prefixes, "prefix", nil, "path prefix to match; trailing / means a subtree (repeatable)")
-	c.Flags().StringArrayVar(&excludes, "exclude", nil, "exact path under a --prefix that does NOT count as a match (repeatable)")
+	c.Flags().StringArrayVar(&excludes, "exclude", nil, "path under a --prefix that does NOT count as a match: an exact path, or *SUFFIX (repeatable)")
 	c.Flags().StringVar(&outputName, "output-name", "touches", "name of the GITHUB_OUTPUT key to write")
 	c.Flags().StringVar(&baseSHA, "base-sha", "", "the PR's base tip (github.event.pull_request.base.sha)")
 	c.Flags().StringVar(&headSHA, "head-sha", "", "the PR's head tip (github.event.pull_request.head.sha)")

@@ -126,34 +126,33 @@ That input was called `assert_loki` until this change, and named one of the four
 things it gates. A promotion into prod skipped the volume-encryption check with
 nothing on screen saying so.
 
-**It does NOT run the four mutating lanes**, and that trade is worth stating
-rather than discovering:
+**It runs the day-2 allow-list, not the whole battery**, and that shape is the
+correction to two earlier mistakes rather than a preference.
 
-| Lane | What it does | What skipping it costs |
-|---|---|---|
-| `broad-pat` | real mint → OpenBao → GitHub publish → **revoke** of the broad Linode PAT | nothing you want on a timer |
-| `health-workflow` | submits a one-shot Workflow | the day-2 RUN path goes unproven |
-| `net-enforcement` | scratch namespace, live packets (self-deleting) | **the CNI-enforcement check** |
-| `obj-encryption` | probe blob through Harbor (GC reclaims it) | **the object-encryption check** |
+`llz ci assert-suite --day2` admits exactly six lanes — `loki`,
+`scrape-reconciler`, `openbao-audit`, `delivery`, `surfaces`, `wave-vap` — the
+same set `llz-cluster-health.yml` used to spell out by hand for its own day-2
+gate. Everything else stays out:
 
-The first two are the reason the flag exists — rotating a production credential
-every week is not a check, it is a liability. The last two are self-cleaning, and
-skipping them is a real loss: they are exactly the "rots silently between applies"
-invariants this workflow is for. If that trade is wrong for a deployment, set
-`assert_mutating: true` on it and take all four.
+| Excluded | Why |
+|---|---|
+| `broad-pat` | real mint → OpenBao → GitHub publish → **revoke** of the broad Linode PAT |
+| `health-workflow` | submits a one-shot Workflow |
+| `net-enforcement` | scratch namespace, live packets |
+| `obj-encryption` | probe blob through Harbor |
+| `instance-custom`, `team-write`, … | depend on fixtures only the **release-e2e instance** has |
 
-The property lives on the lane (`Mutating bool` in `suite.go`), not in a list
-here — `llz-cluster-health.yml` still carries a hand-written `--only` naming the
-non-mutating lanes, and the safety of the rest rested on a comment in
-`broadpat.go` saying they are "wired behind the e2e gate, which only release-e2e
-sets". The moment a second caller set that gate, that sentence stopped being true
-and nothing failed. `TestMutatingFlagAgreesWithTheLaneItDescribes` now derives
-the set from each lane's own `Why` rather than restating it, so a lane added later
-— or a `Why` edited to say MUTATING — forces the flag to move with it.
+**It was subtractive first, and subtraction kept losing.** `--skip-mutating` had
+to enumerate every reason a lane did not belong in production, and it missed two
+mutating lanes, and then it missed `instance-custom` — whose namespace
+`llz-e2e-custom` is created only by the template repo's `e2e-instantiate.yml`.
+That lane is gating and `assert-platform` is componentless, so on a real instance
+it would poll for 300s, fail, and `needs:` would block the promotion chain at the
+dev stage. Every promotion, forever. An allow-list defaults a new lane to
+*absent* instead of *present*.
 
-That is also why the cron sits two hours after `scheduled-checks.yml`'s weekly
-health probe: reading back through a red Sunday, the health verdict that preceded
-the apply is already in the log.
+If a deployment wants the full battery, `assert_mutating: true` takes it — that is
+what release-e2e sets.
 
 ## The `verdict` job is not decoration
 

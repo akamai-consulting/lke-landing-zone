@@ -84,14 +84,41 @@ func TestDeliveredWorkflowsNameRealLanes(t *testing.T) {
 		}
 	}
 
-	// A corpus guard that matched nothing reports clean over a workflow it never
-	// read — the failure this whole tree refuses.
-	if checked == 0 {
-		t.Fatal("no `assert-suite --only` lane name found in the delivered workflows. Either " +
-			"the health workflow stopped narrowing the suite (delete this guard and say so in " +
-			"the same commit), or the flag spelling changed and this guard has been vacuous since")
+	// ZERO IS NOW THE EXPECTED ANSWER, and that is the point of the change this
+	// guard survived rather than a hole in it.
+	//
+	// It was written because llz-cluster-health.yml hand-wrote a lane list in
+	// `--only`, vendored into every adopter's repo, where a rename here would break
+	// their gate at run time. That list is gone: both delivered callers now pass
+	// `--day2` and the set lives on the lane table, so there is no restated name
+	// left to rot. The guard stays because the hazard returns the moment someone
+	// writes a list into a delivered file again — which is exactly what it fails on.
+	//
+	// It does still fail closed on the case that would make it meaningless: a
+	// delivered workflow that narrows the suite by name AND names something fake is
+	// caught by the loop above.
+	if checked > 0 {
+		t.Logf("resolved %d delivered lane name(s) against %d live lanes", checked, len(known))
 	}
-	t.Logf("resolved %d delivered lane name(s) against %d live lanes", checked, len(known))
+
+	// The positive half, so this file is not merely dormant: the delivered callers
+	// must select lanes through the FLAG, not by restating the set.
+	day2 := 0
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(filepath.FromSlash(wfDir), e.Name()))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(b), "assert-suite --day2") {
+			day2++
+		}
+	}
+	if day2 == 0 {
+		t.Fatal("no delivered workflow runs `assert-suite --day2`. Either the allow-list flag was renamed " +
+			"(update this guard with it) or a delivered caller went back to naming lanes by hand — which is " +
+			"the vendored-rename hazard this file exists for")
+	}
+	t.Logf("%d delivered workflow(s) select lanes via --day2", day2)
 }
 
 func knownLaneList(known map[string]bool) string {

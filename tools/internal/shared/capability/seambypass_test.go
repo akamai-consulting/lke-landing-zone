@@ -71,17 +71,18 @@ var seamCall = regexp.MustCompile(
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
 	"assertsecrets": 2,
-	// 7, and every one of them runs `gh` or `git`, never kubectl. As the failure
+	// 8, and every one of them runs `gh` or `git`, never kubectl. As the failure
 	// message says: there is no capability handle for the FORGE yet, so these
 	// cannot be converted — they are the measurement of what such a handle would
 	// have to cover. Concretely: `git diff` (the PR's changed files), `gh pr list`
 	// (is there an OPEN pull request, as opposed to merely a branch), `gh pr
-	// create`, `git ls-remote`, `git switch`, `git push`, and `git
+	// create`, `git ls-remote`, `git switch`, `git push` (twice: a new branch, and
+	// a force-with-lease onto an orphan one), and `git
 	// rev-parse`/`status` via gitcmd. A forge capability would need read (API GET),
 	// branch write (push) and pull-request create — a wider surface than
 	// Cluster.Run's one-shot shape, which is why the entry is here rather than a
 	// conversion.
-	"upstreamupdates": 7,
+	"upstreamupdates": 8,
 	"clusteraccess":   1,
 	"healthsla":       1,
 	"identityconfig":  1,

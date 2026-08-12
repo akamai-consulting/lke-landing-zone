@@ -178,21 +178,19 @@ jobs:
       # through the suite means this workflow never has to be edited again when a
       # gate is added: `llz upgrade` carries the new lane.
       #
-      # --only names the observing lanes this check wants; everything else is
-      # omitted, including all four that MUTATE (net-enforcement, obj-encryption,
-      # health-workflow, broad-pat). Those are deliberate e2e exercises, not things
-      # a scheduled health check should do to a live cluster on a timer.
-      #
-      # A hand-written list rather than `--skip-mutating`, and deliberately so: this
-      # is a CHOSEN subset, not "everything that observes". Swapping it for the flag
-      # would silently widen the check to every non-mutating lane, several of which
-      # want credentials this job does not hold.
+      # --day2 is the SAME allow-list this workflow used to spell out by hand
+      # (loki, scrape-reconciler, openbao-audit, delivery, surfaces, wave-vap). It
+      # now lives on the lane table, which is what the hand-written copy could not
+      # do: the promotion path needed the identical set and got a subtractive
+      # approximation instead, which let e2e-only and mutating lanes through.
+      # Everything else is omitted — the four that MUTATE, and the ones that depend
+      # on fixtures only the release-e2e instance has.
       - name: Assert observability + reconciler + wave-health (E2E gate)
         if: ${{ inputs.fail-on-unhealthy }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"
-          llz ci assert-suite --only loki,scrape-reconciler,openbao-audit,delivery,surfaces,wave-vap
+          llz ci assert-suite --day2
           llz ci alert-eval --strict
 
       - name: Revoke control-plane ACL for this runner

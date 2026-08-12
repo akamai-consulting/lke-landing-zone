@@ -137,8 +137,15 @@ jobs:
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
         run: 'test -n "$GH_TOKEN" || { echo "::error title=Missing LLZ_AUTOMATION_TOKEN::The automated template upgrade is armed but this repository secret is unset, so the branch cannot be pushed and no pull request can be opened. GITHUB_TOKEN is not a substitute, because a pull request it opens runs none of the checks that make the upgrade reviewable. See docs/secrets.md."; exit 1; }'
 
+      # NO `if: inputs.ref == ''` — SELF-UPDATE RUNS ON BOTH PATHS. It used to be
+      # skipped when --ref was given, on the reasoning that an explicit ref needs no
+      # resolution. True of the ref, false of the BINARY: the --ref path then ran
+      # the llz baked into vars.TF_IMAGE, which lags the pin by design, so
+      # `llz upgrade --ref` would succeed and `llz ci upgrade-pr` would then die on
+      # "unknown command" — the same TF_IMAGE-lag class the pr-touches probe in
+      # llz-terraform.yml exists to handle. --ref still decides the TARGET; this
+      # only decides which binary performs the upgrade.
       - name: Install the latest llz release
-        if: inputs.ref == ''
         env:
           GH_TOKEN: ${{ secrets.LLZ_AUTOMATION_TOKEN }}
         run: llz self-update 

@@ -373,10 +373,54 @@ func TestMutatingFlagAgreesWithTheLaneItDescribes(t *testing.T) {
 	t.Logf("%d of %d lanes are mutating", marked, len(all))
 }
 
-func TestSkipMutatingFailsRatherThanRunningNothing(t *testing.T) {
-	// --only naming exactly the mutating lanes, plus --skip-mutating, leaves an
-	// empty battery. Reporting success there is "green having examined nothing".
-	err := Run("e2e", []string{"broad-pat", "health-workflow"}, false, true)
+// TestDay2IsAnAllowListThatExcludesEveryMutatingLane couples the two axes.
+//
+// Day2 says "safe and meaningful against a live deployment"; Mutating says
+// "changes real state". Nothing can be both, and the check lives here rather than
+// in a comment because the promotion path runs whatever Day2 admits — against
+// production, on a timer, with no human reading the lane list first.
+func TestDay2IsAnAllowListThatExcludesEveryMutatingLane(t *testing.T) {
+	all := Lanes("e2e")
+	day2 := 0
+	for _, l := range all {
+		if !l.Day2 {
+			continue
+		}
+		day2++
+		if l.Mutating {
+			t.Errorf("lane %q is marked Day2 AND Mutating. Day2 lanes run on every promotion stage and "+
+				"every scheduled apply; a mutating one there changes production state on a timer.", l.Name)
+		}
+	}
+	if day2 == 0 {
+		t.Fatal("no lane is marked Day2 — --day2 would drop everything and the promotion path could never pass")
+	}
+	if day2 == len(all) {
+		t.Fatal("every lane is marked Day2 — the allow-list admits the e2e-only and mutating lanes it exists " +
+			"to keep out of production")
+	}
+	t.Logf("%d of %d lanes are day-2 safe", day2, len(all))
+}
+
+func TestDay2ExcludesTheLanesThatNeedTheE2EFixture(t *testing.T) {
+	// The specific miss that made this an allow-list rather than a subtraction.
+	// instance-custom polls for Application `instance-custom-llz-e2e-custom` in
+	// namespace `llz-e2e-custom`, which ONLY the template repo's
+	// e2e-instantiate.yml creates — and the lane is gating, and assert-platform is
+	// componentless so it never self-disables. On a real instance it polls, fails,
+	// and `needs:` blocks the promotion chain at the dev stage. Every promotion.
+	for _, name := range []string{"instance-custom", "team-write", "health-workflow", "broad-pat"} {
+		for _, l := range Lanes("e2e") {
+			if l.Name == name && l.Day2 {
+				t.Errorf("lane %q is marked Day2, but it depends on the release-e2e fixture or mutates real "+
+					"state — a promotion into prod would run it and block on it", name)
+			}
+		}
+	}
+}
+
+func TestDay2FailsRatherThanRunningNothing(t *testing.T) {
+	err := Run("e2e", []string{"broad-pat", "instance-custom"}, false, true)
 	if err == nil {
 		t.Fatal("an empty lane selection must fail rather than pass")
 	}
@@ -385,36 +429,25 @@ func TestSkipMutatingFailsRatherThanRunningNothing(t *testing.T) {
 	}
 }
 
-// TestSkipMutatingHelpNamesEveryLaneItDrops couples the flag's help text to the
-// set it actually drops.
-//
-// The help is the only place an operator learns what `--skip-mutating` costs
-// them, and it went stale the moment two more lanes were marked: it named
-// health-workflow and broad-pat while the flag had started dropping
-// net-enforcement and obj-encryption too — the CNI-enforcement and
-// object-encryption checks, silently absent from every promotion. Three other
-// statements of the same set drifted with it.
-//
-// Reading the real cobra help rather than a copy means the next lane marked
-// Mutating fails here until the sentence an operator reads is updated with it.
-func TestSkipMutatingHelpNamesEveryLaneItDrops(t *testing.T) {
-	flag := Cmd().Flags().Lookup("skip-mutating")
+// TestDay2HelpNamesEveryLaneItAdmits keeps the sentence an operator reads in step
+// with the set the flag actually runs against production.
+func TestDay2HelpNamesEveryLaneItAdmits(t *testing.T) {
+	flag := Cmd().Flags().Lookup("day2")
 	if flag == nil {
-		t.Fatal("no --skip-mutating flag — the gate would pass having read nothing")
+		t.Fatal("no --day2 flag — the gate would pass having read nothing")
 	}
-	dropped := 0
+	admitted := 0
 	for _, l := range Lanes("e2e") {
-		if !l.Mutating {
+		if !l.Day2 {
 			continue
 		}
-		dropped++
+		admitted++
 		if !strings.Contains(flag.Usage, l.Name) {
-			t.Errorf("--skip-mutating drops lane %q but its help does not name it, so an operator "+
-				"reading the flag cannot know that check is absent from every promotion.\n  help: %s",
+			t.Errorf("--day2 runs lane %q against production but its help does not name it.\n  help: %s",
 				l.Name, flag.Usage)
 		}
 	}
-	if dropped == 0 {
-		t.Fatal("no lane is marked Mutating — the flag drops nothing and this gate compared nothing")
+	if admitted == 0 {
+		t.Fatal("no lane is admitted — this gate compared nothing")
 	}
 }

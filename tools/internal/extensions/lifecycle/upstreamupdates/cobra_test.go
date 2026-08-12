@@ -337,9 +337,9 @@ func TestUpgradePRRecoversAnOrphanBranch(t *testing.T) {
 	//
 	// The recovery is to create the PR for what is already pushed, and NOT to push
 	// again: `git switch -c` fails on a branch name that exists.
-	origGit, origPR, origRemote, origPush, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR
+	origGit, origPR, origRemote, origPush, origUpd, origCreate := gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, updateOrphanBranch, createPR
 	t.Cleanup(func() {
-		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, createPR = origGit, origPR, origRemote, origPush, origCreate
+		gitOut, remoteHasOpenPR, remoteHasBranch, pushBranch, updateOrphanBranch, createPR = origGit, origPR, origRemote, origPush, origUpd, origCreate
 	})
 	gitOut = func(args ...string) (string, error) {
 		if args[0] == "rev-parse" {
@@ -349,7 +349,9 @@ func TestUpgradePRRecoversAnOrphanBranch(t *testing.T) {
 	}
 	remoteHasOpenPR = func(string) bool { return false }
 	remoteHasBranch = func(string) bool { return true }
-	pushBranch = func(string) error { t.Error("must not re-push an orphan branch that already exists"); return nil }
+	pushBranch = func(string) error { t.Error("must not `git switch -c` a branch that already exists"); return nil }
+	updated := ""
+	updateOrphanBranch = func(b string) error { updated = b; return nil }
 	created := false
 	createPR = func(_, _, _, _ string) error { created = true; return nil }
 
@@ -363,5 +365,11 @@ func TestUpgradePRRecoversAnOrphanBranch(t *testing.T) {
 	})
 	if !created {
 		t.Error("an orphan branch must get its pull request opened, not be reported as already open")
+	}
+	// THE HALF THE FIRST FIX MISSED: without this the PR opens against the stale
+	// commit the failed run left, and this run's upgrade is discarded with the
+	// runner while the summary reports success.
+	if updated != "chore/template-upgrade-v3.3.3" {
+		t.Errorf("this run's commit must be pushed onto the orphan branch, updated=%q", updated)
 	}
 }

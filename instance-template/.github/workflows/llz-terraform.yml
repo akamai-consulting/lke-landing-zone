@@ -46,7 +46,7 @@ on:
         type: boolean
         default: false
       assert_mutating:
-        description: 'Also run the assert-suite lanes that MUTATE (real PAT rotation, Workflow submission). release-e2e only. Requires assert_invariants.'
+        description: 'Run the FULL assert-suite instead of the day-2 allow-list — the mutating lanes and the ones needing release-e2e fixtures. release-e2e only. Requires assert_invariants.'
         required: false
         type: boolean
         default: false
@@ -233,7 +233,7 @@ jobs:
         # One physical line because inline workflow bash is a ratcheted budget
         # (.untestable-budget.yaml) that charges block scalars by the line; the
         # reasoning lives here, where it costs nothing.
-        run: 'llz ci --help 2>/dev/null | grep -qE "^[[:space:]]+pr-touches[[:space:]]" || { echo "terraform=false" >> "$GITHUB_OUTPUT"; echo "::warning title=Pre-upgrade image::vars.TF_IMAGE has no llz ci pr-touches verb, so the VPC/subnet import is skipped and the plan may show existing resources as new. Expected on the PR that advances the template pin; it resolves once TF_IMAGE moves."; exit 0; }; llz ci pr-touches --output-name terraform --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/ --exclude terraform-iac-bootstrap/AGENTS.md --exclude terraform-iac-bootstrap/.gitignore'
+        run: 'llz ci --help 2>/dev/null | grep -qE "^[[:space:]]+pr-touches[[:space:]]" || { echo "terraform=false" >> "$GITHUB_OUTPUT"; echo "::warning title=Pre-upgrade image::vars.TF_IMAGE has no llz ci pr-touches verb, so the VPC/subnet import is skipped and the plan may show existing resources as new. Expected on the PR that advances the template pin; it resolves once TF_IMAGE moves."; exit 0; }; llz ci pr-touches --output-name terraform --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --prefix terraform-iac-bootstrap/ --prefix landingzone.yaml --prefix environments/ --exclude terraform-iac-bootstrap/AGENTS.md --exclude terraform-iac-bootstrap/.gitignore --exclude "*.yaml.example"'
 
   # ── Plan on PRs ─────────────────────────────────────────────────────────────
   # Posts a plan summary; never applies.

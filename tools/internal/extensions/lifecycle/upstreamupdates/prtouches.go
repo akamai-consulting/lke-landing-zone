@@ -19,7 +19,6 @@ package upstreamupdates
 import (
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 )
 
@@ -65,7 +64,7 @@ func Classify(files, prefixes, excludes []string) (Classification, error) {
 	}
 	c := Classification{Files: files}
 	for _, f := range files {
-		if slices.Contains(excludes, f) {
+		if excluded(f, excludes) {
 			continue
 		}
 		for _, p := range prefixes {
@@ -77,6 +76,31 @@ func Classify(files, prefixes, excludes []string) (Classification, error) {
 	}
 	c.Touches = len(c.Matched) > 0
 	return c, nil
+}
+
+// excluded reports whether f is exempt. An exclude is an exact path, or — when it
+// begins with `*` — a suffix.
+//
+// THE SUFFIX FORM EXISTS FOR `*.yaml.example`. `--prefix environments/` is a
+// subtree match, so it also caught environments/*.yaml.example, which
+// .template-manifest classes `managed` and every upgrade rewrites. The sibling
+// case one level up was already safe by accident: `landingzone.yaml` is an exact
+// prefix, so landingzone.yaml.example never matched it. Exact-only excludes could
+// not express the subtree case, and a bot upgrade PR that touched an example file
+// would classify as a Terraform change and take the unserialized tfstate write.
+func excluded(f string, excludes []string) bool {
+	for _, e := range excludes {
+		if suffix, ok := strings.CutPrefix(e, "*"); ok {
+			if strings.HasSuffix(f, suffix) {
+				return true
+			}
+			continue
+		}
+		if f == e {
+			return true
+		}
+	}
+	return false
 }
 
 // Report writes the human half: what was decided and, when the answer is "no",

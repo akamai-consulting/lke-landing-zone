@@ -147,7 +147,7 @@ on:
         type: boolean
         default: false
       assert_mutating:
-        description: 'Also run the assert-suite lanes that MUTATE — a real broad-PAT rotation and a Workflow submission. release-e2e sets this; leave it off for anything running against a deployment you care about.'
+        description: 'Run the FULL assert-suite instead of the day-2 allow-list: the lanes that mutate real state, plus the ones that need release-e2e fixtures. release-e2e sets this; leave it off for anything running against a deployment you care about.'
         required: false
         type: boolean
         default: false

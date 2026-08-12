@@ -56,6 +56,22 @@ var (
 		return nil
 	}
 
+	// updateOrphanBranch pushes THIS run's commit onto a branch an earlier run left
+	// behind, without creating it. Skipping the push entirely was the first cut of
+	// the recovery, and it opened a pull request against the STALE commit while the
+	// summary reported a successful upgrade — the new commit existed only in the
+	// runner's checkout and was thrown away with it.
+	//
+	// --force-with-lease is safe precisely because this branch has NO open pull
+	// request: nothing is being reviewed, and the lease still refuses if someone
+	// pushed to it since we last looked.
+	updateOrphanBranch = func(branch string) error {
+		if _, err := kubectlprobe.Exec("git", "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+branch); err != nil {
+			return fmt.Errorf("update orphan branch %s: %w", branch, err)
+		}
+		return nil
+	}
+
 	createPR = func(title, body, base, head string) error {
 		// --label is dropped on retry rather than required: a repo that has never
 		// created the label 422s, and losing the whole pull request over a
@@ -156,12 +172,15 @@ func UpgradePRCmd() *cobra.Command {
 			if base == "" {
 				return fmt.Errorf("no base branch: pass --base or set GITHUB_REF_NAME")
 			}
-			// Skipped for an orphan: the branch is already on the remote with the
-			// commit on it, and `git switch -c` would fail on a name that exists.
-			if !s.OrphanBranch {
-				if err := pushBranch(d.Branch); err != nil {
-					return err
-				}
+			// An orphan branch is UPDATED, not recreated: `git switch -c` fails on a
+			// name that exists, but the commit still has to reach the remote or the
+			// pull request opens against whatever the failed run left there.
+			push := pushBranch
+			if s.OrphanBranch {
+				push = updateOrphanBranch
+			}
+			if err := push(d.Branch); err != nil {
+				return err
 			}
 			if err := createPR("chore(template): upgrade to "+s.Version, prBody, base, d.Branch); err != nil {
 				return err
