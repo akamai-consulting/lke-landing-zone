@@ -25,6 +25,42 @@ permissions:
   contents: read
 
 jobs:
+  # THE RELEASE'S OWN PRECONDITION, and it has to be a job of its own because the
+  # thing it protects is an ORDERING. `image-tag` already refused to retag a
+  # missing image and said so loudly — but it declares no `needs:`, so on v0.0.44
+  # it failed at 00:30:04Z while "Attach binaries to the release" had already
+  # succeeded. The release went out installable, advertising a `:vX.Y.Z` image
+  # that did not exist. A gate that runs after the irreversible step is a report.
+  #
+  # Measured root cause: build-images for that commit started 00:28:49Z and was
+  # still in_progress when the release fired 66s later. Not a missing build — a
+  # race with one. So this WAITS (default ~15 min, against 6-9 min observed
+  # build-images runs) rather than failing fast, which would turn every promptly
+  # cut release into a manual re-run.
+  preflight:
+    name: The commit's image is published
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Through the composite, not a hand-rolled setup-go: setup-go-sole-site
+      # gates that, and llz-release.yml's ONE sanctioned exception is the `go
+      # build` that stamps the release version via -ldflags. This is not that.
+      - name: Set up Go + build llz from source
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: /usr/local/bin/llz
+      # From source on purpose: a released binary would answer for code that is
+      # not what this release ships.
+      - name: Wait for ghcr.io/<owner>/llz:sha-<commit>
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: llz ci assert-release-image --owner "$OWNER" --sha "$SHA"
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
@@ -73,7 +109,10 @@ jobs:
 
   release:
     name: Attach binaries to the release
-    needs: build
+    # preflight as well as build: attaching the binaries is what makes a release
+    # installable, so it must not happen while the image tag it advertises is
+    # still missing. `build` alone was the ordering that let v0.0.44 out.
+    needs: [build, preflight]
     # Only the real release event has a release to attach to; a manual dispatch
     # just exercises the matrix build (artifacts only).
     if: github.event_name == 'release'
@@ -117,6 +156,10 @@ jobs:
     name: Retag the llz image as ${{ github.event.release.tag_name }}
     # Only a real release has a version to publish; a dispatch run has no tag.
     if: github.event_name == 'release'
+    # preflight has already waited for the source image, so this no longer races
+    # build-images — it either finds what preflight saw, or something removed it
+    # in between, which is worth failing on.
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

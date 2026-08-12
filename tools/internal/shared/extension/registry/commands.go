@@ -240,6 +240,7 @@ var commands = []Command{
 	{"templatemanifest", templatemanifest.Cmd},
 	{"templatecommit", templatecommit.AssertAdopterPinCmd},
 	{"templatecommit", templatecommit.AssertImageFreshCmd},
+	{"templatecommit", templatecommit.AssertReleaseImageCmd},
 	{"tofudriver", tofudriver.DestroyCmd},
 	{"tofudriver", tofudriver.OutputCmd},
 	{"tofudriver", tofudriver.PlanCmd},

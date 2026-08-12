@@ -1347,7 +1347,19 @@ categories:
     #                       import and a field) — the same omission, in a second
     #                       package, that killed the team-write lane. The literals
     #                       are now held by deps_literals_test.go.
-    budget: 1948
+    #   1,949 / 113 files  +1 wiring `llz ci assert-release-image`. A release
+    #                       published a :vX.Y.Z image tag nothing could pull
+    #                       (v0.0.44) because the retag job ran beside the
+    #                       publish instead of before it; this is the preflight.
+    #                       One AddCommand — the logic is in templatecommit,
+    #                       unit-tested, which is the split ADR 0013 asks for.
+    # 1948 -> 1949: one line, the `c.AddCommand(templatecommit.AssertReleaseImageCmd())`
+    # that makes `llz ci assert-release-image` reachable. Wiring a verb into the tree
+    # is the one thing this layer is FOR; the verb's own logic lives in
+    # internal/extensions/assertions/templatecommit under unit tests, which is the
+    # split ADR 0013 asks for. It exists because a release published a `:vX.Y.Z`
+    # image tag nothing could pull (v0.0.44) — the preflight that stops it.
+    budget: 1949
     exact: true
     include:
       - "tools/internal/cli/*.go"

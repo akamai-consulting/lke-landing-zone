@@ -449,6 +449,7 @@ func ciCmd() *cobra.Command {
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(templatecommit.AssertImageFreshCmd())
+	c.AddCommand(templatecommit.AssertReleaseImageCmd())
 	// Release gate for the shape e2e structurally cannot produce: an instance pinned
 	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
