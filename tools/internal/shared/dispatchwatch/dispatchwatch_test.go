@@ -27,7 +27,7 @@ func TestDispatchWatchRejectsTheRunThatPredatesTheDispatch(t *testing.T) {
 		return []Run{{ID: 100, URL: "https://x/100", Status: "completed"}}, true
 	})
 
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 	out := captureStderr(t, w.Report)
 
 	if strings.Contains(out, "https://x/100") {
@@ -43,7 +43,7 @@ func TestDispatchWatchAcceptsAStrictlyNewerRun(t *testing.T) {
 		return []Run{{ID: 101, URL: "https://x/101", Status: "queued"}}, true
 	})
 
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 	out := captureStderr(t, w.Report)
 
 	for _, want := range []string{"https://x/101", "gh run watch 101", "gh run view 101", "first-build-failed"} {
@@ -57,7 +57,7 @@ func TestDispatchWatchWithoutABaselineRejectsACompletedRun(t *testing.T) {
 	// The pre-dispatch lookup can fail (rate limit, transient 5xx). With no
 	// baseline the id test is unavailable, so a COMPLETED run must still be
 	// refused — that single check is what stops the week-old-green-run failure.
-	w := Watch{sinceID: 0, armed: true}
+	w := Watch{sinceID: 0, baseline: false, armed: true}
 	if w.isOurs(Run{ID: 7, Status: "completed"}) {
 		t.Error("a completed run cannot be the one just dispatched")
 	}
@@ -100,4 +100,20 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+// Begin2ForTest builds a Watch through the same baseline path Begin uses, without
+// Begin's gh/answers probes — so the tests cover how `baseline` is SET, not a
+// hand-made struct that could disagree with it.
+func Begin2ForTest(repo, workflow string) Watch {
+	w := Watch{repo: repo, workflow: workflow, armed: true}
+	if runs, ok := LatestDispatchRun(repo, workflow); ok {
+		w.baseline = true
+		for _, r := range runs {
+			if r.ID > w.sinceID {
+				w.sinceID = r.ID
+			}
+		}
+	}
+	return w
 }

@@ -40,7 +40,7 @@ func Cmd() *cobra.Command {
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment/region passed to the lanes that need it (defaults to $REGION)")
 	c.Flags().StringVar(&only, "only", "", "comma-separated subset of lanes to run (default: all)")
 	c.Flags().BoolVar(&skipMutating, "skip-mutating", false,
-		"drop the lanes that change the cluster or an external system (health-workflow submits a Workflow, broad-pat forces a real PAT rotation) — for a promotion or a scheduled run, which must observe rather than exercise")
+		"drop the four lanes that change state rather than observe it — net-enforcement (scratch namespace, live packets), obj-encryption (probe blob through Harbor), health-workflow (submits a Workflow), broad-pat (real mint/publish/revoke of the broad Linode PAT) — for a promotion or a scheduled run, which must observe rather than exercise")
 	c.Flags().BoolVar(&list, "list", false, "print the lane table and exit without running anything")
 	return c
 }

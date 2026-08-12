@@ -104,7 +104,12 @@ var LatestDispatchRun = func(repo, workflow string) ([]Run, bool) {
 		}
 		out = append(out, Run{ID: r.ID, URL: r.URL, Status: r.Status})
 	}
-	return out, len(out) > 0
+	// ok=true FOR AN EMPTY LIST. "this workflow has never been dispatched" is an
+	// answer; only an unreachable API is a failure. Collapsing the two made a
+	// first-ever dispatch — and every instance that has only ever applied through
+	// promote.yml — indistinguishable from a broken query, which Wait() then
+	// refuses to proceed on.
+	return out, true
 }
 
 // runConclusion reads a run's terminal state. Seamed for tests; ok=false
@@ -144,7 +149,12 @@ var (
 type Watch struct {
 	repo     string
 	workflow string
-	sinceID  uint64 // newest run before the dispatch; 0 = unknown
+	sinceID  uint64 // highest run id before the dispatch; 0 with baseline=true means none existed
+	// baseline records that the pre-dispatch lookup SUCCEEDED. It is not the same
+	// as sinceID != 0: a workflow dispatched for the first time legitimately has a
+	// baseline of zero, and treating that as "could not read the run list" turns a
+	// correct first apply into a red job with a misdiagnosing message.
+	baseline bool
 	armed    bool
 }
 
@@ -182,6 +192,7 @@ func Begin(dryRun, yes bool, workflow string) Watch {
 	// baseline's whole job is to be an upper bound on "runs that existed before we
 	// dispatched", and taking the max is what makes that true regardless of order.
 	if runs, ok := LatestDispatchRun(repo, workflow); ok {
+		w.baseline = true
 		for _, r := range runs {
 			if r.ID > w.sinceID {
 				w.sinceID = r.ID
@@ -200,7 +211,7 @@ func Begin(dryRun, yes bool, workflow string) Watch {
 // that predates the dispatch by seconds can still slip through, which is
 // acceptable: it is a live run of the same workflow on the same deployment.
 func (w Watch) isOurs(run Run) bool {
-	if w.sinceID != 0 {
+	if w.baseline {
 		return run.ID > w.sinceID
 	}
 	return run.Status != "completed"
@@ -232,7 +243,7 @@ func (w Watch) resolve(attempts int) (run Run, found, ambiguous bool) {
 		switch {
 		case len(ours) == 1:
 			return ours[0], true, false
-		case len(ours) > 1 && w.sinceID != 0:
+		case len(ours) > 1 && w.baseline:
 			// Only meaningful WITH a baseline: without one, isOurs falls back to
 			// "not completed", which legitimately matches several live runs and
 			// says nothing about who started them.
@@ -288,15 +299,15 @@ func (w Watch) Wait() error {
 		return fmt.Errorf("--watch cannot follow the run: the dispatch watcher was never armed " +
 			"(needs --yes, a resolvable instance repo, and `gh` on PATH)")
 	}
-	// NO BASELINE, NO VERDICT. With sinceID == 0 the pre-dispatch lookup failed (or
-	// this workflow had never been dispatched), and both of resolve's safeguards
+	// NO BASELINE, NO VERDICT. When the pre-dispatch lookup FAILED, both of
+	// resolve's safeguards
 	// collapse at once: isOurs degrades to "not completed", which matches ANY live
 	// run, and the ambiguity guard is disabled because it cannot mean anything
 	// without an ordering. Wait() would then be free to follow a stranger's run and
 	// return nil on ITS success — a fail-open in the one function whose entire
 	// contract is to fail closed. Report() may still guess, because the worst it
 	// can do is print a link to the wrong page.
-	if w.sinceID == 0 {
+	if !w.baseline {
 		return fmt.Errorf("--watch could not read the run list before dispatching, so it has no baseline to tell "+
 			"this run from any other — refusing to report an unrelated run's result as this apply's.\n"+
 			"    the dispatch DID happen: gh run list --repo %s --workflow %s --limit 5", w.repo, w.workflow)

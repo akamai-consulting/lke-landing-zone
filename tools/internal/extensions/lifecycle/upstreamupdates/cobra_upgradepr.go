@@ -105,10 +105,21 @@ func UpgradePRCmd() *cobra.Command {
 
 			d := Decide(s)
 			d.Report(cmd.ErrOrStderr(), s)
-			if err := ghaout.Append("GITHUB_STEP_SUMMARY", d.Summary(s)); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "::warning::could not write the step summary: %v\n", err)
+
+			// THE SUMMARY IS WRITTEN AFTER THE WORK, NOT AFTER THE DECISION. It used
+			// to go out here, so a failed push or a refused `gh pr create` left
+			// "opened a pull request: `true`" and a branch name standing in the run
+			// summary for a branch that does not exist — the run reads as a
+			// successful upgrade and the operator goes looking for a PR nobody can
+			// find. Decide() says what SHOULD happen; only the calls below know what
+			// DID.
+			summarise := func() {
+				if err := ghaout.Append("GITHUB_STEP_SUMMARY", d.Summary(s)); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "::warning::could not write the step summary: %v\n", err)
+				}
 			}
 			if !d.OpenPR {
+				summarise()
 				return nil
 			}
 			if base == "" {
@@ -120,7 +131,11 @@ func UpgradePRCmd() *cobra.Command {
 			if err := pushBranch(d.Branch); err != nil {
 				return err
 			}
-			return createPR("chore(template): upgrade to "+s.Version, prBody, base, d.Branch)
+			if err := createPR("chore(template): upgrade to "+s.Version, prBody, base, d.Branch); err != nil {
+				return err
+			}
+			summarise()
+			return nil
 		},
 	}
 	c.Flags().StringVar(&beforeSHA, "before", "", "HEAD as recorded before `llz upgrade` ran (required)")

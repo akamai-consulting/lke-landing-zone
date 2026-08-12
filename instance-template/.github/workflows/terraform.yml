@@ -24,6 +24,14 @@ on:
     branches: [main, master]
     paths:
       - 'terraform-iac-bootstrap/**'
+      # THE SPEC, which renders the tfvars the roots read. A spec-only PR changes
+      # the plan without touching a single .tf file, and until now it selected this
+      # workflow on neither trigger — so `llz ci pr-touches` classified on two
+      # prefixes (landingzone.yaml, environments/) that could never be reached,
+      # because a PR containing only them ran nothing at all. The filter and the
+      # classifier now agree on what counts as a Terraform change.
+      - 'landingzone.yaml'
+      - 'environments/**'
       - '.github/workflows/terraform.yml'
       # The PIPELINE ITSELF, which this stub is only the trigger surface for.
       # Listing this file and not the reusable it calls watched the 90-line caller
@@ -48,6 +56,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'terraform-iac-bootstrap/**'
+      # THE SPEC, which renders the tfvars the roots read. A spec-only PR changes
+      # the plan without touching a single .tf file, and until now it selected this
+      # workflow on neither trigger — so `llz ci pr-touches` classified on two
+      # prefixes (landingzone.yaml, environments/) that could never be reached,
+      # because a PR containing only them ran nothing at all. The filter and the
+      # classifier now agree on what counts as a Terraform change.
+      - 'landingzone.yaml'
+      - 'environments/**'
       - '.github/workflows/terraform.yml'
       # The PIPELINE ITSELF, which this stub is only the trigger surface for.
       # Listing this file and not the reusable it calls watched the 90-line caller

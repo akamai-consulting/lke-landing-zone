@@ -42,7 +42,7 @@ on:
         required: true
         type: string
       assert_mutating:
-        description: 'Also run the assert-suite lanes that MUTATE — health-workflow submits a Workflow, broad-pat forces a real mint/publish/revoke of the broad Linode PAT. release-e2e sets this; a promotion or a scheduled apply must not, because those exercise production credentials on a timer. Requires assert_invariants.'
+        description: 'Also run the FOUR assert-suite lanes that mutate rather than observe: net-enforcement (scratch namespace, live packets), obj-encryption (probe blob through Harbor), health-workflow (submits a Workflow), broad-pat (real mint/publish/revoke of the broad Linode PAT). release-e2e sets this. A promotion or a scheduled apply leaves it off, which trades the CNI-enforcement and object-encryption checks for not rotating a production credential on a timer — set it true on a deployment where that trade is wrong. Requires assert_invariants.'
         required: false
         type: boolean
         default: false

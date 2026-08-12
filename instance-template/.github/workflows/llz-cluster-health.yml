@@ -178,9 +178,15 @@ jobs:
       # through the suite means this workflow never has to be edited again when a
       # gate is added: `llz upgrade` carries the new lane.
       #
-      # --only skips the two MUTATING lanes (health-workflow submits a Workflow,
-      # broad-pat forces a PAT rotation). Those are deliberate e2e exercises, not
-      # things a scheduled health check should do to a live cluster on a timer.
+      # --only names the observing lanes this check wants; everything else is
+      # omitted, including all four that MUTATE (net-enforcement, obj-encryption,
+      # health-workflow, broad-pat). Those are deliberate e2e exercises, not things
+      # a scheduled health check should do to a live cluster on a timer.
+      #
+      # A hand-written list rather than `--skip-mutating`, and deliberately so: this
+      # is a CHOSEN subset, not "everything that observes". Swapping it for the flag
+      # would silently widen the check to every non-mutating lane, several of which
+      # want credentials this job does not hold.
       - name: Assert observability + reconciler + wave-health (E2E gate)
         if: ${{ inputs.fail-on-unhealthy }}
         run: |

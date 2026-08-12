@@ -53,7 +53,7 @@ func armedWatch(t *testing.T) Watch {
 	stubRunLookup(t, 5, func(string, string) ([]Run, bool) {
 		return []Run{{ID: 101, URL: "https://x/101", Status: "queued"}}, true
 	})
-	return Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	return Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 }
 
 func TestWaitSucceedsOnlyOnASuccessfulRun(t *testing.T) {
@@ -98,7 +98,7 @@ func TestWaitFailsWhenTheRunIsNeverIdentified(t *testing.T) {
 	stubRunLookup(t, 2, func(string, string) ([]Run, bool) {
 		return nil, false
 	})
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 
 	err := captureStderrErr(t, w.Wait)
 	if err == nil {
@@ -199,7 +199,7 @@ func TestWaitRefusesToGuessBetweenConcurrentDispatches(t *testing.T) {
 			{ID: 102, URL: "https://x/102", Status: "in_progress"},
 		}, true
 	})
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 
 	err := captureStderrErr(t, w.Wait)
 	if err == nil {
@@ -220,7 +220,7 @@ func TestWaitAcceptsASingleCandidateAmongOlderRuns(t *testing.T) {
 			{ID: 98, URL: "https://x/98", Status: "completed"},
 		}, true
 	})
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 100, baseline: true, armed: true}
 	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
 
 	if err := captureStderrErr(t, w.Wait); err != nil {
@@ -238,7 +238,7 @@ func TestWaitRefusesWithoutABaseline(t *testing.T) {
 		return []Run{{ID: 7, URL: "https://x/7", Status: "in_progress"}}, true
 	})
 	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
-	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 0, armed: true}
+	w := Watch{repo: "acme/inst", workflow: "terraform.yml", sinceID: 0, baseline: false, armed: true}
 
 	err := captureStderrErr(t, w.Wait)
 	if err == nil {
@@ -246,5 +246,40 @@ func TestWaitRefusesWithoutABaseline(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no baseline") {
 		t.Errorf("error must name the missing baseline, got: %v", err)
+	}
+}
+
+func TestWaitWorksOnAFirstEverDispatch(t *testing.T) {
+	// An empty run list is an ANSWER, not a failure: this workflow has simply never
+	// been dispatched. That is the ordinary state of an instance which has only
+	// ever applied through promote.yml — and collapsing it into "could not read the
+	// run list" gave those instances a red weekly job, with a message blaming the
+	// runs API, for an apply that succeeded.
+	first := true
+	stubRunLookup(t, 5, func(string, string) ([]Run, bool) {
+		if first {
+			first = false
+			return nil, true // baseline: nothing has ever run, and we know it
+		}
+		return []Run{{ID: 1, URL: "https://x/1", Status: "in_progress"}}, true
+	})
+	w := Begin2ForTest("acme/inst", "terraform.yml")
+	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
+
+	if err := captureStderrErr(t, w.Wait); err != nil {
+		t.Fatalf("a first-ever dispatch must be watchable, got %v", err)
+	}
+}
+
+func TestWaitStillRefusesWhenTheLookupFailed(t *testing.T) {
+	// The distinction the fix above must not erase: ok=false is a broken query, and
+	// there Wait() has no ordering to tell our run from a stranger's.
+	stubRunLookup(t, 3, func(string, string) ([]Run, bool) { return nil, false })
+	w := Begin2ForTest("acme/inst", "terraform.yml")
+	stubRunConclusion(t, 10, []conclusionAnswer{{status: "completed", conclusion: "success", ok: true}})
+
+	err := captureStderrErr(t, w.Wait)
+	if err == nil || !strings.Contains(err.Error(), "no baseline") {
+		t.Errorf("an unreadable run list must still refuse, got %v", err)
 	}
 }

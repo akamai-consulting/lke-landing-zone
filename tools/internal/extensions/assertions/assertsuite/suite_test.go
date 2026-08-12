@@ -384,3 +384,37 @@ func TestSkipMutatingFailsRatherThanRunningNothing(t *testing.T) {
 		t.Errorf("error must say the selection was empty, got: %v", err)
 	}
 }
+
+// TestSkipMutatingHelpNamesEveryLaneItDrops couples the flag's help text to the
+// set it actually drops.
+//
+// The help is the only place an operator learns what `--skip-mutating` costs
+// them, and it went stale the moment two more lanes were marked: it named
+// health-workflow and broad-pat while the flag had started dropping
+// net-enforcement and obj-encryption too — the CNI-enforcement and
+// object-encryption checks, silently absent from every promotion. Three other
+// statements of the same set drifted with it.
+//
+// Reading the real cobra help rather than a copy means the next lane marked
+// Mutating fails here until the sentence an operator reads is updated with it.
+func TestSkipMutatingHelpNamesEveryLaneItDrops(t *testing.T) {
+	flag := Cmd().Flags().Lookup("skip-mutating")
+	if flag == nil {
+		t.Fatal("no --skip-mutating flag — the gate would pass having read nothing")
+	}
+	dropped := 0
+	for _, l := range Lanes("e2e") {
+		if !l.Mutating {
+			continue
+		}
+		dropped++
+		if !strings.Contains(flag.Usage, l.Name) {
+			t.Errorf("--skip-mutating drops lane %q but its help does not name it, so an operator "+
+				"reading the flag cannot know that check is absent from every promotion.\n  help: %s",
+				l.Name, flag.Usage)
+		}
+	}
+	if dropped == 0 {
+		t.Fatal("no lane is marked Mutating — the flag drops nothing and this gate compared nothing")
+	}
+}

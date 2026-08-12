@@ -38,7 +38,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // them; it has no capability of its own beyond scheduling.
 //
 // NOTE WHAT IS ABSENT: no mutating grant. Its own header records that the lane
-// table is "collision-free only because the two MUTATING ones" are separated — the
+// table is collision-free only because the MUTATING lanes are separated — the
 // mutations belong to the lanes, declared by the lanes, and the runner does none.
 func Extension() extension.Extension {
 	return extension.Extension{

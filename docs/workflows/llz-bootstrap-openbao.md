@@ -868,8 +868,10 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   intent is still to harden to `alert-eval --strict` once today's known-DEAD? alerts —
   real cluster bugs, not rule bugs — are resolved.
 
-**Concurrency safety:** the two MUTATING lanes (health-workflow's Workflow, broad-pat's
-Job) touch disjoint namespaces/objects. The lanes that query Prometheus
+**Concurrency safety:** the MUTATING lanes touch disjoint namespaces/objects —
+health-workflow's Workflow and broad-pat's Job each in their own namespace,
+net-enforcement in a scratch namespace it deletes on every path, obj-encryption on
+one untagged Harbor blob. The lanes that query Prometheus
 (scrape+reconciler, metric-surface, alert-eval) each open their own port-forward with
 local port `:0`, so kubectl assigns a free port per lane and they cannot collide.
 

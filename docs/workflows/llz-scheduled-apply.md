@@ -126,15 +126,23 @@ That input was called `assert_loki` until this change, and named one of the four
 things it gates. A promotion into prod skipped the volume-encryption check with
 nothing on screen saying so.
 
-**It does NOT run the two mutating lanes.** `health-workflow` submits a Workflow
-and `broad-pat` forces a real mint → OpenBao → GitHub publish → *revoke* of the
-broad Linode PAT. Those exist to exercise the rotation path on a throwaway e2e
-cluster; running them on every promotion stage and every weekly cron would rotate
-a production credential on a timer nobody asked for. The bootstrap job therefore
-runs `llz ci assert-suite --skip-mutating` unless the caller also sets
-`assert_mutating`, which only release-e2e does.
+**It does NOT run the four mutating lanes**, and that trade is worth stating
+rather than discovering:
 
-That property lives on the lane (`Mutating bool` in `suite.go`), not in a list
+| Lane | What it does | What skipping it costs |
+|---|---|---|
+| `broad-pat` | real mint → OpenBao → GitHub publish → **revoke** of the broad Linode PAT | nothing you want on a timer |
+| `health-workflow` | submits a one-shot Workflow | the day-2 RUN path goes unproven |
+| `net-enforcement` | scratch namespace, live packets (self-deleting) | **the CNI-enforcement check** |
+| `obj-encryption` | probe blob through Harbor (GC reclaims it) | **the object-encryption check** |
+
+The first two are the reason the flag exists — rotating a production credential
+every week is not a check, it is a liability. The last two are self-cleaning, and
+skipping them is a real loss: they are exactly the "rots silently between applies"
+invariants this workflow is for. If that trade is wrong for a deployment, set
+`assert_mutating: true` on it and take all four.
+
+The property lives on the lane (`Mutating bool` in `suite.go`), not in a list
 here — `llz-cluster-health.yml` still carries a hand-written `--only` naming the
 non-mutating lanes, and the safety of the rest rested on a comment in
 `broadpat.go` saying they are "wired behind the e2e gate, which only release-e2e

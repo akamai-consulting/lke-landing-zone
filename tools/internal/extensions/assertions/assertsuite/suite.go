@@ -27,7 +27,7 @@ package assertsuite
 // reads gauges assert-scrape-targets just proved fresh). Wall clock is the
 // slowest lane rather than the sum.
 //
-// The lanes are collision-free only because the two MUTATING ones
+// The lanes are collision-free only because the MUTATING ones
 // (health-workflow, broad-pat) touch disjoint namespaces, and because every lane
 // that port-forwards binds local port :0 so kubectl assigns a free port per lane.
 // Preserve both properties when adding a lane.
