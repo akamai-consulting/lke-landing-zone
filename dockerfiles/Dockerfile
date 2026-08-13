@@ -31,8 +31,19 @@
 # The Go tools module arrives as the `tools-src` build context (build-images.yml
 # passes `--build-context tools-src=tools`) so the primary context stays small.
 # Cross-compiles from BUILDPLATFORM via GOOS/GOARCH — no QEMU for the compile.
-# main.version is stamped from LLZ_VERSION exactly as llz-release.yml does, so a
-# baked `llz version` is traceable to the build that produced it.
+# internal/cli.Version is stamped from LLZ_VERSION exactly as llz-release.yml
+# does, so a baked `llz version` is traceable to the build that produced it.
+#
+# THE SYMBOL IS NOT main.version, AND THIS LINE SHIPPED WRONG FOR MONTHS. When
+# the command tree moved to internal/cli (cd076cd1), the release workflow's
+# ldflag was updated and cmd/llz lost its `version` var — but this one was not.
+# The linker IGNORES an -X for a symbol it cannot resolve, so the build stayed
+# green, build-images.yml kept passing LLZ_VERSION=dev-<sha>, and the value
+# landed nowhere: every ci-tofu/ci-kubernetes image baked an llz reporting the
+# default "dev". That is not cosmetic — `llz ci assert-image-fresh` reads this
+# stamp to compare the image against the instance's template pin, and an
+# unstamped build makes it warn-and-pass, so the image/template skew guard was
+# silently off on every adopter it was built to protect.
 FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gotools
 ARG TARGETOS
 ARG TARGETARCH
@@ -44,7 +55,7 @@ COPY --from=tools-src . .
 # CGO_ENABLED=0 → a fully static binary, required by the distroless `llz` image
 # and harmless for the others.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
-      -ldflags "-s -w -X main.version=${LLZ_VERSION}" -o /out/llz ./cmd/llz
+      -ldflags "-s -w -X github.com/akamai-consulting/lke-landing-zone/tools/internal/cli.Version=${LLZ_VERSION}" -o /out/llz ./cmd/llz
 
 # ── toolbox: download + checksum-verify every third-party CLI, once ───────────
 # Everything here is a statically linked binary (Go, or Haskell for shellcheck),
