@@ -113,6 +113,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
@@ -129,8 +130,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-three of the twenty-six gates read the repository root
-// through `--root`, so twenty-three rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-four of the twenty-seven gates read the repository root
+// through `--root`, so twenty-four rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -304,6 +305,7 @@ var gates = []Gate{
 	// business; handing it a subtree would silently halve what it checks.
 	{Extension: "setup-go-sole-site", New: setupgosite.Cmd},
 	{Extension: "reusable-workflow-caller-permissions", New: callerperms.Cmd},
+	{Extension: "workflow-injection", New: runinjection.Cmd},
 
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},

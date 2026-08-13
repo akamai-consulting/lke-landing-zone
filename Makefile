@@ -150,6 +150,7 @@ COVERAGE_MINS := \
 	internal/cli/deps=41 \
 	internal/extensions/lifecycle/brownfield=80 \
 	internal/extensions/guards/callerperms=85 \
+	internal/extensions/guards/runinjection=92 \
 	internal/extensions/guards/budget=87 \
 	internal/extensions/guards/chartguard=71 \
 	internal/shared/cli=98 \

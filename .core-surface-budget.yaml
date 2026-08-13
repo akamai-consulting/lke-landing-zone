@@ -1359,7 +1359,13 @@ categories:
     # internal/extensions/assertions/templatecommit under unit tests, which is the
     # split ADR 0013 asks for. It exists because a release published a `:vX.Y.Z`
     # image tag nothing could pull (v0.0.44) — the preflight that stops it.
-    budget: 1949
+    #   1,951 / 113 files  +2 registering `workflow-injection`: an import and an
+    #                       AddCommand, the usual cost of a gate. The gate itself
+    #                       is guards/runinjection. It closes a class nothing in
+    #                       the tree detected: actionlint exits 0 on
+    #                       `${{ inputs.x }}` inside a run: script, measured, and
+    #                       four such interpolations were live when it was written.
+    budget: 1951
     exact: true
     include:
       - "tools/internal/cli/*.go"

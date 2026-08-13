@@ -23,6 +23,12 @@ on:
       - 'Makefile'
       - 'tools/**'
       - '.github/workflows/**'
+      # The FIRST-PARTY composite actions. instance-template/.github/** covers the
+      # delivered copies but nothing covered these, so a PR touching only
+      # .github/actions/ started no run — and workflow-injection scans that root.
+      # Same omission as platform-apl below, found the same way: by asking which
+      # path starts the workflow rather than which gate reads the file.
+      - '.github/actions/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
@@ -70,6 +76,12 @@ on:
       - 'Makefile'
       - 'tools/**'
       - '.github/workflows/**'
+      # The FIRST-PARTY composite actions. instance-template/.github/** covers the
+      # delivered copies but nothing covered these, so a PR touching only
+      # .github/actions/ started no run — and workflow-injection scans that root.
+      # Same omission as platform-apl below, found the same way: by asking which
+      # path starts the workflow rather than which gate reads the file.
+      - '.github/actions/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
@@ -657,3 +669,15 @@ jobs:
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
+
+      # Guard: no externally-supplied expression may be interpolated into a run:
+      # script. HERE, NOT IN `llz-gates`, and the placement is the whole point —
+      # the Kubernetes job that runs `llz ci gates` is skipped for FORK pull
+      # requests, which is exactly the population this guard's threat model is
+      # about. A fork PR is how an attacker-chosen branch name or PR title reaches
+      # a workflow in the first place, so a guard that cannot run on one is not
+      # protecting against the case it exists for. Same reasoning, and the same
+      # relocation, as the shell-default guard above.
+      - name: Workflow run-interpolation guard
+        working-directory: tools
+        run: go run ./cmd/llz ci workflow-injection --root ..
