@@ -108,7 +108,24 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	}
 	if len(missing) == 0 && len(repin) == 0 {
 		_ = WriteEnvFile(".llz/vars.env", vars)
-		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", color.Green("✓"))
+		// A DEAD CREDENTIAL IS NOT A GREEN RUN. This branch used to print the ✓ and
+		// return nil however the validity probe went, so a revoked-but-present token
+		// produced the dim "fix the invalid credential(s)" line, then a green
+		// "everything is set", then — because TokensCmd calls PrintNextSteps on a nil
+		// return — "Next steps: llz build". Three outputs, the last two contradicting
+		// the first, and exit 0 for a tool whose next step cannot work. `llz doctor`
+		// already errors in exactly this state (DoctorE2E's `invalid > 0` arm), and
+		// `llz up` chains tokens → doctor → build, so the disagreement only bought one
+		// more stage before the same stop.
+		//
+		// ONLY ON THIS PATH, deliberately. invalidN is measured before the interactive
+		// section; past this point the operator may have just pasted a replacement for
+		// the very token that probed dead, and failing on a stale measurement would
+		// reject the fix. Here nothing was prompted, so the measurement still holds.
+		if err := InvalidCredentialsError(invalidN, instanceRepo); err != nil {
+			return err
+		}
+		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo))
 		return nil
 	}
 	if o.DryRun {
@@ -401,8 +418,8 @@ func DoctorE2E(repo, env string, admin bool) error {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
 	}
-	if invalid > 0 {
-		return fmt.Errorf("%d probeable credential(s) are invalid — rotate them (see the validity report above)", invalid)
+	if err := InvalidCredentialsError(invalid, instanceRepo); err != nil {
+		return err
 	}
 	if pinErr != nil {
 		return pinErr
@@ -449,6 +466,80 @@ func repoSlug(repo string) string {
 		return strings.ToLower(name)
 	}
 	return strings.ToLower(repo)
+}
+
+// InvalidCredentialsError is the single refusal `llz tokens` and `llz doctor`
+// both return when the validity probe found present-but-dead credentials. nil
+// when there are none, so callers can `if err := ...; err != nil`.
+//
+// ONE FUNCTION BECAUSE THE TWO COMMANDS DISAGREED. `llz doctor` errored on
+// invalid > 0; `llz tokens`, on the path where nothing is missing, printed the
+// dim "fix the invalid credential(s)" line and then returned nil anyway — which
+// TokensCmd reads as success and answers with "Next steps: llz build". Same
+// probe, same instance, same moment, opposite verdicts, and the one that exits 0
+// is the one an operator runs first. Restating the rule in both places is what
+// let them drift; there is now one place to change and one place to test.
+func InvalidCredentialsError(n int, repo string) error {
+	if n <= 0 {
+		return nil
+	}
+	return fmt.Errorf("%d probeable credential(s) on %s are invalid — rotate them (see the validity report above)", n, repo)
+}
+
+// NothingToProvisionNote is what `llz tokens` says when it finds every required
+// credential already accounted for — and, load-bearingly, what it says NEXT.
+//
+// THE OLD TEXT WAS "Everything required for e2e is already set — nothing to
+// do.", and it misled the one operator most likely to reach it, twice.
+//
+// It named `e2e` no matter what --env was passed — the template's own throwaway
+// lane, not the adopter's deployment. That is the same misdirection
+// DefaultDoctorEnv() exists to remove one verb over (see cobra_root2.go), landing
+// here because this string was a constant rather than a format.
+//
+// The worse half is "nothing to do", which is a claim about THIS COMMAND that
+// reads as a claim about the REPO. The readiness behind it is envreq.Satisfied,
+// and that tests PRESENCE — a key in .llz/secrets.env, or a secret NAME on the
+// instance repo — never VALUE, because GitHub does not disclose a secret back.
+// So an operator who rotates a credential the obvious way, by editing
+// .llz/secrets.env, arrives here with everything "satisfied", is told there is
+// nothing to do, and RETURNS BEFORE pushToRepo. Their new value stays on their
+// laptop, CI keeps authenticating with the old one, and the failure surfaces
+// later as a 401 from a build that had no reason to be reading a stale token.
+// The command that would have shipped it — `llz secrets push` — is a sibling
+// verb nothing in this output mentions, so the operator has to already know the
+// answer to find it.
+//
+// Detecting the drift instead of announcing the route is not available: the
+// comparison that would find it is local value vs pushed value, and the pushed
+// half is precisely what the API withholds. Naming the command out loud is the
+// whole of the remedy, which is why it is unconditional here rather than gated
+// on some heuristic about whether the operator edited anything.
+//
+// IT NAMES THE CHECKOUT, NOT JUST THE COMMAND, because `llz secrets push` and
+// this command do not resolve their target the same way. RunTokens honours
+// --repo / .copier-answers.yml; PushSecrets builds its argv through
+// ghcli.SecretSetArgv / ghcli.VariableSetArgv, neither of which passes --repo, so
+// it pushes wherever `gh` infers the repo from the working directory. The two
+// agree for the ordinary case — an adopter in their instance checkout — and
+// diverge exactly when this note would otherwise be most confident: a --repo run,
+// and every --admin run, where RunTokens targets the example instance while the
+// working directory is the template. Advice that sends a full set of credentials
+// into the wrong repo is worse than no advice, and repeating the repo here is
+// what makes the sentence true in both modes.
+//
+// Both env files, not just secrets.env: this early return skips pushToRepo
+// entirely, so a hand-edited variable is dropped on the same floor. (Variables
+// alone WOULD be detectable — pushToRepo compares st.Value(k) != vars[k] — but it
+// never runs on this path, and `llz secrets push` re-pushes both files anyway.)
+func NothingToProvisionNote(env, repo string) string {
+	return fmt.Sprintf("Everything required for infra-%s is already set — nothing to provision.\n%s",
+		env, color.Dim(fmt.Sprintf(
+			"  This checks that each credential is PRESENT, not that its pushed value still matches\n"+
+				"  yours — GitHub never reads a secret back. Anything you edited in .llz/secrets.env or\n"+
+				"  .llz/vars.env by hand has NOT been pushed; send it with `llz secrets push %s --yes`,\n"+
+				"  run from a checkout of %s (that command pushes to the repo of the working\n"+
+				"  directory — it takes no --repo).", env, repo)))
 }
 
 // RepinPlanNote is the dry-run tail that keeps a repin-only run from reporting
