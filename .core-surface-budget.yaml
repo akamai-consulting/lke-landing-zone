@@ -1347,7 +1347,12 @@ categories:
     #                       import and a field) — the same omission, in a second
     #                       package, that killed the team-write lane. The literals
     #                       are now held by deps_literals_test.go.
-    budget: 1948
+    #   1,950 / 113 files  +2 registering `apply-drift`: an import and an
+    #                       AddCommand, the usual cost of a verb. The verb is
+    #                       extensions/assertions/applydrift — an ASSERTION, not a
+    #                       gate, because what was last applied is a fact about the
+    #                       forge rather than about this checkout.
+    budget: 1950
     exact: true
     include:
       - "tools/internal/cli/*.go"

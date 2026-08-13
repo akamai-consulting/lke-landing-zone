@@ -440,6 +440,59 @@ jobs:
   # ── Template drift ───────────────────────────────────────────────────────────
   # Its own job, not a step: monthly cron rather than daily/weekly, and no
   # `environment:` — it touches no cluster and no per-region secrets.
+  # ── Apply drift ─────────────────────────────────────────────────────────────
+  # A merged change reaches this cluster by three routes and only two are
+  # pull-based: the apl-overlay is git-synced by the in-cluster reconciler, and
+  # apl-values/<env>/manifest/** is pulled by Argo. TERRAFORM LANDS ON NOTHING —
+  # a push to main deliberately neither plans nor applies, and the apply is a
+  # workflow_dispatch a human fires. So a merged module-ref bump sits undeployed
+  # with nothing saying so. This says so.
+  #
+  # IT REPORTS, IT DOES NOT APPLY. promote.yml already walks the ranked
+  # deployments with a green gate between stages and per-stage environment
+  # approval; the gap was never that nothing can apply, it was that nobody knows
+  # they need to. Applying here would mean a second, weaker pipeline (and a PAT,
+  # and a run watcher) beside the one that exists.
+  #
+  # Weekly, with the health probes rather than monthly with the template drift:
+  # this tracks what has merged, which moves on a pull-request cadence.
+  apply-drift:
+    name: Apply drift (${{ matrix.deployment }})
+    needs: discover
+    if: >
+      needs.discover.outputs.deployments != '[]' &&
+      (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+      # The run history is how the last apply is found, and `actions: read` is
+      # what reads it. The CALLER must grant this too — a callee asking for more
+      # than its caller holds is a startup_failure with no jobs and no logs, which
+      # `llz ci reusable-workflow-caller-permissions` now checks per level.
+      actions: read
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        deployment: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    steps:
+      # FULL HISTORY: the comparison is against the commit the last apply ran
+      # from, which a shallow clone does not contain.
+      - name: Checkout the instance
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      # Reports rather than fails by default: a deployment being behind is
+      # ordinary between a merge and the next promotion. Dispatch with strict to
+      # make it a gate.
+      - name: Has a Terraform change merged that this deployment has not applied?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT: ${{ matrix.deployment }}
+        run: llz ci apply-drift --env "$DEPLOYMENT"
+
   template-drift:
     name: Template drift
     runs-on: ubuntu-latest

@@ -38,6 +38,18 @@ permissions:
 
 jobs:
   call:
+    # A job-level block REPLACES the workflow-level one, so this lists everything
+    # the callee's jobs ask for — including contents: read, which would otherwise
+    # be dropped. `actions: read` is the apply-drift job reading the run history
+    # to find each deployment's last successful apply.
+    #
+    # A callee asking for more than its caller holds is not a failed job: GitHub
+    # refuses to start the RUN, with no jobs, no logs and no annotations. `llz ci
+    # reusable-workflow-caller-permissions` checks this per level and caught this
+    # very line before CI did.
+    permissions:
+      contents: read
+      actions: read
     # Local reusable — the body ships in this repo and is re-rendered by
     # `llz upgrade`, so updates arrive as reviewable template-version PRs.
     # ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).

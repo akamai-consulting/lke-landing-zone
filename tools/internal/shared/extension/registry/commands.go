@@ -30,6 +30,7 @@ package registry
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/applydrift"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
@@ -251,6 +252,7 @@ var commands = []Command{
 	{"versionpins", versionpins.Cmd},
 	{"setupgosite", setupgosite.Cmd},
 	{"callerperms", callerperms.Cmd},
+	{"applydrift", applydrift.Cmd},
 	{"sourceref", sourceref.Cmd},
 	{"sourceref", sourceref.SymbolsCmd},
 	{"workflowshells", workflowshells.Cmd},

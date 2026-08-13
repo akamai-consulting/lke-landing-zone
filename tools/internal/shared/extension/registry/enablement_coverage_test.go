@@ -62,7 +62,11 @@ import (
 // spec component, and which an instance therefore cannot turn off. MEASURED, not
 // chosen.
 var componentless = map[string]bool{
-	"assert-identity":             true,
+	"assert-identity": true,
+	// No component: every deployment has Terraform, whichever spec components it
+	// enables — the question is about what has been APPLIED, not about what is
+	// installed.
+	"apply-drift":                 true,
 	"assert-network":              true,
 	"assert-objstore":             true,
 	"assert-platform":             true,

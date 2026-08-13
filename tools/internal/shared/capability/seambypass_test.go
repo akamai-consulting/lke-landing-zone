@@ -70,6 +70,13 @@ var seamCall = regexp.MustCompile(
 // interactive and long-lived cases the Writer's one-shot []byte shape cannot
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
+	// 1, and it runs `gh api` — never kubectl. It reads the workflow-run history to
+	// find each deployment's last successful apply, which is the only place the
+	// forge records that fact (the runs API does not expose a dispatch's inputs, so
+	// the JOB NAME is the per-deployment key). There is no handle for the forge
+	// yet; this entry is part of the measurement of what one would have to cover:
+	// API read, nothing else.
+	"applydrift":      1,
 	"assertsecrets":   2,
 	"clusteraccess":   1,
 	"healthsla":       1,

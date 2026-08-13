@@ -10,6 +10,7 @@ package cli
 
 import (
 	clideps "github.com/akamai-consulting/lke-landing-zone/tools/internal/cli/deps"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/applydrift"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertidentity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertnetwork"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertobs"
@@ -458,6 +459,7 @@ func ciCmd() *cobra.Command {
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(setupgosite.Cmd())
 	c.AddCommand(callerperms.Cmd())
+	c.AddCommand(applydrift.Cmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
 	// Scaffold update-class manifest gate (former check-template-manifest.sh).

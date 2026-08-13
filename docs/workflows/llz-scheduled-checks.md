@@ -20,6 +20,56 @@ debugging aids.
 
 ---
 
+## Apply drift — what has merged that a cluster has not applied
+
+A merged change reaches an instance's cluster by three routes, and only two are
+pull-based:
+
+| What moved | How it lands |
+|---|---|
+| `apl-values/_shared/apl-overlay/**` | the in-cluster reconciler git-syncs it |
+| `apl-values/<env>/manifest/**` | Argo pulls it |
+| `terraform-iac-bootstrap/**`, `landingzone.yaml`, `environments/**` | **nothing** |
+
+A push to `main` deliberately neither plans nor applies — `llz-terraform.yml`'s
+`push-noop-notice` job exists to say so — and the apply is a `workflow_dispatch` a
+human fires. So a merged module-ref bump sits undeployed with nothing reporting
+it. `llz ci apply-drift` reports it, weekly, per deployment.
+
+**It does not apply anything, and that is the design.** `promote.yml` already
+walks the ranked deployments with `needs:` as a green gate between stages and
+per-stage `environment:` approval. An earlier attempt built a second apply engine
+beside it — fanning out *alphabetically* with `fail-fast: false`, so it could
+apply prod before staging and would not stop on a failed dev — and needed a PAT,
+a run watcher and a relaxed apply guard to do it. The gap was never that nothing
+can apply; it was that nobody knows they need to.
+
+### How it knows what was last applied
+
+The runs API does not expose a dispatch's inputs, so the deployment cannot be read
+off the run. But `llz-terraform.yml` names its chained job
+`Bootstrap OpenBao (<deployment>)`, and job names *are* readable — that is the
+per-deployment key. Both API calls were run against a live repo before the verb
+was written.
+
+The match is on `(<deployment>)` rather than a bare substring, so a deployment
+called `prod` is not satisfied by `Bootstrap OpenBao (prod-web)`.
+
+### Everything unanswerable is an error
+
+"I could not find an apply" must never render as "nothing to apply", so each of
+these fails rather than passing:
+
+- no successful apply for this deployment in the scanned history — it may never
+  have been applied, or the history may not reach back that far
+- a run whose jobs cannot be read — it might *be* this deployment's last apply
+- `--env` omitted — a repo-wide answer would key off whichever deployment applied
+  most recently and call every other one up to date
+
+`apl-values/` is deliberately not counted as drift: it is already live by the time
+anyone looks, and a check that fires on every values commit is one people stop
+reading.
+
 ## Inputs and secrets
 
 ### `drift_branch`
