@@ -1,19 +1,30 @@
 # Design: the internal extension model — bindings and grants
 
-**Status:** **Partial** — Phases 1 and 2 landed, and Phase 2's acceptance criterion (a binding that
-RUNS from the registry) with them. Phase 1 is the declaration model (states, bindings, grants and
-their validation) in `tools/internal/shared/extension`. Phase 2 is **62 extensions across 61
-packages** — the set is not enumerated here, because a list beside the code it describes is the
-hand-maintained second copy this design exists to avoid. `llz extension list --verbose` is the
-listing, and it derives the package path from each declaration's constructor rather than
-transcribing it.
+**Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
+an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
+and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
+**64 extensions across 63 packages** declare **116 bindings** between them. The set is not enumerated
+here, because a list beside the code it describes is the hand-maintained second copy this design
+exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
+each declaration's constructor rather than transcribing it.
+
+**THE SCOPE WAS NARROWED TO GET HERE, and that is the honest part of this status line.** This design
+was once the front half of the whole decomposition programme, and carried the action ABI, a YAML
+manifest, a loader, ordering, and the remote half with it. Those are **not** specified here and are
+not deferred work *of this design* — see [Out of scope](#out-of-scope-and-where-it-is-tracked) for
+each one and why. The programme is tracked in issue #399.
+
+The narrowing is a claim worth checking rather than trusting: the decomposition target that motivated
+the programme has been **met**. Issue #399 aimed package `main` at ~3,000 lines from 41,803; the
+counted CLI surface is **1,954** today (`cli-wiring-layer` 1,948 + `cmd-llz-entrypoint` 6, both
+`exact: true`). What remains is framework for consumers that do not exist yet.
 
 **THE DECLARATIONS ARE NO LONGER INERT**, which is the sentence this block carried for far too long
 after it stopped being true. Three consumers read them today, and only one is dispatch:
 
 | consumer | what it does with a declaration |
 |---|---|
-| `registry/gates.go` | **RUNS** gate bindings — 24 of them. `llz ci gates` drives the whole set from the table there; `make llz-gates` is how CI calls it |
+| `registry/gates.go` | **RUNS** gate bindings — **26 rows**, covering 19 of the 21 extensions that declare one. A row is a *command*, so one extension can contribute several (`guard-manifests` has three). `llz ci gates` drives the whole table; `make llz-gates` is how CI calls it. The two that are not driven are declared undriven **with a reason** in the same file, not omitted |
 | `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 10 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in the cobra tree `internal/cli` builds |
 | `shared/capability` | builds the **handles** a binding's grants entitle it to — `capability.For`, `CloudFor`, `RepoForGate`. The grant IS the handle, so a binding declaring nothing is handed nothing |
 
@@ -22,10 +33,15 @@ are hand-wired into the cobra tree in `tools/internal/cli`; invariants are sched
 reconciler. So `Kind` is a real constraint for the validator and a real dispatch key for one kind,
 and saying so plainly beats a reader inferring otherwise from the model's symmetry.
 
-Still absent: the action ABI, the YAML manifest, the remote half, and **the driver** — nothing
-evaluates a required set and names a state. Phase 1 replaces the `kind: check|tool` capability
-ceiling from PR #15 (closed); the rest of that design is not contradicted here, only re-sequenced,
-and is tracked in issue #399.
+**One gap is real, and calling it out-of-scope does not make it smaller.** Nothing evaluates a
+required set and names a state, so `verified` and `operating` — the two spine states not entered by
+acting — are vocabulary that bindings attach to rather than stations an instance is ever declared to
+have reached. The lifecycle spine is **descriptive here, not operational**. That is the driver's job,
+it is the one absent piece with real pull, and it is the reason this document is scoped to
+declaration rather than to running the machine.
+
+This design replaces the `kind: check|tool` capability ceiling from PR #15 (closed); the rest of that
+design is not contradicted here, only re-sequenced, and is tracked in issue #399.
 
 **ALL TEN STATES** — `promoted` was the last, taken by `promote-pipeline` — and `seeded`, the group
 the old ceiling banned by omission — **ALL NINE grants**, both values of `Always`, multi-binding
@@ -190,8 +206,9 @@ evidence is [the catalog](internal-extensions.md); the budget it serves is [ADR
 - [What changed, and why](#what-changed-and-why)
 - [The model](#the-model)
 - [Anatomy of an extension](#anatomy-of-an-extension)
-- [What is deliberately absent](#what-is-deliberately-absent)
-- [Ordering](#ordering)
+- [How the directory and the code support the model](#how-the-directory-and-the-code-support-the-model)
+- [Out of scope, and where it is tracked](#out-of-scope-and-where-it-is-tracked)
+- [What comes next](#what-comes-next)
 
 <!-- /toc -->
 
@@ -377,15 +394,27 @@ would have nowhere to put either.
 the catalog's most valuable split. It does not — the split happened before this design existed. The
 rule is unchanged; the evidence for it is stronger as a precedent than it was as a proposal.)
 
-An extension may carry **several bindings**, which is how the catalog's strongest structural signal
-gets expressed: `harbor-provisioner` ↔ `assert-registry`, `database-provisioner` ↔
-`assert-database`, `keycloak-provisioner` ↔ `assert-identity`, `reconciler-runtime` ↔
-`assert-reconciler`. A capability and its assertion enable and disable together; making them one
-extension with two bindings removes the possibility of them drifting out of step. The catalog
-predicted this would pull the count from ~57 down toward ~49; it did not — the set is **62**, because
-extraction kept finding capabilities the catalog had folded into a neighbour. Pairing did its job
-(`database-provisioner` carries `assert-database` as a third binding rather than existing twice); the
-population simply turned out larger than the survey.
+An extension may carry **several bindings** — 116 across the 64. The catalog read the
+capability/assertion pair as its strongest structural signal (`harbor-provisioner` ↔
+`assert-registry`, `database-provisioner` ↔ its admin check, `reconciler-runtime` ↔
+`assert-reconciler`) and predicted that merging each pair into one two-binding extension would pull
+the count from ~57 down toward ~49.
+
+**Neither half of that prediction held, and the second is the correction worth recording.** The set
+is **64**, not ~49, because extraction kept finding capabilities the catalog had folded into a
+neighbour. And merging is no longer the recommended shape: of the catalogued pairs, only
+`database-provisioner` merged — it carries `admin-usable` (`assertion:verified`) beside its two
+seeding transitions. `harbor-provisioner`/`assert-registry` and
+`reconciler-runtime`/`assert-reconciler` deliberately stayed **two extensions each**, and
+`assert-registry`'s header states the reason: *the merged grant line is the union*. The provisioner
+holds `cloud-mutate` and `secret-custody` to MINT a robot; the assertion holds `cluster-read` and
+`secret-read` to USE one. Nothing in the union would be true of either half, and a reviewer reading
+one grant line would see a capability neither binding actually wants.
+
+So the drift-out-of-step problem the pairing was meant to solve is solved by **`Component`, not by
+co-residence**: both harbor extensions name `harbor`, both reconciler extensions name
+`llzReconciler`, and `registry.EnabledFor` enables and disables them together. Merging remains
+correct where the halves share a grant line honestly, as `database-provisioner` does.
 
 ### Grants
 
@@ -442,7 +471,7 @@ Plus the structural rules: kebab-case unique names, at least one binding, closed
 duplicate bindings or grants.
 
 **Repeated attachments carry a name.** `operating` is the only state an invariant may attach to, so
-without one an extension could hold exactly a single invariant — and `reconcile-actions` is eight lanes,
+without one an extension could hold exactly a single invariant — and `reconcile-actions` is five lanes,
 whose needs genuinely differ (the token restorers place credential material; the storage-class
 demoter only writes to the cluster). Collapsing them into one binding widens its grants to the union,
 which is the over-granting that scoping grants *per binding* was introduced to prevent. The name is
@@ -483,8 +512,8 @@ restore it, and two callers cannot hold different capability sets at once. An ac
 each binding its own handle at dispatch time — exactly the thing package-level installation cannot
 do. `tools/internal/cli/ci_converge.go` is the hand-written version of that dispatch.
 
-*The case AGAINST, made by the first dispatch that actually shipped.* `registry/gates.go` drives 24
-gate bindings and needs no ABI: each binding acquires its capability by looking **itself** up from
+*The case AGAINST, made by the first dispatch that actually shipped.* `registry/gates.go` drives 26
+gate rows and needs no ABI: each binding acquires its capability by looking **itself** up from
 its own declaration at the point of use (`capability.RepoForGate` and the accessors beside it), and
 the driver passes nothing but flags. Self-service turned out to do something a dispatcher cannot —
 `teardown` narrows itself to a read-only handle from `--dry-run` at RUNTIME, after flags are parsed,
@@ -540,28 +569,31 @@ The simplest — one binding, one grant, nothing to argue about:
 
 | | `guard-budgets` |
 |---|---|
-| bindings | `gate:configured` |
+| bindings | `gate:scaffolded` (unnamed — there is only one) |
 | grants | `read-repo` |
 | always | yes |
 | why it validates | a gate may hold only `read-repo`, and it holds exactly that |
 
-The pairing pattern — one extension, two bindings, each scoped separately. The capability and its
-assertion enable and disable together, so they are one extension rather than two kept in step by hand:
+(It contributes **two** rows to `registry/gates.go` — `core-surface` and `untestable-loc` — off that
+single binding. A row is a command; the binding is the thing the ceiling judges.)
 
-| | `harbor-provisioner` |
+The multi-binding pattern — one extension, three bindings, each scoped separately. This is the one
+catalogued capability/assertion pair that genuinely merged, because each half's grants stay its own:
+
+| | `database-provisioner` |
 |---|---|
-| bindings | `transition:seeded` · `assertion:verified` |
-| grants | `secret-custody` (on the transition) · `cluster-read` (on the assertion) |
+| bindings | `transition:seeded` "seed-admin" · `transition:seeded` "rotate-admin" · `assertion:verified` "admin-usable" |
+| grants | `cloud-read` + `secret-custody` · `cloud-mutate` + `secret-custody` · `cloud-read` + `secret-read` |
 | always | no |
-| why it validates | the seeded transition declares the custody that transition is *defined* by; the assertion stays read-only |
+| why it validates | both seeded transitions declare the custody that state is *defined* by; the assertion stays read-only. Two same-`kind:state` attachments are legal because they are **named** |
 
-The acid test — the action and the predicate separated. `health.go` fuses them today; under this
-model they come apart, which is why an `assertion` must be allowed to target `converged`:
+The acid test — the action and the predicate separated, which is why an `assertion` must be allowed
+to target `converged`:
 
 | | `converge` |
 |---|---|
-| bindings | `transition:converged` (the action) · `assertion:converged` (health, the predicate) |
-| grants | `cluster-read` + `cluster-write` · `cluster-read` |
+| bindings | `transition:converged` "drive" (the action) · `assertion:converged` "health" · `assertion:converged` "health-incluster" |
+| grants | `cluster-read` + `cluster-write` · `cluster-read` · `cluster-read` |
 | always | yes |
 | why it matters | if assertions could only target `verified`, this split would have nowhere to land |
 
@@ -593,7 +625,88 @@ gate:configured[read-repo] + transition:seeded[secret-custody]
 That pair was once *unsatisfiable*: one rule demanded `secret-custody`, another forbade anything but
 `read-repo`, and no edit satisfied both. Per-binding scoping dissolves it.
 
-## What is deliberately absent
+## How the directory and the code support the model
+
+The model is held up by **where a package sits** as much as by what it declares. Four structural
+rules do that work, each pinned by a test, and each added after the rule had already been broken.
+
+The arithmetic ties the tree to the registry exactly, and is worth re-deriving from a fresh clone
+rather than trusting this table:
+
+| bucket | packages | declarations |
+|---|---|---|
+| `internal/extensions/guards/` | 18 | 18 |
+| `internal/extensions/assertions/` | 17 | 17 |
+| `internal/extensions/lifecycle/` | 28 | **29** — `credrotate` is the one package declaring two |
+| **total** | **63** | **64** |
+
+Nothing outside `internal/extensions/` declares. (`internal/cli/extension.go` is the `llz extension
+list` command, not a declaration.)
+
+```
+tools/
+├── cmd/llz/                     a six-line entry point, capped by the `cmd-llz-entrypoint` budget
+└── internal/
+    ├── shared/extension/        THE MODEL — State, BindingKind, Grant, Binding, Validate()
+    │   └── registry/
+    │       ├── gates.go         the 26-row gate table, plus the `undriven` map and its reasons
+    │       ├── enablement.go    EnabledFor — resolves spec.components into the enabled set
+    │       └── commands.go      extension → cobra constructors, BY FUNCTION REFERENCE
+    ├── shared/capability/       grants → handles (For, CloudFor, RepoForGate)
+    ├── shared/…                 59 substrate packages; none may import an extension
+    ├── extensions/
+    │   ├── guards/<name>/       extension.go + the guard — blocks a change
+    │   ├── assertions/<name>/   extension.go + the lane  — produces a verdict
+    │   └── lifecycle/<name>/    extension.go + the action — moves or holds the platform
+    ├── verbs/                   10 packages of dev tooling that may NOT declare
+    └── cli/                     the composition root — builds the cobra tree, installs Deps
+```
+
+### The four structural rules
+
+| rule | test | the drift it was written after |
+|---|---|---|
+| a package's **bucket** must agree with its declaration | `TestBucketAgreesWithDeclaration` | `assert-objstore` sat in `assertions/` while declaring only `transition:converged[cloud-mutate]`. It had been filed by its **name prefix** — the third time that same mistake was made |
+| `internal/shared` may not import `internal/extensions` | `TestSharedPackagesDoNotImportExtensions` | had already drifted **four times**, always the same way: a general helper written inside whichever extension needed it first, then imported downward instead of moved |
+| no extension may import a peer | `TestNoNewExtensionToExtensionImports` | 41 of 75 extensions imported one. `assert-objstore` was undisableable *at compile time* because four peers imported `objenc` — the headline `Always`-is-a-default promise, undeliverable, and no declaration recorded it. **14 allowed edges remain**, each one a package that should probably be split |
+| `internal/verbs` may not declare | `TestVerbsDoNotDeclareExtensions` | the verbs were extensions once. An extension is a thing an instance can HAVE or NOT HAVE; nobody ships an instance with `lint` disabled |
+
+The third is a **ratchet in both directions** — an allowance that no longer corresponds to a real
+edge fails too, because stale slack is what the next change spends without anyone deciding to.
+
+### The composition root
+
+`internal/cli` is where declarations become a running binary, and it is the seam that has produced
+the most defects — not because the wiring is hard, but because **a missing wire is silent**. Each of
+these is now a source-scanning coupling test rather than something a reviewer has to notice:
+
+| what could go missing | test |
+|---|---|
+| an extension's `Init()` is never called, so its commands never register | `TestEveryExtensionInitIsCalled` |
+| a `Deps` struct literal omits a func field — and `Install` REPLACES the struct wholesale, so the omission is `nil`, not the package's fail-closed default | `TestEveryDepsLiteralSetsEveryFuncField` |
+| a sentinel seam (`"not installed"`, `"never wired"`) is declared and never assigned | `TestEverySentinelSeamIsWired` |
+| a gate the driver runs holds more than `read-repo` | `TestEveryDrivenGateIsReadRepoOnly` |
+| this document's `grantStates` table drifts from the code | `TestDesignDocGrantStatesMatchesTheCode` |
+| the grant-distribution counts above drift from the registry | `TestHandleHeaderCensusesMatchTheRegistry` |
+
+The `Deps` one is the sharpest illustration of why the model needs enforcement in code rather than
+convention: the same omission shipped **twice**, in two packages, and both times the symptom was a
+segfault in a live e2e run, arbitrarily far from the line that omitted the field.
+
+## Out of scope, and where it is tracked
+
+Each of these was once in this design's scope and is no longer. The arguments are kept in full
+because they are the reason for the boundary, not an apology for it — and because three of the five
+carry a live argument that they may never be worth building.
+
+| piece | why it is not here | tracked |
+|---|---|---|
+| action ABI | the case for it **weakened** after gates shipped — self-service works | #399 |
+| YAML manifest | serves the externalisable minority; no external extension exists | #399 |
+| loader | every declaration is compiled in, and nothing has asked to read one from elsewhere | #399 |
+| ordering | nothing sequences bindings against each other, and nothing has needed to | #399 |
+| remote half | serves at most the argv-shaped minority, none of the in-process majority | #399 |
+| **the driver** | **a real gap, not a deferral** — it is what would make the spine operational | **#419** |
 
 **The action ABI.** How an extension's Go entry point receives a cluster client, a credential handle
 or a render context is not defined here. No consumer needs one yet — the one driver that ships
@@ -614,16 +727,19 @@ mean designing the schema against zero external extensions.
 
 **The loader and ordering** — but *not* the registry or enablement, which **landed** and are
 described in the status block above. The catalog sized this at ~45–55 internal extensions and the set
-is now 62, so anything built here is built for dozens. `Always` is a **default**, not a constant:
+is now 64, so anything built here is built for dozens. `Always` is a **default**, not a constant:
 `llz ci assert-suite` is called from three places in `instance-template/`, so an instance with no
 object storage must be able to turn `assert-objstore` off in its own configuration rather than by
 taking a different build — `registry.EnabledFor` is what delivers that today, and 10 extensions name
-the component they follow. What is still missing is **ordering** (nothing sequences bindings against
-each other) and a **loader** (every declaration is compiled in; none is read from anywhere).
+the component they follow. Neither **ordering** (nothing sequences bindings against each other) nor a
+**loader** (every declaration is compiled in; none is read from anywhere) exists, and in both cases
+nothing has yet asked for one — which is why they sit in #399 rather than here.
 
-**The driver, and what advances the last two spine states.** Five of the seven are entered by acting;
-`verified` and `operating` are not, and naming them is the driver's job. Two decisions already
-constrain it (both recorded in [the catalog](internal-extensions.md#decisions)):
+**The driver, and what advances the last two spine states.** This is the one entry in the table above
+that is a gap rather than a boundary, and it is tracked in issue #419. Five of the
+seven spine states are entered by acting; `verified` and `operating` are not, and naming them is the
+driver's job. Two decisions already constrain it (both recorded in
+[the catalog](internal-extensions.md#decisions)), and together they are most of its specification:
 
 - **`llz state` recomputes with a freshness window.** Cheap predicates evaluate every time; the
   expensive ones reuse a recorded result inside a TTL and re-run past it. So every state needs a
@@ -635,14 +751,23 @@ constrain it (both recorded in [the catalog](internal-extensions.md#decisions)):
   state reached. The waiver's job is to make a skipped assertion visible and time-boxed rather than
   absorbed, which is what stops `verified` from meaning something different on every instance.
 
-## Ordering
+## What comes next
 
 The remote half of PR #15 — git-pinned `sources:`, digest lock, trust model, `extension sync` — can
 serve at most the externalisable minority and none of the majority that needs in-process Go. The half
 that unblocks 91% of the decomposition is this one, and the spike treated it as a later phase.
-Reversing that is the whole point of the re-sequencing.
+Reversing that was the whole point of the re-sequencing, and that reversal is what shipped.
 
 **The phased plan lives in issue #399**, with the catalog's first five as the forcing cases. It is
 not duplicated here: it carries per-slice line counts that move as `main` moves, and a copy in this
 document would drift silently — as an earlier copy already had, quoting `guard-budgets` at 646 lines
 when it had grown to 691.
+
+**If one thing is picked up next, it should be the driver** (issue #419), because it is the only
+absent piece with a consumer waiting: `llz state` is the command that would make the spine
+observable, and an
+unobserved state machine is a diagram. Concretely it needs a declared **cost** on each state's
+predicate, a recorded-result store with a freshness TTL that can say when it last actually looked, a
+core-held required-assertion set, and spec-level **waivers carrying a reason and an expiry**. The
+other four can wait for a consumer that may never arrive — and this document takes the position that
+waiting is correct, rather than building a framework against zero users.
