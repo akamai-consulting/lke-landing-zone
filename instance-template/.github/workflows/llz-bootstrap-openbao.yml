@@ -220,12 +220,16 @@ jobs:
         if: inputs.bootstrap_cluster
         env:
           APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          # The hint text is operator-facing prose, but instance_repo is an INPUT —
+          # interpolated it would sit inside a double-quoted shell string, one quote
+          # away from being syntax.
+          INSTANCE_REPO:               ${{ inputs.instance_repo }}
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
         run: |
           set -u
           FAIL=0
           llz ci require-secret APL_VALUES_REPO_TOKEN \
-            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
+            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/$INSTANCE_REPO.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
             --hint "Fine-grained PAT (github.com) scoped to this repo with Actions: write + Environments: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
@@ -307,13 +311,17 @@ jobs:
           # block-storage-retain StorageClass's lke<id> ownership tag. bootstrap-cluster
           # hard-fails if empty, so an un-reapable untagged class can never ship.
           LKE_CLUSTER_ID:        ${{ inputs.cluster_id }}
+          # An INPUT, so it goes through env: like every other one. cluster_id above
+          # is an input too and was already routed this way — this line was the
+          # exception, and an exception is what a reader stops noticing.
+          INSTANCE_REPO:         ${{ inputs.instance_repo }}
         run: |
           llz ci phase-mark apl-core-install
           llz ci bootstrap-cluster \
             --env "${REGION}" \
             --cluster-id "${LKE_CLUSTER_ID}" \
             --apps-repo-revision "${APPS_REPO_REVISION}" \
-            --instance-repo "${{ inputs.instance_repo }}"
+            --instance-repo "${INSTANCE_REPO}"
           llz ci phase-mark foundation-ready
 
       # The full-pool assert deferred from the split gate above: --tfvars reads

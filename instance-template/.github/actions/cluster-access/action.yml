@@ -62,7 +62,10 @@ inputs:
     required: false
     default: ${{ github.token }}
   kubeconfig-path:
-    description: Path to write the kubeconfig file ($HOME/$RUNNER_TEMP expand at run time).
+    description: >
+      Path to write the kubeconfig file. $HOME / $RUNNER_TEMP / $GITHUB_WORKSPACE are
+      expanded by llz, not by this action; any other variable, or an unset one,
+      is an error rather than a literal path.
     required: false
     default: $HOME/.kube/config
   allow-missing:

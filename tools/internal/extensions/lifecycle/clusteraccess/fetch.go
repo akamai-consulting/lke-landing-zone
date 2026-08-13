@@ -42,6 +42,13 @@ func RunFetch(o FetchOpts) error {
 	if o.Output == "" {
 		return fmt.Errorf("--output is required")
 	}
+	// Callers pass the LITERAL `$HOME/.kube/config` — GitHub expands nothing in a
+	// `with:` value. See pathvars.go for why this is here and not in the action.
+	resolved, err := resolvePath(o.Output, os.Getenv)
+	if err != nil {
+		return fmt.Errorf("--output: %w", err)
+	}
+	o.Output = resolved
 	token := firstNonEmpty(os.Getenv("LINODE_API_TOKEN"), os.Getenv("LINODE_TOKEN"))
 	if token == "" {
 		return fmt.Errorf("set LINODE_API_TOKEN (or LINODE_TOKEN) to a Linode PAT")

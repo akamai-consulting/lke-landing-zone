@@ -68,7 +68,7 @@ func FetchKubeconfigCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error { return RunFetch(o) },
 	}
 	f := c.Flags()
-	f.StringVar(&o.Output, "output", "", "absolute path to write the kubeconfig to (required)")
+	f.StringVar(&o.Output, "output", "", "path to write the kubeconfig to (required); $HOME, $RUNNER_TEMP and $GITHUB_WORKSPACE are expanded")
 	f.StringVar(&o.Ref.Region, "region", "", "deployment/env key (finds <region>.tfvars)")
 	f.StringVar(&o.Ref.ClusterID, "cluster-id", "", "explicit LKE cluster numeric ID (skips label resolution)")
 	f.StringVar(&o.Ref.ClusterLabel, "cluster-label", "", "LKE cluster label to resolve by")
@@ -98,7 +98,7 @@ func FetchKubeconfigStateCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment/env key, e.g. primary (required)")
-	c.Flags().StringVar(&output, "output", "", "absolute path to write the kubeconfig to (required)")
+	c.Flags().StringVar(&output, "output", "", "path to write the kubeconfig to (required); $HOME, $RUNNER_TEMP and $GITHUB_WORKSPACE are expanded")
 	c.Flags().BoolVar(&allowMissing, "allow-missing", false, "set available=false instead of failing when kubeconfig_raw is absent")
 	return c
 }

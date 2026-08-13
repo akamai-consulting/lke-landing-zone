@@ -107,6 +107,14 @@ func RunFetchFromState(d Deps, region, output string, allowMissing bool) error {
 	if region == "" || output == "" {
 		return fmt.Errorf("--region and --output are required")
 	}
+	// Same reason as RunFetch: the path arrives with $HOME unexpanded, and this
+	// function MkdirAll's its parent and then reports available=true — so an
+	// unexpanded path is a green step writing to a directory named `$HOME`.
+	resolvedOut, err := resolvePath(output, os.Getenv)
+	if err != nil {
+		return fmt.Errorf("--output: %w", err)
+	}
+	output = resolvedOut
 	bucket := os.Getenv("TF_STATE_BUCKET")
 	if bucket == "" {
 		return fmt.Errorf("TF_STATE_BUCKET must be set (the S3 state bucket)")

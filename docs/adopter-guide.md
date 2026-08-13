@@ -239,6 +239,22 @@ copier update --trust --vcs-ref v0.0.39 -d llz_version=v0.0.39
 > `gh variable set` commands when it detects the skew; `llz tokens --env <env>
 > --yes` applies them for you. Leave it and the next pipeline run fails
 > `llz ci assert-image-fresh` — loudly and with the same fix, but 20 minutes in.
+>
+> **Vendored actions and the image move together.** The `.github/actions/*`
+> bodies an upgrade delivers may depend on behaviour added to `llz` in the same
+> release — the kubeconfig actions do: they hand `llz` a `$HOME/...` path and
+> rely on it to expand, where an older binary treats it as a literal directory
+> name. A new action against an old `TF_IMAGE` is therefore not merely stale, and
+> the current `llz` fails loudly on that path rather than writing somewhere
+> wrong. Re-pin in the same change as the upgrade, not after the next red run.
+>
+> **Only three variables expand in a `kubeconfig-path`.** `$HOME`,
+> `$RUNNER_TEMP` and `$GITHUB_WORKSPACE`. The expansion used to be an accident of
+> shell interpolation, which expanded anything — so if you customised the path to
+> use some other variable (`$GITHUB_ACTION_PATH`, a `${VAR:-default}` form), the
+> step now FAILS with the unresolved text rather than writing to a directory of
+> that literal name. The list is closed on purpose: expanding everything would let
+> a path read arbitrary runner environment, which is where GitHub puts secrets.
 
 Copier re-renders the old and new template versions and applies only the delta,
 so your local edits survive — conflicts appear (as `.rej`/merge markers) **only**
