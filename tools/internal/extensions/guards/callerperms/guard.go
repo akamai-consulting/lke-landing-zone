@@ -90,12 +90,42 @@ func parsePermissions(v any) (perms, bool) {
 	return nil, false
 }
 
-// holdsWrite reports whether p grants write on scope, honouring write-all.
-func (p perms) holdsWrite(scope string) bool {
-	if p["*"] == "write" {
-		return true
+// rank orders the three levels GitHub recognises, so "does the caller cover the
+// callee" is a comparison rather than a special case per level.
+//
+// THIS USED TO BE A holdsWrite BOOLEAN, and the gap it left is the one this guard
+// exists to close. GitHub validates the ceiling for EVERY level, not only write:
+// a callee job asking `pull-requests: read` under a caller holding
+// `contents: read` is `pull-requests: none` vs `read`, which fails the run at
+// startup exactly as a write escalation does. Checking only `level == "write"`
+// meant a read escalation printed "OK — N local reusable call(s) cover their
+// callee" while every dispatch of that pipeline died with no jobs and no logs.
+//
+// FOUND ON A REAL CHANGE, not by inspection: a feature branch added a job to
+// llz-terraform.yml asking for `pull-requests: read` (it wanted the pulls API).
+// Every caller of that reusable — terraform.yml's `call:` job and all three
+// promote.yml stages — holds `contents: read`, so PR plans, dispatched applies
+// and promotions alike would have become startup_failures. This guard, whose
+// entire purpose is that class, printed OK.
+func rank(level string) int {
+	switch level {
+	case "write":
+		return 2
+	case "read":
+		return 1
+	default:
+		return 0
 	}
-	return p[scope] == "write"
+}
+
+// holds reports whether p grants at least want on scope, honouring the
+// read-all / write-all wildcards.
+func (p perms) holds(scope, want string) bool {
+	have := p[scope]
+	if w, ok := p["*"]; ok && rank(w) > rank(have) {
+		have = w
+	}
+	return rank(have) >= rank(want)
 }
 
 // Finding is one caller job that cannot cover its callee.
@@ -170,8 +200,9 @@ func Run(root string, out, errOut io.Writer) error {
 			need := calleeUnion(cw)
 			var missing []string
 			for scope, level := range need {
-				if level == "write" && !caller.holdsWrite(scope) {
-					missing = append(missing, scope)
+				// `none` is not an ask, so it can never be an escalation.
+				if rank(level) > 0 && !caller.holds(scope, level) {
+					missing = append(missing, fmt.Sprintf("%s: %s", scope, level))
 				}
 			}
 			if len(missing) > 0 {
@@ -224,7 +255,12 @@ func calleeUnion(w workflow) perms {
 			jp = p
 		}
 		for scope, level := range jp {
-			if u[scope] != "write" {
+			// BY RANK, NOT BY STRING. `u[scope] != "write"` let a later job's
+			// explicit `none` overwrite an earlier job's `read`, so what the union
+			// reported depended on Go's map iteration order — the same read level
+			// this guard was just taught to check could vanish before it was
+			// compared. The union is the WIDEST ask across the callee's jobs.
+			if rank(level) > rank(u[scope]) {
 				u[scope] = level
 			}
 		}
