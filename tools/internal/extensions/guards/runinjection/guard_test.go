@@ -236,8 +236,9 @@ func TestFlagsTheBranchNameContexts(t *testing.T) {
 
 func TestScansCompositeActions(t *testing.T) {
 	// A composite action holds its steps under `runs:`, not `jobs:` — so scanning
-	// only workflows printed OK over seven live sites, one of them reachable from
-	// a workflow_call input (breakglass → cluster-access → fetch-kubeconfig).
+	// only workflows saw 5 of the 11 live interpolations and missed 6, including
+	// the one reachable from a workflow_call input (breakglass → cluster-access →
+	// fetch-kubeconfig).
 	f := Scan("action.yml", parse(t, `
 runs:
   using: composite
@@ -488,7 +489,7 @@ func TestADeliveredTreeThatMovedIsAFailureNotAQuietPass(t *testing.T) {
 	// The absence is LEGITIMATE in an instance checkout, which has no
 	// instance-template/ at all — that must still pass, or the guard cannot run
 	// where half the value is. It DOES carry .github/actions: the managed lock
-	// delivers seven composite actions to every instance, so the fixture has one.
+	// delivers six composite actions to every instance, so the fixture has one.
 	inst := t.TempDir()
 	iwf := filepath.Join(inst, ".github", "workflows")
 	iact := filepath.Join(inst, ".github", "actions", "cluster-access")
@@ -984,10 +985,19 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
 	// Split into jobs by top-level (2-space) keys under jobs:.
+	//
+	// COMMENT LINES ARE DROPPED FIRST, and that is not tidiness. The check is a
+	// substring match over the job body, so before this the fork condition could
+	// not be DESCRIBED in a comment inside the job it applies to — documenting the
+	// property failed the test that holds it, which is a gate that punishes the
+	// thing it exists to encourage. It read prose as configuration.
 	type job struct{ name, body string }
 	var jobs []job
 	var cur *job
 	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
 		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasSuffix(strings.TrimSpace(line), ":") {
 			jobs = append(jobs, job{name: strings.TrimSpace(line)})
 			cur = &jobs[len(jobs)-1]
@@ -1000,16 +1010,26 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	forkGate := "head.repo.full_name == github.repository"
+	// EVERY SPELLING OF THE SAME SKIP, because one of them was all this checked and
+	// the condition has three equivalent forms. Reversing the operands or asking
+	// `.fork` instead is the same exclusion written differently, and would have
+	// re-opened the hole under a passing test.
+	forkGates := []string{
+		"head.repo.full_name == github.repository",
+		"github.repository == github.event.pull_request.head.repo.full_name",
+		"head.repo.fork",
+	}
 	found := false
 	for _, j := range jobs {
 		if !strings.Contains(j.body, "ci workflow-injection") {
 			continue
 		}
 		found = true
-		if strings.Contains(j.body, forkGate) {
-			t.Errorf("job %s runs workflow-injection but is skipped for fork PRs — "+
-				"the population the guard exists for", j.name)
+		for _, g := range forkGates {
+			if strings.Contains(j.body, g) {
+				t.Errorf("job %s runs workflow-injection but is skipped for fork PRs (%s) — "+
+					"the population the guard exists for", j.name, g)
+			}
 		}
 	}
 	if !found {
