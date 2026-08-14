@@ -20,7 +20,10 @@ func Cmd() *cobra.Command {
 			"opened the pull request.\n\n" +
 			"The fix is always the same — move it to `env:`, where the shell expands it after\n" +
 			"parsing and it cannot become syntax.\n\n" +
-			"NOT COVERED BY actionlint: measured, it exits 0 on this shape.",
+			"A SUPERSET OF actionlint, not a duplicate of it: measured, actionlint flags\n" +
+			"its own untrusted-input list (github.head_ref, the event title/body fields) and\n" +
+			"exits 0 on inputs.*, github.event.inputs.*, toJSON(github) and anything routed\n" +
+			"through env: from one of those — which is the half every site found here was in.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return Run(root, cmd.OutOrStdout(), cmd.ErrOrStderr())

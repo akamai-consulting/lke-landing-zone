@@ -1361,10 +1361,12 @@ categories:
     # image tag nothing could pull (v0.0.44) — the preflight that stops it.
     #   1,951 / 113 files  +2 registering `workflow-injection`: an import and an
     #                       AddCommand, the usual cost of a gate. The gate itself
-    #                       is guards/runinjection. It closes a class nothing in
-    #                       the tree detected: actionlint exits 0 on
-    #                       `${{ inputs.x }}` inside a run: script, measured, and
-    #                       four such interpolations were live when it was written.
+    #                       is guards/runinjection. It closes the half of the class
+    #                       nothing in the tree detected: actionlint exits 0 on
+    #                       `${{ inputs.x }}` inside a run: script (measured on the
+    #                       pinned v1.7.7), and eleven such interpolations, across
+    #                       seven run: blocks in six files, were live one commit
+    #                       earlier.
     #   1,961 / 113 files  +10 for `llz env pipeline --require-pipeline` and the
     #                       richer return the check needed. Four of them are the
     #                       adapter that keeps `environments.SyncPromoteWorkflow`

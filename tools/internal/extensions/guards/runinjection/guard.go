@@ -18,8 +18,20 @@ package runinjection
 // contents:write, pull-requests:write and workflows:write. And this guard's own
 // first justification was wrong in a way worth recording: the claim was that
 // actionlint does not scan instance-template/. Measured, it does (instance-test
-// lints the rendered instance) — AND actionlint exits 0 on the injection anyway.
-// Nothing in this repo detected the class, in either tree.
+// lints the rendered instance).
+//
+// WHAT actionlint ACTUALLY COVERS — measured on the pinned v1.7.7 and on v1.7.12,
+// identically, and unchanged by `-shellcheck=` (its shellcheck integration
+// substitutes a placeholder for the expression, so shellcheck reads the script
+// AFTER substitution and the injection is gone by the time it looks). It exits 1
+// on its own untrusted-input list: `github.head_ref`, `github.event.*.title`,
+// `github.event.*.body`, `github.event.comment.body`, and the `github['event'][…]`
+// bracket spelling of them. It exits 0 on `inputs.*`, `github.event.inputs.*`,
+// `github.ref_name`, `toJSON(github)`, `toJSON(github.event)`, and on any value
+// laundered through `env:` from one of those. So this guard is a SUPERSET, not a
+// replacement — and the half it adds is exactly the half every site remediated in
+// the preceding commit was in: all eleven interpolations were `inputs.*`, over
+// which actionlint had been passing for as long as they were there.
 //
 // SCOPE: `inputs.*` and `github.event.*` only, which is the unambiguous half.
 // Those are set by whoever dispatches or calls the workflow, and by whoever opens
@@ -29,10 +41,13 @@ package runinjection
 // under another name, so the taint is decided per job rather than by the tier —
 // see externallyBuiltMatrix. `needs.*.outputs.*` and
 // `steps.*.outputs.*` are a real second tier (a step that echoes external data
-// launders it into an output) and are deliberately NOT flagged yet: there are
-// seven such sites today, all producing values this repo computes, and widening
-// the rule to them belongs in its own change with its own paydown rather than
-// riding along here.
+// launders it into an output) and are deliberately NOT flagged yet: six such
+// references across five run: blocks today, and each was traced to a repo-computed
+// producer before this was written — `llz ci rotation-plan` renders a Go bool, not
+// the dispatch input it reads; `llz env resolve` and `llz env vpc` emit names out
+// of the instance spec. Nothing enforces that, which is the debt: widening the
+// rule belongs in its own change with its own paydown rather than riding along
+// here.
 
 import (
 	"errors"
@@ -55,13 +70,17 @@ import (
 // adopter's, and the real instance of this bug was in exactly that tree.
 var scanRoots = []string{
 	".github/workflows", "instance-template/.github/workflows",
-	// COMPOSITE ACTIONS TOO. The first cut scanned only the workflow trees and
-	// printed OK over seven live sites, five of them delivered — including a
-	// proven attacker-reachable path: llz-breakglass-openbao.yml takes a
-	// `workflow_call` input `region`, hands it to the cluster-access action, which
-	// hands it to fetch-kubeconfig, whose run: block does
-	// KUBE_REGION="${{ inputs.region }}". A guard that reports clean over the
-	// class it is named for is worse than no guard: it ends the search.
+	// COMPOSITE ACTIONS TOO, and the miss is measured rather than argued: replay
+	// the workflow-trees-only cut against the tree as it stood before the
+	// remediation and it reports 5 of the 11 interpolations and misses 6 — three
+	// whole sites, every one of them in an action. PARTIAL BLINDNESS, NOT SILENCE,
+	// which is the worse failure: a guard that names a class and returns findings
+	// reads as having enumerated it, so the three it cannot see are the three
+	// nobody goes looking for. One of them is the proven attacker-reachable path:
+	// llz-breakglass-openbao.yml takes a `workflow_call` input `region`, hands it
+	// to the cluster-access action, which hands it to fetch-kubeconfig, whose run:
+	// block did KUBE_REGION="${{ inputs.region }}" — three files from the trigger,
+	// and the only one of them a workflow-tree scan opens is the first.
 	".github/actions", "instance-template/.github/actions",
 }
 
@@ -480,8 +499,8 @@ func Run(root string, out, errOut io.Writer) error {
 			// not: the aggregate counts across ALL roots, and .github/workflows alone
 			// keeps it non-zero. .github/actions holds one file, so moving it printed
 			// a confident OK over 35 files having never read a first-party composite
-			// action, the same omission that made this guard's first cut report clean
-			// over seven live sites.
+			// action — the same omission that left this guard's first cut blind to
+			// three of the seven live sites.
 			//
 			// THREE CASES, THREE ANSWERS. Reporting "the delivered tree moved" for a
 			// root that is present and merely empty names the wrong cause, and a wrong
