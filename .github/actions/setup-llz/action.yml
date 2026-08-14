@@ -40,4 +40,9 @@ runs:
     - name: Build llz onto ${{ inputs.install-path }}
       if: inputs.install-path != ''
       shell: bash
-      run: mkdir -p "$(dirname "${{ inputs.install-path }}")" && cd tools && go build -buildvcs=false -o "${{ inputs.install-path }}" ./cmd/llz
+      env:
+        # Via env:, never interpolated into the script — see `llz ci
+        # workflow-injection`. The step NAME above may keep the expression: a name
+        # is not a shell.
+        INSTALL_PATH: ${{ inputs.install-path }}
+      run: mkdir -p "$(dirname "$INSTALL_PATH")" && cd tools && go build -buildvcs=false -o "$INSTALL_PATH" ./cmd/llz

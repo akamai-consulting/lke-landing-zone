@@ -56,6 +56,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
@@ -252,6 +253,7 @@ var commands = []Command{
 	{"versionpins", versionpins.Cmd},
 	{"setupgosite", setupgosite.Cmd},
 	{"callerperms", callerperms.Cmd},
+	{"runinjection", runinjection.Cmd},
 	{"sourceref", sourceref.Cmd},
 	{"sourceref", sourceref.SymbolsCmd},
 	{"workflowshells", workflowshells.Cmd},

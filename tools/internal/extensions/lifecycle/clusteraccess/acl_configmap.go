@@ -69,10 +69,13 @@ const runnerACLLeaseBudget = 90 * time.Second
 // Seams (overridden in tests).
 var (
 	// runnerACLKubectlFn runs kubectl with args, piping stdin, and returns the
-	// combined output. KUBECONFIG reaches kubectl through the inherited
-	// environment, set by the lke-runner-acl action when a kubeconfig is wired.
+	// combined output. KUBECONFIG comes from the lke-runner-acl action when a
+	// kubeconfig is wired, but NOT via the inherited environment any more — the
+	// child's env is rebuilt by runnerACLKubectlEnv, which resolves the shell
+	// variables the action used to expand with eval.
 	runnerACLKubectlFn = func(stdin string, args ...string) (string, error) {
 		cmd := exec.Command("kubectl", runnerACLKubectlArgv(args)...)
+		cmd.Env = runnerACLKubectlEnv(os.Environ())
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -373,4 +376,49 @@ func isNotFound(out string) bool {
 
 func isAlreadyExists(out string) bool {
 	return strings.Contains(out, "AlreadyExists") || strings.Contains(out, "already exists")
+}
+
+// runnerACLKubectlEnv is the environment the kubectl child runs with. Pure, and
+// separated from the exec seam FOR THE REASON THE FILE ALREADY GIVES ABOVE:
+// tests replace runnerACLKubectlFn wholesale, so anything inline in that closure
+// is never exercised. The first cut of this put the expansion inline and it was
+// invisible — deleting it left the package green, and since leaseOutcome always
+// returns nil the regression is silent end to end: `runner-acl open` reports
+// success, the ConfigMap lease is never written, and the EAA controller evicts
+// the runner IP mid-job.
+//
+// KUBECONFIG arrives unexpanded now that lke-runner-acl's `eval echo` is gone —
+// eval was the one repair that could execute a caller-supplied path.
+func runnerACLKubectlEnv(env []string) []string {
+	return kubeconfigExpandedEnv(env)
+}
+
+// kubeconfigExpandedEnv returns env with KUBECONFIG's shell variables expanded.
+// Applied to the child's environment rather than the parent's so nothing else in
+// this process observes a mutated KUBECONFIG.
+func kubeconfigExpandedEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if name, val, ok := strings.Cut(kv, "="); ok && name == "KUBECONFIG" {
+			// FAILS OPEN, DELIBERATELY, and unlike resolvePath. An unresolvable
+			// KUBECONFIG here means every lease kubectl fails — but these writes are
+			// best-effort by design (see the header), so aborting the ACL open over
+			// them would trade a degraded lease for no cluster access at all. The
+			// unresolved text is passed through so kubectl's own error names the
+			// path, rather than a silently-mangled one, and leaseOutcome turns the
+			// resulting failure into a ::warning:: rather than swallowing it. The
+			// delivered action's docstring states this difference from the write
+			// path, which DOES fail closed.
+			kv = name + "=" + expandPathVars(val, func(v string) string {
+				for _, e := range env {
+					if n, ev, ok := strings.Cut(e, "="); ok && n == v {
+						return ev
+					}
+				}
+				return ""
+			})
+		}
+		out = append(out, kv)
+	}
+	return out
 }

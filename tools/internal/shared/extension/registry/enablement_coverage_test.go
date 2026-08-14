@@ -62,7 +62,10 @@ import (
 // spec component, and which an instance therefore cannot turn off. MEASURED, not
 // chosen.
 var componentless = map[string]bool{
-	"assert-identity":             true,
+	"assert-identity": true,
+	// No component: the injection class is a property of the WORKFLOW FILES, which
+	// every instance carries regardless of which spec components it turned on.
+	"workflow-injection":          true,
 	"assert-network":              true,
 	"assert-objstore":             true,
 	"assert-platform":             true,

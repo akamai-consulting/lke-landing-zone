@@ -124,9 +124,15 @@ runs:
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        # Via env:, never interpolated into the script. `working-directory:` above
+        # keeps its expression — that is a path GitHub resolves itself, not a
+        # shell — but a state key reaching `tofu init` through the script would be
+        # syntax the moment it carried a quote.
+        STATE_KEY: ${{ inputs.state-key }}
+        MODULE:    ${{ inputs.module }}
       run: |
-        KEY="${{ inputs.state-key }}"
-        [ -n "$KEY" ] || KEY="${{ inputs.module }}/$REGION/terraform.tfstate"
+        KEY="$STATE_KEY"
+        [ -n "$KEY" ] || KEY="$MODULE/$REGION/terraform.tfstate"
         tofu init \
           -backend-config="bucket=$TF_STATE_BUCKET" \
           -backend-config="key=$KEY" \

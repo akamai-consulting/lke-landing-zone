@@ -70,7 +70,11 @@ inputs:
       replacing it out from under a long-running kubectl job (e.g. the
       convergence gate). Leave empty for short jobs that finish inside one
       reconcile interval — behaviour is then exactly the Linode-API-only ACL
-      open/revoke. The value may contain $HOME / $RUNNER_TEMP (expanded here).
+      open/revoke. The value may contain $HOME / $RUNNER_TEMP / $GITHUB_WORKSPACE,
+      expanded by llz (not by this action — the shell that did it used eval).
+      Unlike the kubeconfig WRITE path, an unresolvable value does not fail here:
+      the ConfigMap lease is best-effort by design, so it degrades to a
+      ::warning:: and the run continues with cluster access intact.
     required: false
     default: ''
 
@@ -118,10 +122,10 @@ runs:
         set -euo pipefail
         CM_ARGS=()
         if [ -n "$ACL_KUBECONFIG" ]; then
-          # Expand any $HOME / $RUNNER_TEMP the caller passed, then lease the IP
-          # in the firewall-runner-acl ConfigMap so the EAA controller keeps it.
-          KUBECONFIG="$(eval echo "$ACL_KUBECONFIG")"
-          export KUBECONFIG
+          # $HOME / $RUNNER_TEMP are expanded by llz (clusteraccess/pathvars.go).
+          # This was `eval echo`, which re-enters the parser: a kubeconfig path of
+          # $HOME/x";id;# would have RUN.
+          export KUBECONFIG="$ACL_KUBECONFIG"
           CM_ARGS=(--runner-configmap)
         fi
         llz ci runner-acl "$ACL_MODE" \

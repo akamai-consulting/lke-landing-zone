@@ -13,7 +13,10 @@ inputs:
     description: AWS secret key for the S3 state backend
     required: true
   kubeconfig-path:
-    description: Absolute path to write the kubeconfig file
+    description: >
+      Path to write the kubeconfig file. $HOME / $RUNNER_TEMP / $GITHUB_WORKSPACE are
+      expanded by llz, not by this action; any other variable, or an unset one,
+      is an error rather than a literal path.
     required: true
   region:
     description: Region (primary or secondary). Defaults to REGION env var when blank.
@@ -69,9 +72,23 @@ runs:
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        # ALL THREE VIA env:. This action's `region` is reachable from a
+        # workflow_call input — llz-breakglass-openbao.yml takes one and passes it
+        # through cluster-access to here — so interpolating it put attacker-shaped
+        # text into a script in a job holding cloud credentials.
+        KUBE_REGION_IN:  ${{ inputs.region }}
+        KUBECONFIG_PATH: ${{ inputs.kubeconfig-path }}
+        # A literal --allow-missing or empty, so it was never dangerous; it moves
+        # anyway, because a rule with exceptions is one a reader stops trusting.
+        ALLOW_MISSING:   ${{ inputs.allow-missing == 'true' && '--allow-missing' || '' }}
       run: |
-        KUBE_REGION="${{ inputs.region }}"
+        KUBE_REGION="$KUBE_REGION_IN"
+        # $HOME/$RUNNER_TEMP in --output are expanded by llz (clusteraccess/
+        # pathvars.go), not here: GitHub expands nothing in a `with:` value, the
+        # old interpolated form expanded it only by accident, and `eval` — the
+        # obvious shell repair — is the one that would run a caller-supplied path.
+        # shellcheck disable=SC2086 # ALLOW_MISSING is a flag or empty and must word-split away
         llz ci fetch-kubeconfig-state \
           --region "${KUBE_REGION:-$REGION}" \
-          --output "${{ inputs.kubeconfig-path }}" \
-          ${{ inputs.allow-missing == 'true' && '--allow-missing' || '' }}
+          --output "$KUBECONFIG_PATH" \
+          $ALLOW_MISSING
