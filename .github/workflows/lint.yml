@@ -671,13 +671,16 @@ jobs:
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. HERE, NOT IN `llz-gates`, and the placement is the whole point —
-      # the Kubernetes job that runs `llz ci gates` is skipped for FORK pull
-      # requests, which is exactly the population this guard's threat model is
+      # script. ALSO a `llz ci gates` row (registry/gates.go) — this step is the
+      # SECOND site, not a relocation, and the duplication is the whole point: the
+      # Kubernetes job that runs `llz ci gates` carries
+      # `if: … head.repo.full_name == github.repository`, so it is skipped for FORK
+      # pull requests, which is exactly the population this guard's threat model is
       # about. A fork PR is how an attacker-chosen branch name or PR title reaches
-      # a workflow in the first place, so a guard that cannot run on one is not
-      # protecting against the case it exists for. Same reasoning, and the same
-      # relocation, as the shell-default guard above.
+      # a workflow in the first place, so a guard reachable only from the gate set
+      # is not protecting against the case it exists for. This job (go-tests) has
+      # no such `if:` and runs on forks. Same reasoning as the shell-default guard
+      # above; TestTheGuardRunsInAJobForkPullRequestsReach holds it here.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
