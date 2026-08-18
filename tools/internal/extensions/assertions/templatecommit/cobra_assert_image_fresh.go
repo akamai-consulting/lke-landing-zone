@@ -94,10 +94,41 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	// a tag main republishes — so the guard passed on precisely the instances it
 	// exists to protect. Resolve the tag to the commit it names and compare the two
 	// as commits. See template_commit.go.
+	// THE STAMP IS JUDGED BEFORE THE PIN IS RESOLVED, and the order is load-bearing
+	// twice over. A stamp that names no commit cannot be compared to anything, so
+	// resolving the tag first would be a network round trip whose answer cannot
+	// change the verdict — and, worse, it would reach the comparison with an empty
+	// SHA, which prefix-matches every pin (see stampedSHA).
+	//
+	// This is also the ONE place the CI-vs-local policy is decided. The comparison
+	// itself stays a pure function of its arguments, so `llz ci assert-adopter-pin`
+	// gets the same answer from it in a GitHub job as on a laptop.
+	if why, unusable := unstampedReason(bakedVersion); unusable {
+		if inGitHubActions() {
+			return unstampedInCIError(bakedVersion)
+		}
+		return skipImageFresh(why)
+	}
+	// A TAG pin against a dev-SHA image used to warn and skip. That skip covered the
+	// DEFAULT new-adopter shape — copier pins a release tag while TF_IMAGE floats on
+	// a tag main republishes — so the guard passed on precisely the instances it
+	// exists to protect. Resolve the tag to the commit it names and compare the two
+	// as commits. See template_commit.go.
 	pinCommit := templateRef
 	if isDevBuild(bakedVersion) && !hexSHARe.MatchString(templateRef) {
 		sha, ok := Resolve(templateRepo, templateRef)
 		if !ok {
+			// AND THIS ONE STAYS A SKIP IN CI, deliberately, where an unusable stamp
+			// does not. The two look alike and are not: an unusable stamp is a defect
+			// in an artifact THIS REPO BUILDS, reproducible on every run of that image
+			// and fixable by whoever sees it. An unresolvable ref is a third party
+			// being unavailable — a GitHub 5xx, a job without GH_TOKEN, or a GHES
+			// instance whose anonymous requests hit the 60/hr per-IP limit
+			// (template_commit.go). Failing on that hands every adopter a red pipeline
+			// whenever api.github.com has a bad minute, which buys no evidence and
+			// costs the run. The honest cost is real and worth stating: this arm is
+			// the MORE likely of the two to fire, so a persistently red-free instance
+			// that never prints OK deserves a look at its GH_TOKEN.
 			return skipImageFresh(fmt.Sprintf("template-ref %q is not a SHA and could not be resolved to one, so it cannot be compared against baked dev build %q", templateRef, strings.TrimSpace(bakedVersion)))
 		}
 		pinCommit = sha
@@ -109,9 +140,28 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	if skip != "" {
 		return skipImageFresh(skip)
 	}
-	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %q.\n", strings.TrimSpace(bakedVersion), templateRef)
+	// NAME WHAT WAS ACTUALLY COMPARED, exactly as imageSkewError does. On the default
+	// adopter shape the pin is a TAG and the comparison was against the commit it
+	// resolves to, so printing the tag alone reports a verdict nobody can audit from
+	// the log — which is how `OK — baked llz "dev-" matches template-ref "v0.0.44"`
+	// reads plausible while being a match against nothing.
+	pinned := templateRef
+	if pinCommit != templateRef {
+		pinned = fmt.Sprintf("%s (= %s)", templateRef, pinCommit)
+	}
+	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %s.\n", strings.TrimSpace(bakedVersion), pinned)
 	return nil
 }
+
+// inGitHubActions reports whether this process is a CI step.
+//
+// `!= ""` rather than `== "true"`: five of the six other readers in this binary
+// (ghsecret, ghaout, credrotate, pg_probe, sustain/drift) spell it this way, and
+// here the spelling has a direction. `== "true"` would send any runner exporting
+// `GITHUB_ACTIONS=1` back to the warn-and-pass arm — the guard-off state this file
+// exists to eliminate — while ghsecret in the same process masked its secrets as
+// though it were CI. The stricter comparison is the fail-open one.
+func inGitHubActions() bool { return os.Getenv("GITHUB_ACTIONS") != "" }
 
 // skipImageFresh emits the verdict of a run that could not compare anything, and
 // is the ONLY thing such a run prints.
@@ -139,6 +189,43 @@ func isDevBuild(baked string) bool {
 	return strings.HasPrefix(strings.TrimSpace(baked), "dev-")
 }
 
+// stampedSHA returns the commit a `dev-<sha>` stamp names, and whether this is a
+// dev stamp at all.
+//
+// THE SHA IS VALIDATED, and it was not. `strings.TrimPrefix("dev-", "dev-")` is the
+// empty string, and shaPrefixMatch treats an empty prefix as a match against every
+// pin — so a `dev-` stamp printed `OK — baked llz "dev-" matches template-ref
+// "v0.0.44"` against any instance in the world, which is #428's own sentence with a
+// different marker in it. `dev-0` matched one commit in sixteen. Nothing produced
+// those stamps on purpose; `--build-arg LLZ_VERSION=dev-${SHA}` with an empty SHA
+// does, and the surrounding guard is exactly the wrong place to assume a producer
+// gets its inputs right.
+func stampedSHA(baked string) (string, bool) {
+	sha, isDev := strings.CutPrefix(strings.TrimSpace(baked), "dev-")
+	return sha, isDev
+}
+
+// unstampedReason says why a baked version cannot be compared to anything, and is
+// the single definition of "this binary does not know what it was built from".
+//
+// It is decided from the baked value ALONE — no pin, no network — which is what
+// lets runAssertImageFresh ask it before spending a round trip resolving a tag, and
+// lets the comparison ask it again for a caller that never goes through there.
+//
+// The class matters, not just the fact: an unusable stamp is a defect in something
+// THIS REPO BUILDS (the image's ldflags), which is why it is fatal in CI, while an
+// unresolvable ref is a third party being unavailable, which is not.
+func unstampedReason(bakedVersion string) (string, bool) {
+	baked := strings.TrimSpace(bakedVersion)
+	if baked == "" || baked == "dev" {
+		return fmt.Sprintf("the baked llz version is unstamped (%q), which is what a local `go build` without the release ldflags produces", bakedVersion), true
+	}
+	if sha, isDev := stampedSHA(baked); isDev && !hexSHARe.MatchString(sha) {
+		return fmt.Sprintf("the baked llz version %q is malformed — the part after `dev-` is %q, which is not a commit sha, so there is nothing to compare against the pin", bakedVersion, sha), true
+	}
+	return "", false
+}
+
 // assertImageFreshResolved is the comparison itself, with the pin ALREADY resolved
 // to a commit (pinCommit == templateRef when the ref is a sha, or when the baked
 // build is a release tag and there is nothing to resolve).
@@ -150,8 +237,9 @@ func isDevBuild(baked string) bool {
 // verdict line says — printing it here is what let a skip and an OK be emitted for
 // the same value (#428). No caller may treat a skip as a pass.
 //
-// Pure — no network, no filesystem, aside from reading GITHUB_ACTIONS. That is what
-// lets `llz ci assert-adopter-pin` exercise this logic with the commit it resolved
+// Pure — no network, no filesystem, no environment. The CI-vs-local policy lives in
+// runAssertImageFresh, one frame up, so this stays a function of its arguments only.
+// That is what lets `llz ci assert-adopter-pin` exercise this logic with the commit it resolved
 // in its own first step instead of paying for two more round-trips. Those
 // round-trips were not just waste: a blip on the NEGATIVE one degraded to
 // warn-and-pass, which the gate reads as "the guard accepted an unrelated commit"
@@ -159,25 +247,13 @@ func isDevBuild(baked string) bool {
 // manufacture that verdict.
 func assertImageFreshResolved(bakedVersion, templateRef, pinCommit string) (skip string, err error) {
 	baked := strings.TrimSpace(bakedVersion)
-	if baked == "" || baked == "dev" {
-		// UNSTAMPED IN CI IS A STAMPING BUG, NOT A LOCAL DEV BUILD. Every invocation
-		// of this verb in a delivered workflow runs inside `container: ${{
-		// vars.TF_IMAGE }}`, and every image build-images.yml publishes stamps
-		// internal/cli.Version from --build-arg LLZ_VERSION. So a binary that both
-		// carries THIS code and reports no stamp did not come from a published ci
-		// image — the one way that can happen is the stamp regressing, which it has:
-		// the linker silently ignores `-X <path>.Var=` for a symbol it cannot
-		// resolve, so dockerfiles/Dockerfile kept stamping `main.version` for months
-		// after the command tree left package main, every ci image baked "dev", and
-		// this guard took its warn-and-pass arm on every adopter it exists to protect
-		// (PR #433). Skipping there means the skew guard is off and nothing says so
-		// louder than an annotation nobody reads.
-		if os.Getenv("GITHUB_ACTIONS") == "true" {
-			return "", unstampedInCIError(baked)
-		}
-		return fmt.Sprintf("the baked llz version is unstamped (%q), which is what a local `go build` without the release ldflags produces", bakedVersion), nil
+	// Checked again here, not only in runAssertImageFresh: assert-adopter-pin calls
+	// this function directly, and a comparison that silently accepted an unusable
+	// stamp from ONE of its two callers is the whole failure class.
+	if why, unusable := unstampedReason(bakedVersion); unusable {
+		return why, nil
 	}
-	if bakedSHA := strings.TrimPrefix(baked, "dev-"); bakedSHA != baked { // dev image — compare SHAs
+	if bakedSHA, isDev := stampedSHA(baked); isDev { // dev image — compare SHAs
 		if !shaPrefixMatch(bakedSHA, pinCommit) {
 			return "", imageSkewError(baked, templateRef, pinCommit)
 		}
@@ -193,22 +269,37 @@ func assertImageFreshResolved(bakedVersion, templateRef, pinCommit string) (skip
 	return "", nil
 }
 
-// unstampedInCIError is the failure an unstamped build takes in CI. It has to name
-// BOTH causes, because the remediation differs: an image that is simply old wants a
-// re-pin, while a current image that reports "dev" means the stamping itself broke
-// and no re-pin will help.
+// unstampedInCIError is the failure an unusable stamp takes in CI.
+//
+// It names all THREE causes because the remediation differs and the wrong one costs
+// a day. It also prints the stamp RAW: a padded `"  dev  "` is a quoting bug in the
+// build-arg, not a wrong `-X` path, and trimming it away deletes the only evidence
+// that distinguishes them.
+//
+// It does NOT lead with the re-pin. An llz carrying this code came from an image
+// built after the stamping fix, so "your image is old" is the one cause that cannot
+// produce this message — the re-pin is here for the case where the pin genuinely
+// moved, not as the first thing to try.
 func unstampedInCIError(baked string) error {
-	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
-	return fmt.Errorf("the baked llz carries no version stamp (%q), so image/template freshness cannot be established at all.\n"+
-		"  This is a CI run, where llz comes from the pinned ci image — and every image build-images.yml publishes stamps\n"+
-		"  its version (`--build-arg LLZ_VERSION=dev-<sha>`). An unstamped one is therefore either not a published image, or\n"+
-		"  a build whose stamp landed nowhere: the Go linker SILENTLY IGNORES `-X <path>.Var=` for a symbol it cannot\n"+
-		"  resolve, which is how every ci image baked \"dev\" for months while this guard warned and passed.\n"+
-		"  Fix — if TF_IMAGE/KUBE_IMAGE are old, re-pin them to a published build:\n"+
-		"      llz tokens --env <deployment> --yes\n"+
-		"  If they already name a `sha-<commit>` image that build-images.yml published, the stamping is broken rather than\n"+
-		"  the pin: check the `-X` path in dockerfiles/Dockerfile against internal/cli.Version — version_stamp_test.go pins\n"+
-		"  every stamping site, and a new one added outside its list is exactly this failure.", baked)
+	// No ST1005 waiver here, unlike its two neighbours: this message happens to end
+	// on a parenthesis rather than a period, so the check does not fire — and
+	// staticcheck rejects a directive that matched nothing, which is how a stale
+	// waiver gets noticed rather than accumulating.
+	return fmt.Errorf("the baked llz carries no usable version stamp (%q), so image/template freshness cannot be established at all.\n"+
+		"  This is a CI run, where a delivered workflow runs llz from the pinned ci image — and every image\n"+
+		"  build-images.yml publishes stamps its version (`--build-arg LLZ_VERSION=dev-<sha>`). Three things produce an\n"+
+		"  unusable one, in the order worth checking:\n"+
+		"    1. THE STAMPING BROKE. The Go linker SILENTLY IGNORES `-X <path>.Var=` for a symbol it cannot resolve, which\n"+
+		"       is how every ci image baked \"dev\" for months while this guard warned and passed. Check the `-X` path in\n"+
+		"       dockerfiles/Dockerfile against internal/cli.Version; version_stamp_test.go pins every stamping site, and a\n"+
+		"       new one added outside its list is exactly this failure. An empty or malformed LLZ_VERSION build-arg lands\n"+
+		"       here too — the stamp is then present but names no commit.\n"+
+		"    2. THIS llz IS NOT FROM A PUBLISHED IMAGE — a job that builds it from source (`go build ./cmd/llz`) has no\n"+
+		"       stamp to read. Such a job has no template pin to check either; it should not be running this verb.\n"+
+		"    3. THE PIN MOVED and the images did not. Re-pin them to a published build:\n"+
+		"           llz tokens --env <deployment> --yes\n"+
+		"       (Least likely of the three here: an image old enough to predate the stamping fix runs an older llz, which\n"+
+		"       cannot reach this message at all.)", baked)
 }
 
 // shaPrefixMatch reports whether two git object names refer to the same commit,
