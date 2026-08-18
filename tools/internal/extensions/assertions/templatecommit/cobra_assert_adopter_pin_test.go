@@ -108,12 +108,45 @@ func TestAssertAdopterPinFailsWithNoReleaseAndNoRef(t *testing.T) {
 
 // An unreachable registry must not fail the gate — the other three legs still
 // answered, and the container pull is the backstop for an absent image.
+//
+// But it must not report OK either. The run used to warn "that leg is UNVERIFIED,
+// not passed" and then close with "OK — an instance scaffolded at vX.Y.Z runs the
+// llz that rendered it", a claim larger than the one the warning had withdrawn and
+// the last line a release log shows. That is #428's shape one gate up.
 func TestAssertAdopterPinToleratesAnUnreachableRegistry(t *testing.T) {
 	stubPublishWait(t)
 	stubTemplateCommit(t, func(string, string) (string, bool) { return pinSHA, true })
 	stubImagePublished(t, func(string) (bool, bool) { return false, false })
-	if err := runAssertAdopterPin("acme/tmpl", "v0.0.39"); err != nil {
+	var err error
+	out, errOut := captureOutput(t, func() { err = runAssertAdopterPin("acme/tmpl", "v0.0.39") })
+	if err != nil {
 		t.Fatalf("runAssertAdopterPin = %v, want nil (a GHCR blip must not block a release)", err)
+	}
+	if strings.Contains(out, "assert-adopter-pin: OK") {
+		t.Errorf("a run that could not confirm publication still claimed OK:\n%s", out)
+	}
+	if !strings.Contains(out, "assert-adopter-pin: PARTIAL") {
+		t.Errorf("want a PARTIAL verdict naming the unverified leg, got:\n%s", out)
+	}
+	if !strings.Contains(errOut, "UNVERIFIED, not passed") {
+		t.Errorf("want the per-image annotation on stderr, got:\n%s", errOut)
+	}
+}
+
+// The converse, so PARTIAL cannot creep onto a fully verified run: all four legs
+// answering must still print OK and nothing else.
+func TestAssertAdopterPinReportsOKOnlyWhenEveryLegAnswered(t *testing.T) {
+	adopterPinStubs(t)
+	var err error
+	out, _ := captureOutput(t, func() { err = runAssertAdopterPin("acme/tmpl", "v0.0.39") })
+	if err != nil {
+		t.Fatalf("runAssertAdopterPin = %v, want nil", err)
+	}
+	if !strings.Contains(out, "assert-adopter-pin: OK") {
+		t.Errorf("a fully verified run printed no OK verdict:\n%s", out)
+	}
+	if strings.Contains(out, "assert-adopter-pin: PARTIAL") {
+		t.Errorf("a fully verified run also claimed PARTIAL:\n%s", out)
 	}
 }
 
@@ -179,9 +212,11 @@ func TestAssertAdopterPinResolvesAgainstTheRepoItWasGiven(t *testing.T) {
 }
 
 // Leg 4 must not depend on the network. It used to re-run the full command, whose
-// resolve step degrades to warn-and-pass on a blip — and a passing NEGATIVE check
-// is exactly the verdict the gate reports as "the skew guard is not guarding".
-// A transient error must not be able to manufacture that.
+// resolve step degrades to a SKIP on a blip — which both legs now refuse to read as
+// a pass, so a transient error would block a good release candidate. (Before that
+// refusal existed the same blip was worse still: the skip read as a passing
+// NEGATIVE check, i.e. "the skew guard is not guarding".) Either way a transient
+// error must not be able to manufacture a verdict.
 func TestAssertAdopterPinLegFourIsNotNetworkDependent(t *testing.T) {
 	stubPublishWait(t)
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })

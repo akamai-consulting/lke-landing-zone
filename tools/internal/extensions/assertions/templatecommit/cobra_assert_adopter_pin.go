@@ -79,10 +79,11 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	}
 	fmt.Printf("assert-adopter-pin: %s @ %s\n", templateRepo, ref)
 
-	// 1. The pin must resolve. Unlike assert-image-fresh — which degrades to a
-	//    warning because it cannot tell "skewed" from "unreachable" — an
-	//    unresolvable ref IS a failure here: this gate's entire job is to answer
-	//    this question, so being unable to ask it is a failed gate, not a pass.
+	// 1. The pin must resolve. assert-image-fresh skips on an unresolvable ref —
+	//    it runs on every PR and cannot tell "skewed" from "GitHub is having a bad
+	//    minute", so it says SKIPPED and passes. Here an unresolvable ref IS a
+	//    failure: this gate's entire job is to answer this question, it runs once
+	//    per release, and being unable to ask it is a failed gate, not a pass.
 	commit, ok := Resolve(templateRepo, ref)
 	if !ok {
 		return fmt.Errorf("could not resolve %s@%s to a commit — the gate cannot verify what an adopter "+
@@ -132,11 +133,13 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    Not a failure, though. A GHCR blip must not block a release the other three
 	//    legs vouched for, and the pull itself is the backstop — an absent image
 	//    fails the first job with `manifest unknown`, which is unambiguous.
+	unverified := 0
 	for _, im := range []struct{ name, ref string }{{"TF_IMAGE", tfImage}, {"KUBE_IMAGE", kubeImage}} {
 		if published, asked := ImagePublished(im.ref); published && asked {
 			fmt.Printf("  ✓ %s is published\n", im.ref)
 			continue
 		}
+		unverified++
 		fmt.Fprintf(os.Stderr, "::warning::assert-adopter-pin: could not confirm %s is published (registry unreachable) — that leg is UNVERIFIED, not passed.\n", im.ref)
 	}
 
@@ -145,13 +148,34 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    satisfy the positive case and is exactly what shipped before.
 	// assertImageFreshResolved, not runAssertImageFresh: leg 1 already resolved this
 	// tag, so re-resolving would spend two more round-trips AND make the verdict
-	// network-dependent. A blip on the NEGATIVE call degrades to warn-and-pass,
-	// which reads here as "the guard accepted an unrelated commit" — a hard, false
-	// failure manufactured by a transient error.
-	if err := assertImageFreshResolved("dev-"+commit, ref, commit); err != nil {
+	// network-dependent. A blip on either call degrades to a SKIP, which both legs
+	// below correctly refuse to read as a pass — so a transient error would fail a
+	// perfectly good release candidate. Reusing leg 1's answer removes the chance.
+	//
+	// A SKIP FAILS BOTH LEGS. assertImageFreshResolved returns a reason instead of a
+	// verdict when it cannot compare at all, and a release gate that could not ask
+	// its question has not answered it — reading that as a pass is the same mistake
+	// #428 made one layer down. Resolve validates its output as a sha, so a skip
+	// should be unreachable here; that is the reason to make it loud, not the reason
+	// to leave it implicit.
+	if skip, err := assertImageFreshResolved("dev-"+commit, ref, commit); err != nil {
 		return fmt.Errorf("assert-image-fresh rejects the image an adopter at %s would correctly be running: %w", ref, err)
+	} else if skip != "" {
+		return fmt.Errorf("assert-image-fresh could not compare a binary built at %s against the %s pin (%s) — "+
+			"this leg proved nothing, and an unanswerable gate is a failed gate, not a passed one", commit, ref, skip)
 	}
-	if err := assertImageFreshResolved("dev-"+foreignCommit(commit), ref, commit); err == nil {
+	// The NEGATIVE leg gets the same treatment rather than folding a skip into
+	// err == nil. Both outcomes are failures, but they are different failures, and
+	// the borrowed sentence would have said the guard ACCEPTED a foreign build when
+	// what actually happened is that it could not look — a false diagnosis on the one
+	// gate whose thesis is that unanswerable questions must not be reported as
+	// answers.
+	skip, err := assertImageFreshResolved("dev-"+foreignCommit(commit), ref, commit)
+	if skip != "" {
+		return fmt.Errorf("assert-image-fresh could not compare a binary built at an unrelated commit against the %s pin (%s) — "+
+			"the negative half of this gate proved nothing", ref, skip)
+	}
+	if err == nil {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline explaining the consequence
 		return fmt.Errorf("assert-image-fresh ACCEPTED a binary built at an unrelated commit against the %s pin.\n"+
 			"  The skew guard is not guarding: an adopter whose TF_IMAGE drifts off their pin would get no warning,\n"+
@@ -159,6 +183,23 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	}
 	fmt.Printf("  ✓ assert-image-fresh accepts dev-%.12s and rejects a foreign build\n", commit)
 
+	// THE FINAL LINE REPORTS WHAT WAS PROVEN, NOT WHAT WAS ATTEMPTED. Leg 3 degrades
+	// to a warning on an unreachable registry, and this print used to run anyway —
+	// so a GHCR blip during a release cut wrote "could not confirm … UNVERIFIED, not
+	// passed" and then, as the last line of the log, "OK — an instance scaffolded at
+	// vX.Y.Z runs the llz that rendered it": a claim strictly larger than the one the
+	// warning had just withdrawn, and the one a reader takes away. That is #428
+	// exactly, one gate up, and it was still here in the file that fixed it.
+	//
+	// Still not a failure — the reason leg 3 warns rather than fails is unchanged (a
+	// registry blip must not block a release the other three legs vouched for, and an
+	// absent image fails the first job with `manifest unknown` anyway). What changes
+	// is that the run no longer claims the leg it skipped.
+	if unverified > 0 {
+		fmt.Printf("assert-adopter-pin: PARTIAL — 3 of 4 legs verified; %d image(s) could not be confirmed published (registry unreachable). "+
+			"Whether an instance scaffolded at %s can PULL what it pins is unproven by this run.\n", unverified, ref)
+		return nil
+	}
 	fmt.Printf("assert-adopter-pin: OK — an instance scaffolded at %s runs the llz that rendered it.\n", ref)
 	return nil
 }

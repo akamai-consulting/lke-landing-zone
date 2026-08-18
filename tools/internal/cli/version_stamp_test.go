@@ -27,7 +27,9 @@ package cli
 // stamped correctly while every ci-tofu/ci-kubernetes image baked an llz
 // reporting "dev" — and `llz ci assert-image-fresh`, which compares that stamp
 // against the instance's template pin, degraded to warn-and-pass on every
-// adopter. A guard that covers one of two producers reports green on the one it
+// adopter — and, worse, printed an OK line on the value it had just called
+// unusable (#428). An unstamped stamp is now fatal in CI, so this test failing is
+// the cheap version of that outage. A guard that covers one of two producers reports green on the one it
 // does not read, which is worse than no guard: it was cited as the reason the
 // symbol could not drift. So this now checks EVERY build file, and Step 3 below
 // fails when a new stamping site appears that this list does not name.
@@ -48,8 +50,14 @@ const repoRoot = "../../.."
 // stampingBuilds are the builds whose output is CONSUMED as a version — each one
 // must carry a correct `-X`. Being on this list means "stamping here is
 // load-bearing", not merely "this file builds llz": the many unstamped
-// `go build ./cmd/llz` sites (setup-llz, the template-scripts) produce
-// throwaway CI binaries whose version nothing reads.
+// `go build ./cmd/llz` sites (setup-llz, the template-scripts) produce throwaway
+// CI binaries whose version nothing reads — TODAY. That last word is now doing
+// work: since #428 an unstamped stamp is FATAL under GITHUB_ACTIONS, so the first
+// job that points one of those binaries at `llz ci assert-image-fresh` gets a hard
+// failure diagnosing a ci-image stamping bug it does not have. Nothing catches
+// that, because Step 3 below only looks at builds that already carry an `-X`. The
+// rule for anyone adding such a call: that verb belongs to a job running the
+// PINNED ci image, and a from-source binary has no template pin to check anyway.
 var stampingBuilds = []struct {
 	path string
 	why  string // what reads the stamp, and what breaks when it is absent
@@ -60,7 +68,7 @@ var stampingBuilds = []struct {
 	},
 	{
 		"dockerfiles/Dockerfile",
-		"`llz ci assert-image-fresh` reads the baked stamp to compare the ci image against the instance's template pin; unstamped, it warns and passes and the skew guard is off",
+		"`llz ci assert-image-fresh` reads the baked stamp to compare the ci image against the instance's template pin; unstamped, it has nothing to compare and (in CI) fails every instance pipeline",
 	},
 }
 

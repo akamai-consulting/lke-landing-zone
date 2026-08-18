@@ -41,9 +41,12 @@
 # green, build-images.yml kept passing LLZ_VERSION=dev-<sha>, and the value
 # landed nowhere: every ci-tofu/ci-kubernetes image baked an llz reporting the
 # default "dev". That is not cosmetic — `llz ci assert-image-fresh` reads this
-# stamp to compare the image against the instance's template pin, and an
-# unstamped build makes it warn-and-pass, so the image/template skew guard was
-# silently off on every adopter it was built to protect.
+# stamp to compare the image against the instance's template pin. An unstamped
+# build used to make that guard warn-and-pass, so the image/template skew guard was
+# silently off on every adopter it was built to protect; since #428 it FAILS in CI
+# instead, which means getting this line wrong now reddens every adopter pipeline
+# at its first step rather than going quiet. The blast radius is the argument for
+# version_stamp_test.go, not against the fatal arm.
 FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gotools
 ARG TARGETOS
 ARG TARGETARCH

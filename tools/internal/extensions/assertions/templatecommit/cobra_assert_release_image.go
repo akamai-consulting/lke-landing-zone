@@ -41,10 +41,13 @@ package templatecommit
 // how a poll loop in this repo once burned its whole budget in milliseconds. The
 // count is the budget.
 //
-// WHY IT STILL FAILS CLOSED at the end, unlike assert-image-fresh, which warns and
-// passes when it cannot ask. That verb runs on every PR and blocking one on a
-// network blip costs more than it saves. This one runs once per release, and the
-// cost of a wrong PASS is a published artifact an adopter cannot pull.
+// WHY IT STILL FAILS CLOSED at the end. assert-image-fresh draws the line
+// differently, and the difference is the SOURCE of the missing evidence, not the
+// fact of it: that verb fails on an unusable stamp — a defect in an artifact this
+// repo builds — and only skips when a third party will not answer (an unresolvable
+// ref), because it runs on every PR and blocking one on a network blip costs more
+// than it saves. This one runs once per release, where the cost of a wrong PASS is
+// a published artifact an adopter cannot pull, so even the third-party case fails.
 
 import (
 	"fmt"

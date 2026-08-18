@@ -267,6 +267,16 @@ speak for it; that variable is only presence-checked, by `require-repo-config`.
 A `KUBE_IMAGE` left behind at an old tag therefore still passes here and surfaces
 later, in the jobs that actually run it.
 
+It also reports **three** outcomes, not two, and the distinction is the point: `OK`
+means the two were compared and agree (and the line names both values, so the
+verdict is auditable); a hard failure means they were compared and disagree; and
+`SKIPPED` means they could not be compared at all — an unresolvable pin, or a
+release image against a SHA pin — and proves nothing. A skipped run never prints
+`OK`. The one "cannot compare" case that is *not* a skip is an `llz` with no usable
+version stamp: in CI that is a broken image build, not missing evidence, so it
+fails. See [#428](https://github.com/akamai-consulting/lke-landing-zone/issues/428)
+for the run where a skip and an `OK` were printed for the same value.
+
 **`assert-image-fresh` used to run in exactly one place** — the first job of an
 *apply* — so a `TF_IMAGE` that had never been re-pinned stayed invisible across
 every pull request. Measured on a live adopter: `TF_IMAGE` still named the
@@ -385,13 +395,19 @@ guards ad-hoc concurrent builds.
    drift that re-rendering locally cannot fix — the operator's `llz` **is** the
    pinned release. `llz ci assert-image-fresh` asserts they match, reading the
    pin from the instance's own `.copier-answers.yml` — there is no third,
-   hand-maintained copy of it to skew.
+   hand-maintained copy of it to skew. A **third** state is fatal here too: an
+   image whose `llz` carries no usable version stamp, which means the guard
+   cannot compare anything at all. That is a broken image build, not a stale pin,
+   so re-pinning will not clear it — see
+   [first-build-failed.md](../runbooks/first-build-failed.md#4-common-first-build-failures).
 
    The pin is a release **tag** and the baked build is a **commit**, so the
    guard resolves the tag against the (public) template repo to compare them at
    all; the step gets `GH_TOKEN: ${{ github.token }}` for that, needing only
-   public read. A resolution it cannot make degrades to a warning, never a
-   failure. `llz tokens` computes `TF_IMAGE`/`KUBE_IMAGE` as
+   public read. A resolution it cannot make degrades to a `SKIPPED` verdict, not
+   a failure — but an image whose `llz` carries no usable version stamp *does*
+   fail here, because that is a defect in an artifact this repo builds rather
+   than a third party being unreachable. `llz tokens` computes `TF_IMAGE`/`KUBE_IMAGE` as
    `sha-<commit of the pin>` precisely so this comparison is satisfied by
    construction — see the fix line the guard prints if it is not.
 
