@@ -148,10 +148,23 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	// network-dependent. A blip on the NEGATIVE call degrades to warn-and-pass,
 	// which reads here as "the guard accepted an unrelated commit" — a hard, false
 	// failure manufactured by a transient error.
-	if err := assertImageFreshResolved("dev-"+commit, ref, commit); err != nil {
+	//
+	// A SKIP FAILS THIS LEG. assertImageFreshResolved returns a reason instead of a
+	// verdict when it cannot compare at all, and a release gate that could not ask
+	// its question has not answered it — reading that as a pass is the same mistake
+	// #428 made one layer down. It should be unreachable for these inputs (a
+	// `dev-<sha>` build against a resolved commit is the one shape that always
+	// compares), which is precisely why it must be loud if it ever is not.
+	if skip, err := assertImageFreshResolved("dev-"+commit, ref, commit); err != nil {
 		return fmt.Errorf("assert-image-fresh rejects the image an adopter at %s would correctly be running: %w", ref, err)
+	} else if skip != "" {
+		return fmt.Errorf("assert-image-fresh could not compare a binary built at %s against the %s pin (%s) — "+
+			"this leg proved nothing, and an unanswerable gate is a failed gate, not a passed one", commit, ref, skip)
 	}
-	if err := assertImageFreshResolved("dev-"+foreignCommit(commit), ref, commit); err == nil {
+	// The skip is discarded here deliberately: it degrades to err == nil, which this
+	// check already reports as the failure "the guard accepted a foreign build" —
+	// fail-closed, and the positive leg above has already ruled the case out.
+	if _, err := assertImageFreshResolved("dev-"+foreignCommit(commit), ref, commit); err == nil {
 		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline explaining the consequence
 		return fmt.Errorf("assert-image-fresh ACCEPTED a binary built at an unrelated commit against the %s pin.\n"+
 			"  The skew guard is not guarding: an adopter whose TF_IMAGE drifts off their pin would get no warning,\n"+

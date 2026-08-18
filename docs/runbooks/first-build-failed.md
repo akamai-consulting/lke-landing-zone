@@ -69,6 +69,7 @@ and `llz tokens` skips everything already provisioned.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `llz ci assert-image-fresh` fails | `TF_IMAGE`/`KUBE_IMAGE` name a different commit than your template pin — normal right after `llz upgrade` | `llz tokens --env <env> --yes` re-pins and pushes both |
+| `llz ci assert-image-fresh` fails with **"the baked llz carries no version stamp"** | The image `TF_IMAGE` names does not stamp its `llz` version, so the skew guard cannot compare anything. Almost always an image older than the stamping fix | `llz tokens --env <env> --yes` re-pins both images to a published build. If they already name a `sha-<commit>` image, the stamping itself is broken — report it upstream |
 | `llz render --check` fails | The committed `apl-values/` no longer match the spec + pin | `llz render <env>` locally, then commit + push |
 | `require-secret` / `validate-tokens` fails | A missing, expired, or under-scoped credential | `llz doctor --env <env>` reports the same set locally |
 | Environment-scoped `gh secret set` 401s | `OPENBAO_SECRETS_WRITE_TOKEN` lacks **Environments: write** (the fine-grained "Secrets" permission is *not* enough), or you are not Environment admin on `infra-<env>` | Re-mint the PAT with Actions + Environments write |

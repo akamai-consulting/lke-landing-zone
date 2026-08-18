@@ -27,7 +27,9 @@ package cli
 // stamped correctly while every ci-tofu/ci-kubernetes image baked an llz
 // reporting "dev" — and `llz ci assert-image-fresh`, which compares that stamp
 // against the instance's template pin, degraded to warn-and-pass on every
-// adopter. A guard that covers one of two producers reports green on the one it
+// adopter — and, worse, printed an OK line on the value it had just called
+// unusable (#428). An unstamped stamp is now fatal in CI, so this test failing is
+// the cheap version of that outage. A guard that covers one of two producers reports green on the one it
 // does not read, which is worse than no guard: it was cited as the reason the
 // symbol could not drift. So this now checks EVERY build file, and Step 3 below
 // fails when a new stamping site appears that this list does not name.
@@ -60,7 +62,7 @@ var stampingBuilds = []struct {
 	},
 	{
 		"dockerfiles/Dockerfile",
-		"`llz ci assert-image-fresh` reads the baked stamp to compare the ci image against the instance's template pin; unstamped, it warns and passes and the skew guard is off",
+		"`llz ci assert-image-fresh` reads the baked stamp to compare the ci image against the instance's template pin; unstamped, it has nothing to compare and (in CI) fails every instance pipeline",
 	},
 }
 

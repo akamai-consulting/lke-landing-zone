@@ -1,56 +1,202 @@
 package templatecommit
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
 
+const (
+	// The verdict lines. Asserted as literals rather than by calling the code that
+	// prints them: the bug (#428) was a run emitting BOTH, so a test that reuses the
+	// producer would agree with whichever it reused.
+	okVerdict   = "assert-image-fresh: OK"
+	skipVerdict = "assert-image-fresh: SKIPPED"
+)
+
+// captureOutput runs fn with both streams redirected and returns what each got.
+// The verdict is a printed LINE, so nothing short of reading the streams tests it —
+// asserting on the returned error only ever saw nil for both a pass and a skip,
+// which is exactly how the two came to be indistinguishable.
+func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	origOut, origErr := os.Stdout, os.Stderr
+	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = wOut, wErr
+	fn()
+	wOut.Close()
+	wErr.Close()
+	o, _ := io.ReadAll(rOut)
+	e, _ := io.ReadAll(rErr)
+	return string(o), string(e)
+}
+
 func TestRunAssertImageFresh(t *testing.T) {
 	const sha = "0d634d7d54a138314be21d0891c376fbae99519a"
 	const other = "7ec07dc7929384cf393bbde98002d7089097e673"
 	// Nothing resolves: the guard must behave exactly as it did before the tag
-	// resolution existed, i.e. warn + pass rather than fail on an unanswered question.
+	// resolution existed, i.e. skip + pass rather than fail on an unanswered question.
 	unresolvable := func(string, string) (string, bool) { return "", false }
 	cases := []struct {
 		name, baked, ref string
 		resolve          func(repo, ref string) (string, bool)
 		wantErr          string // substring; "" means no error
+		wantVerdict      string // the line the run must print; "" for the error cases
 	}{
-		{"dev matches full sha", "dev-" + sha, sha, unresolvable, ""},
-		{"dev matches short ref", "dev-" + sha, sha[:12], unresolvable, ""},
-		{"dev short build matches full ref", "dev-" + sha[:12], sha, unresolvable, ""},
-		{"dev sha mismatch", "dev-" + sha, other, unresolvable, "image/template skew"},
-		{"dev vs unresolvable ref skips", "dev-" + sha, "main", unresolvable, ""},
-		{"unstamped dev skips", "dev", sha, unresolvable, ""},
-		{"empty Version skips", "", sha, unresolvable, ""},
-		{"release tag matches", "v1.2.3", "v1.2.3", unresolvable, ""},
-		{"release tag mismatch", "v1.2.3", "v1.2.4", unresolvable, "image/template skew"},
-		{"release vs sha skips", "v1.2.3", sha, unresolvable, ""},
-		{"unresolvable ref errors", "dev-" + sha, "", unresolvable, "cannot resolve the template ref"},
+		{"dev matches full sha", "dev-" + sha, sha, unresolvable, "", okVerdict},
+		{"dev matches short ref", "dev-" + sha, sha[:12], unresolvable, "", okVerdict},
+		{"dev short build matches full ref", "dev-" + sha[:12], sha, unresolvable, "", okVerdict},
+		{"dev sha mismatch", "dev-" + sha, other, unresolvable, "image/template skew", ""},
+		{"dev vs unresolvable ref skips", "dev-" + sha, "main", unresolvable, "", skipVerdict},
+		{"unstamped dev skips", "dev", sha, unresolvable, "", skipVerdict},
+		{"empty Version skips", "", sha, unresolvable, "", skipVerdict},
+		{"release tag matches", "v1.2.3", "v1.2.3", unresolvable, "", okVerdict},
+		{"release tag mismatch", "v1.2.3", "v1.2.4", unresolvable, "image/template skew", ""},
+		{"release vs sha skips", "v1.2.3", sha, unresolvable, "", skipVerdict},
+		{"unresolvable ref errors", "dev-" + sha, "", unresolvable, "cannot resolve the template ref", ""},
 
 		// The case this guard used to skip — a release-tag pin against a dev image.
 		// It is the DEFAULT shape of a fresh instance, so both outcomes must be right.
 		{"tag resolving to the baked commit passes", "dev-" + sha, "v0.0.39",
-			func(string, string) (string, bool) { return sha, true }, ""},
+			func(string, string) (string, bool) { return sha, true }, "", okVerdict},
 		{"tag resolving to a different commit fails", "dev-" + sha, "v0.0.39",
-			func(string, string) (string, bool) { return other, true }, "image/template skew"},
+			func(string, string) (string, bool) { return other, true }, "image/template skew", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// The unstamped cases are fatal in CI and skipped outside it, and this
+			// suite itself runs under GITHUB_ACTIONS — so the local and CI runs of the
+			// same test would disagree unless the arm is pinned here.
+			t.Setenv("GITHUB_ACTIONS", "")
 			stubTemplateCommit(t, tc.resolve)
-			err := runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl")
+			var err error
+			out, _ := captureOutput(t, func() { err = runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl") })
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runAssertImageFresh(%q,%q) = %v, want nil", tc.baked, tc.ref, err)
 				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("runAssertImageFresh(%q,%q) = %v, want error containing %q", tc.baked, tc.ref, err, tc.wantErr)
 			}
+			if tc.wantVerdict == "" {
+				if strings.Contains(out, okVerdict) {
+					t.Errorf("a failing run printed an OK verdict:\n%s", out)
+				}
+				return
+			}
+			if !strings.Contains(out, tc.wantVerdict) {
+				t.Errorf("runAssertImageFresh(%q,%q) printed %q, want a %q line", tc.baked, tc.ref, out, tc.wantVerdict)
+			}
+			// THE BUG: a skipped run also printed the OK line, and the OK line came
+			// second, so it read as the verdict.
+			if tc.wantVerdict == skipVerdict && strings.Contains(out, okVerdict) {
+				t.Errorf("a SKIPPED run also claimed OK — the two cannot both be true:\n%s", out)
+			}
 		})
+	}
+}
+
+// The three inputs the guard cannot compare, each asserted to produce a SKIP and
+// NOT an OK — the direct pin of #428, where an unstamped "dev" build was warned
+// about as unusable and then reported as matching a commit.
+func TestSkippedRunNeverClaimsOK(t *testing.T) {
+	const sha = "0d634d7d54a138314be21d0891c376fbae99519a"
+	cases := []struct{ name, baked, ref string }{
+		// Both directions of the unstamped case: against a SHA pin and against a tag
+		// pin, which take different arms (the tag pin resolves first).
+		{"unstamped against a sha pin", "dev", sha},
+		{"unstamped against a tag pin", "dev", "v0.0.44"},
+		{"empty stamp against a sha pin", "", sha},
+		{"unresolvable ref", "dev-" + sha, "main"},
+		{"release build against a sha pin", "v1.2.3", sha},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_ACTIONS", "")
+			stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
+			var err error
+			out, errOut := captureOutput(t, func() { err = runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl") })
+			if err != nil {
+				t.Fatalf("want a skip (pass), got %v", err)
+			}
+			if strings.Contains(out, okVerdict) {
+				t.Errorf("skipped run printed an OK verdict:\n%s", out)
+			}
+			if !strings.Contains(out, skipVerdict) {
+				t.Errorf("skipped run printed no SKIPPED verdict on stdout:\n%s", out)
+			}
+			// The annotation is what surfaces in the Actions UI; losing it would make a
+			// skip invisible to everyone not reading the log.
+			if !strings.Contains(errOut, "::warning::assert-image-fresh:") {
+				t.Errorf("skipped run emitted no ::warning:: annotation:\n%s", errOut)
+			}
+		})
+	}
+}
+
+// In CI the binary comes from the pinned ci image, and every published image stamps
+// its version — so an unstamped build there is a stamping regression (it has
+// happened: PR #433) and the guard is OFF. Skipping would report that as a pass.
+func TestUnstampedIsFatalInCI(t *testing.T) {
+	const sha = "0d634d7d54a138314be21d0891c376fbae99519a"
+	// Whitespace included: the stamp arrives from an ldflag and a padded one is
+	// still unstamped, so trimming must not be the difference between fatal and skip.
+	for _, tc := range []struct{ name, baked string }{
+		{"literal dev", "dev"},
+		{"empty stamp", ""},
+		{"padded dev", "  dev  "},
+	} {
+		baked := tc.baked
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_ACTIONS", "true")
+			stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
+			var err error
+			out, _ := captureOutput(t, func() { err = runAssertImageFresh(baked, sha, "acme/tmpl") })
+			if err == nil {
+				t.Fatalf("unstamped %q in CI must FAIL, got nil (output: %q)", baked, out)
+			}
+			if strings.Contains(out, okVerdict) {
+				t.Errorf("a failing run printed an OK verdict:\n%s", out)
+			}
+			// Both causes and both remediations, because the wrong one wastes a day.
+			for _, want := range []string{
+				"no version stamp",
+				"llz tokens --env <deployment> --yes",
+				"dockerfiles/Dockerfile",
+				"internal/cli.Version",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("unstamped-in-CI message missing %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// Outside CI the same input is a local `go build`, which must still pass — the
+// guard does not block a developer on a stamp only the release build sets.
+func TestUnstampedOutsideCISkips(t *testing.T) {
+	const sha = "0d634d7d54a138314be21d0891c376fbae99519a"
+	t.Setenv("GITHUB_ACTIONS", "")
+	stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
+	var err error
+	out, _ := captureOutput(t, func() { err = runAssertImageFresh("dev", sha, "acme/tmpl") })
+	if err != nil {
+		t.Fatalf("local dev build must not fail the guard: %v", err)
+	}
+	if !strings.Contains(out, skipVerdict) || strings.Contains(out, okVerdict) {
+		t.Errorf("want a SKIPPED verdict and no OK, got:\n%s", out)
 	}
 }
 
