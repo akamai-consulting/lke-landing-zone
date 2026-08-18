@@ -33,7 +33,8 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 	if !strings.Contains(out, "name: Promote (dev → staging → prod)") {
 		t.Errorf("missing/incorrect workflow title:\n%s", out)
 	}
-	// First stage has NO needs; later stages chain to the previous one.
+	// The first stage chains from the PREFLIGHT (not from nothing — that is what
+	// left a dispatched pipeline ungated); later stages chain to the previous one.
 	devIdx := strings.Index(out, "\n  dev:\n")
 	stagingIdx := strings.Index(out, "\n  staging:\n")
 	prodIdx := strings.Index(out, "\n  prod:\n")
@@ -44,8 +45,8 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 		t.Errorf("jobs not emitted in promotion order")
 	}
 	devBlock := out[devIdx:stagingIdx]
-	if strings.Contains(devBlock, "needs:") {
-		t.Errorf("entry stage dev must not declare needs:\n%s", devBlock)
+	if !strings.Contains(devBlock, "needs: "+preflightJob) {
+		t.Errorf("entry stage dev must chain from the preflight:\n%s", devBlock)
 	}
 	if !strings.Contains(out[stagingIdx:prodIdx], "needs: dev") {
 		t.Errorf("staging must `needs: dev`")

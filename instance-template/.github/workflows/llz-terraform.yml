@@ -408,9 +408,20 @@ jobs:
       # security coverage that did not exist. See the sidecar before re-adding.
 
   # ── Promotion-pipeline drift (PRs) ───────────────────────────────────────────
-  # promote.yml is RENDERED from `promotion_rank` in cluster/<env>.tfvars; this
-  # fails a PR that edits a rank without regenerating. Fix: `llz env pipeline`.
-  # No-op for instances with <2 ranked deployments.
+  # promote.yml is RENDERED from each deployment's `promotionRank`; this fails a PR
+  # that edits a rank without regenerating, AND a PR that leaves a stage naming a
+  # deployment the spec does not declare (renamed, deleted, or never created).
+  # Fix: `llz env pipeline`, or add the missing deployment.
+  #
+  # The second half is not a nicety. This job used to be described as a no-op below
+  # two ranked deployments, and it WAS one — it reported "in sync" for a promote.yml
+  # chaining dev → staging → prod on an instance whose spec declared only prod,
+  # right up until someone dispatched it. Abstaining is not agreement.
+  #
+  # STILL PR-ONLY, deliberately: the dispatch path is now gated by promote.yml's own
+  # llz-preflight job, which runs the same check with the whole chain behind it.
+  # Widening this `if:` instead would run the check inside every single-deployment
+  # apply, where there is no pipeline to protect.
   promote-pipeline-drift:
     name: Promotion pipeline up to date
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository

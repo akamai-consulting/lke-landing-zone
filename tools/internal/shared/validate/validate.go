@@ -41,10 +41,27 @@ var EnvNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 // ordinal, e.g. us-ord-1 or the newer-generation us-ord-10.
 var objClusterRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
 
+// ReservedEnvNames are legal-looking deployment names that llz itself emits as
+// identifiers elsewhere, so a deployment carrying one would collide.
+//
+// `llz-preflight` is a JOB ID in the generated .github/workflows/promote.yml, and
+// every stage job there is named after a deployment. A deployment called
+// llz-preflight would emit a duplicate `jobs:` key — GitHub rejects the whole
+// workflow with an error naming neither cause, and llz's own stage reader then
+// hard-errors on the file. The generator's comment claimed this name was one
+// `llz env add` would never produce; EnvNameRe accepts it, and nothing checked.
+// This is that check.
+var ReservedEnvNames = map[string]string{
+	"llz-preflight": "the preflight job id in the generated promote.yml — a deployment of this name would emit a duplicate jobs: key",
+}
+
 // EnvName returns an error if env is not a legal deployment name.
 func EnvName(env string) error {
 	if !EnvNameRe.MatchString(env) {
 		return fmt.Errorf("invalid deployment name %q (want %s — the same contract as `llz env add`)", env, EnvNameRe.String())
+	}
+	if why, reserved := ReservedEnvNames[env]; reserved {
+		return fmt.Errorf("deployment name %q is reserved: %s — pick another name", env, why)
 	}
 	return nil
 }

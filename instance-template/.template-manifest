@@ -120,7 +120,9 @@ managed  apl-values/README.md
 managed  apl-values/values.yaml
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
-# Workflow CALLER STUBS (terraform.yml, promote.yml, …) are `merge` for TWO reasons,
+# (promote.yml used to be listed here and is NOT a caller stub any more — it is
+# generated, and `owned`; see the exception below the glob.)
+# Workflow CALLER STUBS (terraform.yml, cluster-health.yml, …) are `merge` for TWO reasons,
 # and only one of them is still about tokens: they own the dispatch/trigger surface
 # an operator may legitimately tune (cron schedules, dispatch defaults), and some
 # carry `instance_repo`.
@@ -135,6 +137,21 @@ managed  apl-values/values.yaml
 # dropped, they belong in `managed` with the bodies — where the lock picks them
 # up automatically.
 merge    .github/workflows/**
+# promote.yml is the ONE exception, and it is `owned` because it is GENERATED —
+# `llz env pipeline` renders it from each deployment's promotionRank, so copier is
+# not the thing that keeps it correct and must not be the thing that rewrites it.
+# (Classify is last-match-wins, so this line overrides the glob above.)
+#
+# THE COST OF LEAVING IT `merge` WAS SILENT DATA LOSS. An instance that took the
+# shipped example as-is has ours == base, so copier applies "theirs" CLEANLY on
+# upgrade — no conflict markers, nothing for `llz upgrade` to stop on. When the
+# template's copy changed from a three-stage example to the stage-less
+# placeholder, that upgrade silently replaced a working dev → staging → prod
+# pipeline with one that promotes nothing, and `llz env pipeline --check` stayed
+# GREEN afterwards, because a file declaring no stages makes no claim to falsify.
+# Seeded once via _skip_if_exists (keep copier.yml in step), maintained from then
+# on by `llz env pipeline`.
+owned    .github/workflows/promote.yml
 # The vendored llz-*.yml REUSABLE BODIES are a different animal: every one of them
 # is token-free (verified: no copier substitution appears in any llz-*.yml), so an
 # instance's copy is byte-identical to the render unless it was hand-edited. Ship them

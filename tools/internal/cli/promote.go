@@ -77,23 +77,29 @@ func envNextCmd() *cobra.Command {
 // `promoted` anyway. So the os.WriteFile lives here, on the side of the boundary
 // whose declaration permits it. Same split `llz ci gen-toc` uses; the catalog
 // records why nothing was invented instead.
-func syncPromoteWorkflow(tfDir, relPrefix string, check bool) (bool, error) {
+func syncPromoteWorkflow(tfDir, relPrefix string, check bool) (promote.Plan, error) {
 	plan, err := promote.PlanWorkflow(promoteDeps(), tfDir, relPrefix)
 	if err != nil {
-		return false, err
+		return promote.Plan{}, err
 	}
 	if plan.Note != "" && !check {
 		fmt.Println(plan.Note)
 	}
 	if !plan.Changed || check {
-		return plan.Changed, nil
+		return plan, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(plan.Path), 0o755); err != nil {
-		return false, err
+		return promote.Plan{}, err
 	}
 	if err := os.WriteFile(plan.Path, []byte(plan.Content), 0o644); err != nil {
-		return false, err
+		return promote.Plan{}, err
 	}
-	fmt.Printf("promote.yml: regenerated pipeline %s\n", strings.Join(plan.Order, " → "))
-	return true, nil
+	if len(plan.Order) > 0 {
+		fmt.Printf("promote.yml: regenerated pipeline %s\n", strings.Join(plan.Order, " → "))
+	} else {
+		fmt.Println("promote.yml: regenerated as the empty pipeline (no stages) — see the note above.")
+	}
+	// Re-derive from what was actually written; see Plan.Applied for the bug that
+	// reporting on the pre-write plan produced.
+	return plan.Applied(), nil
 }

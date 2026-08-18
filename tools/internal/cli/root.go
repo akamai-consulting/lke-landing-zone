@@ -98,7 +98,17 @@ func init() {
 	// envadd regenerates promote.yml after adding an environment, but the WRITE
 	// stays here: internal/promote declares transition:promoted[read-repo] and its
 	// own guard refuses a write path, and write-repo is not legal at `promoted`.
-	environments.SyncPromoteWorkflow = syncPromoteWorkflow
+	// Adapted rather than assigned: the seam answers "did it change?", and taking
+	// the whole promote.Plan across it would put that type in `environments` to
+	// carry a field env-add does not read. The undeclared-stage report is
+	// deliberately NOT routed through here — env-add's handler frames any error as
+	// "could not regenerate promote.yml", which is the wrong sentence for a stage
+	// pointing at a deployment that never existed. That gets reported by
+	// `llz env pipeline --check`, on the PR and again in the promote preflight.
+	environments.SyncPromoteWorkflow = func(tfDir, relPrefix string, check bool) (bool, error) {
+		plan, err := syncPromoteWorkflow(tfDir, relPrefix, check)
+		return plan.Changed, err
+	}
 	// sustain.Deps needs lockableScaffoldFiles and the global --yes. Both used to
 	// be main's, which is what made `llz ci managed-fresh` undriveable from the
 	// registry; they are cli/deps now and the gate driver assembles the same value.
@@ -384,7 +394,7 @@ func envCmd() *cobra.Command {
 }
 
 func envPipelineCmd() *cobra.Command {
-	var check bool
+	var check, requirePipeline bool
 	c := &cobra.Command{
 		Use:   "pipeline",
 		Short: "regenerate .github/workflows/promote.yml from the promotion_rank ordering",
@@ -393,25 +403,39 @@ func envPipelineCmd() *cobra.Command {
 			"generation `llz env add` runs, exposed standalone for the hand-edit path\n" +
 			"(you changed a promotion_rank directly in a cluster/<env>.tfvars).\n" +
 			"--check writes nothing and exits non-zero when promote.yml has drifted from\n" +
-			"the ranks (wire it into CI as the \"did you regenerate?\" gate). Needs ≥2\n" +
-			"ranked deployments to form a pipeline; runs only in a rendered instance.",
+			"the ranks, when any stage names a deployment the spec does not declare, or\n" +
+			"when two or more applying stages have no needs: order over them (wire it into\n" +
+			"CI as the \"can this pipeline still run?\" gate). Regenerating needs ≥2 ranked\n" +
+			"deployments; the stage checks run at any count. Runs only in a rendered\n" +
+			"instance.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// --require-pipeline is a question, so it needs the question mode. Without
+			// this it also armed the WRITE path, where `llz env pipeline` regenerated
+			// the empty placeholder and then exited 1 to report that the file it had
+			// just written has no pipeline — a true statement, delivered as if the
+			// write had failed.
+			if requirePipeline && !check {
+				return fmt.Errorf("--require-pipeline only applies to --check (it asks whether a pipeline exists; it cannot make one)")
+			}
 			tfDir, _, relPrefix := instancelayout.Detect()
-			changed, err := syncPromoteWorkflow(tfDir, relPrefix, check)
+			plan, err := syncPromoteWorkflow(tfDir, relPrefix, check)
 			if err != nil {
 				return err
 			}
-			if check && changed {
-				return fmt.Errorf("promote.yml is out of date with the promotion_rank ordering — run `llz env pipeline` and commit the result")
+			// The whole verdict in one call — the four failing arms, the advisories a
+			// passing check must still disclose, and the not-an-instance case — composed
+			// in the promote extension under unit test. This layer prints; see
+			// Plan.CheckReport for why none of that ordering lives here.
+			lines, err := plan.CheckReport(check, requirePipeline)
+			for _, l := range lines {
+				fmt.Println(l)
 			}
-			if check {
-				fmt.Println("promote.yml is in sync with the promotion_rank ordering.")
-			}
-			return nil
+			return err
 		},
 	}
-	c.Flags().BoolVar(&check, "check", false, "verify promote.yml matches the ranks; exit non-zero on drift (writes nothing)")
+	c.Flags().BoolVar(&check, "check", false, "verify promote.yml matches the ranks, names only declared deployments, and orders its stages; exit non-zero otherwise (writes nothing)")
+	c.Flags().BoolVar(&requirePipeline, "require-pipeline", false, "with --check, also fail when promote.yml declares fewer than 2 applying stages (for promote.yml's own preflight, where having no pipeline IS the failure; a PR gate must NOT set this)")
 	return c
 }
 

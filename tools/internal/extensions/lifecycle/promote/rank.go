@@ -83,6 +83,25 @@ func ReadPromotion(d Deps, tfDir string) ([]promoStage, error) {
 	return stages, nil
 }
 
+// DeploymentNames returns every deployment the instance declares, RANKED OR NOT,
+// from the same two sources and in the same preference order PromotionRanks uses.
+//
+// PromotionRanks is not a substitute: on the tfvars path it only carries the
+// deployments that happen to have a `promotion_rank` line, so using it as the set
+// of "deployments that exist" would silently treat an unranked deployment as
+// nonexistent — and the stage check (stages.go) would then reject a stage that is
+// perfectly valid. The set of deployments and the set of ranks are different
+// questions; this answers the first one.
+func DeploymentNames(d Deps, tfDir string) ([]string, error) {
+	if lz, present, err := d.LoadSpec(); present {
+		if err != nil {
+			return nil, err
+		}
+		return lz.EnvNames(), nil
+	}
+	return d.ListDeployments(tfDir)
+}
+
 // EXPORTED because a coupling test spans the extraction boundary:
 // internal/cli/spec_topology_test.go asserts that the SPEC's environments and
 // their ranks agree, and the two halves of that claim live in different packages.

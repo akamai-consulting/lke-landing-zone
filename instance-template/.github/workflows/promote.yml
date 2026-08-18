@@ -1,4 +1,4 @@
-name: Promote (dev → staging → prod)
+name: Promote (no pipeline configured yet)
 
 # Native code-promotion pipeline (docs/environments-and-promotion.md): a STATIC,
 # `needs:`-chained walk over the ranked deployments. Each stage calls the SAME
@@ -7,57 +7,55 @@ name: Promote (dev → staging → prod)
 # per-stage GREEN GATE — a stage starts only once the prior stage's whole apply +
 # convergence gate succeeded.
 #
-# REGENERATED FROM `promotion_rank`: this file is rendered from each deployment's
-# `promotion_rank` (cluster/<env>.tfvars) by `llz env add` and `llz env pipeline`.
-# It is the GitHub-native runtime; promotion_rank is the source of truth. The
-# dev/staging/prod jobs below are the example shipped with a fresh instance — once
-# you scaffold your ranked deployments (`llz env add <env> --promotion-rank N`),
-# llz rewrites this file to match. To change the pipeline, edit promotion_rank and
-# run `llz env pipeline` (NOT this file by hand); `llz env pipeline --check` fails
-# in CI when the two drift. `llz env list --ordered` / `llz env next` read the same
-# ranks; the fan-out workflows (health, rotation) read the full deployment list.
+# THIS FILE IS GENERATED, and what ships with a fresh instance is the ONLY state
+# that is not: a preflight and no stages. It stays that way until you rank at least
+# two deployments (`llz env add <env> --promotion-rank N`, or `promotionRank` in
+# environments/<env>.yaml) and run `llz env pipeline`, which rewrites this file
+# from the ranks — keeping the preflight and adding the stages after it. To change
+# the pipeline, edit the ranks and re-run `llz env pipeline` — NOT this file by
+# hand; `llz env pipeline --check` fails in CI when the two drift.
+# `llz env list --ordered` / `llz env next` read the same ranks; the fan-out
+# workflows (health, rotation) read the full deployment list.
 #
-# Why static jobs instead of a `llz env next` self-dispatch loop: GitHub already
-# provides the three pieces of a promotion pipeline, so there is nothing to
-# reinvent at runtime —
-#   • on-green gate       → `needs:` (a stage waits for the prior to go green)
-#   • approval / soak      → infra-<stage> Environment protection rules
-#                            (required reviewers + wait timer + "only main"
-#                             deployment-branch policy)
-#   • resume-from-failure  → GitHub's built-in "Re-run failed jobs" resumes the
-#                            chain from the stage that failed — no custom resume.
+# WHY A PREFLIGHT AND NOT A dev → staging → prod EXAMPLE. It used to ship the
+# three-stage example live and dispatchable. On an instance that only ever declared
+# `prod`, dispatching it started three stages that each died ~20s in with
+# `llz: env "dev" not in spec (have: [prod])` — one cause, three unrelated-looking
+# failures — and the drift gate had reported the file "in sync" on the same tree,
+# because with fewer than two ranked deployments it abstained and abstaining read
+# as agreement. An example that can be RUN is not an example. The rendered shape
+# this generates into is documented in docs/environments-and-promotion.md instead,
+# where running it is not an option.
 #
 # ADOPTERS:
-#   • Set `promotion_rank` on the deployments you want chained and run
+#   • Set `promotionRank` on the deployments you want chained and run
 #     `llz env pipeline` rather than editing the jobs below by hand.
-#   • Every stage's `region:` must have a tfvars set + an `infra-<deployment>`
-#     GitHub Environment. Put approval (required reviewers) and any soak time
-#     (wait timer) on infra-staging / infra-prod — NOT on infra-dev — so dev flows
-#     automatically and the human gate sits BETWEEN stages. Add a
+#   • Every stage's `region:` must have a deployment in the spec + an
+#     `infra-<deployment>` GitHub Environment. Put approval (required reviewers)
+#     and any soak time (wait timer) on the LATER stages — NOT on the first — so
+#     stage 1 flows automatically and the human gate sits BETWEEN stages. Add a
 #     deployment-branch policy ("Selected branches: main") so only main promotes.
 #   • Nothing to repoint: every stage calls the repo-local vendored body
 #     (./.github/workflows/llz-terraform.yml), re-rendered by `llz upgrade`.
+#   • `llz upgrade` NEVER TOUCHES THIS FILE. It is `owned` in .template-manifest
+#     and fenced by copier's `_skip_if_exists`: seeded once when the instance is
+#     scaffolded, yours from then on. `llz env pipeline` is what keeps it correct,
+#     so copier must not be what rewrites it — left in the 3-way merge, an instance
+#     that took the old shipped example unchanged had ours == base, so copier
+#     applied "theirs" CLEANLY and silently replaced a working promotion pipeline.
+#     No conflict markers, nothing for `llz upgrade` to stop on.
+#     THE COST OF THAT SAFETY: improvements to this file — new preflight steps, a
+#     bumped `actions/checkout` — do NOT arrive by upgrade. Re-run
+#     `llz env pipeline` after an upgrade to pick them up, or copy the job from
+#     docs/environments-and-promotion.md. `llz env pipeline --check` tells you when
+#     something is missing; it will not change the file behind your back.
 
 on:
+  # Kept dispatchable so the workflow is discoverable in the Actions tab and can
+  # say what to do — a promotion pipeline nobody can find is not safer than one
+  # that explains itself. It applies nothing until `llz env pipeline` adds stages;
+  # the preflight below fails the run and prints how to build one.
   workflow_dispatch:
-    inputs:
-      module:
-        description: 'How much of each stage to (re)apply for this promotion'
-        required: false
-        type: choice
-        default: all
-        options:
-          - all
-          - cluster
-          - object-storage
-  # Optional: auto-start the pipeline when a promotable change lands on main.
-  # Left commented so promotion is an explicit, operator-initiated action by
-  # default; uncomment to make every merge to main walk the pipeline.
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'terraform-iac-bootstrap/**'
-  #     - 'apl-values/**'
 
 permissions:
   contents: read
@@ -69,44 +67,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Stage 1 (promotion_rank 1) ───────────────────────────────────────────────
-  # No `needs:` — the pipeline entry point. infra-dev should have NO required
-  # reviewers so the first stage applies automatically from main.
-  dev:
-    name: Promote → dev
-    uses: ./.github/workflows/llz-terraform.yml
-    with:
-      instance_repo: <@ instance_repo @>
-      action: apply
-      module: ${{ inputs.module || 'all' }}
-      region: dev
-    secrets: inherit
-
-  # ── Stage 2 (promotion_rank 2) ───────────────────────────────────────────────
-  # `needs: dev` is the green gate: staging only starts after dev applied AND the
-  # convergence gate passed. The approval prompt (if infra-staging has required
-  # reviewers) appears when this stage's apply jobs begin.
-  staging:
-    name: Promote → staging
-    needs: dev
-    uses: ./.github/workflows/llz-terraform.yml
-    with:
-      instance_repo: <@ instance_repo @>
-      action: apply
-      module: ${{ inputs.module || 'all' }}
-      region: staging
-    secrets: inherit
-
-  # ── Stage 3 (promotion_rank 3) ───────────────────────────────────────────────
-  # Last stage. Gate infra-prod with required reviewers (and optionally a wait
-  # timer for soak) so prod is the deliberate, human-approved end of the line.
-  prod:
-    name: Promote → prod
-    needs: staging
-    uses: ./.github/workflows/llz-terraform.yml
-    with:
-      instance_repo: <@ instance_repo @>
-      action: apply
-      module: ${{ inputs.module || 'all' }}
-      region: prod
-    secrets: inherit
+  # The job the generated file keeps, running the same command. `--require-pipeline`
+  # is what makes it fail here and pass there: it adds "there must BE a pipeline" to
+  # the spec-agreement check, which is the failure at dispatch time and a normal
+  # state on a pull request. The PR gate (promote-pipeline-drift in
+  # llz-terraform.yml) therefore does NOT pass that flag.
+  llz-preflight:
+    name: Promotion pipeline matches the spec
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the instance
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # IMAGE SKEW IS CHECKED FIRST, AND THE ORDER IS THE WHOLE POINT — the same
+      # rule repo-readiness records in llz-terraform.yml. A TF_IMAGE that has not
+      # been re-pinned since the last upgrade is the NORMAL state right after one,
+      # and that image's baked llz does not have `--require-pipeline`: with the
+      # steps the other way round this job dies on `unknown flag` and the
+      # actionable message never runs, on exactly the population it was built for.
+      # assert-image-fresh has shipped for many releases, so it resolves in the old
+      # image and says the useful thing. Any new verb or flag added here belongs
+      # BELOW it.
+      - name: ci images match the instance's template pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: llz ci assert-image-fresh
+      - name: Verify there is a pipeline and every stage names a declared deployment
+        run: llz env pipeline --check --require-pipeline
