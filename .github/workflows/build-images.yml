@@ -216,6 +216,30 @@ jobs:
           done
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
+      # THE STAMP IS CHECKED IN THE IMAGE THAT WAS JUST PUSHED, not in the build
+      # recipe. version_stamp_test.go pins that every stamping site names a symbol
+      # the linker can RESOLVE — which is the half that broke last time (#433) — but
+      # it reads build files, so it cannot see the value: `ARG LLZ_VERSION=dev` is a
+      # silent fallback, `--build-arg` above could be dropped or expand empty, and
+      # every one of those publishes an image whose llz reports "dev" with the test
+      # still green.
+      #
+      # That matters more since #428 made an unusable stamp FATAL for the consumer:
+      # a bad build no longer degrades to an annotation, it reddens the first step of
+      # every job in every adopter's pipeline at once, with no fix they can apply.
+      # This is the check that keeps such an image from being published at all, and
+      # it is the repo's own rule — assert at the CONSUMER on data the producer
+      # really emitted. Run against the registry copy because a multi-platform build
+      # cannot be `--load`ed; --entrypoint covers the distroless `llz` image, whose
+      # own entrypoint is the binary.
+      - name: ${{ matrix.image }}'s baked llz reports this build's version
+        env:
+          REPO:  ${{ steps.ns.outputs.repo }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=always --entrypoint /usr/local/bin/llz "${REPO}/${IMAGE}:sha-${SHA}" version | tee /dev/stderr | grep -qxF "llz dev-${SHA}" || { echo "::error::${IMAGE}:sha-${SHA} bakes an llz whose version is not 'dev-${SHA}' (the line above is what it reports). The -ldflags -X in dockerfiles/Dockerfile did not reach internal/cli.Version, or LLZ_VERSION arrived empty/malformed — the linker ignores an -X it cannot resolve, silently. Publishing this image would fail 'llz ci assert-image-fresh' in every instance pipeline."; exit 1; }
+
       # Signed per REPOSITORY, not per digest: cosign stores the signature as a
       # `sha256-<digest>.sig` tag inside the repo it was pushed to, so a signature
       # on ci-tofu does NOT appear under the ci-terraform alias even though both

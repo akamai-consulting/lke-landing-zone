@@ -395,7 +395,11 @@ guards ad-hoc concurrent builds.
    drift that re-rendering locally cannot fix — the operator's `llz` **is** the
    pinned release. `llz ci assert-image-fresh` asserts they match, reading the
    pin from the instance's own `.copier-answers.yml` — there is no third,
-   hand-maintained copy of it to skew.
+   hand-maintained copy of it to skew. A **third** state is fatal here too: an
+   image whose `llz` carries no usable version stamp, which means the guard
+   cannot compare anything at all. That is a broken image build, not a stale pin,
+   so re-pinning will not clear it — see
+   [first-build-failed.md](../runbooks/first-build-failed.md#4-common-first-build-failures).
 
    The pin is a release **tag** and the baked build is a **commit**, so the
    guard resolves the tag against the (public) template repo to compare them at

@@ -63,6 +63,16 @@ func AssertImageFreshCmd() *cobra.Command {
 			// only) — so without this call the skew reaches a cluster whenever the
 			// operator commits the upgrade with --no-verify. An explicit
 			// --template-ref overrides the pin, so there is nothing to hold to it.
+			//
+			// TRIMMED FIRST, and that is not cosmetic. The comparison downstream trims
+			// before testing for empty, so a `--template-ref "   "` (an unset workflow
+			// variable interpolated into the flag is the way that happens) used to fall
+			// through this guard as "an override was given" and then be rejected
+			// downstream as "no .copier-answers.yml in the working directory" — a false
+			// statement about a file sitting right there, with the pin-coherence check
+			// silently skipped for the life of the misconfiguration. Malformed-but-non-
+			// empty beating an `== ""` guard is a scar this repo has paid for before.
+			templateRef = strings.TrimSpace(templateRef)
 			if templateRef == "" {
 				if err := pincoherence.Assert("."); err != nil {
 					return err
@@ -89,11 +99,6 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	if templateRef == "" {
 		return fmt.Errorf("cannot resolve the template ref to compare against: no .copier-answers.yml in the working directory (run from an instance checkout, or pass --template-ref)")
 	}
-	// A TAG pin against a dev-SHA image used to warn and skip. That skip covered the
-	// DEFAULT new-adopter shape — copier pins a release tag while TF_IMAGE floats on
-	// a tag main republishes — so the guard passed on precisely the instances it
-	// exists to protect. Resolve the tag to the commit it names and compare the two
-	// as commits. See template_commit.go.
 	// THE STAMP IS JUDGED BEFORE THE PIN IS RESOLVED, and the order is load-bearing
 	// twice over. A stamp that names no commit cannot be compared to anything, so
 	// resolving the tag first would be a network round trip whose answer cannot
@@ -115,7 +120,7 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	// exists to protect. Resolve the tag to the commit it names and compare the two
 	// as commits. See template_commit.go.
 	pinCommit := templateRef
-	if isDevBuild(bakedVersion) && !hexSHARe.MatchString(templateRef) {
+	if isDevStamp(bakedVersion) && !hexSHARe.MatchString(templateRef) {
 		sha, ok := Resolve(templateRepo, templateRef)
 		if !ok {
 			// AND THIS ONE STAYS A SKIP IN CI, deliberately, where an unusable stamp
@@ -145,11 +150,7 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 	// resolves to, so printing the tag alone reports a verdict nobody can audit from
 	// the log — which is how `OK — baked llz "dev-" matches template-ref "v0.0.44"`
 	// reads plausible while being a match against nothing.
-	pinned := templateRef
-	if pinCommit != templateRef {
-		pinned = fmt.Sprintf("%s (= %s)", templateRef, pinCommit)
-	}
-	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %s.\n", strings.TrimSpace(bakedVersion), pinned)
+	fmt.Printf("assert-image-fresh: OK — baked llz %q matches template-ref %s.\n", strings.TrimSpace(bakedVersion), pinnedDesc(templateRef, pinCommit))
 	return nil
 }
 
@@ -184,13 +185,9 @@ func skipImageFresh(reason string) error {
 	return nil
 }
 
-// isDevBuild reports whether a baked version is a `dev-<sha>` stamp.
-func isDevBuild(baked string) bool {
-	return strings.HasPrefix(strings.TrimSpace(baked), "dev-")
-}
-
-// stampedSHA returns the commit a `dev-<sha>` stamp names, and whether this is a
-// dev stamp at all.
+// stampedSHA returns the commit a `dev-<sha>` stamp names, and whether it names one
+// AT ALL — ok is false both for a release tag and for a `dev-` prefix carrying
+// something that is not a commit.
 //
 // THE SHA IS VALIDATED, and it was not. `strings.TrimPrefix("dev-", "dev-")` is the
 // empty string, and shaPrefixMatch treats an empty prefix as a match against every
@@ -200,9 +197,21 @@ func isDevBuild(baked string) bool {
 // those stamps on purpose; `--build-arg LLZ_VERSION=dev-${SHA}` with an empty SHA
 // does, and the surrounding guard is exactly the wrong place to assume a producer
 // gets its inputs right.
+//
+// The validation lives HERE, in the accessor, and not only in unstampedReason: a
+// caller that reaches shaPrefixMatch with an unvalidated suffix recreates the bug,
+// and "safe because a different function ran three lines earlier" is a property no
+// compiler checks and no reader can see.
 func stampedSHA(baked string) (string, bool) {
 	sha, isDev := strings.CutPrefix(strings.TrimSpace(baked), "dev-")
-	return sha, isDev
+	return sha, isDev && hexSHARe.MatchString(sha)
+}
+
+// isDevStamp reports whether a baked version claims to be a dev build, valid or
+// not. unstampedReason needs the claim (to say a `dev-` stamp is MALFORMED rather
+// than a release tag that does not match); everything else wants stampedSHA.
+func isDevStamp(baked string) bool {
+	return strings.HasPrefix(strings.TrimSpace(baked), "dev-")
 }
 
 // unstampedReason says why a baked version cannot be compared to anything, and is
@@ -220,7 +229,8 @@ func unstampedReason(bakedVersion string) (string, bool) {
 	if baked == "" || baked == "dev" {
 		return fmt.Sprintf("the baked llz version is unstamped (%q), which is what a local `go build` without the release ldflags produces", bakedVersion), true
 	}
-	if sha, isDev := stampedSHA(baked); isDev && !hexSHARe.MatchString(sha) {
+	if _, usable := stampedSHA(baked); isDevStamp(baked) && !usable {
+		sha := strings.TrimPrefix(baked, "dev-")
 		return fmt.Sprintf("the baked llz version %q is malformed — the part after `dev-` is %q, which is not a commit sha, so there is nothing to compare against the pin", bakedVersion, sha), true
 	}
 	return "", false
@@ -302,6 +312,20 @@ func unstampedInCIError(baked string) error {
 		"       cannot reach this message at all.)", baked)
 }
 
+// pinnedDesc renders the pin as the reader needs to see it: the ref alone when it
+// IS a commit, `tag (= commit)` when it had to be resolved.
+//
+// Shared by the OK line and the skew error deliberately. The OK line was changed to
+// name what was compared BECAUSE the failure line already did — two copies of that
+// rendering would be two verdicts about the same resolution, free to drift, which is
+// the shape of the bug this file is about.
+func pinnedDesc(templateRef, pinCommit string) string {
+	if pinCommit == templateRef {
+		return templateRef
+	}
+	return fmt.Sprintf("%s (= %s)", templateRef, pinCommit)
+}
+
 // shaPrefixMatch reports whether two git object names refer to the same commit,
 // tolerating a short SHA on either side (one must be a prefix of the other).
 func shaPrefixMatch(a, b string) bool {
@@ -323,10 +347,7 @@ func shaPrefixMatch(a, b string) bool {
 // operator's local llz IS the pinned release and re-rendering changes nothing.
 // Whoever reads this must be able to tell which one they have.
 func imageSkewError(baked, templateRef, pinCommit string) error {
-	pinned := templateRef
-	if pinCommit != templateRef {
-		pinned = fmt.Sprintf("%s (= %s)", templateRef, pinCommit)
-	}
+	pinned := pinnedDesc(templateRef, pinCommit)
 	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
 	return fmt.Errorf("image/template skew: the ci-tofu image's baked llz is %q but this instance pins template ref %s.\n"+
 		"  These must name the same commit. If the image LAGS the pin it lacks any llz command/flag added since it was\n"+

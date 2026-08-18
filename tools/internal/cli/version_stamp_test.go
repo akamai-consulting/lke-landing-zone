@@ -50,8 +50,14 @@ const repoRoot = "../../.."
 // stampingBuilds are the builds whose output is CONSUMED as a version — each one
 // must carry a correct `-X`. Being on this list means "stamping here is
 // load-bearing", not merely "this file builds llz": the many unstamped
-// `go build ./cmd/llz` sites (setup-llz, the template-scripts) produce
-// throwaway CI binaries whose version nothing reads.
+// `go build ./cmd/llz` sites (setup-llz, the template-scripts) produce throwaway
+// CI binaries whose version nothing reads — TODAY. That last word is now doing
+// work: since #428 an unstamped stamp is FATAL under GITHUB_ACTIONS, so the first
+// job that points one of those binaries at `llz ci assert-image-fresh` gets a hard
+// failure diagnosing a ci-image stamping bug it does not have. Nothing catches
+// that, because Step 3 below only looks at builds that already carry an `-X`. The
+// rule for anyone adding such a call: that verb belongs to a job running the
+// PINNED ci image, and a from-source binary has no template pin to check anyway.
 var stampingBuilds = []struct {
 	path string
 	why  string // what reads the stamp, and what breaks when it is absent

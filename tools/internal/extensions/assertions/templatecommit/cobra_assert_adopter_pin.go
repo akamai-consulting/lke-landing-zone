@@ -79,10 +79,11 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	}
 	fmt.Printf("assert-adopter-pin: %s @ %s\n", templateRepo, ref)
 
-	// 1. The pin must resolve. Unlike assert-image-fresh — which degrades to a
-	//    warning because it cannot tell "skewed" from "unreachable" — an
-	//    unresolvable ref IS a failure here: this gate's entire job is to answer
-	//    this question, so being unable to ask it is a failed gate, not a pass.
+	// 1. The pin must resolve. assert-image-fresh skips on an unresolvable ref —
+	//    it runs on every PR and cannot tell "skewed" from "GitHub is having a bad
+	//    minute", so it says SKIPPED and passes. Here an unresolvable ref IS a
+	//    failure: this gate's entire job is to answer this question, it runs once
+	//    per release, and being unable to ask it is a failed gate, not a pass.
 	commit, ok := Resolve(templateRepo, ref)
 	if !ok {
 		return fmt.Errorf("could not resolve %s@%s to a commit — the gate cannot verify what an adopter "+

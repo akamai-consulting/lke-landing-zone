@@ -51,6 +51,17 @@ func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	go func() { _, _ = io.Copy(&o, rOut); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(&e, rErr); done <- struct{}{} }()
 
+	// DEFERRED AS WELL AS EXPLICIT. fn is the code under test; if it panics — or
+	// calls t.Fatal, which is runtime.Goexit — the straight-line restore below never
+	// runs, the panic text goes into a pipe whose buffer is then discarded, and the
+	// binary dies with nothing to point at: the exact failure this helper's drain
+	// goroutines exist to prevent, arriving by the other door. Re-assigning the same
+	// values twice and double-closing a pipe are both harmless.
+	defer func() {
+		os.Stdout, os.Stderr = origOut, origErr
+		wOut.Close()
+		wErr.Close()
+	}()
 	os.Stdout, os.Stderr = wOut, wErr
 	fn()
 	// Restore BEFORE reading the buffers: the copy goroutines finish only on EOF,
@@ -119,7 +130,7 @@ func TestRunAssertImageFresh(t *testing.T) {
 			t.Setenv("GITHUB_ACTIONS", "")
 			stubTemplateCommit(t, tc.resolve)
 			var err error
-			out, _ := captureOutput(t, func() { err = runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl") })
+			out, errOut := captureOutput(t, func() { err = runAssertImageFresh(tc.baked, tc.ref, "acme/tmpl") })
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runAssertImageFresh(%q,%q) = %v, want nil", tc.baked, tc.ref, err)
@@ -147,6 +158,16 @@ func TestRunAssertImageFresh(t *testing.T) {
 			if tc.wantVerdict == okVerdict && strings.Contains(out, skipVerdict) {
 				t.Errorf("an OK run also claimed SKIPPED — the two cannot both be true:\n%s", out)
 			}
+			// THE ANNOTATION CHANNEL COUNTS AS A VERDICT. Checking only stdout would
+			// leave the same contradiction reachable across streams: a `::warning::`
+			// saying the value is unusable beside an OK line saying it matches is
+			// #428 whether the two lines are ordered or interleaved.
+			if tc.wantVerdict == okVerdict && strings.Contains(errOut, "::warning::") {
+				t.Errorf("an OK run also emitted a warning annotation:\n%s", errOut)
+			}
+			if tc.wantVerdict == skipVerdict && !strings.Contains(errOut, "::warning::assert-image-fresh:") {
+				t.Errorf("a SKIPPED run emitted no ::warning:: annotation:\n%s", errOut)
+			}
 		})
 	}
 }
@@ -162,7 +183,7 @@ func TestSkippedRunNeverClaimsOK(t *testing.T) {
 		{"empty stamp against a sha pin", "", sha},
 		// The `dev-`-prefixed shapes, which DO reach the tag-resolution arm's
 		// predicate — the earlier claim that a bare "dev" resolves first was wrong
-		// (isDevBuild("dev") is false, so nothing resolves), and the row that claimed
+		// (isDevStamp("dev") is false, so nothing resolves), and the row that claimed
 		// it was a duplicate. These are the inputs that actually distinguish the arms.
 		{"dev- with no sha against a sha pin", "dev-", sha},
 		{"dev- with no sha against a tag pin", "dev-", "v0.0.44"},
@@ -341,5 +362,37 @@ func TestAnyNonEmptyGitHubActionsCountsAsCI(t *testing.T) {
 				t.Fatalf("unstamped under GITHUB_ACTIONS=%q must FAIL, got nil (output: %q)", v, out)
 			}
 		})
+	}
+}
+
+// A whitespace-only --template-ref is not an override. It used to satisfy the
+// `templateRef == ""` guard on the pin-coherence call — so an unset workflow
+// variable interpolated into the flag silently disabled the instance's only
+// CI-run pin check — and was then rejected downstream as "no .copier-answers.yml
+// in the working directory", a false statement about a file that is right there.
+// Malformed-but-non-empty beating an `== ""` guard is a repeat offender in this
+// repo, so the trim is pinned rather than assumed.
+//
+// Driven through a REAL skewed pin, because that is the only thing that tells the
+// two paths apart: with the trim the run reports the pin skew, without it the
+// guard is skipped and the run blames a missing file.
+func TestBlankTemplateRefFlagIsNotAnOverride(t *testing.T) {
+	chdirTemp(t)
+	t.Setenv("GITHUB_ACTIONS", "")
+	stubTemplateCommit(t, func(string, string) (string, bool) { return "", false })
+	if err := os.WriteFile(".copier-answers.yml", []byte(
+		"_src_path: https://github.com/akamai-consulting/lke-landing-zone\n"+
+			"_commit: v0.0.39\nllz_version: v0.0.44\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := AssertImageFreshCmd()
+	c.SetArgs([]string{"--template-ref", "   "})
+	var err error
+	_, _ = captureOutput(t, func() { err = c.Execute() })
+	if err == nil {
+		t.Fatal("want the pin-skew error: a blank flag is not an override, so the pin must still be checked against itself")
+	}
+	if !strings.Contains(err.Error(), "template pin skew") {
+		t.Errorf("blank --template-ref skipped the pin-coherence check; got: %v", err)
 	}
 }

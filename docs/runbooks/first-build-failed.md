@@ -68,8 +68,8 @@ and `llz tokens` skips everything already provisioned.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `llz ci assert-image-fresh` fails | `TF_IMAGE`/`KUBE_IMAGE` name a different commit than your template pin — normal right after `llz upgrade` | `llz tokens --env <env> --yes` re-pins and pushes both |
 | `llz ci assert-image-fresh` fails with **"no usable version stamp"** | The `llz` in the image `TF_IMAGE` names reports no build stamp (or one that names no commit), so the skew guard has nothing to compare. **Not** an old image — an image old enough to predate the stamping fix runs an older `llz` that cannot print this at all | The image build is broken upstream: report it, quoting the stamp in the message (whitespace included — it distinguishes a bad `-X` path from a bad build-arg). If `TF_IMAGE`/`KUBE_IMAGE` are simply behind your pin, `llz tokens --env <env> --yes` re-pins both |
+| `llz ci assert-image-fresh` fails | `TF_IMAGE`/`KUBE_IMAGE` name a different commit than your template pin — normal right after `llz upgrade` | `llz tokens --env <env> --yes` re-pins and pushes both |
 | `llz render --check` fails | The committed `apl-values/` no longer match the spec + pin | `llz render <env>` locally, then commit + push |
 | `require-secret` / `validate-tokens` fails | A missing, expired, or under-scoped credential | `llz doctor --env <env>` reports the same set locally |
 | Environment-scoped `gh secret set` 401s | `OPENBAO_SECRETS_WRITE_TOKEN` lacks **Environments: write** (the fine-grained "Secrets" permission is *not* enough), or you are not Environment admin on `infra-<env>` | Re-mint the PAT with Actions + Environments write |
