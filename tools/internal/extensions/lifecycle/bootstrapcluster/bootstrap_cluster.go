@@ -1210,7 +1210,7 @@ func patchAplGitConfig(d bootstrapDeps, githubURL, branch, tok string) error {
 // aplAppEnableManifest is the minimal apl-core values-repo file that enables an app:
 // an AplApp manifest whose spec becomes apps.<name> in the merged values. Schema-valid
 // for the LLZ default set (harbor has no app-level required; loki's adminPassword is an
-// x-secret, stripped from `required` before validation).
+// x-secret and, from apl-core 6.2.0, no longer `required` either).
 func aplAppEnableManifest(app string) string {
 	return "kind: AplApp\nmetadata:\n  name: " + app + "\nspec:\n  enabled: true\n"
 }
