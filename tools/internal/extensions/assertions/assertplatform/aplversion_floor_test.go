@@ -14,15 +14,19 @@ import (
 )
 
 // TestMinSupportedAplChartVersionIsNotTheBaseline guards the split made when the
-// baseline moved to v6.1.0: the SUPPORT FLOOR is a separate idea from the version
-// this release targets. Nothing in 6.1.0 made the landing zone 6.1-only, so a
-// 6.0.0 instance must still pass the preflight and merely warn about drift.
+// baseline moved to v6.1.0 and re-asserted at v6.2.0: the SUPPORT FLOOR is a
+// separate idea from the version this release targets. Nothing in 6.1.0 or 6.2.0
+// made the landing zone 6.1/6.2-only, so a 6.0.0 instance must still pass the
+// preflight and merely warn about drift.
 func TestMinSupportedAplChartVersionIsNotTheBaseline(t *testing.T) {
-	if err := clusterspec.AplVersionSupported("6.0.0", "prod"); err != nil {
-		t.Errorf("6.0.0 must remain SUPPORTED (floor %s) — the 6.1.0 bump raises the target, not the floor: %v",
-			clusterspec.MinSupportedAplChartVersion, err)
-	}
-	if clusterspec.AplChartDriftOf("6.0.0") != clusterspec.AplChartDriftMinor {
-		t.Error("a 6.0.0 pin against the v6.1.0 baseline must be MINOR drift (a warning), not a block")
+	for _, v := range []string{"6.0.0", "6.1.0"} {
+		if err := clusterspec.AplVersionSupported(v, "prod"); err != nil {
+			t.Errorf("%s must remain SUPPORTED (floor %s) — a baseline bump raises the target, not the floor: %v",
+				v, clusterspec.MinSupportedAplChartVersion, err)
+		}
+		if clusterspec.AplChartDriftOf(v) != clusterspec.AplChartDriftMinor {
+			t.Errorf("a %s pin against the %s baseline must be MINOR drift (a warning), not a block",
+				v, clusterspec.BaselineAplChartVersion)
+		}
 	}
 }
