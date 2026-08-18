@@ -213,8 +213,10 @@ var exercisedEntryPoints = map[string]string{
 		"regenerate a root token on every release for no signal.",
 	"wedge-gameday.yml": "NOT DRIVEN by the release lane: it deliberately INJECTS wedges, so running it inside the " +
 		"gate would fail the gate. It is exercised by hand during gameday exercises.",
-	"promote.yml": "NOT DRIVEN: rendered per-instance from promotion_rank and a no-op for the <2 ranked " +
-		"deployments the e2e instance has. promote-pipeline-drift checks it is in sync on every PR.",
+	"promote.yml": "NOT DRIVEN: rendered per-instance from promotionRank, and the e2e instance has fewer " +
+		"than 2 ranked deployments so it carries the EMPTY pipeline (a preflight, no stages) — there is no " +
+		"chain to walk. Not a no-op gate, though: promote-pipeline-drift runs `llz env pipeline --check` on " +
+		"every PR at any rank count, and the preflight re-runs it with --require-pipeline on dispatch.",
 }
 
 // workflowCallOnly matches a delivered body that is only ever invoked by another

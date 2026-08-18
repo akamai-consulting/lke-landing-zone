@@ -364,7 +364,8 @@ The split is uneven, and that is the opening:
 
 | Workflow class | Files | Character | Ports how |
 |---|---|---|---|
-| Thin callers (`terraform.yml`, `promote.yml`, `cluster-health.yml`, …) | 7 | 0 shell, 0 `llz` — pure `uses:` + input plumbing | mechanically |
+| Thin callers (`terraform.yml`, `cluster-health.yml`, …) | 6 | 0 shell, 0 `llz` — pure `uses:` + input plumbing | mechanically |
+| Generated caller (`promote.yml`) | 1 | thin stages, plus a preflight job that runs `llz` | rendered by `llz env pipeline`, so it ports with the CLI |
 | Fat bodies (`llz-terraform.yml` ~1,465L, `llz-bootstrap-openbao.yml` ~1,118L, …) | 7 | the real graph + all the shell | **rewrite** |
 
 **A GitLab CI port is gated on assimilating the fat bodies into `llz ci` verbs

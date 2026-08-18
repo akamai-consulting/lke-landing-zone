@@ -1365,7 +1365,49 @@ categories:
     #                       the tree detected: actionlint exits 0 on
     #                       `${{ inputs.x }}` inside a run: script, measured, and
     #                       four such interpolations were live when it was written.
-    budget: 1951
+    #   1,961 / 113 files  +10 for `llz env pipeline --require-pipeline` and the
+    #                       richer return the check needed. Four of them are the
+    #                       adapter that keeps `environments.SyncPromoteWorkflow`
+    #                       answering "did it change?" while the command itself
+    #                       now needs the whole promote.Plan; the rest are the new
+    #                       flag, the guard clause, and threading promote.Plan out
+    #                       of syncPromoteWorkflow instead of a bare bool.
+    #                       NO JUDGEMENT MOVED HERE: the two questions the flag
+    #                       selects between are `Plan.RunnableErr` in
+    #                       extensions/lifecycle/promote, under unit test, which is
+    #                       why the guard is three lines and not eight. It closes a
+    #                       gate that reported "in sync" for a promote.yml chaining
+    #                       dev → staging → prod on an instance that declared only
+    #                       prod — abstention rendered as agreement, and the ONLY
+    #                       state a fresh instance is ever in.
+    #   1,964 / 113 files  +3 more on the same change, from code review: the
+    #                       regeneration line now branches, because
+    #                       `llz env pipeline` can write the EMPTY pipeline as well
+    #                       as a ranked one and "regenerated pipeline " with
+    #                       nothing after it is not a sentence. The branch is here
+    #                       rather than in the extension because it is output
+    #                       formatting, which is what this layer prints; the
+    #                       decision it reports on (Plan.Applied) is in promote.
+    #   1,963 / 113 files   -1, banked. Review round 3 moved the drift message into
+    #                       Plan.RunnableErr so all three gate arms fire in one
+    #                       place, in most-specific-first order — the ordering was
+    #                       the bug (no-pipeline ahead of drift printed a remedy the
+    #                       operator had already done). Consolidating the judgement
+    #                       into the extension took a line back out of this layer,
+    #                       which is the direction the budget exists to encourage.
+    #   1,963 / 113 files  UNCHANGED across review round 4, and the shape is the
+    #                       entry: +3 for rejecting `--require-pipeline` without
+    #                       `--check` (it used to arm the WRITE path, which wrote the
+    #                       placeholder and then exited 1 about the file it had just
+    #                       written), paid for by −3 collapsing three print/verdict
+    #                       blocks into `Plan.CheckReport`. Whether a tree is an
+    #                       instance at all, which arm fires, and whether a green exit
+    #                       may claim full coverage are all judgements about promotion;
+    #                       they now live in the extension under unit test, and this
+    #                       layer prints lines it did not compose. Written out here
+    #                       they cost eleven lines and put the ordering in the one
+    #                       place no test reads.
+    budget: 1963
     exact: true
     include:
       - "tools/internal/cli/*.go"

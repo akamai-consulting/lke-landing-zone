@@ -78,6 +78,13 @@ _skip_if_exists:
   # instance's own manifests here are theirs. (The ACME email is no longer a vendored
   # file rewrite — it's a JSON6902 patch in the per-env overlay now.)
   - "kubernetes-custom/**"
+  # promote.yml is GENERATED per-instance by `llz env pipeline` from each
+  # deployment's promotionRank. Seed it once; never re-render it. Left in the
+  # 3-way merge, an instance that took the shipped example unchanged has
+  # ours == base, so copier applies "theirs" cleanly and SILENTLY replaced a
+  # working promotion pipeline with the stage-less placeholder — no markers, so
+  # `llz upgrade` had nothing to stop on. See .template-manifest.
+  - ".github/workflows/promote.yml"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
 # docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a

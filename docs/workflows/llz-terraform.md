@@ -319,14 +319,30 @@ The YAML keeps a two-line pointer at the removed step.
 
 ## Job: `promote-pipeline-drift`
 
-`promotion_rank` (`cluster/<env>.tfvars`) is the source of truth for the native
-promotion pipeline; `.github/workflows/promote.yml` is **rendered** from it by
-`llz env add` / `llz env pipeline` (`docs/environments-and-promotion.md` §4).
-This gate fails a PR that edits a rank without regenerating `promote.yml` — the
-"did you regenerate?" check. It is a no-op for instances with fewer than two
-ranked deployments (the chain only forms at two stages). Regenerate locally with
-`llz env pipeline`. `llz` is baked into `vars.TF_IMAGE`, the same as the plan
-jobs' `llz ci …`.
+`promotionRank` is the source of truth for the native promotion pipeline;
+`.github/workflows/promote.yml` is **rendered** from it by `llz env add` /
+`llz env pipeline` (`docs/environments-and-promotion.md` §4). This gate runs
+`llz env pipeline --check`, which fails a PR on either of two things:
+
+- a rank edit that was not regenerated — the "did you regenerate?" check;
+- a stage naming a deployment the spec does not declare — renamed, deleted, or
+  never created;
+- two or more `action: apply` stages with no `needs:` order between any of them,
+  which applies every deployment simultaneously rather than promoting through them.
+
+Only the first needs two or more ranked deployments. **This job used to be
+described as a no-op below that threshold, and was one** — it passed a
+`dev → staging → prod` workflow on an instance declaring only `prod`, which then
+failed three stages deep on dispatch. The second check runs at any rank count,
+including zero, which is what closed that hole.
+
+Regenerate locally with `llz env pipeline`. `llz` is baked into `vars.TF_IMAGE`,
+the same as the plan jobs' `llz ci …`.
+
+Still `pull_request`-only: the dispatch path is gated by the generated
+`promote.yml`'s own `llz-preflight` job, which runs the same check with the whole
+chain behind it. Widening this `if:` instead would run the promotion check inside
+every single-deployment apply, where there is no pipeline to protect.
 
 ---
 

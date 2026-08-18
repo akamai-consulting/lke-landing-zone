@@ -161,7 +161,16 @@ single-deployment flow uses — promotion only adds *ordering* (`needs:`) and th
 ```yaml
 # .github/workflows/promote.yml  (GENERATED — `llz env pipeline` renders it)
 jobs:
+  llz-preflight:                                          # spec gate — see below
+    runs-on: ubuntu-latest
+    container: { image: "${{ vars.TF_IMAGE }}" }
+    steps:
+      - uses: actions/checkout@<pinned-sha>
+      - run: llz ci assert-image-fresh          # skew check FIRST — see below
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - run: llz env pipeline --check --require-pipeline
   dev:                                                    # rank 1 — pipeline entry
+    needs: llz-preflight
     uses: ./.github/workflows/llz-terraform.yml           # vendored body — local, same-repo
     with: { action: apply, module: all, region: dev }
     secrets: inherit
@@ -177,6 +186,15 @@ jobs:
     secrets: inherit
 ```
 
+**A fresh instance does not have this file — it has a placeholder with no stages.**
+It ships that way on purpose. The template used to deliver the three-stage example
+above *live and dispatchable*, which meant an instance that declared only `prod`
+could run a `dev → staging → prod` promotion: three stages started, and each died
+about twenty seconds in with `llz: env "dev" not in spec (have: [prod])`. One
+cause, three unrelated-looking failures. An example you can run is not an example,
+so the runnable copy lives here and the instance gets a placeholder that tells you
+to rank two deployments.
+
 The `uses:` is **repo-local**: the instance vendors the reusable bodies and
 composite actions (ADR 0003), so `secrets: inherit` is same-repo and nothing is
 fetched from the template repo at runtime — the property that makes cross-org
@@ -188,11 +206,78 @@ tfvars directly) **`llz env pipeline`** re-renders it from the current ranks:
 
 ```bash
 llz env pipeline           # regenerate promote.yml from the promotion_rank ordering
-llz env pipeline --check    # CI gate: exit non-zero if promote.yml has drifted from the ranks
+llz env pipeline --check   # CI gate: exit non-zero on rank drift, or on a stage the spec does not declare
 ```
 
-Wire `llz env pipeline --check` into the instance's CI as the "did you
-regenerate?" guard so a tfvars rank edit can't silently diverge from the workflow.
+`--check` asserts two different things, and the second is the one that bites:
+
+1. **Rank drift** — the file no longer matches the `promotionRank` ordering. Fix
+   by regenerating.
+2. **A stage naming a deployment that does not exist** — renamed, deleted, or
+   never created. Fix by adding the deployment or re-ranking and regenerating.
+
+Only the first needs two or more ranked deployments to mean anything; the second
+runs at any count, *including zero*. That asymmetry is the whole point. The check
+used to abstain below two ranks and print "in sync" for it, so an instance with
+one deployment and a three-stage workflow was reported as healthy right up until
+somebody pressed **Run workflow**. Abstaining is not agreement.
+
+It runs in two places, and both are needed: `promote-pipeline-drift` in
+`llz-terraform.yml` (on pull requests — catches the bad edit before it lands) and
+the `llz-preflight` job the generated `promote.yml` chains its first stage from
+(on dispatch — catches anything that reached `main` another way, before a single
+stage starts applying).
+
+**`llz ci assert-image-fresh` runs first in the preflight, and the order is load
+bearing.** A `TF_IMAGE` that has not been re-pinned since the last upgrade is the
+*normal* state right after one, and that image's baked `llz` does not have
+`--require-pipeline` — so with the steps the other way round the job dies on
+`unknown flag` and the actionable skew message never runs, on exactly the
+population it was built for. `assert-image-fresh` has shipped for many releases,
+so it resolves in the old image and says the useful thing. Any new verb or flag
+added to this job belongs *below* it. (Same rule `repo-readiness` records in
+`llz-terraform.yml`, learned the same way.)
+
+### When `llz` is *not* managing this file
+
+Generation needs two ranked deployments. Below that, `llz env pipeline` leaves an
+existing `promote.yml` **alone** — an unranked chain over deployments that all
+exist applies exactly what it says, and is yours to maintain. The one case it will
+overwrite is a stage naming a deployment that *does not exist* — a **literal** name
+the spec does not have. That file cannot run, there are too few ranks to regenerate
+a real chain from, and replacing it with the stage-less placeholder is the only
+route back to a green `--check`.
+
+A `region:` that is an **expression** (`${{ inputs.target }}`) is *not* that case,
+and is never overwritten. There is no name to compare against the spec, so calling
+it undeclared would assert a falsehood — and no edit makes an expression resolvable
+at check time, so the failure would have no reachable remedy. `--check` reports such
+a stage as **unverified** and still exits 0; the passing message says so rather than
+claiming every stage was checked. Whatever it resolves to at run time must be a
+declared deployment, and only the run can tell you.
+
+What `--check` *will* fail on, ranked or not, is a file with two or more `action:
+apply` stages and **no `needs:` between any of them**. Every stage starts at once,
+so the last deployment applies alongside the first — and the ordering is precisely
+what `promote.yml` adds over dispatching `terraform.yml` per deployment. A *partial*
+chain (one stage fanning out to two) stays legal: that is an ordering, and a
+hand-maintained file is not required to look like the generated one.
+
+### `llz upgrade` never rewrites this file
+
+`promote.yml` is `owned` in `.template-manifest` and fenced by copier's
+`_skip_if_exists`: seeded once at scaffold, yours from then on. `llz env pipeline`
+is what keeps it correct, so copier must not be what rewrites it. Left in the
+three-way merge, an instance that took the old shipped example unchanged had
+`ours == base`, so copier applied *theirs* cleanly — silently replacing a working
+promotion pipeline, with no conflict markers for `llz upgrade` to stop on.
+
+The cost of that safety is that improvements to this file — a new preflight step, a
+bumped `actions/checkout` — **do not arrive by upgrade**. Re-run `llz env pipeline`
+after an upgrade to pick them up. An instance whose pipeline predates the preflight
+job keeps dispatching without one; `--check` says so as an advisory rather than
+failing, because that file runs correctly and nothing the operator did caused it.
+
 The caller boilerplate (`instance_repo`) is **preserved** from the file already
 on disk (or lifted from the sibling `terraform.yml`), and the stages carry no
 template pin at all — so a template version bump is *not* treated as drift, and
