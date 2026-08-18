@@ -131,9 +131,10 @@ func runAssertImageFresh(bakedVersion, templateRef, templateRepo string) error {
 			// instance whose anonymous requests hit the 60/hr per-IP limit
 			// (template_commit.go). Failing on that hands every adopter a red pipeline
 			// whenever api.github.com has a bad minute, which buys no evidence and
-			// costs the run. The honest cost is real and worth stating: this arm is
-			// the MORE likely of the two to fire, so a persistently red-free instance
-			// that never prints OK deserves a look at its GH_TOKEN.
+			// costs the run. The cost of that choice is real and worth stating: this
+			// arm is the MORE likely of the two to fire, so an instance whose runs
+			// print SKIPPED and never OK has an unguarded pin, and the first thing to
+			// check is its GH_TOKEN.
 			return skipImageFresh(fmt.Sprintf("template-ref %q is not a SHA and could not be resolved to one, so it cannot be compared against baked dev build %q", templateRef, strings.TrimSpace(bakedVersion)))
 		}
 		pinCommit = sha
@@ -229,8 +230,7 @@ func unstampedReason(bakedVersion string) (string, bool) {
 	if baked == "" || baked == "dev" {
 		return fmt.Sprintf("the baked llz version is unstamped (%q), which is what a local `go build` without the release ldflags produces", bakedVersion), true
 	}
-	if _, usable := stampedSHA(baked); isDevStamp(baked) && !usable {
-		sha := strings.TrimPrefix(baked, "dev-")
+	if sha, isDev := strings.CutPrefix(baked, "dev-"); isDev && !hexSHARe.MatchString(sha) {
 		return fmt.Sprintf("the baked llz version %q is malformed — the part after `dev-` is %q, which is not a commit sha, so there is nothing to compare against the pin", bakedVersion, sha), true
 	}
 	return "", false
@@ -248,9 +248,10 @@ func unstampedReason(bakedVersion string) (string, bool) {
 // the same value (#428). No caller may treat a skip as a pass.
 //
 // Pure — no network, no filesystem, no environment. The CI-vs-local policy lives in
-// runAssertImageFresh, one frame up, so this stays a function of its arguments only.
-// That is what lets `llz ci assert-adopter-pin` exercise this logic with the commit it resolved
-// in its own first step instead of paying for two more round-trips. Those
+// runAssertImageFresh, one frame up, so this stays a function of its arguments
+// only. That is what lets `llz ci assert-adopter-pin` exercise this logic with the
+// commit it resolved in its own first step instead of paying for two more
+// round-trips. Those
 // round-trips were not just waste: a blip on the NEGATIVE one degraded to
 // warn-and-pass, which the gate reads as "the guard accepted an unrelated commit"
 // and reports as a hard failure. A transient network error must not be able to
@@ -263,7 +264,7 @@ func assertImageFreshResolved(bakedVersion, templateRef, pinCommit string) (skip
 	if why, unusable := unstampedReason(bakedVersion); unusable {
 		return why, nil
 	}
-	if bakedSHA, isDev := stampedSHA(baked); isDev { // dev image — compare SHAs
+	if bakedSHA, usable := stampedSHA(baked); usable { // dev image — compare SHAs
 		if !shaPrefixMatch(bakedSHA, pinCommit) {
 			return "", imageSkewError(baked, templateRef, pinCommit)
 		}

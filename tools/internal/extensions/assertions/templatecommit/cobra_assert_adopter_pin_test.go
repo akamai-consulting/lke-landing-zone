@@ -212,9 +212,11 @@ func TestAssertAdopterPinResolvesAgainstTheRepoItWasGiven(t *testing.T) {
 }
 
 // Leg 4 must not depend on the network. It used to re-run the full command, whose
-// resolve step degrades to warn-and-pass on a blip — and a passing NEGATIVE check
-// is exactly the verdict the gate reports as "the skew guard is not guarding".
-// A transient error must not be able to manufacture that.
+// resolve step degrades to a SKIP on a blip — which both legs now refuse to read as
+// a pass, so a transient error would block a good release candidate. (Before that
+// refusal existed the same blip was worse still: the skip read as a passing
+// NEGATIVE check, i.e. "the skew guard is not guarding".) Either way a transient
+// error must not be able to manufacture a verdict.
 func TestAssertAdopterPinLegFourIsNotNetworkDependent(t *testing.T) {
 	stubPublishWait(t)
 	stubImagePublished(t, func(string) (bool, bool) { return true, true })

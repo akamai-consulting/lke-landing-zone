@@ -238,7 +238,7 @@ jobs:
           IMAGE: ${{ matrix.image }}
         run: |
           set -euo pipefail
-          docker run --rm --pull=always --entrypoint /usr/local/bin/llz "${REPO}/${IMAGE}:sha-${SHA}" version | tee /dev/stderr | grep -qxF "llz dev-${SHA}" || { echo "::error::${IMAGE}:sha-${SHA} bakes an llz whose version is not 'dev-${SHA}' (the line above is what it reports). The -ldflags -X in dockerfiles/Dockerfile did not reach internal/cli.Version, or LLZ_VERSION arrived empty/malformed — the linker ignores an -X it cannot resolve, silently. Publishing this image would fail 'llz ci assert-image-fresh' in every instance pipeline."; exit 1; }
+          GOT="$(docker run --rm --pull=always --entrypoint /usr/local/bin/llz "${REPO}/${IMAGE}:sha-${SHA}" version)"; [ "${GOT}" = "llz dev-${SHA}" ] || { echo "::error::${IMAGE}:sha-${SHA} bakes an llz reporting '${GOT}', want 'llz dev-${SHA}'. The -ldflags -X in dockerfiles/Dockerfile did not reach internal/cli.Version, or LLZ_VERSION arrived empty/malformed — the linker ignores an -X it cannot resolve, silently. Publishing this image would fail 'llz ci assert-image-fresh' in every instance pipeline."; exit 1; }
 
       # Signed per REPOSITORY, not per digest: cosign stores the signature as a
       # `sha256-<digest>.sig` tag inside the repo it was pushed to, so a signature

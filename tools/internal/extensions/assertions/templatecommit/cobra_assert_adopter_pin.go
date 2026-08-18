@@ -148,9 +148,9 @@ func runAssertAdopterPin(templateRepo, ref string) error {
 	//    satisfy the positive case and is exactly what shipped before.
 	// assertImageFreshResolved, not runAssertImageFresh: leg 1 already resolved this
 	// tag, so re-resolving would spend two more round-trips AND make the verdict
-	// network-dependent. A blip on the NEGATIVE call degrades to warn-and-pass,
-	// which reads here as "the guard accepted an unrelated commit" — a hard, false
-	// failure manufactured by a transient error.
+	// network-dependent. A blip on either call degrades to a SKIP, which both legs
+	// below correctly refuse to read as a pass — so a transient error would fail a
+	// perfectly good release candidate. Reusing leg 1's answer removes the chance.
 	//
 	// A SKIP FAILS BOTH LEGS. assertImageFreshResolved returns a reason instead of a
 	// verdict when it cannot compare at all, and a release gate that could not ask
