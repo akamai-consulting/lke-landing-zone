@@ -42,13 +42,14 @@ func TestAplChartDriftOf(t *testing.T) {
 	// Anchored on a 6.x baseline; update alongside BaselineAplChartVersion.
 	cases := map[string]AplChartDrift{
 		"":           AplChartDriftNone,
-		"6.1.0":      AplChartDriftNone,
-		"v6.1.0":     AplChartDriftNone, // the published chart string; the "v" must not read as drift
+		"6.2.0":      AplChartDriftNone,
+		"v6.2.0":     AplChartDriftNone, // the published chart string; the "v" must not read as drift
 		"5.0.0":      AplChartDriftMajorBehind,
 		"4.9.9":      AplChartDriftMajorBehind,
 		"7.0.0":      AplChartDriftMajorAhead,
 		"6.0.0":      AplChartDriftMinor,
 		"6.0.1":      AplChartDriftMinor,
+		"6.1.0":      AplChartDriftMinor, // the previous baseline is now a minor behind
 		"not-semver": AplChartDriftUnparseable,
 	}
 	for pin, want := range cases {
@@ -74,9 +75,10 @@ func TestAplChartVersionError_MajorBehindBlocks(t *testing.T) {
 }
 
 func TestAplChartVersionError_AllowsBaselineAndMinorDrift(t *testing.T) {
-	// "6.1.0" is the baseline written WITHOUT the published "v" prefix — it must
+	// "6.2.0" is the baseline written WITHOUT the published "v" prefix — it must
 	// read as the same version, not as drift, so an existing spec pin keeps working.
-	for _, pin := range []string{"", BaselineAplChartVersion, "6.1.0", "6.0.0"} {
+	// 6.1.0/6.0.0 lag by a minor: a warning, never a block.
+	for _, pin := range []string{"", BaselineAplChartVersion, "6.2.0", "6.1.0", "6.0.0"} {
 		if err := aplChartVersionError("prod", pin); err != nil {
 			t.Errorf("pin %q must not block, got: %v", pin, err)
 		}
@@ -110,7 +112,7 @@ func TestAplChartVersionWarnings(t *testing.T) {
 	lz := &LandingZone{Spec: Spec{Environments: map[string]Environment{
 		// dev lags the baseline by a minor — the routine mid-rollout case this warns on.
 		"dev": {Cluster: Cluster{Bootstrap: Bootstrap{AplChartVersion: "6.0.0"}}},
-		// prod is on the baseline; bare is the same version as the published "v6.1.0".
+		// prod is on the baseline; bare is the same version as the published "v6.2.0".
 		"prod": {Cluster: Cluster{Bootstrap: Bootstrap{AplChartVersion: BaselineAplChartVersion}}},
 		"lab":  {Cluster: Cluster{Bootstrap: Bootstrap{AplChartVersion: strings.TrimPrefix(BaselineAplChartVersion, "v")}}},
 	}}}

@@ -74,7 +74,6 @@ var BootstrapValuePlaceholders = []string{
 	"apl_values_repo_password",
 	"linode_dns_token",
 	"coredns_cluster_ip",
-	"loki_admin_password",
 }
 
 func RunValidateAplValues(valuesPath, chartVersion string, skipSchema bool) error {
@@ -162,8 +161,36 @@ func validateAplSchema(values, version string) error {
 	out, ok := helmRunner("template", "apl", "apl/apl", "--version", version, "-f", stubPath)
 	if !ok {
 		fmt.Fprint(os.Stderr, out)
+		if hint := aplVersionHint(out, version); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
 		return fmt.Errorf("rendered values violate apl-core's schema (apl/apl %s) — fix apl-values before it fails at helm_release.apl in Release-E2E", version)
 	}
 	fmt.Printf("schema ok (apl/apl %s)\n", version)
 	return nil
+}
+
+// firstAplVersionRequiringNoLokiAdminPassword is the release that dropped
+// apps.loki.adminPassword from apl-core's `required` list (linode/apl-core#3465).
+// The delivered apl-values base stopped carrying the field at the same time, so a
+// values file rendered by THIS llz cannot validate against an older chart.
+const firstAplVersionRequiringNoLokiAdminPassword = "6.2.0"
+
+// aplVersionHint turns helm's schema error into a statement about the PIN when the
+// failure is one this llz release knowingly caused by dropping a field the older
+// chart still requires. Without it the operator reads "adminPassword is required"
+// and goes looking for a missing secret, when the actual fix is to raise
+// spec.cluster.bootstrap.aplChartVersion. Returns "" for every other failure —
+// guessing at unrelated schema errors would be worse than silence.
+func aplVersionHint(helmOut, version string) string {
+	if !strings.Contains(helmOut, "adminPassword") {
+		return ""
+	}
+	if !clusterspec.AplSemverLess(version, firstAplVersionRequiringNoLokiAdminPassword) {
+		return ""
+	}
+	return fmt.Sprintf("::error::this is a PIN problem, not a missing secret: apl-core %s still lists apps.loki.adminPassword as required, "+
+		"and this llz release no longer renders it (apl-core %s dropped the requirement so apl-core's own generator can fill it). "+
+		"Raise spec.cluster.bootstrap.aplChartVersion to >= %s.",
+		version, firstAplVersionRequiringNoLokiAdminPassword, firstAplVersionRequiringNoLokiAdminPassword)
 }

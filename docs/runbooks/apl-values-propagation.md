@@ -13,11 +13,12 @@ gate, and no `otomi/values` Gitea repo to seed.
 1. **`llz ci bootstrap-cluster`** — the file is substituted (identity
    placeholders, tokens) and passed as the apl-core chart values on every
    bootstrap. This sets `otomi.git.*` (the external repo + PAT), `apps.*`,
-   `cluster.*`, and `dns.*`. Note `apps.loki.adminPassword` IS still rendered
-   here: apl-core 6.x declares it as an x-secret with a generator, but that
-   generator only runs inside otomi's own bootstrap — a raw `helm install apl/apl`
-   validates the schema first and fails "adminPassword is required" if it is
-   omitted.
+   `cluster.*`, and `dns.*`. It does NOT set `apps.loki.adminPassword`: apl-core
+   declares that as an x-secret with a generator, and from 6.2.0 it is no longer
+   in `required`, so apl-core generates and self-wires it. (Up to 6.1.0 the two
+   flags contradicted each other — the field was required but only fillable
+   inside otomi's own bootstrap — which is why older instances rendered a value
+   here.)
 
 2. **apl-operator** — on bootstrap it materialises its values tree in the
    external repo (the `env/`, `apps/`, … layout apl-core owns) using the same

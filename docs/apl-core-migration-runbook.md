@@ -33,11 +33,13 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
       and update `spec.cluster.bootstrap.aplChartVersion` in each
       `environments/<env>.yaml` to match.
-      The current pin is the GA `v6.1.0` release (note the `v` — apl-core's
-      published chart version gained the prefix at 6.1.0; `6.1.0` still resolves,
-      but only via helm's "unable to find exact version requested" fallback).
-      The supported FLOOR is still `6.0.0`, so an instance mid-rollout warns
-      rather than fails. If you are upgrading
+      The pin this release targets is `clusterspec.BaselineAplChartVersion`
+      (`tools/internal/shared/clusterspec/aplversion.go`) — an omitted
+      `aplChartVersion` resolves to it, and `llz` prints it on any drift. Note the
+      `v`: apl-core's published chart version gained the prefix at 6.1.0, and a
+      bare `6.x.y` still resolves but only via helm's "unable to find exact
+      version requested" fallback. The supported FLOOR is `6.0.0`, so an instance
+      mid-rollout warns rather than fails. If you are upgrading
       an existing 5.x cluster (rather than cutting over a fresh one), read the
       [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
       covers the breaking changes (ESO becomes a core app, Gitea→git-server,

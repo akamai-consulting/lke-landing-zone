@@ -43,12 +43,12 @@ func TestRunCombined_OutputAfterRun(t *testing.T) {
 //
 // The literal is the EXACT published chart version, "v" and all: apl-core changed
 // its published Chart.yaml from `version: 6.0.0` to `version: v6.1.0` with the
-// 6.1.0 release automation, and `helm --version 6.1.0` only resolves it via a
-// fallback warning. Dropping the prefix on the next bump is a silent regression, so
-// assert it here.
+// 6.1.0 release automation and kept the convention at v6.2.0, and
+// `helm --version 6.2.0` only resolves it via a fallback warning. Dropping the
+// prefix on the next bump is a silent regression, so assert it here.
 func TestDefaultAplChartVersion(t *testing.T) {
-	if clusterspec.BaselineAplChartVersion != "v6.1.0" {
-		t.Errorf("clusterspec.BaselineAplChartVersion = %q, want \"v6.1.0\" — bump deliberately, in lockstep with the platform baseline", clusterspec.BaselineAplChartVersion)
+	if clusterspec.BaselineAplChartVersion != "v6.2.0" {
+		t.Errorf("clusterspec.BaselineAplChartVersion = %q, want \"v6.2.0\" — bump deliberately, in lockstep with the platform baseline", clusterspec.BaselineAplChartVersion)
 	}
 	// The skew check that used to sit here is GONE, and getting what it wanted is
 	// why. It compared package main's `defaultAplChartVersion` against

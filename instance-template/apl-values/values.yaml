@@ -14,9 +14,9 @@
 # values-repo coordinates (otomi.git repoUrl/username/branch) — all from
 # spec.environments.<env> + spec.defaults.platform (single source = the spec).
 #
-# Only the genuine runtime secrets + the live coredns IP are left as $${...} for
-# Terraform's cluster-bootstrap templatefile() to fill: $${loki_admin_password},
-# $${apl_values_repo_password}, $${linode_dns_token}, $${coredns_cluster_ip}.
+# Only the genuine runtime secrets + the live coredns IP are left as $${...} to be
+# filled at bootstrap: $${apl_values_repo_password}, $${linode_dns_token},
+# $${coredns_cluster_ip}.
 # (The $${...} here are ESCAPED for templatefile() — this whole file is passed
 # through it, so a bare (unescaped) placeholder in a comment would be parsed as an
 # interpolation and break the render.)
@@ -196,14 +196,14 @@ apps:
   grafana:       { enabled: true }
   loki:
     enabled: true
-    # Loki gateway HTTP basic-auth admin password. REQUIRED by apl-core's apps.loki
-    # values schema on v6 (it is an x-secret with a `randAlphaNum 20` generator, but
-    # that generator only runs inside otomi's own bootstrap — our raw `helm install
-    # apl/apl` validates the schema first and fails "adminPassword is required" if
-    # omitted). Rendered by cluster-bootstrap templatefile() from a stable
-    # random_password (TF state), NOT a GitHub secret — nothing on the landing-zone
-    # side consumes it; it is loki's internal gateway<->grafana credential.
-    adminPassword: ${loki_admin_password}
+    # NO adminPassword here, deliberately. It is the loki gateway's internal
+    # basic-auth credential, an x-secret with a `randAlphaNum 20` generator that
+    # apl-core runs itself — nothing on the landing-zone side consumes it. Up to
+    # 6.1.0 apl-core ALSO listed it in apps.loki's `required`, so schema
+    # validation rejected the file before the generator could fire and we had to
+    # supply a value we did not want to own. apl-core 6.2.0 dropped it from
+    # `required` (linode/apl-core#3465), so the generator does its job. Putting a
+    # value back here would pin a credential this repo would then have to rotate.
     # S3 chunk store on Linode Object Storage. The grafana/loki chart reads
     # bucketNames + s3.{endpoint,region} from values (not env); `llz render`
     # writes them in from the spec (env name + spec.cluster.objectStorage.cluster),

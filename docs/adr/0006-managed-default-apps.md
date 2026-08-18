@@ -51,7 +51,7 @@ metadata:
 spec:
   enabled: true
 ```
-`loadValues()` globs `env/apps/*.yaml` into the aggregate `values-repo.yaml`; `spec` becomes `apps.<name>`. Schema-valid for the default set (harbor has no app-level `required`; loki's `adminPassword` is an `x-secret`, stripped from `required` before validation). The operator's write-back preserves `enabled: true`.
+`loadValues()` globs `env/apps/*.yaml` into the aggregate `values-repo.yaml`; `spec` becomes `apps.<name>`. Schema-valid for the default set (harbor has no app-level `required`; loki's `adminPassword` is an `x-secret` and, from apl-core 6.2.0, no longer `required`). The operator's write-back preserves `enabled: true`.
 
 ## Implementation (corrected, in #306)
 
