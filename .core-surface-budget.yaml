@@ -1407,7 +1407,13 @@ categories:
     #                       layer prints lines it did not compose. Written out here
     #                       they cost eleven lines and put the ordering in the one
     #                       place no test reads.
-    budget: 1963
+    #   1,965 / 113 files  +2 registering `upgrade-pr`: an import and an
+    #                       AddCommand, the usual cost of a verb. The verb itself
+    #                       is internal/extensions/lifecycle/upstreamupdates —
+    #                       every decision it makes has a wrong answer that looks
+    #                       like success, so the judgement is Go with tests rather
+    #                       than shell in the delivered workflow.
+    budget: 1965
     exact: true
     include:
       - "tools/internal/cli/*.go"

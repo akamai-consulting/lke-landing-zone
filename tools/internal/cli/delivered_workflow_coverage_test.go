@@ -217,6 +217,15 @@ var exercisedEntryPoints = map[string]string{
 		"than 2 ranked deployments so it carries the EMPTY pipeline (a preflight, no stages) — there is no " +
 		"chain to walk. Not a no-op gate, though: promote-pipeline-drift runs `llz env pipeline --check` on " +
 		"every PR at any rank count, and the preflight re-runs it with --require-pipeline on dispatch.",
+	"template-upgrade.yml": "NOT DRIVEN by the release lane, and it cannot be: it upgrades an instance to the " +
+		"LATEST PUBLISHED release, while the lane's instance is scaffolded from the commit under test — so it " +
+		"would either no-op or drag the fixture onto a different version mid-run. The `llz upgrade` it wraps is " +
+		"covered by `llz ci upgrade-test` (a real upgrade across the last 3 releases on every lint run), and the " +
+		"decisions around it (already-current; the open-upgrade and rejected-version guards, including the " +
+		"exact-version match and merged-beats-closed; --draft read off the real argv; summary and annotation " +
+		"written after the work rather than after the decision) are unit-tested in " +
+		"internal/extensions/lifecycle/upstreamupdates. What stays unproven is the stub's trigger surface; " +
+		"reusable-workflow-caller-permissions covers the startup_failure class statically.",
 }
 
 // workflowCallOnly matches a delivered body that is only ever invoked by another

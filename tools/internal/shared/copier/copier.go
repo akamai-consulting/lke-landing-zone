@@ -132,11 +132,36 @@ func Require(dryRun bool, action string) error {
 		fmt.Fprintf(os.Stderr, "  install it first: %s\n", color.Cyan("pipx install copier"))
 		return nil
 	}
-	//lint:ignore ST1005 multi-line operator diagnostic: the trailing period closes an embedded install-route block, not a sentence fragment
+	return missingCopierError(action, os.Getenv("GITHUB_ACTIONS") == "true")
+}
+
+// missingCopierError builds the diagnostic. PURE — the environment is a parameter
+// — so both shapes are testable without uninstalling copier, which is what the
+// first attempt at this needed and therefore skipped everywhere it mattered.
+//
+// THE CI REMEDY IS APPENDED, NOT SUBSTITUTED, and that distinction is the bug this
+// came from. The first cut REPLACED the message when GITHUB_ACTIONS was set — and
+// CI sets it, so two existing tests asserting the install routes got the CI text
+// and failed there while passing locally, where the variable is unset. A branch
+// keyed on the one thing that distinguishes CI from a laptop is invisible on the
+// laptop by construction.
+func missingCopierError(action string, inCI bool) error {
+	ciHint := ""
+	if inCI {
+		// Inside the pinned container `pipx install` is unactionable: copier ships in
+		// ci-tofu, so its absence means TF_IMAGE points at an image from before that.
+		ciHint = "\n  IN CI: copier ships in the ci-tofu image, so its absence means the repo variable TF_IMAGE\n" +
+			"  points at an image from before that. Point it at the image for the template release this\n" +
+			"  instance pins — `llz ci assert-image-fresh` prints the exact value it expects:\n" +
+			"  • gh variable set TF_IMAGE --body ghcr.io/<org>/ci-tofu:sha-<the pin>"
+	}
+	// No //lint:ignore needed any more: the message now ends in %s (the CI hint,
+	// empty outside CI) rather than a period, so ST1005 does not fire — and a
+	// directive that matches nothing is itself a staticcheck finding.
 	return fmt.Errorf("the `copier` CLI is not on PATH — %s renders the scaffold with it.\n"+
 		"  copier is a Python tool and is not installed by default (the llz installer does not add it):\n"+
 		"  • pipx install copier      (what this repo's own CI uses)\n"+
 		"  • uv tool install copier\n"+
 		"  • brew install copier\n"+
-		"  Then re-run %s. `llz doctor` lists the rest of the toolchain it expects.", action, action)
+		"  Then re-run %s. `llz doctor` lists the rest of the toolchain it expects.%s", action, action, ciHint)
 }

@@ -70,7 +70,19 @@ var seamCall = regexp.MustCompile(
 // interactive and long-lived cases the Writer's one-shot []byte shape cannot
 // express, which are the same ones rawexec_test already lists.
 var allowedSeamCalls = map[string]int{
-	"assertsecrets":   2,
+	"assertsecrets": 2,
+	// 1, and it is ONE only because the package funnels every process hop through a
+	// single `execSeam` var. THE SURFACE DID NOT SHRINK by concentrating — but it
+	// did shrink for a real reason: the branch name now carries the commit SHA, so
+	// orphan-branch recovery, `git ls-remote` and a --force-with-lease push were all
+	// deleted rather than converted. What remains is `gh pr list` (twice: the open
+	// and closed guards), `gh pr create`, `git switch -c` and a plain `git push`,
+	// plus `git rev-parse` via gitcmd.
+	//
+	// There is no handle for the FORGE yet, and when there is, this package has
+	// exactly one place to convert. It would need API read and pull-request create;
+	// branch write is now an ordinary push rather than a forced one.
+	"upstreamupdates": 1,
 	"clusteraccess":   1,
 	"healthsla":       1,
 	"identityconfig":  1,

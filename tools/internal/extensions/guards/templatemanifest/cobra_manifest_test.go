@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -129,4 +130,112 @@ func TestGateBindingComesFromTheDeclaration(t *testing.T) {
 	if Extension().Name == "" {
 		t.Error("the extension has no name")
 	}
+}
+
+// TestTokenFreeCallerStubsMatchThisList pins the enumeration in
+// .template-manifest of caller stubs that carry no copier token.
+//
+// IT IS A HAND-KEPT LIST THAT DECIDES SOMETHING. Those stubs are `merge`, so the
+// managed-fresh digest gate does not cover them and a hand-edit there survives an
+// upgrade silently; the prose is the only record of which files are in that
+// position, and the sentence after it uses the list to reason about which could
+// move to `managed`. It had already drifted — template-upgrade.yml arrived
+// token-free while the prose still said "those three" — which is the whole
+// argument for measuring it rather than re-reading it.
+func TestTokenFreeCallerStubsMatchThisList(t *testing.T) {
+	const scaffold = "../../../../../instance-template"
+	entries, err := os.ReadDir(filepath.Join(scaffold, ".github/workflows"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		name := e.Name()
+		// llz-*.yml are the reusable BODIES (`managed`, digest-locked). promote.yml is
+		// GENERATED and `owned`. Neither is a caller stub held in `merge`.
+		if e.IsDir() || strings.HasPrefix(name, "llz-") || name == "promote.yml" {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(scaffold, ".github/workflows", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "<@") {
+			got[name] = true
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("found no caller stubs at all — the scan examined nothing, which reads exactly like agreement")
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(scaffold, ".template-manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SCOPED TO THE ENUMERATION, not to the file. Searching the whole manifest let
+	// this test pass on the PARAGRAPH EXPLAINING the drift — which names
+	// template-upgrade.yml — while the list itself still said "those three". A gate
+	// that can be satisfied by prose about the gate is satisfied by nothing.
+	// TOKENISED, NOT SUBSTRING-MATCHED. `strings.Contains` let a token-free
+	// `upgrade.yml` false-pass off `template-upgrade.yml` — and `health.yml`,
+	// `checks.yml` and `gameday.yml` off the other three — so a new stub could be
+	// omitted from the list and still be reported as named.
+	// BOTH DIRECTIONS. Checking only that every stub is named let the enumeration
+	// OVER-state: give cluster-health.yml a copier token and it drops out of the
+	// scan while the sentence goes on calling it token-free — and the manifest
+	// claims this test pins that list, so a one-way check makes the claim false in
+	// the direction nobody is looking.
+	enum := namesIn(enumerationOfTokenFreeStubs(t, string(manifest)))
+	for name := range got {
+		if !enum[name] {
+			t.Errorf("%s is a token-free `merge` caller stub but .template-manifest does not name it. That "+
+				"list is the only record of which files sit OUTSIDE the managed-fresh digest gate, and the "+
+				"sentence after it decides from the list which stubs could move to `managed`.", name)
+		}
+	}
+	for name := range enum {
+		if !got[name] {
+			t.Errorf(".template-manifest lists %s as a token-free caller stub, but it is not one — it "+
+				"either carries a copier token now or no longer exists. The list over-states, which is the "+
+				"same staleness in the direction the membership check does not look.", name)
+		}
+	}
+}
+
+// enumerationOfTokenFreeStubs returns just the sentence in .template-manifest that
+// lists the token-free caller stubs — from "and to ZERO for" to the end of that
+// sentence. Fails the test if the anchor is gone, because a search over an empty
+// string finds nothing and reads exactly like agreement.
+func enumerationOfTokenFreeStubs(t *testing.T, manifest string) string {
+	t.Helper()
+	const anchor = "and to ZERO for"
+	i := strings.Index(manifest, anchor)
+	if i < 0 {
+		t.Fatalf(".template-manifest no longer contains %q — this test can no longer find the list it "+
+			"pins, and would otherwise pass having read nothing", anchor)
+	}
+	rest := manifest[i+len(anchor):]
+	j := strings.Index(rest, ".")
+	for j >= 0 && j+1 < len(rest) && rest[j+1] != ' ' && rest[j+1] != '\n' {
+		// A period inside a filename (cluster-health.yml) is not the end of the
+		// sentence; only one followed by a space or a newline is.
+		k := strings.Index(rest[j+1:], ".")
+		if k < 0 {
+			break
+		}
+		j += 1 + k
+	}
+	if j < 0 {
+		return rest
+	}
+	return rest[:j]
+}
+
+// namesIn is the set of workflow filenames a sentence actually names.
+func namesIn(sentence string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range regexp.MustCompile(`[A-Za-z0-9._-]+\.yml`).FindAllString(sentence, -1) {
+		out[m] = true
+	}
+	return out
 }

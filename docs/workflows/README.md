@@ -40,6 +40,7 @@ flowchart LR
 | `llz-breakglass-openbao.yml` | Break-glass OpenBao root-token generation | [llz-breakglass-openbao.md](llz-breakglass-openbao.md) |
 | `llz-wedge-gameday.yml` | The blast-radius game-day that exercises the wedge classes the guards protect against | [llz-wedge-gameday.md](llz-wedge-gameday.md) |
 | `llz-discover-deployments.yml` | A tiny shim: the single source of truth for the per-deployment CI matrix | [llz-discover-deployments.md](llz-discover-deployments.md) |
+| `llz-template-upgrade.yml` | **Opt-in.** Runs `llz upgrade` in CI and opens the result as a reviewable pull request | [llz-template-upgrade.md](llz-template-upgrade.md) |
 
 ## Reading one
 

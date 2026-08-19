@@ -31,6 +31,48 @@ import (
 
 var runDirectiveRE = regexp.MustCompile(`^(\s*)(- )?run:\s*(.*)$`)
 
+// defaultsRunKeyRE matches the body of a `defaults: run:` MAPPING — which is
+// configuration, not a script.
+//
+// `defaults.run` is spelled exactly like a step's block scalar once the `|` is
+// gone: a bare `run:` followed by an indented body. The counter read its
+// `shell: bash` as one line of untestable shell, in all fourteen workflows that
+// set it — so ~14 of the tally were phantom, and two files whose entire reported
+// cost was this line looked like they carried inline logic when they carry none.
+//
+// It surfaced by blocking a PR: the category sat at 526/526, and a workflow that
+// added no shell at all pushed it to 527. Raising the budget is what the gate
+// tells you not to do, and the honest reading is that the budget was never
+// measuring what it said.
+//
+// Keyed on the two options `defaults.run` accepts. A real script line cannot
+// collide: `shell: bash` alone is not a command, it is a YAML key.
+var defaultsRunKeyRE = regexp.MustCompile(`^\s*(shell|working-directory):\s*\S`)
+
+// isDefaultsRun reports whether the bare `run:` at lines[i] opens a
+// `defaults.run` mapping rather than a script body, by looking at its first
+// non-blank body line.
+//
+// ITS TWO `return false` REFUSALS ARE DEFENSIVE AND UNOBSERVABLE, which is worth
+// saying because they read like coverage gaps and are not. Both describe a `run:`
+// with an EMPTY body — dedented immediately, or at end of file — and an empty body
+// counts zero lines whether it is exempted or walked. Measured: flipping either
+// leaves the repo tally at 513. A test asserting them would pin nothing, so the
+// narrowness that DOES change the count is pinned instead, in
+// TestDefaultsRunExemptionIsNarrow.
+func isDefaultsRun(lines []string, i, indent int) bool {
+	for j := i + 1; j < len(lines); j++ {
+		if strings.TrimSpace(lines[j]) == "" {
+			continue
+		}
+		if lineIndent(lines[j]) <= indent {
+			return false // empty body; not a mapping we recognise
+		}
+		return defaultsRunKeyRE.MatchString(lines[j])
+	}
+	return false
+}
+
 // countRunBlockLines counts non-blank, non-comment lines inside every `run:`
 // block of a workflow / composite-action YAML document. Handles both the
 // block-scalar form (`run: |` / `run: >` followed by an indented body) and the
@@ -46,6 +88,9 @@ func countRunBlockLines(content string) int {
 		indent := len(m[1])
 		rest := strings.TrimSpace(m[3])
 		isBlock := rest == "" || rest[0] == '|' || rest[0] == '>'
+		if isBlock && rest == "" && isDefaultsRun(lines, i, indent) {
+			continue // `defaults: run:` — configuration, not a script
+		}
 		if !isBlock {
 			// Single-line command (`run: llz ci <verb>`) is tool-invocation glue,
 			// not embedded logic — it's exactly what a converted step looks
