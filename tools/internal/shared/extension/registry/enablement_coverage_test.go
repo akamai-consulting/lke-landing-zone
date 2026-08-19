@@ -65,7 +65,12 @@ var componentless = map[string]bool{
 	"assert-identity": true,
 	// No component: the injection class is a property of the WORKFLOW FILES, which
 	// every instance carries regardless of which spec components it turned on.
-	"workflow-injection":          true,
+	"workflow-injection": true,
+	// No component: an instance's opt-in to the automated template upgrade is a
+	// repo VARIABLE (LLZ_TEMPLATE_UPGRADE), not a spec component — the choice is
+	// about who may change this repo, which is not a property of the cluster the
+	// spec describes.
+	"upstream-updates":            true,
 	"assert-network":              true,
 	"assert-objstore":             true,
 	"assert-platform":             true,

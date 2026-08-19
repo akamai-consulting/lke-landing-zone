@@ -255,6 +255,21 @@ var GHPATTargets = []PATTargetSpec{
 	// Only a PRIVATE fork/image needs a GHCR read credential; the first-party
 	// charts are public, so a stock instance leaves it empty by design.
 	{Name: "GHCR_READ_TOKEN", Optional: true},
+	// The automation PAT template-upgrade.yml runs on: it pushes the upgrade
+	// branch and opens its pull request. Needs Workflows: write as well as
+	// Contents/Pull-requests — an upgrade rewrites the managed llz-*.yml bodies,
+	// and GitHub refuses a PAT push touching a workflow file without it. Opt-in behind a repo variable, so an
+	// instance that has not armed it correctly has no such secret: `optional`.
+	//
+	// IT IS MEASURED RATHER THAN EXEMPT because it is a PAT with a real expiry, and
+	// that expiry is silent in the worst possible way — silent to the OPERATOR, not
+	// to the run. The workflow fails loudly on a missing or expired token, but it
+	// runs monthly, so the red sits in the Actions tab unread and the first symptom
+	// anyone actually meets is an instance that has quietly stopped receiving
+	// upstream updates, which is indistinguishable from an instance that was
+	// already up to date. That is the ADR 0009 shape exactly: not a leak, a
+	// credential that fell off the pane.
+	{Name: "LLZ_AUTOMATION_TOKEN", Optional: true},
 }
 
 // SecretProbeVerdict decides whether the write-time lane can be trusted this

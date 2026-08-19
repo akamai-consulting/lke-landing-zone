@@ -63,6 +63,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension/registry"
@@ -461,6 +462,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(setupgosite.Cmd())
 	c.AddCommand(callerperms.Cmd())
 	c.AddCommand(runinjection.Cmd())
+	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
 	// Scaffold update-class manifest gate (former check-template-manifest.sh).
