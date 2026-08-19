@@ -465,7 +465,7 @@ tfvars before each terraform op:
 
 ```bash
 llz env add lab --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.33.6+lke7 --node-type g8-dedicated-8-4 --node-count 5 \
+  --k8s-version v1.34.6+lke2 --node-type g8-dedicated-8-4 --node-count 5 \
   --runner-ipv4-cidrs 203.0.113.0/24
 ```
 

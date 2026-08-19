@@ -3,7 +3,7 @@
 **Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
 an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
 and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
-**66 extensions across 65 packages** declare **119 bindings** between them. The set is not enumerated
+**66 extensions across 65 packages** declare **120 bindings** between them. The set is not enumerated
 here, because a list beside the code it describes is the hand-maintained second copy this design
 exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
 each declaration's constructor rather than transcribing it.
@@ -394,7 +394,7 @@ would have nowhere to put either.
 the catalog's most valuable split. It does not — the split happened before this design existed. The
 rule is unchanged; the evidence for it is stronger as a precedent than it was as a proposal.)
 
-An extension may carry **several bindings** — 116 across the 64. The catalog read the
+An extension may carry **several bindings** — 120 across the 66. The catalog read the
 capability/assertion pair as its strongest structural signal (`harbor-provisioner` ↔
 `assert-registry`, `database-provisioner` ↔ its admin check, `reconciler-runtime` ↔
 `assert-reconciler`) and predicted that merging each pair into one two-binding extension would pull
@@ -436,7 +436,7 @@ own grants. Measured against the live registry, per extension:
 | `read-repo` | **46 / 66** |
 | `cluster-read` | 23 |
 | `cloud-mutate` | 17 |
-| `cloud-read` | 16 |
+| `cloud-read` | 17 |
 | `cluster-write` | 16 |
 | `secret-custody` | 12 |
 | `secret-read` | 9 |

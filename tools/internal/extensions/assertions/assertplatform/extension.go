@@ -2,12 +2,17 @@ package assertplatform
 
 // extension.go — `assert-platform` declares itself.
 //
-// FIFTEENTH EXTENSION, AND THE FIRST THAT IS PURELY ASSERTIONS. Four lanes that
-// observe a platform someone else built and report whether it is what it claims
-// to be. Nothing here mutates, and the declaration is four bindings holding one
-// read grant each — which is what an assertion-only extension is supposed to look
-// like, and worth having one of on the record now that the mutating shapes are
-// all exercised.
+// FIFTEENTH EXTENSION, AND THE FIRST THAT IS PURELY ASSERTIONS — which it was
+// when written, and is not any more. It began as four lanes observing a platform
+// someone else built, each holding one read grant, and that is what an
+// assertion-only extension is supposed to look like.
+//
+// It has since grown a `nudge-and-reap` TRANSITION (two lanes really do mutate;
+// the capability layer surfaced it) and a `k8s-version` preflight holding two
+// grants, one of which leaves the machine. Six bindings now, and the header says
+// so rather than leaving a reader to discover it in the declaration — the reason
+// this extension was worth putting on the record survives the growth, but the
+// count was evidence and evidence goes stale.
 //
 // THE CATALOG NAMED FIVE FILES; FOUR BELONG. `ci_assert_image_fresh.go` stayed in
 // package main: its closure is the TEMPLATE-PIN machinery (assertPinCoherence,
@@ -20,39 +25,47 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `assert-platform` declaration.
 //
-//	assertion:verified "health-workflow"  [cluster-read]
-//	assertion:verified "argo-app"         [cluster-read]
-//	assertion:verified "instance-custom"  [cluster-read]
-//	assertion:configured "apl-version"    [read-repo]
+//	assertion:verified   "health-workflow" [cluster-read]
+//	assertion:verified   "argo-app"        [cluster-read]
+//	assertion:verified   "instance-custom" [cluster-read]
+//	transition:converged "nudge-and-reap"  [cluster-read cluster-write]
+//	assertion:configured "apl-version"     [read-repo]
+//	assertion:configured "k8s-version"     [read-repo cloud-read]
 //
-// WHY THE LAST ONE BINDS A DIFFERENT STATE. Three of these run a cluster and read
-// what is there. `assert-apl-version` does not: it reads the instance's pinned
+// WHY THE LAST TWO BIND A DIFFERENT STATE. Three of these run a cluster and read
+// what is there. The preflights do not. `apl-version` reads the instance's pinned
 // apl-core chart version out of the SPEC FILE and compares it against the floor
-// this llz supports. There is no cluster involved and none needs to exist — it is
-// a statement about how the instance is CONFIGURED, and it is deliberately
-// runnable before anything is provisioned, because refusing an unsupported chart
-// after a 45-minute bootstrap is the failure it exists to prevent.
+// this llz supports; `k8s-version` reads the spec's cluster.k8sVersion and asks
+// the LINODE ACCOUNT whether it may build it. No cluster is involved and none
+// needs to exist — both are statements about how the instance is CONFIGURED,
+// deliberately runnable before anything is provisioned, because refusing an
+// unsupported chart after a 45-minute bootstrap (or an unbuildable k8s version
+// fifteen minutes into a cluster apply) is the failure each exists to prevent.
 //
 // That is the same argument `token-inventory`'s validate-tokens lane makes, and
-// the same shape: a preflight is not a gate just because it blocks. It reads more
-// than files, so it is an assertion; it reads them before provisioning, so it
-// binds `configured`.
+// the same shape: a preflight is not a gate just because it blocks. They read more
+// than files, so they are assertions; they read them before provisioning, so they
+// bind `configured`.
 //
-// FOUR BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
+// SIX BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
 // CAPABILITY rather than count, and three of these do hold identical grants — so
 // on that rule alone they could collapse. They are named separately because their
-// STATES differ (apl-version is `configured`, the rest are `verified`), and once
-// the set is split at all, naming the three siblings is what keeps the listing
-// legible. Collapsing the three would also hide that they fail independently:
-// each is wired into a different CI lane and a reader of `llz extension list`
-// should see four things that can go red, not one.
+// STATES differ (the two preflights are `configured`, the rest `verified`), and
+// once the set is split at all, naming the siblings is what keeps the listing
+// legible. Collapsing them would also hide that they fail independently: each is
+// wired into a different CI lane and a reader of `llz extension list` should see
+// six things that can go red, not one.
+//
+// The grants are no longer uniform either, which is the other reason the split
+// earns itself: `k8s-version` is the only lane here that leaves the machine, and
+// `nudge-and-reap` the only one that writes.
 //
 // No ceiling change. Assertions may bind any state and `cluster-read`/`read-repo`
 // are unrestricted.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "assert-platform",
-		Short:  "assert the platform is what it claims: workflows run, apps sync, customisations land, the chart is supported",
+		Short:  "assert the platform is what it claims: workflows run, apps sync, customisations land, and the pinned chart + k8s version are ones this instance can actually build",
 		Always: true,
 		Bindings: []extension.Binding{
 			{
@@ -104,8 +117,35 @@ func Extension() extension.Extension {
 				State:  extension.Configured,
 				Grants: []extension.Grant{extension.ReadRepo},
 			},
+			{
+				// THE SECOND PREFLIGHT, AND THE FIRST THAT CANNOT ANSWER OFFLINE. It reads
+				// the spec's cluster.k8sVersion (read-repo, like apl-version) and then asks
+				// the LINODE ACCOUNT whether it may build that version (cloud-read) —
+				// because LKE-Enterprise availability is per-account, so the spec alone
+				// cannot settle it and neither can a release note.
+				//
+				// `configured` for the same reason apl-version is: it is a statement about
+				// how the instance is CONFIGURED, made before any cluster exists, precisely
+				// so a bad pin does not surface fifteen minutes into an apply that has
+				// already built a VPC, object storage and databases.
+				//
+				// cloud-READ and nothing else. It looks at a version catalog; a lane that
+				// could also delete the cluster it is checking is the anomaly
+				// TestEveryLaneOnlyObserves exists to refuse.
+				Kind:   extension.Assertion,
+				Name:   "k8s-version",
+				State:  extension.Configured,
+				Grants: []extension.Grant{extension.ReadRepo, extension.CloudRead},
+			},
 		},
 	}
+}
+
+// k8sVersionBinding is the cloud-read binding the version preflight reads the
+// account through. Named rather than indexed, for the reason MutatingBinding is:
+// adding an assertion must not silently shift which grants a handle is built from.
+func k8sVersionBinding() extension.Binding {
+	return Extension().MustBinding("k8s-version")
 }
 
 // MutatingBinding is the `nudge-and-reap` transition — the only binding here that

@@ -99,6 +99,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(tofudriver.TFImportCmd(), tofudriver.TFApplyCmd(), tofudriver.PlanCmd(), tofudriver.OutputCmd(), tofudriver.DestroyCmd(), teardown.ReapVolumesCmd(), teardown.ReapNodeBalancersCmd(), teardown.ReapObjKeysCmd(),
 		configreadiness.PreflightCmd(), configreadiness.RequireRepoConfigCmd(), assertobjstore.VerifyObjectStorageCmd(), converge.HealthCmd(), converge.HealthInClusterCmd(), converge.ConvergeCmd(),
 		assertplatform.AplVersionCmd(),
+		assertplatform.K8sVersionCmd(),
 		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
 		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
