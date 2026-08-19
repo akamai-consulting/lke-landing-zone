@@ -149,8 +149,16 @@ func Run(root string, verbose bool, out, errOut io.Writer) error {
 			fmt.Fprintf(out, "  %-5s %s:%d  %s = %s\n", mark, s.file, s.line, s.what, s.got)
 		}
 	}
+	// The pip-pin scan is a SEPARATE authority problem (see pippins.go) and runs
+	// whether or not the ARG restatements agree, so one red does not hide the other.
+	nPip, pipErr := runPipPins(repo, verbose, out, errOut)
+
 	if len(bad) == 0 {
 		fmt.Fprintf(out, "version-pins: OK — %d restatement(s) agree with %s\n", len(sites), versionAuthorityFile)
+		if pipErr != nil {
+			return pipErr
+		}
+		fmt.Fprint(out, pipPinSummary(nPip))
 		return nil
 	}
 	for _, s := range bad {
@@ -164,6 +172,9 @@ func Run(root string, verbose bool, out, errOut io.Writer) error {
 	fmt.Fprintf(errOut, "\nThe Dockerfile ARG block is the authority. Either bump these to match it, or —\n"+
 		"if the ARG is what is stale — bump the ARG and re-run. Every restatement of a\n"+
 		"tool version must move together; that is the whole point of this gate.\n")
+	if pipErr != nil {
+		return fmt.Errorf("version-pins: %d pin(s) drifted (and %w)", len(bad), pipErr)
+	}
 	return fmt.Errorf("version-pins: %d pin(s) drifted", len(bad))
 }
 
