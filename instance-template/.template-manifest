@@ -130,12 +130,18 @@ managed  apl-values/values.yaml
 # The token count is now much lower than it was: retiring the `template-ref:` input
 # (and the renovate depName annotated on it) took every stub from 2-9 copier
 # substitutions down to ONE — `instance_repo` — and to ZERO for cluster-health.yml,
-# scheduled-checks.yml and wedge-gameday.yml. Those three are token-free template
-# logic held in `merge` purely for the trigger-surface affordance, so a hand-edit
-# there survives upgrades silently (they are `merge`, and the `managed-fresh`
-# digest gate covers only digest-locked classes). If that affordance is ever
-# dropped, they belong in `managed` with the bodies — where the lock picks them
-# up automatically.
+# scheduled-checks.yml, wedge-gameday.yml and template-upgrade.yml. Those FOUR are
+# token-free template logic held in `merge` purely for the trigger-surface
+# affordance, so a hand-edit there survives upgrades silently (they are `merge`,
+# and the `managed-fresh` digest gate covers only digest-locked classes). If that
+# affordance is ever dropped, they belong in `managed` with the bodies — where the
+# lock picks them up automatically.
+#
+# THE LIST IS PINNED BY TestTokenFreeCallerStubsMatchThisList, because it is a
+# hand-kept enumeration that decides which files sit OUTSIDE the digest gate — and
+# it had already drifted: template-upgrade.yml arrived token-free and the prose
+# still said "those three". A list that silently omits a file is how one ends up
+# unaccounted for in the only place that records the gap.
 merge    .github/workflows/**
 # promote.yml is the ONE exception, and it is `owned` because it is GENERATED —
 # `llz env pipeline` renders it from each deployment's promotionRank, so copier is
