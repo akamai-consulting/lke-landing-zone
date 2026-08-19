@@ -313,7 +313,7 @@ refusal carries the fix. The full set, so you know what is and is not covered:
 | `llz new <dir>` | the directory is empty (copier renders *on top* of a populated one) | yes |
 | `llz env add` | the CWD is an instance root; `--region` and `--obj-cluster` exist in your Linode account and belong together; runner CIDRs parse, match their flag's address family, and are not `0.0.0.0/0` | yes |
 | `llz env add` | lists the overlay placeholders left to fill, and names the one command that fixes the rendered ones (`llz spec set instance.repo=…`) | no |
-| `llz doctor --env` | spec valid, committed `apl-values` in sync with it, no unfilled placeholders, every required repo secret/variable set; reports an open-world control-plane ACL wherever it came from | yes (advisory for the ACL) |
+| `llz doctor --env` | spec valid, committed `apl-values` in sync with it, no unfilled placeholders, every required repo secret/variable set; **whether your Linode account can build the pinned `k8sVersion`** (needs `LINODE_TOKEN`; reported, never fatal — it reads *your* account, and CI builds under the repo's `LINODE_API_TOKEN`, so CI's answer decides); reports an open-world control-plane ACL wherever it came from | yes (advisory for the ACL and the k8sVersion) |
 | `llz build` / `llz up` | `landingzone.yaml` and `environments/<env>.yaml` are on the branch the workflow checks out, and the deployment exists | yes (`--skip-preflight` to override) |
 | `llz build` / `llz up` | your working copy differs from the pushed spec, or the deployment is only on the remote | no — the build uses the pushed tree either way |
 | `llz status` | a kubeconfig exists and the cluster answers, before running any check against it | yes |
@@ -342,7 +342,7 @@ llz env add <env> --region us-sea --obj-cluster us-sea-1 --dry-run
 
 # then create the scaffold (must-set values can be passed as flags up front)
 llz env add <env> --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.33.6+lke7 --promotion-rank 1
+  --k8s-version v1.34.6+lke2 --promotion-rank 1
 ```
 
 It generates `terraform-iac-bootstrap/{cluster,object-storage,databases}/<env>.tfvars`

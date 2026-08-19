@@ -52,6 +52,10 @@ func (l *ctxRecordingLister) ListLKEVersions(ctx context.Context, _ string) ([]s
 	return []string{"v1.33.6+lke7"}, nil
 }
 
+func (l *ctxRecordingLister) ListClusters(context.Context) ([]map[string]any, error) {
+	return nil, nil
+}
+
 // The account probe is a network call on doctor's critical path, so it must be
 // bounded — AND the bound must still be in the future when the call is made. A
 // deadline that has already passed cancels the probe before it starts, turning
@@ -59,7 +63,7 @@ func (l *ctxRecordingLister) ListLKEVersions(ctx context.Context, _ string) ([]s
 func TestReportLinodeAccountBoundsTheProbeWithALiveDeadline(t *testing.T) {
 	l := &ctxRecordingLister{}
 	withLKELister(t, l)
-	captureStdout(t, func() { ReportLinodeAccount([]string{"v1.33.6+lke7"}) })
+	captureStdout(t, func() { ReportLinodeAccount([]K8sPin{pin("v1.33.6+lke7")}) })
 
 	if !l.called {
 		t.Fatal("the lister was never called")
@@ -71,24 +75,7 @@ func TestReportLinodeAccountBoundsTheProbeWithALiveDeadline(t *testing.T) {
 		t.Fatalf("the context was already expired when the call was made (%v) — a collapsed timeout cancels the probe before it starts", l.errAtCall)
 	}
 	if left := time.Until(l.deadline); left < time.Second {
-		t.Errorf("deadline is %v away, want the ~20s budget", left)
-	}
-}
-
-// majorMinor's job is to fail CLOSED on anything it cannot parse: an empty
-// answer makes lkeVersionOffered fall back to exact matching, while a garbage
-// answer ("-1.33") can match another garbage answer and declare a nonsense pin
-// "offered". A string that begins with the build/pre-release separator has no
-// major.minor at all.
-func TestMajorMinorRejectsALeadingSeparator(t *testing.T) {
-	for _, in := range []string{"-1.33", "+1.33", "v-1.33", "v+lke7", "-", "+"} {
-		if got := majorMinor(in); got != "" {
-			t.Errorf("majorMinor(%q) = %q, want %q — nothing precedes the separator", in, got, "")
-		}
-	}
-	// And the malformed pin must not then be reported as offered.
-	if lkeVersionOffered("-1.33", []string{"-1.33.6+lke7"}) {
-		t.Error("lkeVersionOffered matched two unparseable versions on their garbage prefix")
+		t.Errorf("deadline is %v away, want the %v probe budget", left, lkeProbeTimeout)
 	}
 }
 
@@ -96,7 +83,7 @@ func TestMajorMinorRejectsALeadingSeparator(t *testing.T) {
 // guard that bails on a perfectly good spec leaves doctor checking nothing while
 // still printing a color.Green "LKE-Enterprise reachable" — the silent no-op the
 // advisory check was added to avoid.
-func TestSpecK8sVersionsReadsAPresentSpec(t *testing.T) {
+func TestSpecK8sPinsReadsAPresentSpec(t *testing.T) {
 	// Split layout: landingzone.yaml carries the default pin (inherited by prod),
 	// lab overrides it.
 	chdirTempDir(t)
@@ -105,29 +92,47 @@ func TestSpecK8sVersionsReadsAPresentSpec(t *testing.T) {
 		"lab":  clusterDef("lab", "    k8sVersion: v1.32.1+lke1\n"),
 	})
 
-	got := SpecK8sVersions("")
-	sort.Strings(got)
+	got := SpecK8sPins("")
+	versions := make([]string, 0, len(got))
+	for _, p := range got {
+		versions = append(versions, p.Version)
+		// The label and region are what make the existing-cluster exemption
+		// possible; a pin carrying only a version cannot express it.
+		if p.ClusterLabel == "" || p.Region == "" {
+			t.Errorf("pin %+v carries no label/region — ClusterRunsVersion cannot match a "+
+				"cluster without them, so a running deployment would be reported unbuildable", p)
+		}
+	}
+	sort.Strings(versions)
 	want := []string{"v1.32.1+lke1", "v1.33.6+lke7"}
-	if len(got) != len(want) {
-		t.Fatalf("SpecK8sVersions(\"\") = %v, want every env's pin %v", got, want)
+	if len(versions) != len(want) {
+		t.Fatalf("SpecK8sPins(\"\") = %v, want every env's pin %v", versions, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("SpecK8sVersions(\"\") = %v, want %v", got, want)
+		if versions[i] != want[i] {
+			t.Fatalf("SpecK8sPins(\"\") = %v, want %v", versions, want)
 		}
 	}
 
 	// A named env narrows it to that env's pin.
-	if one := SpecK8sVersions("lab"); len(one) != 1 || one[0] != "v1.32.1+lke1" {
-		t.Errorf("SpecK8sVersions(\"lab\") = %v, want [v1.32.1+lke1]", one)
+	if one := SpecK8sPins("lab"); len(one) != 1 || one[0].Version != "v1.32.1+lke1" {
+		t.Errorf("SpecK8sPins(\"lab\") = %v, want [v1.32.1+lke1]", one)
+	}
+
+	// AND A NAMED-BUT-UNKNOWN ENV NARROWS TO NOTHING. It used to fall through to
+	// every deployment, which was cosmetic while this section only printed — and
+	// became "`llz doctor --env prd` hard-fails on pins the operator never asked
+	// about" the moment it started returning errors.
+	if none := SpecK8sPins("prd"); len(none) != 0 {
+		t.Errorf("SpecK8sPins(\"prd\") = %v, want none — scope follows the flag", none)
 	}
 }
 
 // Outside an instance there is nothing to check — doctor runs in the template
 // repo too, and must stay silent there.
-func TestSpecK8sVersionsSilentWithoutASpec(t *testing.T) {
+func TestSpecK8sPinsSilentWithoutASpec(t *testing.T) {
 	chdirTempDir(t)
-	if got := SpecK8sVersions(""); got != nil {
-		t.Errorf("SpecK8sVersions with no spec = %v, want nil", got)
+	if got := SpecK8sPins(""); got != nil {
+		t.Errorf("SpecK8sPins with no spec = %v, want nil", got)
 	}
 }
