@@ -282,3 +282,42 @@ func SplitCSVList(s string) []string {
 func WaitPoll(timeout, interval time.Duration, cond func() bool) bool {
 	return PollUntil(time.Now, time.Sleep, timeout, interval, cond)
 }
+
+// Warning renders msg for whichever log is reading.
+//
+// UNDER ACTIONS an annotation is worth the encoding: it reaches the run summary,
+// where "this check did not run" is visible without opening the step. ANYWHERE
+// ELSE the same string is a disfigurement — `llz ci` verbs run on laptops and in
+// plain CI logs, and there the operator reads `%0A` and `%25` instead of the
+// reason and the remedy. The repo already gates Actions-only output this way
+// (ghaout.Mask, ghsecret's env-secret notices).
+//
+// Takes the PLAIN message, so callers never hand-write the prefix or the escaping
+// and cannot get one right while getting the other wrong.
+func Warning(msg string) string {
+	if os.Getenv("GITHUB_ACTIONS") != "" {
+		return "::warning::" + Annotation(msg)
+	}
+	return "WARNING: " + msg
+}
+
+// Annotation escapes msg for a GitHub Actions workflow command
+// (`::warning::<msg>`).
+//
+// A WORKFLOW COMMAND IS ONE LINE, AND A RAW NEWLINE TRUNCATES IT SILENTLY.
+// Everything after the first `\n` falls out of the annotation and lands in plain
+// step-log text instead — which keeps the headline and drops the detail, and the
+// detail is usually the half that says WHY. `llz ci assert-k8s-version` shipped
+// exactly that: its "this check did not run" annotations carried the reason (a
+// 401, the PAT-scope hint) after a newline, so the annotation showed the claim
+// without the evidence, in the one place it exists to be seen.
+//
+// ORDER IS IRRELEVANT HERE and the comment used to claim otherwise:
+// strings.NewReplacer matches against the INPUT and never rescans what it wrote,
+// so `%` cannot re-escape the `%0A` it produces. It is still written first,
+// because that is the order the Actions encoding is documented in and the order a
+// sequential ReplaceAll rewrite would have to keep.
+func Annotation(msg string) string {
+	r := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A")
+	return r.Replace(msg)
+}
