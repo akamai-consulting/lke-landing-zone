@@ -12,6 +12,18 @@ import (
 // capabilities here are "run a diagnostic command" and "read the spec" — nothing
 // that writes, which is what an assertion-only extension looks like when the
 // declaration is honest.
+//
+// The k8s-version lane takes its SPEC read from here (LoadSpec) and its Linode
+// client from its own binding's grants instead (see k8sversion.go) — a cloud read
+// has to go through the declaration that entitles it, and threading a client into
+// this struct would hand every lane a handle only one of them may hold.
+//
+// LoadSpec's default is the dangerous half of that split: it answers
+// (nil, false, nil), which the k8s-version lane reads as "no spec here" and exits
+// 0 having checked nothing. That is the seam-nobody-installs shape this repo has
+// shipped before. It IS installed — cli/ci_assert_platform.go wires
+// clusterspec.Detected — and anyone re-scoping this struct needs to keep it that
+// way rather than trusting the default to be inert.
 type Deps struct {
 	// ExecCombined runs a command and returns stdout+stderr as one string,
 	// ignoring exit status. The health-workflow lane uses it for DIAGNOSTICS: when

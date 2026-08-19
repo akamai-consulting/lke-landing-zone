@@ -3,17 +3,34 @@ package onboard
 // doctor_build_preflights.go — make `llz doctor` answer the question it claims
 // to: "am I ready to build?"
 //
-// The apply path front-loads five cheap checks into its first job so a bad
+// The apply path front-loads six cheap checks into its first job so a bad
 // instance fails in seconds rather than after a ~15-minute cluster apply. Doctor
 // covered three of them (the committed-render check, secret presence, and
-// credential validity) and missed two:
+// credential validity) and missed the rest:
 //
 //	llz ci assert-image-fresh    TF_IMAGE / KUBE_IMAGE vs the template pin
 //	llz ci assert-apl-version    the apl-core chart floor
+//	llz ci assert-k8s-version    the account can build the pinned k8sVersion
 //
-// Both are local, free, and spec-only, so the miss had no upside: doctor went
-// green, `llz up` dispatched, and CI rejected the instance on evidence doctor
-// already had. `llz up` covered the image half by accident — its `tokens` stage
+// THE THIRD IS COVERED DIFFERENTLY, AND THE DIFFERENCE IS THE POINT OF THIS FILE
+// RATHER THAN AN EXCEPTION TO IT. The chart floor and the image pins are
+// answerable offline, from the instance's own files, so doctor can reach CI's
+// verdict and fold it into its exit status. The k8sVersion question cannot be:
+// it needs a LINODE_TOKEN, and the account behind the operator's token need not
+// be the account CI builds under (`llz tokens` PROMPTS for the PAT it pushes).
+// A check that reads a different system than CI will read may report but must not
+// decide — objlabel_preflight.go below is the same shape for the same reason.
+//
+// So doctor/linode.go reports it at FULL VOLUME instead: a provable mismatch
+// prints a red ✗ and says `llz ci assert-k8s-version` will fail the build. That
+// answers this file's actual complaint — a green doctor letting an operator walk
+// into a red build having been told they were ready — without inventing an
+// authority doctor does not have. And it now costs a dispatch that fails in
+// SECONDS rather than the ~15-minute apply the rest of this header is about.
+//
+// The first two are local, free, and spec-only, so the miss had no upside at all:
+// doctor went green, `llz up` dispatched, and CI rejected the instance on evidence
+// doctor already had. `llz up` covered the image half by accident — its `tokens` stage
 // re-pins — but `llz up --skip-tokens` is documented in the quickstart, and a
 // plain `doctor` → `build` misses it too. The chart floor was missed on every
 // path, and its own workflow comment says the failure it prevents otherwise
@@ -22,13 +39,16 @@ package onboard
 // Doctor-green then build-red is the worst outcome for an operator following the
 // steps, because it invalidates the one signal they were told to trust.
 //
-// THE TWO CHECKS LIVE IN DIFFERENT PLACES, and that is not arbitrary. The chart
-// floor is answerable from the spec alone, so it runs in doctor's local section
-// and works offline. The image pins are a REPO-level fact: CI reads
-// vars.TF_IMAGE, not a local file, so checking only `.llz/vars.env` would report
-// ✓ for a fresh clone that has no `.llz/` at all — a false affirmative in exactly
-// the state an upgrade produces. It therefore runs inside the e2e-readiness
-// section, against the same merged local+live lookup `llz tokens` re-pins from.
+// THE CHECKS LIVE IN DIFFERENT PLACES, and that is not arbitrary — each runs
+// where its evidence is. The chart floor is answerable from the spec alone, so it
+// runs in doctor's local section and works offline. The image pins are a
+// REPO-level fact: CI reads vars.TF_IMAGE, not a local file, so checking only
+// `.llz/vars.env` would report ✓ for a fresh clone that has no `.llz/` at all — a
+// false affirmative in exactly the state an upgrade produces. It therefore runs
+// inside the e2e-readiness section, against the same merged local+live lookup
+// `llz tokens` re-pins from. The k8sVersion pin is an ACCOUNT-level fact, so it
+// runs where the Linode client already is (doctor/linode.go); putting a copy here
+// would be a second answer to one question.
 //
 // NOT a re-implementation: the image check reuses staleCIImageVars (the same
 // predicate `llz tokens` re-pins from) and the chart check reuses

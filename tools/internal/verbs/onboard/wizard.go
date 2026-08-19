@@ -521,9 +521,23 @@ func RunDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 
 	// Ask the ACCOUNT whether it can build what the spec pins. Everything above
 	// this point is local or GitHub, so an unentitled Linode account or a retired
-	// `+lke` pin used to reach terraform apply unchallenged. Advisory only — it
-	// never touches errs. See doctor_linode.go.
-	doctor.ReportLinodeAccount(doctor.SpecK8sVersions(env))
+	// `+lke` pin used to reach terraform apply unchallenged.
+	//
+	// IT REPORTS AND DOES NOT DECIDE, and it briefly did the opposite. The case for
+	// folding it into errs was that `llz ci assert-k8s-version` hard-fails on the
+	// same verdict, so a green doctor here would reproduce the doctor-green/build-red
+	// pattern doctor_build_preflights.go exists to eliminate. Two things undid it:
+	// the CI gate now fails in SECONDS rather than fifteen minutes, so a green doctor
+	// costs a dispatch rather than an apply; and the verdict comes from whatever
+	// token is in this shell, which need not be the account CI builds under — so
+	// blocking aborted `llz up` on specs that would have built, on the primary
+	// onboarding path, and the only way past was to unset the token, which also
+	// silently disabled the bucket-label preflight below.
+	//
+	// objlabel_preflight is the precedent, for the same reason. The original
+	// complaint is answered by VOLUME instead: a definite mismatch prints a red ✗
+	// and says CI will fail the build. See doctor/linode.go.
+	doctor.ReportLinodeAccount(doctor.SpecK8sPins(env))
 
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.

@@ -2022,6 +2022,12 @@ this row proves it by containing three different things wearing that tone. The c
 the LKE-version comparison ask a cloud whether the spec's declared inputs resolve — which is what
 `configured` means.
 
+(PR #443 sharpened the account probe without moving it: a pinned `k8sVersion` the account cannot build
+now prints a red ✗ saying `llz ci assert-k8s-version` will fail the build. It still does not fail
+`llz doctor` — deliberately, because it reads the operator's account while CI reads the one behind the
+repo secret, so it reports and the gate decides. That is the same "asks a cloud, does not decide"
+shape this row is split on.)
+
 So the fifth kind is not invented, and the reason is now **positive rather than cautious**: not
 "insufficient evidence" but "the evidence says these are three different things". That is the
 strongest form this campaign's two-part bar — *count* and *shape* — was written to produce.

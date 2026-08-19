@@ -556,6 +556,26 @@ jobs:
       - name: Pre-flight — apl-core chart version is supported
         run: llz ci assert-apl-version --env "$REGION"
 
+      # LKE-Enterprise version availability is per-ACCOUNT, which is what makes this
+      # unanswerable from anything but the account that will build the cluster.
+      # Measured in one hour on 2026-08-11: another Linode account still listed
+      # v1.33.6+lke7 while this one offered exactly two versions — so a pin that
+      # worked at 16:04 was rejected at 17:06, and no release note could have said
+      # so. Unchecked it reaches `terraform apply` and dies ~15 minutes in with
+      # `[400] [k8s_version] k8s_version is not valid`, AFTER the VPC,
+      # object-storage and database roots have applied. Cost a release-e2e round.
+      #
+      # Degrades like its neighbours: an unreachable or unscoped API warns and
+      # PASSES (this token 401s on the versions route from some contexts). And a
+      # cluster ALREADY RUNNING the pin is exempt — `k8s_version` reaches the API
+      # only on a create or a change, so terraform plans no diff and this apply is
+      # unaffected by a version that has since rotated out. Without that, the first
+      # rotation would block every routine apply here (apply-cluster needs this
+      # job), so a node-pool resize would demand a control-plane upgrade nobody
+      # asked for. LINODE_TOKEN comes from the job-level env: block above.
+      - name: Pre-flight — the account can build this deployment's k8sVersion
+        run: llz ci assert-k8s-version --env "$REGION"
+
       # Resolved from the spec, so no rendered tfvars are needed here. Empty =>
       # dedicated VPC, created by the cluster apply itself — nothing to do.
       - name: Resolve shared VPC for this deployment

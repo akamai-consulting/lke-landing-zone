@@ -124,6 +124,7 @@ var commands = []Command{
 	{"assertplatform", assertplatform.ArgoAppCmd},
 	{"assertplatform", assertplatform.HealthWorkflowCmd},
 	{"assertplatform", assertplatform.InstanceCustomCmd},
+	{"assertplatform", assertplatform.K8sVersionCmd},
 	{"assertreconciler", assertreconciler.EffectsCmd},
 	{"assertreconciler", assertreconciler.ReconcilerCmd},
 	{"assertregistry", assertregistry.AssertHarborRoundTripCmd},

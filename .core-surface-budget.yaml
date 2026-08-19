@@ -1413,7 +1413,16 @@ categories:
     #                       every decision it makes has a wrong answer that looks
     #                       like success, so the judgement is Go with tests rather
     #                       than shell in the delivered workflow.
-    budget: 1965
+    #   1,966 / 113 files  +1 registering `llz ci assert-k8s-version`: one
+    #                       AddCommand, the usual cost of a verb. The lane is
+    #                       assertions/assertplatform under unit test, which is the
+    #                       split ADR 0013 asks for. It closes the class where a
+    #                       spec pins an LKE-E version THIS ACCOUNT cannot build —
+    #                       availability is per-account, so nothing local can
+    #                       answer it, and unchecked it fails ~15 minutes into the
+    #                       cluster apply after the VPC, object-storage and
+    #                       database roots have already applied.
+    budget: 1966
     exact: true
     include:
       - "tools/internal/cli/*.go"

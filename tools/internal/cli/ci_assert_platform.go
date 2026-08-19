@@ -4,7 +4,7 @@ package cli
 // extension (internal/assertplatform).
 //
 // Like internal/converge, the lanes export their own cobra constructors and this
-// file is the capability set. Same reasoning: four assertion lanes sharing one
+// file is the capability set. Same reasoning: five assertion lanes sharing one
 // exit contract, and what package main actually owns is HOW this binary reaches a
 // cluster and where an instance repo keeps its spec.
 

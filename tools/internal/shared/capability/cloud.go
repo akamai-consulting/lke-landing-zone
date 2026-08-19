@@ -5,7 +5,7 @@ package capability
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
 //
 // SEVENTH AND EIGHTH CAPABILITY, and between them the largest hole left in the
-// vocabulary: 19 declarations of `cloud-read` and 21 of `cloud-mutate`, forty
+// vocabulary: 20 declarations of `cloud-read` and 21 of `cloud-mutate`, forty-one
 // in total, with nothing behind either. Every one of them could destroy an LKE
 // cluster, and the declaration said so or did not with equal effect.
 //

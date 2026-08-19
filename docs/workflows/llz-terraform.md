@@ -383,7 +383,10 @@ guards ad-hoc concurrent builds.
 ### Front-loaded preflights
 
 `apply-vpc` is the first job `apply-cluster` depends on, so failing here aborts
-**before** the ~15-minute cluster apply. Two cheap fail-fast checks live here:
+**before** the ~15-minute cluster apply. (Only that apply: `apply-object-storage`
+and `apply-databases` declare no `needs:` and run in parallel regardless — their
+resources are reused by the retry, so serialising them behind these checks would
+slow every good build to save nothing.) The cheap fail-fast checks living here:
 
 1. **Image/template skew** (`Pre-flight — ci-tofu image matches the
    instance's template pin`). The instance pins `TF_IMAGE` (baked `llz`)
@@ -425,6 +428,42 @@ guards ad-hoc concurrent builds.
      repo with Actions + Secrets: write — used by `bootstrap-openbao`
      (GitHub-token seeds and recovery-key/root-token persistence) and by the
      destroy-time GH-secret cleanup.
+
+3. **The account can build the pinned `k8sVersion`**
+   (`llz ci assert-k8s-version`). LKE-Enterprise version availability is
+   **per-account**, so this is the one question in the battery that no local file
+   can answer: measured in a single hour, one Linode account still offered
+   `v1.33.6+lke7` while another offered only `v1.34.6+lke2` and `v1.32.9+lke4`.
+   Unchecked, the pin reaches `terraform apply` and dies ~15 minutes in with
+   `[400] [k8s_version] k8s_version is not valid`. The failure names the versions
+   the account *does* offer — or, when your pin differs from a catalog entry only
+   by the leading `v` (`1.34.6+lke2` for `v1.34.6+lke2`), it names that one entry
+   instead, since the fix is a single character. Fix `cluster.k8sVersion` **in
+   whichever file holds it**: `spec.defaults` in `landingzone.yaml` if every
+   deployment inherits it, else `environments/<env>.yaml`. The failure says which.
+
+   It **warns and passes** when the API is unreachable, the token lacks the
+   scope, or the catalog comes back in an unrecognised shape — a build must not
+   be blocked on a question nobody could ask. It also **exempts a cluster that
+   already runs the pin**: `k8s_version` reaches the API only on a create or a
+   change, so an existing deployment plans no diff and is unaffected by a version
+   that has since rotated out of the catalog. (Without that exemption the first
+   rotation would block every routine apply to that deployment — `apply-cluster`
+   needs `apply-vpc` — so a node-pool resize would demand a control-plane upgrade
+   nobody asked for. Such a deployment cannot be *re-created* until its pin moves,
+   and both this check and `llz doctor` say so.) `llz doctor` asks the same
+   question locally and **reports** the same verdict — a provable mismatch prints
+   a red ✗ saying this step will fail the build — but it does not block, because
+   it reads *your* account while CI reads the one behind the repo's
+   `LINODE_API_TOKEN`, and those need not be the same. Doctor also skips the check
+   entirely without a `LINODE_TOKEN`, and checks the deployment its own `--env`
+   resolves to, which need not be the one you dispatch. **This step is the
+   authority**; doctor is the early warning.
+
+The job also runs `llz render --check` (the committed `apl-values/` still match
+the spec + pin), `llz ci validate-tokens` (credential *validity* and scope, not
+just presence) and `llz ci assert-apl-version` (the apl-core 6.x floor). Each is
+documented with its own gate rather than restated here.
 
 ### Step: `Resolve shared VPC for this deployment`
 

@@ -98,7 +98,7 @@ spec:
                                            #  .copier-answers.yml, see below)
   defaults:                                # inherited by every ClusterDefinition
     cluster:
-      k8sVersion: v1.33.6+lke7             # → k8s_version
+      k8sVersion: v1.34.6+lke2             # → k8s_version (must be one YOUR account offers)
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
       # MANDATORY and validated: LLZ never self-installs apl-core. `llz env add`
@@ -215,7 +215,7 @@ spec:
   cluster:
     clusterLabel: platform-lab
     region: us-sea
-    k8sVersion: v1.33.6+lke7
+    k8sVersion: v1.34.6+lke2
     nodePool: { type: g8-dedicated-8-4, count: 3 }
     bootstrap: { name: platform-lab, managedAppPlatform: true }
     objectStorage: { cluster: us-sea-1 }
