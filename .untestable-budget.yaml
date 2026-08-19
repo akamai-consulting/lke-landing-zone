@@ -105,7 +105,24 @@ categories:
     #
     # Tally after the move: 511 — 39 below the pre-existing 550 ceiling even with the
     # six new gates added. Budgeted at 511 + ~3%, same convention as the others.
-    budget: 526
+    #
+    # Ratcheted 526 → 528 → measured 513, and the middle number never existed. The
+    # counter read `defaults: run:` — the two-line MAPPING that sets `shell: bash` —
+    # as a block scalar, because once the `|` is gone a defaults block and a step's
+    # script are spelled identically. Every one of the fourteen workflows that sets
+    # it was charged one line for configuration, and two files whose entire reported
+    # cost was that line looked like they carried inline logic when they carry none.
+    #
+    # It surfaced by blocking a pull request: the category sat at exactly 526/526,
+    # and a workflow that adds no shell at all pushed it to 527. Raising the budget
+    # is the one remedy this gate's error message rules out, and it would have been
+    # the wrong one twice over — the budget was not tight, it was mismeasured.
+    #
+    # Real tally with the counter fixed: 513. Budgeted AT the measurement rather than
+    # at +3%, because the ~3% headroom convention exists to absorb honest growth and
+    # this is not growth — it is fourteen lines that were never shell. A change that
+    # genuinely adds inline bash should have to say so.
+    budget: 513
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"

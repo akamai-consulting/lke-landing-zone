@@ -593,3 +593,93 @@ func TestCountMakefileRecipeLinesFreesDocumentation(t *testing.T) {
 func gRepo(root string) capability.Repo {
 	return capability.RepoForGate(Extension(), root)
 }
+
+func TestDefaultsRunIsConfigurationNotShell(t *testing.T) {
+	// `defaults: run:` sets shell/working-directory for every step. Once the `|`
+	// is gone it is spelled exactly like a step's block scalar, and the counter
+	// charged its `shell: bash` as one line of untestable shell in all fourteen
+	// workflows that set it. Two files whose whole reported cost was that line
+	// looked like they carried inline logic when they carry none.
+	//
+	// It surfaced by blocking a PR: the category sat at 526/526 and a workflow
+	// adding no shell at all pushed it over.
+	got := countRunBlockLines("" +
+		"defaults:\n" +
+		"  run:\n" +
+		"    shell: bash\n" +
+		"\n" +
+		"jobs:\n" +
+		"  a:\n" +
+		"    defaults:\n" +
+		"      run:\n" +
+		"        shell: bash\n" +
+		"        working-directory: sub\n" +
+		"    steps:\n" +
+		"      - run: llz ci something\n")
+	if got != 0 {
+		t.Errorf("a defaults.run mapping is configuration and a single-line run: is glue; "+
+			"neither is inline shell, got %d line(s)", got)
+	}
+}
+
+func TestARealRunBlockIsStillCounted(t *testing.T) {
+	// The other half: exempting defaults.run must not exempt scripts. A bare
+	// `run:` whose body is a command, not a mapping, is still a script.
+	got := countRunBlockLines("" +
+		"steps:\n" +
+		"  - run: |\n" +
+		"      set -euo pipefail\n" +
+		"      echo one\n" +
+		"      # a comment does not count\n" +
+		"      echo two\n")
+	if got != 3 {
+		t.Errorf("a real block scalar must still be counted in full, got %d (want 3)", got)
+	}
+}
+
+func TestDefaultsRunExemptionIsNarrow(t *testing.T) {
+	// THE EXEMPTION IS THE RISK, NOT THE FIX. It is the only path by which a `run:`
+	// escapes counting entirely, on the counter that sets a repo-wide ratchet — so
+	// what has to be pinned is how little it covers. Each case below is a mutant
+	// that survived the suite when only the positive direction was tested.
+	cases := []struct {
+		name, yaml string
+		want       int
+	}{{
+		// defaultsRunKeyRE must not widen to "any key: value". A plain scalar
+		// script whose first line happens to look like an assignment is a script.
+		name: "a bare run: with some other mapping-shaped body is still a script",
+		yaml: "steps:\n  - run:\n      FOO: bar\n      echo hi\n",
+		want: 2,
+	}, {
+		// The `rest == ""` precondition: an explicit block scalar is always a
+		// script, whatever its first line says.
+		name: "an explicit block scalar is never exempt, even if it starts shell:",
+		yaml: "steps:\n  - run: |\n      shell: bash\n      echo hi\n",
+		want: 2,
+	}, {
+		// The dedent guard: a bare run: with an empty body must not be exempted by
+		// falling through to whatever line comes next.
+		name: "a bare run: with an empty body is not a defaults mapping",
+		yaml: "steps:\n  - run:\n  - name: next\n    shell: bash\n",
+		want: 0,
+	}, {
+		// The terminal return: a bare run: at end of file has no body to inspect.
+		name: "a bare run: at end of file",
+		yaml: "defaults:\n  run:\n",
+		want: 0,
+	}, {
+		// working-directory is the other key defaults.run accepts.
+		name: "working-directory alone is still configuration",
+		yaml: "defaults:\n  run:\n    working-directory: sub\n",
+		want: 0,
+	}}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := countRunBlockLines(c.yaml); got != c.want {
+				t.Errorf("countRunBlockLines() = %d, want %d — the defaults.run exemption is the only "+
+					"way a run: escapes counting; widening it silently lowers a repo-wide ratchet", got, c.want)
+			}
+		})
+	}
+}
