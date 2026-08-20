@@ -472,8 +472,10 @@ func ciCmd() *cobra.Command {
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
 	c.AddCommand(clideps.ManagedFreshCmd())
 	// Tool-version pin agreement: the Dockerfile ARG block is the authority and
-	// every restatement (build matrix, container fallbacks, Go constants) must
-	// match it. This drifted once already — see ci_version_pins.go.
+	// every restatement (build matrix, workflow env blocks, Makefile, the
+	// CITofuTag/CIKubernetesTag constants) must match it. This drifted once
+	// already. Container images in this repo's workflows are the ONE inversion —
+	// they must name `:latest`, never the ARG; see the versionpins package header.
 	c.AddCommand(versionpins.Cmd())
 	return c
 }

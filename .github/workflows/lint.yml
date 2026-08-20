@@ -162,9 +162,63 @@ jobs:
       packages: read
     container:
       # Fall back to the image build-images.yml publishes under this repo's owner
-      # when KUBE_IMAGE isn't set, so CI works on a fresh fork with no repo
-      # variables. (Owner must be lowercase for GHCR — true for org logins.)
-      image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:1.34.10', github.repository_owner) }}
+      # when KUBE_IMAGE isn't set. (Owner must be lowercase for GHCR — true for
+      # org logins.)
+      #
+      # AND IT IS NOT SET HERE. Calling this the fresh-fork path understates it:
+      # this repo sets neither KUBE_IMAGE nor TF_IMAGE, so the fallback is what
+      # every Lint run on this repo actually resolves — which is why the scar
+      # below happened here at all, rather than only to some hypothetical fork.
+      #
+      # :latest, NOT :${KUBECTL_VERSION}, AND `llz ci version-pins` ENFORCES THAT.
+      # This used to restate the Dockerfile's KUBECTL_VERSION, which made a
+      # kubectl bump self-defeating: version-pins (correctly) required the two to
+      # agree, so the bump pointed this job at a tag build-images.yml had not
+      # published yet — it builds on pushes to main, this runs on the bump's own
+      # push — and Lint died with `manifest unknown` on a reference that looked
+      # broken rather than early. Every bump cost one confusing red and a manual
+      # re-run. Where no variable pins the image, a moving tag is the honest
+      # answer; set KUBE_IMAGE (to a :sha-<commit> tag) for a reproducible pin.
+      # (`:1.34.10` was less of an upgrade on that than it looked —
+      # build-images.yml pushes :latest, :sha-<commit> and :<version> from the
+      # SAME build, so while a version is current the two names resolve to the
+      # same digest. They diverge AFTER a bump: the old version tag is never
+      # republished and freezes there, while :latest keeps moving — so an
+      # un-rebased branch re-running Lint now gets the post-bump toolchain rather
+      # than the one its own tree declares. A :sha- pin is the fix for anyone who
+      # needs that; a version tag was never it.)
+      #
+      # BRANCH BUILDS CONTAMINATE THIS TAG, and the honest version of that takes
+      # two cases — earlier comments here got each of them wrong on its own.
+      # build-images.yml's workflow_dispatch is not gated on the ref and publishes
+      # :latest, :sha-<commit> AND :<version> from whatever branch it runs on, and
+      # e2e-instantiate.yml dispatches it on the branch automatically
+      # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`), so
+      # this is routine rather than deliberate.
+      #
+      #   branch does NOT bump the version — it republishes :<version> as well as
+      #     :latest, so the old pinned fallback was repointed exactly the same way.
+      #     Nothing changes here.
+      #   branch DOES bump the version — it publishes :latest plus a :<new> tag
+      #     nobody pins yet, leaving the old :<current> pin untouched. The pinned
+      #     fallback insulated other PRs from that build; :latest does not.
+      #
+      # So the exposure is real and narrow: a version-bumping branch that runs
+      # e2e repoints the image every other open PR's Lint job resolves. Gating
+      # that publish on the ref is the fix, and it is build-images.yml's business
+      # rather than this change's — tracked in #451, and noted here so the next
+      # reader does not have to rediscover which half is true.
+      #
+      # WHAT THIS COSTS, STATED PLAINLY: on the push that bumps KUBECTL_VERSION,
+      # this job runs the PREVIOUS image, so its baked kubectl is one version
+      # behind for that run. It is not the skew it sounds like — `make
+      # k8s-validate` passes `-kubernetes-version $(KUBECTL_VERSION)` from the
+      # Makefile's own pin (which version-pins gates and the bump moves), so the
+      # schema validation that actually depends on the version follows the bump
+      # immediately. And the old behaviour was no better: build-images only
+      # publishes on main, so a bump PR could not run the new image either — it
+      # just failed instead of passing.
+      image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:latest', github.repository_owner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -548,9 +602,13 @@ jobs:
       packages: read
     container:
       # Fall back to the image build-images.yml publishes under this repo's owner
-      # when TF_IMAGE isn't set, so CI works on a fresh fork with no repo
-      # variables. (Owner must be lowercase for GHCR — true for org logins.)
-      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-tofu:1.12.5', github.repository_owner) }}
+      # when TF_IMAGE isn't set — which, on this repo, is always: no TF_IMAGE
+      # variable is set, so this fallback is the live path for every run.
+      # (Owner must be lowercase for GHCR — true for org logins.)
+      #
+      # :latest, NOT :${TOFU_VERSION} — same scar as the Kubernetes lint job
+      # above, and `llz ci version-pins` enforces the floating tag here too.
+      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-tofu:latest', github.repository_owner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
