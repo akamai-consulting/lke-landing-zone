@@ -428,12 +428,12 @@ not a measurement**: the grants were assigned in the same pass that invented the
 reported the author's judgement about package `main`, and it "cannot become evidence until extensions
 declare their own grants and the distribution is *observed* rather than assigned".
 
-**That condition has since been met, and the observation disagrees.** 66 extensions now declare their
+**That condition has since been met, and the observation disagrees.** 67 extensions now declare their
 own grants. Measured against the live registry, per extension:
 
 | grant | extensions declaring it |
 |---|---|
-| `read-repo` | **46 / 66** |
+| `read-repo` | **47 / 67** |
 | `cluster-read` | 23 |
 | `cloud-mutate` | 17 |
 | `cloud-read` | 17 |

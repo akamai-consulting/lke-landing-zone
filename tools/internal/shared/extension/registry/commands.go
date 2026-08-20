@@ -54,6 +54,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
@@ -254,6 +255,7 @@ var commands = []Command{
 	{"tokeninv", tokeninv.ValidateTokensCmd},
 	{"versionpins", versionpins.Cmd},
 	{"setupgosite", setupgosite.Cmd},
+	{"mutabletags", mutabletags.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"runinjection", runinjection.Cmd},
 	{"upstreamupdates", upstreamupdates.UpgradePRCmd},

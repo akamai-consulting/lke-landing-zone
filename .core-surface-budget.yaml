@@ -1422,7 +1422,14 @@ categories:
     #                       answer it, and unchecked it fails ~15 minutes into the
     #                       cluster apply after the VPC, object-storage and
     #                       database roots have already applied.
-    budget: 1966
+    #   1,967 / 113 files  +1 registering `llz ci mutable-tag-guard`: an import, with
+    #                       the constructor added to an AddCommand call that already
+    #                       existed. The guard itself is
+    #                       extensions/guards/mutabletags under unit test — it reads
+    #                       build-images.yml and judges whether a MUTABLE tag can be
+    #                       published from a non-default ref (#451), which is a
+    #                       decision with fail-closed arms rather than a wiring line.
+    budget: 1967
     exact: true
     include:
       - "tools/internal/cli/*.go"

@@ -33,6 +33,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
@@ -460,7 +461,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(templatecommit.AssertAdopterPinCmd())
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
-	c.AddCommand(setupgosite.Cmd())
+	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
 	c.AddCommand(callerperms.Cmd())
 	c.AddCommand(runinjection.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
