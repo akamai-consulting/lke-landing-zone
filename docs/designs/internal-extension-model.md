@@ -3,7 +3,7 @@
 **Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
 an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
 and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
-**66 extensions across 65 packages** declare **120 bindings** between them. The set is not enumerated
+**67 extensions across 66 packages** declare **121 bindings** between them. The set is not enumerated
 here, because a list beside the code it describes is the hand-maintained second copy this design
 exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
 each declaration's constructor rather than transcribing it.

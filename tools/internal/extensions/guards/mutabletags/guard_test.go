@@ -51,7 +51,7 @@ func rep(t *testing.T, body, old, replacement string) string {
 
 func judgeBody(t *testing.T, body string) []problem {
 	t.Helper()
-	return judge(body, tagSites(body))
+	return judge(body, scanFile(body))
 }
 
 func msgs(ps []problem) string {
@@ -248,11 +248,20 @@ func TestLiveWorkflowPasses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the live publisher: %v", err)
 	}
-	sites := tagSites(string(body))
-	if len(sites) == 0 {
+	sc := scanFile(string(body))
+	if sc.parseErr != nil {
+		t.Fatalf("the live publisher must parse: %v", sc.parseErr)
+	}
+	if len(sc.sites) == 0 {
 		t.Fatal("the live workflow published no --tag — the fixture-free half of this test would be vacuous")
 	}
-	if ps := judge(string(body), sites); len(ps) != 0 {
+	// The live file's own scripts must also come out BALANCED. That is what proves
+	// the scanner is still reading them as shell rather than losing the block
+	// structure in prose — the defect that made an earlier cut of this guard blind.
+	if len(sc.unbalanced) != 0 {
+		t.Fatalf("the live publisher's scripts did not close their if blocks: %v", sc.unbalanced)
+	}
+	if ps := judge(string(body), sc); len(ps) != 0 {
 		t.Fatalf("the live %s must satisfy this gate, got:\n%s", publisherFile, msgs(ps))
 	}
 }
@@ -264,5 +273,115 @@ func TestRunReportsTheLiveWorkflowClean(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "mutable-tag-guard: OK") {
 		t.Fatalf("want an OK verdict, got %q", out.String())
+	}
+}
+
+// ── The bypasses a review found in the first cut ─────────────────────────────
+//
+// Every one of these made the guard report OK over the #451 defect itself, which
+// is the worst failure a gate has: it launders the bug into a green check. They
+// are kept as named cases rather than folded into the arms above, because each
+// one is a way the scanner can go blind rather than a way the workflow can be
+// wrong.
+
+func TestQuotedIfInProseDoesNotOpenABlock(t *testing.T) {
+	// A shell `if` inside a STRING is not a block. The scanner used to push one and
+	// never pop it, so every later tag counted as enclosed — and if that string also
+	// mentioned PUBLISH_MUTABLE, it counted as GATED. The live workflow already had
+	// two such lines (an input `description:` and an `::error::` echo); only the
+	// absence of the gate's name on them kept the guard sighted.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n"+
+			`          echo "PUBLISH_MUTABLE=${PUBLISH_MUTABLE} — :latest is published only if this is true"`+"\n")
+	body = rep(t, body, `          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n", "")
+	body = rep(t, body, "          fi\n", "")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("a quoted `if` must not gate anything, got:\n%s", got)
+	}
+}
+
+func TestYAMLProseIsNotShell(t *testing.T) {
+	// The same defect one level out: only `run:` scripts are shell. A workflow
+	// input's description is prose, and the live file's says "…matches even if the
+	// branch HEAD has since moved".
+	body := rep(t, good, "jobs:\n",
+		"on:\n  workflow_dispatch:\n    inputs:\n      sha:\n"+
+			"        description: rebuild if PUBLISH_MUTABLE is set and the branch HEAD has moved\n"+
+			"jobs:\n")
+	body = rep(t, body, `          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n", "")
+	body = rep(t, body, "          fi\n", "")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("YAML prose must not gate a shell tag, got:\n%s", got)
+	}
+}
+
+func TestInvertedGateIsRejected(t *testing.T) {
+	// #451 EXACTLY INVERTED: publish the mutable tags from every ref EXCEPT the
+	// default branch. Lexically it is inside the gate, so "is it enclosed" passes
+	// it. The condition has to be read, not just located.
+	body := rep(t, good, `if [ "${PUBLISH_MUTABLE}" = "true" ]; then`, `if [ "${PUBLISH_MUTABLE}" != "true" ]; then`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("an inverted gate must be rejected, got:\n%s", got)
+	}
+}
+
+func TestElseArmIsNotGated(t *testing.T) {
+	// The else arm of the gate runs when the gate is FALSE — a mutable tag there is
+	// published from exactly the refs the gate exists to exclude.
+	body := rep(t, good, "          fi\n",
+		"          else\n"+
+			`            TAGS+=(--tag "${REPO}/${IMAGE}:latest")`+"\n"+
+			"          fi\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("the else arm must not count as gated, got:\n%s", got)
+	}
+}
+
+func TestEqualsFormOfTheTagFlagIsSeen(t *testing.T) {
+	// `--tag=<ref>` is the same publish spelled with an `=`. Reading only the
+	// space-separated form is the bypass class this guard refuses `-t` for.
+	body := rep(t, good, `for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`,
+		`for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}" --tag="${REPO}/${NAME}:nightly"); done`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("`--tag=` must be read like `--tag `, got:\n%s", got)
+	}
+}
+
+func TestUnrelatedShortFlagIsNotADockerTag(t *testing.T) {
+	// `-t` is refused so a publish cannot hide behind it — but `mktemp -t`,
+	// `sort -t` and friends are not publishes, and failing the gate on them with a
+	// docker-tag diagnosis is a guard that gets turned off.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          TMP=$(mktemp -d -t llz)\n          sort -t , -k1 <<<\"a,b\" >/dev/null\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("an unrelated -t must not be read as a docker tag, got:\n%s", msgs(ps))
+	}
+}
+
+func TestUnbalancedScriptFailsClosed(t *testing.T) {
+	// If the scanner loses track of the block structure it can no longer say what
+	// is gated. "Could not tell" is a failure, not a pass.
+	body := rep(t, good, "          fi\n", "")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "did not close") {
+		t.Fatalf("an unbalanced script must fail closed, got:\n%s", got)
+	}
+}
+
+func TestNonCanonicalGateSpellingSaysSo(t *testing.T) {
+	// A reader who wrote a REAL gate in another form must be told that, not told to
+	// "move it inside the gate" it is already inside.
+	body := rep(t, good,
+		`          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n"+
+			`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done`+"\n"+
+			"          fi\n",
+		`          [ "${PUBLISH_MUTABLE}" != "true" ] || TAGS+=(--tag "${REPO}/${IMAGE}:latest")`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "canonical") {
+		t.Fatalf("a non-canonical gate must be named as such, got:\n%s", got)
+	}
+}
+
+func TestMalformedYAMLFailsClosed(t *testing.T) {
+	if got := msgs(judgeBody(t, "jobs:\n  a: [unterminated\n")); !strings.Contains(got, "could not be parsed") {
+		t.Fatalf("unparseable YAML must fail closed, got:\n%s", got)
 	}
 }

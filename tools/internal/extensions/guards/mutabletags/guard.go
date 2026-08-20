@@ -55,6 +55,8 @@ import (
 	"regexp"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
@@ -76,18 +78,36 @@ const immutablePrefix = "sha-"
 // not mention it is not gating on the ref, whatever else it says.
 const refContext = "github.ref"
 
-// reTag captures the image reference of a `--tag` argument, quoted or not.
-var reTag = regexp.MustCompile(`--tag\s+"?([^"\s]+)"?`)
+// reTag captures the image reference of a `--tag` argument. BOTH SPELLINGS: the
+// space-separated form and `--tag=<ref>`. Reading only the first was a bypass of
+// exactly the class this guard refuses `-t` for — one `=` and the publish is
+// invisible.
+var reTag = regexp.MustCompile(`--tag[=\s]\s*"?([^"\s]+)"?`)
 
-// reShortTag finds docker's SHORT tag flag. It is not parsed — it is REFUSED,
-// because `-t` would let a mutable publish back in past a guard that only reads
-// `--tag`. A bypass this gate cannot see is worse than one it rejects.
-var reShortTag = regexp.MustCompile(`(?:^|\s)-t\s+\S`)
+// reShortTag finds docker's SHORT tag flag applied to something IMAGE-SHAPED. It
+// is not parsed — it is REFUSED, because `-t` would let a mutable publish back in
+// past a guard that only reads `--tag`.
+//
+// THE `:` IS WHAT KEEPS THIS A RULE RATHER THAN A NUISANCE. A bare `-t` scan hits
+// `mktemp -t`, `sort -t` and `docker run -t`, and failing the gate on those with a
+// docker-tag diagnosis is how a guard gets turned off. An argument with a tag
+// separator in it is an image reference or close enough to be worth the sentence.
+var reShortTag = regexp.MustCompile(`(?:^|\s)-t\s+"?[^"\s]*:[^"\s]+`)
 
 // reGateExpr captures the value of the workflow env key that computes the gate.
 // Anchored on the key at any indentation: it is one mapping entry in one file,
 // and a YAML walk to find it would still have to be told the key's name.
 var reGateExpr = regexp.MustCompile(`(?m)^\s*` + gateVar + `:\s*(\S.*?)\s*$`)
+
+// reGateOpen matches THE canonical gate: an `if` whose condition is the POSITIVE
+// test of gateVar.
+//
+// POSITIVE, AND THAT IS THE POINT. "Is this tag lexically inside the gate?" is not
+// the question — `if [ "${PUBLISH_MUTABLE}" != "true" ]` puts the mutable publish
+// inside a block that runs on every ref EXCEPT the default branch, which is #451
+// exactly inverted, and a scanner that only locates the block passes it. `!=`
+// cannot match here because the pattern requires `=` where the `!` sits.
+var reGateOpen = regexp.MustCompile(`\bif\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s*=\s*"?true"?\s*\]\]?`)
 
 // tagSite is one `--tag` argument: where it is, what tag it names, and whether it
 // is inside the gate.
@@ -96,6 +116,12 @@ type tagSite struct {
 	ref   string // the whole image reference as written
 	tag   string // the tag portion — `latest`, `sha-${SHA}`, `${VERSION}`
 	gated bool
+	// namesGate marks a site whose own line tests gateVar without being the
+	// canonical block. Such a line is a real attempt at the rule spelled a way this
+	// guard cannot verify, and telling its author to "move it inside the gate" —
+	// which is what the plain finding says — would be advice about a gate they are
+	// already looking at.
+	namesGate bool
 }
 
 // mutable reports whether this tag can be repointed by a later build. Everything
@@ -104,6 +130,20 @@ type tagSite struct {
 // moves `:latest`. Deriving the answer the other way round — an allowlist of
 // mutable names — would let the next tag anyone adds default to "immutable".
 func (s tagSite) mutable() bool { return !strings.HasPrefix(s.tag, immutablePrefix) }
+
+// scan is everything reading the file yields: the publish sites, and the two ways
+// the read itself can fail.
+type scan struct {
+	sites []tagSite
+	// unbalanced holds the first line of each `run:` script whose if/fi did not
+	// close. A scanner that lost the block structure cannot say what is gated, and
+	// "could not tell" is not "nothing wrong".
+	unbalanced []int
+	// shortFlag is the first line publishing through docker's `-t`, or 0.
+	shortFlag int
+	// parseErr is set when the file is not YAML this gate can walk.
+	parseErr error
+}
 
 // Run fails when publisherFile can publish a mutable tag from a non-default ref.
 func Run(root string, out, errOut io.Writer) error {
@@ -121,12 +161,12 @@ func Run(root string, out, errOut io.Writer) error {
 	}
 	body := string(data)
 
-	sites := tagSites(body)
-	problems := judge(body, sites)
+	sc := scanFile(body)
+	problems := judge(body, sc)
 
 	if len(problems) == 0 {
 		gated, ungated := 0, 0
-		for _, s := range sites {
+		for _, s := range sc.sites {
 			if s.gated {
 				gated++
 				continue
@@ -190,8 +230,17 @@ type problem struct {
 // IT COLLECTS RATHER THAN RETURNING ON THE FIRST. CI runs this without --verbose,
 // so a finding suppressed by an early return is emitted nowhere and costs a
 // second red round-trip to discover.
-func judge(body string, sites []tagSite) []problem {
+func judge(body string, sc scan) []problem {
 	var out []problem
+
+	// SEPARATE "COULD NOT TELL" FROM "NOTHING THERE", at the outermost level: a file
+	// this gate cannot parse is a file it has not read, and every arm below would
+	// then be judging an empty set.
+	if sc.parseErr != nil {
+		return []problem{{msg: fmt.Sprintf("could not be parsed as YAML (%v) — every check below would "+
+			"otherwise run over zero scripts and report clean", sc.parseErr)}}
+	}
+	sites := sc.sites
 
 	// FAIL CLOSED ON AN EMPTY CORPUS. No `--tag` at all is what a rewritten build
 	// step, a moved publish, or a wrong file looks like; "0 tags, all gated" is a
@@ -200,9 +249,17 @@ func judge(body string, sites []tagSite) []problem {
 		out = append(out, problem{msg: "no `--tag` argument found — either the publish moved out of this file " +
 			"or the build step was rewritten, and this gate would otherwise pass having judged nothing"})
 	}
-	if loc := shortFlagLine(body); loc > 0 {
-		out = append(out, problem{line: loc, msg: "docker's short `-t` tag flag is refused here — write `--tag`, " +
+	if sc.shortFlag > 0 {
+		out = append(out, problem{line: sc.shortFlag, msg: "docker's short `-t` tag flag is refused here — write `--tag`, " +
 			"which is the form this gate reads (a tag it cannot see is a tag it cannot hold)"})
+	}
+	for _, line := range sc.unbalanced {
+		// A SCANNER THAT LOST THE BLOCK STRUCTURE CANNOT ANSWER THE QUESTION. Whatever
+		// it says about what is gated after an unclosed `if` is a guess, and a guess
+		// that resolves to "gated" is this gate passing over the defect itself.
+		out = append(out, problem{line: line, msg: "this `run:` script's `if` blocks did not close — the gate scope " +
+			"after that point is unknowable, so this fails rather than guessing (if the shell is correct and " +
+			"this guard mis-read it, that is a bug in the guard, not a reason to edit around it)"})
 	}
 
 	var mutable, immutableUngated int
@@ -221,10 +278,21 @@ func judge(body string, sites []tagSite) []problem {
 			continue
 		}
 		mutable++
-		if !s.gated {
-			out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag published from any ref — "+
-				"move it inside the `%s` gate", s.tag, gateVar)})
+		if s.gated {
+			continue
 		}
+		if s.namesGate {
+			// It IS an attempt at the rule, spelled a way this guard cannot verify.
+			// "Move it inside the gate" would be advice about a gate its author is
+			// looking at, so say what is actually wrong instead.
+			out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag on a line that tests `%s` "+
+				"without being the canonical gate — this guard recognises only `if [ \"${%s}\" = \"true\" ]; then … fi`, "+
+				"because a condition it cannot read is a condition it cannot confirm points the right way "+
+				"(`!=` publishes from every ref EXCEPT the default branch)", s.tag, gateVar, gateVar)})
+			continue
+		}
+		out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag published from any ref — "+
+			"move it inside the `%s` gate", s.tag, gateVar)})
 	}
 
 	// NEVER DERIVE THE EXPECTED SET FROM THE THING UNDER TEST. If deleting the
@@ -258,42 +326,112 @@ func judge(body string, sites []tagSite) []problem {
 	return out
 }
 
-// tagSites extracts every `--tag` argument with its gate scope.
+// scanFile extracts every `--tag` argument in every `run:` script, with its gate
+// scope.
 //
-// IT READS THE FILE AS SHELL, WHICH IS THE HONEST LEVEL. The property is "this
-// tag is inside that `if`", and a YAML walk to the `run:` scalar would still have
-// to answer it by scanning the script. Actions YAML cannot confuse the scan: a
-// job-level condition is `if:` WITH the colon, which is not the shell keyword,
-// and comments are stripped before any token is read.
-func tagSites(body string) []tagSite {
-	var out []tagSite
-	var stack []bool // one entry per open `if`; true when its condition names gateVar
-	for i, raw := range strings.Split(body, "\n") {
-		line := stripComment(raw)
-		opensGate := hasToken(line, "if") && strings.Contains(line, gateVar)
-		gated := opensGate
-		for _, g := range stack {
-			gated = gated || g
-		}
-		for _, m := range reTag.FindAllStringSubmatch(line, -1) {
-			ref := m[1]
-			out = append(out, tagSite{line: i + 1, ref: ref, tag: tagOf(ref), gated: gated})
-		}
-		// The stack is updated AFTER the line's own tags are judged, so a one-line
-		// `if …; then TAGS+=(--tag …); fi` counts as gated rather than as whatever
-		// encloses it.
-		for _, tok := range strings.Fields(line) {
-			switch strings.TrimRight(tok, ";") {
-			case "if":
-				stack = append(stack, opensGate)
-			case "fi":
-				if len(stack) > 0 {
-					stack = stack[:len(stack)-1]
+// IT READS THE `run:` SCRIPTS AS SHELL, AND NOTHING ELSE AS ANYTHING. Both halves
+// are scars. Scanning the whole file for `if`/`fi` counted an input's
+// `description:` prose ("…matches even if the branch HEAD has since moved") as an
+// open block that never closed; scanning a script without regard to quoting
+// counted `echo "… only if this is true"` the same way. Either one leaves every
+// later tag looking enclosed — and if the same line happens to name PUBLISH_MUTABLE,
+// looking GATED, which is the guard reporting OK over the defect it exists for.
+//
+// So: YAML says which text is shell (a `run:` value), and each script is scanned
+// with its own block stack, on text with quoted spans blanked out. The gate's own
+// condition survives that blanking because it is TESTED on the unblanked line —
+// the shell keywords are what must not come out of a string, not the variable name.
+func scanFile(body string) scan {
+	var out scan
+	scripts, err := runScripts(body)
+	if err != nil {
+		out.parseErr = err
+		return out
+	}
+	for _, sc := range scripts {
+		var stack []bool // one entry per open `if`; true while inside the canonical gate
+		for i, raw := range strings.Split(sc.body, "\n") {
+			line := stripComment(raw)
+			fileLine := sc.startLine + i
+			bare := blankQuoted(line) // shell structure only — no keyword may come out of a string
+			opensGate := reGateOpen.MatchString(line) && hasToken(bare, "if")
+			gated := opensGate
+			for _, g := range stack {
+				gated = gated || g
+			}
+			if out.shortFlag == 0 && reShortTag.MatchString(line) {
+				out.shortFlag = fileLine
+			}
+			for _, m := range reTag.FindAllStringSubmatch(line, -1) {
+				ref := m[1]
+				out.sites = append(out.sites, tagSite{
+					line: fileLine, ref: ref, tag: tagOf(ref), gated: gated,
+					namesGate: !opensGate && strings.Contains(line, gateVar),
+				})
+			}
+			// The stack is updated AFTER the line's own tags are judged, so a one-line
+			// `if …; then TAGS+=(--tag …); fi` counts as gated rather than as whatever
+			// encloses it.
+			for _, tok := range strings.Fields(bare) {
+				switch strings.TrimRight(tok, ";") {
+				case "if":
+					stack = append(stack, opensGate)
+				case "else", "elif":
+					// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set
+					// would mark a mutable tag there as gated when it publishes from
+					// precisely the refs the gate exists to exclude.
+					if len(stack) > 0 {
+						stack[len(stack)-1] = false
+					}
+				case "fi":
+					if len(stack) > 0 {
+						stack = stack[:len(stack)-1]
+					}
 				}
 			}
 		}
+		if len(stack) > 0 {
+			out.unbalanced = append(out.unbalanced, sc.startLine)
+		}
 	}
 	return out
+}
+
+// script is one `run:` value with the file line its first line sits on.
+type script struct {
+	startLine int
+	body      string
+}
+
+// runScripts returns every `run:` scalar in the workflow, in document order.
+func runScripts(body string) ([]script, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(body), &root); err != nil {
+		return nil, err
+	}
+	var out []script
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := n.Content[i], n.Content[i+1]
+				if k.Value == "run" && v.Kind == yaml.ScalarNode {
+					// A block scalar's node line is the `run: |` line and its content
+					// starts on the next one; an inline scalar starts on its own line.
+					start := v.Line
+					if v.Style == yaml.LiteralStyle || v.Style == yaml.FoldedStyle {
+						start++
+					}
+					out = append(out, script{startLine: start, body: v.Value})
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&root)
+	return out, nil
 }
 
 // tagOf is the tag portion of an image reference — everything after the last
@@ -317,16 +455,30 @@ func gateExpression(body string) (string, bool) {
 	return m[1], true
 }
 
-// shortFlagLine reports the first line using docker's `-t` short tag flag, or 0.
-// Comments are stripped first — the prose explaining why `-t` is refused must not
-// be read as a use of it, the same distinction setup-go-sole-site draws.
-func shortFlagLine(body string) int {
-	for i, raw := range strings.Split(body, "\n") {
-		if reShortTag.MatchString(stripComment(raw)) {
-			return i + 1
+// blankQuoted replaces the CONTENTS of quoted spans with spaces, keeping every
+// other character in place so column positions and word boundaries survive.
+//
+// It is applied only where shell STRUCTURE is read. `echo "publishing :latest only
+// if this is true"` contains no keyword — the shell sees one word — and a scanner
+// that reads `if` out of it opens a block that never closes, after which every tag
+// in the script looks enclosed. The gate's own condition is matched on the
+// unblanked line, so blanking cannot hide the thing being looked for.
+func blankQuoted(line string) string {
+	out := []rune(line)
+	var quote rune
+	for i, r := range out {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			out[i] = ' '
+		case r == '\'' || r == '"':
+			quote = r
 		}
 	}
-	return 0
+	return string(out)
 }
 
 // lineOf is the 1-based line of the first occurrence of needle, or 0.
