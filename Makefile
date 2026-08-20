@@ -311,7 +311,7 @@ help:
 	@echo "  mtls-wiring-guard  OpenBao consumers must mount the mTLS material they read (ADR 0010)"
 	@echo "  plaintext-guard  registry gate on unencrypted in-cluster hops (ADR 0010)"
 	@echo "  credential-coverage-guard  every workflow secret is measured, or registered as an exemption"
-	@echo "  k8s-validate    kubeconform — schema validation against k8s 1.31"
+	@echo "  k8s-validate    kubeconform — schema validation against k8s $(KUBECTL_VERSION)"
 	@echo "  prom-rules-check  promtool check rules — PromQL syntax + rule structure"
 	@echo "  helm-lint-charts  helm lint --strict + template every first-party chart"
 	@echo "  helm-lint-real-values  hard dep-build + namespaced render of the OpenBao chart (lint --strict is helm-lint-charts' job)"
@@ -1031,10 +1031,16 @@ managed-lock-check:
 	$(call LLZ_CI,managed-fresh --root ../instance-template,)
 
 # Assert every restatement of a tool version agrees with the Dockerfile ARG block
-# (the declared single source of truth): the build-images matrix, lint.yml's
-# container fallbacks and env pins, and the ciTofuTag/ciKubernetesTag constants
-# that derive TF_IMAGE/KUBE_IMAGE. The Go constants sat on Terraform 1.9.8 after
-# the other two moved to OpenTofu 1.12.5 — caught by hand then, caught here now.
+# (the declared single source of truth): the build-images matrix, lint.yml's env
+# pins, this file's own KUBECTL_VERSION, and the CITofuTag/CIKubernetesTag
+# constants that derive TF_IMAGE/KUBE_IMAGE. The Go constants sat on Terraform
+# 1.9.8 after the other two moved to OpenTofu 1.12.5 — caught by hand then,
+# caught here now.
+#
+# ...and asserts the INVERSE on lint.yml's `vars.TF_IMAGE`/`vars.KUBE_IMAGE`
+# container fallbacks: those must name `:latest`. Gating them as pins made a
+# version bump red-light Lint exactly once per bump, on an image build-images.yml
+# had not published yet.
 #
 # FROM SOURCE, for the same reason as managed-lock-check: this compares the
 # WORKING TREE against itself, and the prebuilt image binary is built from the

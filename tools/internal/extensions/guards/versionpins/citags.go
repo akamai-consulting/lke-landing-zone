@@ -15,10 +15,12 @@ package versionpins
 
 // CI image tags published by build-images.yml; TF_IMAGE/KUBE_IMAGE derive from
 // these + the template org.
-// A THIRD restatement of the image pin, beyond the two the Dockerfile header
-// names (build-images.yml's matrix and lint.yml's fallback). It was still on
-// 1.9.8 after both of those moved, which would have scaffolded new instances
-// onto a HashiCorp Terraform image while every caller invoked `tofu`.
+// A SECOND restatement of the image pin, beyond build-images.yml's matrix. (It
+// was a third until lint.yml's container fallbacks stopped restating the version
+// and moved to `:latest` — they are gated the other way now; see the package
+// header.) It was still on 1.9.8 after the matrix moved, which would have
+// scaffolded new instances onto a HashiCorp Terraform image while every caller
+// invoked `tofu`.
 const (
 	CITofuTag       = "1.12.5"
 	CIKubernetesTag = "1.34.10"

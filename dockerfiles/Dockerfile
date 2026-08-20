@@ -22,10 +22,17 @@
 # The tool ARGs in `toolbox` are the single source of truth for what goes INTO
 # the images. Two version-named image TAGS still restate a pin outside this file
 # and must be bumped with it — `ci-tofu:<TOFU_VERSION>` and
-# `ci-kubernetes:<KUBECTL_VERSION>` in .github/workflows/build-images.yml, and the
-# same two literals as the `vars.TF_IMAGE`/`vars.KUBE_IMAGE` fallbacks in
-# .github/workflows/lint.yml. Nothing enforces that yet; a guard verb is the
-# obvious follow-up.
+# `ci-kubernetes:<KUBECTL_VERSION>` in .github/workflows/build-images.yml.
+# `llz ci version-pins` enforces that, and every other restatement it can find
+# (workflow env blocks, the Makefile, the Go tag constants).
+#
+# .github/workflows/lint.yml's `vars.TF_IMAGE`/`vars.KUBE_IMAGE` fallbacks are the
+# ONE exception and are gated the other way: they must name `:latest`. Requiring
+# them to restate the ARG made a bump here self-defeating — build-images.yml
+# publishes on pushes to main, Lint runs on the bump's own push, so the bump
+# pointed Lint at a tag that did not exist yet and every bump cost a `manifest
+# unknown` red plus a manual re-run. Do not "fix" those two lines to match this
+# block; version-pins will reject it.
 
 # ── gotools: build the llz CLI once, for every image that bakes it ────────────
 # The Go tools module arrives as the `tools-src` build context (build-images.yml

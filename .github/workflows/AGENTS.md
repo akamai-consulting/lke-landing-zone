@@ -40,6 +40,28 @@ container:
     password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+A job's `container.image`, **when it names one of this repo's own CI images**
+(`ci-tofu` / `ci-kubernetes`), uses **`:latest`, never a version** —
+`format('ghcr.io/{0}/ci-kubernetes:latest', github.repository_owner)` — and
+`llz ci version-pins` fails the build if one restates the Dockerfile ARG instead.
+It finds them by YAML position (`jobs.<id>.container.image`, and service
+containers), not by matching the fallback expression, so the rule holds however
+the value is spelled. Third-party images (`postgres:16`, say) are not its
+business and keep their own pins. In `instance-template/` the rule inverts
+again: a delivered workflow must resolve its image from `vars.TF_IMAGE` /
+`vars.KUBE_IMAGE` and hardcode nothing, because an instance's image has to match
+the template ref it is pinned to.
+The fallback used to be version-pinned, which made a `KUBECTL_VERSION` /
+`TOFU_VERSION` bump self-defeating: `build-images.yml` publishes on pushes to
+`main` while Lint runs on the bump's own push, so every bump pointed Lint at a tag
+that did not exist yet and cost one `manifest unknown` red plus a manual re-run.
+The fallback fires whenever the repo variable is unset — which on this repo is
+always, since neither `TF_IMAGE` nor `KUBE_IMAGE` is set here. It is the live
+path for every Lint run, not a fresh-fork edge case, which is why the scar above
+happened here. Where nothing pins the image a moving tag is the honest answer;
+pin `TF_IMAGE`/`KUBE_IMAGE` to a `:sha-<commit>` tag if you need reproducibility
+— a version tag is not it, since that moves too until the next bump freezes it.
+
 ## Composite actions available
 
 Prefer these over reimplementing their logic inline:
