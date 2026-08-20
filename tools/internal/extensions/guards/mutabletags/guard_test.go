@@ -385,3 +385,56 @@ func TestMalformedYAMLFailsClosed(t *testing.T) {
 		t.Fatalf("unparseable YAML must fail closed, got:\n%s", got)
 	}
 }
+
+// ── Round two: the same three defects one level finer ────────────────────────
+
+func TestSameLineElseIsNotGated(t *testing.T) {
+	// The multi-line else was fixed by clearing the stack entry; the ONE-LINE else
+	// was not, because the line's tags were judged before its own tokens were read.
+	// Same publish, same inversion, spelled on one line.
+	body := rep(t, good,
+		`          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n"+
+			`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done`+"\n"+
+			"          fi\n",
+		`          if [ "${PUBLISH_MUTABLE}" = "true" ]; then echo gated; else TAGS+=(--tag "${REPO}/${IMAGE}:latest"); fi`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("a one-line else arm must not count as gated, got:\n%s", got)
+	}
+}
+
+func TestTagAfterASameLineFiIsNotGated(t *testing.T) {
+	// Once `fi` has run, the gate is over — a tag after it on the same line is
+	// published unconditionally.
+	body := rep(t, good,
+		`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done`+"\n"+
+			"          fi\n",
+		`            echo gated`+"\n"+
+			`          fi; TAGS+=(--tag "${REPO}/${IMAGE}:latest")`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("a tag after `fi` must not count as gated, got:\n%s", got)
+	}
+}
+
+func TestAStepLevelOverrideOfTheGateIsRejected(t *testing.T) {
+	// GitHub resolves step env OVER workflow env, so a step-level
+	// `PUBLISH_MUTABLE: 'true'` defeats the gate at runtime while the workflow-level
+	// expression above it still reads perfectly. Reading only the first entry is
+	// reading the one that loses.
+	body := rep(t, good, "      - name: Build and push\n",
+		"      - name: Build and push\n        env:\n          PUBLISH_MUTABLE: 'true'\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not consult `github.ref`") {
+		t.Fatalf("a step-level override must be rejected, got:\n%s", got)
+	}
+}
+
+func TestDockerRunTtyIsNotAPublish(t *testing.T) {
+	// `-t` is refused because a PUBLISH could hide behind it. `docker run -t` is not
+	// a publish — and the live workflow runs the built image to check its baked
+	// version stamp, one edit away from this shape.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          docker run --rm -t "${REPO}/${IMAGE}:sha-${SHA}" version`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("`docker run -t` must not be read as a docker BUILD tag, got:\n%s", msgs(ps))
+	}
+}

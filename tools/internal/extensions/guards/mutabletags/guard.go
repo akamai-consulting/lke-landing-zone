@@ -88,10 +88,15 @@ var reTag = regexp.MustCompile(`--tag[=\s]\s*"?([^"\s]+)"?`)
 // is not parsed — it is REFUSED, because `-t` would let a mutable publish back in
 // past a guard that only reads `--tag`.
 //
-// THE `:` IS WHAT KEEPS THIS A RULE RATHER THAN A NUISANCE. A bare `-t` scan hits
-// `mktemp -t`, `sort -t` and `docker run -t`, and failing the gate on those with a
-// docker-tag diagnosis is how a guard gets turned off. An argument with a tag
-// separator in it is an image reference or close enough to be worth the sentence.
+// TWO NARROWINGS KEEP THIS A RULE RATHER THAN A NUISANCE, and the second replaced a
+// claim that was simply false. The `:` excludes `mktemp -t llz` and `sort -t ,` —
+// arguments that are not references. It does NOT exclude `docker run -t
+// <image>:<tag>`, which the earlier comment here asserted: every image reference
+// has a colon, so that is exactly the shape it matches, and the version-stamp step
+// in this very workflow runs the built image one edit away from it. A `-t` is only
+// a TAG flag on a line that BUILDS (see buildLine); on any other line it is a tty,
+// a field separator or a template — and a guard that fails on correct code with a
+// confident wrong diagnosis is one that gets deleted.
 var reShortTag = regexp.MustCompile(`(?:^|\s)-t\s+"?[^"\s]*:[^"\s]+`)
 
 // reGateExpr captures the value of the workflow env key that computes the gate.
@@ -107,7 +112,16 @@ var reGateExpr = regexp.MustCompile(`(?m)^\s*` + gateVar + `:\s*(\S.*?)\s*$`)
 // inside a block that runs on every ref EXCEPT the default branch, which is #451
 // exactly inverted, and a scanner that only locates the block passes it. `!=`
 // cannot match here because the pattern requires `=` where the `!` sits.
-var reGateOpen = regexp.MustCompile(`\bif\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s*=\s*"?true"?\s*\]\]?`)
+var reGateOpen = regexp.MustCompile(`^if\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s*=\s*"?true"?\s*\]\]?`)
+
+// reBlockToken finds the shell keywords that open, switch and close a block, as
+// WORDS. `elif` cannot match the `if` alternative — the `l` before it leaves no
+// word boundary — and Actions' own `if:` is not a word match either.
+var reBlockToken = regexp.MustCompile(`\b(if|elif|else|fi)\b`)
+
+// buildLine reports whether this line invokes a container build, which is the only
+// place a `-t` is a tag flag.
+func buildLine(bare string) bool { return hasToken(bare, "build") || hasToken(bare, "buildx") }
 
 // tagSite is one `--tag` argument: where it is, what tag it names, and whether it
 // is inside the gate.
@@ -313,15 +327,19 @@ func judge(body string, sc scan) []problem {
 			"build has to publish it", immutablePrefix, gateVar)})
 	}
 
-	expr, ok := gateExpression(body)
-	switch {
-	case !ok:
+	entries := gateExpressions(body)
+	if len(entries) == 0 {
 		out = append(out, problem{msg: fmt.Sprintf("no `%s:` env entry — the shell gate reads a variable this workflow "+
 			"never sets, which expands empty and publishes nothing anywhere", gateVar)})
-	case !strings.Contains(expr, refContext):
-		out = append(out, problem{line: lineOf(body, gateVar+":"), msg: fmt.Sprintf("`%s` does not consult `%s` "+
-			"(it is %s) — the tags are gated on something that is not the ref, which is the defect this gate exists for",
-			gateVar, refContext, expr)})
+	}
+	for _, e := range entries {
+		if strings.Contains(e.expr, refContext) {
+			continue
+		}
+		out = append(out, problem{line: e.line, msg: fmt.Sprintf("`%s` does not consult `%s` (it is %s) — the tags "+
+			"are gated on something that is not the ref, which is the defect this gate exists for. Env layers, and "+
+			"the INNERMOST wins: a job- or step-level setting overrides the workflow-level expression at runtime, "+
+			"so every setting of this variable has to gate on the ref", gateVar, refContext, e.expr)})
 	}
 	return out
 }
@@ -354,40 +372,37 @@ func scanFile(body string) scan {
 			line := stripComment(raw)
 			fileLine := sc.startLine + i
 			bare := blankQuoted(line) // shell structure only — no keyword may come out of a string
-			opensGate := reGateOpen.MatchString(line) && hasToken(bare, "if")
-			gated := opensGate
-			for _, g := range stack {
-				gated = gated || g
-			}
-			if out.shortFlag == 0 && reShortTag.MatchString(line) {
+			if out.shortFlag == 0 && buildLine(bare) && reShortTag.MatchString(line) {
 				out.shortFlag = fileLine
 			}
-			for _, m := range reTag.FindAllStringSubmatch(line, -1) {
-				ref := m[1]
+			// WITHIN A LINE, ORDER DECIDES. `…; then echo x; else TAGS+=(--tag …:latest);
+			// fi` publishes that tag when the gate is FALSE, and a tag written after a
+			// `fi` is not inside anything — but a scanner that judges the line's tags
+			// first and its keywords afterwards records both as gated. So the keyword
+			// events and the tag sites are replayed in the order they appear.
+			events := blockEvents(line, bare)
+			opened := false
+			for _, e := range events {
+				opened = opened || (e.kind == "if" && e.gate)
+			}
+			next := 0
+			for _, m := range reTag.FindAllStringSubmatchIndex(line, -1) {
+				for next < len(events) && events[next].off < m[0] {
+					stack = apply(stack, events[next])
+					next++
+				}
+				gated := false
+				for _, g := range stack {
+					gated = gated || g
+				}
+				ref := line[m[2]:m[3]]
 				out.sites = append(out.sites, tagSite{
 					line: fileLine, ref: ref, tag: tagOf(ref), gated: gated,
-					namesGate: !opensGate && strings.Contains(line, gateVar),
+					namesGate: !opened && strings.Contains(line, gateVar),
 				})
 			}
-			// The stack is updated AFTER the line's own tags are judged, so a one-line
-			// `if …; then TAGS+=(--tag …); fi` counts as gated rather than as whatever
-			// encloses it.
-			for _, tok := range strings.Fields(bare) {
-				switch strings.TrimRight(tok, ";") {
-				case "if":
-					stack = append(stack, opensGate)
-				case "else", "elif":
-					// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set
-					// would mark a mutable tag there as gated when it publishes from
-					// precisely the refs the gate exists to exclude.
-					if len(stack) > 0 {
-						stack[len(stack)-1] = false
-					}
-				case "fi":
-					if len(stack) > 0 {
-						stack = stack[:len(stack)-1]
-					}
-				}
+			for ; next < len(events); next++ {
+				stack = apply(stack, events[next])
 			}
 		}
 		if len(stack) > 0 {
@@ -395,6 +410,47 @@ func scanFile(body string) scan {
 		}
 	}
 	return out
+}
+
+// blockEvent is one shell block keyword and where it sits on the line. `gate`
+// marks an `if` whose condition is the canonical positive test.
+type blockEvent struct {
+	off  int
+	kind string
+	gate bool
+}
+
+// blockEvents reads the line's block keywords in order. Offsets come from the
+// blanked text — so no keyword is read out of a string — and the CONDITION is read
+// from the original at the same offset, which is why blankQuoted must preserve
+// byte positions exactly.
+func blockEvents(line, bare string) []blockEvent {
+	var out []blockEvent
+	for _, m := range reBlockToken.FindAllStringSubmatchIndex(bare, -1) {
+		kind := bare[m[2]:m[3]]
+		out = append(out, blockEvent{off: m[0], kind: kind, gate: kind == "if" && reGateOpen.MatchString(line[m[0]:])})
+	}
+	return out
+}
+
+// apply advances the block stack by one keyword.
+func apply(stack []bool, e blockEvent) []bool {
+	switch e.kind {
+	case "if":
+		return append(stack, e.gate)
+	case "else", "elif":
+		// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set would mark
+		// a mutable tag there as gated when it publishes from precisely the refs the
+		// gate exists to exclude.
+		if len(stack) > 0 {
+			stack[len(stack)-1] = false
+		}
+	case "fi":
+		if len(stack) > 0 {
+			return stack[:len(stack)-1]
+		}
+	}
+	return stack
 }
 
 // script is one `run:` value with the file line its first line sits on.
@@ -445,14 +501,26 @@ func tagOf(ref string) string {
 	return ref[i+1:]
 }
 
-// gateExpression returns the `${{ … }}` expression the workflow computes the gate
-// from.
-func gateExpression(body string) (string, bool) {
-	m := reGateExpr.FindStringSubmatch(body)
-	if m == nil {
-		return "", false
+// gateEntry is one place the workflow sets the gate variable.
+type gateEntry struct {
+	line int
+	expr string
+}
+
+// gateExpressions returns EVERY setting of the gate variable, in file order.
+//
+// EVERY, BECAUSE GITHUB RESOLVES THE LAST ONE THAT APPLIES. Env is layered
+// workflow → job → step, and the innermost wins, so a step-level
+// `PUBLISH_MUTABLE: 'true'` defeats the gate at runtime while the workflow-level
+// expression above it still reads perfectly. Checking the first match is checking
+// the entry that LOSES — the shape this arm exists to catch, sneaking past the arm
+// itself. All of them must consult the ref.
+func gateExpressions(body string) []gateEntry {
+	var out []gateEntry
+	for _, m := range reGateExpr.FindAllStringSubmatchIndex(body, -1) {
+		out = append(out, gateEntry{line: 1 + strings.Count(body[:m[0]], "\n"), expr: body[m[2]:m[3]]})
 	}
-	return m[1], true
+	return out
 }
 
 // blankQuoted replaces the CONTENTS of quoted spans with spaces, keeping every
@@ -463,32 +531,29 @@ func gateExpression(body string) (string, bool) {
 // that reads `if` out of it opens a block that never closes, after which every tag
 // in the script looks enclosed. The gate's own condition is matched on the
 // unblanked line, so blanking cannot hide the thing being looked for.
+// BYTE-WISE, NOT RUNE-WISE, and that is load-bearing rather than a style choice:
+// the keyword offsets found in the blanked text are used to index the ORIGINAL
+// line. Blanking a multi-byte rune (this file's comments and echoes carry em
+// dashes) to a single space would shorten the string and slide every later offset,
+// pointing the condition match at the middle of a word. Quote characters are
+// ASCII, and no UTF-8 continuation byte can be mistaken for one, so a byte scan is
+// safe as well as position-preserving.
 func blankQuoted(line string) string {
-	out := []rune(line)
-	var quote rune
-	for i, r := range out {
+	out := []byte(line)
+	var quote byte
+	for i, b := range out {
 		switch {
 		case quote != 0:
-			if r == quote {
+			if b == quote {
 				quote = 0
 				continue
 			}
 			out[i] = ' '
-		case r == '\'' || r == '"':
-			quote = r
+		case b == '\'' || b == '"':
+			quote = b
 		}
 	}
 	return string(out)
-}
-
-// lineOf is the 1-based line of the first occurrence of needle, or 0.
-func lineOf(body, needle string) int {
-	for i, line := range strings.Split(body, "\n") {
-		if strings.Contains(line, needle) {
-			return i + 1
-		}
-	}
-	return 0
 }
 
 // hasToken reports whether line contains word as a shell WORD — `if`, not `if:`
