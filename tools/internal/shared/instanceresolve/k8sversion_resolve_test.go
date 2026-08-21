@@ -1076,14 +1076,23 @@ func TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the rejection — this catalog is entitled to reject")
 	}
-	if strings.Contains(err.Error(), "llz picks the newest your account offers") {
+	if strings.Contains(err.Error(), "the newest this account offers") {
 		t.Errorf("the rejection tells the operator to omit the flag and let llz derive, from a catalog\n"+
-			"that derives NOTHING — omitting falls through to the compiled default:\n%s", err)
+			"that derives NOTHING:\n%s", err)
 	}
-	for _, want := range []string{"will NOT help", "compiled default", "llz doctor"} {
+	for _, want := range []string{"no version for llz to derive", "llz doctor"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the rejection must say %q so the operator is not sent round a loop; got:\n%s", want, err)
 		}
+	}
+	// AND IT NAMES NO SINGLE DESTINATION. This package cannot know where the version
+	// comes from once the flag is dropped — only the FIRST `llz env add` seeds
+	// anything, a later one inherits spec.defaults — so a message that picks one is
+	// the predict-the-pin defect this branch removed from two other warnings and then
+	// reintroduced here.
+	if strings.Contains(err.Error(), "fall back to its compiled default") {
+		t.Errorf("the rejection predicts a compiled default, but on an instance that already has\n"+
+			"landingzone.yaml the deployment inherits spec.defaults instead:\n%s", err)
 	}
 
 	// THE NEGATIVE ARM: a catalog that CAN derive must still offer the remedy, or
@@ -1094,8 +1103,14 @@ func TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the rejection")
 	}
-	if !strings.Contains(err.Error(), "llz picks the newest your account offers") {
+	if !strings.Contains(err.Error(), "the newest this account offers") {
 		t.Errorf("a catalog that CAN derive must still be offered as the remedy:\n%s", err)
+	}
+	// The same no-single-destination rule on this branch, which carried the defect
+	// first and was only noticed after the other one was written.
+	if !strings.Contains(err.Error(), "spec.defaults") {
+		t.Errorf("the remedy names only a first-`env add` outcome; a later one inherits the shared\n"+
+			"default and the message must say so:\n%s", err)
 	}
 }
 

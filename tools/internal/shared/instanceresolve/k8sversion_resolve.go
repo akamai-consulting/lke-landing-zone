@@ -800,15 +800,27 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 // The asymmetry itself stays — each direction is the safe one for its own question,
 // and #443 owns the verdict — but a remedy may only promise what THIS catalog can
 // actually deliver.
+// AND IT NAMES NO DESTINATION, WHICH IS THE OTHER HALF. Both branches used to say
+// where the version would come from if the flag were dropped — "llz picks the newest
+// your account offers", "llz would fall back to its compiled default" — and this
+// package cannot know either. Only the FIRST `llz env add` seeds anything; a later
+// one leaves the deployment inheriting spec.defaults, and nothing falls back at all.
+// That is the rule the "names no full build id" warning already states about itself,
+// and the same defect just removed from the empty-catalog warning in
+// accountLKEVersions — reintroduced in a new message the moment one was written.
+// What is safe to say is what dropping the FLAG changes, and what the account can
+// supply.
 func omitRemedy(offered []string) string {
 	if linode.NewestVersion(offered) == "" {
-		return "  Omitting --k8s-version will NOT help here: nothing in this catalog is a full build id, so\n" +
-			"  llz would fall back to its compiled default rather than derive anything. Check the account\n" +
-			"  with `llz doctor` — this is a catalog problem, not a spelling one."
+		return "  Omitting --k8s-version will NOT rescue this: nothing in this catalog is a full build id, so\n" +
+			"  there is no version for llz to derive from the account at all — whatever the spec then\n" +
+			"  pins (a shared default it inherits, or llz's compiled one) is not a version this account\n" +
+			"  confirmed. Check it with `llz doctor` — a catalog problem, not a spelling one."
 	}
-	return "  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n" +
-		"  deployment does exist AND the account reports its version — the one it is ALREADY RUNNING,\n" +
-		"  which plans no diff at all."
+	return "  Omit --k8s-version and llz decides instead: the version this deployment's cluster is\n" +
+		"  ALREADY RUNNING when one exists and the account reports it — which plans no diff at all —\n" +
+		"  and otherwise the newest this account offers on a first `llz env add`, or the shared\n" +
+		"  spec.defaults this instance already carries on a later one."
 }
 
 // coarsePinRemedy is the last line of the coarse-pin warning: the versions in this
