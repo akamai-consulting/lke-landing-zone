@@ -781,10 +781,34 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"%s"+
 		"  Unchanged, the cluster apply fails ~15 minutes in with\n"+
 		"  `[400] [k8s_version] k8s_version is not valid`.\n"+
-		"  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n"+
-		"  deployment does exist AND the account reports its version — the one it is ALREADY RUNNING,\n"+
-		"  which plans no diff at all.",
-		c.Pin, strings.Join(offered, ", "), lookedUp)
+		"%s",
+		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered))
+}
+
+// omitRemedy is the closing line of a hard rejection: what actually happens if the
+// operator drops the flag.
+//
+// IT MUST NOT PROMISE A DERIVE THAT YIELDS NOTHING, and the unconditional version
+// did. Two rules decide different halves of this message on purpose — the catalog's
+// entitlement to REJECT runs off the loose `hasBuild` (via everyEntryNamesABuild),
+// while what llz would CHOOSE runs off the strict versionSortKey — and the gap
+// between them is a real catalog shape: `["v1.34+lke2"]` licenses the rejection and
+// derives "". So the message said "omit it and llz picks the newest your account
+// offers" in a run that had already printed "this catalog names no full build id",
+// and omitting the flag would have fallen through to llz's compiled literal.
+//
+// The asymmetry itself stays — each direction is the safe one for its own question,
+// and #443 owns the verdict — but a remedy may only promise what THIS catalog can
+// actually deliver.
+func omitRemedy(offered []string) string {
+	if linode.NewestVersion(offered) == "" {
+		return "  Omitting --k8s-version will NOT help here: nothing in this catalog is a full build id, so\n" +
+			"  llz would fall back to its compiled default rather than derive anything. Check the account\n" +
+			"  with `llz doctor` — this is a catalog problem, not a spelling one."
+	}
+	return "  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n" +
+		"  deployment does exist AND the account reports its version — the one it is ALREADY RUNNING,\n" +
+		"  which plans no diff at all."
 }
 
 // coarsePinRemedy is the last line of the coarse-pin warning: the versions in this

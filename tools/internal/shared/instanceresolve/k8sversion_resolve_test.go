@@ -1053,6 +1053,52 @@ func TestCatalogOutcomeNamesItselfInAFailure(t *testing.T) {
 	}
 }
 
+// TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing.
+//
+// TWO RULES DECIDE DIFFERENT HALVES OF THIS MESSAGE, ON PURPOSE, and the gap
+// between them is a real catalog shape. The catalog's entitlement to REJECT runs
+// off the loose `hasBuild` (via everyEntryNamesABuild); what llz would CHOOSE runs
+// off the strict versionSortKey. A catalog of `["v1.34+lke2"]` licenses the
+// rejection and derives "" — so the remedy said "omit it and llz picks the newest
+// your account offers" in a run that had ALREADY printed "this catalog names no
+// full build id", and omitting would have fallen through to the compiled literal.
+//
+// The asymmetry stays: each direction is the safe one for its own question. What a
+// remedy may not do is promise what this catalog cannot deliver.
+func TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing(t *testing.T) {
+	// The shape where the two rules split — a build suffix with no patch component.
+	unusable := []string{"v1.34+lke2"}
+	if linode.NamesABuild(unusable[0]) {
+		t.Fatalf("premise broken: %q must not be choosable", unusable[0])
+	}
+	withCatalog(t, &fakeVersionLister{versions: unusable})
+	_, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err == nil {
+		t.Fatal("expected the rejection — this catalog is entitled to reject")
+	}
+	if strings.Contains(err.Error(), "llz picks the newest your account offers") {
+		t.Errorf("the rejection tells the operator to omit the flag and let llz derive, from a catalog\n"+
+			"that derives NOTHING — omitting falls through to the compiled default:\n%s", err)
+	}
+	for _, want := range []string{"will NOT help", "compiled default", "llz doctor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the rejection must say %q so the operator is not sent round a loop; got:\n%s", want, err)
+		}
+	}
+
+	// THE NEGATIVE ARM: a catalog that CAN derive must still offer the remedy, or
+	// "never promise a derive" passes the above while withholding the fix from every
+	// ordinary rejection.
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+	_, err = ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if !strings.Contains(err.Error(), "llz picks the newest your account offers") {
+		t.Errorf("a catalog that CAN derive must still be offered as the remedy:\n%s", err)
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request

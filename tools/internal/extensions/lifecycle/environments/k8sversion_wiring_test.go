@@ -1185,33 +1185,41 @@ func TestDryRunPreviewsTheVersionConsequencesItWouldCause(t *testing.T) {
 	}
 }
 
-// TestTheE2ELanePinsTheVersionWhenItReusesACluster.
+// TestTheE2ELaneCanStillPinTheVersionByHand.
 //
-// `k8s_version` reaches the LKE-E API on a create OR A CHANGE. release-e2e-warm
-// refreshes a LIVE cluster on purpose (it exists to skip the ~14m create), and
-// release-e2e keeps one on keep_cluster=true — so a re-scaffold that derives a
-// different version than the running cluster plans a CONTROL-PLANE UPGRADE inside
-// a run whose whole point was not to rebuild anything. `assert-k8s-version` cannot
-// catch it: the freshly derived pin is in the catalog, it is simply not the one
-// that cluster runs.
+// `k8s_version` reaches the LKE-E API on a create OR A CHANGE, and release-e2e-warm
+// refreshes a LIVE cluster on purpose (it exists to skip the ~14m create), as does
+// release-e2e with keep_cluster=true. A re-scaffold that lands on a different
+// version than the running cluster plans a CONTROL-PLANE UPGRADE inside a run whose
+// whole point was not to rebuild anything, and `assert-k8s-version` cannot catch it:
+// the new pin IS in the catalog, it is simply not the one that cluster runs.
 //
-// The hazard predates the derivation — a baked literal mismatched a cluster
-// created at anything else in exactly the same way — so the escape is an explicit
-// pin, and it has to be reachable without editing the workflow.
-func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
+// #453 CLOSED THAT IN THE SCAFFOLD, WHICH IS WHY THIS TEST'S REASON CHANGED. With
+// E2E_LINODE_TOKEN in scope `llz env add` asks the account whether a cluster for
+// this deployment exists and pins WHAT IT RUNS, so the warm lane needs no var at
+// all. What remains is the manual escape for the paths llz cannot ask about — no
+// token, or a cluster read that failed — and it must stay reachable without editing
+// the workflow.
+//
+// THE OLD RATIONALE SURVIVED THE FIX AND WAS THE LAST PLACE IN THE REPO CARRYING
+// IT, after this branch rewrote both workflow headers and docs/secrets.md. A
+// maintainer tripping this gate was told to set vars.E2E_K8S_VERSION — which the
+// same branch now documents as hard-failing the next COLD run, once that version
+// rotates out and an explicit pin has no cluster to exempt it.
+func TestTheE2ELaneCanStillPinTheVersionByHand(t *testing.T) {
 	step := e2eScaffoldStep(t)
 	if !strings.Contains(step, `--k8s-version "${E2E_K8S_VERSION}"`) {
-		t.Errorf("the e2e scaffold cannot be pinned, so a lane that REUSES a cluster (release-e2e-warm, or\n"+
-			"release-e2e with keep_cluster=true) re-derives the version and plans an unrequested\n"+
-			"LKE-Enterprise control-plane upgrade on it. Step body:\n%s", step)
+		t.Errorf("the e2e scaffold can no longer be pinned by hand, so the paths llz cannot ask about —\n"+
+			"no E2E_LINODE_TOKEN, or a failed cluster read — have no way to stop a reused cluster being\n"+
+			"re-derived onto a different version. Step body:\n%s", step)
 	}
 	raw, err := os.ReadFile(e2eInstantiateWorkflow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// From a repo VAR, so a maintainer keeping a warm cluster sets it without a
-	// commit — and it must stay optional, since an empty value is what makes the
-	// cold lane derive.
+	// From a repo VAR, so the escape is reachable without a commit — and it must stay
+	// optional, since EMPTY is now the normal setting: it is what lets `llz env add`
+	// decide, adopting a live cluster's version or deriving the account's newest.
 	if !strings.Contains(string(raw), "E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}") {
 		t.Error("E2E_K8S_VERSION must come from a repo var — a pin that needs a commit is one nobody sets")
 	}
