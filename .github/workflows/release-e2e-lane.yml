@@ -63,17 +63,32 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #            cluster may not be creatable at. Unset → the compiled default, and a
 #            ::warning saying so.
 #
-# And one OPTIONAL var, which you MUST set while you keep a warm cluster:
+# And one OPTIONAL var, needed only when E2E_LINODE_TOKEN is NOT in scope:
 #   vars:    E2E_K8S_VERSION — pins cluster.k8sVersion instead of deriving it.
-#            Empty is right when the run CREATES the cluster. It is WRONG the
-#            moment one survives into the next run (release-e2e-warm.yml, or this
-#            workflow with keep_cluster=true): `k8s_version` reaches the LKE-E API
-#            on a create OR A CHANGE, so re-scaffolding to a different version
+#            NO LONGER REQUIRED FOR A WARM CLUSTER. With the token set, `llz env add`
+#            asks the account whether a cluster for this deployment already exists
+#            and pins WHAT IT RUNS, so a reused cluster plans no control-plane change
+#            without anyone setting a var. Leave it empty in that case: a pin left
+#            behind after the warm cluster is gone HARD-FAILS the next cold run once
+#            that version rotates out of the catalog, which for LKE-E is hours.
+#            SET IT FOR ONE CASE, AND TREAT IT AS A STOPGAP IN THE OTHERS. With no
+#            token llz reads no catalog, so nothing judges the var and it works
+#            indefinitely. In the three states where llz asked but could not answer
+#            — a failed cluster read, TWO clusters sharing this deployment's label
+#            (an orphan beside the live one, where llz refuses to guess), or an
+#            account reporting no k8s_version for the cluster it found — the catalog
+#            WAS read, so the pin is judged against it with no exemption available,
+#            and the var HARD-FAILS the scaffold once that version rotates out.
+#            Fix the state instead: re-run, delete the duplicate by id, or find out
+#            why the cluster reports no version.
+#            THE HAZARD IT WAS ADDED FOR IS NOW CLOSED IN llz, WHICH IS WHY THE
+#            INSTRUCTION CHANGED: `k8s_version` reaches the LKE-E API on a create OR
+#            A CHANGE, so re-scaffolding a surviving cluster to a different version
 #            plans a control-plane UPGRADE inside a run that meant to skip the
-#            create. assert-k8s-version cannot catch it — the derived pin is a
-#            valid version, just not the one that cluster runs. Set it to what the
-#            warm cluster runs (`llz doctor --env e2e` names it); clear it when you
-#            go back to cold runs.
+#            create, and assert-k8s-version cannot catch it — the derived pin is a
+#            valid version, just not the one that cluster runs. That is exactly what
+#            the scaffold's cluster read now prevents on its own (#453). The var
+#            remains the manual escape for the runs llz cannot ask about.
 # Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
 # set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
 #

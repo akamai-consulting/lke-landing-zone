@@ -535,19 +535,21 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 		return inheritedFix + color.Dim(" (this deployment only — the shared default is unbuildable)")
 	case !lzExists && k8s.Newest != "":
 		return k8s.Newest
-	case !lzExists && k8s.CatalogRead:
+	case !lzExists && k8s.Catalog == instanceresolve.CatalogAnswered:
 		// THE ACCOUNT ANSWERED; its catalog just holds nothing that could be sent to
 		// the create API. Reporting that as "could not be asked" contradicted the
 		// stderr line printed moments earlier, which names the catalog it returned —
 		// two messages about one event, disagreeing on whether the request happened.
 		//
-		// CatalogRead, NOT len(k8s.Offered) > 0. A read that SUCCEEDED and returned an
+		// Catalog, NOT len(k8s.Offered) > 0. A read that SUCCEEDED and returned an
 		// empty catalog leaves Offered nil, so keying on it put this line and
-		// seedSource — which was moved to CatalogRead first — on opposite sides of the
-		// same fact: one run printed "the account could not be asked" in the banner and
-		// "the account's catalog names no full build id" three lines later. The two
-		// must read the same flag or they will drift again.
+		// seedSource on opposite sides of the same fact: one run printed "the account
+		// could not be asked" in the banner and "the account's catalog names no full
+		// build id" three lines later. The two must read the same field or they will
+		// drift again.
 		return color.Dim("(scaffold default — the account's catalog names no build id)")
+	case !lzExists && k8s.Catalog == instanceresolve.CatalogFailed:
+		return color.Dim("(scaffold default — the account did not answer)")
 	case !lzExists:
 		return color.Dim("(scaffold default — the account could not be asked)")
 	default:
@@ -566,19 +568,26 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 // asked. k8sVersionBanner already distinguishes these three; this did not, and one
 // of them is the operator's own credential being blamed for their catalog.
 //
-// CatalogRead is the discriminator, and Offered is NOT: a read that succeeded on an
+// Catalog is the discriminator, and Offered is NOT: a read that succeeded on an
 // empty catalog leaves Offered nil, so it cannot tell "answered with nothing" from
-// "never answered". k8sVersionBanner reads the same flag, deliberately — the two
+// "never answered". k8sVersionBanner reads the same field, deliberately — the two
 // sentences are about one event and drifted apart once already.
 func seedSource(k8s instanceresolve.K8sVersionChoice) string {
 	switch {
 	case k8s.Newest != "":
 		return "the newest LKE-Enterprise version this account offers"
-	case k8s.CatalogRead:
+	case k8s.Catalog == instanceresolve.CatalogAnswered:
 		// NOT len(k8s.Offered) > 0. A successful read of an EMPTY catalog leaves Offered
 		// nil, so keying on it told an account that had answered it "was never asked" —
 		// the same message-lies class the cluster-read arm was fixed for.
 		return "llz's compiled default — the account's catalog names no full build id"
+	case k8s.Catalog == instanceresolve.CatalogFailed:
+		// ASKED AND REFUSED IS NOT NEVER ASKED. A bool could not hold this, so a token
+		// whose versions route 401s got "the API did not answer" from the skip notice
+		// and "this account was never asked" here, in one run about one request. The
+		// remedies differ — fix the token you have, versus export one — which is the
+		// entire reason to distinguish them.
+		return "llz's compiled default — this account did not answer (see the warning above)"
 	default:
 		return "llz's compiled default — this account was never asked"
 	}

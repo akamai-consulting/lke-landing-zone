@@ -343,6 +343,80 @@ func TestOneMatcherServesEveryCallerThatResolvesADeploymentsCluster(t *testing.T
 	}
 }
 
+// TestNamesABuildAndNewestVersionCannotDISAGREEAboutOneRow.
+//
+// They answer the same question — "is this a string the LKE-E create API could
+// take?" — and answered it with two different rules: NamesABuild asked whether the
+// string contains `+`, NewestVersion required a full v?MAJOR.MINOR.PATCH+lkeN. On a
+// row carrying a build suffix but no patch component they disagree, and the
+// disagreement is user-visible: NewestVersion skips the row so llz reports "this
+// catalog names no full build id", while NamesABuild calls it a build id and
+// coarsePinRemedy offers that very row back as the thing to pin instead.
+//
+// The shape is unmeasured, which is why this is a coupling test rather than a claim
+// about the API: whatever LKE-E turns out to spell, the two must not contradict
+// each other about it.
+func TestNamesABuildAndNewestVersionCannotDISAGREEAboutOneRow(t *testing.T) {
+	for _, row := range []string{
+		"v1.34.6+lke2", // the measured shape
+		"1.34.6+lke2",  // no leading v — still sendable, still orderable
+		"v1.34+lke2",   // build suffix, NO patch: where the two rules used to split
+		"v1.34.6",      // no build suffix
+		"1.33",         // coarse
+		"v1.34.6+lke",  // suffix present, no number
+		"v1.34.6+lkeX", // suffix present, not a number
+		"v1.-1.6+lke2", // negative component
+		"",             // empty
+		"   ",          // blank
+		"vvv",          // nonsense
+	} {
+		// NewestVersion over a single-row catalog answers exactly "would you choose
+		// this?" — the operational meaning of "is it a build id".
+		chosen := NewestVersion([]string{row}) != ""
+		if got := NamesABuild(row); got != chosen {
+			t.Errorf("NamesABuild(%q) = %v but NewestVersion %s it — llz would say the catalog "+
+				"names no build id and then offer this row as one to pin",
+				row, got, map[bool]string{true: "chooses", false: "skips"}[chosen])
+		}
+	}
+}
+
+// TestVersionSortKeyRejectsARowItCannotHOLD.
+//
+// versionSortKey fills a fixed [4]int by ranging over `append(parts, build)`, and
+// the ONLY thing keeping that in bounds is `len(parts) != 3`. Nothing pinned it:
+// loosening the check to `< 3` left the whole suite green, and under that loosening
+// `v1.34.6.9+lke2` panics with index-out-of-range — inside code fed raw
+// account-catalog strings by `llz env add`, `llz doctor` and
+// `llz ci assert-k8s-version` alike.
+//
+// A four-component version is not a shape LKE-E has been seen to emit. That is the
+// reason to pin it rather than to shrug: this parser's whole contract is that an
+// unrecognised row is SKIPPED, and a row that crashes the process instead is the
+// one failure mode none of its callers can degrade around.
+func TestVersionSortKeyRejectsARowItCannotHOLD(t *testing.T) {
+	for _, row := range []string{
+		"v1.34.6.9+lke2", // four components — the one that overflows the key
+		"v1.34.6.9.1+lke2",
+		"v1.34+lke2", // two — the other side of the same guard
+		"v1+lke2",
+	} {
+		if _, ok := versionSortKey(row); ok {
+			t.Errorf("versionSortKey(%q) accepted a row it cannot represent", row)
+		}
+		// AND THE CALLERS DEGRADE RATHER THAN CRASH. NewestVersion must skip it and
+		// return "", not panic and not choose it.
+		if got := NewestVersion([]string{row}); got != "" {
+			t.Errorf("NewestVersion([%q]) = %q, want \"\" — an unparseable row is skipped, never chosen", row, got)
+		}
+	}
+	// The guard must not have been loosened into "at least three" either: a valid row
+	// still parses, so this is a rejection test rather than a reject-everything test.
+	if _, ok := versionSortKey("v1.34.6+lke2"); !ok {
+		t.Error("versionSortKey rejected the measured shape — the guard is now too strict")
+	}
+}
+
 // A NEAR MISS SHARPENS THE MESSAGE; IT NEVER WIDENS WHO MAY REJECT. The near-miss
 // branch used to return NotOffered before asking whether the catalog was entitled
 // to reject anything, so a coarse or mixed list hard-failed a build — and the

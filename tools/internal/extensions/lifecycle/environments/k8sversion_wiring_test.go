@@ -452,6 +452,128 @@ func TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken(t *testing.T) {
 	}
 }
 
+// TestAStarterExampleIsNotADeployment.
+//
+// existingDeployments filters environments/ to `.yaml`, and nothing pinned it:
+// mutating the suffix check away left the whole suite green. What it defends is
+// specific — the template tree ships `prod-web-ord.yaml.example` as a starter, and
+// without the filter that file counts as a deployment. The re-seed warning then
+// names a `.example` as something that will inherit the new pin, and `reseeding`
+// flips true in this repo's own e2e lane, which rm's landingzone.yaml at the
+// template root. A warning that names a file nobody deployed is how a real warning
+// stops being read.
+func TestAStarterExampleIsNotADeployment(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, clusterspec.EnvironmentsDir)
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"lab.yaml", "prod-web-ord.yaml.example", "README.md", "dr.yaml"} {
+		if err := os.WriteFile(filepath.Join(envDir, f), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := existingDeployments(dir)
+	want := []string{"dr", "lab"}
+	if len(got) != len(want) {
+		t.Fatalf("existingDeployments = %v, want %v — a starter `.example` (or a README) counted as a "+
+			"deployment that inherits the re-seeded pin", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("existingDeployments = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestTheThirdCatalogStateCHANGESWhatLlzSays.
+//
+// Round 9 split the catalog flag into three states because "no token" and "asked, and
+// the API refused" licensed different sentences and different remedies. The
+// resolver test pins that CatalogFailed is PRODUCED — and nothing pinned that any
+// consumer says anything different about it, which is the entire user-visible point
+// of the third state. Mutation probe: rewriting both CatalogFailed arms back to the
+// CatalogNotAsked wording left the environments suite green.
+//
+// So this asserts the two consumers DISTINGUISH all three, without pinning their
+// wording: what must hold is that a state llz can tell apart is one the operator can
+// tell apart too.
+func TestTheThirdCatalogStateCHANGESWhatLlzSays(t *testing.T) {
+	states := map[string]instanceresolve.K8sVersionChoice{
+		"not asked": {Catalog: instanceresolve.CatalogNotAsked},
+		"failed":    {Catalog: instanceresolve.CatalogFailed},
+		"answered":  {Catalog: instanceresolve.CatalogAnswered},
+	}
+	for _, render := range []struct {
+		name string
+		fn   func(instanceresolve.K8sVersionChoice) string
+	}{
+		{"k8sVersionBanner", func(k instanceresolve.K8sVersionChoice) string { return k8sVersionBanner(k, false, "") }},
+		{"seedSource", seedSource},
+	} {
+		seen := map[string]string{}
+		for state, k8s := range states {
+			got := render.fn(k8s)
+			if prior, dup := seen[got]; dup {
+				t.Errorf("%s renders %q for BOTH the %q and %q catalog states — llz knows they are "+
+					"different (one is 'export a token', the other is 'fix the token you have') and "+
+					"the operator cannot tell", render.name, got, prior, state)
+			}
+			seen[got] = state
+		}
+	}
+	// AND THE FAILED ARM POINTS AT THE DIAGNOSTIC THAT SAYS WHY, which is the whole
+	// reason the state is worth distinguishing: the skip notice above it names the
+	// status code.
+	if src := seedSource(states["failed"]); !strings.Contains(src, "did not answer") {
+		t.Errorf("seedSource for a FAILED read = %q, which does not tell the operator the account was "+
+			"asked and refused", src)
+	}
+}
+
+// TestTheE2ELaneScaffoldsBEFOREItRenamesTheInstance.
+//
+// THE WARM LANE'S WHOLE GUARANTEE RESTS ON A STEP ORDER NOTHING PINNED. `llz env
+// add` derives this deployment's cluster label from envdef.InstanceName, which at
+// the template root finds `.copier-answers.yml` unrendered and falls back to the
+// directory name — `instance-template-e2e`. That is the label the surviving warm
+// cluster carries, so the adoption fires and no control-plane upgrade is planned.
+//
+// `llz spec set instance.repo=` runs AFTER, and changes what InstanceName would
+// return. Move it earlier and the label becomes the real repo's short name, the
+// lookup matches nothing, and adoption stops — SILENTLY, because `Matches == 0` is
+// the one classifyClusters outcome that deliberately emits no warning (it is the
+// ordinary fresh-instance case; see TestAnAccountWithNoMatchIsQuiet). The lane
+// would plan the upgrade this branch removed the documented backstop for, with
+// nothing in the log to say so.
+//
+// So the order is load-bearing in a way neither step announces, and this is the
+// only thing that would notice it changing.
+func TestTheE2ELaneScaffoldsBEFOREItRenamesTheInstance(t *testing.T) {
+	raw, err := os.ReadFile(e2eInstantiateWorkflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// `bin/llz`, NOT `llz` — the bare name appears in COMMENTS above both steps
+	// (including one about E2E_K8S_VERSION 200 lines earlier), so the first cut of
+	// this gate compared the positions of two sentences and passed no matter how the
+	// commands were ordered. Caught by swapping the real steps and watching it stay
+	// green: a gate whose mutation lands on prose is not a gate.
+	body := string(raw)
+	add := strings.Index(body, "bin/llz env add")
+	rename := strings.Index(body, "bin/llz spec set instance.repo=")
+	if add < 0 || rename < 0 {
+		t.Fatalf("premise broken: `bin/llz env add` at %d, `bin/llz spec set instance.repo=` at %d — "+
+			"this gate is watching commands that are no longer in the lane", add, rename)
+	}
+	if add > rename {
+		t.Error("`llz spec set instance.repo=` now runs BEFORE `llz env add`, so the cluster label the\n" +
+			"scaffold looks up is no longer the one the warm cluster carries. Adoption stops matching\n" +
+			"and says nothing — `Matches == 0` is the one outcome with no warning — and the warm lane\n" +
+			"plans an LKE-Enterprise control-plane upgrade it used to be pinned against.")
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //
@@ -632,17 +754,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		want         string
 	}{
 		"explicit pin wins": {
-			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true},
+			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered},
 			false, "", "v1.32.9+lke4",
 		},
 		"first env add shows the derived version": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, false, "", "v1.34.6+lke2",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, false, "", "v1.34.6+lke2",
 		},
 		"later env add inherits": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "", "inherited",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "", "inherited",
 		},
 		"later env add overrides a rotated-out shared pin": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "v1.34.6+lke2", "this deployment only",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "v1.34.6+lke2", "this deployment only",
 		},
 		// THE TWO STATES THAT USED TO RENDER IDENTICALLY. One never reached the
 		// account; the other got an answer it cannot use — and the second one prints
@@ -652,17 +774,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 			instanceresolve.K8sVersionChoice{}, false, "", "could not be asked",
 		},
 		"catalog answered but names no build id": {
-			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, CatalogRead: true}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
 		},
 		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
-		// empty catalog leaves Offered nil while CatalogRead is true — so a banner
+		// empty catalog leaves Offered nil while Catalog is CatalogAnswered — so a banner
 		// keyed on len(Offered) said "could not be asked" while seedSource, keyed on
-		// CatalogRead, said the catalog had answered. Same run, same request, opposite
-		// claims. Every fixture above now carries CatalogRead because the resolver
+		// Catalog, said the catalog had answered. Same run, same request, opposite
+		// claims. Every fixture above now carries Catalog because the resolver
 		// always sets the two together; a hand-built choice that omits it is a state
 		// ResolveK8sVersion cannot produce, and it hid this.
 		"catalog answered with nothing at all": {
-			instanceresolve.K8sVersionChoice{CatalogRead: true}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -675,7 +797,7 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// And the two "no build id" states must not render the same string, which is the
 	// whole finding rather than a wording preference.
 	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, "")
-	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, CatalogRead: true}, false, "")
+	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered}, false, "")
 	if unreachable == coarse {
 		t.Errorf("an unreachable account and a catalog llz cannot use both render %q — "+
 			"they are different events with different remedies", unreachable)
@@ -686,8 +808,8 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// fields. Asserted rather than commented, because they live in different
 	// functions and nothing else couples them.
 	for name, k8s := range map[string]instanceresolve.K8sVersionChoice{
-		"empty read":  {CatalogRead: true},
-		"coarse read": {Offered: []string{"1.33"}, CatalogRead: true},
+		"empty read":  {Catalog: instanceresolve.CatalogAnswered},
+		"coarse read": {Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered},
 		"no read":     {},
 	} {
 		banner, source := k8sVersionBanner(k8s, false, ""), seedSource(k8s)
@@ -1106,33 +1228,41 @@ func TestDryRunPreviewsTheVersionConsequencesItWouldCause(t *testing.T) {
 	}
 }
 
-// TestTheE2ELanePinsTheVersionWhenItReusesACluster.
+// TestTheE2ELaneCanStillPinTheVersionByHand.
 //
-// `k8s_version` reaches the LKE-E API on a create OR A CHANGE. release-e2e-warm
-// refreshes a LIVE cluster on purpose (it exists to skip the ~14m create), and
-// release-e2e keeps one on keep_cluster=true — so a re-scaffold that derives a
-// different version than the running cluster plans a CONTROL-PLANE UPGRADE inside
-// a run whose whole point was not to rebuild anything. `assert-k8s-version` cannot
-// catch it: the freshly derived pin is in the catalog, it is simply not the one
-// that cluster runs.
+// `k8s_version` reaches the LKE-E API on a create OR A CHANGE, and release-e2e-warm
+// refreshes a LIVE cluster on purpose (it exists to skip the ~14m create), as does
+// release-e2e with keep_cluster=true. A re-scaffold that lands on a different
+// version than the running cluster plans a CONTROL-PLANE UPGRADE inside a run whose
+// whole point was not to rebuild anything, and `assert-k8s-version` cannot catch it:
+// the new pin IS in the catalog, it is simply not the one that cluster runs.
 //
-// The hazard predates the derivation — a baked literal mismatched a cluster
-// created at anything else in exactly the same way — so the escape is an explicit
-// pin, and it has to be reachable without editing the workflow.
-func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
+// #453 CLOSED THAT IN THE SCAFFOLD, WHICH IS WHY THIS TEST'S REASON CHANGED. With
+// E2E_LINODE_TOKEN in scope `llz env add` asks the account whether a cluster for
+// this deployment exists and pins WHAT IT RUNS, so the warm lane needs no var at
+// all. What remains is the manual escape for the paths llz cannot ask about — no
+// token, or a cluster read that failed — and it must stay reachable without editing
+// the workflow.
+//
+// THE OLD RATIONALE SURVIVED THE FIX AND WAS THE LAST PLACE IN THE REPO CARRYING
+// IT, after this branch rewrote both workflow headers and docs/secrets.md. A
+// maintainer tripping this gate was told to set vars.E2E_K8S_VERSION — which the
+// same branch now documents as hard-failing the next COLD run, once that version
+// rotates out and an explicit pin has no cluster to exempt it.
+func TestTheE2ELaneCanStillPinTheVersionByHand(t *testing.T) {
 	step := e2eScaffoldStep(t)
 	if !strings.Contains(step, `--k8s-version "${E2E_K8S_VERSION}"`) {
-		t.Errorf("the e2e scaffold cannot be pinned, so a lane that REUSES a cluster (release-e2e-warm, or\n"+
-			"release-e2e with keep_cluster=true) re-derives the version and plans an unrequested\n"+
-			"LKE-Enterprise control-plane upgrade on it. Step body:\n%s", step)
+		t.Errorf("the e2e scaffold can no longer be pinned by hand, so the paths llz cannot ask about —\n"+
+			"no E2E_LINODE_TOKEN, or a failed cluster read — have no way to stop a reused cluster being\n"+
+			"re-derived onto a different version. Step body:\n%s", step)
 	}
 	raw, err := os.ReadFile(e2eInstantiateWorkflow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// From a repo VAR, so a maintainer keeping a warm cluster sets it without a
-	// commit — and it must stay optional, since an empty value is what makes the
-	// cold lane derive.
+	// From a repo VAR, so the escape is reachable without a commit — and it must stay
+	// optional, since EMPTY is now the normal setting: it is what lets `llz env add`
+	// decide, adopting a live cluster's version or deriving the account's newest.
 	if !strings.Contains(string(raw), "E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}") {
 		t.Error("E2E_K8S_VERSION must come from a repo var — a pin that needs a commit is one nobody sets")
 	}
@@ -1153,7 +1283,7 @@ func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
 // empty" — so an account that answered was told it "was never asked", in the one
 // sentence whose whole job is to say what llz did and did not do.
 func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
-	answered := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true})
+	answered := seedSource(instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered})
 	if strings.Contains(answered, "never asked") {
 		t.Errorf("the account answered — an empty catalog is an answer; got %q", answered)
 	}
@@ -1167,7 +1297,7 @@ func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
 			"implying it judged a catalog; got %q", unasked)
 	}
 
-	derived := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true, Newest: "v1.34.6+lke2"})
+	derived := seedSource(instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered, Newest: "v1.34.6+lke2"})
 	if !strings.Contains(derived, "newest") {
 		t.Errorf("a derived seed must name where it came from; got %q", derived)
 	}

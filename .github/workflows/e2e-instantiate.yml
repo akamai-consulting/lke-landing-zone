@@ -107,23 +107,41 @@ env:
   # throwaway tier co-located in us-ord, the right shape for an E2E run. Override via repo
   # vars only to exercise a different region.
   E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
-  # PIN THE VERSION WHEN THE LANE REUSES A CLUSTER. Empty = let `llz env add` derive
-  # the newest the account offers, which is right when this run CREATES the cluster.
+  # THE MANUAL ESCAPE, AND NORMALLY EMPTY. Leave it unset and `llz env add` decides:
+  # it asks the account whether a cluster for this deployment already exists and pins
+  # WHAT THAT CLUSTER RUNS, falling back to the newest the account offers when there
+  # is none.
   #
-  # It is WRONG the moment a cluster survives into the next run — which is the warm
-  # lane's entire premise (release-e2e-warm.yml refreshes a live cluster) and also
-  # release-e2e.yml with keep_cluster=true. `k8s_version` reaches the LKE-E API on a
-  # create OR A CHANGE, so a re-scaffold that derives a DIFFERENT version than the
-  # running cluster plans an LKE-Enterprise CONTROL-PLANE UPGRADE inside a run whose
-  # whole point was to skip the 14m create. `llz ci assert-k8s-version` cannot catch
-  # it: the newly derived pin is in the catalog, so it is a valid version — just not
-  # the one that cluster is running.
+  # THAT IS WHY THIS IS NO LONGER "SET IT WHILE YOU KEEP A WARM CLUSTER". The hazard
+  # was real: `k8s_version` reaches the LKE-E API on a create OR A CHANGE, so a
+  # re-scaffold that derived a DIFFERENT version than the running cluster planned an
+  # LKE-Enterprise CONTROL-PLANE UPGRADE inside a run whose whole point was to skip
+  # the 14m create — the warm lane's entire premise, and release-e2e.yml with
+  # keep_cluster=true. `llz ci assert-k8s-version` cannot catch it: the derived pin
+  # IS in the catalog, it is simply not the one that cluster runs. #453 closed it in
+  # the scaffold, where the answer actually lives.
   #
-  # Note this hazard is OLDER than the derivation and the fix is not "remove the
-  # token": before, the lane baked a fixed literal, so a cluster created at anything
-  # else planned the same upgrade. Only an explicit pin closes it. Set this to the
-  # version your warm cluster runs (`llz doctor --env e2e` names it) for as long as
-  # you keep one, and clear it when you go back to cold runs.
+  # AND A PIN LEFT BEHIND IS NOW THE HAZARD. Once the warm cluster is gone, a stale
+  # var HARD-FAILS the next cold run the moment that version rotates out of the
+  # account's catalog — hours, for LKE-E — because an explicit --k8s-version with no
+  # cluster to exempt it is rejected outright.
+  #
+  # SETTING IT IS A STOPGAP EVERYWHERE EXCEPT ONE CASE, and the difference is which
+  # code path judges the pin. With NO E2E_LINODE_TOKEN llz reads no catalog, so
+  # nothing judges the var at all and it works indefinitely — that is the one case to
+  # set it for. In the three states where llz asked but could not ANSWER — the
+  # cluster read failed, TWO clusters carry this deployment's label (an orphan beside
+  # the live one, so llz refuses to guess), or the account reports no k8s_version for
+  # the cluster it found — the catalog WAS read, so the pin is judged against it and
+  # llz has no exemption to grant. The var works only until that version rotates out,
+  # which for LKE-E is hours; after that the scaffold HARD-FAILS with "is not an
+  # LKE-Enterprise version this account can build".
+  #
+  # So in those three, fix the state rather than pinning around it: re-run the read,
+  # delete the duplicate cluster BY ID (never `llz reap --cluster-label`, which takes
+  # both), or find out why the cluster reports no version. Each says which it is in
+  # the log — and the middle two are the easy ones to miss, since the run is
+  # otherwise healthy and the only trace is a ::warning inside a green step.
   E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
 

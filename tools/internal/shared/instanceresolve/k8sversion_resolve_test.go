@@ -3,6 +3,7 @@ package instanceresolve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -325,10 +326,21 @@ func TestRejectingAPinDoesNotAdviseAControlPlaneUpgrade(t *testing.T) {
 		// IT MUST NOT CLAIM MORE THAN IT CHECKED, and it must not claim less: the
 		// account WAS asked, so the message says the cluster is absent rather than
 		// leaving the operator to wonder whether an exemption was even considered.
-		for _, want := range []string{"No single cluster named", "platform-support-lab", "ALREADY RUNNING"} {
+		for _, want := range []string{"No single cluster named", "platform-support-lab"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the rejection must mention %q; got:\n%s", want, err)
 			}
+		}
+		// AND IT MUST NOT OFFER THE ADOPTION IT JUST SAID IS IMPOSSIBLE. This arm used
+		// to require the words "ALREADY RUNNING" — the promise that omitting the flag
+		// lets llz pin what the cluster runs — in the one message that has just
+		// established there is no such cluster. The assertion was pinning the defect.
+		if strings.Contains(err.Error(), "ALREADY RUNNING") {
+			t.Errorf("the rejection offers to adopt a running version two lines after saying no such "+
+				"cluster exists:\n%s", err)
+		}
+		if !strings.Contains(err.Error(), "no cluster for this deployment to adopt") {
+			t.Errorf("the rejection does not say why the adoption path is unavailable:\n%s", err)
 		}
 	})
 }
@@ -863,6 +875,384 @@ func TestTheOrphanRemedyIsScopedToTheClusterItMatched(t *testing.T) {
 	}
 }
 
+// TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount.
+//
+// A read that SUCCEEDED and listed nothing was routed through
+// reportSkippedAccountCheck, whose error arm reads "the API did not answer" and
+// tells the operator their token is probably expired, revoked or under-scoped.
+// Their token worked. And in the same run k8sVersionBanner correctly reported the
+// catalog as READ — so llz made two contradictory statements about one request and
+// sent the operator off to re-mint a PAT that was fine.
+func TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: nil})
+	var c K8sVersionChoice
+	out := captureStderr(t, func() {
+		var err error
+		if c, err = ResolveK8sVersion("", Deployment{}); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	// THE FLAG THAT KEEPS THE BANNER AND THE NOTICE ON ONE STORY.
+	if c.Catalog != CatalogAnswered {
+		t.Error("the read succeeded, so Catalog must be CatalogAnswered — the notice and the banner key on it")
+	}
+	if strings.Contains(out, "did not answer") || strings.Contains(out, "expired") {
+		t.Errorf("an account that ANSWERED was reported as unreachable, blaming a working token:\n%s", out)
+	}
+	if !strings.Contains(out, "lists NO LKE-Enterprise versions") {
+		t.Errorf("the empty answer was not reported as what it is:\n%s", out)
+	}
+}
+
+// TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed.
+//
+// This derivation runs on EVERY `llz env add`, flag or no flag. Naming
+// `--k8s-version` told an operator who never passed one that it "was NOT checked" —
+// a sentence about something they did not do, which reads as a mistake they made.
+// `cluster.k8sVersion` is what is actually being decided, and it is the field they
+// will go and look at.
+func TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{err: errors.New("401 unauthorized")})
+	out := captureStderr(t, func() {
+		if _, err := ResolveK8sVersion("", Deployment{}); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if !strings.Contains(out, "cluster.k8sVersion") {
+		t.Errorf("the notice does not name the spec field it decides:\n%s", out)
+	}
+	if strings.Contains(out, "--k8s-version was NOT checked") {
+		t.Errorf("the notice blames a flag the operator never passed:\n%s", out)
+	}
+}
+
+// TestAskedAndRefusedIsNotNeverAsked.
+//
+// The catalog outcome began as one bool, and a bool cannot hold this: "no token" and
+// "asked, and the API refused" both read as not-answered. So a token whose versions
+// route 401s produced "the API did not answer" from the skip notice and "this
+// account was never asked" from the seed provenance — one run, one request, two
+// contradictory claims, with different remedies attached (fix the token you have,
+// versus export one).
+func TestAskedAndRefusedIsNotNeverAsked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lister *fakeVersionLister
+		want   CatalogOutcome
+	}{
+		"no token":            {nil, CatalogNotAsked},
+		"the API refused":     {&fakeVersionLister{err: errors.New("401 unauthorized")}, CatalogFailed},
+		"answered with none":  {&fakeVersionLister{versions: nil}, CatalogAnswered},
+		"answered but coarse": {&fakeVersionLister{versions: []string{"1.33"}}, CatalogAnswered},
+		"answered properly":   {&fakeVersionLister{versions: e2eAccountCatalog}, CatalogAnswered},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if tc.lister == nil {
+				withCatalog(t, nil)
+			} else {
+				withCatalog(t, tc.lister)
+			}
+			var c K8sVersionChoice
+			captureStderr(t, func() {
+				var err error
+				if c, err = ResolveK8sVersion("", Deployment{}); err != nil {
+					t.Fatalf("ResolveK8sVersion: %v", err)
+				}
+			})
+			if c.Catalog != tc.want {
+				t.Errorf("Catalog = %v, want %v — the three outcomes license three different "+
+					"sentences and three different remedies", c.Catalog, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheEmptyCatalogWarningDoesNotPREDICTThePin.
+//
+// It fires from accountLKEVersions, BEFORE the pin is decided, and three things can
+// still happen after it: a live cluster is adopted and Pin becomes what it runs, an
+// explicit --k8s-version is written as given, or a later `env add` inherits
+// spec.defaults and falls back to nothing at all. The first cut said "the spec keeps
+// its compiled default" — contradicting, from 400 lines up, the sibling warning
+// whose own comment spells out this exact rule.
+func TestTheEmptyCatalogWarningDoesNotPREDICTThePin(t *testing.T) {
+	// The case that most obviously falsifies the old claim: an empty catalog AND a
+	// live cluster, so the pin llz writes is the adopted one, not any default.
+	withCatalog(t, &fakeVersionLister{
+		versions: nil,
+		clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+	})
+	var c K8sVersionChoice
+	out := captureStderr(t, func() {
+		var err error
+		if c, err = ResolveK8sVersion("", lab); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if c.Pin != "v1.33.6+lke7" {
+		t.Fatalf("premise broken: Pin = %q, want the adopted version", c.Pin)
+	}
+	if !strings.Contains(out, "lists NO LKE-Enterprise versions") {
+		t.Fatalf("the empty-catalog warning did not fire:\n%s", out)
+	}
+	if strings.Contains(out, "keeps its compiled default") {
+		t.Errorf("the warning predicts a compiled default while llz went on to pin %q from a live "+
+			"cluster — it runs BEFORE the pin is decided and cannot know:\n%s", c.Pin, out)
+	}
+}
+
+// TestTheCoarsePinWarningExplainsTheRuleItActuallyAPPLIES.
+//
+// The warning tells the operator WHY their pin is not a full build id, and that
+// explanation has to match the predicate that rejected it. It did not: NamesABuild
+// was tightened to the same parse NewestVersion uses (MAJOR.MINOR.PATCH + `+lkeN`)
+// while the warning still explained itself with the old substring rule — "those
+// carry an `+lke` suffix". So a pin of `v1.34+lke2`, which HAS an `+lke` suffix, was
+// told it lacked one. That is the same contradiction class this arm was added to
+// remove, one message along.
+//
+// The fixture is the exact shape the linode-side coupling test names as the split
+// between the two rules, so this cannot pass by accident.
+func TestTheCoarsePinWarningExplainsTheRuleItActuallyAPPLIES(t *testing.T) {
+	const pin = "v1.34+lke2" // a build suffix, no patch component
+	if linode.NamesABuild(pin) {
+		t.Fatalf("premise broken: %q must be rejected by NamesABuild for this arm to fire", pin)
+	}
+	withCatalog(t, &fakeVersionLister{versions: []string{pin}})
+	c, err := ResolveK8sVersion(pin, lab)
+	if err != nil {
+		t.Fatalf("a coarse pin is warned about, not rejected: %v", err)
+	}
+	if c.Warning == "" {
+		t.Fatal("the coarse-pin warning did not fire")
+	}
+	// THE EXPLANATION MUST NOT BE FALSIFIED BY THE PIN IT DESCRIBES. Asserting the
+	// absence of the old rule rather than the presence of new wording, so this stays
+	// a correctness gate and not a spellcheck.
+	if strings.Contains(c.Warning, "carry an `+lke` suffix") {
+		t.Errorf("the warning tells the operator a build id is one that carries `+lke` — which %q does, "+
+			"and llz rejected it anyway:\n%s", pin, c.Warning)
+	}
+	if !strings.Contains(c.Warning, "PATCH") {
+		t.Errorf("the warning does not name the component %q actually lacks, so the operator cannot "+
+			"tell what to change:\n%s", pin, c.Warning)
+	}
+}
+
+// TestCatalogOutcomeNamesItselfInAFailure.
+//
+// The names ARE this type's point — each state licenses a different sentence and a
+// different remedy — and a bare int defeats that exactly where it matters most.
+// TestAskedAndRefusedIsNotNeverAsked exists to prove the three stay
+// distinguishable, and it was reporting `Catalog = 1, want 2`: no reader can tell
+// WHICH distinction broke from the failure message of the test whose whole subject
+// is that distinction.
+func TestCatalogOutcomeNamesItselfInAFailure(t *testing.T) {
+	for want, o := range map[string]CatalogOutcome{
+		"CatalogNotAsked": CatalogNotAsked,
+		"CatalogFailed":   CatalogFailed,
+		"CatalogAnswered": CatalogAnswered,
+	} {
+		if got := fmt.Sprintf("%v", o); got != want {
+			t.Errorf("CatalogOutcome(%d) renders as %q, want %q — a failure message that prints an "+
+				"integer cannot say which state llz got", int(o), got, want)
+		}
+	}
+	// AN UNKNOWN VALUE STILL SAYS WHAT IT IS rather than rendering as an empty
+	// string, which is how a stringer turns an out-of-range bug into a silent one.
+	if got := fmt.Sprintf("%v", CatalogOutcome(99)); !strings.Contains(got, "99") {
+		t.Errorf("an out-of-range CatalogOutcome rendered as %q, losing the value", got)
+	}
+}
+
+// TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing.
+//
+// TWO RULES DECIDE DIFFERENT HALVES OF THIS MESSAGE, ON PURPOSE, and the gap
+// between them is a real catalog shape. The catalog's entitlement to REJECT runs
+// off the loose `hasBuild` (via everyEntryNamesABuild); what llz would CHOOSE runs
+// off the strict versionSortKey. A catalog of `["v1.34+lke2"]` licenses the
+// rejection and derives "" — so the remedy said "omit it and llz picks the newest
+// your account offers" in a run that had ALREADY printed "this catalog names no
+// full build id", and omitting would have fallen through to the compiled literal.
+//
+// The asymmetry stays: each direction is the safe one for its own question. What a
+// remedy may not do is promise what this catalog cannot deliver.
+func TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing(t *testing.T) {
+	// The shape where the two rules split — a build suffix with no patch component.
+	unusable := []string{"v1.34+lke2"}
+	if linode.NamesABuild(unusable[0]) {
+		t.Fatalf("premise broken: %q must not be choosable", unusable[0])
+	}
+	withCatalog(t, &fakeVersionLister{versions: unusable})
+	_, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err == nil {
+		t.Fatal("expected the rejection — this catalog is entitled to reject")
+	}
+	if strings.Contains(err.Error(), "the newest this account offers") {
+		t.Errorf("the rejection tells the operator to omit the flag and let llz derive, from a catalog\n"+
+			"that derives NOTHING:\n%s", err)
+	}
+	for _, want := range []string{"no version for llz to derive", "llz doctor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the rejection must say %q so the operator is not sent round a loop; got:\n%s", want, err)
+		}
+	}
+	// AND IT NAMES NO SINGLE DESTINATION. This package cannot know where the version
+	// comes from once the flag is dropped — only the FIRST `llz env add` seeds
+	// anything, a later one inherits spec.defaults — so a message that picks one is
+	// the predict-the-pin defect this branch removed from two other warnings and then
+	// reintroduced here.
+	if strings.Contains(err.Error(), "fall back to its compiled default") {
+		t.Errorf("the rejection predicts a compiled default, but on an instance that already has\n"+
+			"landingzone.yaml the deployment inherits spec.defaults instead:\n%s", err)
+	}
+
+	// THE NEGATIVE ARM: a catalog that CAN derive must still offer the remedy, or
+	// "never promise a derive" passes the above while withholding the fix from every
+	// ordinary rejection.
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+	_, err = ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if !strings.Contains(err.Error(), "the newest this account offers") {
+		t.Errorf("a catalog that CAN derive must still be offered as the remedy:\n%s", err)
+	}
+	// The same no-single-destination rule on this branch, which carried the defect
+	// first and was only noticed after the other one was written.
+	if !strings.Contains(err.Error(), "spec.defaults") {
+		t.Errorf("the remedy names only a first-`env add` outcome; a later one inherits the shared\n"+
+			"default and the message must say so:\n%s", err)
+	}
+}
+
+// TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt.
+//
+// Every arm that reaches omitRemedy has an EMPTY lk.Running — the exemption and the
+// runs-something-else error both return earlier — so "omit it and llz pins what
+// your cluster is ALREADY RUNNING, which plans no diff at all" was never true of
+// the run printing it. On the ambiguous arm it directly contradicted the warning
+// classifyClusters had emitted seconds before, in the same run: llz cannot tell
+// which cluster is this deployment's and will not guess.
+//
+// The four states are separated because they need four different next actions:
+// resolve the duplicate, read the version by hand, re-run, or accept there is
+// nothing to adopt.
+func TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt(t *testing.T) {
+	const label = "platform-support-lab"
+	for name, tc := range map[string]struct {
+		lister  *fakeVersionLister
+		want    string
+		mustNot string
+	}{
+		"ambiguous": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusters: []map[string]any{
+				{"id": float64(1), "label": label, "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
+				{"id": float64(2), "label": label, "region": "us-ord", "k8s_version": "v1.34.6+lke2"},
+			}},
+			"will not guess between them", "no diff at all",
+		},
+		"unreadable": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusters: []map[string]any{
+				{"id": float64(3), "label": label, "region": "us-ord"},
+			}},
+			"reports none for that cluster", "no diff at all",
+		},
+		"read failed": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503")},
+			"A re-run may settle it", "",
+		},
+		"no cluster": {
+			&fakeVersionLister{versions: e2eAccountCatalog},
+			"no cluster for this deployment to adopt", "no diff at all",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			noClusterReadPause(t)
+			withCatalog(t, tc.lister)
+			var err error
+			captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+			if err == nil {
+				t.Fatal("expected the rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the remedy does not say %q, so the operator is not told what to do next:\n%s",
+					tc.want, err)
+			}
+			// "plans no diff at all" is the adoption promise. It may appear ONLY where
+			// the lookup could actually deliver it — which, on the failed-read arm, is
+			// phrased as a maybe rather than withheld.
+			if tc.mustNot != "" && strings.Contains(err.Error(), tc.mustNot) {
+				t.Errorf("the remedy promises the adoption path on a run whose lookup cannot deliver "+
+					"it (%s):\n%s", name, err)
+			}
+			// AND THE REJECTION ITSELF IS THE FACT THE OPERATOR GUIDANCE RESTS ON. The
+			// e2e prose used to say `vars.E2E_K8S_VERSION` is the escape for the states
+			// where llz cannot answer — but in every one of these the catalog WAS read,
+			// so an explicit pin is judged against it with no exemption to grant, and
+			// hard-fails the moment that version rotates out. Only the no-token case is
+			// safe, because there nothing judges the pin at all. That distinction is
+			// three prose sites deep and this is where it is actually decided.
+			if !strings.Contains(err.Error(), "is not an LKE-Enterprise version this account can build") {
+				t.Errorf("%s: an explicit pin must be REJECTED here — the guidance about when "+
+					"E2E_K8S_VERSION is a durable escape depends on it:\n%s", name, err)
+			}
+		})
+	}
+}
+
+// TestAnUnusableCatalogStillLeavesTheAdoptionDoorOpen.
+//
+// ADOPTION NEEDS NO CATALOG — it copies a version off a running cluster — so "omit
+// it and llz will NOT rescue this" is false when the CLUSTER read is the thing that
+// failed. The same error had already told the operator to re-run if that read was
+// transient, and a re-run that succeeds would in fact adopt.
+func TestAnUnusableCatalogStillLeavesTheAdoptionDoorOpen(t *testing.T) {
+	noClusterReadPause(t)
+	// A catalog that can supply nothing AND a cluster read that failed.
+	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34+lke2"}, clusterErr: errors.New("503")})
+	var err error
+	captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if !strings.Contains(err.Error(), "ONE EXCEPTION") {
+		t.Errorf("the remedy declares the door shut while the CLUSTER read — which needs no catalog —\n"+
+			"is the thing that failed, in the same error that says to re-run:\n%s", err)
+	}
+
+	// THE NEGATIVE ARM: when the read SUCCEEDED and found nothing, there is no
+	// exception to offer, and pretending otherwise sends the operator round a loop.
+	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34+lke2"}})
+	captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if strings.Contains(err.Error(), "ONE EXCEPTION") {
+		t.Errorf("the read succeeded and found no cluster, so a re-run changes nothing:\n%s", err)
+	}
+}
+
+// TestAZeroDeploymentIsNotToldAboutAClusterOrARead.
+//
+// A zero Deployment is documented as DISABLING the read, and !lk.Asked covers both
+// "the read failed" and "there was nothing to look up" — only the first has a read
+// above to point at. Unguarded, the remedy cited "that cluster" and "the read
+// above" for a run that had neither. Latent, since `llz env add` always supplies a
+// label; pinned because the sibling lookedUp case is guarded and these two must not
+// drift apart.
+func TestAZeroDeploymentIsNotToldAboutAClusterOrARead(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+	_, err := ResolveK8sVersion("v1.33.6+lke7", Deployment{})
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	for _, forbidden := range []string{"that cluster", "the read above", "A re-run may settle it"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("no read happened and no label was given, but the remedy says %q:\n%s", forbidden, err)
+		}
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request
@@ -985,8 +1375,8 @@ func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("an empty catalog must not fail the scaffold: %v", err)
 		}
-		if !c.CatalogRead {
-			t.Error("the catalog read succeeded, so CatalogRead must be true — an empty answer IS " +
+		if c.Catalog != CatalogAnswered {
+			t.Error("the catalog read succeeded, so Catalog must be CatalogAnswered — an empty answer IS " +
 				"an answer, and reporting it as 'never asked' is a claim llz never verified")
 		}
 	})
@@ -997,8 +1387,8 @@ func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("an unreadable catalog must not fail the scaffold: %v", err)
 		}
-		if c.CatalogRead {
-			t.Error("the read failed, so CatalogRead must be false — otherwise the flag is decorative " +
+		if c.Catalog == CatalogAnswered {
+			t.Error("the read failed, so Catalog must not be CatalogAnswered — otherwise the field is decorative " +
 				"and the caller is back to guessing from len(Offered)")
 		}
 	})
