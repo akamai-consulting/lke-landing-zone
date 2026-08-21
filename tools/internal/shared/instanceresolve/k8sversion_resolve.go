@@ -107,16 +107,18 @@ const (
 // SAME account, and calling LKEVersionClient() twice would have let one question be
 // answered by a token and the other by nothing (or, after a test substituted the
 // var mid-run, by two different fakes).
-// `ok` MEANS USABLE, `read` MEANS ANSWERED, AND THEY ARE NOT THE SAME BOOL. An
-// empty catalog is folded into ok=false deliberately — there is nothing in it to
-// derive a pin from, and every caller wanting a version must degrade identically
-// whether the read failed or came back empty.
+// `ok` MEANS USABLE, `outcome` MEANS WHAT HAPPENED, AND THEY ANSWER DIFFERENT
+// QUESTIONS. An empty catalog is folded into ok=false deliberately — there is
+// nothing in it to derive a pin from, and every caller wanting a version must
+// degrade identically whether the read failed or came back empty.
 //
-// BUT THE CALLER ALSO EXPLAINS ITSELF, and there the two are opposite claims. `llz
-// env add` reports where the version it wrote came from, and with one bool it said
-// "this account was never asked" about accounts that had answered — a claim llz
-// never verified, in the sentence whose entire job is to say what it did and did
-// not do. Same class as the cluster read returning (running, asked).
+// BUT THE CALLER ALSO EXPLAINS ITSELF, and there they are opposite claims. `llz
+// env add` reports where the version it wrote came from, and one bool cannot carry
+// that: it said "this account was never asked" about accounts that had answered
+// with nothing, and then — once that was fixed with a second bool — about accounts
+// that had been asked and REFUSED. Three outcomes, three sentences, three remedies;
+// see CatalogOutcome. Same class as the cluster read returning a clusterLookup
+// rather than a string.
 func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome CatalogOutcome) {
 	if c == nil {
 		// Silent on the no-token path, like objClustersInRegion: CheckRegion runs
@@ -145,8 +147,8 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome Cata
 		// contradictory statements about one request and sent the operator off to
 		// re-mint a PAT that was fine.
 		//
-		// The `read` return below is the same distinction, and it was already being
-		// made here — the notice simply had not been told about it.
+		// The CatalogAnswered return below is the same distinction, and it was already
+		// being made here — the notice simply had not been told about it.
 		//
 		// AND IT SAYS NOTHING ABOUT WHAT THE SPEC ENDS UP WITH, which the first cut
 		// did ("the spec keeps its compiled default"). This fires from
@@ -399,6 +401,23 @@ const (
 	// use; that is still an answer, and blaming it on the credential is a lie.
 	CatalogAnswered
 )
+
+// String names the state, because the names ARE the point of this type and a bare
+// int defeats it exactly where it matters most. The gates that exist to prove the
+// three states stay distinguishable were reporting `Catalog = 1, want 2` — which
+// tells a reader nothing about which distinction broke, in the failure message of
+// the test whose whole subject is that distinction.
+func (o CatalogOutcome) String() string {
+	switch o {
+	case CatalogNotAsked:
+		return "CatalogNotAsked"
+	case CatalogFailed:
+		return "CatalogFailed"
+	case CatalogAnswered:
+		return "CatalogAnswered"
+	}
+	return fmt.Sprintf("CatalogOutcome(%d)", int(o))
+}
 
 // K8sVersionChoice is everything `llz env add` needs in order to decide a
 // deployment's version, out of ONE catalog read.

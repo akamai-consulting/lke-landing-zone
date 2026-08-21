@@ -3,6 +3,7 @@ package instanceresolve
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1023,6 +1024,32 @@ func TestTheCoarsePinWarningExplainsTheRuleItActuallyAPPLIES(t *testing.T) {
 	if !strings.Contains(c.Warning, "PATCH") {
 		t.Errorf("the warning does not name the component %q actually lacks, so the operator cannot "+
 			"tell what to change:\n%s", pin, c.Warning)
+	}
+}
+
+// TestCatalogOutcomeNamesItselfInAFailure.
+//
+// The names ARE this type's point — each state licenses a different sentence and a
+// different remedy — and a bare int defeats that exactly where it matters most.
+// TestAskedAndRefusedIsNotNeverAsked exists to prove the three stay
+// distinguishable, and it was reporting `Catalog = 1, want 2`: no reader can tell
+// WHICH distinction broke from the failure message of the test whose whole subject
+// is that distinction.
+func TestCatalogOutcomeNamesItselfInAFailure(t *testing.T) {
+	for want, o := range map[string]CatalogOutcome{
+		"CatalogNotAsked": CatalogNotAsked,
+		"CatalogFailed":   CatalogFailed,
+		"CatalogAnswered": CatalogAnswered,
+	} {
+		if got := fmt.Sprintf("%v", o); got != want {
+			t.Errorf("CatalogOutcome(%d) renders as %q, want %q — a failure message that prints an "+
+				"integer cannot say which state llz got", int(o), got, want)
+		}
+	}
+	// AN UNKNOWN VALUE STILL SAYS WHAT IT IS rather than rendering as an empty
+	// string, which is how a stringer turns an out-of-range bug into a silent one.
+	if got := fmt.Sprintf("%v", CatalogOutcome(99)); !strings.Contains(got, "99") {
+		t.Errorf("an out-of-range CatalogOutcome rendered as %q, losing the value", got)
 	}
 }
 
