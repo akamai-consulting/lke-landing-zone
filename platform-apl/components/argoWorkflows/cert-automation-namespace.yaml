@@ -48,12 +48,18 @@ metadata:
     # Mirrors the chart's values (podSecurity.*): baseline enforce because
     # cert-automation's buildah build-image step runs as root; audit/warn stay at
     # restricted so the gap remains visible.
+    #
+    # AND `latest` ON THE VERSIONS, which is what makes that visibility claim true.
+    # These were pinned to v1.31 — a ruleset several minors behind what any current
+    # LKE-E apiserver ships, and PSS revisions are cumulative, so audit/warn were
+    # reporting the gap against an OLDER `restricted` than the one this namespace is
+    # actually exempt from. Issue #447; same reasoning as llz-cluster-foundation.
     pod-security.kubernetes.io/audit: restricted
-    pod-security.kubernetes.io/audit-version: v1.31
+    pod-security.kubernetes.io/audit-version: latest
     pod-security.kubernetes.io/enforce: baseline
-    pod-security.kubernetes.io/enforce-version: v1.31
+    pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/warn: restricted
-    pod-security.kubernetes.io/warn-version: v1.31
+    pod-security.kubernetes.io/warn-version: latest
     # Argo Workflow pods are short-lived batch workloads; a sidecar prevents them
     # terminating cleanly.
     istio-injection: disabled

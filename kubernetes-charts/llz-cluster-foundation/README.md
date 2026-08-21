@@ -61,7 +61,7 @@ Every allow rule here exists because a default-deny without it broke something:
 
 ```sh
 helm install llz-cluster-foundation oci://ghcr.io/akamai-consulting/charts/llz-cluster-foundation \
-  --version 0.1.13
+  --version 0.1.15
 ```
 
 In this repo it is consumed by an Argo CD Application at an early sync wave
@@ -79,7 +79,7 @@ In this repo it is consumed by an Argo CD Application at an early sync wave
 | `syncWaves.networkPolicies` | `"-10"` | NPs before workload pods. |
 | `syncWaves.corednsCustom` | `"-10"` | CoreDNS ConfigMap before pods that wait on `*.internal`. |
 | `syncWaves.corednsRestart` | `"-9"` | CoreDNS restart Job + its RBAC/NP. |
-| `podSecurityStandardsVersion` | `"v1.33"` | PSS version pin (match the cluster K8s minor). |
+| `podSecurityStandardsVersion` | `"latest"` | PSS ruleset version for the `restricted` namespaces. Keep `latest`: one published chart lands on clusters at different LKE-E minors, so a baked minor is wrong for someone — and wrong silently, since a lagging PSS pin enforces a weaker ruleset than `restricted` advertises. |
 | `namespaces` | see values.yaml | List of `{name, restricted, labels}` for namespaces apl-core doesn't manage. |
 | `networkPolicies.enabled` | `true` | Master toggle for the foundation NP set. |
 | `networkPolicies.apiserverPorts` | `[443, 6443]` | LKE-E apiserver egress port pair. |

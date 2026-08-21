@@ -46,7 +46,7 @@ and `6443` per the LKE-E post-DNAT Cilium quirk.
 
 ```sh
 helm install llz-cert-automation oci://ghcr.io/akamai-consulting/charts/llz-cert-automation \
-  --version 0.1.9
+  --version 0.1.13
 ```
 
 **Nothing in this repo deploys it today.** On Managed App Platform — the only

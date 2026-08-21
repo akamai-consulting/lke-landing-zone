@@ -66,7 +66,11 @@ type: application
 #         chart-pin-guard: the pin realignment is not follow-up work, it is half
 #         of the bump, because a pin the registry never received 404s at Argo sync
 #         time.
-version: 0.1.25
+# 0.1.26: re-pin llz-cluster-foundation 0.1.14 -> 0.1.15 (that chart's PSS
+#         version change, issue #447). Pin-only change here — a pin the registry
+#         never received 404s at Argo sync time, which is why the realignment ships
+#         with the bump rather than after it. Same shape as 0.1.24.
+version: 0.1.26
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

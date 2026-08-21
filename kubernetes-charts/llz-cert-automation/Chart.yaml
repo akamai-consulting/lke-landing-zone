@@ -52,7 +52,11 @@ type: application
 #        was never going to be published: the registry would keep serving 0.1.11
 #        with the stale pointers, and the fix would live only in git. Bumped so the
 #        corrections actually ship (behavior unchanged).
-version: 0.1.12
+# 0.1.13: podSecurity.{enforce,audit,warn}Version v1.31 -> latest (issue #447).
+#         RENDERED CHANGE on the namespace's PSS labels. A published chart cannot
+#         name the Kubernetes minor of every cluster it lands on, and a lagging PSS
+#         pin enforces a weaker cumulative ruleset than the mode advertises.
+version: 0.1.13
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

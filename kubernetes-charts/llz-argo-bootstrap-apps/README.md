@@ -33,7 +33,7 @@ doesn't re-discover it.
 
 ```sh
 helm template our-bootstrap oci://ghcr.io/akamai-consulting/charts/llz-argo-bootstrap-apps \
-  --version 0.1.22 \
+  --version 0.1.26 \
   --set global.gitRepoURL='git@github.com:yourorg/yourplatform.git' \
   --set 'components[N].enabled=false'   # disable a component you don't run
 ```

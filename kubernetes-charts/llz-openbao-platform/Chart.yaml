@@ -204,7 +204,13 @@ type: application
 #         files that no longer exist — and this is the chart whose comments an
 #         operator reads mid-incident, which is exactly when a dead pointer costs.
 #         Bumped so the corrections ship (behavior unchanged).
-version: 0.1.31
+# 0.1.32: doc-only README correction — the PSS profile the StatefulSet's
+#         securityContexts satisfy is named WITHOUT a version, because
+#         llz-cluster-foundation 0.1.15 stopped pinning one (issue #447). The old
+#         `restricted:v1.33` named a ruleset no cluster was still being held to,
+#         in the chart whose README an operator reads mid-incident. Behavior
+#         unchanged; bumped so the correction ships.
+version: 0.1.32
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
