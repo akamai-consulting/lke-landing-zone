@@ -193,14 +193,23 @@ func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked 
 			// that the fallback never happens quietly; that rule was written for the
 			// failed-read arm and not upheld here.
 			if m := linode.MatchingClusters(clusters, d.ClusterLabel, d.Region); len(m) > 1 {
+				// THE REMEDY MUST NOT BE `llz reap --cluster-label`, and the first cut of
+				// this warning said exactly that. That flag is LABEL-scoped: it lists every
+				// cluster carrying the label and DELETEs each one (teardown/reap.go), which
+				// is correct for a sweep after a deployment is gone and catastrophic here —
+				// this warning fires precisely BECAUSE two clusters share the label, so the
+				// advice, followed with --yes, destroys the live deployment alongside the
+				// orphan. Name the ids instead and let the operator choose.
 				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
 					"%d clusters on this account are labelled %q in %s, so llz cannot tell which one is this\n"+
 						"  deployment's and will not guess. cluster.k8sVersion falls back to the newest version the\n"+
 						"  account offers — which, against a cluster that is already running, plans a control-plane\n"+
 						"  upgrade nobody asked for.\n"+
-						"  Sweep the duplicate (`llz reap --cluster-label %[2]s`) or pin the running version with\n"+
-						"  --k8s-version, then re-run.",
-					len(m), d.ClusterLabel, orAnyRegion(d.Region))))
+						"%s"+
+						"  Identify which is live, then delete the OTHER one by id. Do NOT reach for\n"+
+						"  `llz reap --cluster-label %[2]s`: it is label-scoped and would delete both.\n"+
+						"  Or pin the running version with --k8s-version and re-run.",
+					len(m), d.ClusterLabel, orAnyRegion(d.Region), describeClusters(m))))
 			}
 			// linode.ClusterVersionFor, NOT a second loop over label+region here. It is
 			// the same matching rule linode.ClusterRunsVersion is written in terms of,
@@ -321,9 +330,33 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its
 		// offline default.
 		//
-		// AND NO CLUSTER READ EITHER. A catalog that could not be answered means no
-		// token or no reachable API; the second request would fail the same way and
-		// only add a second paragraph of the same news.
+		// BUT THE CLUSTER READ STILL HAPPENS, and an earlier revision skipped it on
+		// the reasoning that "a catalog that could not be answered means no token or
+		// no reachable API, so the second request would fail the same way". That is
+		// three different failures collapsed into one, and two of them are measured
+		// shapes in this repo:
+		//
+		//   - the two endpoints are not the same endpoint. #426 recorded the e2e token
+		//     401ing on the VERSIONS route from some contexts; /v4beta/lke/clusters is
+		//     a different path with its own PAT scope, and a read-only Kubernetes scope
+		//     answers it fine.
+		//   - an EMPTY catalog also lands here (accountLKEVersions folds it in), and an
+		//     account listing no LKE-E versions says nothing whatever about whether it
+		//     has clusters.
+		//
+		// The cost of getting this wrong is the whole feature: a re-scaffold over a
+		// live cluster would silently re-seed today's newest and plan the upgrade #453
+		// exists to prevent, with nothing on disk left to warn from. No token still
+		// costs nothing — runningVersionFor returns immediately on a nil client.
+		c.Running, _ = runningVersionFor(client, d)
+		if c.Pin == "" && c.Running != "" {
+			c.Pin = c.Running
+			// offered is nil here, so CheckVersion answers Unknown and adoptionMessage
+			// degrades to the plain note — which claims nothing about a catalog llz
+			// could not read. `llz doctor` reaches that verdict later, with its own
+			// diagnostics for why the read failed.
+			c.Note, c.Warning = adoptionMessage(d, c.Running, nil)
+		}
 		return c, nil
 	}
 	c.Offered = offered
@@ -404,7 +437,29 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// the same catalog.
 		if linode.NamesABuild(c.Pin) {
 			c.Note = fmt.Sprintf("k8s-version %s confirmed against the account's LKE-Enterprise catalog.", c.Pin)
+			return c, nil
 		}
+		// SUPPRESSING THE CONFIRMATION IS NOT ENOUGH, and for one revision that was all
+		// this did. A coarse pin byte-matches a coarse catalog row, so CheckVersion
+		// says Offered — and then `llz doctor` and `llz ci assert-k8s-version` say
+		// Offered too, for the identical reason. Every gate the feature added is
+		// GREEN, the spec carries the pin, and the apply dies ~15 minutes in on
+		// `[400] k8s_version is not valid`: the exact failure this feature exists to
+		// remove, wearing a full set of passing checks.
+		//
+		// A WARNING RATHER THAN A REJECTION, deliberately. #443 is explicit that a
+		// catalog spelled in bare major.minor is an UNMEASURED shape rather than a
+		// falsehood, and CheckVersion owns the verdict — nothing here may become the
+		// stricter of two checks that are supposed to be one. What this may do is
+		// refuse to let the operator walk away believing it checked out.
+		c.Warning = fmt.Sprintf(
+			"--k8s-version %q matches a row in this account's catalog, but it is not a full LKE-E build id\n"+
+				"  (those carry an `+lke` suffix, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
+				"  VERBATIM. The catalog row it matched is just as coarse, so `llz doctor` and\n"+
+				"  `llz ci assert-k8s-version` will both pass it, and the cluster apply is what discovers the\n"+
+				"  problem ~15 minutes in with `[400] [k8s_version] k8s_version is not valid`.\n"+
+				"  Pass a build id from this list instead: %s",
+			c.Pin, strings.Join(offered, ", "))
 		return c, nil
 	case linode.VersionUnknown:
 		// The catalog answered in a shape that cannot settle this pin. Say nothing
@@ -486,6 +541,26 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n"+
 		"  deployment does exist — the version it is ALREADY RUNNING, which plans no diff at all.",
 		c.Pin, strings.Join(offered, ", "), lookedUp)
+}
+
+// describeClusters lists matched clusters as indented "id N — runs V" lines, so an
+// operator told two clusters share a label can tell them apart without going to the
+// Console. Empty when nothing is identifiable, which keeps the caller's message
+// grammatical rather than trailing a blank section.
+func describeClusters(clusters []map[string]any) string {
+	var b strings.Builder
+	for _, m := range clusters {
+		id, ok := m["id"]
+		if !ok {
+			continue
+		}
+		v := strings.TrimSpace(fmt.Sprintf("%v", m["k8s_version"]))
+		if v == "" || v == "<nil>" {
+			v = "an unreported version"
+		}
+		fmt.Fprintf(&b, "  cluster id %v — runs %s\n", id, v)
+	}
+	return b.String()
 }
 
 // orAnyRegion names the region a lookup was scoped to, for a message. `llz env

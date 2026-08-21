@@ -671,6 +671,87 @@ func TestAnAccountWithNoMatchIsQuiet(t *testing.T) {
 	}
 }
 
+// TestTheAmbiguityRemedyDoesNotDESTROYTheLiveDeployment.
+//
+// THE FIRST CUT OF THIS WARNING TOLD OPERATORS TO RUN `llz reap --cluster-label
+// <label>`. That flag is LABEL-scoped: it lists every cluster carrying the label
+// and DELETEs each one. This warning fires precisely BECAUSE two clusters share the
+// label — so the advice, followed with --yes, destroys the live deployment
+// alongside the orphan it was meant to sweep. A remedy that is catastrophic in the
+// exact state that prints it is worse than no remedy.
+func TestTheAmbiguityRemedyDoesNotDESTROYTheLiveDeployment(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{
+		versions: e2eAccountCatalog,
+		clusters: []map[string]any{
+			{"id": 111, "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
+			{"id": 222, "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
+		},
+	})
+	out := captureStderr(t, func() {
+		if _, err := ResolveK8sVersion("", lab); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	// IT MUST NAME THE IDS, because telling someone two clusters collide without
+	// saying which is which leaves them no way to act that is not a guess.
+	for _, want := range []string{"111", "222", "v1.32.9+lke4", "v1.33.6+lke7"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the ambiguity warning does not name %q, so the operator cannot tell the two "+
+				"clusters apart; stderr:\n%s", want, out)
+		}
+	}
+	// AND IT MUST WARN OFF the label-scoped sweep rather than recommend it.
+	if !strings.Contains(out, "would delete both") {
+		t.Errorf("the warning does not say that `llz reap --cluster-label` is label-scoped and takes "+
+			"BOTH clusters; stderr:\n%s", out)
+	}
+}
+
+// TestACoarsePinIsNotWavedThroughInSilence.
+//
+// CheckVersion confirms on a byte-exact match, so `--k8s-version 1.33` against a
+// MIXED catalog holding a coarse `1.33` row comes back Offered. For one revision
+// llz merely withheld its confirmation note — and said nothing at all. Every gate
+// this feature added is then GREEN (doctor and assert-k8s-version make the same
+// byte-exact match), the spec carries the pin, and the apply is what discovers the
+// problem ~15 minutes in: the exact failure the feature exists to remove, wearing a
+// full set of passing checks.
+func TestACoarsePinIsNotWavedThroughInSilence(t *testing.T) {
+	mixed := []string{"v1.34.6+lke2", "1.33"}
+	withCatalog(t, &fakeVersionLister{versions: mixed})
+	c, err := ResolveK8sVersion("1.33", lab)
+	// A WARNING, NOT A REJECTION. CheckVersion owns the verdict, and #443 is explicit
+	// that a coarse catalog is an unmeasured shape rather than a falsehood — nothing
+	// here may become the stricter of two checks that are supposed to be one.
+	if err != nil {
+		t.Fatalf("a coarse pin must not be REJECTED here — the catalog is not entitled to: %v", err)
+	}
+	if c.Note != "" {
+		t.Errorf("llz confirmed a pin the create API rejects: %q", c.Note)
+	}
+	for _, want := range []string{"not a full LKE-E build id", "VERBATIM", "assert-k8s-version"} {
+		if !strings.Contains(c.Warning, want) {
+			t.Errorf("a coarse pin was accepted in silence; Warning must say %q, got:\n%s", want, c.Warning)
+		}
+	}
+}
+
+// TestABuildIdPinIsStillJustConfirmed is the negative arm: warning on every
+// Offered pin would pass the test above while nagging about every correct one.
+func TestABuildIdPinIsStillJustConfirmed(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+	c, err := ResolveK8sVersion("v1.34.6+lke2", lab)
+	if err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if c.Note == "" {
+		t.Error("a full build id the account offers must still be confirmed")
+	}
+	if c.Warning != "" {
+		t.Errorf("a correct pin was warned about:\n%s", c.Warning)
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request
@@ -689,17 +770,58 @@ func TestAConfirmedPinCostsNoClusterRead(t *testing.T) {
 	}
 }
 
-// TestNoCatalogMeansNoClusterRead. An unanswerable catalog means no token or no
-// reachable API; a second request would fail the same way and add a second
-// paragraph of the same news.
-func TestNoCatalogMeansNoClusterRead(t *testing.T) {
-	f := &fakeVersionLister{err: errors.New("401 unauthorized")}
+// TestAnUnreadableCatalogDoesNotDISABLETheClusterRead.
+//
+// THIS TEST USED TO ASSERT THE OPPOSITE, and the reasoning it encoded was wrong.
+// It said a catalog that could not be answered means no token or no reachable API,
+// so the second request would fail the same way — which collapses three different
+// failures into one, and two of them are measured shapes in this repo:
+//
+//   - the two endpoints are NOT the same endpoint. #426 recorded the e2e token
+//     401ing on the VERSIONS route from some contexts while the clusters route
+//     answers; they are different paths with different PAT scopes.
+//   - an EMPTY catalog lands on the same branch, and an account listing no LKE-E
+//     versions says nothing whatever about whether it has clusters.
+//
+// The cost of the old behaviour was the entire feature: a re-scaffold over a live
+// cluster silently re-seeded today's newest and planned the upgrade #453 exists to
+// prevent, with nothing left on disk to warn from.
+func TestAnUnreadableCatalogDoesNotDISABLETheClusterRead(t *testing.T) {
+	f := &fakeVersionLister{
+		err:      errors.New("401 unauthorized"),
+		clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+	}
 	withCatalog(t, f)
-	if _, err := ResolveK8sVersion("", lab); err != nil {
+	c, err := ResolveK8sVersion("", lab)
+	if err != nil {
 		t.Fatalf("ResolveK8sVersion: %v", err)
 	}
-	if f.clusterCalls != 0 {
-		t.Errorf("listed the account's clusters %d time(s) after the catalog read had already failed", f.clusterCalls)
+	if f.clusterCalls == 0 {
+		t.Fatal("a 401 on the VERSIONS route disabled the CLUSTER read, so a re-scaffold over a live " +
+			"cluster is invisible again — the whole of #453, undone by an unrelated endpoint")
+	}
+	if c.Pin != "v1.33.6+lke7" {
+		t.Errorf("Pin = %q, want the version the cluster runs — adopting it needs no catalog", c.Pin)
+	}
+	// AND IT CLAIMS NOTHING ABOUT A CATALOG IT COULD NOT READ.
+	if strings.Contains(c.Note+c.Warning, "no longer offers") {
+		t.Errorf("llz judged the running version against a catalog it never read:\n%s", c.Note+c.Warning)
+	}
+	if c.Newest != "" {
+		t.Errorf("Newest = %q, want \"\" — the caller must keep its own offline default", c.Newest)
+	}
+}
+
+// TestNoTokenCostsNoRequestsAtAll is the cheapness half the test above must not
+// cost: with no client there is nothing to ask, on either endpoint.
+func TestNoTokenCostsNoRequestsAtAll(t *testing.T) {
+	withCatalog(t, nil)
+	c, err := ResolveK8sVersion("", lab)
+	if err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if c.Pin != "" || c.Running != "" || c.Newest != "" {
+		t.Errorf("with no token llz decided something: Pin=%q Running=%q Newest=%q", c.Pin, c.Running, c.Newest)
 	}
 }
 
