@@ -311,6 +311,74 @@ func TestARescaffoldOverALiveClusterSaysSo(t *testing.T) {
 	}
 }
 
+// TestDryRunOverALiveClusterPreviewsRatherThanReports.
+//
+// The adoption note/warning is a version consequence like the other two, so it goes
+// through printK8sVersionConsequences — which both paths call — rather than being
+// printed at the resolve site, where it landed ABOVE the "Spec that would be
+// authored" header. A preview that opens with a past-tense report of a write is
+// worse than no preview: it reads as though the run already happened.
+func TestDryRunOverALiveClusterPreviewsRatherThanReports(t *testing.T) {
+	dir := t.TempDir()
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", "v1.33.6+lke7")},
+	}
+	var err error
+	out := captureStderr(t, func() {
+		_, err = scaffoldEnv(t, dir, "lab", catalog,
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", DryRun: true})
+	})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	// IT STILL DISCLOSES THE DECISION — the point is not to go quiet under --dry-run,
+	// which would hide the one thing this preview is now uniquely able to show.
+	if !strings.Contains(out, "v1.33.6+lke7") {
+		t.Errorf("--dry-run did not preview that llz would pin the running version:\n%s", out)
+	}
+	if strings.Contains(out, "pinned it") || strings.Contains(out, "can no longer be") {
+		t.Errorf("--dry-run reports a write that never happened:\n%s", out)
+	}
+	// AND IT REALLY WAS A DRY RUN.
+	for _, p := range []string{clusterspec.LandingZoneFile, filepath.Join(clusterspec.EnvironmentsDir, "lab.yaml")} {
+		if _, serr := os.Stat(filepath.Join(dir, p)); serr == nil {
+			t.Errorf("--dry-run wrote %s", p)
+		}
+	}
+}
+
+// TestARenderRejectedSpecCanStillBeRecoveredWhenTheVersionHasRotated.
+//
+// An env file with NO overlay means a previous `llz env add` authored the spec and
+// `llz render` then rejected it. That state used to dead-end — this refused, and
+// `llz doctor` sent you back here — so the preflight grew a sentence naming the way
+// out. Then the account reads were hoisted above it, and re-running with the
+// original flags could die on the --k8s-version instead: LKE-E availability rotates
+// within hours, so the pin that worked when the spec was authored is routinely gone
+// by the time anyone comes back to fix the render error. The operator never reached
+// the recovery sentence.
+func TestARenderRejectedSpecCanStillBeRecoveredWhenTheVersionHasRotated(t *testing.T) {
+	dir := t.TempDir()
+	// The state a rejected render leaves: environments/lab.yaml with no overlay.
+	if err := os.MkdirAll(filepath.Join(dir, clusterspec.EnvironmentsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The account can no longer build the pin the operator is re-running with.
+	_, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v1.34.6+lke2"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", K8sVersion: "v1.33.6+lke7"})
+	if err == nil {
+		t.Fatal("expected `llz env add` to refuse — the env file already exists")
+	}
+	if !strings.Contains(err.Error(), "llz render lab") {
+		t.Errorf("re-running after a rejected render died on the VERSION instead of naming the way out\n"+
+			"of the dead-end the preflight exists to break. got:\n%s", err)
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //

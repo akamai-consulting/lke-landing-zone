@@ -336,8 +336,9 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 // half-torn-down one is not adopted as "already runs X". Two things argue against
 // it and neither is about effort:
 //
-//   - NOTHING IN THIS REPO HAS EVER OBSERVED AN LKE-E CLUSTER'S `status` VALUES.
-//     The one measured `status` here is Postgres's (credrotate). This file already
+//   - THE FIELD IS RETURNED (ListClusters says so); ITS VALUES ARE UNMEASURED.
+//     Nothing in this repo has ever read an LKE-E cluster's status — the one
+//     measured `status` here is Postgres's (credrotate). This file already
 //     carries a warning about exactly this class of guess — see ClusterRunsVersion
 //     on the cluster object's `k8s_version` spelling — and the rule it settled on
 //     is to compare what has been seen and let an unmeasured shape fail LOUDLY

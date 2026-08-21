@@ -32,10 +32,11 @@ type fakeVersionLister struct {
 	// clusters is what /lke/clusters answers, and clusterErr fails that read. Both
 	// are on the SAME fake because they are the same account and the same client —
 	// see LKEVersionLister.
-	clusters     []map[string]any
-	clusterErr   error
-	failFirst    bool
-	clusterCalls int
+	clusters         []map[string]any
+	clusterErr       error
+	failFirst        bool
+	clusterCalls     int
+	clusterDeadlines []time.Time
 }
 
 func (f *fakeVersionLister) ListLKEVersions(_ context.Context, tier string) ([]string, error) {
@@ -46,8 +47,14 @@ func (f *fakeVersionLister) ListLKEVersions(_ context.Context, tier string) ([]s
 	return f.versions, f.err
 }
 
-func (f *fakeVersionLister) ListClusters(context.Context) ([]map[string]any, error) {
+func (f *fakeVersionLister) ListClusters(ctx context.Context) ([]map[string]any, error) {
 	f.clusterCalls++
+	// The deadline each attempt is handed. A retry that shares ONE context across
+	// attempts hands out the identical deadline every time, and is decorative: the
+	// first slow request spends the budget and the second attempt cannot run.
+	if dl, ok := ctx.Deadline(); ok {
+		f.clusterDeadlines = append(f.clusterDeadlines, dl)
+	}
 	// failFirst models a TRANSIENT read — the shape the retry exists for. It fails
 	// exactly once and then answers, so a test can tell "retried" from "gave up".
 	if f.failFirst && f.clusterCalls == 1 {
@@ -61,7 +68,11 @@ func (f *fakeVersionLister) ListClusters(context.Context) ([]map[string]any, err
 func noClusterReadPause(t *testing.T) {
 	t.Helper()
 	prev := clusterReadSleep
-	clusterReadSleep = func(time.Duration) {}
+	// A MILLISECOND RATHER THAN ZERO, so two attempts are separable on the clock —
+	// TestEachClusterReadAttemptGetsItsOwnBudget compares the deadlines they were
+	// handed, and a zero-cost stub would make a correct implementation's two
+	// deadlines indistinguishable from a shared one's.
+	clusterReadSleep = func(time.Duration) { time.Sleep(time.Millisecond) }
 	t.Cleanup(func() { clusterReadSleep = prev })
 }
 
@@ -525,6 +536,87 @@ func TestTheClusterReadRetryIsBounded(t *testing.T) {
 	if f.clusterCalls != linode.ClusterReadAttempts {
 		t.Errorf("listed the account's clusters %d time(s), want linode.ClusterReadAttempts (%d)",
 			f.clusterCalls, linode.ClusterReadAttempts)
+	}
+}
+
+// TestEachClusterReadAttemptGetsItsOwnBudget.
+//
+// THE RETRY WAS DECORATIVE FOR ONE REVISION AND NOTHING NOTICED. A single
+// context.WithTimeout wrapped the whole loop while the HTTP client's own timeout
+// was the same duration, so a SLOW (rather than fast-failing) request exhausted the
+// shared budget on attempt 1, tripped the `ctx.Err() != nil` break, and attempt 2
+// never ran — falling back to seeding Newest over a live cluster, or hard-failing a
+// --k8s-version the cluster is actually on. Every other test here uses a fake that
+// answers instantly, so the deadline is the only thing that distinguishes the two
+// shapes: a shared context hands out the SAME deadline twice.
+//
+// The two callers that already read this route carve a per-attempt sub-budget for
+// exactly this reason (verbs/doctor, assertplatform).
+func TestEachClusterReadAttemptGetsItsOwnBudget(t *testing.T) {
+	noClusterReadPause(t)
+	f := &fakeVersionLister{
+		versions:  e2eAccountCatalog,
+		failFirst: true,
+		clusters:  []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+	}
+	withCatalog(t, f)
+	if _, err := ResolveK8sVersion("", lab); err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if len(f.clusterDeadlines) != 2 {
+		t.Fatalf("saw %d attempt deadline(s), want 2 — the retry did not run", len(f.clusterDeadlines))
+	}
+	if !f.clusterDeadlines[1].After(f.clusterDeadlines[0]) {
+		t.Errorf("both attempts were handed the same deadline (%v), so they SHARE one budget: a slow\n"+
+			"first request spends it and the retry cannot fire. Each attempt needs its own sub-budget\n"+
+			"carved out of the probe budget.", f.clusterDeadlines[0])
+	}
+}
+
+// TestTheProbeBudgetOutlastsTheAttemptsItIsMeantToHold — a sizing invariant, not a
+// behaviour. If the parent budget were not strictly larger than what the attempts
+// plus their pauses can consume, the last attempt would be cut off by the parent
+// and the retry would again be decorative. Asserted rather than commented, because
+// the four constants are edited independently.
+func TestTheProbeBudgetOutlastsTheAttemptsItIsMeantToHold(t *testing.T) {
+	need := time.Duration(linode.ClusterReadAttempts)*accountReadBudget +
+		time.Duration(linode.ClusterReadAttempts)*linode.ClusterReadRetryPause
+	if clusterProbeTimeout <= need {
+		t.Errorf("clusterProbeTimeout = %v, which cannot hold %d attempt(s) of %v plus their pauses (%v)",
+			clusterProbeTimeout, linode.ClusterReadAttempts, accountReadBudget, need)
+	}
+}
+
+// TestTheAdoptionMessagesAreTrueBEFOREAnythingIsWritten.
+//
+// These strings are printed on the `--dry-run` path too, where nothing is written.
+// The first cut said "pinned it" and "can no longer be RE-CREATED" — past-tense
+// claims about a write that never happened, which is the exact defect
+// printK8sVersionConsequences was extracted to fix for the other two consequences.
+func TestTheAdoptionMessagesAreTrueBEFOREAnythingIsWritten(t *testing.T) {
+	for name, tc := range map[string]struct{ catalog, want string }{
+		"still offered": {"v1.32.9+lke4", "pinning it"},
+		"rotated out":   {"v1.33.6+lke7", "pinning it anyway"},
+	} {
+		withCatalog(t, &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{cluster("platform-support-lab", "us-ord", tc.catalog)},
+		})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got := c.Note + c.Warning
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: the message must describe the DECISION, not report a completed write "+
+				"(it is printed under --dry-run too); want %q in:\n%s", name, tc.want, got)
+		}
+		if strings.Contains(got, "pinned it") {
+			t.Errorf("%s: past tense about a write that has not happened yet:\n%s", name, got)
+		}
+		if strings.Contains(got, "can no longer be") {
+			t.Errorf("%s: asserts a state the run may never create (--dry-run):\n%s", name, got)
+		}
 	}
 }
 

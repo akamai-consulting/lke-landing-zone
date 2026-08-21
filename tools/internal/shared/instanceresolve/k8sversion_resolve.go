@@ -70,10 +70,30 @@ var LKEVersionClient = func() LKEVersionLister {
 	return linode.NewClient(tok, 20*time.Second)
 }
 
-// accountReadTimeout bounds each of the two reads this file makes. `llz env add`
-// is interactive and re-runnable, so it waits rather than retries — see
-// runningVersionFor.
-const accountReadTimeout = 20 * time.Second
+// accountRequestTimeout bounds one HTTP call; accountReadBudget bounds one READ,
+// and clusterProbeTimeout bounds the whole retried cluster read.
+//
+// A READ IS NOT A REQUEST. Both routes this file calls go through listAllPages,
+// which issues one request per 100-item page, so a budget sized from the
+// per-request timeout under-counts any account big enough to paginate. The two
+// callers that already read /v4beta/lke/clusters carry these same three constants
+// and this same reasoning (verbs/doctor/linode.go, assertplatform/k8sversion.go);
+// this is the third copy on purpose, because the alternative is a fourth spelling
+// of the sizing rule.
+//
+// THE READ BUDGET IS APPLIED PER ATTEMPT, NOT MERELY USED TO SIZE THE PARENT, and
+// the first cut of the retry below got this wrong in the way that makes a retry
+// decorative: one 20s context wrapped the whole loop while the HTTP client's own
+// timeout was also 20s, so a single SLOW request exhausted the shared budget,
+// tripped the ctx.Err() break, and attempt 2 never ran. The retry existed and
+// could not fire.
+const (
+	accountRequestTimeout = 20 * time.Second
+	accountReadPages      = 5
+	accountReadBudget     = accountReadPages * accountRequestTimeout
+	clusterProbeTimeout   = linode.ClusterReadAttempts*accountReadBudget +
+		linode.ClusterReadAttempts*linode.ClusterReadRetryPause + 10*time.Second
+)
 
 // accountLKEVersions returns the LKE-Enterprise versions this account may build.
 // ok is false when the answer is unknown (no token, API error, empty list) — which
@@ -91,7 +111,7 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool) {
 		// reportSkippedAccountCheck is a once-per-process notice for that reason.
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountReadTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), accountReadBudget)
 	defer cancel()
 	all, err := c.ListLKEVersions(ctx, linode.LKETierEnterprise)
 	if err != nil || len(all) == 0 {
@@ -150,12 +170,16 @@ func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked 
 	if c == nil || d.ClusterLabel == "" {
 		return "", false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountReadTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), clusterProbeTimeout)
 	defer cancel()
 	var err error
 	for attempt := 1; attempt <= linode.ClusterReadAttempts; attempt++ {
 		var clusters []map[string]any
-		clusters, err = c.ListClusters(ctx)
+		// A SUB-BUDGET PER ATTEMPT, carved out of the probe budget. Without it the
+		// two attempts share one deadline and a slow first request spends the lot.
+		rctx, rcancel := context.WithTimeout(ctx, accountReadBudget)
+		clusters, err = c.ListClusters(rctx)
+		rcancel()
 		if err == nil {
 			// linode.ClusterVersionFor, NOT a second loop over label+region here. It is
 			// the same matching rule linode.ClusterRunsVersion is written in terms of,
@@ -471,15 +495,21 @@ func orAnyRegion(r string) string {
 // documents at the preflight, bounded the same way (`llz reap` sweeps orphans), and
 // it is named here because this is the one caller that WRITES the pin rather than
 // judging one.
+// TENSE MATTERS HERE AND THE FIRST CUT GOT IT WRONG. These lines are printed on
+// the `--dry-run` path too, where nothing is written — so "pinned it" and "can no
+// longer be RE-CREATED" were past-tense claims about a write that never happened,
+// which is the exact defect printK8sVersionConsequences was extracted to fix for
+// the other two version consequences. Both are phrased as the DECISION rather than
+// the deed, which is true before the write and still true after it.
 func adoptionMessage(d Deployment, running string, offered []string) (note, warning string) {
 	if verdict, _ := linode.CheckVersion(running, offered); verdict != linode.VersionNotOffered {
-		return fmt.Sprintf("cluster %s (%s) already runs %s — pinned it for this deployment so terraform plans no control-plane change.",
+		return fmt.Sprintf("cluster %s (%s) already runs %s — pinning it for this deployment, so terraform plans no control-plane change.",
 			d.ClusterLabel, orAnyRegion(d.Region), running), ""
 	}
 	return "", fmt.Sprintf(
-		"cluster %s (%s) already runs %s, which this account no longer offers — pinned it anyway.\n"+
+		"cluster %s (%s) already runs %s, which this account no longer offers — pinning it anyway.\n"+
 			"  That is deliberate: k8s_version reaches the API only on a create or a change, so a running\n"+
-			"  cluster plans no diff and every routine apply is unaffected. This deployment can no longer be\n"+
+			"  cluster plans no diff and every routine apply is unaffected. This deployment cannot then be\n"+
 			"  RE-CREATED until the pin moves to a listed version (%s).\n"+
 			"  If %[1]s is instead an ORPHAN from a failed cycle, terraform will plan a CREATE and send this\n"+
 			"  pin: sweep it (`llz reap --cluster-label %[1]s`) and re-run `llz env add`.",

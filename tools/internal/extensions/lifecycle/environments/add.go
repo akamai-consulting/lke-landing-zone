@@ -75,6 +75,42 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	if err := validate.CIDRList("--runner-ipv6-cidrs", o.RunnerIPv6CIDRs, validate.IPv6); err != nil {
 		return err
 	}
+	// ── layout + the refuse-to-overwrite preflight, BEFORE any account read ──
+	//
+	// THE ORDER IS LOAD-BEARING AND IT USED TO BE WRONG. These checks are pure
+	// filesystem detection, and one of them exists to break a DEAD-END: an env file
+	// with no overlay means a previous run authored the spec and `llz render` then
+	// rejected it, and the way out is the guidance below. With the account reads
+	// first, re-running `llz env add` with the original flags could die on an
+	// unbuildable --k8s-version instead — the version having rotated out in the
+	// meantime, which is a matter of hours for LKE-E — and the operator never
+	// reached the sentence telling them how to recover.
+	//
+	// It is also simply cheaper: a run that is going to refuse now makes no Linode
+	// requests at all.
+	tfDir, aplDir, relPrefix := instancelayout.Detect()
+	specRoot := filepath.Dir(tfDir)
+	overlayDst := filepath.Join(aplDir, name)
+	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
+	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
+
+	if _, err := os.Stat(overlayDst); err == nil {
+		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
+	}
+	if _, err := os.Stat(envFile); err == nil {
+		// Distinguish "already scaffolded" from "a previous run authored the spec and
+		// then render rejected it", which leaves the env file WITHOUT an overlay. That
+		// second state used to dead-end: this refused, and `llz doctor` sent you back
+		// here because apl-values/<env>/ was missing.
+		if _, oerr := os.Stat(overlayDst); oerr != nil {
+			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
+				"  Fix the spec (%s or %s) and run %s,\n"+
+				"  or discard it and start over: %s",
+				envFile, overlayDst, envFile, lzPath, color.Cyan("llz render "+name), color.Cyan("rm "+envFile))
+		}
+		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
+	}
+
 	// Ask the account whether the region exists before authoring a spec against it
 	// (best-effort — see region_resolve.go). Runs BEFORE the obj-cluster resolution
 	// so a swapped --region/--obj-cluster pair is named for what it is.
@@ -92,13 +128,6 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	if note != "" {
 		fmt.Printf("  %s\n", note)
 	}
-	// THE LAYOUT IS DETECTED BEFORE THE ACCOUNT IS ASKED, because the version
-	// question needs to name this deployment's CLUSTER and the label is derived from
-	// the instance identity on disk. It is pure filesystem detection with no side
-	// effects, so hoisting it changes nothing else about the order.
-	tfDir, aplDir, relPrefix := instancelayout.Detect()
-	specRoot := filepath.Dir(tfDir)
-
 	// Ask the same account which LKE-Enterprise versions it can actually build,
 	// rather than seeding the spec from a literal that is stale by construction
 	// (availability is per-account and rotates within hours). Best-effort in the
@@ -126,17 +155,12 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// it is per-deployment: it lands in environments/<env>.yaml and never in
 	// spec.defaults, which EnsureLandingZone still seeds from k8s.Newest below.
 	o.K8sVersion = k8s.Pin
-	if k8s.Note != "" {
-		fmt.Printf("  %s\n", k8s.Note)
-	}
-	if k8s.Warning != "" {
-		fmt.Fprintln(os.Stderr, cigate.Warning(k8s.Warning))
-	}
+	// k8s.Note / k8s.Warning are NOT printed here. They are version consequences like
+	// the other two, so they go through printK8sVersionConsequences, which both the
+	// dry-run and the real path call — printing them at the resolve site put them
+	// above the "would be authored" preview, i.e. above the line that says nothing
+	// has happened yet.
 	dryRun = o.DryRun || dryRun
-
-	overlayDst := filepath.Join(aplDir, name)
-	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
-	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
 
 	// Whether landingzone.yaml already exists decides where this deployment's
 	// version comes from, so it is read ONCE here and both the banner and the write
@@ -189,24 +213,6 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// re-seeded spec.defaults, which llz does not pin for them and cannot restore.
 	orphanedEnvs := existingDeployments(specRoot)
 	reseeding := !lzExists && len(orphanedEnvs) > 0
-
-	// ── pre-flight ───────────────────────────────────────────────────────────
-	if _, err := os.Stat(overlayDst); err == nil {
-		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
-	}
-	if _, err := os.Stat(envFile); err == nil {
-		// Distinguish "already scaffolded" from "a previous run authored the spec and
-		// then render rejected it", which leaves the env file WITHOUT an overlay. That
-		// second state used to dead-end: this refused, and `llz doctor` sent you back
-		// here because apl-values/<env>/ was missing.
-		if _, oerr := os.Stat(overlayDst); oerr != nil {
-			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
-				"  Fix the spec (%s or %s) and run %s,\n"+
-				"  or discard it and start over: %s",
-				envFile, overlayDst, envFile, lzPath, color.Cyan("llz render "+name), color.Cyan("rm "+envFile))
-		}
-		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
-	}
 
 	field := func(label, val string) { fmt.Printf("    %s%s\n", color.Dim(label), val) }
 	fmt.Println(color.Bold("llz env add") + color.Dim(" — spec-first scaffold"))
@@ -586,6 +592,16 @@ func existingDeployments(specRoot string) []string {
 func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVersionChoice,
 	inheritedFix string, reseeding bool, orphanedEnvs []string,
 ) {
+	// THE ADOPTION ARM FIRST, because it is the one that decided this deployment's
+	// version — the other two are about deployments that inherit. Both strings are
+	// composed by the resolver (instanceresolve.adoptionMessage) so the judgement
+	// "is the running version still in the catalog?" has exactly one implementation.
+	if k8s.Note != "" {
+		fmt.Printf("  %s\n", k8s.Note)
+	}
+	if k8s.Warning != "" {
+		fmt.Fprintln(os.Stderr, cigate.Warning(k8s.Warning))
+	}
 	if inheritedFix != "" {
 		// LOUD, because it makes this deployment DIVERGE from the others and the
 		// operator has to know which file now holds the difference.
