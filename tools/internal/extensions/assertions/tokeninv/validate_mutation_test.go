@@ -36,6 +36,11 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 	tokenprobe.LinodeProbe = func(string) (int, error) { return 200, nil }
 	tokenprobe.GHCRTokenProbe = func(_, _ string) (int, error) { return 403, nil } // GHCR is optional
 	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
+	// LINODE_API_TOKEN validates, so its SCOPE is then probed — which without this
+	// stub is a live request to api.linode.com from a unit test.
+	origCap := LinodeCapabilityProbe
+	t.Cleanup(func() { LinodeCapabilityProbe = origCap })
+	LinodeCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
 
 	clearValidatableTokens(t)
 	t.Setenv("LINODE_API_TOKEN", "live")   // required, valid
@@ -48,7 +53,7 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 		t.Fatalf("only an OPTIONAL credential is invalid, so this must exit 0: %v", err)
 	}
 	// Matched as one whole line: "-1 optional-invalid" contains "1 optional-invalid".
-	const want = "probed 3 credential(s): 0 blocking-invalid, 1 optional-invalid, 0 scope-denied."
+	const want = "probed 3 credential(s): 0 blocking-invalid, 1 optional-invalid, 0 scope-denied, 0 route-refused."
 	if !strings.Contains(out, want) {
 		t.Errorf("summary line wrong — want exactly:\n  %s\ngot:\n%s", want, out)
 	}

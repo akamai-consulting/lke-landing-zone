@@ -24,7 +24,7 @@ func TestClassifyCapabilityStatus(t *testing.T) {
 		{"server error", 500, capUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, detail := classifyCapabilityStatus(tc.code, "do the thing")
+			got, detail := classifyCapabilityStatus(tc.code, "do the thing", capREST)
 			if got != tc.want {
 				t.Errorf("code %d: status %v, want %v", tc.code, got, tc.want)
 			}
@@ -36,7 +36,7 @@ func TestClassifyCapabilityStatus(t *testing.T) {
 
 	// A denial must say the token is under-scoped, NOT that it expired — the
 	// remediation is re-scoping, and "rotate it" sends the operator the wrong way.
-	_, detail := classifyCapabilityStatus(403, "write environment secrets")
+	_, detail := classifyCapabilityStatus(403, "write environment secrets", capREST)
 	if !strings.Contains(detail, "under-scoped") {
 		t.Errorf("403 detail = %q, want it to name the scope as the cause", detail)
 	}
@@ -93,8 +93,12 @@ func TestCheckCapability_OnlyRegisteredTokens(t *testing.T) {
 	t.Setenv("GH_REPO", "acme/platform")
 	t.Setenv("REGION", "prod")
 
-	if _, ok := checkCapability("LINODE_API_TOKEN", "tok"); ok {
-		t.Error("LINODE_API_TOKEN has no registered scope check, want ok=false")
+	// LINODE_API_TOKEN used to be the example of a credential with NO scope check.
+	// It has one now (issue #449) — the version catalog it must be able to read —
+	// so the "no check registered" case is carried by a credential that genuinely
+	// has none.
+	if _, ok := checkCapability("GHCR_READ_TOKEN", "tok"); ok {
+		t.Error("GHCR_READ_TOKEN has no registered scope check, want ok=false")
 	}
 	if _, ok := checkCapability("OPENBAO_SECRETS_WRITE_TOKEN", "tok"); !ok {
 		t.Error("OPENBAO_SECRETS_WRITE_TOKEN should have a scope check")

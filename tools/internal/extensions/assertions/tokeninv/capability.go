@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // GHCapabilityProbe GETs one API path with the credential and returns the HTTP
@@ -97,6 +98,33 @@ var GitRefsProbe = func(server, token, path string) (int, error) {
 	return resp.StatusCode, nil
 }
 
+// LinodeCapabilityProbe GETs one Linode API path with the PAT as a Bearer token
+// and returns the HTTP status (0 == unreachable). Same shape and same reason as
+// GHCapabilityProbe and tokenprobe.LinodeProbe: a package var so this file is
+// exercisable without network access.
+//
+// NOT tokenprobe.LinodeProbe, which is a different question. That one GETs
+// /v4/profile, which EVERY live Linode token can read — it proves the credential
+// authenticates and nothing about what it is allowed to do. This one knocks on
+// the specific door the pipeline later needs open, which is the entire
+// validity-vs-authorization distinction this file exists for.
+var LinodeCapabilityProbe = func(api, token, path string) (int, error) {
+	url := strings.TrimRight(api, "/") + path
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err // unreachable — code 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
 type capabilityStatus int
 
 const (
@@ -104,6 +132,16 @@ const (
 	capOK                              // authorized for the operation
 	capDenied                          // authenticates but NOT authorized — the scar case
 	capUnknown                         // unreachable or ambiguous → warn, never block
+	// capRouteRefused — the credential HOLDS the grant this route needs (a second
+	// route needing the same grant answered), and this route refused it anyway.
+	//
+	// A THIRD OUTCOME, BECAUSE THE OTHER TWO WOULD BOTH LIE. capDenied would tell
+	// the operator to re-scope a PAT that is correctly scoped, and block a build on
+	// it; capUnknown would file a measured, reproducible refusal under "could not
+	// verify" and lose it. What it actually means is that a check downstream of this
+	// route is INERT — it will warn and pass forever — and that is a finding worth
+	// naming rather than either failing on or forgetting. Non-blocking, and loud.
+	capRouteRefused
 )
 
 // capabilityResult is one credential's authorization verdict.
@@ -119,8 +157,9 @@ type capabilityResult struct {
 type capTransport int
 
 const (
-	capREST capTransport = iota // GET {GITHUB_API}{path}, PAT in an Authorization header
-	capGit                      // GET {GITHUB_SERVER_URL}{path}, git smart-HTTP + Basic auth
+	capREST   capTransport = iota // GET {GITHUB_API}{path}, PAT in an Authorization header
+	capGit                        // GET {GITHUB_SERVER_URL}{path}, git smart-HTTP + Basic auth
+	capLinode                     // GET {LINODE_API}{path}, PAT as a Bearer token
 )
 
 // capabilityCheck binds a credential to the read-only probe that proves it can
@@ -137,6 +176,29 @@ type capabilityCheck struct {
 	transport capTransport
 	path      func() (path string, skip string)
 	hint      string
+
+	// secondOpinion names a SECOND read-only route needing the SAME grant as
+	// `path`, asked only when the first one refuses. Its job is to tell a missing
+	// GRANT from a refusing ROUTE, which a single probe cannot do: both answer 401.
+	//
+	// It varies exactly one thing — the route — and holds the transport, the
+	// credential and the host fixed, because anything else it varied would be a
+	// second explanation for the difference and the verdict would stop meaning
+	// anything.
+	//
+	// Only register one where the two routes genuinely share a grant. A second
+	// route needing a DIFFERENT permission would acquit an under-scoped token, which
+	// is the failure this whole file exists to prevent, arrived at from the other
+	// side.
+	//
+	// WHAT IT ISOLATES IS THE ROUTE, AND ONLY THE ROUTE. Two routes that share a
+	// grant also share everything above it — the API version, the account, the
+	// platform — so a cause at that level refuses both and reads here as a missing
+	// grant. That is why the denial message names the account-level candidates
+	// instead of asserting the scope one. It is a real limit and it is bounded: every
+	// cause it cannot separate stops the build this preflight runs ahead of anyway,
+	// so the VERDICT is right even where the explanation is uncertain.
+	secondOpinion func() (path string, op string)
 }
 
 // capabilityChecks lists every credential whose SCOPE (not just validity) is
@@ -196,6 +258,46 @@ var capabilityChecks = []capabilityCheck{
 			"Application ComparisonErrors with \"failed to list refs: authentication required\" and the whole " +
 			"external-secrets/cert chain behind it never installs",
 	},
+	{
+		token: "LINODE_API_TOKEN",
+		op:    "read this account's LKE-Enterprise version catalog",
+		// THE EXACT ROUTE `llz ci assert-k8s-version` READS, taken from
+		// linode.LKEVersionsPath rather than spelled here — see that function for why
+		// a probe with its own copy of the route is worse than no probe at all.
+		//
+		// WHY THIS ONE IS NOT LIKE ITS NEIGHBOURS. The other two checks exist because
+		// a later WRITE would 403; nothing downstream of them changes if the probe is
+		// skipped. This one exists because a later READ is allowed to fail SOFTLY:
+		// `llz ci assert-k8s-version` warns and passes when this route refuses it, on
+		// the deliberate rule (#426) that a build must not be blocked on a question
+		// nobody could ask. That rule is right and it has a cost — a token that ALWAYS
+		// refuses leaves the gate permanently inert while every run stays green, which
+		// is issue #449. Nothing measured whether the question was ever answerable.
+		// This does, once per pipeline, at the credential rather than at the gate.
+		transport: capLinode,
+		path: func() (string, string) {
+			// No ambient context to assemble and therefore no skip arm: the route is a
+			// constant, so this check either runs or the token is unset. The two GitHub
+			// checks skip on a missing GH_REPO/REGION; there is no equivalent here, and
+			// inventing one would be a way for this to go quiet.
+			return linode.LKEVersionsPath(linode.LKETierEnterprise), ""
+		},
+		// Asked ONLY if the versions route refuses. Both routes are `lke:read_only`,
+		// so this is the discriminator: refused at both ⇒ the PAT lacks the grant, and
+		// the cluster apply would have failed on it anyway (blocking, and strictly
+		// earlier than the ~15 minutes that costs today). Accepted here and refused
+		// there ⇒ the grant is present, and the refusal belongs to the route.
+		secondOpinion: func() (string, string) {
+			return linode.LKEClustersPath, "list this account's LKE clusters (the same lke:read_only grant)"
+		},
+		hint: "the Linode PAT needs Kubernetes (LKE): Read Only or better — it is refused at BOTH the " +
+			"LKE-Enterprise version catalog and the plain cluster list, so this is not one fussy route. " +
+			"If the PAT visibly carries that grant, the remaining candidates are account-level rather " +
+			"than token-level (LKE not enabled on the account, an API restriction) — and all of them " +
+			"stop the same build: unfixed, `terraform apply` fails ~15 minutes in when it tries to " +
+			"create the LKE-E cluster, and `llz ci assert-k8s-version` cannot check the pin that would " +
+			"have caught a bad one before the apply started",
+	},
 }
 
 // classifyCapabilityStatus maps a probe status to an authorization verdict.
@@ -207,7 +309,7 @@ var capabilityChecks = []capabilityCheck{
 // those are indistinguishable from here — failing a run on that ambiguity would
 // trade a late true positive for an early false one. Warn with both causes and
 // let the run proceed to the real call.
-func classifyCapabilityStatus(code int, op string) (capabilityStatus, string) {
+func classifyCapabilityStatus(code int, op string, t capTransport) (capabilityStatus, string) {
 	switch {
 	case code == 0:
 		return capUnknown, "endpoint unreachable — could not verify authorization (not failing on connectivity)"
@@ -218,10 +320,9 @@ func classifyCapabilityStatus(code int, op string) (capabilityStatus, string) {
 	case code == 401:
 		// NOT "rotate it": capability is only asked of a credential whose validity
 		// probe already passed, so the token is live. A 401 here means this
-		// particular door refuses it — the git endpoint's answer for a PAT lacking
-		// the repo's Contents permission or unauthorized for an SSO-enforced org.
+		// particular door refuses it.
 		return capDenied, fmt.Sprintf("auth rejected (HTTP 401) — the token is live but not accepted to %s "+
-			"(missing permission, or SAML SSO not authorized); re-scope or SSO-authorize it, don't rotate it", op)
+			"(%s); %s, don't rotate it", op, refusalCauses(t), refusalRemedy(t))
 	case code == 404:
 		return capUnknown, fmt.Sprintf("HTTP 404 probing %q — either the target does not exist yet or this token cannot see it; could not verify", op)
 	default:
@@ -229,26 +330,120 @@ func classifyCapabilityStatus(code int, op string) (capabilityStatus, string) {
 	}
 }
 
-// probeCapability runs one credential's authorization check against a token
-// value already known to be present.
-func probeCapability(c capabilityCheck, token string) capabilityResult {
-	path, skip := c.path()
-	if skip != "" {
-		return capabilityResult{c.token, capSkipped, skip}
+// refusalCauses names what a 401 at THIS door plausibly means, because the causes
+// do not overlap and the remedies are different buildings. SAML SSO authorization
+// is a GitHub concept and offering it as a cause for a Linode PAT sends the
+// operator to a setting that does not exist; conversely a Linode PAT's grants are
+// per-token checkboxes with no org-authorization step at all.
+func refusalCauses(t capTransport) string {
+	if t == capLinode {
+		return "the PAT is missing the grant this route needs"
 	}
+	return "missing permission, or SAML SSO not authorized"
+}
+
+// refusalRemedy is the ACTION half, and it is transport-aware for the same reason
+// the cause is — with one scar attached. Making only the cause vary dropped
+// "SSO-authorize it" from the GitHub 401, which is the remedy for the second of
+// the two causes that line names. A correctly-scoped APL_VALUES_REPO_TOKEN that is
+// simply not SSO-authorized then blocked the run under advice that cannot fix it,
+// and the test guarding this only checked that the CAUSE still said SSO.
+func refusalRemedy(t capTransport) string {
+	if t == capLinode {
+		return "re-scope it"
+	}
+	return "re-scope or SSO-authorize it"
+}
+
+// probeOneRoute performs a single read-only GET on the check's transport and
+// classifies the answer. Split out of probeCapability so the second opinion asks
+// the SAME question of a different route rather than a similar-looking one.
+func probeOneRoute(t capTransport, token, path, op string) (capabilityStatus, string, int) {
 	var code int
 	var err error
-	switch c.transport {
+	switch t {
 	case capGit:
 		code, err = GitRefsProbe(envOr("GITHUB_SERVER_URL", "https://github.com"), token, path)
+	case capLinode:
+		code, err = LinodeCapabilityProbe(envOr("LINODE_API", linode.APIBase), token, path)
 	default:
 		code, err = GHCapabilityProbe(envOr("GITHUB_API", "https://api.github.com"), token, path)
 	}
 	if err != nil {
 		code = 0
 	}
-	s, d := classifyCapabilityStatus(code, c.op)
-	return capabilityResult{c.token, s, d}
+	st, detail := classifyCapabilityStatus(code, op, t)
+	// The raw code travels alongside the rendered detail. A caller that has to
+	// OVERRIDE the verdict must state the bare fact rather than quote a sentence
+	// written for the verdict it is overriding — the first cut of the route-refused
+	// arm pasted the denial detail in and told the operator to "re-scope" a
+	// correctly-scoped PAT in the same breath as saying its scope was fine.
+	return st, detail, code
+}
+
+// probeCapability runs one credential's authorization check against a token
+// value already known to be present.
+//
+// A REFUSAL IS NOT YET A VERDICT WHEN A SECOND OPINION IS REGISTERED. One 401
+// cannot tell "this credential lacks the grant" from "this route refuses a
+// credential that has it", and those want opposite handling: the first is a
+// build-blocking credential fault, the second is a downstream check going inert.
+// Asking a second route that needs the SAME grant separates them, and it is asked
+// ONLY on a refusal — a good run still pays exactly one request.
+func probeCapability(c capabilityCheck, token string) capabilityResult {
+	path, skip := c.path()
+	if skip != "" {
+		return capabilityResult{c.token, capSkipped, skip}
+	}
+	s, d, code := probeOneRoute(c.transport, token, path, c.op)
+	if s != capDenied || c.secondOpinion == nil {
+		return capabilityResult{c.token, s, d}
+	}
+
+	p2, op2 := c.secondOpinion()
+	s2, d2, _ := probeOneRoute(c.transport, token, p2, op2)
+	switch s2 {
+	case capOK:
+		// THE GRANT IS THERE AND THE ROUTE REFUSED ANYWAY — measured, not inferred.
+		// This is the sentence issue #449 wanted something to be able to say: the
+		// question `llz ci assert-k8s-version` asks cannot be asked in this pipeline,
+		// so that gate is inert here and its green step means nothing. Naming the
+		// consequence is the point; a verdict about a credential that the reader has
+		// to connect to a gate three steps later is the silence all over again.
+		return capabilityResult{c.token, capRouteRefused, fmt.Sprintf(
+			"the token IS authorized to %s, and is refused (HTTP %d) when it tries to %s — same grant, "+
+				"different door, so THIS IS THE ROUTE AND NOT THE TOKEN. Nothing to re-scope. "+
+				"`llz ci assert-k8s-version` reads that route and warns-and-PASSES when it is refused, so the "+
+				"k8sVersion preflight is INERT in this pipeline: its green step is not evidence, and a pin this "+
+				"account cannot build will reach `terraform apply` unchecked", op2, code, c.op)}
+	case capDenied:
+		// REFUSED AT BOTH, WHICH RULES OUT THE ROUTE AND NOT MUCH ELSE. The overwhelmingly
+		// likely cause is the missing grant, and that is what the hint leads with — but
+		// two routes under the same API version can also share an explanation that has
+		// nothing to do with scope (a v4beta-wide restriction, a suspended account). The
+		// verdict is the same either way, because every one of those breaks the cluster
+		// apply this preflight runs ahead of; the MESSAGE must not assert the one it
+		// cannot distinguish, or an operator spends the afternoon re-scoping a PAT that
+		// was never the problem.
+		return capabilityResult{c.token, capDenied, fmt.Sprintf(
+			"%s; it is also refused to %s, which needs the same grant — so this is not one fussy route. "+
+				"Almost always the missing grant; if the PAT visibly has it, look for an account-level "+
+				"restriction on the Linode API rather than at the token", d, op2)}
+	default:
+		// The corroborating read could not be made, so the refusal stands unexplained.
+		// Blocking here would fail a build on a blip at a route nothing was asking
+		// about; that is the trade this file already makes for a 404.
+		//
+		// THE BARE FACT, NOT THE FIRST PROBE'S RENDERED DETAIL. That detail ends
+		// "re-scope it, don't rotate it" — a remedy this arm has just declared it
+		// cannot justify. Pasting it in is the same contradiction the capOK arm above
+		// was fixed for, and probeOneRoute returns the code precisely so neither arm
+		// has to quote a sentence written for the verdict it is overriding.
+		return capabilityResult{c.token, capUnknown, fmt.Sprintf(
+			"refused (HTTP %d) when it tries to %s, and the second opinion could not be taken (%s) — "+
+				"so whether this is the token's scope or the route itself is UNRESOLVED. Nothing to act on "+
+				"yet; re-run, and if it reproduces the scope line below will say which", code, c.op, d2)}
+	}
 }
 
 // checkCapability runs the capability check registered for a credential, if any.
@@ -282,6 +477,8 @@ func capabilityCell(cr capabilityResult) string {
 		return color.Red("✗ DENIED — " + cr.detail)
 	case capUnknown:
 		return color.Yellow("⚠ " + cr.detail)
+	case capRouteRefused:
+		return color.Yellow("⚠ INERT — " + cr.detail)
 	default: // capSkipped
 		return color.Dim("– " + orDefault(cr.detail, "not probed"))
 	}

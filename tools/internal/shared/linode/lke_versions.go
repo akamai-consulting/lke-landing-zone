@@ -39,6 +39,28 @@ import (
 // LKETierEnterprise is the tier segment for LKE-Enterprise.
 const LKETierEnterprise = "enterprise"
 
+// LKEVersionsPath is the ONE definition of the route this catalog is read from,
+// and it is exported because a SECOND caller now needs the same string for a
+// different purpose: `llz ci validate-tokens` probes this exact path to prove the
+// pipeline's Linode PAT is authorized for it.
+//
+// WHY THAT PROBE MUST NOT SPELL THE ROUTE ITSELF. `llz ci assert-k8s-version`
+// warns and PASSES when this read is refused — deliberately, because a build must
+// not be blocked on a question nobody could ask. The consequence is that the gate
+// can be permanently inert while looking green, so the credential probe is the
+// thing that measures whether the question is answerable at all (issue #449). A
+// probe holding its own copy of the route would keep saying "authorized" about a
+// path this function no longer reads the day the route moves — the split-contract
+// failure docs/e2e-gates.md is written around, in the one place whose whole job is
+// to notice that the real read cannot happen.
+//
+// TestTheReadsUseTheExportedRouteDefinitions holds the producer side of that to
+// this definition; TestTheCatalogProbeAsksTheRouteTheGateActuallyReads holds the
+// probe to it.
+func LKEVersionsPath(tier string) string {
+	return "/v4beta/lke/tiers/" + tier + "/versions"
+}
+
 // ListLKEVersions returns the Kubernetes versions the ACCOUNT may create in the
 // given LKE tier, newest-first as the API returns them.
 //
@@ -55,7 +77,7 @@ const LKETierEnterprise = "enterprise"
 // against, which is exactly the uncertainty both callers already degrade on. Say
 // so and let them.
 func (c *Client) ListLKEVersions(ctx context.Context, tier string) ([]string, error) {
-	raw, err := c.listAllPages(ctx, "/v4beta/lke/tiers/"+tier+"/versions")
+	raw, err := c.listAllPages(ctx, LKEVersionsPath(tier))
 	if err != nil {
 		return nil, err
 	}

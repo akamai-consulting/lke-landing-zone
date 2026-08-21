@@ -50,12 +50,15 @@ func TestK8sVersionVerdictFailsAPinTheAccountCannotBuild(t *testing.T) {
 }
 
 func TestK8sVersionVerdictPassesAPinTheAccountOffers(t *testing.T) {
-	note, err := k8sVersionVerdict("prod", "v1.34.6+lke2", false, theE2EAccount, nil)
+	p, err := k8sVersionVerdict("prod", "v1.34.6+lke2", false, theE2EAccount, nil)
 	if err != nil {
 		t.Fatalf("an offered pin must pass: %v", err)
 	}
-	if !strings.Contains(note, "v1.34.6+lke2") {
-		t.Errorf("the success line should name the version it checked; got: %s", note)
+	if !strings.Contains(p.note, "v1.34.6+lke2") {
+		t.Errorf("the success line should name the version it checked; got: %s", p.note)
+	}
+	if p.kind != k8sOffered {
+		t.Errorf("kind = %q, want %q — the record is what says this run decided anything", p.kind, k8sOffered)
 	}
 }
 
@@ -74,14 +77,25 @@ func TestK8sVersionVerdictWarnsAndPassesOnAnUnanswerableQuestion(t *testing.T) {
 		{"empty catalog", "v1.33.6+lke7", nil, nil},
 		{"catalog too coarse to disprove the pin", "v1.33.6+lke7", []string{"1.30", "1.31"}, nil},
 	} {
-		note, err := k8sVersionVerdict("prod", tc.want, false, tc.offered, tc.err)
+		p, err := k8sVersionVerdict("prod", tc.want, false, tc.offered, tc.err)
 		if err != nil {
 			t.Errorf("%s: returned an error (%v) — an unanswerable question must warn and PASS, "+
 				"or a Linode blip fails a build on a good spec", tc.name, err)
 		}
-		if strings.TrimSpace(note) == "" {
+		if strings.TrimSpace(p.note) == "" {
 			t.Errorf("%s: passed silently — a check that skipped must say so, or it is "+
 				"indistinguishable from one that verified something", tc.name)
+		}
+		// AND IT MUST RECORD ITSELF AS UNDECIDED. This is the arm issue #449 is about:
+		// a pass here looks identical to a real one in the exit status, so the only
+		// thing that can tell an inert pipeline from a working one is the record.
+		if p.kind != k8sUndecided {
+			t.Errorf("%s: kind = %q, want %q — a soft pass that records itself as a decision "+
+				"is the green check the class hides behind", tc.name, p.kind, k8sUndecided)
+		}
+		if p.reason == "" {
+			t.Errorf("%s: recorded UNDECIDED with no reason — \"it could not be answered\" and "+
+				"WHY are different findings and only one of them is actionable", tc.name)
 		}
 	}
 }
@@ -92,21 +106,21 @@ func TestK8sVersionVerdictWarnsAndPassesOnAnUnanswerableQuestion(t *testing.T) {
 // retired build, followed by the apply dying at ~15 min with the 400.
 func TestK8sVersionVerdictOnACoarseCatalog(t *testing.T) {
 	for _, offered := range [][]string{{"1.33"}, {"1.30", "1.31"}} {
-		note, err := k8sVersionVerdict("prod", "v1.33.6+lke7", false, offered, nil)
+		p, err := k8sVersionVerdict("prod", "v1.33.6+lke7", false, offered, nil)
 		if err != nil {
 			t.Fatalf("a catalog that cannot express builds must not REJECT one (%v): %v", offered, err)
 		}
-		if !strings.Contains(note, "UNCHECKED") {
+		if !strings.Contains(p.note, "UNCHECKED") {
 			t.Errorf("%v cannot confirm a +lke build either; claiming a pass is how an operator "+
-				"stops looking: %s", offered, note)
+				"stops looking: %s", offered, p.note)
 		}
 	}
 
 	// A pin the coarse catalog literally lists IS confirmed — an exact match is an
 	// exact match whatever precision the list is written at.
-	note, err := k8sVersionVerdict("prod", "1.33", false, []string{"1.33"}, nil)
-	if err != nil || strings.Contains(note, "UNCHECKED") {
-		t.Errorf("an exact match is a pass at any precision (err=%v): %s", err, note)
+	p, err := k8sVersionVerdict("prod", "1.33", false, []string{"1.33"}, nil)
+	if err != nil || strings.Contains(p.note, "UNCHECKED") {
+		t.Errorf("an exact match is a pass at any precision (err=%v): %s", err, p.note)
 	}
 }
 

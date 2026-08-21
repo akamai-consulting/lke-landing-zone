@@ -38,6 +38,28 @@ package assertplatform
 // ask. Only a definite answer — a catalog that came back, and does not contain the
 // pin — fails.
 //
+// AND THAT LENIENCY IS NOW MEASURED, WHICH IT WAS NOT (issue #449). Warn-and-pass
+// is the right rule and it has one cost: in a pipeline where the read ALWAYS
+// fails, this gate is permanently inert and every run of it is green — the class
+// it exists for stays open wearing a green check, in the exact environment the
+// 2026-08-11 incident happened in. Two things now stop that from being silent:
+//
+//   - EVERY RUN EMITS A VERDICT RECORD (verdict.go) naming what was decided and
+//     whether the ACCOUNT decided it. `decided=no` on every run of a cycle is a
+//     countable fact rather than a warning somebody had to be looking at.
+//   - `llz ci validate-tokens` PROBES THIS EXACT ROUTE and, on a refusal, asks a
+//     second LKE route needing the same grant. Refused at both ⇒ the PAT is
+//     under-scoped, which blocks the build (the cluster apply would fail on it
+//     regardless, ~15 minutes later). Accepted at the second ⇒ the token is
+//     scoped and the ROUTE refuses it, which is reported as this gate being inert
+//     here. That preflight runs in the same job, a few steps before this one.
+//
+// WHAT IS STILL NOT MEASURED, so the next reader does not re-derive it: nothing
+// outside the run asserts on those records. An e2e cycle in which every record
+// says `decided=no` is visible in each run's summary and in nothing that fails.
+// Closing that means the release-e2e lane reading the dispatched instance run's
+// verdicts back — worth doing, and a different change from this one.
+//
 // `llz doctor` has reported this advisorily since the section was written, and
 // still does. What was missing is that doctor is not run before an apply.
 
@@ -171,6 +193,21 @@ so a named deployment always has a pin to check.`,
 		"and an empty version is not one any account can build", env)
 }
 
+// k8sPreflight is what the decision function hands back: the line to print, and
+// the RECORD of what was decided.
+//
+// The record travels WITH the message rather than being re-derived from it by the
+// caller. A caller that inspected the note to work out whether the account had
+// answered would be a second implementation of the same rule, disagreeing with
+// this one the first time a message is reworded — and the thing it would get
+// wrong is precisely "did this gate decide anything", which is the question
+// issue #449 exists because nobody could answer.
+type k8sPreflight struct {
+	note   string
+	kind   k8sVerdictKind
+	reason string
+}
+
 // k8sVersionVerdict is the whole decision, split from the I/O so both arms are
 // unit-testable: the line to print, and the error that fails the build.
 //
@@ -188,9 +225,17 @@ so a named deployment always has a pin to check.`,
 // warning buried in a green job's log is indistinguishable from a real pass —
 // which is how the class this gate exists for comes back wearing a green check.
 // `::warning::` puts it in the run summary instead, where "this check did not
-// run" is visible without reading the step. Whether such a token should
-// eventually be a hard failure is a decision about credentials, not about this
-// verb.
+// run" is visible without reading the step, and every arm now also emits a
+// machine-readable verdict record (verdict.go) so "did not run" is countable
+// rather than merely visible.
+//
+// WHETHER SUCH A TOKEN SHOULD BE A HARD FAILURE IS A DECISION ABOUT CREDENTIALS,
+// AND IT HAS BEEN MADE — in `llz ci validate-tokens`, which is where a credential
+// verdict belongs. It probes linode.LKEVersionsPath directly and separates the two
+// 401s this verb cannot tell apart: a PAT missing the LKE grant now BLOCKS there,
+// while a correctly-scoped PAT refused at this route is reported as this gate
+// being inert. Neither decision moved into this file, and that is the point —
+// this verb still judges a pin, not a token.
 //
 // THROUGH cigate.Warning, which decides the rendering. Under Actions a workflow
 // command ends at the first raw newline, so written directly these kept their
@@ -200,40 +245,56 @@ so a named deployment always has a pin to check.`,
 // disfigurement: this verb runs on laptops, where `%0A` in place of the remedy is
 // its own way of hiding the reason. One helper, so a caller cannot get the prefix
 // right and the escaping wrong.
-func k8sVersionVerdict(env, want string, shared bool, offered []string, listErr error) (string, error) {
+func k8sVersionVerdict(env, want string, shared bool, offered []string, listErr error) (k8sPreflight, error) {
 	switch {
 	case listErr != nil:
-		return cigate.Warning(fmt.Sprintf("could not list the account's LKE-Enterprise versions, so %q is UNCHECKED — "+
-			"if it is a retired or mistyped pin the cluster apply will fail with `[400] [k8s_version] k8s_version is not valid`.\n"+
-			"  %s\n"+
-			"  Check the PAT's scope and that the account is LKE-Enterprise entitled.", want, cigate.FirstLine(listErr.Error()))), nil
+		return k8sPreflight{
+			note: cigate.Warning(fmt.Sprintf("could not list the account's LKE-Enterprise versions, so %q is UNCHECKED — "+
+				"if it is a retired or mistyped pin the cluster apply will fail with `[400] [k8s_version] k8s_version is not valid`.\n"+
+				"  %s\n"+
+				"  `llz ci validate-tokens` probes this exact route and says whether the PAT is scoped for it; a refusal there "+
+				"that reproduces every run means this preflight is INERT in this pipeline, not that it passed.", want, cigate.FirstLine(listErr.Error()))),
+			kind:   k8sUndecided,
+			reason: reasonCatalogUnreadable,
+		}, nil
 	case len(offered) == 0:
-		return cigate.Warning(fmt.Sprintf("the account reported NO LKE-Enterprise versions, so %q is UNCHECKED — "+
-			"an empty catalog is an unexpected answer, not proof the pin is wrong.", want)), nil
+		return k8sPreflight{
+			note: cigate.Warning(fmt.Sprintf("the account reported NO LKE-Enterprise versions, so %q is UNCHECKED — "+
+				"an empty catalog is an unexpected answer, not proof the pin is wrong.", want)),
+			kind:   k8sUndecided,
+			reason: reasonCatalogEmpty,
+		}, nil
 	}
 
 	verdict, nearest := linode.CheckVersion(want, offered)
 	switch verdict {
 	case linode.VersionOffered:
-		return fmt.Sprintf("k8sVersion %s (deployment %q) is offered by this Linode account.", want, env), nil
+		return k8sPreflight{
+			note: fmt.Sprintf("k8sVersion %s (deployment %q) is offered by this Linode account.", want, env),
+			kind: k8sOffered,
+		}, nil
 	case linode.VersionUnknown:
 		// The catalog answered, but not in a spelling that can disprove this pin —
 		// a list of bare major.minor cannot reject a `+lke` build. Guessing at it is
 		// how a preflight turns into a build blocked on a spelling difference.
-		return cigate.Warning(fmt.Sprintf("the account's version list (%s) cannot settle %q, so it is UNCHECKED — "+
-			"this is not the catalog shape this gate was measured against.", strings.Join(offered, ", "), want)), nil
+		return k8sPreflight{
+			note: cigate.Warning(fmt.Sprintf("the account's version list (%s) cannot settle %q, so it is UNCHECKED — "+
+				"this is not the catalog shape this gate was measured against.", strings.Join(offered, ", "), want)),
+			kind:   k8sUndecided,
+			reason: reasonCatalogCoarse,
+		}, nil
 	}
 	if nearest != "" {
 		// One character apart, so name it instead of printing the whole catalog and
 		// letting the operator find the difference.
-		return "", fmt.Errorf(`k8sVersion %q (deployment %q) is NOT offered by this Linode account — but %q is.
+		return k8sPreflight{kind: k8sNotOffered}, fmt.Errorf(`k8sVersion %q (deployment %q) is NOT offered by this Linode account — but %q is.
 
 The two are the same version spelled differently, and terraform sends
 cluster.k8sVersion VERBATIM, so the catalog's spelling is the one that works.
 
 Fix: set cluster.k8sVersion to %q %s`, want, env, nearest, nearest, k8sVersionFixIn(env, shared))
 	}
-	return "", fmt.Errorf(`k8sVersion %q (deployment %q) is NOT offered by this Linode account.
+	return k8sPreflight{kind: k8sNotOffered}, fmt.Errorf(`k8sVersion %q (deployment %q) is NOT offered by this Linode account.
 
   offered: %s
 
@@ -326,13 +387,24 @@ func k8sVersionFixIn(env string, shared bool) string {
 }
 
 func assertK8sVersion(env string) error {
+	// ONE DEFERRED EMIT, ON EVERY PATH. Recording at each return instead would put
+	// the fail-closed property in the hands of whoever adds the next arm — and the
+	// arm most likely to be added is another soft pass, which is the one that must
+	// not be able to go unrecorded. The closure reads v when the function returns,
+	// so every branch below only has to fill it in.
+	v := k8sVerdict{env: env}
+	defer func() { emitK8sVerdict(v) }()
+
 	want, label, region, shared, noSpec, err := specK8sVersion(env)
+	v.pin = want
 	switch {
 	case err != nil:
+		v.kind, v.reason = k8sSpecRejected, reasonSpecUnusable
 		return err
 	case noSpec:
 		// The one honest skip, and it stops WITHOUT calling the API: a verb that
 		// reaches for a token it does not need fails wherever there is none.
+		v.kind, v.reason = k8sNoSpec, reasonNoSpec
 		fmt.Println("no LandingZone spec here — nothing to check against the account.")
 		return nil
 	}
@@ -342,9 +414,10 @@ func assertK8sVersion(env string) error {
 	cctx, ccancel := context.WithTimeout(ctx, k8sVersionReadBudget)
 	offered, lerr := listAccountLKEVersions(cctx)
 	ccancel()
-	note, fatal := k8sVersionVerdict(env, want, shared, offered, lerr)
+	p, fatal := k8sVersionVerdict(env, want, shared, offered, lerr)
+	v.kind, v.reason = p.kind, p.reason
 	if fatal == nil {
-		fmt.Println(note)
+		fmt.Println(p.note)
 		return nil
 	}
 
@@ -375,6 +448,7 @@ func assertK8sVersion(env string) error {
 		return fatal
 	}
 	if linode.ClusterRunsVersion(clusters, label, region, want) {
+		v.kind, v.reason = k8sExempt, ""
 		// THE ONE ARM THAT WAVES A DEFINITELY-RETIRED PIN THROUGH, so it is the last
 		// one that may render as a silent green step. Every other soft pass here
 		// annotates; this one did not, which made the most consequential "yes, but"

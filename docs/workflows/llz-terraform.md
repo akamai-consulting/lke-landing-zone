@@ -465,6 +465,25 @@ the spec + pin), `llz ci validate-tokens` (credential *validity* and scope, not
 just presence) and `llz ci assert-apl-version` (the apl-core 6.x floor). Each is
 documented with its own gate rather than restated here.
 
+`validate-tokens` probes `LINODE_API_TOKEN` against the LKE-Enterprise **version
+catalog** — the route `llz ci assert-k8s-version` reads a few steps later. That
+gate warns and *passes* when the route refuses it, so it can be permanently inert
+while every run stays green; the credential probe is what tells the two 401s
+apart. Refused at the catalog **and** at the account's cluster list (both need
+`lke:read_only`), the PAT lacks the grant and this step fails — the cluster apply
+would have failed on it anyway, ~15 minutes later. Refused at the catalog only,
+the PAT is correctly scoped, the refusal belongs to the route, and the run is
+annotated with the fact that the k8sVersion preflight decided nothing.
+
+The same probe runs wherever `llz ci validate-tokens` does — `llz-bootstrap-openbao.yml`
+runs it too, on the bootstrap-cluster path, with the same credential. There is no
+per-workflow switch: a Linode PAT that cannot read LKE cannot do that job either.
+
+`assert-k8s-version` writes a one-line verdict into the job summary on every run,
+naming the outcome (`offered` / `not-offered` / `exempt` / `undecided`) and
+whether the account settled it. A run whose record says `UNDECIDED` checked
+nothing, whatever its exit status.
+
 ### Step: `Resolve shared VPC for this deployment`
 
 Which shared VPC (if any) this deployment attaches to is resolved from the spec

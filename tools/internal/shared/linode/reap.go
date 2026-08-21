@@ -209,7 +209,7 @@ func containsStr(ss []string, want string) bool {
 // LiveClusterIDs returns the id (as a string) of every live LKE cluster — the
 // set that is NEVER treated as an orphan.
 func (c *Client) LiveClusterIDs(ctx context.Context) (map[string]bool, error) {
-	cl, err := c.listAllPages(ctx, "/v4beta/lke/clusters")
+	cl, err := c.listAllPages(ctx, LKEClustersPath)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func (c *Client) LiveClusterIDs(ctx context.Context) (map[string]bool, error) {
 
 // ClustersWithLabel returns the ids of LIVE LKE clusters whose label matches.
 func (c *Client) ClustersWithLabel(ctx context.Context, label string) ([]uint64, error) {
-	cl, err := c.listAllPages(ctx, "/v4beta/lke/clusters")
+	cl, err := c.listAllPages(ctx, LKEClustersPath)
 	if err != nil {
 		return nil, err
 	}
