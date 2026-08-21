@@ -30,15 +30,20 @@ package runinjection
 // `github.ref_name`, `toJSON(github)`, `toJSON(github.event)`, and on any value
 // laundered through `env:` from one of those. So this guard is a SUPERSET, not a
 // replacement — and the half it adds is exactly the half every site remediated in
-// the preceding commit was in: all eleven interpolations were `inputs.*`, over
-// which actionlint had been passing for as long as they were there.
+// the preceding commit was in: all eleven interpolations were `inputs.*`. And it
+// is worse than "passing" for six of them — those are in `action.yml` files, which
+// actionlint cannot parse at all ("jobs" section is missing, measured), so it
+// never rendered a verdict on a composite action in its life. Five it read and
+// passed; six it could not open.
 //
 // SCOPE: what someone outside this repo can set. `inputs.*` and `github.event.*`
 // are the unambiguous half — the dispatch-or-call payload and the pull-request
 // payload, neither under this repo's control. Flagged alongside them, and NOT a
-// wider net than the paragraph above describes: the branch-name contexts
-// (`github.head_ref`, `github.ref_name`, `github.ref`, `github.workflow_ref`),
-// which carry an attacker-chosen branch on a fork PR; bare `github`, because
+// wider net than the paragraph above describes: the branch-name contexts, which
+// are `github.head_ref` on a pull_request and `github.ref`, `github.ref_name` and
+// `github.workflow_ref` wherever the event's ref IS a branch someone else named —
+// a push or a dispatch, not a PR, where those three are the server-set
+// `refs/pull/N/merge`; bare `github`, because
 // `toJSON(github)` ships the event payload without ever naming it; and `env.*`,
 // which is the remedy's own back door. Each has its own case in
 // externallySupplied with the measurement that put it there. `matrix.*` is a THIRD
@@ -483,8 +488,10 @@ func Run(root string, out, errOut io.Writer) error {
 		// is legitimately absent" from "this root moved and I am now scanning half the
 		// tree" — and the half that goes missing this way is the DELIVERED one, since
 		// the template's own .github/ is the root that always resolves. The result is a
-		// confident OK over 13 files while the 23 that reach every adopter are
-		// unexamined.
+		// confident OK over the template's own files while every file that reaches an
+		// adopter goes unexamined. (Deliberately not a file count: the trees grow, and
+		// a comment carrying a number that decays is the defect this guard's own
+		// header spent a commit correcting.)
 		//
 		// FIRST: an empty corpus is a wrong --root, and it must say so. Run after the
 		// per-root loop this was unreachable — .github/workflows always returns from
@@ -504,8 +511,9 @@ func Run(root string, out, errOut io.Writer) error {
 			// first-party roots "because the aggregate check covers them" — it does
 			// not: the aggregate counts across ALL roots, and .github/workflows alone
 			// keeps it non-zero. .github/actions holds one file, so moving it printed
-			// a confident OK over 35 files having never read a first-party composite
-			// action — the same omission, one root over, that left this guard's first
+			// a confident OK over every other file in the tree having never read a
+			// first-party composite action — the same omission, one root over, that
+			// left this guard's first
 			// cut blind to three of the seven live sites: setup-llz here, and
 			// fetch-kubeconfig and terraform-init in the DELIVERED action tree.
 			//
