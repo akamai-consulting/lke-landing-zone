@@ -1189,6 +1189,59 @@ func TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt(t *testing.T
 	}
 }
 
+// TestAnUnusableCatalogStillLeavesTheAdoptionDoorOpen.
+//
+// ADOPTION NEEDS NO CATALOG — it copies a version off a running cluster — so "omit
+// it and llz will NOT rescue this" is false when the CLUSTER read is the thing that
+// failed. The same error had already told the operator to re-run if that read was
+// transient, and a re-run that succeeds would in fact adopt.
+func TestAnUnusableCatalogStillLeavesTheAdoptionDoorOpen(t *testing.T) {
+	noClusterReadPause(t)
+	// A catalog that can supply nothing AND a cluster read that failed.
+	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34+lke2"}, clusterErr: errors.New("503")})
+	var err error
+	captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if !strings.Contains(err.Error(), "ONE EXCEPTION") {
+		t.Errorf("the remedy declares the door shut while the CLUSTER read — which needs no catalog —\n"+
+			"is the thing that failed, in the same error that says to re-run:\n%s", err)
+	}
+
+	// THE NEGATIVE ARM: when the read SUCCEEDED and found nothing, there is no
+	// exception to offer, and pretending otherwise sends the operator round a loop.
+	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34+lke2"}})
+	captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	if strings.Contains(err.Error(), "ONE EXCEPTION") {
+		t.Errorf("the read succeeded and found no cluster, so a re-run changes nothing:\n%s", err)
+	}
+}
+
+// TestAZeroDeploymentIsNotToldAboutAClusterOrARead.
+//
+// A zero Deployment is documented as DISABLING the read, and !lk.Asked covers both
+// "the read failed" and "there was nothing to look up" — only the first has a read
+// above to point at. Unguarded, the remedy cited "that cluster" and "the read
+// above" for a run that had neither. Latent, since `llz env add` always supplies a
+// label; pinned because the sibling lookedUp case is guarded and these two must not
+// drift apart.
+func TestAZeroDeploymentIsNotToldAboutAClusterOrARead(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+	_, err := ResolveK8sVersion("v1.33.6+lke7", Deployment{})
+	if err == nil {
+		t.Fatal("expected the rejection")
+	}
+	for _, forbidden := range []string{"that cluster", "the read above", "A re-run may settle it"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("no read happened and no label was given, but the remedy says %q:\n%s", forbidden, err)
+		}
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request

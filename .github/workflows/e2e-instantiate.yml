@@ -124,8 +124,15 @@ env:
   # AND A PIN LEFT BEHIND IS NOW THE HAZARD. Once the warm cluster is gone, a stale
   # var HARD-FAILS the next cold run the moment that version rotates out of the
   # account's catalog — hours, for LKE-E — because an explicit --k8s-version with no
-  # cluster to exempt it is rejected outright. Set this only when llz cannot ask:
-  # no E2E_LINODE_TOKEN, or a cluster read that failed (both say so in the log).
+  # cluster to exempt it is rejected outright. Set this only when llz cannot ANSWER,
+  # and there are four ways that happens — all four say so in the log:
+  #   * no E2E_LINODE_TOKEN, so llz never asks;
+  #   * the cluster read failed;
+  #   * TWO clusters carry this deployment's label (an orphan beside the live one),
+  #     so llz refuses to guess which version to adopt;
+  #   * the account reports no k8s_version for the cluster it found.
+  # The last two are the easy ones to miss: the run is otherwise healthy and the
+  # only trace is a ::warning inside a green step.
   E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
 

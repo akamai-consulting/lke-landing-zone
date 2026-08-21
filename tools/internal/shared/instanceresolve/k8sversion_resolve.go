@@ -782,7 +782,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"  Unchanged, the cluster apply fails ~15 minutes in with\n"+
 		"  `[400] [k8s_version] k8s_version is not valid`.\n"+
 		"%s",
-		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered, lk))
+		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered, d, lk))
 }
 
 // omitRemedy is the closing line of a hard rejection: what actually happens if the
@@ -810,12 +810,33 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 // accountLKEVersions — reintroduced in a new message the moment one was written.
 // What is safe to say is what dropping the FLAG changes, and what the account can
 // supply.
-func omitRemedy(offered []string, lk clusterLookup) string {
+func omitRemedy(offered []string, d Deployment, lk clusterLookup) string {
+	// A FAILED READ IS NOT A CLOSED DOOR, and both branches below have to know it.
+	// ADOPTION NEEDS NO CATALOG — it copies a version off a running cluster — so a
+	// re-run whose cluster read succeeds can still settle this even when the catalog
+	// can supply nothing. The unusable-catalog branch said "will NOT rescue this"
+	// flatly, in the same error that had just told the operator to re-run if the read
+	// was transient.
+	//
+	// GUARDED ON THE LABEL, like the sibling lookedUp case. !lk.Asked covers both "the
+	// read failed" and "there was nothing to look up", and only the first has a read
+	// above to point at. A zero Deployment is documented as disabling the read, and
+	// this arm would otherwise cite "that cluster" and "the read above" for a run that
+	// had neither. (A missing TOKEN cannot reach here: no catalog means no verdict,
+	// so the rejection this remedy closes is unreachable.)
+	readMayYetAnswer := !lk.Asked && d.ClusterLabel != ""
 	if linode.NewestVersion(offered) == "" {
-		return "  Omitting --k8s-version will NOT rescue this: nothing in this catalog is a full build id, so\n" +
+		unusable := "  Omitting --k8s-version will NOT rescue this: nothing in this catalog is a full build id, so\n" +
 			"  there is no version for llz to derive from the account at all — whatever the spec then\n" +
 			"  pins (a shared default it inherits, or llz's compiled one) is not a version this account\n" +
 			"  confirmed. Check it with `llz doctor` — a catalog problem, not a spelling one."
+		if readMayYetAnswer {
+			return unusable + "\n" +
+				"  ONE EXCEPTION: the cluster read above failed, and adopting a running version needs no\n" +
+				"  catalog at all. If a re-run reads the account and finds exactly one cluster for this\n" +
+				"  deployment, llz pins whatever that cluster runs regardless of this list."
+		}
+		return unusable
 	}
 	// THE ADOPTION CLAUSE IS EARNED, NOT ASSUMED. Every arm that reaches here has an
 	// EMPTY lk.Running — the exemption and the runs-something-else error both return
@@ -831,9 +852,12 @@ func omitRemedy(offered []string, lk clusterLookup) string {
 			"  will not guess between them. Resolve that first (the listing above names them)."
 	case lk.Unreadable():
 		return derive + "  It will NOT adopt the running version — the account reports none for that cluster."
-	case !lk.Asked:
+	case readMayYetAnswer:
 		return derive + "  Whether it can instead adopt the version that cluster is ALREADY RUNNING — which plans\n" +
 			"  no diff at all — is exactly what the read above could not establish. A re-run may settle it."
+	case !lk.Asked:
+		// No label to look one up by, so there is nothing to say about a cluster at all.
+		return strings.TrimRight(derive, "\n")
 	}
 	return derive + "  There is no cluster for this deployment to adopt a version from."
 }
