@@ -39,8 +39,10 @@ This chart captures them as **defaults**:
 
 - **Raft join ordering** — `retry_join` blocks for all peers, with the per-pod
   FQDNs present as cert SANs so TLS forms before bootstrap.
-- **Pod Security Standards** — the `restricted:v1.33` securityContexts the
-  StatefulSet needs to schedule at all.
+- **Pod Security Standards** — the `restricted` securityContexts the StatefulSet
+  needs to schedule at all. Named without a version on purpose: the `llz-openbao`
+  namespace is labelled `restricted` at `latest` by `llz-cluster-foundation`, so the
+  ruleset is whichever one that cluster's apiserver ships.
 - **Liveness during bootstrap** — `sealedcode=204&uninitcode=204` so a freshly
   deployed (sealed) OpenBao isn't SIGKILLed before `bao operator init` runs.
 - **LKE-Enterprise NetworkPolicy** — `6443` allowed alongside `443` because the

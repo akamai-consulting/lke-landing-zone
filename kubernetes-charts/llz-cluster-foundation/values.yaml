@@ -66,9 +66,39 @@ syncWaves:
 # apl-core's later create-or-replace merges cleanly.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Reused PSS label block. The version pin must match the cluster's Kubernetes
-# minor; bump in lockstep with the LKE-E version (current default: v1.33.6+lke7).
-podSecurityStandardsVersion: "v1.33"
+# Reused PSS label block — the value of `pod-security.kubernetes.io/{enforce,warn,
+# audit}-version` on the two namespaces this chart marks `restricted`
+# (llz-openbao, llz-observability).
+#
+# `latest`, AND IT CANNOT BE A MINOR. This used to say "the version pin must match
+# the cluster's Kubernetes minor; bump in lockstep with the LKE-E version", and sat
+# at v1.33 while the scaffold default moved to a v1.34 build — a whole minor behind,
+# unnoticed, because nothing bumps it and nothing compares it to anything.
+#
+# THE STALENESS IS THE SYMPTOM. THIS CHART IS PUBLISHED ONCE AND INSTALLED ON EVERY
+# INSTANCE'S CLUSTER, and those clusters run different LKE-E minors — availability
+# is per-ACCOUNT and rotates within hours (see internal/shared/linode/lke_versions.go).
+# So "matches the cluster's Kubernetes minor" is not a property one baked literal
+# can have. Whatever minor it names is wrong for somebody, and it is silently wrong:
+# a pinned version does not fail, it just enforces an OLDER ruleset than the
+# apiserver ships. Pod Security Standards revisions are cumulative, so a lagging pin
+# is strictly weaker than the `restricted` this chart advertises — a weakened posture
+# that reads, in the labels, exactly like an enforced one.
+#
+# `latest` is the upstream DEFAULT (an absent -version label means latest) and is
+# the only value that is correct on every cluster this chart lands on, because it is
+# resolved by the apiserver that will do the enforcing rather than by us months
+# earlier.
+#
+# WHAT WE GIVE UP, STATED PLAINLY: a pin protects against an apiserver upgrade
+# tightening `restricted` and rejecting a pod that used to be admitted. That risk is
+# real and it is small here — the profile applies to two namespaces we own
+# (OpenBao and our observability stack), both already restricted-compliant — and its
+# failure mode is LOUD: an admission rejection naming the rule, at upgrade time. The
+# failure mode of the stale pin is silence, which is the one this repo trades away
+# last. TestTheChartDoesNotPinAKubernetesMinorItCannotKnow keeps the literal from
+# coming back.
+podSecurityStandardsVersion: "latest"
 
 namespaces:
   # openbao — our HA Raft cluster. Full restricted PSS.
