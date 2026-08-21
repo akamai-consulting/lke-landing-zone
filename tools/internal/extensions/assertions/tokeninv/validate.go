@@ -27,6 +27,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
@@ -63,7 +64,7 @@ func RunValidate(failOnInvalid bool) error {
 	ghcrUser := os.Getenv("GHCR_USERNAME")
 
 	fmt.Printf("%s\n", color.Bold("Token validity — probing pipeline credentials in the environment"))
-	probed, blockingInvalid, optionalInvalid, blockingDenied := 0, 0, 0, 0
+	probed, blockingInvalid, optionalInvalid, blockingDenied, inertRoutes := 0, 0, 0, 0, 0
 	for _, name := range validatableTokens {
 		val := os.Getenv(name)
 		if val == "" {
@@ -93,13 +94,21 @@ func RunValidate(failOnInvalid bool) error {
 			continue
 		}
 		if cr, ok := checkCapability(name, val); ok {
-			if cr.status == capDenied {
-				if optionalTokens[name] {
-					fmt.Fprintf(os.Stderr, "::warning::%s is not authorized for its required scope but is optional — it won't block the run.\n", name)
-				} else {
-					blockingDenied++
-					fmt.Fprintf(os.Stderr, "::error::%s: %s\n", name, capabilityHint(name))
-				}
+			switch {
+			case cr.status == capDenied && optionalTokens[name]:
+				fmt.Fprintf(os.Stderr, "::warning::%s is not authorized for its required scope but is optional — it won't block the run.\n", name)
+			case cr.status == capDenied:
+				blockingDenied++
+				fmt.Fprintf(os.Stderr, "::error::%s: %s\n", name, capabilityHint(name))
+			case cr.status == capRouteRefused:
+				// ANNOTATED, NEVER BLOCKING, AND COUNTED. The credential is correctly
+				// scoped, so there is nothing to fail it for — but a downstream check has
+				// been proven unanswerable in this pipeline, and that is exactly the finding
+				// that used to exist only as a warning inside the inert gate's own green
+				// step. cigate.Warning so the reason survives into the annotation instead of
+				// being truncated at the first newline.
+				inertRoutes++
+				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf("%s: %s", name, cr.detail)))
 			}
 			fmt.Printf("  %-30s %s\n", "  └ scope", capabilityCell(cr))
 		}
@@ -117,8 +126,8 @@ func RunValidate(failOnInvalid bool) error {
 		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", tokenprobe.ValidityCell(tv))
 	}
 
-	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid, %d scope-denied.\n",
-		probed, blockingInvalid, optionalInvalid, blockingDenied)
+	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid, %d scope-denied, %d route-refused.\n",
+		probed, blockingInvalid, optionalInvalid, blockingDenied, inertRoutes)
 
 	// Denial and invalidity are reported separately because the remediation
 	// differs: an invalid token needs ROTATING, a denied one needs RE-SCOPING, and

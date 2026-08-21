@@ -186,10 +186,20 @@ func (a ControlPlaneACL) WithoutIP(ip string) (ControlPlaneACL, bool) {
 	return ControlPlaneACL{Enabled: a.Enabled, IPv4: out, IPv6: a.IPv6}, true
 }
 
+// LKEClustersPath is the account's cluster list, exported for the same reason
+// LKEVersionsPath is: `llz ci validate-tokens` probes it as the SECOND OPINION on
+// a refused version-catalog read. Both routes need the same `lke:read_only`
+// grant, so a token refused at both is under-scoped — a real credential fault
+// that fails the cluster apply later anyway — while a token accepted here and
+// refused there has the grant, and the refusal is about the route rather than the
+// PAT. That difference is the whole question issue #449 asks, and it can only be
+// answered by asking both.
+const LKEClustersPath = "/v4beta/lke/clusters"
+
 // ListClusters returns every LKE cluster on the account (all pages). Each map
 // carries id, label, region, k8s_version and status.
 func (c *Client) ListClusters(ctx context.Context) ([]map[string]any, error) {
-	return c.listAllPages(ctx, "/v4beta/lke/clusters")
+	return c.listAllPages(ctx, LKEClustersPath)
 }
 
 // MatchClusterIDs returns the ids of clusters whose label == label and, when

@@ -526,10 +526,18 @@ jobs:
       # It costs a few HTTP round-trips and is not gated on ACTION: a `plan` that
       # would apply with a dead credential should say so now.
       #
-      # GH_REPO is what the authorization probes build their paths from (the
+      # GH_REPO is what the GitHub authorization probes build their paths from (the
       # environment-secret public-key endpoint, the values-repo ref discovery);
       # without it they skip rather than fail, which would quietly return this
       # step to a validity-only check.
+      #
+      # LINODE_API_TOKEN's scope probe needs no such context — it reads the
+      # LKE-Enterprise version catalog, which is a fixed route. Refused there AND at
+      # the plain cluster list (same `lke:read_only` grant) it FAILS this step: the
+      # cluster apply would have died on the same missing grant ~15 minutes in.
+      # Refused at the catalog only, it annotates — the PAT is fine, and what the
+      # refusal means is that `llz ci assert-k8s-version` below cannot ask its
+      # question in this pipeline and its green step is not evidence.
       - name: Pre-flight — probe credential validity + scope (fail fast on a dead or under-scoped token)
         env:
           GH_REPO:                     ${{ inputs.instance_repo }}
@@ -566,7 +574,11 @@ jobs:
       # object-storage and database roots have applied. Cost a release-e2e round.
       #
       # Degrades like its neighbours: an unreachable or unscoped API warns and
-      # PASSES (this token 401s on the versions route from some contexts). And a
+      # PASSES (this token 401s on the versions route from some contexts) — and the
+      # credential preflight above is what says whether that is happening EVERY run,
+      # which is the difference between a check that degraded once and one that has
+      # never decided anything. Either way this step records its verdict, and
+      # whether the ACCOUNT reached it, in the job summary. And a
       # cluster ALREADY RUNNING the pin is exempt — `k8s_version` reaches the API
       # only on a create or a change, so terraform plans no diff and this apply is
       # unaffected by a version that has since rotated out. Without that, the first
