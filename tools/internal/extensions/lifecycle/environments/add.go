@@ -535,11 +535,18 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 		return inheritedFix + color.Dim(" (this deployment only — the shared default is unbuildable)")
 	case !lzExists && k8s.Newest != "":
 		return k8s.Newest
-	case !lzExists && len(k8s.Offered) > 0:
+	case !lzExists && k8s.CatalogRead:
 		// THE ACCOUNT ANSWERED; its catalog just holds nothing that could be sent to
 		// the create API. Reporting that as "could not be asked" contradicted the
 		// stderr line printed moments earlier, which names the catalog it returned —
 		// two messages about one event, disagreeing on whether the request happened.
+		//
+		// CatalogRead, NOT len(k8s.Offered) > 0. A read that SUCCEEDED and returned an
+		// empty catalog leaves Offered nil, so keying on it put this line and
+		// seedSource — which was moved to CatalogRead first — on opposite sides of the
+		// same fact: one run printed "the account could not be asked" in the banner and
+		// "the account's catalog names no full build id" three lines later. The two
+		// must read the same flag or they will drift again.
 		return color.Dim("(scaffold default — the account's catalog names no build id)")
 	case !lzExists:
 		return color.Dim("(scaffold default — the account could not be asked)")
@@ -559,8 +566,10 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 // asked. k8sVersionBanner already distinguishes these three; this did not, and one
 // of them is the operator's own credential being blamed for their catalog.
 //
-// Offered is the discriminator because ResolveK8sVersion sets it only on a catalog
-// that came back — the same fact the banner keys on.
+// CatalogRead is the discriminator, and Offered is NOT: a read that succeeded on an
+// empty catalog leaves Offered nil, so it cannot tell "answered with nothing" from
+// "never answered". k8sVersionBanner reads the same flag, deliberately — the two
+// sentences are about one event and drifted apart once already.
 func seedSource(k8s instanceresolve.K8sVersionChoice) string {
 	switch {
 	case k8s.Newest != "":

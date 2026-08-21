@@ -48,19 +48,31 @@ func firstNonNilErr(err, fallback error) error {
 	return fallback
 }
 
-// accountCheckSkipReported keeps the notice to once per process. checkRegion and
-// resolveOBJCluster both run in a single `llz env add`, and printing the same
-// "your token did not work" paragraph twice reads like two different problems.
+// accountCheckSkipReported keeps the notice from repeating. checkRegion,
+// resolveOBJCluster and accountLKEVersions all run in a single `llz env add`, and
+// printing the same paragraph three times reads like three different problems.
+//
+// THE GUARD IS PER CAUSE CLASS, NOT ONE FLAG FOR EVERYTHING, and a single global
+// bool was wrong in a way that took a live reproduction to see:
+//
+//   - NO TOKEN is one fact about the ENVIRONMENT. It is equally true of every
+//     lookup, so it is said once — the noise this guard was built to stop. Key "".
+//   - AN API ERROR IS PER ROUTE. /v4/regions is unauthenticated and passes on a
+//     bad token, /v4/object-storage/clusters 401s, and /v4beta/lke/tiers/…/versions
+//     401s separately. Under one flag the obj-cluster failure consumed the guard
+//     and the VERSIONS failure went silent — losing exactly the per-route
+//     diagnostic #426 argues for, in the run where the operator most needs it.
+//     Key the flag name, so each route gets one say.
 //
 // Process-global, which is right for a CLI (one `env add` per process) and a
 // hazard in tests: the first case to trip it silences every later one, so an
 // assertion on the notice would pass or fail by test ORDER. resetAccountCheckSkip
 // exists so a test can state its precondition instead of inheriting one.
-var accountCheckSkipReported bool
+var accountCheckSkipReported = map[string]bool{}
 
 // resetAccountCheckSkip re-arms the once-guard. Test-only in practice; kept
 // beside the flag rather than in a _test.go file so the reason travels with it.
-func resetAccountCheckSkip() { accountCheckSkipReported = false }
+func resetAccountCheckSkip() { accountCheckSkipReported = map[string]bool{} }
 
 // reportSkippedAccountCheck tells the operator that a validation they were
 // promised did not happen. cause is nil for "no token configured".
@@ -86,10 +98,17 @@ func resetAccountCheckSkip() { accountCheckSkipReported = false }
 // is the untestable-inline-bash the budget gate exists to refuse — and it would
 // have covered ONE caller, while this covers every one.
 func reportSkippedAccountCheck(what string, cause error) {
-	if accountCheckSkipReported {
+	// "" for the no-token case — one environment fact, said once however many
+	// lookups it stops. The flag name otherwise, so each ROUTE that failed gets to
+	// say so. See accountCheckSkipReported.
+	key := ""
+	if cause != nil {
+		key = what
+	}
+	if accountCheckSkipReported[key] {
 		return
 	}
-	accountCheckSkipReported = true
+	accountCheckSkipReported[key] = true
 	if cause == nil {
 		// ONE cigate.Warning CALL, NOT FOUR PRINTLNS. Under Actions a workflow
 		// command ends at the first raw newline, so a multi-line message keeps its

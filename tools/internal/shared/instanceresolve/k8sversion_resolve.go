@@ -524,12 +524,18 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// instead of seeding today's newest), and a pin the catalog REJECTS (exempt it
 	// if that is precisely what the cluster runs).
 	//
-	// ONE EXCEPTION, ON THE PATH ABOVE THIS ONE: when the CATALOG could not be read
-	// at all, the cluster read happens whatever --k8s-version says. It cannot change
-	// the write there — an unjudgeable pin passes through as written — and it is
-	// still asked, because a re-scaffold over a live cluster is the state that path
-	// most needs to be able to describe and nothing else can witness it. Stating the
-	// rule and then quietly breaking it is how a cost comment stops being read.
+	// THE SAME RULE HOLDS ON THE UNREADABLE-CATALOG PATH ABOVE, which returns early
+	// on a pin for exactly this reason. An earlier revision of this comment claimed
+	// the opposite — that the cluster read happens there "whatever --k8s-version
+	// says" — and described behaviour the code beside it did not have. Stating a rule
+	// and then breaking it is how a cost comment stops being read; so is stating an
+	// exception that does not exist.
+	//
+	// AN EXPLICIT PIN THEREFORE NEVER TRIGGERS THE READ, on either path, and the
+	// consequence is worth naming: `--k8s-version` that differs from what a live
+	// cluster runs is written as given, and terraform plans the change. That is the
+	// operator saying the version out loud, and it is the same answer both paths
+	// give — llz adopts a running version only when it was not told one.
 	//
 	// SO A GENUINELY FRESH `llz new` STILL PAYS ONE REQUEST, and the alternative was
 	// worse. Gating on "landingzone.yaml exists or environments/ is non-empty" was

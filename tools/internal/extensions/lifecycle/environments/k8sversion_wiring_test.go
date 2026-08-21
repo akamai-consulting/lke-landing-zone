@@ -632,17 +632,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		want         string
 	}{
 		"explicit pin wins": {
-			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog},
+			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true},
 			false, "", "v1.32.9+lke4",
 		},
 		"first env add shows the derived version": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, false, "", "v1.34.6+lke2",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, false, "", "v1.34.6+lke2",
 		},
 		"later env add inherits": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, true, "", "inherited",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "", "inherited",
 		},
 		"later env add overrides a rotated-out shared pin": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, true, "v1.34.6+lke2", "this deployment only",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "v1.34.6+lke2", "this deployment only",
 		},
 		// THE TWO STATES THAT USED TO RENDER IDENTICALLY. One never reached the
 		// account; the other got an answer it cannot use — and the second one prints
@@ -652,7 +652,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 			instanceresolve.K8sVersionChoice{}, false, "", "could not be asked",
 		},
 		"catalog answered but names no build id": {
-			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, CatalogRead: true}, false, "", "names no build id",
+		},
+		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
+		// empty catalog leaves Offered nil while CatalogRead is true — so a banner
+		// keyed on len(Offered) said "could not be asked" while seedSource, keyed on
+		// CatalogRead, said the catalog had answered. Same run, same request, opposite
+		// claims. Every fixture above now carries CatalogRead because the resolver
+		// always sets the two together; a hand-built choice that omits it is a state
+		// ResolveK8sVersion cannot produce, and it hid this.
+		"catalog answered with nothing at all": {
+			instanceresolve.K8sVersionChoice{CatalogRead: true}, false, "", "names no build id",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -665,10 +675,26 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// And the two "no build id" states must not render the same string, which is the
 	// whole finding rather than a wording preference.
 	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, "")
-	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}}, false, "")
+	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, CatalogRead: true}, false, "")
 	if unreachable == coarse {
 		t.Errorf("an unreachable account and a catalog llz cannot use both render %q — "+
 			"they are different events with different remedies", unreachable)
+	}
+	// AND THE BANNER AND THE SEED PROVENANCE MUST NOT DISAGREE ABOUT ONE REQUEST.
+	// They are two sentences in one run about whether the account answered; keyed on
+	// different fields they drifted, and only a successful EMPTY read separates the
+	// fields. Asserted rather than commented, because they live in different
+	// functions and nothing else couples them.
+	for name, k8s := range map[string]instanceresolve.K8sVersionChoice{
+		"empty read":  {CatalogRead: true},
+		"coarse read": {Offered: []string{"1.33"}, CatalogRead: true},
+		"no read":     {},
+	} {
+		banner, source := k8sVersionBanner(k8s, false, ""), seedSource(k8s)
+		if strings.Contains(banner, "could not be asked") != strings.Contains(source, "never asked") {
+			t.Errorf("%s: the banner says %q and the seed provenance says %q — one run, one request, "+
+				"two answers about whether the account was asked", name, banner, source)
+		}
 	}
 }
 
