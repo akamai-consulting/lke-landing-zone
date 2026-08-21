@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -236,6 +236,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/cosignguard=75 \
 	internal/extensions/guards/monitoringlabel=66 \
 	internal/extensions/guards/setupgosite=79 \
+	internal/extensions/guards/mutabletags=91 \
 	internal/extensions/guards/sourceref=87 \
 	internal/extensions/guards/workflowshells=71 \
 	internal/shared/answers=87 \
@@ -305,6 +306,7 @@ help:
 	@echo "  source-ref-guard  stale tools/ path literals in prose, comments and error strings"
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
 	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
+	@echo "  mutable-tag-guard  build-images.yml may publish :latest / :<version> only from the default branch"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -1112,6 +1114,32 @@ source-ref-guard:
 setup-go-sole-site: export LLZ_FORCE_SOURCE := 1
 setup-go-sole-site:
 	$(call LLZ_CI,gates --only setup-go-sole-site,)
+
+# mutable-tag-guard: `llz ci mutable-tag-guard` — build-images.yml may publish a
+# MUTABLE tag (`:latest`, `:<version>`) only from the default branch's HEAD.
+#
+# A BRANCH BUILD REPOINTED `:latest` FOR EVERYONE, and it was routine rather than
+# deliberate (#451). That workflow's `workflow_dispatch` is deliberately not gated
+# on the ref — release-e2e and e2e-instantiate drive it on feature branches, and
+# e2e-instantiate dispatches it automatically (`pin-instance-images --ref
+# "${GITHUB_REF_NAME}" --build-if-missing`) — so every branch that ran an e2e
+# republished `:latest` and `:<version>` from its own content. Three readers move
+# with it at once: lint.yml's container fallback (this repo sets neither TF_IMAGE
+# nor KUBE_IMAGE, so the fallback is what every Lint run here resolves),
+# `llz ci assert-image-fresh`, which reads the baked sha expecting the template
+# ref's commit, and any instance that never pinned an image. The no-path-filter
+# design at the top of build-images.yml exists solely to keep `:latest` == main's
+# HEAD; a branch dispatch falsified it until the next main push.
+#
+# NOTHING COULD SEE IT: each `--tag` is individually well-formed and the tag looks
+# identical after it moves. Only the relation between the publish and the ref is
+# checkable, which is the same shape as version-pins and setup-go-sole-site.
+#
+# FROM SOURCE for the usual reason: on the PR that introduces the verb, the
+# merge-base image binary does not have it.
+mutable-tag-guard: export LLZ_FORCE_SOURCE := 1
+mutable-tag-guard:
+	$(call LLZ_CI,gates --only mutable-tag-guard,)
 
 # symbol-ref-guard: the OTHER half of a reference — `llz ci symbol-ref-guard`.
 #

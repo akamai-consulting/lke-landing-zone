@@ -62,6 +62,17 @@ happened here. Where nothing pins the image a moving tag is the honest answer;
 pin `TF_IMAGE`/`KUBE_IMAGE` to a `:sha-<commit>` tag if you need reproducibility
 — a version tag is not it, since that moves too until the next bump freezes it.
 
+That floating tag is only safe because of what publishes it. **`build-images.yml`
+publishes the MUTABLE tags (`:latest`, `:<version>`) from the default branch's
+HEAD only**; every other ref gets `:sha-<commit>` and nothing else. Its
+`workflow_dispatch` is deliberately *not* gated on the ref — `release-e2e` and
+`e2e-instantiate` drive it on feature branches, and `e2e-instantiate` does so
+automatically — so the gate lives on the publish, as the `PUBLISH_MUTABLE` env
+expression. Before that, every branch that ran an e2e repointed `:latest` for
+main and every open PR at once: the fallback above, the baked sha `llz ci
+assert-image-fresh` compares, and any instance that never pinned an image. `llz
+ci mutable-tag-guard` (in the `llz-gates` suite) holds the shape at PR time.
+
 ## Composite actions available
 
 Prefer these over reimplementing their logic inline:

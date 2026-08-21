@@ -122,7 +122,15 @@ categories:
     # at +3%, because the ~3% headroom convention exists to absorb honest growth and
     # this is not growth — it is fourteen lines that were never shell. A change that
     # genuinely adds inline bash should have to say so.
-    budget: 513
+    #
+    # Ratcheted 513 → 512 when build-images.yml's tag assembly was rewritten to gate
+    # the mutable tags on the ref (#451). The gate is two shell lines MORE than the
+    # unconditional publish it replaced, and the block still came out one line
+    # shorter, because the image and its ci-terraform alias stopped being two
+    # hand-stamped copies of the same three tags and became a loop over both names.
+    # Banked rather than left as slack: a line freed by deduplication is not a
+    # licence for the next change to add one.
+    budget: 512
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"

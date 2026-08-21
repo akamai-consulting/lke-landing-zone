@@ -100,6 +100,9 @@ var componentless = map[string]bool{
 	"guard-source-refs":           true,
 	// Its subject is this repo's own CI wiring, which no instance can turn off.
 	"setup-go-sole-site": true,
+	// Same again: which tags build-images.yml may publish is a property of THIS
+	// repo's publishing, not of any component an instance can turn off.
+	"guard-mutable-tags": true,
 	// Same: the caller/callee permission contract is a property of the workflow
 	// files themselves, not of any component an instance can disable.
 	"reusable-workflow-caller-permissions": true,

@@ -55,6 +55,26 @@ env:
   # the dispatched ref HEAD / pushed commit. (For a push event `inputs` is empty →
   # falls back to github.sha.)
   SHA: ${{ inputs.sha || github.sha }}
+  # Whether this run may publish MUTABLE tags (`:latest`, `:<version>`) — see the
+  # tag-assembly step for what that costs when it is wrong (#451). Two conditions,
+  # and both are load-bearing:
+  #
+  #   the ref is the default branch — `workflow_dispatch` is deliberately NOT
+  #     gated on the ref (release-e2e and e2e-instantiate drive this workflow on
+  #     feature branches and release tags, and must keep being able to), so the
+  #     gate lives on the PUBLISH rather than on the trigger. main/master mirrors
+  #     the `push:` filter above rather than reading
+  #     github.event.repository.default_branch, so the two cannot disagree — and
+  #     an expression that resolves empty here would silently stop republishing
+  #     `:latest` on main, which is failure-open.
+  #   the build is that branch's HEAD — an explicit `sha` input names some other
+  #     commit, and stamping `:latest` with it breaks `:latest` == HEAD just as a
+  #     branch build does. For a push or the schedule `inputs` is empty, so this
+  #     half is vacuously true and only a dispatch can trip it.
+  #
+  # `schedule` runs on the default branch, so the weekly rebuild still refreshes
+  # every mutable tag.
+  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}
 
 jobs:
   # ── Which images to build ────────────────────────────────────────────────────
@@ -171,21 +191,43 @@ jobs:
           ALIAS:   ${{ matrix.alias }}
         run: |
           set -euo pipefail
-          # The version tag is per-image and optional (ci-tofu pins the OpenTofu
-          # version, ci-kubernetes the kubectl one; devcontainer and llz carry
-          # none), so it is appended rather than templated inline.
-          TAGS=(--tag "${REPO}/${IMAGE}:latest" --tag "${REPO}/${IMAGE}:sha-${SHA}")
-          [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${IMAGE}:${VERSION}")
           # DEPRECATION WINDOW: ci-tofu is also published as ci-terraform. The
           # image was renamed when it stopped containing HashiCorp Terraform, but
           # instances pin it through vars.TF_IMAGE — an explicit pin nobody's
           # migration is obliged to update on our schedule. Publishing both names
           # from one build means an un-updated pin keeps resolving to the CURRENT
           # image rather than silently rotting on the last ci-terraform push.
-          # Remove the alias (and this block) once no instance pins the old name.
-          if [ -n "${ALIAS}" ]; then
-            TAGS+=(--tag "${REPO}/${ALIAS}:latest" --tag "${REPO}/${ALIAS}:sha-${SHA}")
-            [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${ALIAS}:${VERSION}")
+          # Remove the alias (and NAMES) once no instance pins the old name.
+          #
+          # EVERY BUILD PUBLISHES `sha-<commit>`, WHATEVER REF IT RAN ON. That tag
+          # is the one release-e2e and `llz ci pin-instance-images` wait on and pin,
+          # so a branch build still gives an e2e an image whose baked llz matches
+          # the workflow under test. It names one commit and can never be repointed.
+          NAMES=("${IMAGE}"); [ -z "${ALIAS}" ] || NAMES+=("${ALIAS}"); TAGS=()
+          for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done
+          # THE MUTABLE TAGS ARE GATED ON THE REF (issue #451), and this is the
+          # whole of that fix. `:latest` and `:<version>` are names main and every
+          # open PR resolve — lint.yml's container fallback floats on `:latest` by
+          # design, `llz ci assert-image-fresh` reads its baked sha expecting main's
+          # HEAD, and instances that never pinned TF_IMAGE get whatever it points
+          # at. Publishing them from a branch was not hypothetical or deliberate:
+          # e2e-instantiate.yml dispatches this workflow ON THE BRANCH automatically
+          # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`), so
+          # every branch that ran an e2e repointed all three of those readers at its
+          # own content, and `:latest` == main's HEAD — the invariant the
+          # no-path-filter design at the top of this file exists to hold — stopped
+          # being true until the next main push.
+          #
+          # The version tag rides the same gate rather than a rule of its own: it is
+          # per-image and optional (ci-tofu pins the OpenTofu version, ci-kubernetes
+          # the kubectl one; devcontainer and llz carry none), and it is republished
+          # unchanged on every main build, so a branch moves it exactly as it moves
+          # `:latest`.
+          #
+          # `llz ci mutable-tag-guard` holds this shape at PR time: mutable tags only
+          # inside this `if`, the sha- tag only outside it.
+          if [ "${PUBLISH_MUTABLE}" = "true" ]; then
+            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done
           fi
           # RETRIED, because the failure this absorbs is not ours and not rare.
           # GHCR answers a burst of pushes with `403 Forbidden` / 429 — a

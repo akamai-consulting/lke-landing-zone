@@ -111,6 +111,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
@@ -130,8 +131,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-four of the twenty-seven gates read the repository root
-// through `--root`, so twenty-four rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-five of the twenty-eight gates read the repository root
+// through `--root`, so twenty-five rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -304,6 +305,10 @@ var gates = []Gate{
 	// whose corpus is one directory. The two scan roots are the gate's own
 	// business; handing it a subtree would silently halve what it checks.
 	{Extension: "setup-go-sole-site", New: setupgosite.Cmd},
+	// Reads ONE workflow — the image publisher — so it takes the repo root like
+	// the majority rather than a Subtree: its subject is a single named file, and
+	// handing it .github/workflows would only shorten the path it opens.
+	{Extension: "guard-mutable-tags", New: mutabletags.Cmd},
 	{Extension: "reusable-workflow-caller-permissions", New: callerperms.Cmd},
 	{Extension: "workflow-injection", New: runinjection.Cmd},
 
@@ -460,7 +465,8 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (24 rows, pinned by TestTheDefaultedMajorityIsStillTheMajority).
+	// table (28 rows, 25 of them taking the default subject — both pinned by
+	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string
 	// Toggles are the instance's component toggles, for enablement.

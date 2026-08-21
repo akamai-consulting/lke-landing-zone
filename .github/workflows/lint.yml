@@ -188,26 +188,27 @@ jobs:
       # than the one its own tree declares. A :sha- pin is the fix for anyone who
       # needs that; a version tag was never it.)
       #
-      # BRANCH BUILDS CONTAMINATE THIS TAG, and the honest version of that takes
-      # two cases — earlier comments here got each of them wrong on its own.
-      # build-images.yml's workflow_dispatch is not gated on the ref and publishes
-      # :latest, :sha-<commit> AND :<version> from whatever branch it runs on, and
-      # e2e-instantiate.yml dispatches it on the branch automatically
-      # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`), so
-      # this is routine rather than deliberate.
+      # BRANCH BUILDS USED TO CONTAMINATE THIS TAG, and the honest version of that
+      # took two cases — earlier comments here got each of them wrong on its own.
+      # build-images.yml's workflow_dispatch is not gated on the ref and it
+      # published :latest, :sha-<commit> AND :<version> from whatever branch it ran
+      # on, while e2e-instantiate.yml dispatches it on the branch automatically
+      # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`) — so
+      # it was routine rather than deliberate.
       #
-      #   branch does NOT bump the version — it republishes :<version> as well as
+      #   branch does NOT bump the version — it republished :<version> as well as
       #     :latest, so the old pinned fallback was repointed exactly the same way.
-      #     Nothing changes here.
-      #   branch DOES bump the version — it publishes :latest plus a :<new> tag
+      #     Nothing changed here.
+      #   branch DOES bump the version — it published :latest plus a :<new> tag
       #     nobody pins yet, leaving the old :<current> pin untouched. The pinned
       #     fallback insulated other PRs from that build; :latest does not.
       #
-      # So the exposure is real and narrow: a version-bumping branch that runs
-      # e2e repoints the image every other open PR's Lint job resolves. Gating
-      # that publish on the ref is the fix, and it is build-images.yml's business
-      # rather than this change's — tracked in #451, and noted here so the next
-      # reader does not have to rediscover which half is true.
+      # FIXED IN build-images.yml (#451), which is where the defect lived: the
+      # mutable tags are now published only from the default branch's HEAD
+      # (PUBLISH_MUTABLE), every other ref gets :sha-<commit> and nothing else, and
+      # `llz ci mutable-tag-guard` fails the PR that undoes it. The two cases stay
+      # written out because they are why the `:latest` fallback below is safe, not
+      # because either is still live.
       #
       # WHAT THIS COSTS, STATED PLAINLY: on the push that bumps KUBECTL_VERSION,
       # this job runs the PREVIOUS image, so its baked kubectl is one version
