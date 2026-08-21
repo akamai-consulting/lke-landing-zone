@@ -33,9 +33,15 @@ package runinjection
 // the preceding commit was in: all eleven interpolations were `inputs.*`, over
 // which actionlint had been passing for as long as they were there.
 //
-// SCOPE: `inputs.*` and `github.event.*` only, which is the unambiguous half.
-// Those are set by whoever dispatches or calls the workflow, and by whoever opens
-// a pull request — neither is under this repo's control. `matrix.*` is a THIRD
+// SCOPE: what someone outside this repo can set. `inputs.*` and `github.event.*`
+// are the unambiguous half — the dispatch-or-call payload and the pull-request
+// payload, neither under this repo's control. Flagged alongside them, and NOT a
+// wider net than the paragraph above describes: the branch-name contexts
+// (`github.head_ref`, `github.ref_name`, `github.ref`, `github.workflow_ref`),
+// which carry an attacker-chosen branch on a fork PR; bare `github`, because
+// `toJSON(github)` ships the event payload without ever naming it; and `env.*`,
+// which is the remedy's own back door. Each has its own case in
+// externallySupplied with the measurement that put it there. `matrix.*` is a THIRD
 // tier and a conditional one: a literal matrix is written in this file and safe,
 // but `matrix: ${{ fromJSON(inputs.x) }}` makes every value a dispatch input
 // under another name, so the taint is decided per job rather than by the tier —
@@ -499,8 +505,9 @@ func Run(root string, out, errOut io.Writer) error {
 			// not: the aggregate counts across ALL roots, and .github/workflows alone
 			// keeps it non-zero. .github/actions holds one file, so moving it printed
 			// a confident OK over 35 files having never read a first-party composite
-			// action — the same omission that left this guard's first cut blind to
-			// three of the seven live sites.
+			// action — the same omission, one root over, that left this guard's first
+			// cut blind to three of the seven live sites: setup-llz here, and
+			// fetch-kubeconfig and terraform-init in the DELIVERED action tree.
 			//
 			// THREE CASES, THREE ANSWERS. Reporting "the delivered tree moved" for a
 			// root that is present and merely empty names the wrong cause, and a wrong
