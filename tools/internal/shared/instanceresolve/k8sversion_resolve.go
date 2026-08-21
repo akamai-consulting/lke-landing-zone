@@ -965,11 +965,83 @@ func adoptionMessage(d Deployment, lk clusterLookup, offered []string) (note, wa
 // plans no change to k8s_version for them, which is what linode.ClusterRunsVersion
 // exempts.
 func (c K8sVersionChoice) ReplacementForInheritedPin(inherited string) string {
-	if c.Newest == "" || len(c.Offered) == 0 || strings.TrimSpace(inherited) == "" {
+	// THE VERDICT IS ASKED FIRST, ahead of whether a replacement exists, so that
+	// "the account says no" and "this could not choose anything" stay separable.
+	// Guarding on c.Newest up front collapses them: a catalog entitled to reject
+	// (everyEntryNamesABuild) can still name nothing versionSortKey will parse, and
+	// then the rejection was reported as unanswerable.
+	if !c.rejects(inherited) {
 		return ""
 	}
-	if verdict, _ := linode.CheckVersion(inherited, c.Offered); verdict != linode.VersionNotOffered {
-		return ""
+	// A NEAR MISS IS A SPELLING FIX, NOT AN UPGRADE, and it has to be tried first.
+	// `1.34.6+lke2` (no leading `v`) and `v1.34.6` (no `+lke` suffix) are both
+	// rejected because terraform sends the pin verbatim — but the account builds
+	// that exact version, so the correct replacement is the catalog's spelling of
+	// THE SAME VERSION. Falling through to the minor rule would hand the deployment
+	// the newest build of that minor instead, quietly changing the patch the
+	// operator meant, and the diagnostics would call a one-character slip a
+	// rotation.
+	if near := c.nearest(inherited); near != "" {
+		return near
 	}
+	// THE DEPLOYMENT'S OWN MINOR NEXT. The evidence is that one build id left the
+	// catalog — not that the minor did — and the size of the divergence this imposes
+	// has to match. A deployment is added to sit BESIDE existing ones: an HA peer, a
+	// promotion sibling, meant to run the same control-plane minor. Handing it the
+	// account's absolute newest turned a build-level rotation into a MINOR jump
+	// nobody asked for and no failure required, discovered later as a version skew
+	// between two deployments the operator believes are a pair.
+	if inMinor := linode.NewestVersionInMinorOf(c.Offered, inherited); inMinor != "" {
+		return inMinor
+	}
+	// The minor itself is gone: newest is all that is left to stay close to.
 	return c.Newest
+}
+
+// SpellingOf returns the catalog's spelling of v when the only thing wrong with v
+// is HOW IT IS WRITTEN, and "" when the account's answer is a real rejection.
+//
+// EXPORTED FOR THE MESSAGE, NEVER FOR THE VERDICT — the same split NamesABuild
+// documents. ReplacementForInheritedPin already corrects a slip silently; what the
+// caller cannot otherwise know is WHICH of the two happened, and the two earn
+// opposite sentences. Calling `v1.34.6` written without its `+lke` suffix "a
+// version this Linode account can no longer build" describes a rotation, and sends
+// an operator hunting a replacement for a version the account builds happily.
+func (c K8sVersionChoice) SpellingOf(v string) string { return c.nearest(v) }
+
+// rejects reports whether the account's catalog DEFINITELY cannot build v.
+//
+// Unexported: ReplacementForInheritedPin is the only caller, and CheckVersion
+// remains the single matcher every verdict in this package routes through — two
+// matchers that can disagree about one spec is exactly what VersionVerdict exists
+// to prevent.
+func (c K8sVersionChoice) rejects(v string) bool {
+	if len(c.Offered) == 0 || strings.TrimSpace(v) == "" {
+		return false
+	}
+	verdict, _ := linode.CheckVersion(v, c.Offered)
+	return verdict == linode.VersionNotOffered
+}
+
+// nearest returns the catalog entry that differs from v only in spelling, or ""
+// when there is no such near miss.
+//
+// A NEAR MISS IS A KIND OF REJECTION, so it needs the same licence every rejection
+// here needs: a catalog entitled to disprove, which HAS disproved this pin. An
+// ungated build-of-patch fallback answers for verdicts that are not rejections at
+// all — against a coarse catalog (VersionUnknown) it would invent a misspelling
+// for a pin nobody could judge, and against an exact entry (VersionOffered) it
+// would call a confirmed pin misspelled.
+func (c K8sVersionChoice) nearest(v string) string {
+	if len(c.Offered) == 0 || strings.TrimSpace(v) == "" {
+		return ""
+	}
+	verdict, near := linode.CheckVersion(v, c.Offered)
+	if verdict != linode.VersionNotOffered {
+		return ""
+	}
+	if near != "" {
+		return near
+	}
+	return linode.NewestBuildOfPatch(c.Offered, v)
 }
