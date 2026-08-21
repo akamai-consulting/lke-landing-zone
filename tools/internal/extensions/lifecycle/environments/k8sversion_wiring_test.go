@@ -531,6 +531,49 @@ func TestTheThirdCatalogStateCHANGESWhatLlzSays(t *testing.T) {
 	}
 }
 
+// TestTheE2ELaneScaffoldsBEFOREItRenamesTheInstance.
+//
+// THE WARM LANE'S WHOLE GUARANTEE RESTS ON A STEP ORDER NOTHING PINNED. `llz env
+// add` derives this deployment's cluster label from envdef.InstanceName, which at
+// the template root finds `.copier-answers.yml` unrendered and falls back to the
+// directory name — `instance-template-e2e`. That is the label the surviving warm
+// cluster carries, so the adoption fires and no control-plane upgrade is planned.
+//
+// `llz spec set instance.repo=` runs AFTER, and changes what InstanceName would
+// return. Move it earlier and the label becomes the real repo's short name, the
+// lookup matches nothing, and adoption stops — SILENTLY, because `Matches == 0` is
+// the one classifyClusters outcome that deliberately emits no warning (it is the
+// ordinary fresh-instance case; see TestAnAccountWithNoMatchIsQuiet). The lane
+// would plan the upgrade this branch removed the documented backstop for, with
+// nothing in the log to say so.
+//
+// So the order is load-bearing in a way neither step announces, and this is the
+// only thing that would notice it changing.
+func TestTheE2ELaneScaffoldsBEFOREItRenamesTheInstance(t *testing.T) {
+	raw, err := os.ReadFile(e2eInstantiateWorkflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// `bin/llz`, NOT `llz` — the bare name appears in COMMENTS above both steps
+	// (including one about E2E_K8S_VERSION 200 lines earlier), so the first cut of
+	// this gate compared the positions of two sentences and passed no matter how the
+	// commands were ordered. Caught by swapping the real steps and watching it stay
+	// green: a gate whose mutation lands on prose is not a gate.
+	body := string(raw)
+	add := strings.Index(body, "bin/llz env add")
+	rename := strings.Index(body, "bin/llz spec set instance.repo=")
+	if add < 0 || rename < 0 {
+		t.Fatalf("premise broken: `bin/llz env add` at %d, `bin/llz spec set instance.repo=` at %d — "+
+			"this gate is watching commands that are no longer in the lane", add, rename)
+	}
+	if add > rename {
+		t.Error("`llz spec set instance.repo=` now runs BEFORE `llz env add`, so the cluster label the\n" +
+			"scaffold looks up is no longer the one the warm cluster carries. Adoption stops matching\n" +
+			"and says nothing — `Matches == 0` is the one outcome with no warning — and the warm lane\n" +
+			"plans an LKE-Enterprise control-plane upgrade it used to be pinned against.")
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //
