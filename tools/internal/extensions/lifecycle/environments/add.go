@@ -687,6 +687,25 @@ func seedSource(k8s instanceresolve.K8sVersionChoice) string {
 	}
 }
 
+// replacementLeftTheFamily reports whether a replacement pin abandoned the minor
+// of the pin it replaced.
+//
+// DifferentMinor ALONE IS THE WRONG TEST HERE, and its conservatism inverts. It
+// answers false when EITHER side names no minor — correct for "are these the same
+// family", wrong for "was this choice constrained", because an old pin that names
+// no minor is precisely the case where ReplacementForInheritedPin makes its most
+// unconstrained jump: MinorOf fails on it, so the ladder falls straight through to
+// the account's newest. `spec.defaults.cluster.k8sVersion: latest` is accepted by
+// clusterspec (which only checks the field is non-empty), and it landed the
+// deployment on a brand-new minor with nothing said.
+func replacementLeftTheFamily(replacement, replaced string) bool {
+	if _, _, ok := linode.MinorOf(replaced); !ok {
+		// Nothing to have stayed within, so the choice was unconstrained by definition.
+		return true
+	}
+	return linode.DifferentMinor(replacement, replaced)
+}
+
 // missingPinSource names where the no-shared-pin choice came from, because "the
 // newest your account offers", "the minor your other deployments run" and "a
 // literal compiled months ago" earn very different reactions — the same reason
@@ -725,7 +744,7 @@ func sharedSiblingMinor(specRoot string) string {
 	// and Env() is keyed on metadata.name; a hand-authored spec where the two differ
 	// — the shape this whole path exists for — would look up nothing, lose its
 	// family silently, and fall back to the account's absolute newest.
-	found := ""
+	var family []string
 	for _, name := range inst.EnvNames() {
 		e, ok := inst.Env(name)
 		if !ok {
@@ -741,23 +760,25 @@ func sharedSiblingMinor(specRoot string) string {
 		//
 		// IT ALSO FIXES THE DISAGREEMENT TEST. DifferentMinor answers false when either
 		// side names no minor, so an unparseable sibling (`latest`) read as AGREEMENT —
-		// and if it sorted first it became the family value itself.
+		// and if it sorted first it became the family value itself. NamesABuild is a
+		// full versionSortKey parse, so anything surviving it also names a minor.
 		v := strings.TrimSpace(e.Cluster.K8sVersion)
 		if !linode.NamesABuild(v) {
 			continue
 		}
-		if _, _, ok := linode.MinorOf(v); !ok {
-			continue
-		}
-		if found == "" {
-			found = v
-			continue
-		}
-		if linode.DifferentMinor(found, v) {
+		if len(family) > 0 && linode.DifferentMinor(family[0], v) {
 			return ""
 		}
+		family = append(family, v)
 	}
-	return found
+	// THE NEWEST OF THE FAMILY, NOT THE FIRST ONE SEEN. EnvNames is sorted by
+	// deployment name, so returning `found` returned whichever sibling happened to
+	// sort first — and this string becomes the new deployment's pin verbatim on the
+	// offline arm. Siblings on v1.32.5+lke1 (dr) and v1.32.9+lke4 (prod) handed the
+	// new deployment the OLDER build, which is also the likelier one to have already
+	// rotated out of the catalog: `[400] k8s_version is not valid` on its first
+	// apply. NewestVersion is the same ranking every other choice here uses.
+	return linode.NewestVersion(family)
 }
 
 // existingDeployments returns the deployment names environments/ already defines,
@@ -840,7 +861,7 @@ func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVers
 		chosen, chosenField = k8s.Newest, "spec.defaults.cluster.k8sVersion "+seeded
 	case missingPinFix != "" && !missingPinFromSibling:
 		chosen, chosenField, chosenPerDeployment = missingPinFix, pinnedTo, true
-	case inheritedFix != "" && linode.DifferentMinor(inheritedFix, sharedPin):
+	case inheritedFix != "" && replacementLeftTheFamily(inheritedFix, sharedPin):
 		// THE REPLACEMENT ABANDONED THE FAMILY. ReplacementForInheritedPin keeps a
 		// deployment in its own minor when it can, and falls through to the account's
 		// newest only when that minor is gone — an unconstrained choice, and the

@@ -2142,3 +2142,84 @@ func TestACatalogThatAnsweredWithNothingUsableStillJoinsTheFamily(t *testing.T) 
 		})
 	}
 }
+
+// TestTheFamilyPinIsTheNewestOfTheFamilyNotTheFirstSeen.
+//
+// EnvNames is sorted by deployment NAME, so returning the first agreeing sibling
+// returned whichever one happened to sort first — and on the offline arm that
+// string becomes the new deployment's pin verbatim. Siblings on v9.98.5+lke1
+// ("aaa") and v9.98.9+lke4 ("bbb") handed the new deployment the OLDER build,
+// which is also the likelier one to have already rotated out of the catalog.
+func TestTheFamilyPinIsTheNewestOfTheFamilyNotTheFirstSeen(t *testing.T) {
+	dir := t.TempDir()
+	for _, env := range []string{"aaa", "bbb"} {
+		if _, err := scaffoldEnv(t, dir, env, &fakeCatalog{versions: []string{"v9.98.5+lke1"}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+			t.Fatalf("`llz env add %s`: %v", env, err)
+		}
+	}
+	pinSibling(t, dir, "aaa", "v9.98.5+lke1") // sorts first, older build
+	pinSibling(t, dir, "bbb", "v9.98.9+lke4") // same minor, newer build
+	stripSharedPin(t, dir)
+
+	if _, err := scaffoldEnv(t, dir, "dr", nil, // offline, so the sibling value is used verbatim
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("offline `llz env add`: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := inst.Env("dr")
+	if got := strings.TrimSpace(e.Cluster.K8sVersion); got != "v9.98.9+lke4" {
+		t.Errorf("dr pins %q, want v9.98.9+lke4 — the NEWEST build of the family, not whichever\n"+
+			"sibling sorted first", got)
+	}
+}
+
+// TestAnUnparseableSharedPinStillAnnouncesTheJumpItCaused.
+//
+// DifferentMinor answers false when EITHER side names no minor — right for "are
+// these the same family", wrong for "was this choice constrained". An old pin
+// naming no minor is precisely where ReplacementForInheritedPin makes its most
+// unconstrained jump: MinorOf fails on it, so the ladder falls straight through to
+// the account's newest. clusterspec accepts `latest` (it only checks the field is
+// non-empty), and the deployment landed on a brand-new minor with nothing said.
+func TestAnUnparseableSharedPinStillAnnouncesTheJumpItCaused(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	lzPath := filepath.Join(dir, clusterspec.LandingZoneFile)
+	b, err := os.ReadFile(lzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lzPath,
+		[]byte(strings.Replace(string(b), "v9.98.4+lke1", "latest", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr",
+			&fakeCatalog{versions: []string{"v9.99.1+lke3", envdef.SeedK8sVersion("")}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := inst.Env("dr"); strings.TrimSpace(e.Cluster.K8sVersion) != "v9.99.1+lke3" {
+		t.Fatalf("premise: an unparseable shared pin should fall through to the newest, got %q",
+			e.Cluster.K8sVersion)
+	}
+	if !strings.Contains(out, "MINOR") {
+		t.Errorf("the most unconstrained jump this command can make was the one it did not\n"+
+			"announce:\n%s", out)
+	}
+}
