@@ -632,17 +632,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		want         string
 	}{
 		"explicit pin wins": {
-			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true},
+			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered},
 			false, "", "v1.32.9+lke4",
 		},
 		"first env add shows the derived version": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, false, "", "v1.34.6+lke2",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, false, "", "v1.34.6+lke2",
 		},
 		"later env add inherits": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "", "inherited",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "", "inherited",
 		},
 		"later env add overrides a rotated-out shared pin": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "v1.34.6+lke2", "this deployment only",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "v1.34.6+lke2", "this deployment only",
 		},
 		// THE TWO STATES THAT USED TO RENDER IDENTICALLY. One never reached the
 		// account; the other got an answer it cannot use — and the second one prints
@@ -652,17 +652,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 			instanceresolve.K8sVersionChoice{}, false, "", "could not be asked",
 		},
 		"catalog answered but names no build id": {
-			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, CatalogRead: true}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
 		},
 		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
-		// empty catalog leaves Offered nil while CatalogRead is true — so a banner
+		// empty catalog leaves Offered nil while Catalog is CatalogAnswered — so a banner
 		// keyed on len(Offered) said "could not be asked" while seedSource, keyed on
-		// CatalogRead, said the catalog had answered. Same run, same request, opposite
-		// claims. Every fixture above now carries CatalogRead because the resolver
+		// Catalog, said the catalog had answered. Same run, same request, opposite
+		// claims. Every fixture above now carries Catalog because the resolver
 		// always sets the two together; a hand-built choice that omits it is a state
 		// ResolveK8sVersion cannot produce, and it hid this.
 		"catalog answered with nothing at all": {
-			instanceresolve.K8sVersionChoice{CatalogRead: true}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -675,7 +675,7 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// And the two "no build id" states must not render the same string, which is the
 	// whole finding rather than a wording preference.
 	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, "")
-	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, CatalogRead: true}, false, "")
+	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered}, false, "")
 	if unreachable == coarse {
 		t.Errorf("an unreachable account and a catalog llz cannot use both render %q — "+
 			"they are different events with different remedies", unreachable)
@@ -686,8 +686,8 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// fields. Asserted rather than commented, because they live in different
 	// functions and nothing else couples them.
 	for name, k8s := range map[string]instanceresolve.K8sVersionChoice{
-		"empty read":  {CatalogRead: true},
-		"coarse read": {Offered: []string{"1.33"}, CatalogRead: true},
+		"empty read":  {Catalog: instanceresolve.CatalogAnswered},
+		"coarse read": {Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered},
 		"no read":     {},
 	} {
 		banner, source := k8sVersionBanner(k8s, false, ""), seedSource(k8s)
@@ -1153,7 +1153,7 @@ func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
 // empty" — so an account that answered was told it "was never asked", in the one
 // sentence whose whole job is to say what llz did and did not do.
 func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
-	answered := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true})
+	answered := seedSource(instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered})
 	if strings.Contains(answered, "never asked") {
 		t.Errorf("the account answered — an empty catalog is an answer; got %q", answered)
 	}
@@ -1167,7 +1167,7 @@ func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
 			"implying it judged a catalog; got %q", unasked)
 	}
 
-	derived := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true, Newest: "v1.34.6+lke2"})
+	derived := seedSource(instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered, Newest: "v1.34.6+lke2"})
 	if !strings.Contains(derived, "newest") {
 		t.Errorf("a derived seed must name where it came from; got %q", derived)
 	}

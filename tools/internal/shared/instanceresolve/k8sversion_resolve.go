@@ -107,35 +107,68 @@ const (
 // SAME account, and calling LKEVersionClient() twice would have let one question be
 // answered by a token and the other by nothing (or, after a test substituted the
 // var mid-run, by two different fakes).
-// `ok` MEANS USABLE, `read` MEANS ANSWERED, AND THEY ARE NOT THE SAME BOOL. An
-// empty catalog is folded into ok=false deliberately — there is nothing in it to
-// derive a pin from, and every caller wanting a version must degrade identically
-// whether the read failed or came back empty.
+// `ok` MEANS USABLE, `outcome` MEANS WHAT HAPPENED, AND THEY ANSWER DIFFERENT
+// QUESTIONS. An empty catalog is folded into ok=false deliberately — there is
+// nothing in it to derive a pin from, and every caller wanting a version must
+// degrade identically whether the read failed or came back empty.
 //
-// BUT THE CALLER ALSO EXPLAINS ITSELF, and there the two are opposite claims. `llz
-// env add` reports where the version it wrote came from, and with one bool it said
-// "this account was never asked" about accounts that had answered — a claim llz
-// never verified, in the sentence whose entire job is to say what it did and did
-// not do. Same class as the cluster read returning (running, asked).
-func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
+// BUT THE CALLER ALSO EXPLAINS ITSELF, and there they are opposite claims. `llz
+// env add` reports where the version it wrote came from, and one bool cannot carry
+// that: it said "this account was never asked" about accounts that had answered
+// with nothing, and then — once that was fixed with a second bool — about accounts
+// that had been asked and REFUSED. Three outcomes, three sentences, three remedies;
+// see CatalogOutcome. Same class as the cluster read returning a clusterLookup
+// rather than a string.
+func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome CatalogOutcome) {
 	if c == nil {
 		// Silent on the no-token path, like objClustersInRegion: CheckRegion runs
 		// first in the same command and has already said it once, and
 		// reportSkippedAccountCheck is a once-per-process notice for that reason.
-		return nil, false, false
+		return nil, false, CatalogNotAsked
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountReadBudget)
 	defer cancel()
 	all, err := c.ListLKEVersions(ctx, linode.LKETierEnterprise)
 	if err != nil {
-		reportSkippedAccountCheck("--k8s-version", err)
-		return nil, false, false
+		// `cluster.k8sVersion`, NOT `--k8s-version`. This derivation runs on EVERY
+		// `llz env add`, flag or no flag, so naming the flag told an operator who never
+		// passed one that it "was NOT checked" — a sentence about a thing they did not
+		// do. The spec field is what is actually being decided here, and it is the
+		// field they will go and look at.
+		reportSkippedAccountCheck("cluster.k8sVersion", err)
+		return nil, false, CatalogFailed
 	}
 	if len(all) == 0 {
-		reportSkippedAccountCheck("--k8s-version", errEmptyAccountListing)
-		return nil, false, true
+		// AN EMPTY ANSWER IS AN ANSWER, and routing it through
+		// reportSkippedAccountCheck said the opposite: that notice's error arm reads
+		// "the API did not answer" and tells the operator their token is probably
+		// expired, revoked or under-scoped. Their token worked. In the same run
+		// k8sVersionBanner correctly reported the catalog as READ, so llz made two
+		// contradictory statements about one request and sent the operator off to
+		// re-mint a PAT that was fine.
+		//
+		// The CatalogAnswered return below is the same distinction, and it was already
+		// being made here — the notice simply had not been told about it.
+		//
+		// AND IT SAYS NOTHING ABOUT WHAT THE SPEC ENDS UP WITH, which the first cut
+		// did ("the spec keeps its compiled default"). This fires from
+		// accountLKEVersions, BEFORE the pin is decided, and three things can still
+		// happen after it: a live cluster is adopted and Pin becomes the version it
+		// runs, an explicit --k8s-version is written as given, or a later `env add`
+		// inherits spec.defaults and falls back to nothing at all. The sibling warning
+		// below carries a comment spelling out this same rule — "only the FIRST
+		// `llz env add` seeds anything ... this function cannot tell which, so it says
+		// what it actually knows" — and this one contradicted it from 400 lines up.
+		fmt.Fprintln(os.Stderr, cigate.Warning(
+			"this Linode account lists NO LKE-Enterprise versions, so its catalog cannot decide\n"+
+				"  cluster.k8sVersion — whatever the spec ends up pinning is not a version llz confirmed\n"+
+				"  against this account.\n"+
+				"  The account answered — this is not a token problem. LKE-Enterprise may not be enabled\n"+
+				"  on it, or it may be a region/account combination that offers none.\n"+
+				"  Check it with `llz doctor` before building."))
+		return nil, false, CatalogAnswered
 	}
-	return all, true, true
+	return all, true, CatalogAnswered
 }
 
 // Deployment names the cluster `llz env add` is about to author, so the resolver
@@ -352,6 +385,40 @@ func mapString(m map[string]any, k string) string {
 	return s
 }
 
+// CatalogOutcome is what came of asking the account for its LKE-E version catalog.
+// Ordered by how much llz learned, so a caller may compare, but the names are the
+// point: each one licenses a different sentence and a different remedy.
+type CatalogOutcome int
+
+const (
+	// CatalogNotAsked — no token, so llz made no request at all.
+	CatalogNotAsked CatalogOutcome = iota
+	// CatalogFailed — llz asked and the API did not answer. NOT the same as
+	// NotAsked: the operator has a token and it did not work, which is a different
+	// thing to go and fix.
+	CatalogFailed
+	// CatalogAnswered — llz asked and got a list. It may be EMPTY or too coarse to
+	// use; that is still an answer, and blaming it on the credential is a lie.
+	CatalogAnswered
+)
+
+// String names the state, because the names ARE the point of this type and a bare
+// int defeats it exactly where it matters most. The gates that exist to prove the
+// three states stay distinguishable were reporting `Catalog = 1, want 2` — which
+// tells a reader nothing about which distinction broke, in the failure message of
+// the test whose whole subject is that distinction.
+func (o CatalogOutcome) String() string {
+	switch o {
+	case CatalogNotAsked:
+		return "CatalogNotAsked"
+	case CatalogFailed:
+		return "CatalogFailed"
+	case CatalogAnswered:
+		return "CatalogAnswered"
+	}
+	return fmt.Sprintf("CatalogOutcome(%d)", int(o))
+}
+
 // K8sVersionChoice is everything `llz env add` needs in order to decide a
 // deployment's version, out of ONE catalog read.
 //
@@ -376,11 +443,18 @@ type K8sVersionChoice struct {
 	// landingzone.yaml is seeded with. "" when the catalog could not be read or
 	// holds nothing that could be sent to the create API.
 	Newest string
-	// CatalogRead records that the account ANSWERED, which len(Offered) cannot: a
-	// read that failed and a read that returned an empty catalog both leave Offered
-	// nil, and they license opposite sentences — "this account was never asked" is a
-	// claim, and it was being made about accounts that had answered.
-	CatalogRead bool
+	// Catalog is what happened when llz asked the account for its version catalog.
+	//
+	// THREE STATES, BECAUSE llz ALREADY DISTINGUISHES THEM AND THE CALLERS DID NOT.
+	// It began as one bool for "the account answered", which len(Offered) cannot
+	// express — a failed read and an empty catalog both leave Offered nil. But a
+	// bool cannot express the other half either: `not asked` and `asked and refused`
+	// collapsed together, so a token whose versions route 401s produced "the API did
+	// not answer" from the skip notice and "this account was never asked" from the
+	// seed provenance, in one run, about one request. The remedies are different —
+	// export a token, versus fix the one you have — which is the whole reason to say
+	// which happened.
+	Catalog CatalogOutcome
 	// Offered is the catalog itself; nil when the answer is unknown.
 	//
 	// It is here so a caller can judge a pin this function was never asked about —
@@ -443,8 +517,8 @@ type K8sVersionChoice struct {
 // everything above, unchanged.
 func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	client := LKEVersionClient()
-	offered, ok, catalogRead := accountLKEVersions(client)
-	c := K8sVersionChoice{Pin: strings.TrimSpace(want), CatalogRead: catalogRead}
+	offered, ok, catalog := accountLKEVersions(client)
+	c := K8sVersionChoice{Pin: strings.TrimSpace(want), Catalog: catalog}
 	var lk clusterLookup
 	if !ok {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its
@@ -607,7 +681,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// defect this arm was added to remove, one message along.
 		c.Warning = fmt.Sprintf(
 			"--k8s-version %q matches a row in this account's catalog, but it is not a full LKE-E build id\n"+
-				"  (those carry an `+lke` suffix, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
+				"  (MAJOR.MINOR.PATCH plus an `+lkeN` build, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
 				"  VERBATIM. The catalog row it matched is just as coarse, so `llz doctor` and\n"+
 				"  `llz ci assert-k8s-version` will both pass it, and the cluster apply is what discovers the\n"+
 				"  problem ~15 minutes in with `[400] [k8s_version] k8s_version is not valid`.\n"+
@@ -701,16 +775,96 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		lookedUp = fmt.Sprintf("  No single cluster named %q is on this account, so nothing exempts this pin: k8s_version\n"+
 			"  reaches the API on a create, and a create sends exactly this string.\n", d.ClusterLabel)
 	}
-	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
+	// NO //lint:ignore HERE ANY MORE. This message used to end in a literal sentence,
+	// so ST1005 fired and the directive silenced it. Since the closing line moved into
+	// omitRemedy the format string ends in "%s", staticcheck can no longer see an
+	// ending to object to, and the directive became one that "didn't match anything" —
+	// which is itself a staticcheck failure. Only `make LINT_ALL=1 lint` catches that:
+	// the change-scoped `make lint` never re-checks a file whose diff has moved on.
 	return K8sVersionChoice{}, fmt.Errorf("--k8s-version %q is not an LKE-Enterprise version this account can build.\n"+
 		"  This account offers: %s\n"+
 		"%s"+
 		"  Unchanged, the cluster apply fails ~15 minutes in with\n"+
 		"  `[400] [k8s_version] k8s_version is not valid`.\n"+
-		"  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n"+
-		"  deployment does exist AND the account reports its version — the one it is ALREADY RUNNING,\n"+
-		"  which plans no diff at all.",
-		c.Pin, strings.Join(offered, ", "), lookedUp)
+		"%s",
+		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered, d, lk))
+}
+
+// omitRemedy is the closing line of a hard rejection: what actually happens if the
+// operator drops the flag.
+//
+// IT MUST NOT PROMISE A DERIVE THAT YIELDS NOTHING, and the unconditional version
+// did. Two rules decide different halves of this message on purpose — the catalog's
+// entitlement to REJECT runs off the loose `hasBuild` (via everyEntryNamesABuild),
+// while what llz would CHOOSE runs off the strict versionSortKey — and the gap
+// between them is a real catalog shape: `["v1.34+lke2"]` licenses the rejection and
+// derives "". So the message said "omit it and llz picks the newest your account
+// offers" in a run that had already printed "this catalog names no full build id",
+// and omitting the flag would have fallen through to llz's compiled literal.
+//
+// The asymmetry itself stays — each direction is the safe one for its own question,
+// and #443 owns the verdict — but a remedy may only promise what THIS catalog can
+// actually deliver.
+// AND IT NAMES NO DESTINATION, WHICH IS THE OTHER HALF. Both branches used to say
+// where the version would come from if the flag were dropped — "llz picks the newest
+// your account offers", "llz would fall back to its compiled default" — and this
+// package cannot know either. Only the FIRST `llz env add` seeds anything; a later
+// one leaves the deployment inheriting spec.defaults, and nothing falls back at all.
+// That is the rule the "names no full build id" warning already states about itself,
+// and the same defect just removed from the empty-catalog warning in
+// accountLKEVersions — reintroduced in a new message the moment one was written.
+// What is safe to say is what dropping the FLAG changes, and what the account can
+// supply.
+func omitRemedy(offered []string, d Deployment, lk clusterLookup) string {
+	// A FAILED READ IS NOT A CLOSED DOOR, and both branches below have to know it.
+	// ADOPTION NEEDS NO CATALOG — it copies a version off a running cluster — so a
+	// re-run whose cluster read succeeds can still settle this even when the catalog
+	// can supply nothing. The unusable-catalog branch said "will NOT rescue this"
+	// flatly, in the same error that had just told the operator to re-run if the read
+	// was transient.
+	//
+	// GUARDED ON THE LABEL, like the sibling lookedUp case. !lk.Asked covers both "the
+	// read failed" and "there was nothing to look up", and only the first has a read
+	// above to point at. A zero Deployment is documented as disabling the read, and
+	// this arm would otherwise cite "that cluster" and "the read above" for a run that
+	// had neither. (A missing TOKEN cannot reach here: no catalog means no verdict,
+	// so the rejection this remedy closes is unreachable.)
+	readMayYetAnswer := !lk.Asked && d.ClusterLabel != ""
+	if linode.NewestVersion(offered) == "" {
+		unusable := "  Omitting --k8s-version will NOT rescue this: nothing in this catalog is a full build id, so\n" +
+			"  there is no version for llz to derive from the account at all — whatever the spec then\n" +
+			"  pins (a shared default it inherits, or llz's compiled one) is not a version this account\n" +
+			"  confirmed. Check it with `llz doctor` — a catalog problem, not a spelling one."
+		if readMayYetAnswer {
+			return unusable + "\n" +
+				"  ONE EXCEPTION: the cluster read above failed, and adopting a running version needs no\n" +
+				"  catalog at all. If a re-run reads the account and finds exactly one cluster for this\n" +
+				"  deployment, llz pins whatever that cluster runs regardless of this list."
+		}
+		return unusable
+	}
+	// THE ADOPTION CLAUSE IS EARNED, NOT ASSUMED. Every arm that reaches here has an
+	// EMPTY lk.Running — the exemption and the runs-something-else error both return
+	// earlier — so "omit it and llz pins what your cluster is already running" was
+	// never true of the run printing it, and on the ambiguous arm it directly
+	// contradicted the warning classifyClusters had emitted seconds before ("llz
+	// cannot tell which one is this deployment's and will not guess").
+	derive := "  Omit --k8s-version and llz derives instead: the newest this account offers on a first\n" +
+		"  `llz env add`, or the shared spec.defaults this instance already carries on a later one.\n"
+	switch {
+	case lk.Matches > 1:
+		return derive + "  It will NOT adopt the running version — two or more clusters share this label and llz\n" +
+			"  will not guess between them. Resolve that first (the listing above names them)."
+	case lk.Unreadable():
+		return derive + "  It will NOT adopt the running version — the account reports none for that cluster."
+	case readMayYetAnswer:
+		return derive + "  Whether it can instead adopt the version that cluster is ALREADY RUNNING — which plans\n" +
+			"  no diff at all — is exactly what the read above could not establish. A re-run may settle it."
+	case !lk.Asked:
+		// No label to look one up by, so there is nothing to say about a cluster at all.
+		return strings.TrimRight(derive, "\n")
+	}
+	return derive + "  There is no cluster for this deployment to adopt a version from."
 }
 
 // coarsePinRemedy is the last line of the coarse-pin warning: the versions in this
