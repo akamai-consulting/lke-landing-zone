@@ -77,6 +77,16 @@ on:
       E2E_DISPATCH_TOKEN:
         description: 'PAT/app token with contents:write + pull-requests:write + actions:read/write + Variables:read/write on the E2E instance repo'
         required: true
+      E2E_LINODE_TOKEN:
+        # READ-ONLY, AND IT MUST BE FOR THE ACCOUNT THAT BUILDS THE E2E CLUSTER —
+        # i.e. the same account as the instance repo's infra-e2e LINODE_API_TOKEN.
+        # LKE-Enterprise version availability is PER-ACCOUNT (measured: two accounts
+        # offering disjoint versions in the same hour), so a token for a DIFFERENT
+        # account makes the derivation actively harmful: it would seed a version the
+        # building account may not offer, which is the failure this exists to remove,
+        # wearing a green scaffold step.
+        description: 'Read-only Linode PAT for the account that builds the e2e cluster. Optional; without it the scaffold falls back to the compiled k8sVersion default.'
+        required: false
 
 permissions:
   contents: read
@@ -97,6 +107,24 @@ env:
   # throwaway tier co-located in us-ord, the right shape for an E2E run. Override via repo
   # vars only to exercise a different region.
   E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
+  # PIN THE VERSION WHEN THE LANE REUSES A CLUSTER. Empty = let `llz env add` derive
+  # the newest the account offers, which is right when this run CREATES the cluster.
+  #
+  # It is WRONG the moment a cluster survives into the next run — which is the warm
+  # lane's entire premise (release-e2e-warm.yml refreshes a live cluster) and also
+  # release-e2e.yml with keep_cluster=true. `k8s_version` reaches the LKE-E API on a
+  # create OR A CHANGE, so a re-scaffold that derives a DIFFERENT version than the
+  # running cluster plans an LKE-Enterprise CONTROL-PLANE UPGRADE inside a run whose
+  # whole point was to skip the 14m create. `llz ci assert-k8s-version` cannot catch
+  # it: the newly derived pin is in the catalog, so it is a valid version — just not
+  # the one that cluster is running.
+  #
+  # Note this hazard is OLDER than the derivation and the fix is not "remove the
+  # token": before, the lane baked a fixed literal, so a cluster created at anything
+  # else planned the same upgrade. Only an explicit pin closes it. Set this to the
+  # version your warm cluster runs (`llz doctor --env e2e` names it) for as long as
+  # you keep one, and clear it when you go back to cold runs.
+  E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
 
 defaults:
@@ -160,6 +188,14 @@ jobs:
             echo "::error::E2E config is incomplete on ${GITHUB_REPOSITORY}. Fix the items above, then re-run. See the header of .github/workflows/release-e2e.yml for the full setup."
             exit 1
           fi
+          # NO PRESENCE CHECK FOR E2E_LINODE_TOKEN HERE, deliberately. It is OPTIONAL
+          # — `llz env add` degrades to its compiled k8sVersion default without it,
+          # so requiring it would break every fork's e2e on the very commit that
+          # added it, for an improvement rather than a prerequisite. And the
+          # "this check did not run" annotation is emitted by llz itself
+          # (instanceresolve.reportSkippedAccountCheck, through cigate.Warning), so
+          # it reaches the run summary for EVERY caller instead of three lines of
+          # untestable inline bash covering only this one.
           echo "E2E config OK — instance=${INSTANCE_REPO} region=${E2E_LINODE_REGION} obj=${E2E_OBJ_CLUSTER}"
 
       - name: Set up Go and build llz
@@ -194,6 +230,38 @@ jobs:
           # target tag from here, so point it at the signed sha image for the commit under
           # test (same image release-e2e's sed renders clusterHealthWorkflow's token to).
           LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
+          # THE SCAFFOLD ASKS THE ACCOUNT, so this lane stops baking a k8sVersion
+          # literal that is stale by construction. Without it `llz env add` uses its
+          # compiled fallback and release-e2e keeps the exact rot #448 removes for
+          # adopters — a version that was valid when someone last edited it, against
+          # a catalog that rotates within hours.
+          #
+          # IT ALSO ARMS THE OTHER TWO ACCOUNT CHECKS, and that is a real behaviour
+          # change rather than a side effect: with a token in scope `llz env add`
+          # validates E2E_LINODE_REGION and E2E_OBJ_CLUSTER against the account too,
+          # and FAILS this step in seconds when the account cannot serve them. That
+          # trade is taken deliberately — the alternative is finding out ~20 minutes
+          # into the apply, which is the entire reason those checks exist.
+          #
+          # ONE KNOWN WAY THAT BITES, WRITTEN DOWN BECAUSE THE REMEDY IS NOT OBVIOUS.
+          # ResolveOBJCluster asks /v4/object-storage/clusters, and llz has no
+          # endpoint-type lookup — so if a NEWER-GENERATION E2E_OBJ_CLUSTER (us-ord-10
+          # rather than us-ord-1) is not listed by that route, `llz env add` rejects
+          # a perfectly valid id and reds this whole lane for an unrelated reason.
+          # The default us-ord-1 is old-generation and unaffected. If an override
+          # ever trips it: unset E2E_LINODE_TOKEN to fall back (the scaffold then
+          # says so in the run summary), or use a listed id.
+          #
+          # REPRODUCIBILITY IS TRADED FOR CURRENCY, DELIBERATELY. This step `rm`s
+          # landingzone.yaml and re-scaffolds every run, so with a token the e2e
+          # cluster's k8sVersion now tracks the account's catalog rather than a
+          # commit — two runs of the SAME sha can build different versions if the
+          # catalog rotated between them. Taken because a release gate wants to know
+          # the build works on what the account offers TODAY, which is the signal a
+          # frozen literal cannot give. Attribution survives: the derived version is
+          # written into the landingzone.yaml this job force-pushes to the instance
+          # repo, so a red lane can always be traced to the version it ran against.
+          LINODE_TOKEN: ${{ secrets.E2E_LINODE_TOKEN }}
         run: |
           set -euo pipefail
           # Re-create the e2e env from scratch each run (idempotent). env add is
@@ -205,9 +273,14 @@ jobs:
           # `llz env add` is the spec-first scaffolder (folded into the binary from
           # the old new-deployment.sh). It is layout-aware: run from
           # the template root it writes into instance-template/.
+          # --k8s-version with an EMPTY value is treated as unset by `llz env add`
+          # (it trims and tests for empty), so no conditional is needed here — which
+          # matters, because a conditional is inline bash the untestable-loc budget
+          # would charge for.
           bin/llz env add "${E2E_ENV}" \
             --region "${E2E_LINODE_REGION}" \
-            --obj-cluster "${E2E_OBJ_CLUSTER}"
+            --obj-cluster "${E2E_OBJ_CLUSTER}" \
+            --k8s-version "${E2E_K8S_VERSION}"
           # (linodeCredRotator is default-ON now — Phase 2 of
           # docs/designs/linode-credential-rotator.md made it the sole rotation
           # mechanism for the object-storage keys, so no explicit env set is

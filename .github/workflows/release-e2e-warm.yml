@@ -87,6 +87,11 @@ jobs:
       actions: write
     secrets:
       E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+      # Optional. Threaded EXPLICITLY because this caller does not use
+      # `secrets: inherit` the way release-e2e.yml does — an unlisted secret is
+      # simply absent inside the reusable workflow, and absence here degrades
+      # silently to the compiled k8sVersion default rather than erroring.
+      E2E_LINODE_TOKEN: ${{ secrets.E2E_LINODE_TOKEN }}
 
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────

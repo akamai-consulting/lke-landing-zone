@@ -44,12 +44,39 @@ func tfvarsExampleValue(root, key string) string {
 	return strings.Trim(tfvars.Value(string(b), key), `"`)
 }
 
+// SeedK8sVersion resolves the cluster.k8sVersion a re-seeded spec.defaults will
+// carry: the caller's account-resolved answer, else the cluster root's
+// terraform.tfvars.example, else a literal that is stale by construction and is
+// the reason the first term exists.
+//
+// EXPORTED SO THE WARNING AND THE WRITE CANNOT DISAGREE. `llz env add` has to
+// name this version in the re-seed warning BEFORE (and, on --dry-run, INSTEAD of)
+// calling EnsureLandingZone, and the first cut of that warning simply skipped
+// itself whenever the caller's answer was empty — which is precisely the
+// no-LINODE_TOKEN case, where the seed silently falls through to the literal and
+// every orphaned deployment inherits it unannounced.
+func SeedK8sVersion(k8sVersion string) string {
+	return OrElse(k8sVersion, OrElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.34.6+lke2"))
+}
+
 // EnsureLandingZone creates landingzone.yaml at specRoot from .copier-answers.yml
 // (the instance identity) seeded with spec.defaults from the cluster
 // terraform.tfvars.example, unless it already exists. It returns the instance name
 // (the <name> half of instance_repo, used to derive per-env cluster identity) and
 // whether it created the file.
-func EnsureLandingZone(specRoot string) (instanceName string, created bool, err error) {
+//
+// k8sVersion IS THE CALLER'S ANSWER TO A QUESTION THIS PACKAGE MAY NOT ASK.
+// LKE-Enterprise version availability is per-ACCOUNT and rotates within hours, so
+// the only correct seed comes from the Linode API — and this package has no
+// capability binding, writes files, and must keep working with no token and no
+// network. So the caller resolves it (instanceresolve.ResolveK8sVersion, through
+// config-readiness's cloud-read binding) and hands the answer down.
+//
+// EMPTY MEANS "I COULD NOT ASK", NOT "no version", which is why the fallback chain
+// below survives rather than being replaced. `llz env add` on a laptop with no
+// LINODE_TOKEN still authors a spec that validates; it just carries a default that
+// `llz doctor` may have something to say about.
+func EnsureLandingZone(specRoot, k8sVersion string) (instanceName string, created bool, err error) {
 	a, _ := answers.Read(specRoot)
 	if a == nil {
 		a = &answers.File{}
@@ -76,7 +103,7 @@ func EnsureLandingZone(specRoot string) (instanceName string, created bool, err 
 	repo := OrElse(a.InstanceRepo, instanceName+"/"+instanceName)
 	// No templateVersion here on purpose: the pin is copier's, and a scaffolded copy
 	// of it in the spec only went stale (see Instance.TemplateVersion).
-	k8s := OrElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.34.6+lke2")
+	k8s := SeedK8sVersion(k8sVersion)
 	nodeType := OrElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
 	nodeCount := OrElse(tfvarsExampleValue("cluster", "node_count"), "5")
 	// The default OpenBao team, chosen at `llz new` (copier openbao_team question);

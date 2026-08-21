@@ -442,6 +442,15 @@ slow every good build to save nothing.) The cheap fail-fast checks living here:
    whichever file holds it**: `spec.defaults` in `landingzone.yaml` if every
    deployment inherits it, else `environments/<env>.yaml`. The failure says which.
 
+   Since #448 `llz env add` seeds that pin from the **same account catalog** (the
+   newest version it offers) rather than from a literal compiled into the
+   scaffold, and re-checks the inherited `spec.defaults` pin every time a further
+   deployment is added — so neither a fresh instance nor a deployment added a
+   quarter later fails here on a default nobody chose. This still fires: an
+   existing deployment's pin rotates out under it (harmless until it is
+   re-created, and this gate exempts that case), or the account could not be
+   reached at scaffold time and the compiled fallback was used.
+
    It **warns and passes** when the API is unreachable, the token lacks the
    scope, or the catalog comes back in an unrecognised shape — a build must not
    be blocked on a question nobody could ask. It also **exempts a cluster that

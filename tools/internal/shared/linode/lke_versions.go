@@ -32,6 +32,7 @@ package linode
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -355,3 +356,95 @@ func normalizeVersion(v string) string {
 
 // hasBuild reports whether a normalized version carries an `+lke…` build suffix.
 func hasBuild(v string) bool { return strings.Contains(v, "+") }
+
+// NamesABuild reports whether v is spelled as a full LKE-E build id rather than a
+// bare major.minor.
+//
+// EXPORTED FOR THE MESSAGE, NEVER FOR THE VERDICT. CheckVersion owns whether a pin
+// is offered, and nothing here may second-guess it — the whole point of that
+// function is that doctor and the preflight cannot reach different conclusions
+// about one spec. What a caller legitimately needs to know separately is whether
+// the string it is about to CALL CONFIRMED is one the create API could accept:
+// `llz env add` told an operator "confirmed against the account's catalog" about a
+// pin of `1.33` that byte-matched a coarse `1.33` row, and then wrote it into the
+// spec for terraform to send verbatim.
+func NamesABuild(v string) bool { return hasBuild(normalizeVersion(v)) }
+
+// NewestVersion returns the newest FULL BUILD ID in an account's catalog, or ""
+// when the catalog holds none.
+//
+// IT PICKS A STRING THE ACCOUNT LITERALLY LISTED, which is the whole safety
+// argument and the reason it may be laxer than CheckVersion about a mixed
+// catalog. CheckVersion's job is to REJECT, so it needs a list entitled to
+// disprove — `everyEntryNamesABuild`, all of it. This one's job is to CHOOSE, and
+// a build id copied verbatim out of the catalog is buildable regardless of what
+// the rows beside it look like. So a coarse row is skipped rather than
+// disqualifying the list: `["v1.34.6+lke2", "1.33"]` yields `v1.34.6+lke2`, which
+// is a version the account offers, while `["1.34", "1.33"]` yields "" because
+// nothing there is a string terraform could send. The asymmetry is deliberate;
+// it is not this file forgetting its own rule.
+//
+// IT DOES NOT TRUST THE API'S ORDER. ListLKEVersions documents the catalog as
+// newest-first "as the API returns them", which is the Linode list convention and
+// not a guarantee anyone here has measured across releases. Seeding a scaffold off
+// an assumed sort order would fail silently and in the expensive direction — an
+// instance pinned to the OLDEST version its account offers, discovered a minor
+// upgrade later. Parse and compare instead; it costs nothing.
+//
+// TIES AND UNPARSEABLE ROWS. Entries that do not parse as v?MAJOR.MINOR.PATCH+lkeN
+// are skipped, not guessed at. When two entries compare equal the FIRST wins, so
+// the API's order still breaks ties — the only thing it is trusted for.
+func NewestVersion(offered []string) string {
+	best, bestKey := "", [4]int{-1, -1, -1, -1}
+	for _, o := range offered {
+		e := strings.TrimSpace(o)
+		key, ok := versionSortKey(e)
+		if !ok {
+			continue
+		}
+		if best == "" || key.greaterThan(bestKey) {
+			best, bestKey = e, key
+		}
+	}
+	return best
+}
+
+// versionKey is (major, minor, patch, lke build) — the four numbers an LKE-E build
+// id carries, in the order they rank.
+type versionKey [4]int
+
+func (k versionKey) greaterThan(other [4]int) bool {
+	for i := range k {
+		if k[i] != other[i] {
+			return k[i] > other[i]
+		}
+	}
+	return false
+}
+
+// versionSortKey parses `v1.34.6+lke2` into its four numbers.
+//
+// ok is false for ANYTHING ELSE, including a version carrying no `+lke` build —
+// deliberately, because the caller is choosing a string to write into a spec and
+// terraform hands it to the create API verbatim. A coarse entry is a row this
+// cannot turn into a buildable pin, so it is not a candidate.
+func versionSortKey(v string) (versionKey, bool) {
+	var k versionKey
+	n := strings.TrimPrefix(strings.TrimSpace(v), "v")
+	base, build, found := strings.Cut(n, "+lke")
+	if !found {
+		return k, false
+	}
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return k, false
+	}
+	for i, p := range append(parts, build) {
+		num, err := strconv.Atoi(p)
+		if err != nil || num < 0 {
+			return k, false
+		}
+		k[i] = num
+	}
+	return k, true
+}

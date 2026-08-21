@@ -30,7 +30,12 @@ spec:
   # Inherited by every environment; a per-env value overrides field-by-field.
   defaults:
     cluster:
-      k8sVersion: v1.34.6+lke2   # an LKE-E +lke version available in your Linode account
+      # SEEDED, not hand-picked: the first `llz env add` writes the newest LKE-E
+      # version YOUR account offers here (availability is per-account and rotates
+      # within hours, so no literal in this file is right for every reader — this
+      # one is illustrative). Later deployments inherit it and `env add` re-checks
+      # it. Edit it to move every deployment; override one in environments/<env>.yaml.
+      k8sVersion: v1.34.6+lke2
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       # ── Managed App Platform (REQUIRED) ──────────────────────────────────────
       # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled). Linode

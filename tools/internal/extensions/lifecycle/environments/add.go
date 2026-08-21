@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
@@ -90,6 +92,21 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	if note != "" {
 		fmt.Printf("  %s\n", note)
 	}
+	// Ask the same account which LKE-Enterprise versions it can actually build,
+	// rather than seeding the spec from a literal that is stale by construction
+	// (availability is per-account and rotates within hours). Best-effort in the
+	// same way as the two above: an unanswerable question leaves the choice empty
+	// and envdef keeps its offline default. An explicit --k8s-version the catalog
+	// DEFINITELY rejects fails here, where it costs a re-run, instead of at
+	// `llz doctor` on a pin the operator never chose.
+	k8s, err := instanceresolve.ResolveK8sVersion(o.K8sVersion)
+	if err != nil {
+		return err
+	}
+	o.K8sVersion = k8s.Pin
+	if k8s.Note != "" {
+		fmt.Printf("  %s\n", k8s.Note)
+	}
 	dryRun = o.DryRun || dryRun
 
 	tfDir, aplDir, relPrefix := instancelayout.Detect()
@@ -97,6 +114,53 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	overlayDst := filepath.Join(aplDir, name)
 	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
 	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
+
+	// Whether landingzone.yaml already exists decides where this deployment's
+	// version comes from, so it is read ONCE here and both the banner and the write
+	// step below key off it. EnsureLandingZone creates the file iff it is absent, so
+	// this is the same fact its `created` return reports — just available in time to
+	// tell the operator the truth in the banner and under --dry-run.
+	_, lzStatErr := os.Stat(lzPath)
+	lzExists := lzStatErr == nil
+
+	// A LATER `env add` INHERITS A PIN NOBODY RE-CHECKED. spec.defaults was seeded
+	// when the instance was scaffolded; this deployment may be a new region or a DR
+	// peer added a quarter later, by which time the shared pin can have rotated out
+	// of the account's catalog entirely. Inheriting it silently is how the failure
+	// this whole feature removes comes back one deployment along — and the command
+	// would have printed "derived" about a version it then discarded.
+	//
+	// Only a DEFINITE negative overrides; see ReplacementForInheritedPin.
+	inheritedFix := ""
+	if o.K8sVersion == "" && lzExists {
+		inheritedFix = k8s.ReplacementForInheritedPin(sharedK8sVersion(lzPath))
+	}
+
+	// THE OTHER WAY THIS COMMAND CAN MOVE A RUNNING DEPLOYMENT'S VERSION, and it
+	// bypasses every guard above. landingzone.yaml ABSENT is read as "fresh
+	// instance" and re-seeded from today's catalog — but if environments/ still
+	// holds deployments, the file was DELETED (this workflow's own e2e lane does
+	// exactly that, and add.go's start-over hint invites it), and those deployments
+	// inherit the new default. On the HA-pair-complete path below that re-renders
+	// EVERY env's tfvars, planning a control-plane upgrade on clusters that are
+	// already running — the precise invariant this feature's own gate asserts
+	// against for the inherit path.
+	//
+	// IT WARNS RATHER THAN REFUSING, because the old shared pin died with the file:
+	// nothing on disk records what these deployments used to inherit (the rendered
+	// tfvars are gitignored build artifacts), so there is no value to restore and
+	// no honest way to choose one. What llz can do is refuse to be quiet about it.
+	//
+	// WHAT IT DOES NOT COVER, stated because the boundary is easy to misread: it
+	// needs ANOTHER deployment to still be defined. A re-scaffold that removes
+	// landingzone.yaml, environments/<env>.yaml AND the overlay together — which is
+	// exactly what e2e-instantiate.yml does, and what add.go's own start-over hint
+	// leads to for a single-deployment instance — is indistinguishable on disk from
+	// a first run, so nothing fires. Closing that needs llz to ask the ACCOUNT
+	// whether a cluster for this deployment already exists, which is a real gap and
+	// not one this seam can reach.
+	orphanedEnvs := existingDeployments(specRoot)
+	reseeding := !lzExists && len(orphanedEnvs) > 0
 
 	// ── pre-flight ───────────────────────────────────────────────────────────
 	if _, err := os.Stat(overlayDst); err == nil {
@@ -124,6 +188,7 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// banner said the same thing twice and split the field list in half.
 	field("Linode Region:  ", o.Region)
 	field("OBJ cluster:    ", o.ObjCluster)
+	field("k8sVersion:     ", k8sVersionBanner(k8s, lzExists, inheritedFix))
 	field("dry-run:        ", fmt.Sprintf("%v", dryRun))
 	fmt.Println()
 
@@ -136,17 +201,33 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 		}
 		fmt.Printf("  %s  %s  %s\n", color.Cyan("would-create"), envFile, color.Dim("(ClusterDefinition from the flags)"))
 		fmt.Printf("  %s     %s  %s\n", color.Cyan("would-run"), "llz render "+name, color.Dim(fmt.Sprintf("(→ tfvars + the thin apl-values/%s overlay)", name)))
+		// BOTH VERSION CONSEQUENCES, HERE TOO. lzExists and inheritedFix are read
+		// before this branch precisely so --dry-run can show them, and then only the
+		// banner did — so the two states worth previewing (this deployment diverging
+		// from the shared pin; a re-seed moving every other deployment's) were visible
+		// only by doing the thing. That is the opposite of what a preview is for.
+		printK8sVersionConsequences(lzPath, name, k8s, inheritedFix, reseeding, orphanedEnvs)
 		fmt.Println("\n" + color.Yellow("DRY RUN") + color.Dim(" — nothing written. Re-run without --dry-run to create the files."))
 		return nil
 	}
 
 	// ── 1. landingzone.yaml (created on the first env, else left as-is) ───────
-	instanceName, created, err := envdef.EnsureLandingZone(specRoot)
+	// k8s.Newest, NOT o.K8sVersion: the shared default is the account's answer, and
+	// --k8s-version is per-deployment like every other flag here (see
+	// K8sVersionChoice.Pin). "" leaves envdef its offline fallback.
+	instanceName, created, err := envdef.EnsureLandingZone(specRoot, k8s.Newest)
 	if err != nil {
 		return fmt.Errorf("write landingzone.yaml: %w", err)
 	}
 	if created {
 		fmt.Printf("  %s  %s  %s\n", color.Green("created"), lzPath, color.Dim("(instance identity + shared defaults)"))
+		if k8s.Newest != "" {
+			fmt.Printf("            %s\n", color.Dim("k8sVersion "+k8s.Newest+" — the newest LKE-Enterprise version this account offers"))
+		}
+	}
+	printK8sVersionConsequences(lzPath, name, k8s, inheritedFix, reseeding, orphanedEnvs)
+	if inheritedFix != "" {
+		o.K8sVersion = inheritedFix
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
@@ -371,3 +452,120 @@ func CountFiles(in []configreadiness.Finding) int {
 func first3(s string) string { return linode.RegionShort(s) }
 
 func quote(s string) string { return `"` + s + `"` }
+
+// sharedK8sVersion reads spec.defaults.cluster.k8sVersion out of an EXISTING
+// landingzone.yaml.
+//
+// Best-effort by design: an unreadable or malformed spec is `llz validate`'s
+// problem and has its own diagnostics, and all this decides is whether to write a
+// per-deployment override. "" simply inherits, which is the previous behaviour.
+func sharedK8sVersion(lzPath string) string {
+	lz, err := clusterspec.Load(lzPath)
+	if err != nil || lz == nil {
+		return ""
+	}
+	return strings.TrimSpace(lz.Spec.Defaults.Cluster.K8sVersion)
+}
+
+// k8sVersionBanner renders the version field of the `llz env add` banner.
+//
+// IT DISTINGUISHES THE THREE CASES BECAUSE THEY ARE GENUINELY DIFFERENT, and
+// collapsing them is what let the second `env add` announce a derived version it
+// did not use. What the operator needs to read off this line is WHICH FILE decides
+// their cluster's version.
+func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inheritedFix string) string {
+	switch {
+	case k8s.Pin != "":
+		return k8s.Pin
+	case inheritedFix != "":
+		return inheritedFix + color.Dim(" (this deployment only — the shared default is unbuildable)")
+	case !lzExists && k8s.Newest != "":
+		return k8s.Newest
+	case !lzExists && len(k8s.Offered) > 0:
+		// THE ACCOUNT ANSWERED; its catalog just holds nothing that could be sent to
+		// the create API. Reporting that as "could not be asked" contradicted the
+		// stderr line printed moments earlier, which names the catalog it returned —
+		// two messages about one event, disagreeing on whether the request happened.
+		return color.Dim("(scaffold default — the account's catalog names no build id)")
+	case !lzExists:
+		return color.Dim("(scaffold default — the account could not be asked)")
+	default:
+		return color.Dim("(inherited from landingzone.yaml spec.defaults)")
+	}
+}
+
+// existingDeployments returns the deployment names environments/ already defines,
+// sorted. The deployment being added is not among them — Run refuses to overwrite
+// an existing environments/<env>.yaml long before this is called.
+//
+// Best-effort: an unreadable directory yields nothing and the caller simply does
+// not warn, which is the behaviour that shipped before the warning existed.
+func existingDeployments(specRoot string) []string {
+	entries, err := os.ReadDir(filepath.Join(specRoot, clusterspec.EnvironmentsDir))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		// `.yaml` only, so the template tree's `*.yaml.example` starter files are not
+		// mistaken for deployments an instance actually has.
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+			out = append(out, strings.TrimSuffix(e.Name(), ".yaml"))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// printK8sVersionConsequences reports the two ways this command can change which
+// LKE-Enterprise version something ends up on.
+//
+// ONE FUNCTION, CALLED FROM BOTH THE DRY-RUN AND THE REAL PATH. It started as two
+// inline blocks after the writes, so `--dry-run` — the flag whose entire job is
+// "show me what this would do" — printed neither, and the two states most worth
+// previewing were visible only by performing them.
+func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVersionChoice,
+	inheritedFix string, reseeding bool, orphanedEnvs []string,
+) {
+	if inheritedFix != "" {
+		// LOUD, because it makes this deployment DIVERGE from the others and the
+		// operator has to know which file now holds the difference.
+		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+			"spec.defaults pins k8sVersion %s, which this Linode account can no longer build.\n"+
+				"  Pinning %s for %q alone so it can be created.\n"+
+				// "UNAFFECTED" WAS TOO STRONG, and the exception is the expensive one. A
+				// deployment whose cluster is already BUILT plans no change to k8s_version
+				// and is genuinely untouched. One scaffolded and never applied still has the
+				// old pin in its spec, and its FIRST apply sends it — dying on the same
+				// `[400] k8s_version is not valid` this feature exists to prevent. Saying
+				// "unaffected" about both is how an operator learns which one they had
+				// fifteen minutes into an apply.
+				"  Deployments whose clusters already RUN the old version are untouched — terraform plans no\n"+
+				"  change to k8s_version for them. Any deployment NOT yet applied still carries the old pin\n"+
+				"  and will fail its first apply on it.\n"+
+				"  To move every deployment, set spec.defaults.cluster.k8sVersion in %s and re-render.",
+			sharedK8sVersion(lzPath), inheritedFix, env, lzPath)))
+	}
+	if reseeding {
+		// NOT GUARDED ON k8s.Newest. It reads as "only warn when we actually derived
+		// something", but the re-seed happens either way: EnsureLandingZone("") falls
+		// straight through to llz's compiled default, so the no-LINODE_TOKEN operator
+		// — the one most likely to be mid-recovery, since add.go's own start-over hint
+		// and the e2e lane both delete this file — got the silent version of the exact
+		// upgrade this warning exists to announce. Name the version that WILL be
+		// seeded, and say where it came from, because "the newest this account offers"
+		// and "a literal compiled months ago" earn very different reactions.
+		seeded, source := k8s.Newest, "the newest version this Linode account offers"
+		if seeded == "" {
+			seeded, source = envdef.SeedK8sVersion(""), "llz's compiled default — this account was never asked"
+		}
+		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+			"%s is missing, so a RE-SEEDED spec.defaults sets cluster.k8sVersion to %s (%s)\n"+
+				"  for every deployment that inherits it — including ones that already exist: %s.\n"+
+				"  The pin they used to inherit died with the file (the rendered tfvars are gitignored), so llz\n"+
+				"  cannot restore it. If any of those clusters is RUNNING a different version, pin it in that\n"+
+				"  deployment's environments/<env>.yaml BEFORE the next apply — otherwise terraform plans a\n"+
+				"  control-plane upgrade nobody asked for.",
+			lzPath, seeded, source, strings.Join(orphanedEnvs, ", "))))
+	}
+}
