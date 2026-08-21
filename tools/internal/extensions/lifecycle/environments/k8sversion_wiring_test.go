@@ -416,6 +416,34 @@ func TestTheReSeedWarningDoesNotContradictTheLineAboveIt(t *testing.T) {
 	}
 }
 
+// TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken.
+//
+// An account whose catalog comes back naming no full build id is a THIRD state, and
+// seedSource keyed on Newest alone collapsed it into "this account was never
+// asked". In one run llz printed the catalog it had just read — in a warning — and
+// then blamed the operator's credential for it a few lines later. The two sentences
+// were about the same request.
+func TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken(t *testing.T) {
+	// Coarse rows only: a real answer, with nothing in it terraform could send.
+	coarse := &fakeCatalog{versions: []string{"1.34", "1.33"}}
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, coarse, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	if coarse.calls == 0 {
+		t.Fatal("premise broken: the account was not asked at all")
+	}
+	if strings.Contains(out, "never asked") {
+		t.Errorf("llz read this account's catalog and then said it never asked for it:\n%s", out)
+	}
+	if !strings.Contains(out, "names no full build id") {
+		t.Errorf("the seed's provenance does not say the catalog answered but held nothing usable:\n%s", out)
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //

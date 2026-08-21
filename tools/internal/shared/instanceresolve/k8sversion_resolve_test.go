@@ -682,9 +682,15 @@ func TestAnAccountWithNoMatchIsQuiet(t *testing.T) {
 func TestTheAmbiguityRemedyDoesNotDESTROYTheLiveDeployment(t *testing.T) {
 	withCatalog(t, &fakeVersionLister{
 		versions: e2eAccountCatalog,
+		// float64 ids, NOT Go ints — that is what encoding/json produces for a number,
+		// and linode.MatchClusterIDs decodes json.Number and float64 only. A fixture
+		// written with int literals decodes to zero and would have hidden both the
+		// decode and the formatting bug this test exists for. The second id is seven
+		// digits on purpose: %v on a float64 that size prints `1.234567e+06`, an id
+		// nobody can paste into a delete command.
 		clusters: []map[string]any{
-			{"id": 111, "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
-			{"id": 222, "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
+			{"id": float64(111), "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
+			{"id": float64(1234567), "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
 		},
 	})
 	out := captureStderr(t, func() {
@@ -694,7 +700,7 @@ func TestTheAmbiguityRemedyDoesNotDESTROYTheLiveDeployment(t *testing.T) {
 	})
 	// IT MUST NAME THE IDS, because telling someone two clusters collide without
 	// saying which is which leaves them no way to act that is not a guess.
-	for _, want := range []string{"111", "222", "v1.32.9+lke4", "v1.33.6+lke7"} {
+	for _, want := range []string{"111", "1234567", "v1.32.9+lke4", "v1.33.6+lke7"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the ambiguity warning does not name %q, so the operator cannot tell the two "+
 				"clusters apart; stderr:\n%s", want, out)
@@ -749,6 +755,111 @@ func TestABuildIdPinIsStillJustConfirmed(t *testing.T) {
 	}
 	if c.Warning != "" {
 		t.Errorf("a correct pin was warned about:\n%s", c.Warning)
+	}
+}
+
+// TestAClusterThatWillNotSayWhatItRunsIsNotNoClusterAtAll.
+//
+// Exactly one cluster matched, and it reports no k8s_version. Until this case
+// existed that was indistinguishable from "the account holds no such cluster": llz
+// seeded the newest over a live deployment in silence, and the rejection message
+// then told the operator that no cluster of that name was on the account — about a
+// listing that contained precisely one.
+func TestAClusterThatWillNotSayWhatItRunsIsNotNoClusterAtAll(t *testing.T) {
+	// A cluster row with no k8s_version at all, which is what the API returns while
+	// one is still provisioning.
+	silent := []map[string]any{{"id": float64(4242), "label": "platform-support-lab", "region": "us-ord"}}
+
+	t.Run("it says so instead of seeding in silence", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog, clusters: silent})
+		var c K8sVersionChoice
+		out := captureStderr(t, func() {
+			var err error
+			if c, err = ResolveK8sVersion("", lab); err != nil {
+				t.Fatalf("ResolveK8sVersion: %v", err)
+			}
+		})
+		if c.Pin != "" {
+			t.Errorf("Pin = %q — there is no version to adopt from a cluster that reports none", c.Pin)
+		}
+		for _, want := range []string{"4242", "reports no k8s_version", "control-plane upgrade"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("a live cluster llz could not read was passed over in silence; want %q in:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("and the rejection does not claim the cluster is absent", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog, clusters: silent})
+		var err error
+		captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+		if err == nil {
+			t.Fatal("expected the rejection — nothing proved this pin is exempt")
+		}
+		if strings.Contains(err.Error(), "No single cluster named") {
+			t.Errorf("the rejection says no such cluster exists, about a listing holding one:\n%s", err)
+		}
+		if !strings.Contains(err.Error(), "4242") {
+			t.Errorf("the rejection does not name the cluster it did find:\n%s", err)
+		}
+	})
+}
+
+// TestTheFailedReadWarningNamesNoFallbackItCannotKnow.
+//
+// One warning, three callers, three different fallbacks: the catalog was read (seed
+// the newest), the catalog was NOT read (seed llz's compiled literal), or an
+// explicit pin is about to be REJECTED and nothing is seeded at all. Asserting "llz
+// falls back to seeding the newest version this account offers" was false in two of
+// the three — and printed in the same run as the message saying what actually
+// happened.
+func TestTheFailedReadWarningNamesNoFallbackItCannotKnow(t *testing.T) {
+	noClusterReadPause(t)
+	withCatalog(t, &fakeVersionLister{err: errors.New("401 unauthorized"), clusterErr: errors.New("503")})
+	out := captureStderr(t, func() {
+		if _, err := ResolveK8sVersion("", lab); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if !strings.Contains(out, "could not be checked") {
+		t.Fatalf("the failed-read warning did not fire:\n%s", out)
+	}
+	// The catalog ALSO failed here, so the seed is llz's compiled literal — the one
+	// thing the warning must not call "the newest version this account offers".
+	if strings.Contains(out, "seeding the newest version this account offers") {
+		t.Errorf("the warning names a fallback that is not the one this run will take:\n%s", out)
+	}
+}
+
+// TestTheOrphanRemedyIsScopedToTheClusterItMatched.
+//
+// `llz reap --cluster-label` sweeps by label ACCOUNT-WIDE — ClustersWithLabel does
+// not filter by region — while the adoption matched label AND region. So a
+// same-labelled cluster in another region is a live deployment the advice would
+// delete. Round 5 removed this hazard from the ambiguity warning; it survived in
+// adoptionMessage because the two were written a round apart.
+func TestTheOrphanRemedyIsScopedToTheClusterItMatched(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{
+		versions: e2eAccountCatalog,
+		clusters: []map[string]any{
+			{"id": float64(7654321), "label": "platform-support-lab", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
+			// The live peer in ANOTHER region that a label-scoped sweep would take.
+			{"id": float64(9999), "label": "platform-support-lab", "region": "de-fra-2", "k8s_version": "v1.34.6+lke2"},
+		},
+	})
+	c, err := ResolveK8sVersion("", lab)
+	if err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if c.Pin != "v1.33.6+lke7" {
+		t.Fatalf("premise broken: region must narrow the match to one cluster; Pin = %q", c.Pin)
+	}
+	if !strings.Contains(c.Warning, "7654321") {
+		t.Errorf("the orphan remedy does not name the id it matched, so it cannot be acted on safely:\n%s", c.Warning)
+	}
+	if !strings.Contains(c.Warning, "sweeps every region") {
+		t.Errorf("the orphan remedy does not warn that `llz reap --cluster-label` is region-blind and "+
+			"would take live deployments sharing the label:\n%s", c.Warning)
 	}
 }
 

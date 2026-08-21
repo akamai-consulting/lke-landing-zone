@@ -240,7 +240,7 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 			// THROUGH envdef.SeedK8sVersion, the function EnsureLandingZone itself calls,
 			// so the preview and the write cannot name different versions — including on
 			// the no-token path, where both fall through to llz's compiled default.
-			fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s.Newest)+", inherited by every deployment"))
+			fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s)+", inherited by every deployment"))
 		} else {
 			fmt.Printf("  %s        %s  %s\n", color.Dim("exists"), lzPath, color.Dim("(left as-is)"))
 		}
@@ -270,7 +270,7 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 		// be `if k8s.Newest != ""`, so the operator with no LINODE_TOKEN — the one who
 		// most needs to know a compiled literal just became every deployment's shared
 		// default — got silence, while the operator whose account answered got a line.
-		fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s.Newest)+", inherited by every deployment"))
+		fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s)+", inherited by every deployment"))
 	}
 	printK8sVersionConsequences(lzPath, name, k8s, inheritedFix, reseeding, orphanedEnvs)
 	if inheritedFix != "" {
@@ -549,14 +549,27 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 }
 
 // seedSource names where a re-seeded spec.defaults version came from, because
-// "the newest this account offers" and "a literal compiled months ago" earn very
-// different reactions from an operator reading a preview. Same distinction the
-// re-seed warning draws; see printK8sVersionConsequences.
-func seedSource(newest string) string {
-	if newest == "" {
+// "the newest this account offers", "your account named nothing usable" and "a
+// literal compiled months ago" earn very different reactions from an operator.
+//
+// THREE CASES, NOT TWO. Keyed on Newest alone this said "this account was never
+// asked" whenever Newest was empty — which also covers the account that ANSWERED
+// and simply named no full build id. In that run llz printed the catalog it had
+// just read, in a warning, and then claimed a few lines later that it had never
+// asked. k8sVersionBanner already distinguishes these three; this did not, and one
+// of them is the operator's own credential being blamed for their catalog.
+//
+// Offered is the discriminator because ResolveK8sVersion sets it only on a catalog
+// that came back — the same fact the banner keys on.
+func seedSource(k8s instanceresolve.K8sVersionChoice) string {
+	switch {
+	case k8s.Newest != "":
+		return "the newest LKE-Enterprise version this account offers"
+	case len(k8s.Offered) > 0:
+		return "llz's compiled default — the account's catalog names no full build id"
+	default:
 		return "llz's compiled default — this account was never asked"
 	}
-	return "the newest LKE-Enterprise version this account offers"
 }
 
 // existingDeployments returns the deployment names environments/ already defines,
@@ -630,10 +643,11 @@ func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVers
 		// upgrade this warning exists to announce. Name the version that WILL be
 		// seeded, and say where it came from, because "the newest this account offers"
 		// and "a literal compiled months ago" earn very different reactions.
-		seeded, source := k8s.Newest, "the newest version this Linode account offers"
-		if seeded == "" {
-			seeded, source = envdef.SeedK8sVersion(""), "llz's compiled default — this account was never asked"
-		}
+		// THROUGH THE SAME TWO FUNCTIONS THE PREVIEW AND THE WRITE USE. This computed
+		// its own version and its own provenance sentence, so it could — and did —
+		// disagree with the line `llz env add` printed moments earlier about the same
+		// seed, including blaming a missing token for a catalog that had answered.
+		seeded, source := envdef.SeedK8sVersion(k8s.Newest), seedSource(k8s)
 		// PAST TENSE ON THE ABSENCE, PRESENT ON THE ARTIFACT, because this one string
 		// is printed from BOTH paths — and on the write path EnsureLandingZone has
 		// already created the file two lines above, so "is missing" contradicted the

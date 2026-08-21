@@ -147,18 +147,48 @@ type Deployment struct {
 // lkeSleep is the same seam for the same reason.
 var clusterReadSleep = time.Sleep
 
-// runningVersionFor asks the account what THIS deployment's cluster is running.
+// clusterLookup is everything the account said about THIS deployment's cluster.
 //
-// asked IS NOT THE SAME AS A NON-EMPTY running, AND CONFLATING THE TWO IS A LIE THE
-// CALLER THEN PRINTS. A failed read and an account with no such cluster both yield no
-// version, and they license opposite sentences: one is "we looked and there is nothing
-// to exempt this pin", which is evidence, and the other is "we could not look", which
-// is not. The first cut returned one string, so a transient 503 produced
-// `No single cluster named "…" is on this account` — a claim llz had never
-// verified — in the message that then failed the operator's build.
+// IT IS A STRUCT BECAUSE FIVE OUTCOMES WERE BEING SQUEEZED INTO A STRING, AND THE
+// MESSAGES LIED. Successive reviews found three separate false statements, all the
+// same root cause: "no version to adopt" was the only thing the caller could see,
+// and it is true of five situations that need five different sentences —
+//
+//	skipped     no token, or no label to match on: llz never looked
+//	failed      the read errored after its retries
+//	none        the account answered and holds no such cluster  ← evidence
+//	ambiguous   several share the label+region: llz will not guess
+//	unreadable  exactly one matched but reports no k8s_version
+//	found       exactly one matched and reports a version        ← Running
+//
+// Only `none` licenses "there is nothing on this account to exempt your pin", and
+// llz was saying it for all five.
+type clusterLookup struct {
+	// Running is the version, set only in the `found` case.
+	Running string
+	// ID is that cluster's Linode id, for a message that has to name it. Zero when
+	// no single cluster was identified.
+	//
+	// THROUGH linode.MatchClusterIDs, WHICH DECODES IT. `id` arrives from the API as
+	// a json.Number or a float64, so formatting the raw map value with %v prints
+	// `1.234567e+06` for any account whose ids are seven digits — an id nobody can
+	// paste into a delete command. An earlier revision did exactly that, and its
+	// test hid it by writing int literals into the fixture.
+	ID uint64
+	// Matches is how many clusters carried this deployment's label+region. Only
+	// meaningful when Asked.
+	Matches int
+	// Asked is whether the account actually answered. False for skipped and failed.
+	Asked bool
+}
+
+// Unreadable reports the one match that could not say what it runs.
+func (l clusterLookup) Unreadable() bool { return l.Asked && l.Matches == 1 && l.Running == "" }
+
+// lookupCluster asks the account what THIS deployment's cluster is, if anything.
 //
 // IT RETRIES, ON THE SAME BUDGET AS THE TWO CALLERS THAT ALREADY READ THIS ROUTE
-// (linode.ClusterReadAttempts). An earlier revision here was single-attempt on the
+// (linode.ClusterReadAttempts). An earlier revision was single-attempt on the
 // grounds that the fallback is "behave as `llz env add` did before" — true for the
 // no-pin arm, and false for the one that matters: an explicit --k8s-version is
 // REJECTED unless this read acquits it, so one 503 turns a deployment whose cluster
@@ -166,12 +196,13 @@ var clusterReadSleep = time.Sleep
 // `llz ci assert-k8s-version` recommends. The preflight refuses to let an
 // unprovable exemption decide that, and so does this.
 //
-// WHAT IT DOES NOT DO IS GO QUIET. The fallback for a no-pin re-scaffold is to
-// seed today's newest, which against a live cluster is the unrequested
-// control-plane upgrade this whole exemption exists to prevent.
-func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked bool) {
+// WHAT IT DOES NOT DO IS GO QUIET on the two outcomes that are neither evidence nor
+// an answer: a failed read and an ambiguous account both fall through to seeding
+// whatever the caller would otherwise have seeded, which against a live cluster is
+// the unrequested control-plane upgrade this whole exemption exists to prevent.
+func lookupCluster(c LKEVersionLister, d Deployment) clusterLookup {
 	if c == nil || d.ClusterLabel == "" {
-		return "", false
+		return clusterLookup{}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), clusterProbeTimeout)
 	defer cancel()
@@ -184,38 +215,7 @@ func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked 
 		clusters, err = c.ListClusters(rctx)
 		rcancel()
 		if err == nil {
-			// AMBIGUITY IS NOT SILENCE. ClusterVersionFor answers "" for BOTH zero
-			// matches and several, and only one of those is uneventful. Several clusters
-			// at one label+region is an account this must not guess about — but it is
-			// also the shape a failed cycle leaves, an orphan sitting beside the live
-			// deployment, and falling through to "seed today's newest" there plans a
-			// control-plane upgrade on whichever one is real. This file's own rule is
-			// that the fallback never happens quietly; that rule was written for the
-			// failed-read arm and not upheld here.
-			if m := linode.MatchingClusters(clusters, d.ClusterLabel, d.Region); len(m) > 1 {
-				// THE REMEDY MUST NOT BE `llz reap --cluster-label`, and the first cut of
-				// this warning said exactly that. That flag is LABEL-scoped: it lists every
-				// cluster carrying the label and DELETEs each one (teardown/reap.go), which
-				// is correct for a sweep after a deployment is gone and catastrophic here —
-				// this warning fires precisely BECAUSE two clusters share the label, so the
-				// advice, followed with --yes, destroys the live deployment alongside the
-				// orphan. Name the ids instead and let the operator choose.
-				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
-					"%d clusters on this account are labelled %q in %s, so llz cannot tell which one is this\n"+
-						"  deployment's and will not guess. cluster.k8sVersion falls back to the newest version the\n"+
-						"  account offers — which, against a cluster that is already running, plans a control-plane\n"+
-						"  upgrade nobody asked for.\n"+
-						"%s"+
-						"  Identify which is live, then delete the OTHER one by id. Do NOT reach for\n"+
-						"  `llz reap --cluster-label %[2]s`: it is label-scoped and would delete both.\n"+
-						"  Or pin the running version with --k8s-version and re-run.",
-					len(m), d.ClusterLabel, orAnyRegion(d.Region), describeClusters(m))))
-			}
-			// linode.ClusterVersionFor, NOT a second loop over label+region here. It is
-			// the same matching rule linode.ClusterRunsVersion is written in terms of,
-			// so this command and the preflight cannot come to different conclusions
-			// about which cluster belongs to a deployment.
-			return linode.ClusterVersionFor(clusters, d.ClusterLabel, d.Region), true
+			return classifyClusters(clusters, d)
 		}
 		// OUR OWN DEADLINE IS NOT A TRANSIENT ERROR, asked of ctx and never of the
 		// error — an http.Client.Timeout unwraps to context.DeadlineExceeded, so
@@ -228,14 +228,100 @@ func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked 
 			clusterReadSleep(linode.ClusterReadRetryPause)
 		}
 	}
+	// IT NAMES NO FALLBACK, and an earlier revision named the wrong one. This one
+	// warning is reached from three callers whose fallbacks differ — the catalog was
+	// read (seed the newest), the catalog was NOT read (seed llz's compiled literal),
+	// or an explicit pin is about to be REJECTED outright and nothing is seeded at
+	// all. Asserting "llz falls back to seeding the newest version this account
+	// offers" was false in two of the three, in the same run as the message that
+	// said what actually happened.
 	fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
 		"whether a cluster named %q already exists could not be checked: %s\n"+
-			"  llz therefore cannot tell a RE-SCAFFOLD over a live cluster from a first run, and falls\n"+
-			"  back to seeding the newest version this account offers. If that cluster exists and runs a\n"+
-			"  DIFFERENT version, set cluster.k8sVersion to the running one in environments/<env>.yaml\n"+
-			"  before the next apply — otherwise terraform plans a control-plane upgrade nobody asked for.",
+			"  llz therefore cannot tell a RE-SCAFFOLD over a live cluster from a first run, and this run's\n"+
+			"  cluster.k8sVersion is decided without that answer. If that cluster does exist and runs a\n"+
+			"  DIFFERENT version than the spec ends up pinning, set cluster.k8sVersion to the running one\n"+
+			"  in environments/<env>.yaml before the next apply — otherwise terraform plans a\n"+
+			"  control-plane upgrade nobody asked for.",
 		d.ClusterLabel, firstLine(err.Error()))))
-	return "", false
+	return clusterLookup{}
+}
+
+// classifyClusters turns one cluster listing into the outcome the messages branch
+// on, and says the two things worth saying out loud.
+func classifyClusters(clusters []map[string]any, d Deployment) clusterLookup {
+	// linode.MatchingClusters, NOT a loop over label+region here. It is the same
+	// matching rule linode.ClusterRunsVersion is written in terms of, so this
+	// command and the preflight cannot come to different conclusions about which
+	// cluster belongs to a deployment.
+	m := linode.MatchingClusters(clusters, d.ClusterLabel, d.Region)
+	ids := linode.MatchClusterIDs(clusters, d.ClusterLabel, d.Region)
+	l := clusterLookup{Matches: len(m), Asked: true}
+	switch {
+	case len(m) > 1:
+		// AMBIGUITY IS NOT SILENCE. Several clusters at one label+region is an account
+		// this must not guess about — and it is also the shape a failed cycle leaves,
+		// an orphan sitting beside the live deployment, where falling through plans a
+		// control-plane upgrade on whichever one is real.
+		//
+		// THE REMEDY MUST NOT BE `llz reap --cluster-label`, and the first cut of this
+		// warning said exactly that. That flag is LABEL-scoped: it lists every cluster
+		// carrying the label and DELETEs each one (teardown/reap.go), which is correct
+		// for a sweep after a deployment is gone and catastrophic here — this warning
+		// fires precisely BECAUSE two clusters share the label, so the advice, followed
+		// with --yes, destroys the live deployment alongside the orphan.
+		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+			"%d clusters on this account are labelled %q in %s, so llz cannot tell which one is this\n"+
+				"  deployment's and will not guess. cluster.k8sVersion is decided without them — which,\n"+
+				"  against a cluster that is already running, plans a control-plane upgrade nobody asked for.\n"+
+				"%s"+
+				"  Identify which is live, then delete the OTHER one by id. Do NOT reach for\n"+
+				"  `llz reap --cluster-label %[2]s`: it is label-scoped and would delete both.\n"+
+				"  Or pin the running version with --k8s-version and re-run.",
+			len(m), d.ClusterLabel, orAnyRegion(d.Region), describeClusters(ids, m))))
+		return l
+	case len(m) == 1:
+		l.ID = ids[0]
+		l.Running = strings.TrimSpace(mapString(m[0], "k8s_version"))
+		if l.Running == "" {
+			// FOUND IT, AND IT WILL NOT SAY WHAT IT RUNS. Indistinguishable from "no such
+			// cluster" until this case existed, so llz seeded the newest over a live
+			// deployment in silence and then told the operator, in the rejection message,
+			// that no cluster of that name was on the account — about a listing that
+			// contained one.
+			fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+				"cluster %q (id %d) exists in %s but reports no k8s_version, so llz cannot adopt what it\n"+
+					"  runs and decides cluster.k8sVersion without it. If that cluster is live, read its version\n"+
+					"  (`linode-cli lke cluster-view %[2]d`) and pass it as --k8s-version — otherwise terraform\n"+
+					"  may plan a control-plane upgrade nobody asked for.",
+				d.ClusterLabel, l.ID, orAnyRegion(d.Region))))
+		}
+		return l
+	}
+	return l
+}
+
+// describeClusters lists matched clusters as indented "cluster id N — runs V"
+// lines, so an operator told two clusters share a label can tell them apart without
+// going to the Console. ids and clusters are parallel: both come from the same
+// matcher, in the same order.
+func describeClusters(ids []uint64, clusters []map[string]any) string {
+	var b strings.Builder
+	for i, m := range clusters {
+		v := strings.TrimSpace(mapString(m, "k8s_version"))
+		if v == "" {
+			v = "an unreported version"
+		}
+		fmt.Fprintf(&b, "  cluster id %d — runs %s\n", ids[i], v)
+	}
+	return b.String()
+}
+
+// mapString is the linode package's mString, which is unexported. Three lines, and
+// a shared package for them would cost more than the duplication — the same call
+// this repo makes for firstNonEmpty and firstLine.
+func mapString(m map[string]any, k string) string {
+	s, _ := m[k].(string)
+	return s
 }
 
 // K8sVersionChoice is everything `llz env add` needs in order to decide a
@@ -326,6 +412,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	client := LKEVersionClient()
 	offered, ok := accountLKEVersions(client)
 	c := K8sVersionChoice{Pin: strings.TrimSpace(want)}
+	var lk clusterLookup
 	if !ok {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its
 		// offline default.
@@ -348,14 +435,15 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// live cluster would silently re-seed today's newest and plan the upgrade #453
 		// exists to prevent, with nothing on disk left to warn from. No token still
 		// costs nothing — runningVersionFor returns immediately on a nil client.
-		c.Running, _ = runningVersionFor(client, d)
+		lk = lookupCluster(client, d)
+		c.Running = lk.Running
 		if c.Pin == "" && c.Running != "" {
 			c.Pin = c.Running
 			// offered is nil here, so CheckVersion answers Unknown and adoptionMessage
 			// degrades to the plain note — which claims nothing about a catalog llz
 			// could not read. `llz doctor` reaches that verdict later, with its own
 			// diagnostics for why the read failed.
-			c.Note, c.Warning = adoptionMessage(d, c.Running, nil)
+			c.Note, c.Warning = adoptionMessage(d, lk, nil)
 		}
 		return c, nil
 	}
@@ -398,9 +486,9 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// overlay deleted together — leaves NOTHING on disk, so a disk-shaped gate is
 	// blind in exactly the case the read was added for. One list call against an
 	// account with no clusters is the price of that case being covered at all.
-	askedAccount := false
 	if c.Pin == "" || verdict == linode.VersionNotOffered {
-		c.Running, askedAccount = runningVersionFor(client, d)
+		lk = lookupCluster(client, d)
+		c.Running = lk.Running
 	}
 
 	if c.Pin == "" {
@@ -411,7 +499,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 			// a deployment added LATER to this instance genuinely should get today's
 			// newest rather than this cluster's.
 			c.Pin = c.Running
-			c.Note, c.Warning = adoptionMessage(d, c.Running, offered)
+			c.Note, c.Warning = adoptionMessage(d, lk, offered)
 		}
 		return c, nil
 	}
@@ -481,7 +569,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// send, so `1.34.6+lke2` against a cluster reporting `v1.34.6+lke2` is a diff and
 	// must NOT be exempted here.
 	if c.Running != "" && c.Running == c.Pin {
-		_, c.Warning = adoptionMessage(d, c.Running, offered)
+		_, c.Warning = adoptionMessage(d, lk, offered)
 		return c, nil
 	}
 	if nearest != "" {
@@ -518,19 +606,28 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// Which of the two it is changes the sentence, because "we checked and there is
 	// no such cluster" and "we did not check" are different claims and only one of
 	// them is evidence.
+	// WHAT llz ACTUALLY LEARNED, IN ITS OWN WORDS. The verdict is the same in every
+	// arm — the catalog answered and the pin is not in it, and no amount of doubt
+	// about the escape hatch is evidence that a cluster exists (the preflight's own
+	// rule). What differs is the CLAIM, and collapsing these is how llz came to say
+	// "No single cluster named X is on this account" about a listing it never read,
+	// and about one that contained exactly that cluster.
 	lookedUp := "  Availability is PER-ACCOUNT and rotates within hours, so a version another account\n" +
 		"  can build says nothing about this one.\n"
 	switch {
-	case askedAccount:
-		lookedUp = fmt.Sprintf("  No single cluster named %q is on this account, so nothing exempts this pin: k8s_version\n"+
-			"  reaches the API on a create, and a create sends exactly this string.\n", d.ClusterLabel)
-	case d.ClusterLabel != "":
-		// THE READ FAILED, AND THE VERDICT STILL STANDS — the preflight's own rule.
-		// What is in doubt is only the ESCAPE HATCH: the catalog read succeeded and the
-		// pin is not in it, and an unreadable cluster list is not evidence that a
-		// cluster exists. But llz must not claim it looked.
+	case !lk.Asked && d.ClusterLabel != "":
 		lookedUp = fmt.Sprintf("  Whether a cluster named %q already runs it could not be checked (the read above says\n"+
 			"  why), so the catalog verdict stands. Re-run if that read was transient.\n", d.ClusterLabel)
+	case lk.Unreadable():
+		lookedUp = fmt.Sprintf("  Cluster %q (id %d) exists but reports no k8s_version, so llz cannot tell whether it is\n"+
+			"  already on this pin. Read its version and pass that, or move the pin to a listed one.\n",
+			d.ClusterLabel, lk.ID)
+	case lk.Matches > 1:
+		lookedUp = fmt.Sprintf("  %d clusters share the label %q here, so llz will not decide which one this pin\n"+
+			"  belongs to (the listing above names them).\n", lk.Matches, d.ClusterLabel)
+	case lk.Asked:
+		lookedUp = fmt.Sprintf("  No single cluster named %q is on this account, so nothing exempts this pin: k8s_version\n"+
+			"  reaches the API on a create, and a create sends exactly this string.\n", d.ClusterLabel)
 	}
 	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 	return K8sVersionChoice{}, fmt.Errorf("--k8s-version %q is not an LKE-Enterprise version this account can build.\n"+
@@ -541,26 +638,6 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n"+
 		"  deployment does exist — the version it is ALREADY RUNNING, which plans no diff at all.",
 		c.Pin, strings.Join(offered, ", "), lookedUp)
-}
-
-// describeClusters lists matched clusters as indented "id N — runs V" lines, so an
-// operator told two clusters share a label can tell them apart without going to the
-// Console. Empty when nothing is identifiable, which keeps the caller's message
-// grammatical rather than trailing a blank section.
-func describeClusters(clusters []map[string]any) string {
-	var b strings.Builder
-	for _, m := range clusters {
-		id, ok := m["id"]
-		if !ok {
-			continue
-		}
-		v := strings.TrimSpace(fmt.Sprintf("%v", m["k8s_version"]))
-		if v == "" || v == "<nil>" {
-			v = "an unreported version"
-		}
-		fmt.Fprintf(&b, "  cluster id %v — runs %s\n", id, v)
-	}
-	return b.String()
 }
 
 // orAnyRegion names the region a lookup was scoped to, for a message. `llz env
@@ -597,19 +674,27 @@ func orAnyRegion(r string) string {
 // which is the exact defect printK8sVersionConsequences was extracted to fix for
 // the other two version consequences. Both are phrased as the DECISION rather than
 // the deed, which is true before the write and still true after it.
-func adoptionMessage(d Deployment, running string, offered []string) (note, warning string) {
-	if verdict, _ := linode.CheckVersion(running, offered); verdict != linode.VersionNotOffered {
+func adoptionMessage(d Deployment, lk clusterLookup, offered []string) (note, warning string) {
+	if verdict, _ := linode.CheckVersion(lk.Running, offered); verdict != linode.VersionNotOffered {
 		return fmt.Sprintf("cluster %s (%s) already runs %s — pinning it for this deployment, so terraform plans no control-plane change.",
-			d.ClusterLabel, orAnyRegion(d.Region), running), ""
+			d.ClusterLabel, orAnyRegion(d.Region), lk.Running), ""
 	}
+	// THE ORPHAN REMEDY NAMES AN ID, NOT THE LABEL. `llz reap --cluster-label` sweeps
+	// by label ACCOUNT-WIDE — ClustersWithLabel does not filter by region — while this
+	// adoption matched label AND region, so a same-labelled cluster in another region
+	// is a live deployment the advice would delete. Same hazard the ambiguity warning
+	// had to have removed from it; it survived here because the two messages were
+	// written a round apart.
 	return "", fmt.Sprintf(
-		"cluster %s (%s) already runs %s, which this account no longer offers — pinning it anyway.\n"+
+		"cluster %s (%s, id %d) already runs %s, which this account no longer offers — pinning it anyway.\n"+
 			"  That is deliberate: k8s_version reaches the API only on a create or a change, so a running\n"+
 			"  cluster plans no diff and every routine apply is unaffected. This deployment cannot then be\n"+
 			"  RE-CREATED until the pin moves to a listed version (%s).\n"+
-			"  If %[1]s is instead an ORPHAN from a failed cycle, terraform will plan a CREATE and send this\n"+
-			"  pin: sweep it (`llz reap --cluster-label %[1]s`) and re-run `llz env add`.",
-		d.ClusterLabel, orAnyRegion(d.Region), running, strings.Join(offered, ", "))
+			"  If id %[3]d is instead an ORPHAN from a failed cycle, terraform will plan a CREATE and send\n"+
+			"  this pin: delete that cluster BY ID and re-run `llz env add`. Not\n"+
+			"  `llz reap --cluster-label %[1]s`, which sweeps every region and would take live deployments\n"+
+			"  sharing the label.",
+		d.ClusterLabel, orAnyRegion(d.Region), lk.ID, lk.Running, strings.Join(offered, ", "))
 }
 
 // ReplacementForInheritedPin returns the version a NEW deployment must pin for
