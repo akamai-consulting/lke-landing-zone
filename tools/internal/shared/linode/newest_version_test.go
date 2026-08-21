@@ -103,3 +103,100 @@ func TestNewestVersionBreaksTiesOnTheAPIsOrder(t *testing.T) {
 		t.Errorf("NewestVersion(%v) = %q, want the first entry", dup, got)
 	}
 }
+
+// TestNewestVersionInMinorOfIsNewestVersionNarrowedToOneMinor — it must agree with
+// NewestVersion on RANKING (numeric, so +lke10 beats +lke2) and differ only in
+// which rows it will consider. A second ranking implementation that drifts from
+// the first is how "the newest of the 1.32 builds" quietly becomes the oldest.
+func TestNewestVersionInMinorOfIsNewestVersionNarrowedToOneMinor(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		offered []string
+		like    string
+		want    string
+	}{
+		{"picks within the minor, not the catalog's newest",
+			[]string{"v1.34.6+lke2", "v1.32.9+lke4"}, "v1.32.5+lke1", "v1.32.9+lke4"},
+		{"ranks builds numerically inside the minor",
+			[]string{"v1.32.9+lke2", "v1.32.9+lke10"}, "v1.32.1+lke1", "v1.32.9+lke10"},
+		{"ranks patches inside the minor",
+			[]string{"v1.32.10+lke1", "v1.32.9+lke9"}, "v1.32.1+lke1", "v1.32.10+lke1"},
+		// THE REFERENCE IS READ, NOT CHOSEN, so it only has to name a minor — and the
+		// two spellings below are precisely the ones an account REJECTS, which is when
+		// a replacement is being looked for at all. Requiring a build id here would
+		// send exactly those cases to the account's absolute newest.
+		{"a build-less reference still names its minor",
+			[]string{"v1.32.9+lke4", "v1.34.6+lke2"}, "v1.32.5", "v1.32.9+lke4"},
+		{"a v-less reference still names its minor",
+			[]string{"v1.32.9+lke4", "v1.34.6+lke2"}, "1.32.5+lke1", "v1.32.9+lke4"},
+		{"a bare major.minor still names its minor",
+			[]string{"v1.32.9+lke4", "v1.34.6+lke2"}, "1.32", "v1.32.9+lke4"},
+		{"a major bump is a different minor",
+			[]string{"v2.32.9+lke4"}, "v1.32.5+lke1", ""},
+		{"the minor is absent", []string{"v1.34.6+lke2"}, "v1.32.5+lke1", ""},
+		{"coarse rows are skipped here too", []string{"1.32", "1.32.9"}, "v1.32.5+lke1", ""},
+		{"a reference naming no minor at all", []string{"v1.32.9+lke4"}, "stable", ""},
+		{"a reference with a non-numeric minor", []string{"v1.32.9+lke4"}, "v1.x", ""},
+		{"an empty catalog", nil, "v1.32.5+lke1", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NewestVersionInMinorOf(tc.offered, tc.like); got != tc.want {
+				t.Errorf("NewestVersionInMinorOf(%v, %q) = %q, want %q", tc.offered, tc.like, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewestBuildOfPatchCatchesTheOtherDocumentedMisspelling — CheckVersion's
+// near-miss rule normalizes away a leading `v`, so `1.34.6+lke2` is recognised.
+// `v1.34.6`, with the `+lke` suffix simply left off, is not, and the runbook lists
+// the two side by side as equally common.
+func TestNewestBuildOfPatchCatchesTheOtherDocumentedMisspelling(t *testing.T) {
+	catalog := []string{"v1.35.0+lke1", "v1.34.9+lke3", "v1.34.6+lke2", "v1.34.6+lke5"}
+	for _, tc := range []struct{ like, want string }{
+		{"v1.34.6", "v1.34.6+lke5"}, // the newest build OF THAT PATCH, not of that minor
+		{"1.34.6", "v1.34.6+lke5"},  // v-less and build-less at once
+		{"v1.34.9", "v1.34.9+lke3"},
+		{"v1.33.6", ""},      // that patch is not offered at all
+		{"v1.34.6+lke2", ""}, // already names a build; a different one would be an upgrade
+		{"v1.34", ""},        // a minor is not a patch
+		{"stable", ""},
+		{"", ""},
+	} {
+		if got := NewestBuildOfPatch(catalog, tc.like); got != tc.want {
+			t.Errorf("NewestBuildOfPatch(%q) = %q, want %q", tc.like, got, tc.want)
+		}
+	}
+}
+
+// TestDifferentMinorClaimsADifferenceOnlyWhenItCanSeeOne.
+//
+// PHRASED AS THE POSITIVE THE CALLER ACTS ON, because the negation is where this
+// goes wrong. A `SameMinor` returning false for an unanswerable comparison reads
+// correctly on its own — an unknown is not a match — and then inverts at the one
+// call site, which warns on NOT-same: an unparseable version would have produced a
+// confident "different MINOR" warning off a comparison nobody could make. The
+// unknown-is-not-a-negative rule has to survive the caller's negation.
+func TestDifferentMinorClaimsADifferenceOnlyWhenItCanSeeOne(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"v1.34.6+lke2", "v1.33.6+lke7", true}, // a real difference
+		{"v1.34.6+lke2", "v2.34.6+lke2", true}, // major counts
+		{"v1.34.6+lke2", "v1.34.9+lke7", false},
+		{"v1.34.6+lke2", "1.34", false}, // the reference need not be a build id
+		{"v1.34", "v1.34.6", false},     // neither has to be
+		// UNANSWERABLE IS NOT DIFFERENT. Each of these would have warned.
+		{"v1.34.6+lke2", "stable", false},
+		{"stable", "v1.34.6+lke2", false},
+		{"v1.34.6+lke2", "v1.x", false},
+		{"", "v1.34.6+lke2", false},
+		{"v1.34.6+lke2", "", false},
+		{"", "", false},
+	} {
+		if got := DifferentMinor(tc.a, tc.b); got != tc.want {
+			t.Errorf("DifferentMinor(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

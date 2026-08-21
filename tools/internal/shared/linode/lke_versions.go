@@ -479,6 +479,123 @@ func NewestVersion(offered []string) string {
 	return best
 }
 
+// NewestVersionInMinorOf returns the newest FULL BUILD ID in the catalog sharing
+// like's MAJOR.MINOR, or "" when the catalog offers none.
+//
+// IT EXISTS BECAUSE "REPLACE A PIN" AND "CHOOSE A PIN" ARE DIFFERENT QUESTIONS.
+// Seeding a brand-new instance has nothing to stay close to, so the newest the
+// account offers is right (see NewestVersion). Replacing a rotated-out pin for a
+// deployment JOINING existing siblings does: an HA peer and its promotion siblings
+// are meant to run the same control-plane minor, and jumping the new one two
+// minors ahead of them is divergence imposed well beyond the evidence — the
+// evidence being only that ONE BUILD ID left the catalog.
+//
+// `v1.32.5+lke1` gone from `[v1.34.6+lke2, v1.32.9+lke4]` yields `v1.32.9+lke4`,
+// not `v1.34.6+lke2`. When the minor itself is gone the caller falls back to the
+// newest offered, because then there is nothing left to stay close to.
+func NewestVersionInMinorOf(offered []string, like string) string {
+	major, minor, ok := MinorOf(like)
+	if !ok {
+		// Nothing here names a minor to stay within. Not an error: the caller's
+		// fallback is NewestVersion, which is what it would have used anyway.
+		return ""
+	}
+	same := make([]string, 0, len(offered))
+	for _, o := range offered {
+		if k, ok := versionSortKey(o); ok && k[0] == major && k[1] == minor {
+			same = append(same, strings.TrimSpace(o))
+		}
+	}
+	return NewestVersion(same)
+}
+
+// NewestBuildOfPatch returns the newest full build id whose MAJOR.MINOR.PATCH
+// equals like's, or "" when there is none.
+//
+// IT EXISTS FOR THE SECOND DOCUMENTED MISSPELLING. CheckVersion's near-miss rule
+// normalizes away a leading `v`, so `1.34.6+lke2` is recognised as
+// `v1.34.6+lke2` — but `v1.34.6`, with the `+lke` suffix simply left off,
+// matches nothing and reads as a version the account cannot build.
+// docs/runbooks/first-build-failed.md lists the two side by side as equally
+// common, and only one of them was being caught.
+//
+// A patch can carry several builds (`+lke2`, `+lke5`), so this is not quite the
+// identity CheckVersion's near miss is — it is "the same version, at the finest
+// granularity the pin actually specified". The newest build of that patch is the
+// answer, and it is still a spelling fix rather than an upgrade: the minor and the
+// patch are the operator's own.
+func NewestBuildOfPatch(offered []string, like string) string {
+	n := normalizeVersion(like)
+	if hasBuild(n) {
+		// Already names a build; if it were offered CheckVersion would have said so,
+		// and picking a DIFFERENT build of the same patch would be an upgrade.
+		return ""
+	}
+	if len(strings.Split(n, ".")) != 3 {
+		return ""
+	}
+	same := make([]string, 0, len(offered))
+	for _, o := range offered {
+		e := strings.TrimSpace(o)
+		if base, _, found := strings.Cut(normalizeVersion(e), "+lke"); found && base == n {
+			same = append(same, e)
+		}
+	}
+	return NewestVersion(same)
+}
+
+// DifferentMinor reports whether a and b DEFINITELY name different MAJOR.MINORs.
+//
+// IT IS PHRASED AS THE POSITIVE ITS CALLER ACTS ON, and that is not a style
+// choice. A `SameMinor` returning false for an unanswerable comparison reads
+// correctly — "an unknown is not a match" — and then inverts into exactly the
+// wrong thing at the one call site, which warns on NOT-same: an unparseable
+// version would have produced a confident "different MINOR" warning off a
+// comparison nobody could make. The unknown-is-not-a-negative rule this package
+// runs on has to survive the caller's negation, so the helper answers the question
+// the caller actually asks.
+//
+// Neither side has to be a full build id — that is why this is minorOf and not
+// versionSortKey — and false is returned whenever either names no minor.
+func DifferentMinor(a, b string) bool {
+	amaj, amin, aok := MinorOf(a)
+	bmaj, bmin, bok := MinorOf(b)
+	if !aok || !bok {
+		return false
+	}
+	return amaj != bmaj || amin != bmin
+}
+
+// MinorOf reads MAJOR.MINOR off a version reference.
+//
+// DELIBERATELY LAXER THAN versionSortKey, and the asymmetry is the same one that
+// runs through this file: a value being CHOSEN has to be a full build id, while a
+// value being READ only has to say enough to answer the question asked of it.
+// Here the question is "which minor was this deployment's family on", and
+// `v1.33.6`, `1.33`, and `v1.33.6+lke7` all answer it.
+//
+// REQUIRING THE SUFFIX HERE WOULD BE A BUG, not strictness: an inherited pin
+// spelled `v1.33.6` — one of the two misspellings the runbook documents, and one
+// this account will reject — would find no minor, and the replacement would fall
+// through to the account's absolute newest, moving the deployment two minors away
+// from its siblings through the input most likely to need the protection.
+func MinorOf(v string) (major, minor int, ok bool) {
+	n := normalizeVersion(v)
+	if i := strings.IndexByte(n, '+'); i >= 0 {
+		n = n[:i]
+	}
+	parts := strings.Split(n, ".")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || ma < 0 || mi < 0 {
+		return 0, 0, false
+	}
+	return ma, mi, true
+}
+
 // versionKey is (major, minor, patch, lke build) — the four numbers an LKE-E build
 // id carries, in the order they rank.
 type versionKey [4]int
