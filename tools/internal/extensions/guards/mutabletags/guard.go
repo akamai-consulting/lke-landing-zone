@@ -78,6 +78,19 @@ const immutablePrefix = "sha-"
 // not mention it is not gating on the ref, whatever else it says.
 const refContext = "github.ref"
 
+// reRefEquals is the POSITIVE test the expression must contain, and reRefNotEquals
+// the comparison it must not.
+//
+// A SUBSTRING TEST IS NOT A READING, and this arm had one. `strings.Contains(expr,
+// "github.ref")` waved through both directions of wrong: `github.ref != …` is #451
+// inverted one layer up (publish everywhere EXCEPT main), and `github.ref_name ==
+// 'main'` compares a short ref to a long one, so the gate is false on every ref
+// and `:latest` quietly stops being republished — the failure-OPEN case, which is
+// the one nobody notices. `\b` after `ref` is what separates the context from
+// `ref_name`, `ref_type` and `ref_protected`.
+var reRefEquals = regexp.MustCompile(`github\.ref\b\s*==`)
+var reRefNotEquals = regexp.MustCompile(`github\.ref\b\s*!=`)
+
 // reTag captures the image reference of a `--tag` argument. BOTH SPELLINGS: the
 // space-separated form and `--tag=<ref>`. Reading only the first was a bypass of
 // exactly the class this guard refuses `-t` for — one `=` and the publish is
@@ -114,6 +127,11 @@ var reDockerPush = regexp.MustCompile(`\b(docker)\s+push\s+["']?\S`)
 // comment above.
 var reHeredoc = regexp.MustCompile(`(?:^|[^<])<<-?\s*["']?[A-Za-z_]`)
 
+// reArithmetic matches an arithmetic expansion, which is removed before the
+// heredoc scan: `$((1 << attempt))` is a left shift, and this workflow's retry
+// backoff is one edit from being written that way.
+var reArithmetic = regexp.MustCompile(`\$\(\([^)]*\)\)`)
+
 // reGateOpen matches THE canonical gate: an `if` whose condition is the POSITIVE
 // test of gateVar.
 //
@@ -127,7 +145,7 @@ var reGateOpen = regexp.MustCompile(`^if\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s
 // reBlockToken finds the shell keywords that open, switch and close a block, as
 // WORDS. `elif` cannot match the `if` alternative — the `l` before it leaves no
 // word boundary — and Actions' own `if:` is not a word match either.
-var reBlockToken = regexp.MustCompile(`\b(if|elif|else|fi)\b`)
+var reBlockToken = regexp.MustCompile(`\b(if|elif|else|fi|then)\b`)
 
 // buildLine reports whether this line invokes a container build, which is the only
 // place a `-t` is a tag flag. A build usually SPANS lines — see the `continues`
@@ -206,7 +224,11 @@ func realFlag(line string, spans []quoteSpan, off int, flag string) bool {
 		return true
 	}
 	content := strings.TrimSpace(line[q.open+1 : q.close])
-	return content == flag || strings.HasPrefix(content, flag+"=")
+	// BEGINS WITH, not equals: `EXTRA="--tag ${REPO}/x:latest"` expanded onto the
+	// build line is a publish with the whole argument list quoted. The flag in the
+	// MIDDLE of a span is still prose — that is what an `::error::` sentence naming
+	// the flag looks like, and the difference between the two is where it sits.
+	return content == flag || strings.HasPrefix(content, flag+"=") || strings.HasPrefix(content, flag+" ")
 }
 
 // tagSite is one `--tag` argument: where it is, what tag it names, and whether it
@@ -450,13 +472,18 @@ func judge(body string, sc scan) []problem {
 			"never sets, which expands empty and publishes nothing anywhere", gateVar)})
 	}
 	for _, e := range entries {
-		if strings.Contains(e.expr, refContext) {
-			continue
+		switch {
+		case reRefNotEquals.MatchString(e.expr):
+			out = append(out, problem{line: e.line, msg: fmt.Sprintf("`%s` compares `%s` with `!=` (it is %s) — that "+
+				"publishes the mutable tags from every ref EXCEPT the default branch, which is this bug inverted "+
+				"rather than fixed", gateVar, refContext, e.expr)})
+		case !reRefEquals.MatchString(e.expr):
+			out = append(out, problem{line: e.line, msg: fmt.Sprintf("`%s` does not test `%s ==` (it is %s) — the tags "+
+				"are gated on something this cannot confirm is the ref. `github.ref_name` is not it: it is `main`, "+
+				"not `refs/heads/main`, so that gate is false everywhere and `:latest` silently stops being "+
+				"republished. Env layers, and the INNERMOST wins, so every setting of this variable has to test the "+
+				"full ref", gateVar, refContext, e.expr)})
 		}
-		out = append(out, problem{line: e.line, msg: fmt.Sprintf("`%s` does not consult `%s` (it is %s) — the tags "+
-			"are gated on something that is not the ref, which is the defect this gate exists for. Env layers, and "+
-			"the INNERMOST wins: a job- or step-level setting overrides the workflow-level expression at runtime, "+
-			"so every setting of this variable has to gate on the ref", gateVar, refContext, e.expr)})
 	}
 	return out
 }
@@ -485,6 +512,7 @@ func scanFile(body string) scan {
 	}
 	for _, sc := range scripts {
 		var stack []block // one entry per open `if`
+		pending := -1     // index in stack of the block whose condition is still open
 		building, continued := false, false
 		var open byte // the quote still open from the previous line, if any
 		for i, raw := range strings.Split(sc.body, "\n") {
@@ -496,7 +524,7 @@ func scanFile(body string) scan {
 			var spans []quoteSpan
 			spans, open = spansOf(line, open)
 			bare := blank(line, spans) // shell structure only — no keyword may come out of a string
-			if out.heredoc == 0 && reHeredoc.MatchString(bare) {
+			if out.heredoc == 0 && reHeredoc.MatchString(reArithmetic.ReplaceAllString(bare, "")) {
 				out.heredoc = fileLine
 			}
 			if out.runtimeEnv == 0 && strings.Contains(line, gateVar) && strings.Contains(line, "GITHUB_ENV") {
@@ -522,6 +550,13 @@ func scanFile(body string) scan {
 				opened = opened || (e.kind == "if" && e.gate)
 				names = names || (e.kind == "if" && e.namesVar)
 			}
+			// A CONDITION CAN WRAP, and reading only the `if`'s own line made a
+			// PUBLISH_MUTABLE test on the continuation invisible — so every tag in the
+			// body was told to "move it inside the gate" it was already inside. While a
+			// condition is still open, a mention of the variable belongs to it.
+			if pending >= 0 && pending < len(stack) && strings.Contains(line, gateVar) && !stack[pending].gate {
+				stack[pending].namesVar = true
+			}
 			next := 0
 			for _, m := range reTag.FindAllStringSubmatchIndex(line, -1) {
 				if !realFlag(line, spans, m[0], "--tag") {
@@ -544,6 +579,14 @@ func scanFile(body string) scan {
 			}
 			for ; next < len(events); next++ {
 				stack = apply(stack, events[next])
+			}
+			for _, e := range events {
+				switch e.kind {
+				case "if":
+					pending = len(stack) - 1 // this block's condition is open until `then`
+				case "then":
+					pending = -1
+				}
 			}
 		}
 		if len(stack) > 0 {
@@ -602,6 +645,7 @@ func apply(stack []block, e blockEvent) []block {
 	switch e.kind {
 	case "if":
 		return append(stack, block{gate: e.gate, namesVar: e.namesVar})
+	case "then": // structure-free: it only closes a condition, which scanFile tracks
 	case "else", "elif":
 		// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set would mark
 		// a mutable tag there as gated when it publishes from precisely the refs the

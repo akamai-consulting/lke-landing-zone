@@ -112,7 +112,7 @@ func TestGateThatIgnoresTheRefIsRejected(t *testing.T) {
 	body := rep(t, good,
 		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}`,
 		`  PUBLISH_MUTABLE: true`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not consult `github.ref`") {
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not test `github.ref ==`") {
 		t.Fatalf("a gate that ignores the ref must be rejected, got:\n%s", got)
 	}
 }
@@ -426,7 +426,7 @@ func TestAStepLevelOverrideOfTheGateIsRejected(t *testing.T) {
 	// reading the one that loses.
 	body := rep(t, good, "      - name: Build and push\n",
 		"      - name: Build and push\n        env:\n          PUBLISH_MUTABLE: 'true'\n")
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not consult `github.ref`") {
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not test `github.ref ==`") {
 		t.Fatalf("a step-level override must be rejected, got:\n%s", got)
 	}
 }
@@ -628,5 +628,68 @@ func TestHerestringIsNotAHeredoc(t *testing.T) {
 		"          set -euo pipefail\n          grep -q main <<<mainline\n")
 	if ps := judgeBody(t, body); len(ps) != 0 {
 		t.Fatalf("a herestring must not be read as a heredoc, got:\n%s", msgs(ps))
+	}
+}
+
+// ── Round six: the expression is a condition too ─────────────────────────────
+
+func TestInvertedYAMLGateIsRejected(t *testing.T) {
+	// The shell side goes to some lengths to reject `!=`; the YAML side only asked
+	// whether the string "github.ref" appeared anywhere in the expression. So the
+	// same inversion, moved one layer up, passed clean: publish the mutable tags
+	// from every ref EXCEPT the default branch.
+	body := rep(t, good, `(github.ref == 'refs/heads/main')`, `(github.ref != 'refs/heads/main')`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "!=") {
+		t.Fatalf("an inverted gate expression must be rejected, got:\n%s", got)
+	}
+}
+
+func TestRefNameGateIsRejected(t *testing.T) {
+	// `github.ref_name` CONTAINS "github.ref" and is a different context: it is
+	// `main`, not `refs/heads/main`, so this gate is false on every ref and quietly
+	// stops republishing `:latest` on main — the failure-OPEN direction the workflow
+	// comment argues about, waved through by a substring test.
+	body := rep(t, good, `(github.ref == 'refs/heads/main')`, `(github.ref_name == 'main')`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "github.ref") {
+		t.Fatalf("a ref_name gate must be rejected, got:\n%s", got)
+	}
+}
+
+func TestArithmeticShiftIsNotAHeredoc(t *testing.T) {
+	// `$((1 << attempt))` is arithmetic, not a heredoc — and this workflow's retry
+	// loop already computes its backoff that way.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          sleep $((1 << attempt))\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("arithmetic must not be read as a heredoc, got:\n%s", msgs(ps))
+	}
+}
+
+func TestTagFlagInAnAssignmentIsAPublish(t *testing.T) {
+	// `EXTRA="--tag …:latest"` expanded onto the build line is a publish with the
+	// whole flag quoted. A span that BEGINS with the flag is an argument list; the
+	// flag in the middle of a sentence is still prose.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          EXTRA="--tag ${REPO}/${IMAGE}:latest"`+"\n"+
+			"          docker buildx build --push \"${TAGS[@]}\" ${EXTRA} .\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("a --tag inside an assignment must be judged, got:\n%s", got)
+	}
+}
+
+func TestConditionSpanningLinesStillNamesTheGate(t *testing.T) {
+	// A condition can wrap. Reading only the `if`'s first physical line meant the
+	// test that mentions PUBLISH_MUTABLE was invisible, and every tag in the body
+	// was told to "move it inside the gate" it was already inside.
+	body := rep(t, good, `          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n",
+		"          if [ \"${GITHUB_REF_NAME}\" = \"main\" ] && \\\n"+
+			"             [ \"${PUBLISH_MUTABLE}\" = \"yes\" ]\n"+
+			"          then\n")
+	got := msgs(judgeBody(t, body))
+	if !strings.Contains(got, "canonical") {
+		t.Fatalf("a wrapped condition naming the gate must be reported as non-canonical, got:\n%s", got)
+	}
+	if strings.Contains(got, "move it inside") {
+		t.Fatalf("it must not send the author into a circle, got:\n%s", got)
 	}
 }
