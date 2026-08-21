@@ -107,21 +107,35 @@ const (
 // SAME account, and calling LKEVersionClient() twice would have let one question be
 // answered by a token and the other by nothing (or, after a test substituted the
 // var mid-run, by two different fakes).
-func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool) {
+// `ok` MEANS USABLE, `read` MEANS ANSWERED, AND THEY ARE NOT THE SAME BOOL. An
+// empty catalog is folded into ok=false deliberately — there is nothing in it to
+// derive a pin from, and every caller wanting a version must degrade identically
+// whether the read failed or came back empty.
+//
+// BUT THE CALLER ALSO EXPLAINS ITSELF, and there the two are opposite claims. `llz
+// env add` reports where the version it wrote came from, and with one bool it said
+// "this account was never asked" about accounts that had answered — a claim llz
+// never verified, in the sentence whose entire job is to say what it did and did
+// not do. Same class as the cluster read returning (running, asked).
+func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
 	if c == nil {
 		// Silent on the no-token path, like objClustersInRegion: CheckRegion runs
 		// first in the same command and has already said it once, and
 		// reportSkippedAccountCheck is a once-per-process notice for that reason.
-		return nil, false
+		return nil, false, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountReadBudget)
 	defer cancel()
 	all, err := c.ListLKEVersions(ctx, linode.LKETierEnterprise)
-	if err != nil || len(all) == 0 {
-		reportSkippedAccountCheck("--k8s-version", firstNonNilErr(err, errEmptyAccountListing))
-		return nil, false
+	if err != nil {
+		reportSkippedAccountCheck("--k8s-version", err)
+		return nil, false, false
 	}
-	return all, true
+	if len(all) == 0 {
+		reportSkippedAccountCheck("--k8s-version", errEmptyAccountListing)
+		return nil, false, true
+	}
+	return all, true, true
 }
 
 // Deployment names the cluster `llz env add` is about to author, so the resolver
@@ -254,8 +268,14 @@ func classifyClusters(clusters []map[string]any, d Deployment) clusterLookup {
 	// command and the preflight cannot come to different conclusions about which
 	// cluster belongs to a deployment.
 	m := linode.MatchingClusters(clusters, d.ClusterLabel, d.Region)
-	ids := linode.MatchClusterIDs(clusters, d.ClusterLabel, d.Region)
 	l := clusterLookup{Matches: len(m), Asked: true}
+	if len(m) == 0 {
+		// THE COMMON CASE ON A FRESH INSTANCE, and it needs no ids. MatchClusterIDs
+		// re-runs the whole match to build them, so computing them up front walked the
+		// account listing twice to produce a slice nothing then read.
+		return l
+	}
+	ids := linode.MatchClusterIDs(clusters, d.ClusterLabel, d.Region)
 	switch {
 	case len(m) > 1:
 		// AMBIGUITY IS NOT SILENCE. Several clusters at one label+region is an account
@@ -281,7 +301,15 @@ func classifyClusters(clusters []map[string]any, d Deployment) clusterLookup {
 		return l
 	case len(m) == 1:
 		l.ID = ids[0]
-		l.Running = strings.TrimSpace(mapString(m[0], "k8s_version"))
+		// linode.ClusterVersionFor, NOT the same two lines again. It owns "the version
+		// of the ONE cluster matching this deployment" — the rule ClusterRunsVersion,
+		// and therefore the preflight, is written in terms of — and its own doc names
+		// the change it expects next (a deny-list of terminal `status` values, once
+		// those are measured). A second copy here would silently not get it, and `llz
+		// env add` and `llz ci assert-k8s-version` would then disagree about which
+		// cluster is this deployment's while both looked correct: the exact drift #443
+		// extracted the matcher to prevent.
+		l.Running = linode.ClusterVersionFor(clusters, d.ClusterLabel, d.Region)
 		if l.Running == "" {
 			// FOUND IT, AND IT WILL NOT SAY WHAT IT RUNS. Indistinguishable from "no such
 			// cluster" until this case existed, so llz seeded the newest over a live
@@ -348,6 +376,11 @@ type K8sVersionChoice struct {
 	// landingzone.yaml is seeded with. "" when the catalog could not be read or
 	// holds nothing that could be sent to the create API.
 	Newest string
+	// CatalogRead records that the account ANSWERED, which len(Offered) cannot: a
+	// read that failed and a read that returned an empty catalog both leave Offered
+	// nil, and they license opposite sentences — "this account was never asked" is a
+	// claim, and it was being made about accounts that had answered.
+	CatalogRead bool
 	// Offered is the catalog itself; nil when the answer is unknown.
 	//
 	// It is here so a caller can judge a pin this function was never asked about —
@@ -410,8 +443,8 @@ type K8sVersionChoice struct {
 // everything above, unchanged.
 func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	client := LKEVersionClient()
-	offered, ok := accountLKEVersions(client)
-	c := K8sVersionChoice{Pin: strings.TrimSpace(want)}
+	offered, ok, catalogRead := accountLKEVersions(client)
+	c := K8sVersionChoice{Pin: strings.TrimSpace(want), CatalogRead: catalogRead}
 	var lk clusterLookup
 	if !ok {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its
@@ -434,10 +467,21 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// The cost of getting this wrong is the whole feature: a re-scaffold over a
 		// live cluster would silently re-seed today's newest and plan the upgrade #453
 		// exists to prevent, with nothing on disk left to warn from. No token still
-		// costs nothing — runningVersionFor returns immediately on a nil client.
+		// costs nothing — lookupCluster returns immediately on a nil client.
+		//
+		// ONLY WHEN ITS ANSWER CAN CHANGE THE WRITE, which is the same rule the
+		// catalog-answered path below states and tests (TestAConfirmedPinCostsNoClusterRead).
+		// An explicit --k8s-version wins here whatever the account holds — the pin is
+		// unjudgeable without a catalog and spec.defaults falls through to llz's
+		// compiled literal either way — so an unconditional read bought nothing and
+		// cost a laptop with a stale token two more 20s timeouts plus a warning
+		// paragraph about a question that had no bearing on the run.
+		if c.Pin != "" {
+			return c, nil
+		}
 		lk = lookupCluster(client, d)
 		c.Running = lk.Running
-		if c.Pin == "" && c.Running != "" {
+		if c.Running != "" {
 			c.Pin = c.Running
 			// offered is nil here, so CheckVersion answers Unknown and adoptionMessage
 			// degrades to the plain note — which claims nothing about a catalog llz
@@ -479,6 +523,13 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// the two arms this read exists for: no pin at all (adopt what the cluster runs
 	// instead of seeding today's newest), and a pin the catalog REJECTS (exempt it
 	// if that is precisely what the cluster runs).
+	//
+	// ONE EXCEPTION, ON THE PATH ABOVE THIS ONE: when the CATALOG could not be read
+	// at all, the cluster read happens whatever --k8s-version says. It cannot change
+	// the write there — an unjudgeable pin passes through as written — and it is
+	// still asked, because a re-scaffold over a live cluster is the state that path
+	// most needs to be able to describe and nothing else can witness it. Stating the
+	// rule and then quietly breaking it is how a cost comment stops being read.
 	//
 	// SO A GENUINELY FRESH `llz new` STILL PAYS ONE REQUEST, and the alternative was
 	// worse. Gating on "landingzone.yaml exists or environments/ is non-empty" was
@@ -540,14 +591,22 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// falsehood, and CheckVersion owns the verdict — nothing here may become the
 		// stricter of two checks that are supposed to be one. What this may do is
 		// refuse to let the operator walk away believing it checked out.
+		//
+		// AND THE REMEDY MAY NOT NAME THE ROW IT JUST REJECTED. `offered` is the
+		// catalog that MATCHED — coarse rows and all — so printing it whole told the
+		// operator to "pass a build id from this list" whose only entry, on an
+		// all-coarse catalog, was the pin they had just been warned about. In that same
+		// run the "names no full build id" warning above has already printed the same
+		// list, so llz said two contradictory things about one catalog: exactly the
+		// defect this arm was added to remove, one message along.
 		c.Warning = fmt.Sprintf(
 			"--k8s-version %q matches a row in this account's catalog, but it is not a full LKE-E build id\n"+
 				"  (those carry an `+lke` suffix, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
 				"  VERBATIM. The catalog row it matched is just as coarse, so `llz doctor` and\n"+
 				"  `llz ci assert-k8s-version` will both pass it, and the cluster apply is what discovers the\n"+
 				"  problem ~15 minutes in with `[400] [k8s_version] k8s_version is not valid`.\n"+
-				"  Pass a build id from this list instead: %s",
-			c.Pin, strings.Join(offered, ", "))
+				"%s",
+			c.Pin, coarsePinRemedy(offered))
 		return c, nil
 	case linode.VersionUnknown:
 		// The catalog answered in a shape that cannot settle this pin. Say nothing
@@ -582,7 +641,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// THE REMEDY USED TO BE WRONG FOR ONE REAL CASE, AND NOW IT IS REACHABLE. "Omit
 	// it and llz picks the newest" is right for a deployment that does not exist yet
 	// and actively harmful for one being RE-SCAFFOLDED over a live cluster — so this
-	// verb now asks the account (runningVersionFor) before getting here, and the
+	// verb now asks the account (lookupCluster) before getting here, and the
 	// exemption above has already returned for the case where the pin IS what the
 	// cluster runs. What is left is a genuinely unbuildable pin, and the advice
 	// depends on what the account actually said.
@@ -619,8 +678,15 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		lookedUp = fmt.Sprintf("  Whether a cluster named %q already runs it could not be checked (the read above says\n"+
 			"  why), so the catalog verdict stands. Re-run if that read was transient.\n", d.ClusterLabel)
 	case lk.Unreadable():
-		lookedUp = fmt.Sprintf("  Cluster %q (id %d) exists but reports no k8s_version, so llz cannot tell whether it is\n"+
-			"  already on this pin. Read its version and pass that, or move the pin to a listed one.\n",
+		// NOT "read its version and pass that", WHICH IS THIS SAME ERROR AGAIN. The
+		// exemption above fires on lk.Running, and lk.Running is empty precisely
+		// because the account reports no k8s_version for this cluster — so passing the
+		// right version by hand lands back here, verbatim, and the operator reads it as
+		// a typo they cannot find. Name the two things that actually terminate.
+		lookedUp = fmt.Sprintf("  Cluster %q (id %d) exists but the account reports no k8s_version for it, so llz cannot\n"+
+			"  exempt this pin no matter what you pass — the exemption is decided from that field.\n"+
+			"  Either move the pin to a listed version, or scaffold without --k8s-version and set\n"+
+			"  cluster.k8sVersion in environments/<env>.yaml by hand once the file exists.\n",
 			d.ClusterLabel, lk.ID)
 	case lk.Matches > 1:
 		lookedUp = fmt.Sprintf("  %d clusters share the label %q here, so llz will not decide which one this pin\n"+
@@ -636,8 +702,32 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"  Unchanged, the cluster apply fails ~15 minutes in with\n"+
 		"  `[400] [k8s_version] k8s_version is not valid`.\n"+
 		"  Omit --k8s-version: llz picks the newest your account offers, or — if a cluster for this\n"+
-		"  deployment does exist — the version it is ALREADY RUNNING, which plans no diff at all.",
+		"  deployment does exist AND the account reports its version — the one it is ALREADY RUNNING,\n"+
+		"  which plans no diff at all.",
 		c.Pin, strings.Join(offered, ", "), lookedUp)
+}
+
+// coarsePinRemedy is the last line of the coarse-pin warning: the versions in this
+// catalog that could actually be pinned, or an admission that there are none.
+//
+// IT FILTERS, BECAUSE THE CATALOG IS WHY THE OPERATOR IS HERE. A coarse pin gets
+// warned about precisely when the row it matched is coarse, so a remedy that
+// reprints the whole catalog offers the rejected spelling back as the fix. When
+// EVERY entry is coarse there is nothing to offer at all, and llz has already said
+// so in the "names no full build id" warning — repeat the verdict rather than
+// pointing at a list that cannot answer it.
+func coarsePinRemedy(offered []string) string {
+	var builds []string
+	for _, o := range offered {
+		if e := strings.TrimSpace(o); linode.NamesABuild(e) {
+			builds = append(builds, e)
+		}
+	}
+	if len(builds) == 0 {
+		return "  This account's catalog names no full build id at all, so there is nothing here to pin\n" +
+			"  instead. Check it with `llz doctor` before building."
+	}
+	return "  Pass a build id from this list instead: " + strings.Join(builds, ", ")
 }
 
 // orAnyRegion names the region a lookup was scoped to, for a message. `llz env

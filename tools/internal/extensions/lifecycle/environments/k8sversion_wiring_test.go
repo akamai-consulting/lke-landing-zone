@@ -68,6 +68,13 @@ func liveCluster(env, region, version string) map[string]any {
 		"label":       envdef.ClusterLabelFor("platform-support", env),
 		"region":      region,
 		"k8s_version": version,
+		// float64, WHICH IS WHAT encoding/json DECODES A NUMBER TO — the shape
+		// linode.MatchClusterIDs is written against. Omitting it entirely was worse than
+		// a wrong type: the orphan warning under test renders the id, so the fixture
+		// produced "id 0 … delete that cluster" and the assertions below still passed.
+		// A gate whose fixture cannot express the field its subject prints is one the
+		// message can rot behind.
+		"id": float64(4242),
 	}
 }
 
@@ -304,6 +311,7 @@ func TestARescaffoldOverALiveClusterSaysSo(t *testing.T) {
 		"v1.33.6+lke7",         // and what that cluster runs
 		"RE-CREATED",           // and the state the operator now carries
 		"ORPHAN",               // and the one way this exemption is wrong
+		"4242",                 // and the id the remedy tells them to act on
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("scaffolding over a live cluster at a rotated-out version must say %q; stderr was:\n%s", want, out)
@@ -1108,5 +1116,33 @@ func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
 	if strings.Contains(step, "if [[ -z \"${E2E_K8S_VERSION") {
 		t.Error("the empty case is handled by `llz env add` itself; a shell conditional here is " +
 			"untestable inline bash the budget gate charges for")
+	}
+}
+
+// TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked — the consumer half.
+//
+// seedSource explains, in the preview and in the re-seed warning, WHERE the version
+// llz just wrote came from. It keyed the three-way split on len(k8s.Offered), which
+// cannot separate "the read failed" from "the account answered and its catalog was
+// empty" — so an account that answered was told it "was never asked", in the one
+// sentence whose whole job is to say what llz did and did not do.
+func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
+	answered := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true})
+	if strings.Contains(answered, "never asked") {
+		t.Errorf("the account answered — an empty catalog is an answer; got %q", answered)
+	}
+	if !strings.Contains(answered, "no full build id") {
+		t.Errorf("it must say what the answer was missing, not merely that a default was used; got %q", answered)
+	}
+
+	unasked := seedSource(instanceresolve.K8sVersionChoice{})
+	if !strings.Contains(unasked, "never asked") {
+		t.Errorf("with no successful read llz genuinely did not ask, and must say so rather than "+
+			"implying it judged a catalog; got %q", unasked)
+	}
+
+	derived := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true, Newest: "v1.34.6+lke2"})
+	if !strings.Contains(derived, "newest") {
+		t.Errorf("a derived seed must name where it came from; got %q", derived)
 	}
 }

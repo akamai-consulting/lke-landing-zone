@@ -967,3 +967,39 @@ func TestAConfirmationIsOnlyClaimedForAPinTheCreateAPICanTake(t *testing.T) {
 		t.Error("a full build id present in the catalog must still be confirmed")
 	}
 }
+
+// TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne — the producer half of a
+// distinction len(Offered) cannot make.
+//
+// A read that FAILED and a read that returned an EMPTY catalog both leave Offered
+// nil, and they license opposite sentences. `llz env add` reported the seed's
+// origin off len(Offered) and therefore told accounts that had answered that they
+// "were never asked" — a claim llz had not verified, printed as the explanation for
+// what it just wrote. Same class as the cluster-read arm this file already fixed.
+func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
+	noClusterReadPause(t)
+
+	t.Run("the account answered, with nothing in it", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{versions: nil})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("an empty catalog must not fail the scaffold: %v", err)
+		}
+		if !c.CatalogRead {
+			t.Error("the catalog read succeeded, so CatalogRead must be true — an empty answer IS " +
+				"an answer, and reporting it as 'never asked' is a claim llz never verified")
+		}
+	})
+
+	t.Run("the read failed", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{err: errors.New("401 Invalid Token")})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("an unreadable catalog must not fail the scaffold: %v", err)
+		}
+		if c.CatalogRead {
+			t.Error("the read failed, so CatalogRead must be false — otherwise the flag is decorative " +
+				"and the caller is back to guessing from len(Offered)")
+		}
+	})
+}

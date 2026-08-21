@@ -565,7 +565,10 @@ func seedSource(k8s instanceresolve.K8sVersionChoice) string {
 	switch {
 	case k8s.Newest != "":
 		return "the newest LKE-Enterprise version this account offers"
-	case len(k8s.Offered) > 0:
+	case k8s.CatalogRead:
+		// NOT len(k8s.Offered) > 0. A successful read of an EMPTY catalog leaves Offered
+		// nil, so keying on it told an account that had answered it "was never asked" —
+		// the same message-lies class the cluster-read arm was fixed for.
 		return "llz's compiled default — the account's catalog names no full build id"
 	default:
 		return "llz's compiled default — this account was never asked"
