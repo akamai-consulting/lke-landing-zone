@@ -147,9 +147,20 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome Cata
 		//
 		// The `read` return below is the same distinction, and it was already being
 		// made here — the notice simply had not been told about it.
+		//
+		// AND IT SAYS NOTHING ABOUT WHAT THE SPEC ENDS UP WITH, which the first cut
+		// did ("the spec keeps its compiled default"). This fires from
+		// accountLKEVersions, BEFORE the pin is decided, and three things can still
+		// happen after it: a live cluster is adopted and Pin becomes the version it
+		// runs, an explicit --k8s-version is written as given, or a later `env add`
+		// inherits spec.defaults and falls back to nothing at all. The sibling warning
+		// below carries a comment spelling out this same rule — "only the FIRST
+		// `llz env add` seeds anything ... this function cannot tell which, so it says
+		// what it actually knows" — and this one contradicted it from 400 lines up.
 		fmt.Fprintln(os.Stderr, cigate.Warning(
-			"this Linode account lists NO LKE-Enterprise versions, so llz cannot derive\n"+
-				"  cluster.k8sVersion and the spec keeps its compiled default.\n"+
+			"this Linode account lists NO LKE-Enterprise versions, so its catalog cannot decide\n"+
+				"  cluster.k8sVersion — whatever the spec ends up pinning is not a version llz confirmed\n"+
+				"  against this account.\n"+
 				"  The account answered — this is not a token problem. LKE-Enterprise may not be enabled\n"+
 				"  on it, or it may be a region/account combination that offers none.\n"+
 				"  Check it with `llz doctor` before building."))

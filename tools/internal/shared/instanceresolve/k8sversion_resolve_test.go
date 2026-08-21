@@ -954,6 +954,40 @@ func TestAskedAndRefusedIsNotNeverAsked(t *testing.T) {
 	}
 }
 
+// TestTheEmptyCatalogWarningDoesNotPREDICTThePin.
+//
+// It fires from accountLKEVersions, BEFORE the pin is decided, and three things can
+// still happen after it: a live cluster is adopted and Pin becomes what it runs, an
+// explicit --k8s-version is written as given, or a later `env add` inherits
+// spec.defaults and falls back to nothing at all. The first cut said "the spec keeps
+// its compiled default" — contradicting, from 400 lines up, the sibling warning
+// whose own comment spells out this exact rule.
+func TestTheEmptyCatalogWarningDoesNotPREDICTThePin(t *testing.T) {
+	// The case that most obviously falsifies the old claim: an empty catalog AND a
+	// live cluster, so the pin llz writes is the adopted one, not any default.
+	withCatalog(t, &fakeVersionLister{
+		versions: nil,
+		clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+	})
+	var c K8sVersionChoice
+	out := captureStderr(t, func() {
+		var err error
+		if c, err = ResolveK8sVersion("", lab); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if c.Pin != "v1.33.6+lke7" {
+		t.Fatalf("premise broken: Pin = %q, want the adopted version", c.Pin)
+	}
+	if !strings.Contains(out, "lists NO LKE-Enterprise versions") {
+		t.Fatalf("the empty-catalog warning did not fire:\n%s", out)
+	}
+	if strings.Contains(out, "keeps its compiled default") {
+		t.Errorf("the warning predicts a compiled default while llz went on to pin %q from a live "+
+			"cluster — it runs BEFORE the pin is decided and cannot know:\n%s", c.Pin, out)
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request

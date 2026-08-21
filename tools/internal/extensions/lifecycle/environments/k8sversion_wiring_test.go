@@ -486,6 +486,51 @@ func TestAStarterExampleIsNotADeployment(t *testing.T) {
 	}
 }
 
+// TestTheThirdCatalogStateCHANGESWhatLlzSays.
+//
+// Round 9 split CatalogRead into three states because "no token" and "asked, and
+// the API refused" licensed different sentences and different remedies. The
+// resolver test pins that CatalogFailed is PRODUCED — and nothing pinned that any
+// consumer says anything different about it, which is the entire user-visible point
+// of the third state. Mutation probe: rewriting both CatalogFailed arms back to the
+// CatalogNotAsked wording left the environments suite green.
+//
+// So this asserts the two consumers DISTINGUISH all three, without pinning their
+// wording: what must hold is that a state llz can tell apart is one the operator can
+// tell apart too.
+func TestTheThirdCatalogStateCHANGESWhatLlzSays(t *testing.T) {
+	states := map[string]instanceresolve.K8sVersionChoice{
+		"not asked": {Catalog: instanceresolve.CatalogNotAsked},
+		"failed":    {Catalog: instanceresolve.CatalogFailed},
+		"answered":  {Catalog: instanceresolve.CatalogAnswered},
+	}
+	for _, render := range []struct {
+		name string
+		fn   func(instanceresolve.K8sVersionChoice) string
+	}{
+		{"k8sVersionBanner", func(k instanceresolve.K8sVersionChoice) string { return k8sVersionBanner(k, false, "") }},
+		{"seedSource", seedSource},
+	} {
+		seen := map[string]string{}
+		for state, k8s := range states {
+			got := render.fn(k8s)
+			if prior, dup := seen[got]; dup {
+				t.Errorf("%s renders %q for BOTH the %q and %q catalog states — llz knows they are "+
+					"different (one is 'export a token', the other is 'fix the token you have') and "+
+					"the operator cannot tell", render.name, got, prior, state)
+			}
+			seen[got] = state
+		}
+	}
+	// AND THE FAILED ARM POINTS AT THE DIAGNOSTIC THAT SAYS WHY, which is the whole
+	// reason the state is worth distinguishing: the skip notice above it names the
+	// status code.
+	if src := seedSource(states["failed"]); !strings.Contains(src, "did not answer") {
+		t.Errorf("seedSource for a FAILED read = %q, which does not tell the operator the account was "+
+			"asked and refused", src)
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //
