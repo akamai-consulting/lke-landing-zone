@@ -714,6 +714,89 @@ func captureStderr(t *testing.T, fn func()) string {
 	return out
 }
 
+// captureStdout is captureStderr for the other stream. The two version decisions
+// `llz env add` makes are announced on DIFFERENT streams on purpose — a warning is
+// a consequence, a preview line is information — so a gate that watches only one
+// of them watches half the output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	os.Stdout = prev
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
+// TestDryRunDisclosesTheSharedDefaultItWouldSeed.
+//
+// THE BANNER AND spec.defaults ANSWER DIFFERENT QUESTIONS, and with an explicit
+// --k8s-version they hold different values: the flag is per-deployment, while
+// spec.defaults is seeded from the account's NEWEST and is what every deployment
+// added afterwards inherits. `--dry-run` showed the first and said nothing at all
+// about the second — so the value with the longest reach was the one the preview
+// omitted, which is the opposite of what a preview is for.
+func TestDryRunDisclosesTheSharedDefaultItWouldSeed(t *testing.T) {
+	// The pin is offered but is NOT the newest, so "the preview just echoes the
+	// banner" cannot pass this.
+	catalog := &fakeCatalog{versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"}}
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, catalog, envdef.Opts{
+			Region: "us-ord", ObjCluster: "us-ord-1", K8sVersion: "v1.32.9+lke4", DryRun: true,
+		})
+	})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if !strings.Contains(out, "v1.34.6+lke2") {
+		t.Errorf("--dry-run never named the k8sVersion it would seed into spec.defaults (v1.34.6+lke2), "+
+			"which every deployment added later inherits. got:\n%s", out)
+	}
+	if !strings.Contains(out, "inherited by every deployment") {
+		t.Errorf("--dry-run named a version without saying it is the SHARED default, which is the "+
+			"whole difference from the per-deployment pin in the banner. got:\n%s", out)
+	}
+}
+
+// TestTheSeedIsDisclosedWithNoAccountToo is the arm the guard used to skip.
+//
+// The disclosure was written as `if k8s.Newest != ""`, which reads as "only say
+// something when we derived something" and silences precisely the operator who
+// most needs to hear it: with no LINODE_TOKEN the seed falls through to a literal
+// compiled months ago, and that literal becomes every deployment's shared default.
+func TestTheSeedIsDisclosedWithNoAccountToo(t *testing.T) {
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, nil, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	// THROUGH envdef.SeedK8sVersion, not a literal restated here: the gate must read
+	// the same function the write does, or it pins a copy that goes stale on its own.
+	if !strings.Contains(out, envdef.SeedK8sVersion("")) {
+		t.Errorf("`llz env add` seeded spec.defaults from a compiled default (%s) without saying so. got:\n%s",
+			envdef.SeedK8sVersion(""), out)
+	}
+	if !strings.Contains(out, "this account was never asked") {
+		t.Errorf("the operator cannot tell a derived pin from a compiled one, which earn very "+
+			"different reactions. got:\n%s", out)
+	}
+}
+
 // TestReSeedingAMissingLandingZoneSaysWhoInheritsTheNewPin.
 //
 // THE ONE PATH THAT BYPASSES EVERY OTHER GUARD HERE. An absent landingzone.yaml

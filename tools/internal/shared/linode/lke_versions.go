@@ -330,6 +330,30 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 // back empty on a malformed tree — without this, every cluster on the account
 // would match and a one-cluster account would hand back a confident answer about
 // a deployment nobody named.
+//
+// IT DOES NOT CONSULT `status`, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
+// The obvious refinement is to skip a cluster that is deleting or errored, so a
+// half-torn-down one is not adopted as "already runs X". Two things argue against
+// it and neither is about effort:
+//
+//   - NOTHING IN THIS REPO HAS EVER OBSERVED AN LKE-E CLUSTER'S `status` VALUES.
+//     The one measured `status` here is Postgres's (credrotate). This file already
+//     carries a warning about exactly this class of guess — see ClusterRunsVersion
+//     on the cluster object's `k8s_version` spelling — and the rule it settled on
+//     is to compare what has been seen and let an unmeasured shape fail LOUDLY
+//     rather than silently. A filter keyed on an unverified enum fails the other
+//     way: spell it wrong and it quietly excludes nothing, or quietly excludes
+//     everything and disables the exemption for every long-lived deployment.
+//   - IT WOULD NOT CATCH THE HAZARD ANYWAY. The orphan that actually costs a build
+//     is a perfectly HEALTHY cluster whose tfstate is gone, so terraform plans a
+//     create — `status` says "ready" and always will. That case is bounded where it
+//     can be: `llz reap` sweeps orphans, and the one caller that WRITES a pin off
+//     this answer names the possibility in its own output.
+//
+// So the shape to add, if the values are ever measured, is an explicit deny-list of
+// known-terminal states that keeps matching when the field is absent or unknown —
+// never an allow-list, which would turn one unmeasured spelling into a silent
+// account-wide regression.
 func ClusterVersionFor(clusters []map[string]any, label, region string) string {
 	if label == "" {
 		return ""

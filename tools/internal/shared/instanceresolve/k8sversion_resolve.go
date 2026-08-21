@@ -119,43 +119,69 @@ type Deployment struct {
 	Region       string
 }
 
-// runningVersionFor asks the account what THIS deployment's cluster is running,
-// or "" when there is nothing to adopt.
+// clusterReadSleep is the pause between cluster-read attempts. Package var so a
+// test does not pay linode.ClusterReadRetryPause of real time; the doctor's
+// lkeSleep is the same seam for the same reason.
+var clusterReadSleep = time.Sleep
+
+// runningVersionFor asks the account what THIS deployment's cluster is running.
 //
-// BEST-EFFORT AND SINGLE-ATTEMPT, unlike the preflight's read of the same route.
-// There, an unprovable exemption would let a proven-bad pin acquit, so a single
-// 503 must not decide it and the read retries (linode.ClusterReadAttempts). Here
-// the fallback is "behave exactly as `llz env add` did before", the command is
-// interactive and costs seconds to re-run, and a 2s retry pause on the scaffold
-// path buys a case a re-run already covers.
+// asked IS NOT THE SAME AS A NON-EMPTY running, AND CONFLATING THE TWO IS A LIE THE
+// CALLER THEN PRINTS. A failed read and an account with no such cluster both yield no
+// version, and they license opposite sentences: one is "we looked and there is nothing
+// to exempt this pin", which is evidence, and the other is "we could not look", which
+// is not. The first cut returned one string, so a transient 503 produced
+// `No single cluster named "…" is on this account` — a claim llz had never
+// verified — in the message that then failed the operator's build.
+//
+// IT RETRIES, ON THE SAME BUDGET AS THE TWO CALLERS THAT ALREADY READ THIS ROUTE
+// (linode.ClusterReadAttempts). An earlier revision here was single-attempt on the
+// grounds that the fallback is "behave as `llz env add` did before" — true for the
+// no-pin arm, and false for the one that matters: an explicit --k8s-version is
+// REJECTED unless this read acquits it, so one 503 turns a deployment whose cluster
+// is running the pin into a hard failure, on exactly the remedy
+// `llz ci assert-k8s-version` recommends. The preflight refuses to let an
+// unprovable exemption decide that, and so does this.
 //
 // WHAT IT DOES NOT DO IS GO QUIET. The fallback for a no-pin re-scaffold is to
 // seed today's newest, which against a live cluster is the unrequested
-// control-plane upgrade this whole exemption exists to prevent — so a read that
-// failed says so, rather than being indistinguishable from an account with no such
-// cluster.
-func runningVersionFor(c LKEVersionLister, d Deployment) string {
+// control-plane upgrade this whole exemption exists to prevent.
+func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked bool) {
 	if c == nil || d.ClusterLabel == "" {
-		return ""
+		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountReadTimeout)
 	defer cancel()
-	clusters, err := c.ListClusters(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
-			"whether a cluster named %q already exists could not be checked: %s\n"+
-				"  llz therefore cannot tell a RE-SCAFFOLD over a live cluster from a first run, and falls\n"+
-				"  back to seeding the newest version this account offers. If that cluster exists and runs a\n"+
-				"  DIFFERENT version, set cluster.k8sVersion to the running one in environments/<env>.yaml\n"+
-				"  before the next apply — otherwise terraform plans a control-plane upgrade nobody asked for.",
-			d.ClusterLabel, firstLine(err.Error()))))
-		return ""
+	var err error
+	for attempt := 1; attempt <= linode.ClusterReadAttempts; attempt++ {
+		var clusters []map[string]any
+		clusters, err = c.ListClusters(ctx)
+		if err == nil {
+			// linode.ClusterVersionFor, NOT a second loop over label+region here. It is
+			// the same matching rule linode.ClusterRunsVersion is written in terms of,
+			// so this command and the preflight cannot come to different conclusions
+			// about which cluster belongs to a deployment.
+			return linode.ClusterVersionFor(clusters, d.ClusterLabel, d.Region), true
+		}
+		// OUR OWN DEADLINE IS NOT A TRANSIENT ERROR, asked of ctx and never of the
+		// error — an http.Client.Timeout unwraps to context.DeadlineExceeded, so
+		// classifying on the error would read one slow request as the whole budget
+		// running out. Same arm, and same reasoning, as the preflight's.
+		if ctx.Err() != nil {
+			break
+		}
+		if attempt < linode.ClusterReadAttempts {
+			clusterReadSleep(linode.ClusterReadRetryPause)
+		}
 	}
-	// linode.ClusterVersionFor, NOT a second loop over label+region here. It is the
-	// same matching rule linode.ClusterRunsVersion is written in terms of, so this
-	// command and the preflight cannot come to different conclusions about which
-	// cluster belongs to a deployment.
-	return linode.ClusterVersionFor(clusters, d.ClusterLabel, d.Region)
+	fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+		"whether a cluster named %q already exists could not be checked: %s\n"+
+			"  llz therefore cannot tell a RE-SCAFFOLD over a live cluster from a first run, and falls\n"+
+			"  back to seeding the newest version this account offers. If that cluster exists and runs a\n"+
+			"  DIFFERENT version, set cluster.k8sVersion to the running one in environments/<env>.yaml\n"+
+			"  before the next apply — otherwise terraform plans a control-plane upgrade nobody asked for.",
+		d.ClusterLabel, firstLine(err.Error()))))
+	return "", false
 }
 
 // K8sVersionChoice is everything `llz env add` needs in order to decide a
@@ -294,8 +320,9 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// overlay deleted together — leaves NOTHING on disk, so a disk-shaped gate is
 	// blind in exactly the case the read was added for. One list call against an
 	// account with no clusters is the price of that case being covered at all.
+	askedAccount := false
 	if c.Pin == "" || verdict == linode.VersionNotOffered {
-		c.Running = runningVersionFor(client, d)
+		c.Running, askedAccount = runningVersionFor(client, d)
 	}
 
 	if c.Pin == "" {
@@ -393,9 +420,17 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// them is evidence.
 	lookedUp := "  Availability is PER-ACCOUNT and rotates within hours, so a version another account\n" +
 		"  can build says nothing about this one.\n"
-	if d.ClusterLabel != "" {
+	switch {
+	case askedAccount:
 		lookedUp = fmt.Sprintf("  No single cluster named %q is on this account, so nothing exempts this pin: k8s_version\n"+
 			"  reaches the API on a create, and a create sends exactly this string.\n", d.ClusterLabel)
+	case d.ClusterLabel != "":
+		// THE READ FAILED, AND THE VERDICT STILL STANDS — the preflight's own rule.
+		// What is in doubt is only the ESCAPE HATCH: the catalog read succeeded and the
+		// pin is not in it, and an unreadable cluster list is not evidence that a
+		// cluster exists. But llz must not claim it looked.
+		lookedUp = fmt.Sprintf("  Whether a cluster named %q already runs it could not be checked (the read above says\n"+
+			"  why), so the catalog verdict stands. Re-run if that read was transient.\n", d.ClusterLabel)
 	}
 	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 	return K8sVersionChoice{}, fmt.Errorf("--k8s-version %q is not an LKE-Enterprise version this account can build.\n"+

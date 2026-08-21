@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
@@ -33,6 +34,7 @@ type fakeVersionLister struct {
 	// see LKEVersionLister.
 	clusters     []map[string]any
 	clusterErr   error
+	failFirst    bool
 	clusterCalls int
 }
 
@@ -46,7 +48,21 @@ func (f *fakeVersionLister) ListLKEVersions(_ context.Context, tier string) ([]s
 
 func (f *fakeVersionLister) ListClusters(context.Context) ([]map[string]any, error) {
 	f.clusterCalls++
+	// failFirst models a TRANSIENT read — the shape the retry exists for. It fails
+	// exactly once and then answers, so a test can tell "retried" from "gave up".
+	if f.failFirst && f.clusterCalls == 1 {
+		return nil, errors.New("503 service unavailable")
+	}
 	return f.clusters, f.clusterErr
+}
+
+// noClusterReadPause stubs the retry pause. Without it every error-path test pays
+// linode.ClusterReadRetryPause of real time for a delay that is not under test.
+func noClusterReadPause(t *testing.T) {
+	t.Helper()
+	prev := clusterReadSleep
+	clusterReadSleep = func(time.Duration) {}
+	t.Cleanup(func() { clusterReadSleep = prev })
 }
 
 // cluster is one row of the account's cluster listing, in the shape
@@ -426,6 +442,7 @@ func TestARescaffoldOverALiveClusterPinsWhatItRuns(t *testing.T) {
 // is precisely the unrequested upgrade the read exists to prevent — so degrading
 // QUIETLY is the one thing it may not do.
 func TestTheClusterReadIsBestEffortAndSaysSoWhenItFails(t *testing.T) {
+	noClusterReadPause(t)
 	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503 service unavailable")})
 	out := captureStderr(t, func() {
 		c, err := ResolveK8sVersion("", lab)
@@ -440,6 +457,74 @@ func TestTheClusterReadIsBestEffortAndSaysSoWhenItFails(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("a failed cluster read must say %q; stderr was:\n%s", want, out)
 		}
+	}
+}
+
+// TestAFailedClusterReadDoesNotClaimTheAccountWasLookedAt.
+//
+// A failed read and an account with no such cluster both leave nothing to adopt,
+// and they license OPPOSITE sentences. The first cut of the rejection said
+// `No single cluster named "…" is on this account` off a 503 — a claim llz had
+// never verified, in the message that then failed the operator's build. The
+// verdict is unchanged (an unreadable cluster list is not evidence that a cluster
+// exists — the preflight's own rule); what changes is that llz says which it is.
+func TestAFailedClusterReadDoesNotClaimTheAccountWasLookedAt(t *testing.T) {
+	noClusterReadPause(t)
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503 service unavailable")})
+	_, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err == nil {
+		t.Fatal("an unprovable exemption must not discharge a proven-bad pin")
+	}
+	if strings.Contains(err.Error(), "No single cluster named") {
+		t.Errorf("the rejection claims the account was checked after the read FAILED:\n%s", err)
+	}
+	for _, want := range []string{"could not be checked", "the catalog verdict stands", "transient"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the rejection must say %q so a re-run is understood to be worth it; got:\n%s", want, err)
+		}
+	}
+}
+
+// TestATransientClusterReadDoesNotDecideADeploymentIsUnbuildable.
+//
+// The exemption is a PROOF that terraform will not send the pin, so one 503 must
+// not be what decides a running deployment is unbuildable — the same reasoning
+// linode.ClusterReadAttempts encodes for the preflight and `llz doctor`. An
+// earlier revision of this file read once, which turned a blip into a hard failure
+// on exactly the remedy `llz ci assert-k8s-version` recommends.
+func TestATransientClusterReadDoesNotDecideADeploymentIsUnbuildable(t *testing.T) {
+	noClusterReadPause(t)
+	f := &fakeVersionLister{
+		versions:  e2eAccountCatalog,
+		failFirst: true,
+		clusters:  []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+	}
+	withCatalog(t, f)
+	c, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+	if err != nil {
+		t.Fatalf("one transient 503 failed a pin the cluster is already running: %v", err)
+	}
+	if c.Running != "v1.33.6+lke7" {
+		t.Errorf("Running = %q, want the retried read's answer", c.Running)
+	}
+	if f.clusterCalls != 2 {
+		t.Errorf("listed the account's clusters %d time(s), want 2 (linode.ClusterReadAttempts)", f.clusterCalls)
+	}
+}
+
+// TestTheClusterReadRetryIsBounded — a bounded retry, not a spin. The budget is
+// linode.ClusterReadAttempts, shared with the two callers that already read this
+// route so the three cannot drift apart.
+func TestTheClusterReadRetryIsBounded(t *testing.T) {
+	noClusterReadPause(t)
+	f := &fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503 service unavailable")}
+	withCatalog(t, f)
+	if _, err := ResolveK8sVersion("", lab); err != nil {
+		t.Fatalf("a failed cluster read must not fail the scaffold: %v", err)
+	}
+	if f.clusterCalls != linode.ClusterReadAttempts {
+		t.Errorf("listed the account's clusters %d time(s), want linode.ClusterReadAttempts (%d)",
+			f.clusterCalls, linode.ClusterReadAttempts)
 	}
 }
 

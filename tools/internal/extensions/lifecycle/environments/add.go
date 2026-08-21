@@ -224,6 +224,17 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 		fmt.Println(color.Bold("Spec that would be authored, then `llz render`:"))
 		if _, err := os.Stat(lzPath); err != nil {
 			fmt.Printf("  %s  %s  %s\n", color.Cyan("would-create"), lzPath, color.Dim("(instance identity + shared defaults)"))
+			// AND THE VERSION IT WOULD SEED, which is a DIFFERENT decision from the
+			// banner's k8sVersion line and was the one state --dry-run showed nothing
+			// about. With an explicit --k8s-version the banner reads back the pin, which
+			// is per-deployment; spec.defaults is seeded from the account's newest, and
+			// every deployment added afterwards inherits THAT. So the preview said
+			// nothing at all about the value with the longest reach.
+			//
+			// THROUGH envdef.SeedK8sVersion, the function EnsureLandingZone itself calls,
+			// so the preview and the write cannot name different versions — including on
+			// the no-token path, where both fall through to llz's compiled default.
+			fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s.Newest)+", inherited by every deployment"))
 		} else {
 			fmt.Printf("  %s        %s  %s\n", color.Dim("exists"), lzPath, color.Dim("(left as-is)"))
 		}
@@ -249,9 +260,11 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	}
 	if created {
 		fmt.Printf("  %s  %s  %s\n", color.Green("created"), lzPath, color.Dim("(instance identity + shared defaults)"))
-		if k8s.Newest != "" {
-			fmt.Printf("            %s\n", color.Dim("k8sVersion "+k8s.Newest+" — the newest LKE-Enterprise version this account offers"))
-		}
+		// UNGUARDED, AND THROUGH THE SAME TWO FUNCTIONS THE PREVIEW USES. This used to
+		// be `if k8s.Newest != ""`, so the operator with no LINODE_TOKEN — the one who
+		// most needs to know a compiled literal just became every deployment's shared
+		// default — got silence, while the operator whose account answered got a line.
+		fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s.Newest)+", inherited by every deployment"))
 	}
 	printK8sVersionConsequences(lzPath, name, k8s, inheritedFix, reseeding, orphanedEnvs)
 	if inheritedFix != "" {
@@ -527,6 +540,17 @@ func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inher
 	default:
 		return color.Dim("(inherited from landingzone.yaml spec.defaults)")
 	}
+}
+
+// seedSource names where a re-seeded spec.defaults version came from, because
+// "the newest this account offers" and "a literal compiled months ago" earn very
+// different reactions from an operator reading a preview. Same distinction the
+// re-seed warning draws; see printK8sVersionConsequences.
+func seedSource(newest string) string {
+	if newest == "" {
+		return "llz's compiled default — this account was never asked"
+	}
+	return "the newest LKE-Enterprise version this account offers"
 }
 
 // existingDeployments returns the deployment names environments/ already defines,
