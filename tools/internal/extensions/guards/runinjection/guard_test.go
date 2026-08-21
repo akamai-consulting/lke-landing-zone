@@ -975,104 +975,90 @@ jobs:
 func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only
 	// in a comment. This guard reached CI solely through `llz ci gates` in the
-	// Kubernetes job, which carries a `head.repo.full_name == github.repository`
-	// condition — so it ran on every population EXCEPT fork pull requests, which
-	// is how an attacker-chosen branch name or PR title reaches a workflow at all.
-	// Moving the step back, or adding that condition to the job it now lives in,
-	// would leave the whole tree green and fork PRs unscanned again.
+	// Kubernetes job, which is gated on the head repository — so it ran on every
+	// population EXCEPT fork pull requests, which is how an attacker-chosen branch
+	// name or PR title reaches a workflow at all. Moving the step back, or gating
+	// the job it now lives in, would leave the whole tree green and forks unscanned.
+	//
+	// PARSED AS YAML, NOT SCANNED AS TEXT, and that is the third attempt. A
+	// substring match over the raw job body could not tell a comment quoting the
+	// condition from the condition (documenting the property failed the test that
+	// holds it); a line-scoped version then missed `if: >` folded scalars entirely,
+	// because only the line carrying the key was ever read, and hardcoded the step
+	// indent, so a `    - name:` sequence style collapsed the step split and put
+	// every unrelated step's condition on trial. Each fix was a smaller patch over
+	// the same mistake: reading YAML with string operations. The parser answers all
+	// three for free — it drops comments, joins folded scalars, and does not care
+	// how the file is indented.
+	//
+	// MUTATION-TESTING THIS NEEDS `-count=1`. lint.yml lives outside the package,
+	// so the test cache does not know it is an input: edit the condition, re-run,
+	// and Go replays the previous verdict under a `(cached)` marker. Two mutations
+	// were scored as "the check missed it" that way before the marker was noticed.
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", ".github", "workflows", "lint.yml"))
 	if err != nil {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
-	// Split into jobs by top-level (2-space) keys under jobs:.
-	//
-	// COMMENT LINES ARE DROPPED FIRST, and that is not tidiness. The check is a
-	// substring match over the job body, so before this the fork condition could
-	// not be DESCRIBED in a comment inside the job it applies to — documenting the
-	// property failed the test that holds it, which is a gate that punishes the
-	// thing it exists to encourage. It read prose as configuration.
-	type job struct{ name, body string }
-	var jobs []job
-	var cur *job
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasSuffix(strings.TrimSpace(line), ":") {
-			jobs = append(jobs, job{name: strings.TrimSpace(line)})
-			cur = &jobs[len(jobs)-1]
-			continue
-		}
-		if cur != nil {
-			cur.body += line + "\n"
-		}
+	var wf struct {
+		Jobs map[string]struct {
+			If    string `yaml:"if"`
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
 	}
-	if len(jobs) == 0 {
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing lint.yml: %v", err)
+	}
+	if len(wf.Jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	found := false
 	// NOT AN ENUMERATION OF SKIP SPELLINGS. The first cut listed the exact
-	// condition the Kubernetes job carries, and a review found two ways past it
-	// that are the same exclusion written differently: delete the spaces around
-	// `==`, or compare `head.repo.owner.login` to `github.repository_owner`, the
-	// other standard idiom. Any enumeration of a free-text expression loses that
-	// race — so this asks the question one level up.
+	// condition the Kubernetes job carries, and review walked past it three ways:
+	// delete the spaces around `==`, compare `head.repo.owner.login` to
+	// `github.repository_owner`, or match `head.label` against the org prefix. A
+	// list of expressions loses that race — the list is finite and the ways to
+	// write the condition are not.
 	//
-	// THE INVARIANT IS THAT THIS JOB IS NOT GATED ON REPOSITORY IDENTITY AT ALL,
-	// in either direction. Every way of excluding forks has to name the head repo
-	// or this repo to do it, so the two tokens below are what a fork gate cannot
-	// avoid, whatever shape it is written in. And the inverse — a condition that
-	// runs the job ONLY on forks — is just as wrong for a guard that has to see
-	// every PR, so it is a finding too rather than a case to exempt.
-	identityTokens := []string{"head.repo", "github.repository"}
-	// SCOPED to the job's own `if:` and to the guard step's `if:`. The whole job
-	// body would also catch an unrelated step gating an artifact upload on the
-	// repo name — a false red, and a false red on a security test gets the test
-	// deleted rather than the condition.
-	const stepPrefix = "      - "
-	for _, j := range jobs {
-		if !strings.Contains(j.body, "ci workflow-injection") {
+	// SO THE TOKENS ARE CONTEXTS, NOT EXPRESSIONS. Deciding a PR is "ours" needs
+	// the pull-request payload or this repo's name, whatever shape the comparison
+	// takes, so naming the two contexts covers every spelling of it at once. The
+	// invariant is that THIS JOB IS NOT GATED ON WHOSE PR IT IS, in either
+	// direction: a condition that runs the job only on forks is equally a finding,
+	// because a guard that cannot see every PR is the defect this test exists for.
+	identityContexts := []string{"github.event.pull_request", "github.repository", "github.head_ref"}
+	// SCOPED to the job's own `if:` and the guard step's `if:`. Judging every step
+	// would red-flag an artifact upload gated on the repo name — and a false red on
+	// a security test gets the test deleted rather than the condition.
+	found := false
+	for name, j := range wf.Jobs {
+		var conditions []string
+		runsGuard := false
+		for _, s := range j.Steps {
+			if !strings.Contains(s.Run, "ci workflow-injection") {
+				continue
+			}
+			runsGuard = true
+			if s.If != "" {
+				conditions = append(conditions, s.If)
+			}
+		}
+		if !runsGuard {
 			continue
 		}
 		found = true
-		// THE STEP BLOCK IS ASSEMBLED BEFORE IT IS JUDGED. A single pass that turns
-		// "am I in the guard step?" on when it sees the `run:` line reads the step's
-		// `if:` — which is written ABOVE `run:` — while the flag is still false, so
-		// the one condition that matters most is the one it cannot see. Measured:
-		// that version passed an `if:` placed directly on this step.
-		var conditions []string
-		var block []string
-		blocks := [][]string{}
-		for _, line := range strings.Split(j.body, "\n") {
-			if strings.HasPrefix(line, stepPrefix) {
-				blocks = append(blocks, block)
-				block = nil
-			}
-			block = append(block, line)
-			// Job-level `if:` — exactly four spaces, so a step's own never matches here.
-			if strings.HasPrefix(line, "    if:") {
-				conditions = append(conditions, line)
-			}
-		}
-		blocks = append(blocks, block)
-		for _, b := range blocks {
-			joined := strings.Join(b, "\n")
-			if !strings.Contains(joined, "ci workflow-injection") {
-				continue
-			}
-			for _, line := range b {
-				if strings.HasPrefix(strings.TrimSpace(line), "if:") {
-					conditions = append(conditions, line)
-				}
-			}
+		if j.If != "" {
+			conditions = append(conditions, j.If)
 		}
 		for _, c := range conditions {
-			for _, tok := range identityTokens {
-				if strings.Contains(c, tok) {
-					t.Errorf("job %s runs workflow-injection under a condition on repository "+
-						"identity (%q in %q) — fork pull requests are the population the guard "+
-						"exists for, and any identity gate here decides whether it sees them",
-						j.name, tok, strings.TrimSpace(c))
+			for _, ctx := range identityContexts {
+				if strings.Contains(c, ctx) {
+					t.Errorf("job %s runs workflow-injection under a condition on whose pull "+
+						"request it is (%q in %q) — fork PRs are the population the guard "+
+						"exists for, and any such gate here decides whether it sees them",
+						name, ctx, c)
 				}
 			}
 		}
