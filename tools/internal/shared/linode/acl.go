@@ -192,12 +192,19 @@ func (c *Client) ListClusters(ctx context.Context) ([]map[string]any, error) {
 	return c.listAllPages(ctx, "/v4beta/lke/clusters")
 }
 
-// MatchClusterIDs returns the ids of clusters whose label == label and, when
+// MatchingClusters returns the clusters whose label == label and, when
 // region != "", whose region matches too — the resolve-by-label(+region) the
 // lke-runner-acl action did with jq. The caller branches on len: 0 none,
 // 1 unique, >1 ambiguous.
-func MatchClusterIDs(clusters []map[string]any, label, region string) []uint64 {
-	var ids []uint64
+//
+// IT IS THE ONE PLACE THAT DECIDES WHICH CLUSTER BELONGS TO A DEPLOYMENT, and it
+// is extracted rather than copied for the reason #443 is entirely about: the
+// preflight, `llz doctor` and now `llz env add` must not be able to reach different
+// conclusions about one spec. This predicate had already been written twice — here
+// and in lke_versions.go — before anyone noticed, and the second copy was added by
+// a change whose own comment claimed there was only one.
+func MatchingClusters(clusters []map[string]any, label, region string) []map[string]any {
+	var out []map[string]any
 	for _, m := range clusters {
 		if mString(m, "label") != label {
 			continue
@@ -205,6 +212,16 @@ func MatchClusterIDs(clusters []map[string]any, label, region string) []uint64 {
 		if region != "" && mString(m, "region") != region {
 			continue
 		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// MatchClusterIDs is MatchingClusters projected onto ids. Nil for no match, so a
+// caller ranging over it sees nothing rather than a zero id.
+func MatchClusterIDs(clusters []map[string]any, label, region string) []uint64 {
+	var ids []uint64
+	for _, m := range MatchingClusters(clusters, label, region) {
 		ids = append(ids, mUint(m, "id"))
 	}
 	return ids

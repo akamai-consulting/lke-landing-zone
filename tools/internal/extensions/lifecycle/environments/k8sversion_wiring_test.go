@@ -379,6 +379,43 @@ func TestARenderRejectedSpecCanStillBeRecoveredWhenTheVersionHasRotated(t *testi
 	}
 }
 
+// TestTheReSeedWarningDoesNotContradictTheLineAboveIt.
+//
+// printK8sVersionConsequences runs AFTER EnsureLandingZone on the write path, so a
+// warning opening "<lzPath> is missing" printed two lines below "created <lzPath>"
+// — a claim the run had just falsified itself. It is one string shared with the
+// --dry-run path, where the file genuinely does not exist yet, so the fix is a
+// tense that is true in both: llz observed it missing, and that is what it says.
+func TestTheReSeedWarningDoesNotContradictTheLineAboveIt(t *testing.T) {
+	dir := t.TempDir()
+	catalog := []string{"v1.34.6+lke2"}
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: catalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, clusterspec.LandingZoneFile)); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	out := captureStderr(t, func() {
+		_, err = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: catalog},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("second `llz env add`: %v", err)
+	}
+	if !strings.Contains(out, "RE-SEEDED") {
+		t.Fatalf("the re-seed warning did not fire at all:\n%s", out)
+	}
+	// THE FILE EXISTS BY NOW — this run created it — so the present tense is false.
+	if strings.Contains(out, "is missing") {
+		t.Errorf("the warning says landingzone.yaml \"is missing\" on the path that just CREATED it:\n%s", out)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, clusterspec.LandingZoneFile)); serr != nil {
+		t.Fatal("premise broken: the run did not re-create landingzone.yaml")
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //

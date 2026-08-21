@@ -356,25 +356,21 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 // never an allow-list, which would turn one unmeasured spelling into a silent
 // account-wide regression.
 func ClusterVersionFor(clusters []map[string]any, label, region string) string {
+	// THE EMPTY-LABEL GUARD IS THIS FUNCTION'S, NOT THE MATCHER'S. MatchingClusters
+	// treats "" as a label to compare against — which is right for a caller that
+	// genuinely has an unlabelled cluster to find, and wrong for every caller here,
+	// where "" means the spec or the instance identity could not be read.
 	if label == "" {
 		return ""
 	}
-	var found int
-	var running string
-	for _, m := range clusters {
-		if mString(m, "label") != label {
-			continue
-		}
-		if region != "" && mString(m, "region") != region {
-			continue
-		}
-		found++
-		running = strings.TrimSpace(mString(m, "k8s_version"))
-	}
-	if found != 1 {
+	// linode.MatchingClusters, not a loop over label+region here. That loop existed
+	// twice for a while — this file and acl.go — which is exactly the drift #443's
+	// whole argument is about, and neither copy would ever have looked wrong.
+	m := MatchingClusters(clusters, label, region)
+	if len(m) != 1 {
 		return ""
 	}
-	return running
+	return strings.TrimSpace(mString(m[0], "k8s_version"))
 }
 
 // normalizeVersion trims surrounding space and the optional leading `v`.

@@ -620,6 +620,57 @@ func TestTheAdoptionMessagesAreTrueBEFOREAnythingIsWritten(t *testing.T) {
 	}
 }
 
+// TestAnAmbiguousAccountIsNotSilent.
+//
+// ClusterVersionFor answers "" for BOTH zero matches and several, and only one of
+// those is uneventful. Several clusters at one label+region is the shape a failed
+// cycle leaves — an orphan sitting beside the live deployment — and falling through
+// to "seed today's newest" there plans a control-plane upgrade on whichever one is
+// real. The file's own rule is that this fallback never happens quietly; it was
+// written for the failed-READ arm and not upheld for the ambiguous-MATCH arm.
+func TestAnAmbiguousAccountIsNotSilent(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{
+		versions: e2eAccountCatalog,
+		clusters: []map[string]any{
+			cluster("platform-support-lab", "us-ord", "v1.32.9+lke4"),
+			cluster("platform-support-lab", "us-ord", "v1.33.6+lke7"),
+		},
+	})
+	var c K8sVersionChoice
+	var err error
+	out := captureStderr(t, func() { c, err = ResolveK8sVersion("", lab) })
+	if err != nil {
+		t.Fatalf("an ambiguous account must not fail the scaffold: %v", err)
+	}
+	// THE VERDICT IS UNCHANGED — this must not start guessing. Only the silence goes.
+	if c.Pin != "" || c.Running != "" {
+		t.Errorf("Pin = %q, Running = %q — two matches must not be guessed between", c.Pin, c.Running)
+	}
+	for _, want := range []string{"platform-support-lab", "cannot tell which one", "control-plane"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("an ambiguous account fell back to seeding the newest without saying %q; stderr:\n%s", want, out)
+		}
+	}
+}
+
+// TestAnAccountWithNoMatchIsQuiet is the negative arm: "warn whenever nothing was
+// adopted" would pass the test above while shouting at every fresh instance, which
+// is most of them.
+func TestAnAccountWithNoMatchIsQuiet(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{
+		versions: e2eAccountCatalog,
+		clusters: []map[string]any{cluster("platform-support-dr", "us-ord", "v1.32.9+lke4")},
+	})
+	out := captureStderr(t, func() {
+		if _, err := ResolveK8sVersion("", lab); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if strings.Contains(out, "cannot tell which one") {
+		t.Errorf("a deployment with no cluster is the ORDINARY case and must not be warned about:\n%s", out)
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request

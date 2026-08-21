@@ -634,8 +634,13 @@ func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVers
 		if seeded == "" {
 			seeded, source = envdef.SeedK8sVersion(""), "llz's compiled default — this account was never asked"
 		}
+		// PAST TENSE ON THE ABSENCE, PRESENT ON THE ARTIFACT, because this one string
+		// is printed from BOTH paths — and on the write path EnsureLandingZone has
+		// already created the file two lines above, so "is missing" contradicted the
+		// `created` line directly over it. "Was missing" is what llz actually observed
+		// and stays true either way. Same correction adoptionMessage needed.
 		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
-			"%s is missing, so a RE-SEEDED spec.defaults sets cluster.k8sVersion to %s (%s)\n"+
+			"%s was missing, so a RE-SEEDED spec.defaults gives cluster.k8sVersion %s (%s)\n"+
 				"  for every deployment that inherits it — including ones that already exist: %s.\n"+
 				"  The pin they used to inherit died with the file (the rendered tfvars are gitignored), so llz\n"+
 				"  cannot restore it. If any of those clusters is RUNNING a different version, pin it in that\n"+

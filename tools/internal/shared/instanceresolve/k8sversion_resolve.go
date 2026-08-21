@@ -67,7 +67,10 @@ var LKEVersionClient = func() LKEVersionLister {
 	if tok == "" {
 		return nil
 	}
-	return linode.NewClient(tok, 20*time.Second)
+	// accountRequestTimeout, NOT a second 20s: the read budget below is SIZED from
+	// this client's per-request timeout, so two spellings of one number would let a
+	// change to the constant silently desynchronize the two.
+	return linode.NewClient(tok, accountRequestTimeout)
 }
 
 // accountRequestTimeout bounds one HTTP call; accountReadBudget bounds one READ,
@@ -181,6 +184,24 @@ func runningVersionFor(c LKEVersionLister, d Deployment) (running string, asked 
 		clusters, err = c.ListClusters(rctx)
 		rcancel()
 		if err == nil {
+			// AMBIGUITY IS NOT SILENCE. ClusterVersionFor answers "" for BOTH zero
+			// matches and several, and only one of those is uneventful. Several clusters
+			// at one label+region is an account this must not guess about — but it is
+			// also the shape a failed cycle leaves, an orphan sitting beside the live
+			// deployment, and falling through to "seed today's newest" there plans a
+			// control-plane upgrade on whichever one is real. This file's own rule is
+			// that the fallback never happens quietly; that rule was written for the
+			// failed-read arm and not upheld here.
+			if m := linode.MatchingClusters(clusters, d.ClusterLabel, d.Region); len(m) > 1 {
+				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+					"%d clusters on this account are labelled %q in %s, so llz cannot tell which one is this\n"+
+						"  deployment's and will not guess. cluster.k8sVersion falls back to the newest version the\n"+
+						"  account offers — which, against a cluster that is already running, plans a control-plane\n"+
+						"  upgrade nobody asked for.\n"+
+						"  Sweep the duplicate (`llz reap --cluster-label %[2]s`) or pin the running version with\n"+
+						"  --k8s-version, then re-run.",
+					len(m), d.ClusterLabel, orAnyRegion(d.Region))))
+			}
 			// linode.ClusterVersionFor, NOT a second loop over label+region here. It is
 			// the same matching rule linode.ClusterRunsVersion is written in terms of,
 			// so this command and the preflight cannot come to different conclusions
