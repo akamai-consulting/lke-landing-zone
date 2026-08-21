@@ -80,8 +80,18 @@ func TestARefusalAtBothRoutesIsTheMissingGrant(t *testing.T) {
 	if cr.status != capDenied {
 		t.Fatalf("refused at both LKE routes → status %v, want capDenied (this blocks)", cr.status)
 	}
-	if !strings.Contains(cr.detail, "GRANT is missing") {
-		t.Errorf("the verdict must say WHICH of the two it concluded; got %q", cr.detail)
+	// It must rule the ROUTE out — that is what the second probe buys — WITHOUT
+	// asserting the scope explanation it cannot separate from an account-level one.
+	// Two routes sharing a grant also share the API version and the account, so a
+	// cause up there refuses both; the verdict is right either way (all of them stop
+	// the cluster apply) but the message must not send an operator to re-scope a PAT
+	// that already carries the grant.
+	if !strings.Contains(cr.detail, "not one fussy route") {
+		t.Errorf("the verdict must say the route has been ruled out; got %q", cr.detail)
+	}
+	if !strings.Contains(cr.detail, "account-level") {
+		t.Errorf("the verdict must name the candidate it cannot rule out, or a correctly scoped PAT "+
+			"costs an afternoon; got %q", cr.detail)
 	}
 	// Re-scope, never rotate: the validity probe already passed, so the token is live
 	// and minting a replacement with the same gap costs an afternoon.
@@ -154,6 +164,30 @@ func TestTheLinodeRefusalAdviceDoesNotOfferGitHubCauses(t *testing.T) {
 	if _, gh := classifyCapabilityStatus(401, "fetch the repo", capGit); !strings.Contains(gh, "SSO") {
 		t.Errorf("the git door's 401 must still offer SSO — it is the cause that check was built "+
 			"for; got %q", gh)
+	}
+}
+
+// TestEachDoorKeepsTheRemedyForEveryCauseItNames — the regression this file's
+// transport split caused, and the reason the cause and the remedy are now both
+// transport-aware. Making only the CAUSE vary dropped "SSO-authorize it" from the
+// GitHub 401 while that same line still offered SSO as a cause, so a correctly
+// scoped APL_VALUES_REPO_TOKEN that was simply not SSO-authorized blocked the run
+// under advice that could not fix it. The existing test checked the cause only.
+func TestEachDoorKeepsTheRemedyForEveryCauseItNames(t *testing.T) {
+	_, gh := classifyCapabilityStatus(401, "fetch the repo", capGit)
+	if !strings.Contains(gh, "SSO-authorize") {
+		t.Errorf("the git door names SSO as a cause, so it must name SSO authorization as a "+
+			"remedy; got %q", gh)
+	}
+	_, lin := classifyCapabilityStatus(401, "read the catalog", capLinode)
+	if strings.Contains(lin, "SSO-authorize") {
+		t.Errorf("a Linode PAT has no SSO authorization step to perform; got %q", lin)
+	}
+	for _, d := range []string{gh, lin} {
+		if !strings.Contains(d, "don't rotate it") {
+			t.Errorf("capability is only asked of a token that already authenticated, so no door may "+
+				"prescribe rotation; got %q", d)
+		}
 	}
 }
 

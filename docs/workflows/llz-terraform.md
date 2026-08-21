@@ -475,6 +475,10 @@ would have failed on it anyway, ~15 minutes later. Refused at the catalog only,
 the PAT is correctly scoped, the refusal belongs to the route, and the run is
 annotated with the fact that the k8sVersion preflight decided nothing.
 
+The same probe runs wherever `llz ci validate-tokens` does — `llz-bootstrap-openbao.yml`
+runs it too, on the bootstrap-cluster path, with the same credential. There is no
+per-workflow switch: a Linode PAT that cannot read LKE cannot do that job either.
+
 `assert-k8s-version` writes a one-line verdict into the job summary on every run,
 naming the outcome (`offered` / `not-offered` / `exempt` / `undecided`) and
 whether the account settled it. A run whose record says `UNDECIDED` checked

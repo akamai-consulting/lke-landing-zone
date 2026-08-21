@@ -190,6 +190,14 @@ type capabilityCheck struct {
 	// route needing a DIFFERENT permission would acquit an under-scoped token, which
 	// is the failure this whole file exists to prevent, arrived at from the other
 	// side.
+	//
+	// WHAT IT ISOLATES IS THE ROUTE, AND ONLY THE ROUTE. Two routes that share a
+	// grant also share everything above it — the API version, the account, the
+	// platform — so a cause at that level refuses both and reads here as a missing
+	// grant. That is why the denial message names the account-level candidates
+	// instead of asserting the scope one. It is a real limit and it is bounded: every
+	// cause it cannot separate stops the build this preflight runs ahead of anyway,
+	// so the VERDICT is right even where the explanation is uncertain.
 	secondOpinion func() (path string, op string)
 }
 
@@ -282,11 +290,13 @@ var capabilityChecks = []capabilityCheck{
 		secondOpinion: func() (string, string) {
 			return linode.LKEClustersPath, "list this account's LKE clusters (the same lke:read_only grant)"
 		},
-		hint: "the Linode PAT needs Kubernetes (LKE): Read Only or better — it is refused at BOTH " +
-			"the LKE-Enterprise version catalog and the plain cluster list, which is the grant missing " +
-			"rather than one route being fussy. Unfixed, `terraform apply` fails ~15 minutes in when it " +
-			"tries to create the LKE-E cluster, and `llz ci assert-k8s-version` cannot check the pin that " +
-			"would have caught a bad one before the apply started",
+		hint: "the Linode PAT needs Kubernetes (LKE): Read Only or better — it is refused at BOTH the " +
+			"LKE-Enterprise version catalog and the plain cluster list, so this is not one fussy route. " +
+			"If the PAT visibly carries that grant, the remaining candidates are account-level rather " +
+			"than token-level (LKE not enabled on the account, an API restriction) — and all of them " +
+			"stop the same build: unfixed, `terraform apply` fails ~15 minutes in when it tries to " +
+			"create the LKE-E cluster, and `llz ci assert-k8s-version` cannot check the pin that would " +
+			"have caught a bad one before the apply started",
 	},
 }
 
@@ -312,7 +322,7 @@ func classifyCapabilityStatus(code int, op string, t capTransport) (capabilitySt
 		// probe already passed, so the token is live. A 401 here means this
 		// particular door refuses it.
 		return capDenied, fmt.Sprintf("auth rejected (HTTP 401) — the token is live but not accepted to %s "+
-			"(%s); re-scope it, don't rotate it", op, refusalCauses(t))
+			"(%s); %s, don't rotate it", op, refusalCauses(t), refusalRemedy(t))
 	case code == 404:
 		return capUnknown, fmt.Sprintf("HTTP 404 probing %q — either the target does not exist yet or this token cannot see it; could not verify", op)
 	default:
@@ -330,6 +340,19 @@ func refusalCauses(t capTransport) string {
 		return "the PAT is missing the grant this route needs"
 	}
 	return "missing permission, or SAML SSO not authorized"
+}
+
+// refusalRemedy is the ACTION half, and it is transport-aware for the same reason
+// the cause is — with one scar attached. Making only the cause vary dropped
+// "SSO-authorize it" from the GitHub 401, which is the remedy for the second of
+// the two causes that line names. A correctly-scoped APL_VALUES_REPO_TOKEN that is
+// simply not SSO-authorized then blocked the run under advice that cannot fix it,
+// and the test guarding this only checked that the CAUSE still said SSO.
+func refusalRemedy(t capTransport) string {
+	if t == capLinode {
+		return "re-scope it"
+	}
+	return "re-scope or SSO-authorize it"
 }
 
 // probeOneRoute performs a single read-only GET on the check's transport and
@@ -394,17 +417,32 @@ func probeCapability(c capabilityCheck, token string) capabilityResult {
 				"k8sVersion preflight is INERT in this pipeline: its green step is not evidence, and a pin this "+
 				"account cannot build will reach `terraform apply` unchecked", op2, code, c.op)}
 	case capDenied:
-		// Refused at both routes that need the same grant. The grant is missing, and
-		// this is the arm that blocks — see the hint.
+		// REFUSED AT BOTH, WHICH RULES OUT THE ROUTE AND NOT MUCH ELSE. The overwhelmingly
+		// likely cause is the missing grant, and that is what the hint leads with — but
+		// two routes under the same API version can also share an explanation that has
+		// nothing to do with scope (a v4beta-wide restriction, a suspended account). The
+		// verdict is the same either way, because every one of those breaks the cluster
+		// apply this preflight runs ahead of; the MESSAGE must not assert the one it
+		// cannot distinguish, or an operator spends the afternoon re-scoping a PAT that
+		// was never the problem.
 		return capabilityResult{c.token, capDenied, fmt.Sprintf(
-			"%s; it is also refused to %s, which needs the same grant — so the GRANT is missing, not the route", d, op2)}
+			"%s; it is also refused to %s, which needs the same grant — so this is not one fussy route. "+
+				"Almost always the missing grant; if the PAT visibly has it, look for an account-level "+
+				"restriction on the Linode API rather than at the token", d, op2)}
 	default:
 		// The corroborating read could not be made, so the refusal stands unexplained.
 		// Blocking here would fail a build on a blip at a route nothing was asking
 		// about; that is the trade this file already makes for a 404.
+		//
+		// THE BARE FACT, NOT THE FIRST PROBE'S RENDERED DETAIL. That detail ends
+		// "re-scope it, don't rotate it" — a remedy this arm has just declared it
+		// cannot justify. Pasting it in is the same contradiction the capOK arm above
+		// was fixed for, and probeOneRoute returns the code precisely so neither arm
+		// has to quote a sentence written for the verdict it is overriding.
 		return capabilityResult{c.token, capUnknown, fmt.Sprintf(
-			"%s — and the second opinion could not be taken (%s), so whether this is the token's scope "+
-				"or the route itself is UNRESOLVED", d, d2)}
+			"refused (HTTP %d) when it tries to %s, and the second opinion could not be taken (%s) — "+
+				"so whether this is the token's scope or the route itself is UNRESOLVED. Nothing to act on "+
+				"yet; re-run, and if it reproduces the scope line below will say which", code, c.op, d2)}
 	}
 }
 
