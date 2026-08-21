@@ -71,11 +71,16 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #            without anyone setting a var. Leave it empty in that case: a pin left
 #            behind after the warm cluster is gone HARD-FAILS the next cold run once
 #            that version rotates out of the catalog, which for LKE-E is hours.
-#            Set it only on the paths llz cannot cover, and there are four: no token,
-#            a failed cluster read, TWO clusters sharing this deployment's label (an
-#            orphan beside the live one, where llz refuses to guess), or an account
-#            reporting no k8s_version for the cluster it found. Each warns and falls
-#            back to deriving — a ::warning inside an otherwise green step.
+#            SET IT FOR ONE CASE, AND TREAT IT AS A STOPGAP IN THE OTHERS. With no
+#            token llz reads no catalog, so nothing judges the var and it works
+#            indefinitely. In the three states where llz asked but could not answer
+#            — a failed cluster read, TWO clusters sharing this deployment's label
+#            (an orphan beside the live one, where llz refuses to guess), or an
+#            account reporting no k8s_version for the cluster it found — the catalog
+#            WAS read, so the pin is judged against it with no exemption available,
+#            and the var HARD-FAILS the scaffold once that version rotates out.
+#            Fix the state instead: re-run, delete the duplicate by id, or find out
+#            why the cluster reports no version.
 #            THE HAZARD IT WAS ADDED FOR IS NOW CLOSED IN llz, WHICH IS WHY THE
 #            INSTRUCTION CHANGED: `k8s_version` reaches the LKE-E API on a create OR
 #            A CHANGE, so re-scaffolding a surviving cluster to a different version

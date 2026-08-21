@@ -1185,6 +1185,17 @@ func TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt(t *testing.T
 				t.Errorf("the remedy promises the adoption path on a run whose lookup cannot deliver "+
 					"it (%s):\n%s", name, err)
 			}
+			// AND THE REJECTION ITSELF IS THE FACT THE OPERATOR GUIDANCE RESTS ON. The
+			// e2e prose used to say `vars.E2E_K8S_VERSION` is the escape for the states
+			// where llz cannot answer — but in every one of these the catalog WAS read,
+			// so an explicit pin is judged against it with no exemption to grant, and
+			// hard-fails the moment that version rotates out. Only the no-token case is
+			// safe, because there nothing judges the pin at all. That distinction is
+			// three prose sites deep and this is where it is actually decided.
+			if !strings.Contains(err.Error(), "is not an LKE-Enterprise version this account can build") {
+				t.Errorf("%s: an explicit pin must be REJECTED here — the guidance about when "+
+					"E2E_K8S_VERSION is a durable escape depends on it:\n%s", name, err)
+			}
 		})
 	}
 }

@@ -124,15 +124,24 @@ env:
   # AND A PIN LEFT BEHIND IS NOW THE HAZARD. Once the warm cluster is gone, a stale
   # var HARD-FAILS the next cold run the moment that version rotates out of the
   # account's catalog — hours, for LKE-E — because an explicit --k8s-version with no
-  # cluster to exempt it is rejected outright. Set this only when llz cannot ANSWER,
-  # and there are four ways that happens — all four say so in the log:
-  #   * no E2E_LINODE_TOKEN, so llz never asks;
-  #   * the cluster read failed;
-  #   * TWO clusters carry this deployment's label (an orphan beside the live one),
-  #     so llz refuses to guess which version to adopt;
-  #   * the account reports no k8s_version for the cluster it found.
-  # The last two are the easy ones to miss: the run is otherwise healthy and the
-  # only trace is a ::warning inside a green step.
+  # cluster to exempt it is rejected outright.
+  #
+  # SETTING IT IS A STOPGAP EVERYWHERE EXCEPT ONE CASE, and the difference is which
+  # code path judges the pin. With NO E2E_LINODE_TOKEN llz reads no catalog, so
+  # nothing judges the var at all and it works indefinitely — that is the one case to
+  # set it for. In the three states where llz asked but could not ANSWER — the
+  # cluster read failed, TWO clusters carry this deployment's label (an orphan beside
+  # the live one, so llz refuses to guess), or the account reports no k8s_version for
+  # the cluster it found — the catalog WAS read, so the pin is judged against it and
+  # llz has no exemption to grant. The var works only until that version rotates out,
+  # which for LKE-E is hours; after that the scaffold HARD-FAILS with "is not an
+  # LKE-Enterprise version this account can build".
+  #
+  # So in those three, fix the state rather than pinning around it: re-run the read,
+  # delete the duplicate cluster BY ID (never `llz reap --cluster-label`, which takes
+  # both), or find out why the cluster reports no version. Each says which it is in
+  # the log — and the middle two are the easy ones to miss, since the run is
+  # otherwise healthy and the only trace is a ::warning inside a green step.
   E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
 
