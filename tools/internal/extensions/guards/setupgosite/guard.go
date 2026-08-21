@@ -24,7 +24,7 @@ package setupgosite
 // version-pins, whose subject is the same shape over tool versions).
 //
 // The rule is exemption-free by construction. instance-template/.github ships
-// seven composite actions and no setup-go at all: an instance never builds llz
+// six composite actions and no setup-go at all: an instance never builds llz
 // from source, it consumes a released binary. So a hit anywhere outside the
 // composite is a bypass, not a special case.
 
