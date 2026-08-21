@@ -782,7 +782,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		"  Unchanged, the cluster apply fails ~15 minutes in with\n"+
 		"  `[400] [k8s_version] k8s_version is not valid`.\n"+
 		"%s",
-		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered))
+		c.Pin, strings.Join(offered, ", "), lookedUp, omitRemedy(offered, lk))
 }
 
 // omitRemedy is the closing line of a hard rejection: what actually happens if the
@@ -810,17 +810,32 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 // accountLKEVersions — reintroduced in a new message the moment one was written.
 // What is safe to say is what dropping the FLAG changes, and what the account can
 // supply.
-func omitRemedy(offered []string) string {
+func omitRemedy(offered []string, lk clusterLookup) string {
 	if linode.NewestVersion(offered) == "" {
 		return "  Omitting --k8s-version will NOT rescue this: nothing in this catalog is a full build id, so\n" +
 			"  there is no version for llz to derive from the account at all — whatever the spec then\n" +
 			"  pins (a shared default it inherits, or llz's compiled one) is not a version this account\n" +
 			"  confirmed. Check it with `llz doctor` — a catalog problem, not a spelling one."
 	}
-	return "  Omit --k8s-version and llz decides instead: the version this deployment's cluster is\n" +
-		"  ALREADY RUNNING when one exists and the account reports it — which plans no diff at all —\n" +
-		"  and otherwise the newest this account offers on a first `llz env add`, or the shared\n" +
-		"  spec.defaults this instance already carries on a later one."
+	// THE ADOPTION CLAUSE IS EARNED, NOT ASSUMED. Every arm that reaches here has an
+	// EMPTY lk.Running — the exemption and the runs-something-else error both return
+	// earlier — so "omit it and llz pins what your cluster is already running" was
+	// never true of the run printing it, and on the ambiguous arm it directly
+	// contradicted the warning classifyClusters had emitted seconds before ("llz
+	// cannot tell which one is this deployment's and will not guess").
+	derive := "  Omit --k8s-version and llz derives instead: the newest this account offers on a first\n" +
+		"  `llz env add`, or the shared spec.defaults this instance already carries on a later one.\n"
+	switch {
+	case lk.Matches > 1:
+		return derive + "  It will NOT adopt the running version — two or more clusters share this label and llz\n" +
+			"  will not guess between them. Resolve that first (the listing above names them)."
+	case lk.Unreadable():
+		return derive + "  It will NOT adopt the running version — the account reports none for that cluster."
+	case !lk.Asked:
+		return derive + "  Whether it can instead adopt the version that cluster is ALREADY RUNNING — which plans\n" +
+			"  no diff at all — is exactly what the read above could not establish. A re-run may settle it."
+	}
+	return derive + "  There is no cluster for this deployment to adopt a version from."
 }
 
 // coarsePinRemedy is the last line of the coarse-pin warning: the versions in this

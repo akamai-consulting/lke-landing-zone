@@ -326,10 +326,21 @@ func TestRejectingAPinDoesNotAdviseAControlPlaneUpgrade(t *testing.T) {
 		// IT MUST NOT CLAIM MORE THAN IT CHECKED, and it must not claim less: the
 		// account WAS asked, so the message says the cluster is absent rather than
 		// leaving the operator to wonder whether an exemption was even considered.
-		for _, want := range []string{"No single cluster named", "platform-support-lab", "ALREADY RUNNING"} {
+		for _, want := range []string{"No single cluster named", "platform-support-lab"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the rejection must mention %q; got:\n%s", want, err)
 			}
+		}
+		// AND IT MUST NOT OFFER THE ADOPTION IT JUST SAID IS IMPOSSIBLE. This arm used
+		// to require the words "ALREADY RUNNING" — the promise that omitting the flag
+		// lets llz pin what the cluster runs — in the one message that has just
+		// established there is no such cluster. The assertion was pinning the defect.
+		if strings.Contains(err.Error(), "ALREADY RUNNING") {
+			t.Errorf("the rejection offers to adopt a running version two lines after saying no such "+
+				"cluster exists:\n%s", err)
+		}
+		if !strings.Contains(err.Error(), "no cluster for this deployment to adopt") {
+			t.Errorf("the rejection does not say why the adoption path is unavailable:\n%s", err)
 		}
 	})
 }
@@ -1111,6 +1122,70 @@ func TestAHardRejectionDoesNotPromiseADeriveThatYieldsNothing(t *testing.T) {
 	if !strings.Contains(err.Error(), "spec.defaults") {
 		t.Errorf("the remedy names only a first-`env add` outcome; a later one inherits the shared\n"+
 			"default and the message must say so:\n%s", err)
+	}
+}
+
+// TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt.
+//
+// Every arm that reaches omitRemedy has an EMPTY lk.Running — the exemption and the
+// runs-something-else error both return earlier — so "omit it and llz pins what
+// your cluster is ALREADY RUNNING, which plans no diff at all" was never true of
+// the run printing it. On the ambiguous arm it directly contradicted the warning
+// classifyClusters had emitted seconds before, in the same run: llz cannot tell
+// which cluster is this deployment's and will not guess.
+//
+// The four states are separated because they need four different next actions:
+// resolve the duplicate, read the version by hand, re-run, or accept there is
+// nothing to adopt.
+func TestTheOmitRemedyOffersAdoptionONLYWhenTheLookupCouldDeliverIt(t *testing.T) {
+	const label = "platform-support-lab"
+	for name, tc := range map[string]struct {
+		lister  *fakeVersionLister
+		want    string
+		mustNot string
+	}{
+		"ambiguous": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusters: []map[string]any{
+				{"id": float64(1), "label": label, "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
+				{"id": float64(2), "label": label, "region": "us-ord", "k8s_version": "v1.34.6+lke2"},
+			}},
+			"will not guess between them", "no diff at all",
+		},
+		"unreadable": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusters: []map[string]any{
+				{"id": float64(3), "label": label, "region": "us-ord"},
+			}},
+			"reports none for that cluster", "no diff at all",
+		},
+		"read failed": {
+			&fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503")},
+			"A re-run may settle it", "",
+		},
+		"no cluster": {
+			&fakeVersionLister{versions: e2eAccountCatalog},
+			"no cluster for this deployment to adopt", "no diff at all",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			noClusterReadPause(t)
+			withCatalog(t, tc.lister)
+			var err error
+			captureStderr(t, func() { _, err = ResolveK8sVersion("v1.33.6+lke7", lab) })
+			if err == nil {
+				t.Fatal("expected the rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the remedy does not say %q, so the operator is not told what to do next:\n%s",
+					tc.want, err)
+			}
+			// "plans no diff at all" is the adoption promise. It may appear ONLY where
+			// the lookup could actually deliver it — which, on the failed-read arm, is
+			// phrased as a maybe rather than withheld.
+			if tc.mustNot != "" && strings.Contains(err.Error(), tc.mustNot) {
+				t.Errorf("the remedy promises the adoption path on a run whose lookup cannot deliver "+
+					"it (%s):\n%s", name, err)
+			}
+		})
 	}
 }
 
