@@ -882,7 +882,7 @@ func TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount(t *testing.T) {
 	})
 	// THE FLAG THAT KEEPS THE BANNER AND THE NOTICE ON ONE STORY.
 	if c.Catalog != CatalogAnswered {
-		t.Error("the read succeeded, so CatalogRead must be true — the notice and the banner key on it")
+		t.Error("the read succeeded, so Catalog must be CatalogAnswered — the notice and the banner key on it")
 	}
 	if strings.Contains(out, "did not answer") || strings.Contains(out, "expired") {
 		t.Errorf("an account that ANSWERED was reported as unreachable, blaming a working token:\n%s", out)
@@ -916,7 +916,7 @@ func TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed(t *testing.T) {
 
 // TestAskedAndRefusedIsNotNeverAsked.
 //
-// CatalogRead began as one bool, and a bool cannot hold this: "no token" and
+// The catalog outcome began as one bool, and a bool cannot hold this: "no token" and
 // "asked, and the API refused" both read as not-answered. So a token whose versions
 // route 401s produced "the API did not answer" from the skip notice and "this
 // account was never asked" from the seed provenance — one run, one request, two
@@ -985,6 +985,44 @@ func TestTheEmptyCatalogWarningDoesNotPREDICTThePin(t *testing.T) {
 	if strings.Contains(out, "keeps its compiled default") {
 		t.Errorf("the warning predicts a compiled default while llz went on to pin %q from a live "+
 			"cluster — it runs BEFORE the pin is decided and cannot know:\n%s", c.Pin, out)
+	}
+}
+
+// TestTheCoarsePinWarningExplainsTheRuleItActuallyAPPLIES.
+//
+// The warning tells the operator WHY their pin is not a full build id, and that
+// explanation has to match the predicate that rejected it. It did not: NamesABuild
+// was tightened to the same parse NewestVersion uses (MAJOR.MINOR.PATCH + `+lkeN`)
+// while the warning still explained itself with the old substring rule — "those
+// carry an `+lke` suffix". So a pin of `v1.34+lke2`, which HAS an `+lke` suffix, was
+// told it lacked one. That is the same contradiction class this arm was added to
+// remove, one message along.
+//
+// The fixture is the exact shape the linode-side coupling test names as the split
+// between the two rules, so this cannot pass by accident.
+func TestTheCoarsePinWarningExplainsTheRuleItActuallyAPPLIES(t *testing.T) {
+	const pin = "v1.34+lke2" // a build suffix, no patch component
+	if linode.NamesABuild(pin) {
+		t.Fatalf("premise broken: %q must be rejected by NamesABuild for this arm to fire", pin)
+	}
+	withCatalog(t, &fakeVersionLister{versions: []string{pin}})
+	c, err := ResolveK8sVersion(pin, lab)
+	if err != nil {
+		t.Fatalf("a coarse pin is warned about, not rejected: %v", err)
+	}
+	if c.Warning == "" {
+		t.Fatal("the coarse-pin warning did not fire")
+	}
+	// THE EXPLANATION MUST NOT BE FALSIFIED BY THE PIN IT DESCRIBES. Asserting the
+	// absence of the old rule rather than the presence of new wording, so this stays
+	// a correctness gate and not a spellcheck.
+	if strings.Contains(c.Warning, "carry an `+lke` suffix") {
+		t.Errorf("the warning tells the operator a build id is one that carries `+lke` — which %q does, "+
+			"and llz rejected it anyway:\n%s", pin, c.Warning)
+	}
+	if !strings.Contains(c.Warning, "PATCH") {
+		t.Errorf("the warning does not name the component %q actually lacks, so the operator cannot "+
+			"tell what to change:\n%s", pin, c.Warning)
 	}
 }
 

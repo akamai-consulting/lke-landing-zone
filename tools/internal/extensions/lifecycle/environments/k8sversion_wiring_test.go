@@ -488,7 +488,7 @@ func TestAStarterExampleIsNotADeployment(t *testing.T) {
 
 // TestTheThirdCatalogStateCHANGESWhatLlzSays.
 //
-// Round 9 split CatalogRead into three states because "no token" and "asked, and
+// Round 9 split the catalog flag into three states because "no token" and "asked, and
 // the API refused" licensed different sentences and different remedies. The
 // resolver test pins that CatalogFailed is PRODUCED — and nothing pinned that any
 // consumer says anything different about it, which is the entire user-visible point
@@ -734,10 +734,10 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
 		},
 		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
-		// empty catalog leaves Offered nil while CatalogRead is true — so a banner
+		// empty catalog leaves Offered nil while Catalog is CatalogAnswered — so a banner
 		// keyed on len(Offered) said "could not be asked" while seedSource, keyed on
-		// CatalogRead, said the catalog had answered. Same run, same request, opposite
-		// claims. Every fixture above now carries CatalogRead because the resolver
+		// Catalog, said the catalog had answered. Same run, same request, opposite
+		// claims. Every fixture above now carries Catalog because the resolver
 		// always sets the two together; a hand-built choice that omits it is a state
 		// ResolveK8sVersion cannot produce, and it hid this.
 		"catalog answered with nothing at all": {

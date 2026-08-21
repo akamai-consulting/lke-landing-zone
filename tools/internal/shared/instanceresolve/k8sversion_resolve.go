@@ -662,7 +662,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// defect this arm was added to remove, one message along.
 		c.Warning = fmt.Sprintf(
 			"--k8s-version %q matches a row in this account's catalog, but it is not a full LKE-E build id\n"+
-				"  (those carry an `+lke` suffix, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
+				"  (MAJOR.MINOR.PATCH plus an `+lkeN` build, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
 				"  VERBATIM. The catalog row it matched is just as coarse, so `llz doctor` and\n"+
 				"  `llz ci assert-k8s-version` will both pass it, and the cluster apply is what discovers the\n"+
 				"  problem ~15 minutes in with `[400] [k8s_version] k8s_version is not valid`.\n"+
