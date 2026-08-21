@@ -320,8 +320,12 @@ func TestInvertedGateIsRejected(t *testing.T) {
 	// default branch. Lexically it is inside the gate, so "is it enclosed" passes
 	// it. The condition has to be read, not just located.
 	body := rep(t, good, `if [ "${PUBLISH_MUTABLE}" = "true" ]; then`, `if [ "${PUBLISH_MUTABLE}" != "true" ]; then`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
-		t.Fatalf("an inverted gate must be rejected, got:\n%s", got)
+	got := msgs(judgeBody(t, body))
+	// Reported as the non-canonical spelling it is — the message names `!=` and
+	// says what it does, which is the sentence this author needs. What must not
+	// happen is silence.
+	if !strings.Contains(got, "canonical") || !strings.Contains(got, "!=") {
+		t.Fatalf("an inverted gate must be rejected and named, got:\n%s", got)
 	}
 }
 
@@ -565,5 +569,64 @@ func TestHeredocFailsClosed(t *testing.T) {
 		"          set -euo pipefail\n          cat <<EOF > /tmp/notes\n          --tag ${REPO}/${IMAGE}:latest\n          EOF\n")
 	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "heredoc") {
 		t.Fatalf("a heredoc must fail closed, got:\n%s", got)
+	}
+}
+
+// ── Round five: a missing tag IS a tag, and a gate can be spelled over lines ──
+
+func TestTaglessShortTagIsRefused(t *testing.T) {
+	// docker publishes a reference with no tag as `:latest`. Requiring a `:` before
+	// refusing `-t` therefore let the most mutable publish of all through — the one
+	// that does not say which tag it moves.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          docker buildx build --push "${TAGS[@]}" -t "${REPO}/${IMAGE}" .`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a tagless -t must be refused, got:\n%s", got)
+	}
+}
+
+func TestTaglessDockerPushIsRefused(t *testing.T) {
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          docker push "${REPO}/${IMAGE}"`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "docker push") {
+		t.Fatalf("a tagless docker push must be refused, got:\n%s", got)
+	}
+}
+
+func TestNonCanonicalGateSpanningLinesSaysSo(t *testing.T) {
+	// The "you wrote a gate I cannot verify" message was decided per LINE, so it
+	// only fired when the condition and the tag shared one. A `[[ … == "true" ]]`
+	// block — a correct gate this guard still cannot confirm — produced "move it
+	// inside the PUBLISH_MUTABLE gate" pointing at lines already inside it.
+	body := rep(t, good, `if [ "${PUBLISH_MUTABLE}" = "true" ]; then`, `if [[ "${PUBLISH_MUTABLE}" == "true" ]]; then`)
+	got := msgs(judgeBody(t, body))
+	if !strings.Contains(got, "canonical") {
+		t.Fatalf("a multi-line non-canonical gate must be named as such, got:\n%s", got)
+	}
+	if strings.Contains(got, "move it inside") {
+		t.Fatalf("it must not tell the author to move a tag into the gate it is already in, got:\n%s", got)
+	}
+}
+
+func TestWritingTheGateToGithubEnvIsRejected(t *testing.T) {
+	// `echo "PUBLISH_MUTABLE=true" >> "$GITHUB_ENV"` sets the variable for every
+	// LATER step, so the gate reads `true` on any ref while the workflow-level
+	// expression above still reads perfectly — the same shadowing the step-env arm
+	// catches, through a door YAML cannot see.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          echo \"PUBLISH_MUTABLE=true\" >> \"$GITHUB_ENV\"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "GITHUB_ENV") {
+		t.Fatalf("writing the gate variable at runtime must be rejected, got:\n%s", got)
+	}
+}
+
+func TestHerestringIsNotAHeredoc(t *testing.T) {
+	// `<<<` is one word, not a body — the heredoc refusal says so and matched it
+	// anyway, because the scan could start on the second `<`.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          grep -q main <<<mainline\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a herestring must not be read as a heredoc, got:\n%s", msgs(ps))
 	}
 }

@@ -88,27 +88,31 @@ var reTag = regexp.MustCompile(`--tag[=\s"']["'\s]*([^"'\s]+)`)
 // is not parsed — it is REFUSED, because `-t` would let a mutable publish back in
 // past a guard that only reads `--tag`.
 //
-// TWO NARROWINGS KEEP THIS A RULE RATHER THAN A NUISANCE, and the second replaced a
-// claim that was simply false. The `:` excludes `mktemp -t llz` and `sort -t ,` —
-// arguments that are not references. It does NOT exclude `docker run -t
-// <image>:<tag>`, which the earlier comment here asserted: every image reference
-// has a colon, so that is exactly the shape it matches, and the version-stamp step
-// in this very workflow runs the built image one edit away from it. A `-t` is only
-// a TAG flag on a line that BUILDS (see buildLine); on any other line it is a tty,
-// a field separator or a template — and a guard that fails on correct code with a
-// confident wrong diagnosis is one that gets deleted.
-var reShortTag = regexp.MustCompile(`(?:^|\s)(-t)=?["'\s]*[^"'\s=]*:[^"'\s]+`)
+// THE BUILD LINE IS THE WHOLE NARROWING, and it used to be joined by a second one
+// that was worse than useless. Requiring a `:` in the argument was meant to spare
+// `mktemp -t llz` and `sort -t ,`; what it actually did was exempt the most mutable
+// publish there is — `-t "${REPO}/${IMAGE}"`, no tag at all, which docker publishes
+// as `:latest`. (The comment justifying it also claimed the `:` excluded `docker
+// run -t <image>:<tag>`, which is false: every image reference has a colon.) Scoped
+// to a line that BUILDS, the separator and tty spellings are already out of reach —
+// `mktemp -t` is not a build — so the flag is refused whatever follows it.
+var reShortTag = regexp.MustCompile(`(?:^|\s)(-t)(?:[=\s"']|$)`)
 
 // reDockerPush finds a publish that carries no flag at all. `--tag` is not the
 // only way to move a tag — `docker push <ref>:<tag>` moves one with nothing this
 // guard reads on the line — so the same bypass family gets the same answer: it is
 // refused rather than half-parsed, because the tags this workflow publishes are
 // the ones assembled into the buildx invocation and nothing else.
-var reDockerPush = regexp.MustCompile(`\b(docker)\s+push\s+["']?[^"'\s]*:[^"'\s]+`)
+var reDockerPush = regexp.MustCompile(`\b(docker)\s+push\s+["']?\S`)
 
 // reHeredoc finds a heredoc opening. `<<<` (a herestring) is deliberately not
 // matched: it is one word, not a body this scanner would go on to read as code.
-var reHeredoc = regexp.MustCompile(`<<-?\s*["']?[A-Za-z_]`)
+//
+// THE LEADING `[^<]` IS WHAT MAKES THAT TRUE. Without it the scan simply started on
+// the SECOND `<` of `<<<word` and matched anyway — a comment asserting an exclusion
+// the pattern did not implement, which is the same class of defect as the `-t`
+// comment above.
+var reHeredoc = regexp.MustCompile(`(?:^|[^<])<<-?\s*["']?[A-Za-z_]`)
 
 // reGateOpen matches THE canonical gate: an `if` whose condition is the POSITIVE
 // test of gateVar.
@@ -242,6 +246,8 @@ type scan struct {
 	// heredoc is the first line opening a heredoc, or 0 — a quoting form this
 	// scanner does not model, so it refuses rather than reads the body as code.
 	heredoc int
+	// runtimeEnv is the first line writing the gate variable to $GITHUB_ENV, or 0.
+	runtimeEnv int
 	// parseErr is set when the file is not YAML this gate can walk.
 	parseErr error
 }
@@ -359,6 +365,15 @@ func judge(body string, sc scan) []problem {
 			"this guard can tell from code, so it refuses rather than reading a template as a publish. Keep the " +
 			"tag assembly out of heredocs, or teach the scanner this form"})
 	}
+	if sc.runtimeEnv > 0 {
+		// THE THIRD DOOR ONTO THE SAME VARIABLE. Workflow env is checked from the
+		// YAML, step env with it — but a step that writes `PUBLISH_MUTABLE=true` to
+		// $GITHUB_ENV sets it for every LATER step, on any ref, with the correct
+		// expression still sitting in the file above. Nothing in the YAML says so.
+		out = append(out, problem{line: sc.runtimeEnv, msg: fmt.Sprintf("this script writes `%s` into $GITHUB_ENV — "+
+			"that sets the gate for every later step at RUNTIME, on any ref, while the expression in the env block "+
+			"still reads correctly. The gate has exactly one source, and it is that expression", gateVar)})
+	}
 	if sc.push > 0 {
 		out = append(out, problem{line: sc.push, msg: "`docker push` of an explicit tag is refused here — a publish " +
 			"outside the `--tag` list this gate reads is a publish it cannot hold to the ref. Add the tag to TAGS " +
@@ -400,10 +415,11 @@ func judge(body string, sc scan) []problem {
 			// It IS an attempt at the rule, spelled a way this guard cannot verify.
 			// "Move it inside the gate" would be advice about a gate its author is
 			// looking at, so say what is actually wrong instead.
-			out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag on a line that tests `%s` "+
-				"without being the canonical gate — this guard recognises only `if [ \"${%s}\" = \"true\" ]; then … fi`, "+
-				"because a condition it cannot read is a condition it cannot confirm points the right way "+
-				"(`!=` publishes from every ref EXCEPT the default branch)", s.tag, gateVar, gateVar)})
+			out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag inside a test of `%s` that "+
+				"is not the canonical gate — this guard recognises only `if [ \"${%s}\" = \"true\" ]; then … fi`, "+
+				"because a condition it cannot read is a condition it cannot confirm points the right way. `!=` "+
+				"publishes from every ref EXCEPT the default branch, which is this bug inverted rather than fixed",
+				s.tag, gateVar, gateVar)})
 			continue
 		}
 		out = append(out, problem{line: s.line, msg: fmt.Sprintf("`:%s` is a MUTABLE tag published from any ref — "+
@@ -468,7 +484,7 @@ func scanFile(body string) scan {
 		return out
 	}
 	for _, sc := range scripts {
-		var stack []bool // one entry per open `if`; true while inside the canonical gate
+		var stack []block // one entry per open `if`
 		building, continued := false, false
 		var open byte // the quote still open from the previous line, if any
 		for i, raw := range strings.Split(sc.body, "\n") {
@@ -482,6 +498,9 @@ func scanFile(body string) scan {
 			bare := blank(line, spans) // shell structure only — no keyword may come out of a string
 			if out.heredoc == 0 && reHeredoc.MatchString(bare) {
 				out.heredoc = fileLine
+			}
+			if out.runtimeEnv == 0 && strings.Contains(line, gateVar) && strings.Contains(line, "GITHUB_ENV") {
+				out.runtimeEnv = fileLine
 			}
 			building = buildLine(bare) || (building && continued)
 			continued = continues(bare)
@@ -498,9 +517,10 @@ func scanFile(body string) scan {
 			// first and its keywords afterwards records both as gated. So the keyword
 			// events and the tag sites are replayed in the order they appear.
 			events := blockEvents(line, bare)
-			opened := false
+			opened, names := false, false
 			for _, e := range events {
 				opened = opened || (e.kind == "if" && e.gate)
+				names = names || (e.kind == "if" && e.namesVar)
 			}
 			next := 0
 			for _, m := range reTag.FindAllStringSubmatchIndex(line, -1) {
@@ -511,14 +531,15 @@ func scanFile(body string) scan {
 					stack = apply(stack, events[next])
 					next++
 				}
-				gated := false
-				for _, g := range stack {
-					gated = gated || g
+				gated, unverifiable := false, names
+				for _, b := range stack {
+					gated = gated || b.gate
+					unverifiable = unverifiable || (b.namesVar && !b.gate)
 				}
 				ref := line[m[2]:m[3]]
 				out.sites = append(out.sites, tagSite{
 					line: fileLine, ref: ref, tag: tagOf(ref), gated: gated,
-					namesGate: !opened && strings.Contains(line, gateVar),
+					namesGate: !opened && (unverifiable || strings.Contains(line, gateVar)),
 				})
 			}
 			for ; next < len(events); next++ {
@@ -538,7 +559,17 @@ type blockEvent struct {
 	off  int
 	kind string
 	gate bool
+	// namesVar marks an `if` whose CONDITION mentions the gate variable without
+	// being the canonical form. It is carried on the block rather than judged per
+	// line because a gate spans lines: `if [[ "${PUBLISH_MUTABLE}" == "true" ]]` is
+	// a real gate this guard cannot confirm, and every tag inside it used to be told
+	// to "move it inside the gate" it was already in.
+	namesVar bool
 }
+
+// block is one open `if`: whether it is the canonical gate, and whether it is an
+// unverifiable attempt at one.
+type block struct{ gate, namesVar bool }
 
 // blockEvents reads the line's block keywords in order. Offsets come from the
 // blanked text — so no keyword is read out of a string — and the CONDITION is read
@@ -548,22 +579,35 @@ func blockEvents(line, bare string) []blockEvent {
 	var out []blockEvent
 	for _, m := range reBlockToken.FindAllStringSubmatchIndex(bare, -1) {
 		kind := bare[m[2]:m[3]]
-		out = append(out, blockEvent{off: m[0], kind: kind, gate: kind == "if" && reGateOpen.MatchString(line[m[0]:])})
+		e := blockEvent{off: m[0], kind: kind}
+		if kind == "if" {
+			e.gate = reGateOpen.MatchString(line[m[0]:])
+			e.namesVar = !e.gate && strings.Contains(condition(line[m[0]:]), gateVar)
+		}
+		out = append(out, e)
 	}
 	return out
 }
 
+// condition is the text between `if` and the `then` that closes it, on this line.
+func condition(rest string) string {
+	if i := strings.Index(rest, "then"); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
 // apply advances the block stack by one keyword.
-func apply(stack []bool, e blockEvent) []bool {
+func apply(stack []block, e blockEvent) []block {
 	switch e.kind {
 	case "if":
-		return append(stack, e.gate)
+		return append(stack, block{gate: e.gate, namesVar: e.namesVar})
 	case "else", "elif":
 		// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set would mark
 		// a mutable tag there as gated when it publishes from precisely the refs the
 		// gate exists to exclude.
 		if len(stack) > 0 {
-			stack[len(stack)-1] = false
+			stack[len(stack)-1].gate = false
 		}
 	case "fi":
 		if len(stack) > 0 {
