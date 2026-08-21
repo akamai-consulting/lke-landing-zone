@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -999,15 +1000,17 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
+	type lintJob struct {
+		If    string    `yaml:"if"`
+		Needs yaml.Node `yaml:"needs"`
+		Steps []struct {
+			Name string `yaml:"name"`
+			If   string `yaml:"if"`
+			Run  string `yaml:"run"`
+		} `yaml:"steps"`
+	}
 	var wf struct {
-		Jobs map[string]struct {
-			If    string `yaml:"if"`
-			Steps []struct {
-				Name string `yaml:"name"`
-				If   string `yaml:"if"`
-				Run  string `yaml:"run"`
-			} `yaml:"steps"`
-		} `yaml:"jobs"`
+		Jobs map[string]lintJob `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(b, &wf); err != nil {
 		t.Fatalf("parsing lint.yml: %v", err)
@@ -1032,12 +1035,39 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// SCOPED to the job's own `if:` and the guard step's `if:`. Judging every step
 	// would red-flag an artifact upload gated on the repo name — and a false red on
 	// a security test gets the test deleted rather than the condition.
+	// THE INVOCATION, NOT THE WORD. `strings.Contains(run, …)` also matched the
+	// guard's name written in a SHELL comment inside someone else's `run:` block —
+	// the prose-for-configuration defect this test was rewritten to escape, one
+	// layer further down. Measured: a `# … ci workflow-injection …` line added to
+	// the fork-gated Kubernetes job turned this red and blamed a job that does not
+	// carry the step. Requiring no `#` earlier on the line rules out both the
+	// comment line and the trailing comment.
+	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bci[ \t]+workflow-injection\b`)
+	// A JOB IS ALSO SKIPPED WHEN WHAT IT NEEDS IS SKIPPED. `needs: [kubernetes]` on
+	// this job carries the Kubernetes job's fork condition onto it by dependency —
+	// the guard stops running on fork PRs and nothing in the job's own text says
+	// so. Measured: adding that line left this test green while the guard went
+	// dark for exactly the population it exists for. So the closure is walked, not
+	// just the job.
+	needsOf := func(j lintJob) []string {
+		switch j.Needs.Kind {
+		case yaml.ScalarNode:
+			return []string{j.Needs.Value}
+		case yaml.SequenceNode:
+			var out []string
+			for _, n := range j.Needs.Content {
+				out = append(out, n.Value)
+			}
+			return out
+		}
+		return nil
+	}
 	found := false
 	for name, j := range wf.Jobs {
-		var conditions []string
 		runsGuard := false
+		var conditions []string
 		for _, s := range j.Steps {
-			if !strings.Contains(s.Run, "ci workflow-injection") {
+			if !invocation.MatchString(s.Run) {
 				continue
 			}
 			runsGuard = true
@@ -1049,16 +1079,34 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			continue
 		}
 		found = true
-		if j.If != "" {
-			conditions = append(conditions, j.If)
+		// The job's own condition, then every job it transitively needs.
+		seen := map[string]bool{name: true}
+		queue := []string{name}
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			dep, ok := wf.Jobs[cur]
+			if !ok {
+				t.Errorf("job %s needs %q, which is not a job in lint.yml", name, cur)
+				continue
+			}
+			if dep.If != "" {
+				conditions = append(conditions, dep.If)
+			}
+			for _, n := range needsOf(dep) {
+				if !seen[n] {
+					seen[n] = true
+					queue = append(queue, n)
+				}
+			}
 		}
 		for _, c := range conditions {
 			for _, ctx := range identityContexts {
 				if strings.Contains(c, ctx) {
-					t.Errorf("job %s runs workflow-injection under a condition on whose pull "+
-						"request it is (%q in %q) — fork PRs are the population the guard "+
-						"exists for, and any such gate here decides whether it sees them",
-						name, ctx, c)
+					t.Errorf("job %s runs workflow-injection, but it or a job it needs is "+
+						"conditioned on whose pull request it is (%q in %q) — fork PRs are the "+
+						"population the guard exists for, and any such gate in that closure "+
+						"decides whether it sees them", name, ctx, c)
 				}
 			}
 		}
