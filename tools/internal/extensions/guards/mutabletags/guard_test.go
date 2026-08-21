@@ -21,7 +21,7 @@ import (
 const good = `
 env:
   SHA: ${{ inputs.sha || github.sha }}
-  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}
+  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}
 jobs:
   build:
     steps:
@@ -110,16 +110,16 @@ func TestGateThatIgnoresTheRefIsRejected(t *testing.T) {
 	// `PUBLISH_MUTABLE: true` satisfies the "inside the gate" arm perfectly and
 	// publishes from everywhere, which is why the expression is checked too.
 	body := rep(t, good,
-		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}`,
+		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}`,
 		`  PUBLISH_MUTABLE: true`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not test `github.ref ==`") {
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "sanctioned gate expression") {
 		t.Fatalf("a gate that ignores the ref must be rejected, got:\n%s", got)
 	}
 }
 
 func TestMissingGateEntryIsRejected(t *testing.T) {
 	body := rep(t, good,
-		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}`+"\n",
+		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}`+"\n",
 		"")
 	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "never sets") {
 		t.Fatalf("an unset gate variable must be rejected, got:\n%s", got)
@@ -426,7 +426,7 @@ func TestAStepLevelOverrideOfTheGateIsRejected(t *testing.T) {
 	// reading the one that loses.
 	body := rep(t, good, "      - name: Build and push\n",
 		"      - name: Build and push\n        env:\n          PUBLISH_MUTABLE: 'true'\n")
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "does not test `github.ref ==`") {
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "sanctioned gate expression") {
 		t.Fatalf("a step-level override must be rejected, got:\n%s", got)
 	}
 }
@@ -445,16 +445,18 @@ func TestDockerRunTtyIsNotAPublish(t *testing.T) {
 
 // ── Round three: a string is not a publish, and a build is not one line ──────
 
-func TestATagInsideAStringIsNotAPublish(t *testing.T) {
-	// Block keywords stopped being read out of strings two rounds ago; the TAGS
-	// were still read out of them. An `::error::` message naming the flag it wants
-	// you to write is documentation, and failing `make lint` on it is the "guard
-	// that fails on correct code" outcome the -t narrowing exists to avoid.
+func TestATagInsideAMessageIsRefusedNotClassified(t *testing.T) {
+	// THIS TEST USED TO ASSERT THE OPPOSITE, and the reversal is the point rather
+	// than an accident. It required an `::error::` message naming `--tag` to pass
+	// clean, which is the humane answer and the one that cannot be implemented: the
+	// same shape with an argument after the flag is a publish, and four successive
+	// rules for telling the two apart each let one through or reddened the other.
+	// The message is now refused, which costs a rewording and ends the class.
 	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
 		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
 			`          echo "::error::push failed — retry publishes --tag ${REPO}/${IMAGE}:latest"`+"\n")
-	if ps := judgeBody(t, body); len(ps) != 0 {
-		t.Fatalf("a --tag inside a string must not be judged as a publish, got:\n%s", msgs(ps))
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "inside a string is refused") {
+		t.Fatalf("a --tag inside a message must be refused, got:\n%s", got)
 	}
 }
 
@@ -504,20 +506,21 @@ func TestAQuotedFlagIsStillAFlag(t *testing.T) {
 	// the flag inside a sentence is prose.
 	body := rep(t, good, `for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`,
 		`for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); TAGS+=("--tag" "${REPO}/${NAME}:latest"); done`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+	// Judged by the quoted-flag arm now: the publish is real, and the spelling is
+	// the one the guard refuses rather than reads.
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "inside a string is refused") {
 		t.Fatalf("a quoted --tag must still be judged, got:\n%s", got)
 	}
 }
 
-func TestQuotedShortTagInAMessageIsNotAPublish(t *testing.T) {
-	// The mirror of the same bug on the `-t` arm: the skip was handed the match's
-	// leading whitespace rather than the flag, so it never fired and an error
-	// message showing the command reddened the gate.
+func TestAShortTagInAMessageIsRefusedToo(t *testing.T) {
+	// Same reversal, same reason: `-t` is refused as a SPELLING rather than parsed,
+	// so where it sits in a sentence cannot change the answer.
 	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
 		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
 			`          echo "::error::do not run docker buildx build -t ${REPO}/${IMAGE}:edge by hand"`+"\n")
-	if ps := judgeBody(t, body); len(ps) != 0 {
-		t.Fatalf("a -t inside a message must not be refused, got:\n%s", msgs(ps))
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a -t in a message must be refused, got:\n%s", got)
 	}
 }
 
@@ -536,11 +539,12 @@ func TestBareDockerPushOfAMutableTagIsRefused(t *testing.T) {
 func TestFoldedGateExpressionIsRead(t *testing.T) {
 	// The expression is 141 characters; wrapping it in a folded scalar is the
 	// obvious tidy-up, and reading only the key's own line captured `>-` and failed
-	// the ref arm on a gate that is completely correct.
+	// on a gate that is completely correct. It is compared with whitespace
+	// normalised, so the fold is a re-indent and not a different value.
 	body := rep(t, good,
-		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}`+"\n",
+		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}`+"\n",
 		"  PUBLISH_MUTABLE: >-\n"+
-			"    ${{ (github.ref == 'refs/heads/main')\n"+
+			"    ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')\n"+
 			"    && (inputs.sha == '' || inputs.sha == github.sha) }}\n")
 	if ps := judgeBody(t, body); len(ps) != 0 {
 		t.Fatalf("a folded gate expression must be read, got:\n%s", msgs(ps))
@@ -638,9 +642,12 @@ func TestInvertedYAMLGateIsRejected(t *testing.T) {
 	// whether the string "github.ref" appeared anywhere in the expression. So the
 	// same inversion, moved one layer up, passed clean: publish the mutable tags
 	// from every ref EXCEPT the default branch.
-	body := rep(t, good, `(github.ref == 'refs/heads/main')`, `(github.ref != 'refs/heads/main')`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "!=") {
-		t.Fatalf("an inverted gate expression must be rejected, got:\n%s", got)
+	body := rep(t, good, `github.ref == 'refs/heads/main'`, `github.ref != 'refs/heads/main'`)
+	// Anchored on the OFFENDING expression being echoed back, not on the word `!=`:
+	// the one generic message names `github.ref !=` among the spellings it refuses,
+	// so a bare Contains(got, "!=") would pass on any deviation at all.
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "It is `${{ (github.ref != 'refs/heads/main'") {
+		t.Fatalf("an inverted gate expression must be rejected and quoted back, got:\n%s", got)
 	}
 }
 
@@ -649,9 +656,9 @@ func TestRefNameGateIsRejected(t *testing.T) {
 	// `main`, not `refs/heads/main`, so this gate is false on every ref and quietly
 	// stops republishing `:latest` on main — the failure-OPEN direction the workflow
 	// comment argues about, waved through by a substring test.
-	body := rep(t, good, `(github.ref == 'refs/heads/main')`, `(github.ref_name == 'main')`)
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "github.ref") {
-		t.Fatalf("a ref_name gate must be rejected, got:\n%s", got)
+	body := rep(t, good, `github.ref == 'refs/heads/main'`, `github.ref_name == 'main'`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "It is `${{ (github.ref_name == 'main'") {
+		t.Fatalf("a ref_name gate must be rejected and quoted back, got:\n%s", got)
 	}
 }
 
@@ -672,7 +679,7 @@ func TestTagFlagInAnAssignmentIsAPublish(t *testing.T) {
 	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
 		`          EXTRA="--tag ${REPO}/${IMAGE}:latest"`+"\n"+
 			"          docker buildx build --push \"${TAGS[@]}\" ${EXTRA} .\n")
-	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "inside a string is refused") {
 		t.Fatalf("a --tag inside an assignment must be judged, got:\n%s", got)
 	}
 }
@@ -731,5 +738,519 @@ func TestUnbalancedNamesTheOpeningLine(t *testing.T) {
 	}
 	if got.line != want {
 		t.Fatalf("want the unclosed `if` at line %d, got line %d (%s)", want, got.line, got.msg)
+	}
+}
+
+// ── Round eight: escapes, the whole expression, and a fourth publish channel ──
+
+func TestABackslashOutsideQuotesDoesNotOpenAString(t *testing.T) {
+	// The shell's escape works everywhere, not only inside double quotes. Honouring
+	// it only inside them meant `echo Say \"hello` opened a phantom quoted run that
+	// swallowed the REST OF THE SCRIPT — after which an ungated `:latest` was
+	// classified as prose and the guard printed OK.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          echo Say \\\"hello\n")
+	body = rep(t, body, `          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n", "")
+	body = rep(t, body, "          fi\n", "")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("an escaped quote must not open a string, got:\n%s", got)
+	}
+}
+
+func TestNegatedGateExpressionIsRejected(t *testing.T) {
+	// `!(github.ref == 'refs/heads/main')` is the inversion again, spelled around
+	// the comparison instead of inside it — and a check that only looked for
+	// `github.ref ==` and a literal `!=` waved it through.
+	body := rep(t, good, `${{ (github.ref == 'refs/heads/main'`, `${{ !(github.ref == 'refs/heads/main'`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("a negated gate expression must be rejected")
+	}
+}
+
+func TestTautologousGateExpressionIsRejected(t *testing.T) {
+	// `github.ref == github.ref` is `true` with the right words in it — exactly the
+	// `PUBLISH_MUTABLE: true` case this arm exists to catch, dressed up.
+	body := rep(t, good, `github.ref == 'refs/heads/main'`, `github.ref == github.ref`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("a tautologous gate expression must be rejected")
+	}
+}
+
+func TestGateOnSomeOtherBranchIsRejected(t *testing.T) {
+	// The rule is the DEFAULT branch, not whichever branch someone was working on.
+	body := rep(t, good, `github.ref == 'refs/heads/main'`, `github.ref == 'refs/heads/some-feature'`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("a gate on a non-default branch must be rejected")
+	}
+}
+
+func TestDroppingTheShaHalfOfTheGateIsRejected(t *testing.T) {
+	// Nothing held the second half. Without it a dispatch on main with `-f
+	// sha=<old>` stamps `:latest` with an arbitrary commit — the same broken
+	// invariant as a branch build, through the input the workflow already accepts.
+	body := rep(t, good, ` && (inputs.sha == '' || inputs.sha == github.sha)`, "")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "'refs/heads/master') }}`; it must be") {
+		t.Fatalf("dropping the sha half must be rejected and the truncated expression quoted back, got:\n%s", got)
+	}
+}
+
+func TestBuildxOutputPublishIsRefused(t *testing.T) {
+	// `--output type=image,name=<ref>,push=true` publishes with no `--tag` anywhere
+	// on the line — the same bypass family as `-t` and `docker push`, and refused
+	// the same way.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          docker buildx build --output type=image,name="${REPO}/${IMAGE}:latest",push=true .`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "--output") {
+		t.Fatalf("a --output publish must be refused, got:\n%s", got)
+	}
+}
+
+// ── Round nine: stop reading the expression, and stop guessing at `-o` ───────
+
+func TestASecondBranchLiteralIsRejected(t *testing.T) {
+	// Adding a literal rather than replacing it: `main || my-feature` publishes the
+	// mutable tags from a feature branch, and every pattern-reading of this
+	// expression so far has said yes to it.
+	body := rep(t, good, `github.ref == 'refs/heads/main'`,
+		`(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/my-feature')`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("a second branch literal must be rejected")
+	}
+}
+
+func TestOrTrueIsRejected(t *testing.T) {
+	// `|| true` is `true` on every ref with the whole correct expression still
+	// sitting next to it.
+	body := rep(t, good, `github.ref == 'refs/heads/main'`, `(github.ref == 'refs/heads/main' || true)`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("`|| true` must be rejected")
+	}
+}
+
+func TestTheShaHalfWithoutItsEmptyCaseIsRejected(t *testing.T) {
+	// The shape a maintainer reaches for when the sha arm goes red — and it is FALSE
+	// on every push to main, because `inputs` is empty there. `:latest` then stops
+	// being republished, silently, which is the failure-open direction.
+	body := rep(t, good, `(inputs.sha == '' || inputs.sha == github.sha)`, `(inputs.sha == github.sha)`)
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("the sha half without its empty case must be rejected")
+	}
+}
+
+func TestAnUnrelatedNegationIsNotCalledAnInversion(t *testing.T) {
+	// `&& !(github.event_name == 'schedule')` narrows the gate; it does not invert
+	// the ref test. Rejecting it is right — it is not the sanctioned expression —
+	// but saying it "publishes from every ref EXCEPT the default branch" is a
+	// confident sentence about the opposite of what it does.
+	body := rep(t, good, `&& (inputs.sha == '' || inputs.sha == github.sha)`,
+		`&& !(github.event_name == 'schedule') && (inputs.sha == '' || inputs.sha == github.sha)`)
+	got := msgs(judgeBody(t, body))
+	if len(got) == 0 {
+		t.Fatal("a deviation from the sanctioned expression must be rejected")
+	}
+	if strings.Contains(got, "EXCEPT the default branch") {
+		t.Fatalf("it must not be diagnosed as an inversion, got:\n%s", got)
+	}
+}
+
+func TestSetOAndCurlOAreNotOutputPublishes(t *testing.T) {
+	// `-o` collides with far more commands than `-t` does. `set -o pipefail` is in
+	// every script this workflow has.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -o pipefail\n          curl -sSfL -o /tmp/x https://example.invalid/x\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("`set -o` and `curl -o` must not be read as buildx exporters, got:\n%s", msgs(ps))
+	}
+}
+
+func TestACommentAfterAnEscapedQuoteIsStillAComment(t *testing.T) {
+	// stripComment and spansOf have to agree about the escape, or one of them reads
+	// a comment as shell and reports a block that never closed.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          echo Say \\\"hello   # publish only if this is main\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("the comment must still be stripped, got:\n%s", msgs(ps))
+	}
+}
+
+// ── Round ten: the quoted spelling of every flag, and the gate as a variable ──
+
+func TestQuotedOutputFlagIsAPublish(t *testing.T) {
+	// `realFlag` exists so a quoted flag is still a flag; the `--output` arm was
+	// added without it, and its pattern required whitespace or `(` in front. So the
+	// exporter came back through the same door `--tag` had already been fixed for.
+	for _, spelling := range []string{
+		`          EXTRA="--output type=image,name=${REPO}/${IMAGE}:latest,push=true"`,
+		`          ARGS+=("--output" "type=image,name=${REPO}/${IMAGE}:latest,push=true")`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			spelling+"\n          docker buildx build --push \"${TAGS[@]}\" ${EXTRA} .\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "--output") {
+			t.Fatalf("a quoted --output must be refused (%s), got:\n%s", spelling, got)
+		}
+	}
+}
+
+func TestQuotedShortTagFlagIsRefused(t *testing.T) {
+	body := rep(t, good, `for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`,
+		`for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); TAGS+=("-t" "${REPO}/${NAME}:latest"); done`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a quoted -t must be refused, got:\n%s", got)
+	}
+}
+
+func TestAssigningTheGateInTheScriptIsRejected(t *testing.T) {
+	// The expression is held to one exact value — and a shell assignment in the
+	// script overwrites what that value produced, for the rest of the script, with
+	// nothing in the YAML to say so. `$GITHUB_ENV` was the door that got closed;
+	// this is the one next to it.
+	for _, spelling := range []string{`          PUBLISH_MUTABLE=true`, `          export PUBLISH_MUTABLE="true"`} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+spelling+"\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "at RUNTIME") {
+			t.Fatalf("assigning the gate in the script must be rejected (%s), got:\n%s", spelling, got)
+		}
+	}
+}
+
+func TestAHashInsideAStringIsNotAComment(t *testing.T) {
+	// If a quoted `#` started a comment, everything after it on the line would be
+	// discarded — including the publish that follows here, which would then trip the
+	// "no mutable tag at all" arm instead.
+	body := rep(t, good,
+		`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done`,
+		`            echo "attempt #1"; TAGS+=(--tag "${REPO}/${IMAGE}:latest")`)
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a quoted # must not truncate the line, got:\n%s", msgs(ps))
+	}
+}
+
+func TestDockerImagePushIsRefused(t *testing.T) {
+	// `docker image push` is the same command spelled the long way.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          docker image push "${REPO}/${IMAGE}:latest"`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "docker push") {
+		t.Fatalf("`docker image push` must be refused, got:\n%s", got)
+	}
+}
+
+// ── Round eleven: a mention must not shadow a publish, or become one ─────────
+
+func TestAnEarlierMentionDoesNotHideALaterPublish(t *testing.T) {
+	// Taking the FIRST match on a line and then asking whether it is prose means a
+	// sentence about the flag suppresses the real use of it beside it. `--tag`
+	// already looped over every match; the refusal arms did not.
+	for _, line := range []string{
+		`          echo "never use --output type=image,push=true"; docker buildx build --output type=image,name="${REPO}/${IMAGE}:latest",push=true .`,
+		`          echo "-t is not how we tag"; docker buildx build --push -t "${REPO}/${IMAGE}:edge" .`,
+		`          echo "no docker push here"; docker push "${REPO}/${IMAGE}:latest"`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n", line+"\n")
+		if ps := judgeBody(t, body); len(ps) == 0 {
+			t.Fatalf("a mention must not hide the publish beside it: %s", line)
+		}
+	}
+}
+
+func TestASentenceNamingAFlagIsRefused(t *testing.T) {
+	// The third of the inverted three. Every one of these is a correct sentence and
+	// every one of them is now a finding, because the alternative — deciding which
+	// sentences are really arguments — is what produced four rounds of alternating
+	// fail-open and false-positive. The remedy is in the message.
+	for _, line := range []string{
+		`          echo "-t is banned in this workflow"`,
+		`          echo "--tag is assembled into TAGS, never passed by hand"`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			line+"\n          docker buildx build --push \"${TAGS[@]}\" .\n")
+		if ps := judgeBody(t, body); len(ps) == 0 {
+			t.Fatalf("a sentence naming a publish flag must be refused: %s", line)
+		}
+	}
+}
+
+func TestMentioningTheGateIsNotAssigningIt(t *testing.T) {
+	// An assignment is a command; `PUBLISH_MUTABLE=` in the middle of one is an
+	// argument to something else. Printing the value and grepping for it are both
+	// ordinary, and neither changes the gate.
+	for _, line := range []string{
+		`          echo PUBLISH_MUTABLE="${PUBLISH_MUTABLE}"`,
+		`          env | grep PUBLISH_MUTABLE=`,
+	} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+line+"\n")
+		if ps := judgeBody(t, body); len(ps) != 0 {
+			t.Fatalf("mentioning the gate must not read as setting it (%s), got:\n%s", line, msgs(ps))
+		}
+	}
+}
+
+// ── Round twelve: a value is not always value-shaped ─────────────────────────
+
+func TestQuotedDockerPushIsStillRefused(t *testing.T) {
+	// The value-shape rule was written for FLAGS and then applied to the `docker`
+	// COMMAND match too: `docker push ${REPO}/x:latest` has `push` as its second
+	// word, which is not reference-shaped, so the whole publish was reclassified as
+	// prose. It is a regression of the exact bypass family this branch is about.
+	for _, line := range []string{
+		`          eval "docker push ${REPO}/${IMAGE}:latest"`,
+		`          sh -c "docker image push ${REPO}/${IMAGE}:latest"`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			"          docker buildx build --push \"${TAGS[@]}\" .\n"+line+"\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "docker push") {
+			t.Fatalf("a quoted docker push must be refused (%s), got:\n%s", line, got)
+		}
+	}
+}
+
+func TestQuotedTaglessShortTagIsStillRefused(t *testing.T) {
+	// `EXTRA="-t myimage"` — the untagged spelling this guard calls the most mutable
+	// publish there is — has a second word that is a bare name, so the same rule
+	// dropped it.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          EXTRA="-t myimage"`+"\n          docker buildx build --push \"${TAGS[@]}\" ${EXTRA} .\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a quoted tagless -t must be refused, got:\n%s", got)
+	}
+}
+
+func TestGrepDashOIsNotAnExporter(t *testing.T) {
+	// The exporter is matched on its VALUE, but "contains type=image" is not the
+	// same as "is an exporter argument": `grep -o type=image` and a jsonpath both
+	// carry the substring and neither publishes anything.
+	for _, line := range []string{
+		`          grep -o type=image manifest.txt`,
+		`          kubectl get pod -o jsonpath={.type=image}`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			"          docker buildx build --push \"${TAGS[@]}\" .\n"+line+"\n")
+		if ps := judgeBody(t, body); len(ps) != 0 {
+			t.Fatalf("`%s` must not be read as a buildx exporter, got:\n%s", line, msgs(ps))
+		}
+	}
+}
+
+func TestEveryDeclarationOfTheGateIsRejected(t *testing.T) {
+	// `export` is one of five ways to spell the same assignment, and `eval` hides a
+	// sixth inside a string the structural scan blanks.
+	for _, line := range []string{
+		`          readonly PUBLISH_MUTABLE=true`,
+		`          declare PUBLISH_MUTABLE=true`,
+		`          typeset PUBLISH_MUTABLE=true`,
+		`          local PUBLISH_MUTABLE=true`,
+		`          eval "PUBLISH_MUTABLE=true"`,
+	} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+line+"\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "at RUNTIME") {
+			t.Fatalf("`%s` must be rejected, got:\n%s", line, got)
+		}
+	}
+}
+
+// ── Round thirteen: stop classifying quoted flags, and refuse them ───────────
+//
+// FOUR ROUNDS TRIED TO TELL A QUOTED ARGUMENT LIST FROM A SENTENCE and each rule
+// had a next spelling: content == flag; begins-with; begins-with plus every later
+// word "value-shaped"; the same plus a list of subcommands. Every widening let a
+// real publish through (`EXTRA="--tag …:latest --target runtime"`,
+// `eval "docker push … && echo ok"`) or turned a message into one. The question is
+// undecidable at this altitude, so the guard stops asking it: a publish flag
+// inside a string is REFUSED, exactly as `-t`, `docker push` and heredocs already
+// are. The rule is satisfiable in one edit and it has no next spelling.
+
+func TestAnyQuotedPublishFlagIsRefused(t *testing.T) {
+	for _, line := range []string{
+		`          EXTRA="--tag ${REPO}/${IMAGE}:latest --target runtime"`,
+		`          EXTRA="--tag ${REPO}/${IMAGE}:latest"`,
+		`          eval "docker push ${REPO}/${IMAGE}:latest && echo pushed"`,
+		`          sh -c "docker push ${REPO}/${IMAGE}:latest || exit 1"`,
+		`          ARGS+=("--output" "type=image,name=${REPO}/${IMAGE}:latest,push=true")`,
+		`          EXTRA="-t myimage --builder default"`,
+		`          echo "::error::push failed — retry publishes --tag ${REPO}/${IMAGE}:latest"`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			line+"\n          docker buildx build --push \"${TAGS[@]}\" ${EXTRA} .\n")
+		if ps := judgeBody(t, body); len(ps) == 0 {
+			t.Fatalf("a quoted publish flag must be refused: %s", line)
+		}
+	}
+}
+
+func TestABraceGroupAssignmentIsRejected(t *testing.T) {
+	// `{ PUBLISH_MUTABLE=true; }` is a command group, and this workflow already
+	// writes `{ echo "::error::…"; exit 1; }` — the nearest spelling to hand.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          { PUBLISH_MUTABLE=true; }\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "at RUNTIME") {
+		t.Fatalf("a brace-group assignment must be rejected, got:\n%s", got)
+	}
+}
+
+func TestAnOutputFlagSplitOverLinesFailsClosed(t *testing.T) {
+	// The workflow's build command is written one flag per line with backslashes,
+	// which is the layout in which the exporter's value is NOT on the flag's line.
+	// Unreadable is a failure here, like every other unreadable form.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build \\\n            --output \\\n"+
+			`            type=image,name="${REPO}/${IMAGE}:latest",push=true \`+"\n            .\n")
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("an --output whose value is on the next line must not pass")
+	}
+}
+
+func TestMentioningGithubEnvInProseIsNotAWrite(t *testing.T) {
+	// The clause was two unanchored Contains while its comment claimed it was
+	// "pinned to the redirect". A write has a redirect; a sentence does not.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          echo \"see GITHUB_ENV docs before touching PUBLISH_MUTABLE\"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("prose naming both must not read as a write, got:\n%s", msgs(ps))
+	}
+}
+
+// ── Round fourteen: a command substitution is code, not a string ─────────────
+
+func TestCommandSubstitutionInsideQuotesIsCode(t *testing.T) {
+	// `"$( … )"` is quoted, but its CONTENTS are a command. Blanking them lost the
+	// exemption words, so `TMP="$(mktemp -t llz.XXXX)"` was refused as a docker tag
+	// while the unquoted spelling passed — a distinction the shell does not make.
+	for _, line := range []string{
+		`          TMP="$(mktemp -d -t llz.XXXX)"`,
+		`          GOT="$(docker run --rm -t "${REPO}/${IMAGE}:sha-${SHA}" version)"`,
+	} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+line+"\n")
+		if ps := judgeBody(t, body); len(ps) != 0 {
+			t.Fatalf("a command substitution must be read as code (%s), got:\n%s", line, msgs(ps))
+		}
+	}
+}
+
+func TestEveryRedirectIntoGithubEnvIsAWrite(t *testing.T) {
+	// Pinning the clause to the redirect was right; pinning it to `>>` alone was
+	// narrower than the two Contains it replaced.
+	for _, line := range []string{
+		`          echo "PUBLISH_MUTABLE=true" > "$GITHUB_ENV"`,
+		`          echo "PUBLISH_MUTABLE=true" | tee -a "$GITHUB_ENV"`,
+	} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+line+"\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "at RUNTIME") {
+			t.Fatalf("`%s` must be rejected, got:\n%s", line, got)
+		}
+	}
+}
+
+func TestAnExporterValueInAVariableFailsClosed(t *testing.T) {
+	// `--tag "$LATEST"` already fails closed as an unreadable reference; the
+	// exporter's value has to be held to the same rule or it is the way round it.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          OUT="type=image,name=${REPO}/${IMAGE}:latest,push=true"`+"\n"+
+			"          docker buildx build --output \"$OUT\" .\n")
+	if ps := judgeBody(t, body); len(ps) == 0 {
+		t.Fatal("an exporter value in a variable must not pass")
+	}
+}
+
+func TestUnrelatedDashOFlagsAreNotExporters(t *testing.T) {
+	// The fail-closed branch fired whenever the value was unreadable, whatever the
+	// command — so a curl continuation, a trailing `-o`, and `--output-dir` all
+	// reported a buildx exporter publish.
+	for _, line := range []string{
+		"          curl -fsSL -o \\\n            /tmp/x https://example.invalid/x",
+		`          jq -r '.a' f -o`,
+		`          helm template x --output-dir /tmp/out`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+			line+"\n          docker buildx build --push \"${TAGS[@]}\" .\n")
+		if ps := judgeBody(t, body); len(ps) != 0 {
+			t.Fatalf("`%s` must not read as an exporter, got:\n%s", line, msgs(ps))
+		}
+	}
+}
+
+// ── Round fifteen: the exemptions belong to a command, not to a line ─────────
+
+func TestASubstitutionDoesNotExemptTheBuildsOwnTag(t *testing.T) {
+	// Un-blanking `$( … )` put its words into the text the exemptions read, and the
+	// exemption test was line-wide — so a build stamping a date exempted its own
+	// `-t`. A fail-open introduced by the fix for a false positive.
+	for _, line := range []string{
+		`          docker buildx build -t "${REPO}/${IMAGE}:latest" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" --push .`,
+		`          docker buildx build -t "${REPO}/${IMAGE}:latest" --build-arg TMP="$(mktemp -d)" --push .`,
+	} {
+		body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n", line+"\n")
+		if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+			t.Fatalf("a build's own -t must never be exempted (%s), got:\n%s", line, got)
+		}
+	}
+}
+
+func TestQuotesInsideASubstitutionAreTracked(t *testing.T) {
+	// The `$(`-skip counted parens with no idea of quoting, so a paren inside a
+	// string never balanced and the scan ran to end of line — leaving every later
+	// line marked as string content.
+	for _, line := range []string{
+		`          NAME="$(echo "$X" | tr -d '(')"`,
+		`          N="$(grep -c ' # tag' Dockerfile)"`,
+	} {
+		body := rep(t, good, "          set -euo pipefail\n", "          set -euo pipefail\n"+line+"\n")
+		if ps := judgeBody(t, body); len(ps) != 0 {
+			t.Fatalf("a substitution must not swallow the rest of the file (%s), got:\n%s", line, msgs(ps))
+		}
+	}
+}
+
+func TestReadSetsTheGateToo(t *testing.T) {
+	// `read` assigns without an `=`.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          read -r PUBLISH_MUTABLE <<< true\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "at RUNTIME") {
+		t.Fatalf("`read` into the gate must be rejected, got:\n%s", got)
+	}
+}
+
+func TestAnUnrelatedDashOOnABuildLineIsNotAnExporter(t *testing.T) {
+	// Failing closed on an unreadable `-o` is right for the BUILD's own flags; the
+	// command after `&&` is a different command, and `sort -o "$OUT"` is not an
+	// exporter however the line began.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          docker buildx build --push "${TAGS[@]}" . && sort -o "$OUT" f`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a -o in another command must not read as an exporter, got:\n%s", msgs(ps))
+	}
+}
+
+func TestNestedSubstitutionsAndTheirReopenedRun(t *testing.T) {
+	// Nesting exercises the depth counter in both directions, and the closing paren
+	// has to hand the double-quoted run back — otherwise the tag after it on the
+	// same line is read as code that is not there, or as string that it is not.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n"+
+			`          D="$(dirname "$(readlink -f "${0}")")"; echo "${D}"`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("nested substitutions must scan cleanly, got:\n%s", msgs(ps))
+	}
+}
+
+func TestRunPrintsTheProblemsItFound(t *testing.T) {
+	// Run's reporting half — the annotations, the summary and the remedy — is what
+	// an operator actually meets, and it had been exercised only on the OK path.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broken := rep(t, good, `          if [ "${PUBLISH_MUTABLE}" = "true" ]; then`+"\n", "")
+	broken = rep(t, broken, "          fi\n", "")
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(publisherFile)), []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	err := Run(dir, &out, &errOut)
+	if err == nil {
+		t.Fatal("a workflow publishing :latest from any ref must fail")
+	}
+	for _, want := range []string{"::error file=" + publisherFile, "MUTABLE tag published from any ref", "sha- tag"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Fatalf("the report must contain %q, got:\n%s", want, errOut.String())
+		}
 	}
 }
