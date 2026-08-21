@@ -97,7 +97,7 @@ var reTag = regexp.MustCompile(`--tag[=\s]\s*"?([^"\s]+)"?`)
 // a TAG flag on a line that BUILDS (see buildLine); on any other line it is a tty,
 // a field separator or a template — and a guard that fails on correct code with a
 // confident wrong diagnosis is one that gets deleted.
-var reShortTag = regexp.MustCompile(`(?:^|\s)-t\s+"?[^"\s]*:[^"\s]+`)
+var reShortTag = regexp.MustCompile(`(?:^|\s)-t=?\s*"?[^"\s=]*:[^"\s]+`)
 
 // reGateExpr captures the value of the workflow env key that computes the gate.
 // Anchored on the key at any indentation: it is one mapping entry in one file,
@@ -120,8 +120,29 @@ var reGateOpen = regexp.MustCompile(`^if\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s
 var reBlockToken = regexp.MustCompile(`\b(if|elif|else|fi)\b`)
 
 // buildLine reports whether this line invokes a container build, which is the only
-// place a `-t` is a tag flag.
+// place a `-t` is a tag flag. A build usually SPANS lines — see the `continues`
+// tracking in scanFile, without which the flag on `docker buildx build \` +
+// `  -t img:edge \` sits on a line that says nothing about building, which is the
+// only spelling this workflow actually uses.
 func buildLine(bare string) bool { return hasToken(bare, "build") || hasToken(bare, "buildx") }
+
+// continues reports whether the line ends in a backslash, joining the next one to
+// it as a single shell command.
+func continues(bare string) bool { return strings.HasSuffix(strings.TrimRight(bare, " \t"), `\`) }
+
+// blankedAt reports whether the byte at off was inside a quoted span — that is,
+// whether blankQuoted replaced it. Exact, because the blanking preserves length
+// and only ever turns a non-space into a space.
+//
+// IT IS THE TEST FOR "IS THIS FLAG REAL". A `--tag` cannot be matched against the
+// blanked text (the reference it names is itself quoted and would come back
+// empty), so the flag is found in the original and its POSITION is asked about
+// here. Without it an `::error::` message mentioning the flag counts as a publish
+// — noisy in one direction, and fail-open in the other: an echoed `sha-` tag would
+// satisfy the arm that requires a real one outside the gate.
+func blankedAt(line, bare string, off int) bool {
+	return off < len(bare) && bare[off] == ' ' && line[off] != ' '
+}
 
 // tagSite is one `--tag` argument: where it is, what tag it names, and whether it
 // is inside the gate.
@@ -368,11 +389,14 @@ func scanFile(body string) scan {
 	}
 	for _, sc := range scripts {
 		var stack []bool // one entry per open `if`; true while inside the canonical gate
+		building, continued := false, false
 		for i, raw := range strings.Split(sc.body, "\n") {
 			line := stripComment(raw)
 			fileLine := sc.startLine + i
 			bare := blankQuoted(line) // shell structure only — no keyword may come out of a string
-			if out.shortFlag == 0 && buildLine(bare) && reShortTag.MatchString(line) {
+			building = buildLine(bare) || (building && continued)
+			continued = continues(bare)
+			if m := reShortTag.FindStringIndex(line); out.shortFlag == 0 && building && m != nil && !blankedAt(line, bare, m[0]) {
 				out.shortFlag = fileLine
 			}
 			// WITHIN A LINE, ORDER DECIDES. `…; then echo x; else TAGS+=(--tag …:latest);
@@ -387,6 +411,9 @@ func scanFile(body string) scan {
 			}
 			next := 0
 			for _, m := range reTag.FindAllStringSubmatchIndex(line, -1) {
+				if blankedAt(line, bare, m[0]) {
+					continue // the flag is inside a string: prose about a publish, not one
+				}
 				for next < len(events) && events[next].off < m[0] {
 					stack = apply(stack, events[next])
 					next++

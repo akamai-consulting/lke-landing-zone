@@ -438,3 +438,54 @@ func TestDockerRunTtyIsNotAPublish(t *testing.T) {
 		t.Fatalf("`docker run -t` must not be read as a docker BUILD tag, got:\n%s", msgs(ps))
 	}
 }
+
+// ── Round three: a string is not a publish, and a build is not one line ──────
+
+func TestATagInsideAStringIsNotAPublish(t *testing.T) {
+	// Block keywords stopped being read out of strings two rounds ago; the TAGS
+	// were still read out of them. An `::error::` message naming the flag it wants
+	// you to write is documentation, and failing `make lint` on it is the "guard
+	// that fails on correct code" outcome the -t narrowing exists to avoid.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          echo "::error::push failed — retry publishes --tag ${REPO}/${IMAGE}:latest"`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a --tag inside a string must not be judged as a publish, got:\n%s", msgs(ps))
+	}
+}
+
+func TestAnEchoedShaTagDoesNotSatisfyTheShaArm(t *testing.T) {
+	// THE FAIL-OPEN MIRROR, which is the worse half: arm 4 asks whether a `sha-`
+	// tag is published outside the gate. If a string can supply one, a workflow
+	// that publishes NOTHING on a branch passes it while merely mentioning the tag.
+	body := rep(t, good,
+		`          for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`+"\n",
+		`          echo "each build publishes --tag ${REPO}/${IMAGE}:sha-${SHA}"`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "outside the `PUBLISH_MUTABLE` gate") {
+		t.Fatalf("an echoed sha- tag must not satisfy the sha arm, got:\n%s", got)
+	}
+}
+
+func TestShortTagOnAContinuationLineIsRefused(t *testing.T) {
+	// The real invocation is a backslash continuation, so the flag lands on a line
+	// that says nothing about building. Scoping the refusal to a single line made it
+	// blind to the only spelling this workflow actually uses.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build \\\n"+
+			"            --push \\\n"+
+			`            -t "${REPO}/${IMAGE}:edge" \`+"\n"+
+			"            .\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a -t on a continuation line must be refused, got:\n%s", got)
+	}
+}
+
+func TestAttachedShortTagIsRefused(t *testing.T) {
+	// docker's flag parser takes `-t<value>` with no space, so requiring one was a
+	// bypass of the bypass-refusal.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		`          docker buildx build --push -t"${REPO}/${IMAGE}:edge" .`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("an attached -t must be refused, got:\n%s", got)
+	}
+}
