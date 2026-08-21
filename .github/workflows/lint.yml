@@ -666,6 +666,13 @@ jobs:
       # container's /bin/sh (dash). A missing default silently broke the scheduled
       # discover → auto-unseal / scheduled-checks / secret-rotation workflows
       # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
+      #
+      # TWO SITES, like the run-interpolation guard below: `guard-workflow-shells`
+      # is also a `llz ci gates` row (registry/gates.go), so this step is a second
+      # site rather than a relocation. Deleting it as redundant would leave the
+      # check reachable only from the Kubernetes job, which is skipped for fork
+      # pull requests. Weaker consequence than the guard below — a dash fallback is
+      # not attacker-controlled — but the same shape, and the reason both live here.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
@@ -679,8 +686,10 @@ jobs:
       # about. A fork PR is how an attacker-chosen branch name or PR title reaches
       # a workflow in the first place, so a guard reachable only from the gate set
       # is not protecting against the case it exists for. This job (go-tests) has
-      # no such `if:` and runs on forks. Same reasoning as the shell-default guard
-      # above; TestTheGuardRunsInAJobForkPullRequestsReach holds it here.
+      # no such `if:` and runs on forks. The shell-default guard above is the same
+      # shape — also a gates row, also duplicated here — but only this one has a
+      # test holding the placement: TestTheGuardRunsInAJobForkPullRequestsReach,
+      # which fails if this step moves to a job gated on repository identity.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
