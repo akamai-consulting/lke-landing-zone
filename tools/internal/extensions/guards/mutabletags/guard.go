@@ -82,7 +82,7 @@ const refContext = "github.ref"
 // space-separated form and `--tag=<ref>`. Reading only the first was a bypass of
 // exactly the class this guard refuses `-t` for — one `=` and the publish is
 // invisible.
-var reTag = regexp.MustCompile(`--tag[=\s]\s*"?([^"\s]+)"?`)
+var reTag = regexp.MustCompile(`--tag[=\s"']["'\s]*([^"'\s]+)`)
 
 // reShortTag finds docker's SHORT tag flag applied to something IMAGE-SHAPED. It
 // is not parsed — it is REFUSED, because `-t` would let a mutable publish back in
@@ -97,12 +97,18 @@ var reTag = regexp.MustCompile(`--tag[=\s]\s*"?([^"\s]+)"?`)
 // a TAG flag on a line that BUILDS (see buildLine); on any other line it is a tty,
 // a field separator or a template — and a guard that fails on correct code with a
 // confident wrong diagnosis is one that gets deleted.
-var reShortTag = regexp.MustCompile(`(?:^|\s)-t=?\s*"?[^"\s=]*:[^"\s]+`)
+var reShortTag = regexp.MustCompile(`(?:^|\s)(-t)=?["'\s]*[^"'\s=]*:[^"'\s]+`)
 
-// reGateExpr captures the value of the workflow env key that computes the gate.
-// Anchored on the key at any indentation: it is one mapping entry in one file,
-// and a YAML walk to find it would still have to be told the key's name.
-var reGateExpr = regexp.MustCompile(`(?m)^\s*` + gateVar + `:\s*(\S.*?)\s*$`)
+// reDockerPush finds a publish that carries no flag at all. `--tag` is not the
+// only way to move a tag — `docker push <ref>:<tag>` moves one with nothing this
+// guard reads on the line — so the same bypass family gets the same answer: it is
+// refused rather than half-parsed, because the tags this workflow publishes are
+// the ones assembled into the buildx invocation and nothing else.
+var reDockerPush = regexp.MustCompile(`\b(docker)\s+push\s+["']?[^"'\s]*:[^"'\s]+`)
+
+// reHeredoc finds a heredoc opening. `<<<` (a herestring) is deliberately not
+// matched: it is one word, not a body this scanner would go on to read as code.
+var reHeredoc = regexp.MustCompile(`<<-?\s*["']?[A-Za-z_]`)
 
 // reGateOpen matches THE canonical gate: an `if` whose condition is the POSITIVE
 // test of gateVar.
@@ -130,18 +136,73 @@ func buildLine(bare string) bool { return hasToken(bare, "build") || hasToken(ba
 // it as a single shell command.
 func continues(bare string) bool { return strings.HasSuffix(strings.TrimRight(bare, " \t"), `\`) }
 
-// blankedAt reports whether the byte at off was inside a quoted span — that is,
-// whether blankQuoted replaced it. Exact, because the blanking preserves length
-// and only ever turns a non-space into a space.
+// quoteSpan is one quoted run: `open` is the index of the opening quote (-1 when
+// the run began on an earlier line) and `close` the index just past its content.
+type quoteSpan struct {
+	open, close int
+}
+
+// contains reports whether off falls inside the span's CONTENT.
+func (q quoteSpan) contains(off int) bool { return off > q.open && off < q.close }
+
+// spansOf reads the quoted runs of a line, continuing a run left open by the
+// previous one. It returns the spans and the quote still open at end of line.
 //
-// IT IS THE TEST FOR "IS THIS FLAG REAL". A `--tag` cannot be matched against the
-// blanked text (the reference it names is itself quoted and would come back
-// empty), so the flag is found in the original and its POSITION is asked about
-// here. Without it an `::error::` message mentioning the flag counts as a publish
-// — noisy in one direction, and fail-open in the other: an echoed `sha-` tag would
-// satisfy the arm that requires a real one outside the gate.
-func blankedAt(line, bare string, off int) bool {
-	return off < len(bare) && bare[off] == ' ' && line[off] != ' '
+// A STRING CAN OUTLIVE ITS LINE, and resetting the state per line meant the second
+// half of a multi-line string was read as code — where one `fi` in prose pops the
+// gate stack and every tag after it stops being gated. Backslash escapes are
+// honoured inside double quotes and not inside single ones, which is the shell's
+// own rule and the difference between tracking the string and losing it at the
+// first `\"`.
+func spansOf(line string, open byte) ([]quoteSpan, byte) {
+	var spans []quoteSpan
+	quote, start := open, -1
+	for i := 0; i < len(line); i++ {
+		b := line[i]
+		switch {
+		case quote == '"' && b == '\\':
+			i++ // the escaped byte is content, whatever it is
+		case quote != 0:
+			if b == quote {
+				spans = append(spans, quoteSpan{open: start, close: i})
+				quote, start = 0, -1
+			}
+		case b == '\'' || b == '"':
+			quote, start = b, i
+		}
+	}
+	if quote != 0 {
+		spans = append(spans, quoteSpan{open: start, close: len(line)})
+	}
+	return spans, quote
+}
+
+// spanAt returns the quoted span containing off, if any.
+func spanAt(spans []quoteSpan, off int) (quoteSpan, bool) {
+	for _, q := range spans {
+		if q.contains(off) {
+			return q, true
+		}
+	}
+	return quoteSpan{}, false
+}
+
+// realFlag reports whether a flag found at off is an argument rather than prose.
+//
+// QUOTING CUTS BOTH WAYS, and this is the line between the two cuts. `TAGS+=("--tag"
+// "…:latest")` is the same publish with the flag quoted — skipping every quoted
+// hit as prose put #451 straight back past the guard built to hold it. An
+// `::error::` sentence that happens to name the flag is not a publish, and
+// failing on it is how a guard gets deleted. What separates them is what ELSE is
+// in the quotes: a span that is exactly the flag is an argument, a flag inside a
+// sentence is a mention.
+func realFlag(line string, spans []quoteSpan, off int, flag string) bool {
+	q, inside := spanAt(spans, off)
+	if !inside {
+		return true
+	}
+	content := strings.TrimSpace(line[q.open+1 : q.close])
+	return content == flag || strings.HasPrefix(content, flag+"=")
 }
 
 // tagSite is one `--tag` argument: where it is, what tag it names, and whether it
@@ -176,6 +237,11 @@ type scan struct {
 	unbalanced []int
 	// shortFlag is the first line publishing through docker's `-t`, or 0.
 	shortFlag int
+	// push is the first line publishing through a bare `docker push <ref>:<tag>`, or 0.
+	push int
+	// heredoc is the first line opening a heredoc, or 0 — a quoting form this
+	// scanner does not model, so it refuses rather than reads the body as code.
+	heredoc int
 	// parseErr is set when the file is not YAML this gate can walk.
 	parseErr error
 }
@@ -284,6 +350,20 @@ func judge(body string, sc scan) []problem {
 		out = append(out, problem{msg: "no `--tag` argument found — either the publish moved out of this file " +
 			"or the build step was rewritten, and this gate would otherwise pass having judged nothing"})
 	}
+	if sc.heredoc > 0 {
+		// A HEREDOC IS A THIRD QUOTING FORM, and this scanner models two. Reading a
+		// heredoc body as code turns a `fi` or a `--tag` in a template into a verdict,
+		// so it refuses. Same rule as everywhere else here: what it cannot read, it
+		// does not pass.
+		out = append(out, problem{line: sc.heredoc, msg: "this `run:` script opens a heredoc — its body is not shell " +
+			"this guard can tell from code, so it refuses rather than reading a template as a publish. Keep the " +
+			"tag assembly out of heredocs, or teach the scanner this form"})
+	}
+	if sc.push > 0 {
+		out = append(out, problem{line: sc.push, msg: "`docker push` of an explicit tag is refused here — a publish " +
+			"outside the `--tag` list this gate reads is a publish it cannot hold to the ref. Add the tag to TAGS " +
+			"and let the build push it"})
+	}
 	if sc.shortFlag > 0 {
 		out = append(out, problem{line: sc.shortFlag, msg: "docker's short `-t` tag flag is refused here — write `--tag`, " +
 			"which is the form this gate reads (a tag it cannot see is a tag it cannot hold)"})
@@ -390,14 +470,27 @@ func scanFile(body string) scan {
 	for _, sc := range scripts {
 		var stack []bool // one entry per open `if`; true while inside the canonical gate
 		building, continued := false, false
+		var open byte // the quote still open from the previous line, if any
 		for i, raw := range strings.Split(sc.body, "\n") {
-			line := stripComment(raw)
+			line := raw
+			if open == 0 {
+				line = stripComment(raw) // inside a string, `#` is not a comment
+			}
 			fileLine := sc.startLine + i
-			bare := blankQuoted(line) // shell structure only — no keyword may come out of a string
+			var spans []quoteSpan
+			spans, open = spansOf(line, open)
+			bare := blank(line, spans) // shell structure only — no keyword may come out of a string
+			if out.heredoc == 0 && reHeredoc.MatchString(bare) {
+				out.heredoc = fileLine
+			}
 			building = buildLine(bare) || (building && continued)
 			continued = continues(bare)
-			if m := reShortTag.FindStringIndex(line); out.shortFlag == 0 && building && m != nil && !blankedAt(line, bare, m[0]) {
+			if m := reShortTag.FindStringSubmatchIndex(line); out.shortFlag == 0 && building && m != nil &&
+				realFlag(line, spans, m[2], "-t") {
 				out.shortFlag = fileLine
+			}
+			if m := reDockerPush.FindStringSubmatchIndex(line); out.push == 0 && m != nil && realFlag(line, spans, m[2], "docker") {
+				out.push = fileLine
 			}
 			// WITHIN A LINE, ORDER DECIDES. `…; then echo x; else TAGS+=(--tag …:latest);
 			// fi` publishes that tag when the gate is FALSE, and a tag written after a
@@ -411,8 +504,8 @@ func scanFile(body string) scan {
 			}
 			next := 0
 			for _, m := range reTag.FindAllStringSubmatchIndex(line, -1) {
-				if blankedAt(line, bare, m[0]) {
-					continue // the flag is inside a string: prose about a publish, not one
+				if !realFlag(line, spans, m[0], "--tag") {
+					continue // the flag is inside a sentence: prose about a publish, not one
 				}
 				for next < len(events) && events[next].off < m[0] {
 					stack = apply(stack, events[next])
@@ -543,10 +636,25 @@ type gateEntry struct {
 // the entry that LOSES — the shape this arm exists to catch, sneaking past the arm
 // itself. All of them must consult the ref.
 func gateExpressions(body string) []gateEntry {
-	var out []gateEntry
-	for _, m := range reGateExpr.FindAllStringSubmatchIndex(body, -1) {
-		out = append(out, gateEntry{line: 1 + strings.Count(body[:m[0]], "\n"), expr: body[m[2]:m[3]]})
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(body), &root); err != nil {
+		return nil // judge has already failed the file on this
 	}
+	var out []gateEntry
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if k, v := n.Content[i], n.Content[i+1]; k.Value == gateVar && v.Kind == yaml.ScalarNode {
+					out = append(out, gateEntry{line: v.Line, expr: v.Value})
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&root)
 	return out
 }
 
@@ -565,19 +673,11 @@ func gateExpressions(body string) []gateEntry {
 // pointing the condition match at the middle of a word. Quote characters are
 // ASCII, and no UTF-8 continuation byte can be mistaken for one, so a byte scan is
 // safe as well as position-preserving.
-func blankQuoted(line string) string {
+func blank(line string, spans []quoteSpan) string {
 	out := []byte(line)
-	var quote byte
-	for i, b := range out {
-		switch {
-		case quote != 0:
-			if b == quote {
-				quote = 0
-				continue
-			}
+	for _, q := range spans {
+		for i := q.open + 1; i < q.close; i++ {
 			out[i] = ' '
-		case b == '\'' || b == '"':
-			quote = b
 		}
 	}
 	return string(out)

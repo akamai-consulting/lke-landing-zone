@@ -489,3 +489,81 @@ func TestAttachedShortTagIsRefused(t *testing.T) {
 		t.Fatalf("an attached -t must be refused, got:\n%s", got)
 	}
 }
+
+// ── Round four: quoting cuts both ways, and a string can outlive its line ────
+
+func TestAQuotedFlagIsStillAFlag(t *testing.T) {
+	// THE FAIL-OPEN SIDE OF "a string is not a publish". Bash does not care where
+	// the quotes are: `TAGS+=("--tag" "…:latest")` is the same publish with the flag
+	// quoted, and skipping every quoted `--tag` as prose restored #451 straight past
+	// the guard built to hold it. A quoted span that is EXACTLY the flag is a flag;
+	// the flag inside a sentence is prose.
+	body := rep(t, good, `for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`,
+		`for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); TAGS+=("--tag" "${REPO}/${NAME}:latest"); done`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "MUTABLE tag published from any ref") {
+		t.Fatalf("a quoted --tag must still be judged, got:\n%s", got)
+	}
+}
+
+func TestQuotedShortTagInAMessageIsNotAPublish(t *testing.T) {
+	// The mirror of the same bug on the `-t` arm: the skip was handed the match's
+	// leading whitespace rather than the flag, so it never fired and an error
+	// message showing the command reddened the gate.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          echo "::error::do not run docker buildx build -t ${REPO}/${IMAGE}:edge by hand"`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a -t inside a message must not be refused, got:\n%s", msgs(ps))
+	}
+}
+
+func TestBareDockerPushOfAMutableTagIsRefused(t *testing.T) {
+	// `--tag` is not the only way to publish. `docker push …:latest` carries no flag
+	// this guard reads, so it would have been invisible — the same bypass family as
+	// `-t`, and refused the same way rather than half-parsed.
+	body := rep(t, good, "          docker buildx build --push \"${TAGS[@]}\" .\n",
+		"          docker buildx build --push \"${TAGS[@]}\" .\n"+
+			`          docker push "${REPO}/${IMAGE}:latest"`+"\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "docker push") {
+		t.Fatalf("a bare docker push must be refused, got:\n%s", got)
+	}
+}
+
+func TestFoldedGateExpressionIsRead(t *testing.T) {
+	// The expression is 141 characters; wrapping it in a folded scalar is the
+	// obvious tidy-up, and reading only the key's own line captured `>-` and failed
+	// the ref arm on a gate that is completely correct.
+	body := rep(t, good,
+		`  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main') && (inputs.sha == '' || inputs.sha == github.sha) }}`+"\n",
+		"  PUBLISH_MUTABLE: >-\n"+
+			"    ${{ (github.ref == 'refs/heads/main')\n"+
+			"    && (inputs.sha == '' || inputs.sha == github.sha) }}\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a folded gate expression must be read, got:\n%s", msgs(ps))
+	}
+}
+
+func TestAStringMayOutliveItsLine(t *testing.T) {
+	// Quote state was reset per line, so the second half of a multi-line string was
+	// scanned as code: a `fi` in prose popped the gate stack and everything after it
+	// stopped being gated.
+	body := rep(t, good,
+		`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done`+"\n",
+		"            echo \"publishing the mutable tags now;\n"+
+			"            fi is a word that appears in this sentence\"\n"+
+			`            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); done`+"\n")
+	if ps := judgeBody(t, body); len(ps) != 0 {
+		t.Fatalf("a multi-line string must not be read as code, got:\n%s", msgs(ps))
+	}
+}
+
+func TestHeredocFailsClosed(t *testing.T) {
+	// A heredoc is a third quoting form this scanner does not model. Reading its
+	// body as code is how a `fi` or a `--tag` in a template becomes a verdict, so it
+	// refuses rather than guesses.
+	body := rep(t, good, "          set -euo pipefail\n",
+		"          set -euo pipefail\n          cat <<EOF > /tmp/notes\n          --tag ${REPO}/${IMAGE}:latest\n          EOF\n")
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "heredoc") {
+		t.Fatalf("a heredoc must fail closed, got:\n%s", got)
+	}
+}

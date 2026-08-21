@@ -465,7 +465,8 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (24 rows, pinned by TestTheDefaultedMajorityIsStillTheMajority).
+	// table (28 rows, 25 of them taking the default subject — both pinned by
+	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string
 	// Toggles are the instance's component toggles, for enablement.
