@@ -293,10 +293,10 @@ const (
 // a guess: the terraform provider round-trips this value into state, so it almost
 // certainly echoes verbatim, and if it does not the failure says so immediately.
 //
-// EXACTLY ONE MATCH, deliberately. Zero means there is nothing to no-op and the
-// pin must be buildable; more than one is an ambiguous account this must not
-// guess about. Both fall through to the catalog verdict, which is the safe
-// direction.
+// EXACTLY ONE MATCH, deliberately — see ClusterVersionFor, which now owns that
+// rule. Zero means there is nothing to no-op and the pin must be buildable; more
+// than one is an ambiguous account this must not guess about. Both fall through to
+// the catalog verdict, which is the safe direction.
 func ClusterRunsVersion(clusters []map[string]any, label, region, version string) bool {
 	// EXACT, for the same reason CheckVersion is: this decides whether terraform
 	// PLANS A DIFF, and terraform compares the tfvars string against what the API
@@ -304,8 +304,35 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 	// `v1.34.6+lke2` is a diff — so normalising the `v` here would exempt precisely
 	// the deployment terraform is about to send the pin for.
 	w := strings.TrimSpace(version)
-	if w == "" || label == "" {
+	if w == "" {
 		return false
+	}
+	return ClusterVersionFor(clusters, label, region) == w
+}
+
+// ClusterVersionFor returns the k8s_version of the ONE cluster on the account
+// matching label (and region, when given), or "" when zero or several match.
+//
+// IT IS THE MATCHING RULE ClusterRunsVersion IS NOW WRITTEN IN TERMS OF, extracted
+// rather than copied. #443's whole argument is that the preflight and `llz doctor`
+// must not be able to reach different conclusions about one deployment, and #453
+// added a THIRD caller — `llz env add`, which needs the version itself rather than
+// a yes/no about a version it already has. A second loop over the same two keys is
+// how the two answers drift, and the drift would be invisible: both would still be
+// "right" about the account, and disagree about the deployment.
+//
+// ZERO OR SEVERAL RETURN "", which every caller must read as "no answer" rather
+// than "no version". Zero means there is nothing to no-op and nothing to adopt;
+// several is an ambiguous account no caller here may guess about.
+//
+// AN EMPTY label MATCHES NOTHING, on purpose. Callers derive the label from a
+// spec (`cluster.clusterLabel`) or from the instance identity, and both can come
+// back empty on a malformed tree — without this, every cluster on the account
+// would match and a one-cluster account would hand back a confident answer about
+// a deployment nobody named.
+func ClusterVersionFor(clusters []map[string]any, label, region string) string {
+	if label == "" {
+		return ""
 	}
 	var found int
 	var running string
@@ -319,7 +346,10 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 		found++
 		running = strings.TrimSpace(mString(m, "k8s_version"))
 	}
-	return found == 1 && running == w
+	if found != 1 {
+		return ""
+	}
+	return running
 }
 
 // normalizeVersion trims surrounding space and the optional leading `v`.

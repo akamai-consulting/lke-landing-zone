@@ -48,6 +48,27 @@ var theOtherAccountCatalog = []string{"v1.33.6+lke7"}
 type fakeCatalog struct {
 	versions []string
 	calls    int
+	// clusters is what /lke/clusters answers — the account's own record of which
+	// deployments already exist, and the only witness to a re-scaffold once the
+	// operator has deleted the spec (#453).
+	clusters     []map[string]any
+	clusterCalls int
+}
+
+func (f *fakeCatalog) ListClusters(context.Context) ([]map[string]any, error) {
+	f.clusterCalls++
+	return f.clusters, nil
+}
+
+// liveCluster is one row of the account's cluster listing. The label is the one
+// envdef.ClusterLabelFor authors for these tests' instance (`platform-support`),
+// which is the whole point: the lookup and the write must derive it once.
+func liveCluster(env, region, version string) map[string]any {
+	return map[string]any{
+		"label":       envdef.ClusterLabelFor("platform-support", env),
+		"region":      region,
+		"k8s_version": version,
+	}
 }
 
 func (f *fakeCatalog) ListLKEVersions(_ context.Context, tier string) ([]string, error) {
@@ -150,6 +171,143 @@ func TestEnvAddSeedsAPinTheAccountCanActuallyBuild(t *testing.T) {
 	if rendered != pin {
 		t.Errorf("cluster/lab.tfvars sends k8s_version = %q but the spec pins %q — terraform sends the "+
 			"tfvars value, so the preflight would be checking a different string than the apply uses", rendered, pin)
+	}
+}
+
+// TestARescaffoldOverALiveClusterPinsWhatItRuns is the gate for issue #453.
+//
+// THE ARCHETYPE IS THE SAME "split contract" as the gate above, with the producer
+// asked a question it previously could not answer. `llz env add` cannot tell a
+// RE-SCAFFOLD over a live cluster from a first run — the single-deployment case
+// deletes landingzone.yaml, environments/<env>.yaml and the overlay together, so
+// the tree is byte-for-byte a fresh instance and every disk-shaped guard is blind.
+// Against a cluster that already exists, any answer other than the one it is
+// running is an LKE-Enterprise control-plane upgrade nobody asked for, and
+// `llz ci assert-k8s-version` cannot catch it: the new pin IS in the catalog, it is
+// simply not the one that cluster runs.
+//
+// So this drives the REAL `llz env add` against a faked account holding a cluster
+// at a version that has ROTATED OUT of that account's catalog — the shape that
+// makes the two candidate answers maximally different — and reads the authored
+// spec and the rendered tfvars, which is the string terraform actually sends.
+func TestARescaffoldOverALiveClusterPinsWhatItRuns(t *testing.T) {
+	// The account can build v1.34.6+lke2 / v1.32.9+lke4 today; the cluster is on
+	// v1.33.6+lke7, which it can no longer build. Pre-#453 the scaffold seeded the
+	// newest and planned an upgrade.
+	const running = "v1.33.6+lke7"
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", running)},
+	}
+	dir, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	if catalog.clusterCalls == 0 {
+		// The wiring half. Every assertion below could be satisfied by a resolver
+		// that never asked; this is what says `llz env add` asked the ACCOUNT.
+		t.Fatal("`llz env add` never listed the account's clusters, so it still cannot tell a " +
+			"re-scaffold over a live cluster from a first run — issue #453")
+	}
+
+	// LoadInstance folds spec.defaults into the deployment, so this is the pin
+	// `llz ci assert-k8s-version` will read for "lab" — the consumer's own view.
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatalf("LoadInstance: %v", err)
+	}
+	e, ok := inst.Env("lab")
+	if !ok {
+		t.Fatal("the deployment was not authored")
+	}
+	if pin := strings.TrimSpace(e.Cluster.K8sVersion); pin != running {
+		t.Errorf("`llz env add` pinned k8sVersion %q for a deployment whose cluster already runs %q.\n"+
+			"terraform sends k8s_version on a create OR A CHANGE, so that plans an LKE-Enterprise "+
+			"control-plane upgrade nobody asked for — and the preflight cannot catch it, because %[1]q "+
+			"IS in the account's catalog. Issue #453.", pin, running)
+	}
+	// AND IT IS PER-DEPLOYMENT. spec.defaults must still be the account's newest: a
+	// deployment added to this instance next quarter genuinely should get today's
+	// version, not this one cluster's.
+	if shared := strings.TrimSpace(inst.Spec.Defaults.Cluster.K8sVersion); shared != "v1.34.6+lke2" {
+		t.Errorf("spec.defaults.cluster.k8sVersion = %q, want v1.34.6+lke2 — adopting one cluster's "+
+			"running version must not move the shared default every later deployment inherits", shared)
+	}
+
+	// ── and the string terraform is actually handed ───────────────────────────
+	b, err := os.ReadFile(filepath.Join(dir, "terraform-iac-bootstrap", "cluster", "lab.tfvars"))
+	if err != nil {
+		t.Fatalf("read the rendered cluster tfvars: %v", err)
+	}
+	if rendered := strings.Trim(tfvars.Value(string(b), "k8s_version"), `"`); rendered != running {
+		t.Errorf("cluster/lab.tfvars sends k8s_version = %q but the cluster runs %q — terraform "+
+			"compares the tfvars value against the API, so this plans the upgrade after all", rendered, running)
+	}
+}
+
+// TestAFreshDeploymentStillGetsTheAccountsNewest is the negative arm, and without
+// it "always pin what's running" passes the gate above while doing the wrong thing
+// on every fresh instance — which is most of them.
+//
+// The fixture differs from the gate above in ONE fact: the account holds no cluster
+// for this deployment. Everything else — catalog, region, flags — is identical.
+func TestAFreshDeploymentStillGetsTheAccountsNewest(t *testing.T) {
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		// A cluster for a DIFFERENT deployment on the same account, at a version this
+		// test would notice being adopted. The match is label+region, not "any cluster".
+		clusters: []map[string]any{liveCluster("dr", "us-ord", "v1.33.6+lke7")},
+	}
+	dir, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatalf("LoadInstance: %v", err)
+	}
+	e, _ := inst.Env("lab")
+	if pin := strings.TrimSpace(e.Cluster.K8sVersion); pin != "v1.34.6+lke2" {
+		t.Errorf("a deployment with no cluster pinned %q, want v1.34.6+lke2 (the newest the account "+
+			"offers). Adopting a version off an unrelated cluster is worse than the bug #453 fixes.", pin)
+	}
+	// AND IT DID NOT DIVERGE FROM THE SHARED DEFAULT: nothing to adopt means nothing
+	// to override, so environments/lab.yaml carries no k8sVersion of its own.
+	b, err := os.ReadFile(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "k8sVersion:") {
+		t.Errorf("environments/lab.yaml pinned its own k8sVersion with no cluster to adopt one from:\n%s", b)
+	}
+}
+
+// TestARescaffoldOverALiveClusterSaysSo — face 3 of #453.
+//
+// The re-seed guard (`reseeding`, add.go) needs ANOTHER environments/*.yaml to
+// survive, so it catches "landingzone.yaml went missing" and not the
+// single-deployment re-scaffold, where the spec, the env file and the overlay are
+// removed together. Nothing on disk distinguishes the result from a fresh instance
+// — the account does, and this asserts the operator is told.
+func TestARescaffoldOverALiveClusterSaysSo(t *testing.T) {
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", "v1.33.6+lke7")},
+	}
+	out := captureStderr(t, func() {
+		if _, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+			t.Fatalf("llz env add: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"platform-support-lab", // which cluster it found
+		"v1.33.6+lke7",         // and what that cluster runs
+		"RE-CREATED",           // and the state the operator now carries
+		"ORPHAN",               // and the one way this exemption is wrong
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scaffolding over a live cluster at a rotated-out version must say %q; stderr was:\n%s", want, out)
+		}
 	}
 }
 

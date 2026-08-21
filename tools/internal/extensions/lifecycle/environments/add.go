@@ -92,6 +92,13 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	if note != "" {
 		fmt.Printf("  %s\n", note)
 	}
+	// THE LAYOUT IS DETECTED BEFORE THE ACCOUNT IS ASKED, because the version
+	// question needs to name this deployment's CLUSTER and the label is derived from
+	// the instance identity on disk. It is pure filesystem detection with no side
+	// effects, so hoisting it changes nothing else about the order.
+	tfDir, aplDir, relPrefix := instancelayout.Detect()
+	specRoot := filepath.Dir(tfDir)
+
 	// Ask the same account which LKE-Enterprise versions it can actually build,
 	// rather than seeding the spec from a literal that is stale by construction
 	// (availability is per-account and rotates within hours). Best-effort in the
@@ -99,18 +106,34 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// and envdef keeps its offline default. An explicit --k8s-version the catalog
 	// DEFINITELY rejects fails here, where it costs a re-run, instead of at
 	// `llz doctor` on a pin the operator never chose.
-	k8s, err := instanceresolve.ResolveK8sVersion(o.K8sVersion)
+	//
+	// AND WHETHER THIS DEPLOYMENT'S CLUSTER ALREADY EXISTS, which is the question
+	// nothing on disk can answer. A re-scaffold over a live cluster — spec, env file
+	// and overlay deleted together, which is what this repo's own e2e lane does —
+	// is byte-for-byte a fresh instance, and every other guard here is keyed off the
+	// tree. The label handed over is the one WriteEnvDefinition is about to author
+	// (envdef.ClusterLabelFor, one derivation), so the cluster llz looks up now is
+	// the cluster `llz ci assert-k8s-version` will look up later.
+	k8s, err := instanceresolve.ResolveK8sVersion(o.K8sVersion, instanceresolve.Deployment{
+		ClusterLabel: envdef.ClusterLabelFor(envdef.InstanceName(specRoot), name),
+		Region:       o.Region,
+	})
 	if err != nil {
 		return err
 	}
+	// k8s.Pin is the operator's --k8s-version, OR the version this deployment's
+	// existing cluster is already running (see K8sVersionChoice.Running). Either way
+	// it is per-deployment: it lands in environments/<env>.yaml and never in
+	// spec.defaults, which EnsureLandingZone still seeds from k8s.Newest below.
 	o.K8sVersion = k8s.Pin
 	if k8s.Note != "" {
 		fmt.Printf("  %s\n", k8s.Note)
 	}
+	if k8s.Warning != "" {
+		fmt.Fprintln(os.Stderr, cigate.Warning(k8s.Warning))
+	}
 	dryRun = o.DryRun || dryRun
 
-	tfDir, aplDir, relPrefix := instancelayout.Detect()
-	specRoot := filepath.Dir(tfDir)
 	overlayDst := filepath.Join(aplDir, name)
 	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
 	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
@@ -155,10 +178,15 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// needs ANOTHER deployment to still be defined. A re-scaffold that removes
 	// landingzone.yaml, environments/<env>.yaml AND the overlay together — which is
 	// exactly what e2e-instantiate.yml does, and what add.go's own start-over hint
-	// leads to for a single-deployment instance — is indistinguishable on disk from
-	// a first run, so nothing fires. Closing that needs llz to ask the ACCOUNT
-	// whether a cluster for this deployment already exists, which is a real gap and
-	// not one this seam can reach.
+	// leads to for a single-deployment instance — is indistinguishable ON DISK from
+	// a first run, so nothing here fires.
+	//
+	// THAT CASE IS COVERED ELSEWHERE NOW, and deliberately not here (#453). The only
+	// witness left is the ACCOUNT, so the resolver asks it: a cluster matching this
+	// deployment's label+region makes the run a re-scaffold whatever the tree looks
+	// like, and K8sVersionChoice.Running carries both the fact and the version. What
+	// remains this warning's job is the OTHER deployments — the ones that inherit a
+	// re-seeded spec.defaults, which llz does not pin for them and cannot restore.
 	orphanedEnvs := existingDeployments(specRoot)
 	reseeding := !lzExists && len(orphanedEnvs) > 0
 
@@ -475,6 +503,13 @@ func sharedK8sVersion(lzPath string) string {
 // their cluster's version.
 func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inheritedFix string) string {
 	switch {
+	case k8s.Pin != "" && k8s.Pin == k8s.Running:
+		// ADOPTED OR EXEMPTED, NOT CHOSEN — and the operator needs to read that off
+		// this line, because it is the one case where llz wrote a version the account
+		// may not even offer any more. Rendering it identically to an explicit
+		// --k8s-version made the most surprising value in the banner the most
+		// ordinary-looking one. The note/warning printed above says the rest.
+		return k8s.Pin + color.Dim(" (this deployment only — its cluster already runs it)")
 	case k8s.Pin != "":
 		return k8s.Pin
 	case inheritedFix != "":

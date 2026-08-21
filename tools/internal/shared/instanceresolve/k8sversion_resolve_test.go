@@ -28,6 +28,12 @@ type fakeVersionLister struct {
 	versions []string
 	err      error
 	calls    int
+	// clusters is what /lke/clusters answers, and clusterErr fails that read. Both
+	// are on the SAME fake because they are the same account and the same client —
+	// see LKEVersionLister.
+	clusters     []map[string]any
+	clusterErr   error
+	clusterCalls int
 }
 
 func (f *fakeVersionLister) ListLKEVersions(_ context.Context, tier string) ([]string, error) {
@@ -37,6 +43,22 @@ func (f *fakeVersionLister) ListLKEVersions(_ context.Context, tier string) ([]s
 	}
 	return f.versions, f.err
 }
+
+func (f *fakeVersionLister) ListClusters(context.Context) ([]map[string]any, error) {
+	f.clusterCalls++
+	return f.clusters, f.clusterErr
+}
+
+// cluster is one row of the account's cluster listing, in the shape
+// linode.ClusterVersionFor reads.
+func cluster(label, region, version string) map[string]any {
+	return map[string]any{"label": label, "region": region, "k8s_version": version}
+}
+
+// lab is the deployment every test below is about — an instance called
+// `platform-support` adding `lab`, so the label is the one
+// envdef.ClusterLabelFor would author.
+var lab = Deployment{ClusterLabel: "platform-support-lab", Region: "us-ord"}
 
 // withCatalog installs a fake catalog for one test. A nil lister means "no token".
 func withCatalog(t *testing.T, l LKEVersionLister) {
@@ -50,7 +72,7 @@ func withCatalog(t *testing.T, l LKEVersionLister) {
 func TestResolveK8sVersionDerivesTheNewestTheAccountOffers(t *testing.T) {
 	f := &fakeVersionLister{versions: e2eAccountCatalog}
 	withCatalog(t, f)
-	c, err := ResolveK8sVersion("")
+	c, err := ResolveK8sVersion("", Deployment{})
 	if err != nil {
 		t.Fatalf("ResolveK8sVersion: %v", err)
 	}
@@ -77,7 +99,7 @@ func TestResolveK8sVersionDerivesTheNewestTheAccountOffers(t *testing.T) {
 	// the assertion a hardcoded default cannot satisfy, and the reason the feature
 	// exists.
 	withCatalog(t, &fakeVersionLister{versions: otherAccountCatalog})
-	if c, _ := ResolveK8sVersion(""); c.Newest != "v1.33.6+lke7" {
+	if c, _ := ResolveK8sVersion("", Deployment{}); c.Newest != "v1.33.6+lke7" {
 		t.Errorf("Newest against the other account = %q, want v1.33.6+lke7", c.Newest)
 	}
 }
@@ -95,7 +117,7 @@ func TestResolveK8sVersionKeepsTheCallersDefaultWhenItCannotAsk(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			withCatalog(t, lister)
-			c, err := ResolveK8sVersion("")
+			c, err := ResolveK8sVersion("", Deployment{})
 			if err != nil {
 				t.Fatalf("%s must not fail `llz env add`: %v", name, err)
 			}
@@ -110,7 +132,7 @@ func TestResolveK8sVersionKeepsTheCallersDefaultWhenItCannotAsk(t *testing.T) {
 			}
 			// An OPERATOR'S pin survives the same arms untouched. An unanswerable
 			// question is not evidence against it.
-			if c, err := ResolveK8sVersion("v1.33.6+lke7"); err != nil || c.Pin != "v1.33.6+lke7" {
+			if c, err := ResolveK8sVersion("v1.33.6+lke7", Deployment{}); err != nil || c.Pin != "v1.33.6+lke7" {
 				t.Errorf("%s: supplied pin = (%q, %v), want it passed through unchanged", name, c.Pin, err)
 			}
 		})
@@ -119,7 +141,7 @@ func TestResolveK8sVersionKeepsTheCallersDefaultWhenItCannotAsk(t *testing.T) {
 
 func TestResolveK8sVersionConfirmsASuppliedPinTheAccountOffers(t *testing.T) {
 	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
-	c, err := ResolveK8sVersion(" v1.32.9+lke4 ")
+	c, err := ResolveK8sVersion(" v1.32.9+lke4 ", Deployment{})
 	if err != nil {
 		t.Fatalf("ResolveK8sVersion: %v", err)
 	}
@@ -140,7 +162,7 @@ func TestResolveK8sVersionConfirmsASuppliedPinTheAccountOffers(t *testing.T) {
 
 func TestResolveK8sVersionRefusesASuppliedPinTheAccountCannotBuild(t *testing.T) {
 	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
-	_, err := ResolveK8sVersion("v1.33.6+lke7")
+	_, err := ResolveK8sVersion("v1.33.6+lke7", Deployment{})
 	if err == nil {
 		t.Fatal("a pin the catalog definitely rejects must fail at `llz env add`, not at `llz doctor` " +
 			"~an hour later on a spec the operator has since committed")
@@ -156,7 +178,7 @@ func TestResolveK8sVersionRefusesASuppliedPinTheAccountCannotBuild(t *testing.T)
 
 func TestResolveK8sVersionNamesTheOneCharacterOnANearMiss(t *testing.T) {
 	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
-	_, err := ResolveK8sVersion("1.34.6+lke2") // the leading `v`, which is sent verbatim
+	_, err := ResolveK8sVersion("1.34.6+lke2", Deployment{}) // the leading `v`, which is sent verbatim
 	if err == nil {
 		t.Fatal("a v-less pin is not in the catalog and the API rejects it as written")
 	}
@@ -170,7 +192,7 @@ func TestResolveK8sVersionDoesNotJudgeAPinAgainstACatalogThatCannotSettleIt(t *t
 	// linode.CheckVersion returns UNKNOWN, and turning that into a failure is how a
 	// scaffold gets blocked on a spelling difference nobody has measured.
 	withCatalog(t, &fakeVersionLister{versions: []string{"1.33", "1.34"}})
-	c, err := ResolveK8sVersion("v1.33.6+lke7")
+	c, err := ResolveK8sVersion("v1.33.6+lke7", Deployment{})
 	if err != nil || c.Pin != "v1.33.6+lke7" {
 		t.Fatalf("got (%q, %v), want the pin passed through with no error", c.Pin, err)
 	}
@@ -213,7 +235,7 @@ func TestLKEVersionClientFollowsTheSameTokenDiscoveryAsItsNeighbours(t *testing.
 // nobody re-checked since the instance was scaffolded.
 func TestReplacementForInheritedPinOnlyDivergesOnEvidence(t *testing.T) {
 	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
-	c, err := ResolveK8sVersion("")
+	c, err := ResolveK8sVersion("", Deployment{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,31 +259,219 @@ func TestReplacementForInheritedPinOnlyDivergesOnEvidence(t *testing.T) {
 }
 
 // TestRejectingAPinDoesNotAdviseAControlPlaneUpgrade — the remedy for a rejected
-// pin depends on something this verb deliberately does not ask about.
+// pin depends on something this verb now asks about (#453).
 //
 // "Omit --k8s-version and llz picks the newest" is right for a deployment that
 // does not exist yet, and actively harmful for one being RE-SCAFFOLDED over a live
-// cluster: the operator is passing the version their cluster is already running,
-// and the newest would plan a control-plane upgrade nobody asked for. The
-// preflight exempts that cluster (linode.ClusterRunsVersion); this verb makes one
-// catalog request and never reads the account's clusters, so the message has to
-// carry the case it cannot detect.
+// cluster: the newest would plan a control-plane upgrade nobody asked for. Before
+// #453 this verb made ONE catalog request and never read the account's clusters,
+// so the message had to carry a case it could not detect. Now it reads them — and
+// the rejection has to say WHICH of the two it found, because "we looked and there
+// is no such cluster" and "we did not look" are different claims.
 func TestRejectingAPinDoesNotAdviseAControlPlaneUpgrade(t *testing.T) {
-	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
-	_, err := ResolveK8sVersion("v1.33.6+lke7")
-	if err == nil {
-		t.Fatal("expected the rejection")
-	}
-	msg := err.Error()
-	for _, want := range []string{
-		"ALREADY RUNS",       // names the case
-		"environments/",      // and where to put the version back
-		"plans no diff",      // and why that is safe
-		"assert-k8s-version", // and what will then let it through
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("the rejection must mention %q so it is not read as advice to upgrade a live cluster; got:\n%s", want, msg)
+	t.Run("a cluster exists and runs something else", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.32.9+lke4")},
+		})
+		_, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+		if err == nil {
+			t.Fatal("expected the rejection")
 		}
+		for _, want := range []string{
+			"platform-support-lab", // names the cluster it looked up
+			"v1.32.9+lke4",         // and what that cluster actually runs
+			"Omit --k8s-version",   // and the remedy that now pins it automatically
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the rejection must mention %q; got:\n%s", want, err)
+			}
+		}
+	})
+
+	t.Run("no cluster exists", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+		_, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+		if err == nil {
+			t.Fatal("expected the rejection")
+		}
+		// IT MUST NOT CLAIM MORE THAN IT CHECKED, and it must not claim less: the
+		// account WAS asked, so the message says the cluster is absent rather than
+		// leaving the operator to wonder whether an exemption was even considered.
+		for _, want := range []string{"No single cluster named", "platform-support-lab", "ALREADY RUNNING"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the rejection must mention %q; got:\n%s", want, err)
+			}
+		}
+	})
+}
+
+// TestARescaffoldOverALiveClusterPinsWhatItRuns is the #453 unit arm: the three
+// faces of one missing question, at the resolver.
+func TestARescaffoldOverALiveClusterPinsWhatItRuns(t *testing.T) {
+	// FACE 2 — no pin, and a cluster that already exists. Seeding the newest here is
+	// an LKE-Enterprise control-plane upgrade nobody asked for, and
+	// `llz ci assert-k8s-version` cannot catch it: the new pin IS in the catalog, it
+	// is simply not the one that cluster runs.
+	t.Run("no pin adopts the running version", func(t *testing.T) {
+		f := &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.32.9+lke4")},
+		}
+		withCatalog(t, f)
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+		if f.clusterCalls == 0 {
+			t.Fatal("the account's clusters were never listed — the whole point of #453")
+		}
+		if c.Pin != "v1.32.9+lke4" {
+			t.Errorf("Pin = %q, want v1.32.9+lke4 (what the cluster runs)", c.Pin)
+		}
+		if c.Running != "v1.32.9+lke4" {
+			t.Errorf("Running = %q, want v1.32.9+lke4", c.Running)
+		}
+		// spec.defaults is NOT moved: a deployment added to this instance later
+		// genuinely should get today's newest, not this cluster's version.
+		if c.Newest != "v1.34.6+lke2" {
+			t.Errorf("Newest = %q, want v1.34.6+lke2 — the shared default must still be the account's newest", c.Newest)
+		}
+		if c.Note == "" || !strings.Contains(c.Note, "platform-support-lab") {
+			t.Errorf("adopting a version silently is the failure mode; Note = %q", c.Note)
+		}
+	})
+
+	// FACE 1 — an explicit pin that has rotated out of the catalog, on a cluster
+	// that is running it. This is the documented remedy for face 2, and before #453
+	// it stopped working the day the version left the catalog (hours, for LKE-E).
+	t.Run("an explicit rotated-out pin is exempted when the cluster runs it", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.33.6+lke7")},
+		})
+		c, err := ResolveK8sVersion("v1.33.6+lke7", lab)
+		if err != nil {
+			t.Fatalf("a pin the cluster is already running must not be rejected: %v", err)
+		}
+		if c.Pin != "v1.33.6+lke7" {
+			t.Errorf("Pin = %q, want the pin the operator passed", c.Pin)
+		}
+		// LOUD, not silent: the deployment is now on a version the account cannot
+		// build, so it can no longer be RE-CREATED, and the orphan case is the one way
+		// this exemption is wrong.
+		for _, want := range []string{"RE-CREATED", "ORPHAN"} {
+			if !strings.Contains(c.Warning, want) {
+				t.Errorf("the exemption must say %q; Warning = %q", want, c.Warning)
+			}
+		}
+	})
+
+	// THE NEGATIVE ARM, without which "always pin what's running" passes while doing
+	// the wrong thing on every fresh instance.
+	t.Run("no cluster still gets the account's newest", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+		if c.Pin != "" {
+			t.Errorf("Pin = %q, want \"\" — a fresh deployment has nothing to adopt and inherits spec.defaults", c.Pin)
+		}
+		if c.Newest != "v1.34.6+lke2" {
+			t.Errorf("Newest = %q, want v1.34.6+lke2", c.Newest)
+		}
+	})
+
+	// AMBIGUITY IS NOT AN ANSWER. Two clusters at one label+region is an account
+	// this must not guess about — see linode.ClusterVersionFor.
+	t.Run("an ambiguous account changes nothing", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{
+				cluster("platform-support-lab", "us-ord", "v1.32.9+lke4"),
+				cluster("platform-support-lab", "us-ord", "v1.33.6+lke7"),
+			},
+		})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+		if c.Pin != "" || c.Running != "" {
+			t.Errorf("Pin = %q, Running = %q — two matches must fall through to today's behaviour", c.Pin, c.Running)
+		}
+	})
+
+	// THE REGION IS PART OF THE MATCH, exactly as it is for the preflight: a
+	// same-named cluster in a different region is a different deployment.
+	t.Run("a cluster in another region is not this deployment", func(t *testing.T) {
+		withCatalog(t, &fakeVersionLister{
+			versions: e2eAccountCatalog,
+			clusters: []map[string]any{cluster("platform-support-lab", "de-fra-2", "v1.32.9+lke4")},
+		})
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+		if c.Pin != "" {
+			t.Errorf("Pin = %q, want \"\"", c.Pin)
+		}
+	})
+}
+
+// TestTheClusterReadIsBestEffortAndSaysSoWhenItFails.
+//
+// `llz env add` has never needed a token or a network and must not start. But the
+// fallback for a failed read is "seed today's newest", which against a live cluster
+// is precisely the unrequested upgrade the read exists to prevent — so degrading
+// QUIETLY is the one thing it may not do.
+func TestTheClusterReadIsBestEffortAndSaysSoWhenItFails(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: e2eAccountCatalog, clusterErr: errors.New("503 service unavailable")})
+	out := captureStderr(t, func() {
+		c, err := ResolveK8sVersion("", lab)
+		if err != nil {
+			t.Fatalf("a failed cluster read must not fail the scaffold: %v", err)
+		}
+		if c.Newest != "v1.34.6+lke2" {
+			t.Errorf("Newest = %q, want the catalog answer to survive", c.Newest)
+		}
+	})
+	for _, want := range []string{"platform-support-lab", "503", "control-plane upgrade"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a failed cluster read must say %q; stderr was:\n%s", want, out)
+		}
+	}
+}
+
+// TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
+// the operator saying the version out loud and the catalog agreeing; there is
+// nothing left for an exemption or an adoption to decide, so the second request
+// must not be made.
+func TestAConfirmedPinCostsNoClusterRead(t *testing.T) {
+	f := &fakeVersionLister{
+		versions: e2eAccountCatalog,
+		clusters: []map[string]any{cluster("platform-support-lab", "us-ord", "v1.32.9+lke4")},
+	}
+	withCatalog(t, f)
+	if _, err := ResolveK8sVersion("v1.34.6+lke2", lab); err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if f.clusterCalls != 0 {
+		t.Errorf("listed the account's clusters %d time(s) for a pin the catalog already confirmed", f.clusterCalls)
+	}
+}
+
+// TestNoCatalogMeansNoClusterRead. An unanswerable catalog means no token or no
+// reachable API; a second request would fail the same way and add a second
+// paragraph of the same news.
+func TestNoCatalogMeansNoClusterRead(t *testing.T) {
+	f := &fakeVersionLister{err: errors.New("401 unauthorized")}
+	withCatalog(t, f)
+	if _, err := ResolveK8sVersion("", lab); err != nil {
+		t.Fatalf("ResolveK8sVersion: %v", err)
+	}
+	if f.clusterCalls != 0 {
+		t.Errorf("listed the account's clusters %d time(s) after the catalog read had already failed", f.clusterCalls)
 	}
 }
 
@@ -279,7 +489,7 @@ func TestAConfirmationIsOnlyClaimedForAPinTheCreateAPICanTake(t *testing.T) {
 	// THE MIXED CATALOG IS THE FIXTURE THAT SEPARATES THE TWO RULES. A purely coarse
 	// one has Newest == "" and would pass under either, so it cannot tell them apart.
 	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34.6+lke2", "1.33"}})
-	c, err := ResolveK8sVersion("1.33")
+	c, err := ResolveK8sVersion("1.33", Deployment{})
 	if err != nil {
 		t.Fatalf("a coarse catalog cannot settle this pin, so it must not fail: %v", err)
 	}
@@ -292,7 +502,7 @@ func TestAConfirmationIsOnlyClaimedForAPinTheCreateAPICanTake(t *testing.T) {
 	}
 	// A real build id against the same catalog still gets its confirmation, or the
 	// guard has simply silenced the useful case too.
-	if c, _ := ResolveK8sVersion("v1.34.6+lke2"); c.Note == "" {
+	if c, _ := ResolveK8sVersion("v1.34.6+lke2", Deployment{}); c.Note == "" {
 		t.Error("a full build id present in the catalog must still be confirmed")
 	}
 }
