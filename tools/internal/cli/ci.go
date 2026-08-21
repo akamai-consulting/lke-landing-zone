@@ -459,8 +459,11 @@ func ciCmd() *cobra.Command {
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
 	// first-run to a live adopter with e2e color.Green throughout.
 	c.AddCommand(templatecommit.AssertAdopterPinCmd())
-	// CI guard: a container job whose run-steps lack a bash default falls back to
-	// dash and breaks `set -o pipefail` (the discover-workflow regression).
+	// Two CI guards over this repo's own workflow files, neither of which any single
+	// file can be wrong about on its own: setup-go-sole-site holds the Go toolchain
+	// action to ONE site (a second copy had already drifted a major version), and
+	// mutable-tag-guard holds build-images.yml's publish policy — `:latest` and
+	// `:<version>` only from the default branch's HEAD (#451).
 	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
 	c.AddCommand(callerperms.Cmd())
 	c.AddCommand(runinjection.Cmd())

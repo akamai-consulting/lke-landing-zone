@@ -109,7 +109,10 @@ var reTag = regexp.MustCompile(`--tag[=\s"']["'\s]*([^"'\s]+)`)
 // run -t <image>:<tag>`, which is false: every image reference has a colon.) Scoped
 // to a line that BUILDS, the separator and tty spellings are already out of reach —
 // `mktemp -t` is not a build — so the flag is refused whatever follows it.
-var reShortTag = regexp.MustCompile(`(?:^|\s)(-t)(?:[=\s"']|$)`)
+// The `(` in the leading class is not decoration: an array append writes the flag
+// as `TAGS+=(-t "…")`, with no space in front of it, which is exactly the shape
+// this arm was reintroduced to catch.
+var reShortTag = regexp.MustCompile(`(?:^|[\s(])(-t)(?:[=\s"']|$)`)
 
 // reDockerPush finds a publish that carries no flag at all. `--tag` is not the
 // only way to move a tag — `docker push <ref>:<tag>` moves one with nothing this
@@ -147,16 +150,24 @@ var reGateOpen = regexp.MustCompile(`^if\s+\[\[?\s*"?\$\{?` + gateVar + `\}?"?\s
 // word boundary — and Actions' own `if:` is not a word match either.
 var reBlockToken = regexp.MustCompile(`\b(if|elif|else|fi|then)\b`)
 
-// buildLine reports whether this line invokes a container build, which is the only
-// place a `-t` is a tag flag. A build usually SPANS lines — see the `continues`
-// tracking in scanFile, without which the flag on `docker buildx build \` +
-// `  -t img:edge \` sits on a line that says nothing about building, which is the
-// only spelling this workflow actually uses.
-func buildLine(bare string) bool { return hasToken(bare, "build") || hasToken(bare, "buildx") }
+// shortTagCommands are the commands that take a `-t` meaning something other than a
+// container tag. Named rather than inferred: the list is short because this guard
+// reads ONE file, and a line here is a line somebody is already looking at.
+// Matched as WORDS, not substrings, and not as shell tokens either: `$(mktemp -t
+// …)` puts the command inside a token that starts `TMP=$(`, so a token comparison
+// misses it — while a plain substring test would exempt any line containing
+// `UPDATE_DATE` on the strength of "date".
+var reShortTagCommands = regexp.MustCompile(`\b(mktemp|sort|join|column|tar|date|timeout|ps)\b`)
 
-// continues reports whether the line ends in a backslash, joining the next one to
-// it as a single shell command.
-func continues(bare string) bool { return strings.HasSuffix(strings.TrimRight(bare, " \t"), `\`) }
+// reDockerRun exempts `docker run -t`, which allocates a tty rather than naming a
+// tag. The version-stamp step in this workflow runs the image it just built.
+var reDockerRun = regexp.MustCompile(`\bdocker\s+run\b`)
+
+// shortTagExempt reports whether this line's `-t` belongs to something that is not
+// a container tag.
+func shortTagExempt(bare string) bool {
+	return reDockerRun.MatchString(bare) || reShortTagCommands.MatchString(bare)
+}
 
 // quoteSpan is one quoted run: `open` is the index of the opening quote (-1 when
 // the run began on an earlier line) and `close` the index just past its content.
@@ -257,8 +268,8 @@ func (s tagSite) mutable() bool { return !strings.HasPrefix(s.tag, immutablePref
 // the read itself can fail.
 type scan struct {
 	sites []tagSite
-	// unbalanced holds the first line of each `run:` script whose if/fi did not
-	// close. A scanner that lost the block structure cannot say what is gated, and
+	// unbalanced holds the line of the outermost `if` left open in each `run:`
+	// script. A scanner that lost the block structure cannot say what is gated, and
 	// "could not tell" is not "nothing wrong".
 	unbalanced []int
 	// shortFlag is the first line publishing through docker's `-t`, or 0.
@@ -513,8 +524,7 @@ func scanFile(body string) scan {
 	for _, sc := range scripts {
 		var stack []block // one entry per open `if`
 		pending := -1     // index in stack of the block whose condition is still open
-		building, continued := false, false
-		var open byte // the quote still open from the previous line, if any
+		var open byte     // the quote still open from the previous line, if any
 		for i, raw := range strings.Split(sc.body, "\n") {
 			line := raw
 			if open == 0 {
@@ -530,10 +540,8 @@ func scanFile(body string) scan {
 			if out.runtimeEnv == 0 && strings.Contains(line, gateVar) && strings.Contains(line, "GITHUB_ENV") {
 				out.runtimeEnv = fileLine
 			}
-			building = buildLine(bare) || (building && continued)
-			continued = continues(bare)
-			if m := reShortTag.FindStringSubmatchIndex(line); out.shortFlag == 0 && building && m != nil &&
-				realFlag(line, spans, m[2], "-t") {
+			if m := reShortTag.FindStringSubmatchIndex(line); out.shortFlag == 0 && m != nil &&
+				!shortTagExempt(bare) && realFlag(line, spans, m[2], "-t") {
 				out.shortFlag = fileLine
 			}
 			if m := reDockerPush.FindStringSubmatchIndex(line); out.push == 0 && m != nil && realFlag(line, spans, m[2], "docker") {
@@ -544,7 +552,7 @@ func scanFile(body string) scan {
 			// `fi` is not inside anything — but a scanner that judges the line's tags
 			// first and its keywords afterwards records both as gated. So the keyword
 			// events and the tag sites are replayed in the order they appear.
-			events := blockEvents(line, bare)
+			events := blockEvents(line, bare, fileLine)
 			opened, names := false, false
 			for _, e := range events {
 				opened = opened || (e.kind == "if" && e.gate)
@@ -590,7 +598,7 @@ func scanFile(body string) scan {
 			}
 		}
 		if len(stack) > 0 {
-			out.unbalanced = append(out.unbalanced, sc.startLine)
+			out.unbalanced = append(out.unbalanced, stack[0].line)
 		}
 	}
 	return out
@@ -600,6 +608,7 @@ func scanFile(body string) scan {
 // marks an `if` whose condition is the canonical positive test.
 type blockEvent struct {
 	off  int
+	line int
 	kind string
 	gate bool
 	// namesVar marks an `if` whose CONDITION mentions the gate variable without
@@ -612,17 +621,23 @@ type blockEvent struct {
 
 // block is one open `if`: whether it is the canonical gate, and whether it is an
 // unverifiable attempt at one.
-type block struct{ gate, namesVar bool }
+type block struct {
+	gate, namesVar bool
+	// line is where this `if` opened, so an unclosed one can be NAMED. "Somewhere in
+	// this script" is the least actionable thing a scanner can say about a block it
+	// lost track of, and it always knows which one.
+	line int
+}
 
 // blockEvents reads the line's block keywords in order. Offsets come from the
 // blanked text — so no keyword is read out of a string — and the CONDITION is read
 // from the original at the same offset, which is why blankQuoted must preserve
 // byte positions exactly.
-func blockEvents(line, bare string) []blockEvent {
+func blockEvents(line, bare string, fileLine int) []blockEvent {
 	var out []blockEvent
 	for _, m := range reBlockToken.FindAllStringSubmatchIndex(bare, -1) {
 		kind := bare[m[2]:m[3]]
-		e := blockEvent{off: m[0], kind: kind}
+		e := blockEvent{off: m[0], line: fileLine, kind: kind}
 		if kind == "if" {
 			e.gate = reGateOpen.MatchString(line[m[0]:])
 			e.namesVar = !e.gate && strings.Contains(condition(line[m[0]:]), gateVar)
@@ -644,7 +659,7 @@ func condition(rest string) string {
 func apply(stack []block, e blockEvent) []block {
 	switch e.kind {
 	case "if":
-		return append(stack, block{gate: e.gate, namesVar: e.namesVar})
+		return append(stack, block{gate: e.gate, namesVar: e.namesVar, line: e.line})
 	case "then": // structure-free: it only closes a condition, which scanFile tracks
 	case "else", "elif":
 		// THE ELSE ARM RUNS WHEN THE GATE IS FALSE. Leaving the entry set would mark
@@ -769,17 +784,6 @@ func blank(line string, spans []quoteSpan) string {
 		}
 	}
 	return string(out)
-}
-
-// hasToken reports whether line contains word as a shell WORD — `if`, not `if:`
-// (a job condition), `elif`, or `notify`.
-func hasToken(line, word string) bool {
-	for _, tok := range strings.Fields(line) {
-		if strings.TrimRight(tok, ";") == word {
-			return true
-		}
-	}
-	return false
 }
 
 // stripComment removes a `#` comment, respecting quotes. Both YAML and shell use

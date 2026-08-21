@@ -693,3 +693,43 @@ func TestConditionSpanningLinesStillNamesTheGate(t *testing.T) {
 		t.Fatalf("it must not send the author into a circle, got:\n%s", got)
 	}
 }
+
+// ── Round seven: the tag array is where the flags live ───────────────────────
+
+func TestShortTagInTheTagArrayIsRefused(t *testing.T) {
+	// `-t` was refused only on a line that BUILDS — but this workflow assembles its
+	// flags into TAGS on lines that build nothing, and the build line just expands
+	// the array. So `TAGS+=(-t "…:latest")` beside the sha- assembly put #451 back
+	// verbatim with every other arm still satisfied by the real gated block.
+	body := rep(t, good, `for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done`,
+		`for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); TAGS+=(-t "${REPO}/${NAME}:latest"); done`)
+	if got := msgs(judgeBody(t, body)); !strings.Contains(got, "short `-t` tag flag is refused") {
+		t.Fatalf("a -t in the tag array must be refused, got:\n%s", got)
+	}
+}
+
+func TestUnbalancedNamesTheOpeningLine(t *testing.T) {
+	// "Somewhere in this script" is the least actionable thing a scanner can say
+	// about a block it lost. It knows which `if` never closed.
+	body := rep(t, good, "          fi\n", "")
+	var got problem
+	for _, p := range judgeBody(t, body) {
+		if strings.Contains(p.msg, "did not close") {
+			got = p
+		}
+	}
+	if got.msg == "" {
+		t.Fatal("an unbalanced script must still be reported")
+	}
+	// The fixture's `if` is the 4th line of the run script, which starts at file
+	// line 10 — the unclosed block, not the script's first line.
+	want := 0
+	for i, l := range strings.Split(good, "\n") {
+		if strings.Contains(l, `if [ "${PUBLISH_MUTABLE}"`) {
+			want = i + 1
+		}
+	}
+	if got.line != want {
+		t.Fatalf("want the unclosed `if` at line %d, got line %d (%s)", want, got.line, got.msg)
+	}
+}
