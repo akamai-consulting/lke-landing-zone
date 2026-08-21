@@ -381,6 +381,42 @@ func TestNamesABuildAndNewestVersionCannotDISAGREEAboutOneRow(t *testing.T) {
 	}
 }
 
+// TestVersionSortKeyRejectsARowItCannotHOLD.
+//
+// versionSortKey fills a fixed [4]int by ranging over `append(parts, build)`, and
+// the ONLY thing keeping that in bounds is `len(parts) != 3`. Nothing pinned it:
+// loosening the check to `< 3` left the whole suite green, and under that loosening
+// `v1.34.6.9+lke2` panics with index-out-of-range — inside code fed raw
+// account-catalog strings by `llz env add`, `llz doctor` and
+// `llz ci assert-k8s-version` alike.
+//
+// A four-component version is not a shape LKE-E has been seen to emit. That is the
+// reason to pin it rather than to shrug: this parser's whole contract is that an
+// unrecognised row is SKIPPED, and a row that crashes the process instead is the
+// one failure mode none of its callers can degrade around.
+func TestVersionSortKeyRejectsARowItCannotHOLD(t *testing.T) {
+	for _, row := range []string{
+		"v1.34.6.9+lke2", // four components — the one that overflows the key
+		"v1.34.6.9.1+lke2",
+		"v1.34+lke2", // two — the other side of the same guard
+		"v1+lke2",
+	} {
+		if _, ok := versionSortKey(row); ok {
+			t.Errorf("versionSortKey(%q) accepted a row it cannot represent", row)
+		}
+		// AND THE CALLERS DEGRADE RATHER THAN CRASH. NewestVersion must skip it and
+		// return "", not panic and not choose it.
+		if got := NewestVersion([]string{row}); got != "" {
+			t.Errorf("NewestVersion([%q]) = %q, want \"\" — an unparseable row is skipped, never chosen", row, got)
+		}
+	}
+	// The guard must not have been loosened into "at least three" either: a valid row
+	// still parses, so this is a rejection test rather than a reject-everything test.
+	if _, ok := versionSortKey("v1.34.6+lke2"); !ok {
+		t.Error("versionSortKey rejected the measured shape — the guard is now too strict")
+	}
+}
+
 // A NEAR MISS SHARPENS THE MESSAGE; IT NEVER WIDENS WHO MAY REJECT. The near-miss
 // branch used to return NotOffered before asking whether the catalog was entitled
 // to reject anything, so a coarse or mixed list hard-failed a build — and the

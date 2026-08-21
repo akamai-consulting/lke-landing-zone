@@ -452,6 +452,40 @@ func TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken(t *testing.T) {
 	}
 }
 
+// TestAStarterExampleIsNotADeployment.
+//
+// existingDeployments filters environments/ to `.yaml`, and nothing pinned it:
+// mutating the suffix check away left the whole suite green. What it defends is
+// specific — the template tree ships `prod-web-ord.yaml.example` as a starter, and
+// without the filter that file counts as a deployment. The re-seed warning then
+// names a `.example` as something that will inherit the new pin, and `reseeding`
+// flips true in this repo's own e2e lane, which rm's landingzone.yaml at the
+// template root. A warning that names a file nobody deployed is how a real warning
+// stops being read.
+func TestAStarterExampleIsNotADeployment(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, clusterspec.EnvironmentsDir)
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"lab.yaml", "prod-web-ord.yaml.example", "README.md", "dr.yaml"} {
+		if err := os.WriteFile(filepath.Join(envDir, f), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := existingDeployments(dir)
+	want := []string{"dr", "lab"}
+	if len(got) != len(want) {
+		t.Fatalf("existingDeployments = %v, want %v — a starter `.example` (or a README) counted as a "+
+			"deployment that inherits the re-seeded pin", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("existingDeployments = %v, want %v", got, want)
+		}
+	}
+}
+
 // TestEnvAddFallsBackToTheScaffoldDefaultWithNoAccount is the fail-OPEN half AND
 // the negative arm that keeps the fixture above honest.
 //
