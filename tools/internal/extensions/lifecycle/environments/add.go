@@ -75,6 +75,42 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	if err := validate.CIDRList("--runner-ipv6-cidrs", o.RunnerIPv6CIDRs, validate.IPv6); err != nil {
 		return err
 	}
+	// ── layout + the refuse-to-overwrite preflight, BEFORE any account read ──
+	//
+	// THE ORDER IS LOAD-BEARING AND IT USED TO BE WRONG. These checks are pure
+	// filesystem detection, and one of them exists to break a DEAD-END: an env file
+	// with no overlay means a previous run authored the spec and `llz render` then
+	// rejected it, and the way out is the guidance below. With the account reads
+	// first, re-running `llz env add` with the original flags could die on an
+	// unbuildable --k8s-version instead — the version having rotated out in the
+	// meantime, which is a matter of hours for LKE-E — and the operator never
+	// reached the sentence telling them how to recover.
+	//
+	// It is also simply cheaper: a run that is going to refuse now makes no Linode
+	// requests at all.
+	tfDir, aplDir, relPrefix := instancelayout.Detect()
+	specRoot := filepath.Dir(tfDir)
+	overlayDst := filepath.Join(aplDir, name)
+	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
+	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
+
+	if _, err := os.Stat(overlayDst); err == nil {
+		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
+	}
+	if _, err := os.Stat(envFile); err == nil {
+		// Distinguish "already scaffolded" from "a previous run authored the spec and
+		// then render rejected it", which leaves the env file WITHOUT an overlay. That
+		// second state used to dead-end: this refused, and `llz doctor` sent you back
+		// here because apl-values/<env>/ was missing.
+		if _, oerr := os.Stat(overlayDst); oerr != nil {
+			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
+				"  Fix the spec (%s or %s) and run %s,\n"+
+				"  or discard it and start over: %s",
+				envFile, overlayDst, envFile, lzPath, color.Cyan("llz render "+name), color.Cyan("rm "+envFile))
+		}
+		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
+	}
+
 	// Ask the account whether the region exists before authoring a spec against it
 	// (best-effort — see region_resolve.go). Runs BEFORE the obj-cluster resolution
 	// so a swapped --region/--obj-cluster pair is named for what it is.
@@ -99,21 +135,32 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// and envdef keeps its offline default. An explicit --k8s-version the catalog
 	// DEFINITELY rejects fails here, where it costs a re-run, instead of at
 	// `llz doctor` on a pin the operator never chose.
-	k8s, err := instanceresolve.ResolveK8sVersion(o.K8sVersion)
+	//
+	// AND WHETHER THIS DEPLOYMENT'S CLUSTER ALREADY EXISTS, which is the question
+	// nothing on disk can answer. A re-scaffold over a live cluster — spec, env file
+	// and overlay deleted together, which is what this repo's own e2e lane does —
+	// is byte-for-byte a fresh instance, and every other guard here is keyed off the
+	// tree. The label handed over is the one WriteEnvDefinition is about to author
+	// (envdef.ClusterLabelFor, one derivation), so the cluster llz looks up now is
+	// the cluster `llz ci assert-k8s-version` will look up later.
+	k8s, err := instanceresolve.ResolveK8sVersion(o.K8sVersion, instanceresolve.Deployment{
+		ClusterLabel: envdef.ClusterLabelFor(envdef.InstanceName(specRoot), name),
+		Region:       o.Region,
+	})
 	if err != nil {
 		return err
 	}
+	// k8s.Pin is the operator's --k8s-version, OR the version this deployment's
+	// existing cluster is already running (see K8sVersionChoice.Running). Either way
+	// it is per-deployment: it lands in environments/<env>.yaml and never in
+	// spec.defaults, which EnsureLandingZone still seeds from k8s.Newest below.
 	o.K8sVersion = k8s.Pin
-	if k8s.Note != "" {
-		fmt.Printf("  %s\n", k8s.Note)
-	}
+	// k8s.Note / k8s.Warning are NOT printed here. They are version consequences like
+	// the other two, so they go through printK8sVersionConsequences, which both the
+	// dry-run and the real path call — printing them at the resolve site put them
+	// above the "would be authored" preview, i.e. above the line that says nothing
+	// has happened yet.
 	dryRun = o.DryRun || dryRun
-
-	tfDir, aplDir, relPrefix := instancelayout.Detect()
-	specRoot := filepath.Dir(tfDir)
-	overlayDst := filepath.Join(aplDir, name)
-	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
-	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
 
 	// Whether landingzone.yaml already exists decides where this deployment's
 	// version comes from, so it is read ONCE here and both the banner and the write
@@ -155,30 +202,17 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// needs ANOTHER deployment to still be defined. A re-scaffold that removes
 	// landingzone.yaml, environments/<env>.yaml AND the overlay together — which is
 	// exactly what e2e-instantiate.yml does, and what add.go's own start-over hint
-	// leads to for a single-deployment instance — is indistinguishable on disk from
-	// a first run, so nothing fires. Closing that needs llz to ask the ACCOUNT
-	// whether a cluster for this deployment already exists, which is a real gap and
-	// not one this seam can reach.
+	// leads to for a single-deployment instance — is indistinguishable ON DISK from
+	// a first run, so nothing here fires.
+	//
+	// THAT CASE IS COVERED ELSEWHERE NOW, and deliberately not here (#453). The only
+	// witness left is the ACCOUNT, so the resolver asks it: a cluster matching this
+	// deployment's label+region makes the run a re-scaffold whatever the tree looks
+	// like, and K8sVersionChoice.Running carries both the fact and the version. What
+	// remains this warning's job is the OTHER deployments — the ones that inherit a
+	// re-seeded spec.defaults, which llz does not pin for them and cannot restore.
 	orphanedEnvs := existingDeployments(specRoot)
 	reseeding := !lzExists && len(orphanedEnvs) > 0
-
-	// ── pre-flight ───────────────────────────────────────────────────────────
-	if _, err := os.Stat(overlayDst); err == nil {
-		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
-	}
-	if _, err := os.Stat(envFile); err == nil {
-		// Distinguish "already scaffolded" from "a previous run authored the spec and
-		// then render rejected it", which leaves the env file WITHOUT an overlay. That
-		// second state used to dead-end: this refused, and `llz doctor` sent you back
-		// here because apl-values/<env>/ was missing.
-		if _, oerr := os.Stat(overlayDst); oerr != nil {
-			return fmt.Errorf("%s exists but %s does not — a previous `llz env add` authored the spec and `llz render` then rejected it.\n"+
-				"  Fix the spec (%s or %s) and run %s,\n"+
-				"  or discard it and start over: %s",
-				envFile, overlayDst, envFile, lzPath, color.Cyan("llz render "+name), color.Cyan("rm "+envFile))
-		}
-		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
-	}
 
 	field := func(label, val string) { fmt.Printf("    %s%s\n", color.Dim(label), val) }
 	fmt.Println(color.Bold("llz env add") + color.Dim(" — spec-first scaffold"))
@@ -196,6 +230,17 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 		fmt.Println(color.Bold("Spec that would be authored, then `llz render`:"))
 		if _, err := os.Stat(lzPath); err != nil {
 			fmt.Printf("  %s  %s  %s\n", color.Cyan("would-create"), lzPath, color.Dim("(instance identity + shared defaults)"))
+			// AND THE VERSION IT WOULD SEED, which is a DIFFERENT decision from the
+			// banner's k8sVersion line and was the one state --dry-run showed nothing
+			// about. With an explicit --k8s-version the banner reads back the pin, which
+			// is per-deployment; spec.defaults is seeded from the account's newest, and
+			// every deployment added afterwards inherits THAT. So the preview said
+			// nothing at all about the value with the longest reach.
+			//
+			// THROUGH envdef.SeedK8sVersion, the function EnsureLandingZone itself calls,
+			// so the preview and the write cannot name different versions — including on
+			// the no-token path, where both fall through to llz's compiled default.
+			fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s)+", inherited by every deployment"))
 		} else {
 			fmt.Printf("  %s        %s  %s\n", color.Dim("exists"), lzPath, color.Dim("(left as-is)"))
 		}
@@ -221,9 +266,11 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	}
 	if created {
 		fmt.Printf("  %s  %s  %s\n", color.Green("created"), lzPath, color.Dim("(instance identity + shared defaults)"))
-		if k8s.Newest != "" {
-			fmt.Printf("            %s\n", color.Dim("k8sVersion "+k8s.Newest+" — the newest LKE-Enterprise version this account offers"))
-		}
+		// UNGUARDED, AND THROUGH THE SAME TWO FUNCTIONS THE PREVIEW USES. This used to
+		// be `if k8s.Newest != ""`, so the operator with no LINODE_TOKEN — the one who
+		// most needs to know a compiled literal just became every deployment's shared
+		// default — got silence, while the operator whose account answered got a line.
+		fmt.Printf("            %s\n", color.Dim("k8sVersion "+envdef.SeedK8sVersion(k8s.Newest)+" — "+seedSource(k8s)+", inherited by every deployment"))
 	}
 	printK8sVersionConsequences(lzPath, name, k8s, inheritedFix, reseeding, orphanedEnvs)
 	if inheritedFix != "" {
@@ -475,22 +522,65 @@ func sharedK8sVersion(lzPath string) string {
 // their cluster's version.
 func k8sVersionBanner(k8s instanceresolve.K8sVersionChoice, lzExists bool, inheritedFix string) string {
 	switch {
+	case k8s.Pin != "" && k8s.Pin == k8s.Running:
+		// ADOPTED OR EXEMPTED, NOT CHOSEN — and the operator needs to read that off
+		// this line, because it is the one case where llz wrote a version the account
+		// may not even offer any more. Rendering it identically to an explicit
+		// --k8s-version made the most surprising value in the banner the most
+		// ordinary-looking one. The note/warning printed above says the rest.
+		return k8s.Pin + color.Dim(" (this deployment only — its cluster already runs it)")
 	case k8s.Pin != "":
 		return k8s.Pin
 	case inheritedFix != "":
 		return inheritedFix + color.Dim(" (this deployment only — the shared default is unbuildable)")
 	case !lzExists && k8s.Newest != "":
 		return k8s.Newest
-	case !lzExists && len(k8s.Offered) > 0:
+	case !lzExists && k8s.CatalogRead:
 		// THE ACCOUNT ANSWERED; its catalog just holds nothing that could be sent to
 		// the create API. Reporting that as "could not be asked" contradicted the
 		// stderr line printed moments earlier, which names the catalog it returned —
 		// two messages about one event, disagreeing on whether the request happened.
+		//
+		// CatalogRead, NOT len(k8s.Offered) > 0. A read that SUCCEEDED and returned an
+		// empty catalog leaves Offered nil, so keying on it put this line and
+		// seedSource — which was moved to CatalogRead first — on opposite sides of the
+		// same fact: one run printed "the account could not be asked" in the banner and
+		// "the account's catalog names no full build id" three lines later. The two
+		// must read the same flag or they will drift again.
 		return color.Dim("(scaffold default — the account's catalog names no build id)")
 	case !lzExists:
 		return color.Dim("(scaffold default — the account could not be asked)")
 	default:
 		return color.Dim("(inherited from landingzone.yaml spec.defaults)")
+	}
+}
+
+// seedSource names where a re-seeded spec.defaults version came from, because
+// "the newest this account offers", "your account named nothing usable" and "a
+// literal compiled months ago" earn very different reactions from an operator.
+//
+// THREE CASES, NOT TWO. Keyed on Newest alone this said "this account was never
+// asked" whenever Newest was empty — which also covers the account that ANSWERED
+// and simply named no full build id. In that run llz printed the catalog it had
+// just read, in a warning, and then claimed a few lines later that it had never
+// asked. k8sVersionBanner already distinguishes these three; this did not, and one
+// of them is the operator's own credential being blamed for their catalog.
+//
+// CatalogRead is the discriminator, and Offered is NOT: a read that succeeded on an
+// empty catalog leaves Offered nil, so it cannot tell "answered with nothing" from
+// "never answered". k8sVersionBanner reads the same flag, deliberately — the two
+// sentences are about one event and drifted apart once already.
+func seedSource(k8s instanceresolve.K8sVersionChoice) string {
+	switch {
+	case k8s.Newest != "":
+		return "the newest LKE-Enterprise version this account offers"
+	case k8s.CatalogRead:
+		// NOT len(k8s.Offered) > 0. A successful read of an EMPTY catalog leaves Offered
+		// nil, so keying on it told an account that had answered it "was never asked" —
+		// the same message-lies class the cluster-read arm was fixed for.
+		return "llz's compiled default — the account's catalog names no full build id"
+	default:
+		return "llz's compiled default — this account was never asked"
 	}
 }
 
@@ -527,6 +617,16 @@ func existingDeployments(specRoot string) []string {
 func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVersionChoice,
 	inheritedFix string, reseeding bool, orphanedEnvs []string,
 ) {
+	// THE ADOPTION ARM FIRST, because it is the one that decided this deployment's
+	// version — the other two are about deployments that inherit. Both strings are
+	// composed by the resolver (instanceresolve.adoptionMessage) so the judgement
+	// "is the running version still in the catalog?" has exactly one implementation.
+	if k8s.Note != "" {
+		fmt.Printf("  %s\n", k8s.Note)
+	}
+	if k8s.Warning != "" {
+		fmt.Fprintln(os.Stderr, cigate.Warning(k8s.Warning))
+	}
 	if inheritedFix != "" {
 		// LOUD, because it makes this deployment DIVERGE from the others and the
 		// operator has to know which file now holds the difference.
@@ -555,12 +655,18 @@ func printK8sVersionConsequences(lzPath, env string, k8s instanceresolve.K8sVers
 		// upgrade this warning exists to announce. Name the version that WILL be
 		// seeded, and say where it came from, because "the newest this account offers"
 		// and "a literal compiled months ago" earn very different reactions.
-		seeded, source := k8s.Newest, "the newest version this Linode account offers"
-		if seeded == "" {
-			seeded, source = envdef.SeedK8sVersion(""), "llz's compiled default — this account was never asked"
-		}
+		// THROUGH THE SAME TWO FUNCTIONS THE PREVIEW AND THE WRITE USE. This computed
+		// its own version and its own provenance sentence, so it could — and did —
+		// disagree with the line `llz env add` printed moments earlier about the same
+		// seed, including blaming a missing token for a catalog that had answered.
+		seeded, source := envdef.SeedK8sVersion(k8s.Newest), seedSource(k8s)
+		// PAST TENSE ON THE ABSENCE, PRESENT ON THE ARTIFACT, because this one string
+		// is printed from BOTH paths — and on the write path EnsureLandingZone has
+		// already created the file two lines above, so "is missing" contradicted the
+		// `created` line directly over it. "Was missing" is what llz actually observed
+		// and stays true either way. Same correction adoptionMessage needed.
 		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
-			"%s is missing, so a RE-SEEDED spec.defaults sets cluster.k8sVersion to %s (%s)\n"+
+			"%s was missing, so a RE-SEEDED spec.defaults gives cluster.k8sVersion %s (%s)\n"+
 				"  for every deployment that inherits it — including ones that already exist: %s.\n"+
 				"  The pin they used to inherit died with the file (the rendered tfvars are gitignored), so llz\n"+
 				"  cannot restore it. If any of those clusters is RUNNING a different version, pin it in that\n"+

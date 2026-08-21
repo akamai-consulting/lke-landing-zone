@@ -315,10 +315,10 @@ const (
 // a guess: the terraform provider round-trips this value into state, so it almost
 // certainly echoes verbatim, and if it does not the failure says so immediately.
 //
-// EXACTLY ONE MATCH, deliberately. Zero means there is nothing to no-op and the
-// pin must be buildable; more than one is an ambiguous account this must not
-// guess about. Both fall through to the catalog verdict, which is the safe
-// direction.
+// EXACTLY ONE MATCH, deliberately — see ClusterVersionFor, which now owns that
+// rule. Zero means there is nothing to no-op and the pin must be buildable; more
+// than one is an ambiguous account this must not guess about. Both fall through to
+// the catalog verdict, which is the safe direction.
 func ClusterRunsVersion(clusters []map[string]any, label, region, version string) bool {
 	// EXACT, for the same reason CheckVersion is: this decides whether terraform
 	// PLANS A DIFF, and terraform compares the tfvars string against what the API
@@ -326,22 +326,73 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 	// `v1.34.6+lke2` is a diff — so normalising the `v` here would exempt precisely
 	// the deployment terraform is about to send the pin for.
 	w := strings.TrimSpace(version)
-	if w == "" || label == "" {
+	if w == "" {
 		return false
 	}
-	var found int
-	var running string
-	for _, m := range clusters {
-		if mString(m, "label") != label {
-			continue
-		}
-		if region != "" && mString(m, "region") != region {
-			continue
-		}
-		found++
-		running = strings.TrimSpace(mString(m, "k8s_version"))
+	return ClusterVersionFor(clusters, label, region) == w
+}
+
+// ClusterVersionFor returns the k8s_version of the ONE cluster on the account
+// matching label (and region, when given), or "" when zero or several match.
+//
+// IT IS THE MATCHING RULE ClusterRunsVersion IS NOW WRITTEN IN TERMS OF, extracted
+// rather than copied. #443's whole argument is that the preflight and `llz doctor`
+// must not be able to reach different conclusions about one deployment, and #453
+// added a THIRD caller — `llz env add`, which needs the version itself rather than
+// a yes/no about a version it already has. A second loop over the same two keys is
+// how the two answers drift, and the drift would be invisible: both would still be
+// "right" about the account, and disagree about the deployment.
+//
+// ZERO OR SEVERAL RETURN "", which every caller must read as "no answer" rather
+// than "no version". Zero means there is nothing to no-op and nothing to adopt;
+// several is an ambiguous account no caller here may guess about.
+//
+// AN EMPTY label MATCHES NOTHING, on purpose. Callers derive the label from a
+// spec (`cluster.clusterLabel`) or from the instance identity, and both can come
+// back empty on a malformed tree — without this, every cluster on the account
+// would match and a one-cluster account would hand back a confident answer about
+// a deployment nobody named.
+//
+// IT DOES NOT CONSULT `status`, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
+// The obvious refinement is to skip a cluster that is deleting or errored, so a
+// half-torn-down one is not adopted as "already runs X". Two things argue against
+// it and neither is about effort:
+//
+//   - THE FIELD IS RETURNED (ListClusters says so); ITS VALUES ARE UNMEASURED.
+//     Nothing in this repo has ever read an LKE-E cluster's status — the one
+//     measured `status` here is Postgres's (credrotate). This file already
+//     carries a warning about exactly this class of guess — see ClusterRunsVersion
+//     on the cluster object's `k8s_version` spelling — and the rule it settled on
+//     is to compare what has been seen and let an unmeasured shape fail LOUDLY
+//     rather than silently. A filter keyed on an unverified enum fails the other
+//     way: spell it wrong and it quietly excludes nothing, or quietly excludes
+//     everything and disables the exemption for every long-lived deployment.
+//   - IT WOULD NOT CATCH THE HAZARD ANYWAY. The orphan that actually costs a build
+//     is a perfectly HEALTHY cluster whose tfstate is gone, so terraform plans a
+//     create — `status` says "ready" and always will. That case is bounded where it
+//     can be: `llz reap` sweeps orphans, and the one caller that WRITES a pin off
+//     this answer names the possibility in its own output.
+//
+// So the shape to add, if the values are ever measured, is an explicit deny-list of
+// known-terminal states that keeps matching when the field is absent or unknown —
+// never an allow-list, which would turn one unmeasured spelling into a silent
+// account-wide regression.
+func ClusterVersionFor(clusters []map[string]any, label, region string) string {
+	// THE EMPTY-LABEL GUARD IS THIS FUNCTION'S, NOT THE MATCHER'S. MatchingClusters
+	// treats "" as a label to compare against — which is right for a caller that
+	// genuinely has an unlabelled cluster to find, and wrong for every caller here,
+	// where "" means the spec or the instance identity could not be read.
+	if label == "" {
+		return ""
 	}
-	return found == 1 && running == w
+	// linode.MatchingClusters, not a loop over label+region here. That loop existed
+	// twice for a while — this file and acl.go — which is exactly the drift #443's
+	// whole argument is about, and neither copy would ever have looked wrong.
+	m := MatchingClusters(clusters, label, region)
+	if len(m) != 1 {
+		return ""
+	}
+	return strings.TrimSpace(mString(m[0], "k8s_version"))
 }
 
 // normalizeVersion trims surrounding space and the optional leading `v`.

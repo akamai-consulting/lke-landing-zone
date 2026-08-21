@@ -161,3 +161,46 @@ func TestFirstLineKeepsTheAnnotationOnOneLine(t *testing.T) {
 		t.Errorf("only the first line of the cause belongs in the annotation: %q", out)
 	}
 }
+
+// TestEachFAILINGROUTEGetsItsOwnSay.
+//
+// REPRODUCED AGAINST THE REAL API WITH AN INVALID TOKEN, which is the only way this
+// was ever going to be seen: /v4/regions is UNAUTHENTICATED, so --region passes on
+// a bad token and never reports; /v4/object-storage/clusters 401s and consumed the
+// single global once-flag; and the versions route's 401 was then silent. The
+// operator saw one route named and got no word at all about the one that decides
+// cluster.k8sVersion — losing exactly the per-route diagnostic #426 argues for, in
+// the run where it matters most.
+func TestEachFAILINGROUTEGetsItsOwnSay(t *testing.T) {
+	resetAccountCheckSkip()
+	t.Cleanup(resetAccountCheckSkip)
+	out := captureStderr(t, func() {
+		reportSkippedAccountCheck("--obj-cluster", errors.New("401 unauthorized"))
+		reportSkippedAccountCheck("--k8s-version", errors.New("401 unauthorized"))
+	})
+	for _, want := range []string{"--obj-cluster", "--k8s-version"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%s failed against the account and said nothing, because another route had already\n"+
+				"spent the once-guard. Each ROUTE fails for its own reason and needs its own line.\nstderr:\n%s",
+				want, out)
+		}
+	}
+}
+
+// TestTheNoTokenNoticeIsSTILLSaidOnce is the other half, and without it "give every
+// check its own flag" passes the test above while printing the same
+// "no LINODE_TOKEN" paragraph three times in one `llz env add` — the exact noise
+// the once-guard was introduced to stop.
+func TestTheNoTokenNoticeIsSTILLSaidOnce(t *testing.T) {
+	resetAccountCheckSkip()
+	t.Cleanup(resetAccountCheckSkip)
+	out := captureStderr(t, func() {
+		reportSkippedAccountCheck("--region", nil)
+		reportSkippedAccountCheck("--obj-cluster", nil)
+		reportSkippedAccountCheck("--k8s-version", nil)
+	})
+	if n := strings.Count(out, "no LINODE_TOKEN is set"); n != 1 {
+		t.Errorf("the no-token notice appeared %d times; it is ONE fact about the environment and is "+
+			"equally true of every lookup:\n%s", n, out)
+	}
+}

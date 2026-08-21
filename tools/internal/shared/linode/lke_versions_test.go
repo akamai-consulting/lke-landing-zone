@@ -238,6 +238,111 @@ func TestClusterRunsVersion(t *testing.T) {
 	}
 }
 
+// TestClusterVersionForIsTheOneMatchingRule.
+//
+// ClusterRunsVersion answers a bool, which is all the preflight and `llz doctor`
+// need. `llz env add` needs the VERSION — it is choosing a pin, not judging one —
+// so #453 extracted the matcher rather than writing a second loop over label+region.
+// A second loop would drift invisibly: both would still be "right" about the
+// account and disagree about which cluster belongs to a deployment.
+func TestClusterVersionForIsTheOneMatchingRule(t *testing.T) {
+	one := []map[string]any{{"label": "llz-prod", "region": "us-ord", "k8s_version": "v1.33.6+lke7"}}
+	if got := ClusterVersionFor(one, "llz-prod", "us-ord"); got != "v1.33.6+lke7" {
+		t.Errorf("ClusterVersionFor = %q, want v1.33.6+lke7", got)
+	}
+	if got := ClusterVersionFor(one, "llz-prod", ""); got != "v1.33.6+lke7" {
+		t.Errorf("an empty region must not narrow the match; got %q", got)
+	}
+	for name, args := range map[string][2]string{
+		"other label":  {"llz-lab", "us-ord"},
+		"other region": {"llz-prod", "us-sea"},
+		// AN EMPTY LABEL MATCHES NOTHING. Callers derive it from a spec or from the
+		// instance identity, and both can come back empty on a malformed tree —
+		// without this, a one-cluster account would hand back a confident answer
+		// about a deployment nobody named.
+		"no label": {"", "us-ord"},
+	} {
+		if got := ClusterVersionFor(one, args[0], args[1]); got != "" {
+			t.Errorf("%s: ClusterVersionFor = %q, want \"\"", name, got)
+		}
+	}
+	two := append(append([]map[string]any{}, one...), one...)
+	if got := ClusterVersionFor(two, "llz-prod", "us-ord"); got != "" {
+		t.Errorf("two clusters share the label+region — an ambiguous account is not an answer; got %q", got)
+	}
+
+	// AND ClusterRunsVersion IS STILL EXPRESSED IN IT rather than beside it: the two
+	// must not be able to disagree about which cluster a deployment owns.
+	for _, c := range [][]map[string]any{one, two, nil} {
+		for _, label := range []string{"llz-prod", "llz-lab", ""} {
+			want := ClusterVersionFor(c, label, "us-ord") == "v1.33.6+lke7"
+			if got := ClusterRunsVersion(c, label, "us-ord", "v1.33.6+lke7"); got != want {
+				t.Errorf("ClusterRunsVersion(%q) = %v but ClusterVersionFor says %v — two rules for one match",
+					label, got, want)
+			}
+		}
+	}
+}
+
+// TestOneMatcherServesEveryCallerThatResolvesADeploymentsCluster.
+//
+// The label+region predicate was written TWICE before anyone noticed — here and in
+// acl.go's MatchClusterIDs — and the second copy arrived in a change whose own
+// comment claimed there was only one. Neither would ever have looked wrong; they
+// would simply have answered differently about one deployment after an edit to one
+// of them, which is precisely the drift #443 exists to prevent.
+//
+// So this asserts the two agree by CONSTRUCTION, over shapes that separate them:
+// an exact match, a region mismatch, an ambiguous pair, and the empty label — which
+// is the one place they legitimately differ, and the difference is documented on
+// ClusterVersionFor rather than accidental.
+func TestOneMatcherServesEveryCallerThatResolvesADeploymentsCluster(t *testing.T) {
+	clusters := []map[string]any{
+		{"id": 1, "label": "llz-prod", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
+		{"id": 2, "label": "llz-lab", "region": "us-sea", "k8s_version": "v1.32.9+lke4"},
+		{"id": 3, "label": "llz-dup", "region": "us-ord", "k8s_version": "v1.33.6+lke7"},
+		{"id": 4, "label": "llz-dup", "region": "us-ord", "k8s_version": "v1.32.9+lke4"},
+	}
+	for _, tc := range []struct {
+		label, region string
+		wantMatches   int
+	}{
+		{"llz-prod", "us-ord", 1},
+		{"llz-prod", "", 1},
+		{"llz-prod", "us-sea", 0},
+		{"llz-lab", "us-sea", 1},
+		{"llz-dup", "us-ord", 2}, // ambiguous — a real shape, not a contrivance
+		{"nope", "us-ord", 0},
+	} {
+		m := MatchingClusters(clusters, tc.label, tc.region)
+		if len(m) != tc.wantMatches {
+			t.Errorf("MatchingClusters(%q, %q) matched %d, want %d", tc.label, tc.region, len(m), tc.wantMatches)
+		}
+		// MatchClusterIDs is the same predicate projected onto ids.
+		if ids := MatchClusterIDs(clusters, tc.label, tc.region); len(ids) != len(m) {
+			t.Errorf("MatchClusterIDs(%q, %q) matched %d but MatchingClusters matched %d — the two "+
+				"resolve-by-label rules have drifted apart", tc.label, tc.region, len(ids), len(m))
+		}
+		// And ClusterVersionFor answers iff the match is UNIQUE.
+		got := ClusterVersionFor(clusters, tc.label, tc.region)
+		if (got != "") != (tc.wantMatches == 1) {
+			t.Errorf("ClusterVersionFor(%q, %q) = %q with %d match(es) — it must answer only on exactly one",
+				tc.label, tc.region, got, tc.wantMatches)
+		}
+	}
+	// THE ONE DELIBERATE DIVERGENCE. MatchingClusters compares "" as a label, which
+	// is right for a caller looking for an unlabelled cluster; ClusterVersionFor
+	// refuses, because "" there means the spec could not be read and every cluster
+	// with no label would otherwise answer for a deployment nobody named.
+	unlabelled := []map[string]any{{"id": 9, "region": "us-ord", "k8s_version": "v1.33.6+lke7"}}
+	if len(MatchingClusters(unlabelled, "", "us-ord")) != 1 {
+		t.Error("MatchingClusters must still compare the empty label literally")
+	}
+	if ClusterVersionFor(unlabelled, "", "us-ord") != "" {
+		t.Error("ClusterVersionFor must refuse an empty label rather than answer off an unlabelled cluster")
+	}
+}
+
 // A NEAR MISS SHARPENS THE MESSAGE; IT NEVER WIDENS WHO MAY REJECT. The near-miss
 // branch used to return NotOffered before asking whether the catalog was entitled
 // to reject anything, so a coarse or mixed list hard-failed a build — and the

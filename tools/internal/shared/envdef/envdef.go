@@ -81,10 +81,7 @@ func EnsureLandingZone(specRoot, k8sVersion string) (instanceName string, create
 	if a == nil {
 		a = &answers.File{}
 	}
-	instanceName = ShortRepoName(a.InstanceRepo)
-	if instanceName == "" {
-		instanceName = filepath.Base(mustAbs(specRoot))
-	}
+	instanceName = InstanceName(specRoot)
 
 	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
 	if _, statErr := os.Stat(lzPath); statErr == nil {
@@ -170,6 +167,33 @@ spec:
 	return instanceName, true, nil
 }
 
+// InstanceName is the <name> half of the copier instance_repo, falling back to
+// the instance directory's own name — the string every per-deployment identity in
+// the spec is derived from (clusterLabel and bootstrap.name are both
+// `<instanceName>-<env>`; see WriteEnvDefinitionVia).
+//
+// EXPORTED SO THE CLUSTER LABEL CAN BE KNOWN BEFORE IT IS WRITTEN. `llz env add`
+// has to ask the Linode account whether THIS deployment's cluster already exists
+// (see instanceresolve.Deployment) and it has to ask BEFORE authoring the spec,
+// which is where the label was previously first computed. A second derivation in
+// the caller would be two rules for one identity, and they would diverge silently:
+// the label llz looked up and the label llz wrote would both look right.
+func InstanceName(specRoot string) string {
+	a, _ := answers.Read(specRoot)
+	if a == nil {
+		a = &answers.File{}
+	}
+	if n := ShortRepoName(a.InstanceRepo); n != "" {
+		return n
+	}
+	return filepath.Base(mustAbs(specRoot))
+}
+
+// ClusterLabelFor is the per-deployment Linode cluster label — the value
+// WriteEnvDefinitionVia authors into `cluster.clusterLabel`, and therefore the one
+// `llz ci assert-k8s-version` later matches an account's clusters on.
+func ClusterLabelFor(instanceName, env string) string { return instanceName + "-" + env }
+
 // WriteEnvDefinition authors environments/<env>.yaml from the flags. Required
 // identity the flags don't carry (clusterLabel, bootstrap.name) is derived from
 // the instance name; unset optional fields are omitted so they inherit
@@ -202,7 +226,7 @@ func WriteEnvDefinition(path, name string, o Opts, instanceName string) error {
 // declared read-repo ALONE — a write laundered through a shared package, which
 // is why the extension's own tests could believe only `definition` wrote.
 func WriteEnvDefinitionVia(w fileWriter, path, name string, o Opts, instanceName string) error {
-	label := instanceName + "-" + name
+	label := ClusterLabelFor(instanceName, name)
 	role := OrElse(o.HARole, "standalone")
 
 	var b strings.Builder

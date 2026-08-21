@@ -48,6 +48,34 @@ var theOtherAccountCatalog = []string{"v1.33.6+lke7"}
 type fakeCatalog struct {
 	versions []string
 	calls    int
+	// clusters is what /lke/clusters answers — the account's own record of which
+	// deployments already exist, and the only witness to a re-scaffold once the
+	// operator has deleted the spec (#453).
+	clusters     []map[string]any
+	clusterCalls int
+}
+
+func (f *fakeCatalog) ListClusters(context.Context) ([]map[string]any, error) {
+	f.clusterCalls++
+	return f.clusters, nil
+}
+
+// liveCluster is one row of the account's cluster listing. The label is the one
+// envdef.ClusterLabelFor authors for these tests' instance (`platform-support`),
+// which is the whole point: the lookup and the write must derive it once.
+func liveCluster(env, region, version string) map[string]any {
+	return map[string]any{
+		"label":       envdef.ClusterLabelFor("platform-support", env),
+		"region":      region,
+		"k8s_version": version,
+		// float64, WHICH IS WHAT encoding/json DECODES A NUMBER TO — the shape
+		// linode.MatchClusterIDs is written against. Omitting it entirely was worse than
+		// a wrong type: the orphan warning under test renders the id, so the fixture
+		// produced "id 0 … delete that cluster" and the assertions below still passed.
+		// A gate whose fixture cannot express the field its subject prints is one the
+		// message can rot behind.
+		"id": float64(4242),
+	}
 }
 
 func (f *fakeCatalog) ListLKEVersions(_ context.Context, tier string) ([]string, error) {
@@ -150,6 +178,277 @@ func TestEnvAddSeedsAPinTheAccountCanActuallyBuild(t *testing.T) {
 	if rendered != pin {
 		t.Errorf("cluster/lab.tfvars sends k8s_version = %q but the spec pins %q — terraform sends the "+
 			"tfvars value, so the preflight would be checking a different string than the apply uses", rendered, pin)
+	}
+}
+
+// TestARescaffoldOverALiveClusterPinsWhatItRuns is the gate for issue #453.
+//
+// THE ARCHETYPE IS THE SAME "split contract" as the gate above, with the producer
+// asked a question it previously could not answer. `llz env add` cannot tell a
+// RE-SCAFFOLD over a live cluster from a first run — the single-deployment case
+// deletes landingzone.yaml, environments/<env>.yaml and the overlay together, so
+// the tree is byte-for-byte a fresh instance and every disk-shaped guard is blind.
+// Against a cluster that already exists, any answer other than the one it is
+// running is an LKE-Enterprise control-plane upgrade nobody asked for, and
+// `llz ci assert-k8s-version` cannot catch it: the new pin IS in the catalog, it is
+// simply not the one that cluster runs.
+//
+// So this drives the REAL `llz env add` against a faked account holding a cluster
+// at a version that has ROTATED OUT of that account's catalog — the shape that
+// makes the two candidate answers maximally different — and reads the authored
+// spec and the rendered tfvars, which is the string terraform actually sends.
+func TestARescaffoldOverALiveClusterPinsWhatItRuns(t *testing.T) {
+	// The account can build v1.34.6+lke2 / v1.32.9+lke4 today; the cluster is on
+	// v1.33.6+lke7, which it can no longer build. Pre-#453 the scaffold seeded the
+	// newest and planned an upgrade.
+	const running = "v1.33.6+lke7"
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", running)},
+	}
+	dir, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	if catalog.clusterCalls == 0 {
+		// The wiring half. Every assertion below could be satisfied by a resolver
+		// that never asked; this is what says `llz env add` asked the ACCOUNT.
+		t.Fatal("`llz env add` never listed the account's clusters, so it still cannot tell a " +
+			"re-scaffold over a live cluster from a first run — issue #453")
+	}
+
+	// LoadInstance folds spec.defaults into the deployment, so this is the pin
+	// `llz ci assert-k8s-version` will read for "lab" — the consumer's own view.
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatalf("LoadInstance: %v", err)
+	}
+	e, ok := inst.Env("lab")
+	if !ok {
+		t.Fatal("the deployment was not authored")
+	}
+	if pin := strings.TrimSpace(e.Cluster.K8sVersion); pin != running {
+		t.Errorf("`llz env add` pinned k8sVersion %q for a deployment whose cluster already runs %q.\n"+
+			"terraform sends k8s_version on a create OR A CHANGE, so that plans an LKE-Enterprise "+
+			"control-plane upgrade nobody asked for — and the preflight cannot catch it, because %[1]q "+
+			"IS in the account's catalog. Issue #453.", pin, running)
+	}
+	// AND IT IS PER-DEPLOYMENT. spec.defaults must still be the account's newest: a
+	// deployment added to this instance next quarter genuinely should get today's
+	// version, not this one cluster's.
+	if shared := strings.TrimSpace(inst.Spec.Defaults.Cluster.K8sVersion); shared != "v1.34.6+lke2" {
+		t.Errorf("spec.defaults.cluster.k8sVersion = %q, want v1.34.6+lke2 — adopting one cluster's "+
+			"running version must not move the shared default every later deployment inherits", shared)
+	}
+
+	// ── and the string terraform is actually handed ───────────────────────────
+	b, err := os.ReadFile(filepath.Join(dir, "terraform-iac-bootstrap", "cluster", "lab.tfvars"))
+	if err != nil {
+		t.Fatalf("read the rendered cluster tfvars: %v", err)
+	}
+	if rendered := strings.Trim(tfvars.Value(string(b), "k8s_version"), `"`); rendered != running {
+		t.Errorf("cluster/lab.tfvars sends k8s_version = %q but the cluster runs %q — terraform "+
+			"compares the tfvars value against the API, so this plans the upgrade after all", rendered, running)
+	}
+}
+
+// TestAFreshDeploymentStillGetsTheAccountsNewest is the negative arm, and without
+// it "always pin what's running" passes the gate above while doing the wrong thing
+// on every fresh instance — which is most of them.
+//
+// The fixture differs from the gate above in ONE fact: the account holds no cluster
+// for this deployment. Everything else — catalog, region, flags — is identical.
+func TestAFreshDeploymentStillGetsTheAccountsNewest(t *testing.T) {
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		// A cluster for a DIFFERENT deployment on the same account, at a version this
+		// test would notice being adopted. The match is label+region, not "any cluster".
+		clusters: []map[string]any{liveCluster("dr", "us-ord", "v1.33.6+lke7")},
+	}
+	dir, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatalf("LoadInstance: %v", err)
+	}
+	e, _ := inst.Env("lab")
+	if pin := strings.TrimSpace(e.Cluster.K8sVersion); pin != "v1.34.6+lke2" {
+		t.Errorf("a deployment with no cluster pinned %q, want v1.34.6+lke2 (the newest the account "+
+			"offers). Adopting a version off an unrelated cluster is worse than the bug #453 fixes.", pin)
+	}
+	// AND IT DID NOT DIVERGE FROM THE SHARED DEFAULT: nothing to adopt means nothing
+	// to override, so environments/lab.yaml carries no k8sVersion of its own.
+	b, err := os.ReadFile(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "k8sVersion:") {
+		t.Errorf("environments/lab.yaml pinned its own k8sVersion with no cluster to adopt one from:\n%s", b)
+	}
+}
+
+// TestARescaffoldOverALiveClusterSaysSo — face 3 of #453.
+//
+// The re-seed guard (`reseeding`, add.go) needs ANOTHER environments/*.yaml to
+// survive, so it catches "landingzone.yaml went missing" and not the
+// single-deployment re-scaffold, where the spec, the env file and the overlay are
+// removed together. Nothing on disk distinguishes the result from a fresh instance
+// — the account does, and this asserts the operator is told.
+func TestARescaffoldOverALiveClusterSaysSo(t *testing.T) {
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", "v1.33.6+lke7")},
+	}
+	out := captureStderr(t, func() {
+		if _, err := scaffoldWith(t, catalog, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+			t.Fatalf("llz env add: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"platform-support-lab", // which cluster it found
+		"v1.33.6+lke7",         // and what that cluster runs
+		"RE-CREATED",           // and the state the operator now carries
+		"ORPHAN",               // and the one way this exemption is wrong
+		"4242",                 // and the id the remedy tells them to act on
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scaffolding over a live cluster at a rotated-out version must say %q; stderr was:\n%s", want, out)
+		}
+	}
+}
+
+// TestDryRunOverALiveClusterPreviewsRatherThanReports.
+//
+// The adoption note/warning is a version consequence like the other two, so it goes
+// through printK8sVersionConsequences — which both paths call — rather than being
+// printed at the resolve site, where it landed ABOVE the "Spec that would be
+// authored" header. A preview that opens with a past-tense report of a write is
+// worse than no preview: it reads as though the run already happened.
+func TestDryRunOverALiveClusterPreviewsRatherThanReports(t *testing.T) {
+	dir := t.TempDir()
+	catalog := &fakeCatalog{
+		versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+		clusters: []map[string]any{liveCluster("lab", "us-ord", "v1.33.6+lke7")},
+	}
+	var err error
+	out := captureStderr(t, func() {
+		_, err = scaffoldEnv(t, dir, "lab", catalog,
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", DryRun: true})
+	})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	// IT STILL DISCLOSES THE DECISION — the point is not to go quiet under --dry-run,
+	// which would hide the one thing this preview is now uniquely able to show.
+	if !strings.Contains(out, "v1.33.6+lke7") {
+		t.Errorf("--dry-run did not preview that llz would pin the running version:\n%s", out)
+	}
+	if strings.Contains(out, "pinned it") || strings.Contains(out, "can no longer be") {
+		t.Errorf("--dry-run reports a write that never happened:\n%s", out)
+	}
+	// AND IT REALLY WAS A DRY RUN.
+	for _, p := range []string{clusterspec.LandingZoneFile, filepath.Join(clusterspec.EnvironmentsDir, "lab.yaml")} {
+		if _, serr := os.Stat(filepath.Join(dir, p)); serr == nil {
+			t.Errorf("--dry-run wrote %s", p)
+		}
+	}
+}
+
+// TestARenderRejectedSpecCanStillBeRecoveredWhenTheVersionHasRotated.
+//
+// An env file with NO overlay means a previous `llz env add` authored the spec and
+// `llz render` then rejected it. That state used to dead-end — this refused, and
+// `llz doctor` sent you back here — so the preflight grew a sentence naming the way
+// out. Then the account reads were hoisted above it, and re-running with the
+// original flags could die on the --k8s-version instead: LKE-E availability rotates
+// within hours, so the pin that worked when the spec was authored is routinely gone
+// by the time anyone comes back to fix the render error. The operator never reached
+// the recovery sentence.
+func TestARenderRejectedSpecCanStillBeRecoveredWhenTheVersionHasRotated(t *testing.T) {
+	dir := t.TempDir()
+	// The state a rejected render leaves: environments/lab.yaml with no overlay.
+	if err := os.MkdirAll(filepath.Join(dir, clusterspec.EnvironmentsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The account can no longer build the pin the operator is re-running with.
+	_, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v1.34.6+lke2"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", K8sVersion: "v1.33.6+lke7"})
+	if err == nil {
+		t.Fatal("expected `llz env add` to refuse — the env file already exists")
+	}
+	if !strings.Contains(err.Error(), "llz render lab") {
+		t.Errorf("re-running after a rejected render died on the VERSION instead of naming the way out\n"+
+			"of the dead-end the preflight exists to break. got:\n%s", err)
+	}
+}
+
+// TestTheReSeedWarningDoesNotContradictTheLineAboveIt.
+//
+// printK8sVersionConsequences runs AFTER EnsureLandingZone on the write path, so a
+// warning opening "<lzPath> is missing" printed two lines below "created <lzPath>"
+// — a claim the run had just falsified itself. It is one string shared with the
+// --dry-run path, where the file genuinely does not exist yet, so the fix is a
+// tense that is true in both: llz observed it missing, and that is what it says.
+func TestTheReSeedWarningDoesNotContradictTheLineAboveIt(t *testing.T) {
+	dir := t.TempDir()
+	catalog := []string{"v1.34.6+lke2"}
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: catalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, clusterspec.LandingZoneFile)); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	out := captureStderr(t, func() {
+		_, err = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: catalog},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("second `llz env add`: %v", err)
+	}
+	if !strings.Contains(out, "RE-SEEDED") {
+		t.Fatalf("the re-seed warning did not fire at all:\n%s", out)
+	}
+	// THE FILE EXISTS BY NOW — this run created it — so the present tense is false.
+	if strings.Contains(out, "is missing") {
+		t.Errorf("the warning says landingzone.yaml \"is missing\" on the path that just CREATED it:\n%s", out)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, clusterspec.LandingZoneFile)); serr != nil {
+		t.Fatal("premise broken: the run did not re-create landingzone.yaml")
+	}
+}
+
+// TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken.
+//
+// An account whose catalog comes back naming no full build id is a THIRD state, and
+// seedSource keyed on Newest alone collapsed it into "this account was never
+// asked". In one run llz printed the catalog it had just read — in a warning — and
+// then blamed the operator's credential for it a few lines later. The two sentences
+// were about the same request.
+func TestACatalogThatANSWEREDIsNotBlamedOnAMissingToken(t *testing.T) {
+	// Coarse rows only: a real answer, with nothing in it terraform could send.
+	coarse := &fakeCatalog{versions: []string{"1.34", "1.33"}}
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, coarse, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	if coarse.calls == 0 {
+		t.Fatal("premise broken: the account was not asked at all")
+	}
+	if strings.Contains(out, "never asked") {
+		t.Errorf("llz read this account's catalog and then said it never asked for it:\n%s", out)
+	}
+	if !strings.Contains(out, "names no full build id") {
+		t.Errorf("the seed's provenance does not say the catalog answered but held nothing usable:\n%s", out)
 	}
 }
 
@@ -333,17 +632,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		want         string
 	}{
 		"explicit pin wins": {
-			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog},
+			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true},
 			false, "", "v1.32.9+lke4",
 		},
 		"first env add shows the derived version": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, false, "", "v1.34.6+lke2",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, false, "", "v1.34.6+lke2",
 		},
 		"later env add inherits": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, true, "", "inherited",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "", "inherited",
 		},
 		"later env add overrides a rotated-out shared pin": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog}, true, "v1.34.6+lke2", "this deployment only",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, CatalogRead: true}, true, "v1.34.6+lke2", "this deployment only",
 		},
 		// THE TWO STATES THAT USED TO RENDER IDENTICALLY. One never reached the
 		// account; the other got an answer it cannot use — and the second one prints
@@ -353,7 +652,17 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 			instanceresolve.K8sVersionChoice{}, false, "", "could not be asked",
 		},
 		"catalog answered but names no build id": {
-			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, CatalogRead: true}, false, "", "names no build id",
+		},
+		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
+		// empty catalog leaves Offered nil while CatalogRead is true — so a banner
+		// keyed on len(Offered) said "could not be asked" while seedSource, keyed on
+		// CatalogRead, said the catalog had answered. Same run, same request, opposite
+		// claims. Every fixture above now carries CatalogRead because the resolver
+		// always sets the two together; a hand-built choice that omits it is a state
+		// ResolveK8sVersion cannot produce, and it hid this.
+		"catalog answered with nothing at all": {
+			instanceresolve.K8sVersionChoice{CatalogRead: true}, false, "", "names no build id",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -366,10 +675,26 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	// And the two "no build id" states must not render the same string, which is the
 	// whole finding rather than a wording preference.
 	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, "")
-	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}}, false, "")
+	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, CatalogRead: true}, false, "")
 	if unreachable == coarse {
 		t.Errorf("an unreachable account and a catalog llz cannot use both render %q — "+
 			"they are different events with different remedies", unreachable)
+	}
+	// AND THE BANNER AND THE SEED PROVENANCE MUST NOT DISAGREE ABOUT ONE REQUEST.
+	// They are two sentences in one run about whether the account answered; keyed on
+	// different fields they drifted, and only a successful EMPTY read separates the
+	// fields. Asserted rather than commented, because they live in different
+	// functions and nothing else couples them.
+	for name, k8s := range map[string]instanceresolve.K8sVersionChoice{
+		"empty read":  {CatalogRead: true},
+		"coarse read": {Offered: []string{"1.33"}, CatalogRead: true},
+		"no read":     {},
+	} {
+		banner, source := k8sVersionBanner(k8s, false, ""), seedSource(k8s)
+		if strings.Contains(banner, "could not be asked") != strings.Contains(source, "never asked") {
+			t.Errorf("%s: the banner says %q and the seed provenance says %q — one run, one request, "+
+				"two answers about whether the account was asked", name, banner, source)
+		}
 	}
 }
 
@@ -556,6 +881,89 @@ func captureStderr(t *testing.T, fn func()) string {
 	return out
 }
 
+// captureStdout is captureStderr for the other stream. The two version decisions
+// `llz env add` makes are announced on DIFFERENT streams on purpose — a warning is
+// a consequence, a preview line is information — so a gate that watches only one
+// of them watches half the output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+	fn()
+	os.Stdout = prev
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
+// TestDryRunDisclosesTheSharedDefaultItWouldSeed.
+//
+// THE BANNER AND spec.defaults ANSWER DIFFERENT QUESTIONS, and with an explicit
+// --k8s-version they hold different values: the flag is per-deployment, while
+// spec.defaults is seeded from the account's NEWEST and is what every deployment
+// added afterwards inherits. `--dry-run` showed the first and said nothing at all
+// about the second — so the value with the longest reach was the one the preview
+// omitted, which is the opposite of what a preview is for.
+func TestDryRunDisclosesTheSharedDefaultItWouldSeed(t *testing.T) {
+	// The pin is offered but is NOT the newest, so "the preview just echoes the
+	// banner" cannot pass this.
+	catalog := &fakeCatalog{versions: []string{"v1.34.6+lke2", "v1.32.9+lke4"}}
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, catalog, envdef.Opts{
+			Region: "us-ord", ObjCluster: "us-ord-1", K8sVersion: "v1.32.9+lke4", DryRun: true,
+		})
+	})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if !strings.Contains(out, "v1.34.6+lke2") {
+		t.Errorf("--dry-run never named the k8sVersion it would seed into spec.defaults (v1.34.6+lke2), "+
+			"which every deployment added later inherits. got:\n%s", out)
+	}
+	if !strings.Contains(out, "inherited by every deployment") {
+		t.Errorf("--dry-run named a version without saying it is the SHARED default, which is the "+
+			"whole difference from the per-deployment pin in the banner. got:\n%s", out)
+	}
+}
+
+// TestTheSeedIsDisclosedWithNoAccountToo is the arm the guard used to skip.
+//
+// The disclosure was written as `if k8s.Newest != ""`, which reads as "only say
+// something when we derived something" and silences precisely the operator who
+// most needs to hear it: with no LINODE_TOKEN the seed falls through to a literal
+// compiled months ago, and that literal becomes every deployment's shared default.
+func TestTheSeedIsDisclosedWithNoAccountToo(t *testing.T) {
+	var err error
+	out := captureStdout(t, func() {
+		_, err = scaffoldWith(t, nil, envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if err != nil {
+		t.Fatalf("llz env add: %v", err)
+	}
+	// THROUGH envdef.SeedK8sVersion, not a literal restated here: the gate must read
+	// the same function the write does, or it pins a copy that goes stale on its own.
+	if !strings.Contains(out, envdef.SeedK8sVersion("")) {
+		t.Errorf("`llz env add` seeded spec.defaults from a compiled default (%s) without saying so. got:\n%s",
+			envdef.SeedK8sVersion(""), out)
+	}
+	if !strings.Contains(out, "this account was never asked") {
+		t.Errorf("the operator cannot tell a derived pin from a compiled one, which earn very "+
+			"different reactions. got:\n%s", out)
+	}
+}
+
 // TestReSeedingAMissingLandingZoneSaysWhoInheritsTheNewPin.
 //
 // THE ONE PATH THAT BYPASSES EVERY OTHER GUARD HERE. An absent landingzone.yaml
@@ -734,5 +1142,33 @@ func TestTheE2ELanePinsTheVersionWhenItReusesACluster(t *testing.T) {
 	if strings.Contains(step, "if [[ -z \"${E2E_K8S_VERSION") {
 		t.Error("the empty case is handled by `llz env add` itself; a shell conditional here is " +
 			"untestable inline bash the budget gate charges for")
+	}
+}
+
+// TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked — the consumer half.
+//
+// seedSource explains, in the preview and in the re-seed warning, WHERE the version
+// llz just wrote came from. It keyed the three-way split on len(k8s.Offered), which
+// cannot separate "the read failed" from "the account answered and its catalog was
+// empty" — so an account that answered was told it "was never asked", in the one
+// sentence whose whole job is to say what llz did and did not do.
+func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
+	answered := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true})
+	if strings.Contains(answered, "never asked") {
+		t.Errorf("the account answered — an empty catalog is an answer; got %q", answered)
+	}
+	if !strings.Contains(answered, "no full build id") {
+		t.Errorf("it must say what the answer was missing, not merely that a default was used; got %q", answered)
+	}
+
+	unasked := seedSource(instanceresolve.K8sVersionChoice{})
+	if !strings.Contains(unasked, "never asked") {
+		t.Errorf("with no successful read llz genuinely did not ask, and must say so rather than "+
+			"implying it judged a catalog; got %q", unasked)
+	}
+
+	derived := seedSource(instanceresolve.K8sVersionChoice{CatalogRead: true, Newest: "v1.34.6+lke2"})
+	if !strings.Contains(derived, "newest") {
+		t.Errorf("a derived seed must name where it came from; got %q", derived)
 	}
 }
