@@ -128,11 +128,31 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
 	defer cancel()
 	all, err := c.ListLKEVersions(ctx, linode.LKETierEnterprise)
 	if err != nil {
-		reportSkippedAccountCheck("--k8s-version", err)
+		// `cluster.k8sVersion`, NOT `--k8s-version`. This derivation runs on EVERY
+		// `llz env add`, flag or no flag, so naming the flag told an operator who never
+		// passed one that it "was NOT checked" — a sentence about a thing they did not
+		// do. The spec field is what is actually being decided here, and it is the
+		// field they will go and look at.
+		reportSkippedAccountCheck("cluster.k8sVersion", err)
 		return nil, false, false
 	}
 	if len(all) == 0 {
-		reportSkippedAccountCheck("--k8s-version", errEmptyAccountListing)
+		// AN EMPTY ANSWER IS AN ANSWER, and routing it through
+		// reportSkippedAccountCheck said the opposite: that notice's error arm reads
+		// "the API did not answer" and tells the operator their token is probably
+		// expired, revoked or under-scoped. Their token worked. In the same run
+		// k8sVersionBanner correctly reported the catalog as READ, so llz made two
+		// contradictory statements about one request and sent the operator off to
+		// re-mint a PAT that was fine.
+		//
+		// The `read` return below is the same distinction, and it was already being
+		// made here — the notice simply had not been told about it.
+		fmt.Fprintln(os.Stderr, cigate.Warning(
+			"this Linode account lists NO LKE-Enterprise versions, so llz cannot derive\n"+
+				"  cluster.k8sVersion and the spec keeps its compiled default.\n"+
+				"  The account answered — this is not a token problem. LKE-Enterprise may not be enabled\n"+
+				"  on it, or it may be a region/account combination that offers none.\n"+
+				"  Check it with `llz doctor` before building."))
 		return nil, false, true
 	}
 	return all, true, true

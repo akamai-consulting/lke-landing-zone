@@ -863,6 +863,57 @@ func TestTheOrphanRemedyIsScopedToTheClusterItMatched(t *testing.T) {
 	}
 }
 
+// TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount.
+//
+// A read that SUCCEEDED and listed nothing was routed through
+// reportSkippedAccountCheck, whose error arm reads "the API did not answer" and
+// tells the operator their token is probably expired, revoked or under-scoped.
+// Their token worked. And in the same run k8sVersionBanner correctly reported the
+// catalog as READ — so llz made two contradictory statements about one request and
+// sent the operator off to re-mint a PAT that was fine.
+func TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{versions: nil})
+	var c K8sVersionChoice
+	out := captureStderr(t, func() {
+		var err error
+		if c, err = ResolveK8sVersion("", Deployment{}); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	// THE FLAG THAT KEEPS THE BANNER AND THE NOTICE ON ONE STORY.
+	if !c.CatalogRead {
+		t.Error("the read succeeded, so CatalogRead must be true — the notice and the banner key on it")
+	}
+	if strings.Contains(out, "did not answer") || strings.Contains(out, "expired") {
+		t.Errorf("an account that ANSWERED was reported as unreachable, blaming a working token:\n%s", out)
+	}
+	if !strings.Contains(out, "lists NO LKE-Enterprise versions") {
+		t.Errorf("the empty answer was not reported as what it is:\n%s", out)
+	}
+}
+
+// TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed.
+//
+// This derivation runs on EVERY `llz env add`, flag or no flag. Naming
+// `--k8s-version` told an operator who never passed one that it "was NOT checked" —
+// a sentence about something they did not do, which reads as a mistake they made.
+// `cluster.k8sVersion` is what is actually being decided, and it is the field they
+// will go and look at.
+func TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed(t *testing.T) {
+	withCatalog(t, &fakeVersionLister{err: errors.New("401 unauthorized")})
+	out := captureStderr(t, func() {
+		if _, err := ResolveK8sVersion("", Deployment{}); err != nil {
+			t.Fatalf("ResolveK8sVersion: %v", err)
+		}
+	})
+	if !strings.Contains(out, "cluster.k8sVersion") {
+		t.Errorf("the notice does not name the spec field it decides:\n%s", out)
+	}
+	if strings.Contains(out, "--k8s-version was NOT checked") {
+		t.Errorf("the notice blames a flag the operator never passed:\n%s", out)
+	}
+}
+
 // TestAConfirmedPinCostsNoClusterRead pins the cheapness rule. --k8s-version is
 // the operator saying the version out loud and the catalog agreeing; there is
 // nothing left for an exemption or an adoption to decide, so the second request
