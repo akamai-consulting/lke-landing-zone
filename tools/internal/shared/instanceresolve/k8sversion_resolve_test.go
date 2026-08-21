@@ -1393,3 +1393,184 @@ func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
 		}
 	})
 }
+
+// TestReplacementForInheritedPinStaysInTheDeploymentsOwnMinor.
+//
+// THE EVIDENCE IS THAT ONE BUILD ID LEFT THE CATALOG, not that the minor did, and
+// the size of the divergence this imposes has to match. A deployment is added to
+// sit BESIDE existing ones — an HA peer, a promotion sibling — which are meant to
+// run the same control-plane minor. Returning the account's absolute newest turned
+// a build-level rotation into a minor jump nobody asked for and no failure
+// required: the operator finds it later as a version skew between two deployments
+// they believe are a pair.
+//
+// The last arm matters as much: when the minor itself is gone there is nothing
+// left to stay close to, and refusing to move would leave the new deployment
+// pinned to something the account cannot build.
+func TestReplacementForInheritedPinStaysInTheDeploymentsOwnMinor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		offered   []string
+		inherited string
+		want      string
+	}{
+		{
+			name:      "the build rotated but the minor is still offered",
+			offered:   []string{"v1.34.6+lke2", "v1.32.9+lke4"},
+			inherited: "v1.32.5+lke1",
+			want:      "v1.32.9+lke4",
+		},
+		{
+			name:      "several builds of the inherited minor — the newest of THOSE",
+			offered:   []string{"v1.34.6+lke2", "v1.32.9+lke4", "v1.32.9+lke10"},
+			inherited: "v1.32.5+lke1",
+			want:      "v1.32.9+lke10",
+		},
+		{
+			name:      "the minor itself is gone — nothing left to stay close to",
+			offered:   []string{"v1.34.6+lke2", "v1.33.6+lke7"},
+			inherited: "v1.31.4+lke1",
+			want:      "v1.34.6+lke2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCatalog(t, &fakeVersionLister{versions: tc.offered})
+			c, err := ResolveK8sVersion("", Deployment{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.ReplacementForInheritedPin(tc.inherited); got != tc.want {
+				t.Errorf("inherited %s rotated out of %v -> %q, want %q",
+					tc.inherited, tc.offered, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReplacementForInheritedPinCorrectsASpellingSlipRatherThanUpgrading.
+//
+// Both misspellings docs/runbooks/first-build-failed.md documents are rejected
+// only because terraform sends the pin VERBATIM — the account builds the version
+// the operator meant. So the replacement is the catalog's spelling of THE SAME
+// VERSION, not the newest build of its minor, which would quietly change the patch
+// they chose and let the diagnostics call a one-character slip a rotation.
+func TestReplacementForInheritedPinCorrectsASpellingSlipRatherThanUpgrading(t *testing.T) {
+	catalog := []string{"v1.35.0+lke1", "v1.34.9+lke3", "v1.34.6+lke2", "v1.34.6+lke5"}
+	for _, tc := range []struct {
+		name, inherited, want string
+	}{
+		{"a missing leading v", "1.34.6+lke2", "v1.34.6+lke2"},
+		{"a missing +lke suffix", "v1.34.6", "v1.34.6+lke5"}, // newest build OF THAT PATCH
+		{"missing both", "1.34.9", "v1.34.9+lke3"},
+		// A genuine rotation is not a slip: no entry names that patch, so the minor
+		// rule takes over and keeps the deployment in its own family.
+		{"a genuine rotation stays in the minor", "v1.34.1+lke1", "v1.34.9+lke3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCatalog(t, &fakeVersionLister{versions: catalog})
+			c, err := ResolveK8sVersion("", Deployment{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.ReplacementForInheritedPin(tc.inherited); got != tc.want {
+				t.Errorf("ReplacementForInheritedPin(%q) = %q, want %q", tc.inherited, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheNearMissRuleNeedsTheSameLicenceEveryRejectionNeeds.
+//
+// A near miss is a KIND OF REJECTION, so the build-of-patch fallback may only run
+// against a catalog entitled to disprove, which HAS disproved this pin. Ungated it
+// answers for verdicts that are not rejections: a coarse catalog returns
+// VersionUnknown and would get a "misspelling" invented for a pin nobody could
+// judge, and an exact entry returns VersionOffered and would have a CONFIRMED pin
+// called misspelled.
+func TestTheNearMissRuleNeedsTheSameLicenceEveryRejectionNeeds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		offered []string
+		v       string
+	}{
+		{"a coarse catalog cannot settle it", []string{"v1.34.6+lke2", "1.33"}, "v1.34.6"},
+		{"the pin is an exact entry", []string{"v1.34.6", "v1.34.6+lke2"}, "v1.34.6"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCatalog(t, &fakeVersionLister{versions: tc.offered})
+			c, err := ResolveK8sVersion("", Deployment{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.ReplacementForInheritedPin(tc.v); got != "" {
+				t.Errorf("ReplacementForInheritedPin(%q) over %v = %q — the catalog did not reject\n"+
+					"this pin, so nothing here may replace it", tc.v, tc.offered, got)
+			}
+		})
+	}
+}
+
+// TestTheReplacementGuardsRefuseWhatTheyCannotJudge — the empty arms of the two
+// helpers, stated directly. Both must answer "no" rather than guess when there is
+// no catalog to ask or no pin to ask about: the caller writes a spec from this,
+// and a guess there is a version nobody chose.
+func TestTheReplacementGuardsRefuseWhatTheyCannotJudge(t *testing.T) {
+	full := K8sVersionChoice{Offered: []string{"v1.34.6+lke2"}, Newest: "v1.34.6+lke2"}
+	unread := K8sVersionChoice{}
+	for _, tc := range []struct {
+		name string
+		c    K8sVersionChoice
+		v    string
+	}{
+		{"no catalog was read", unread, "v1.32.5+lke1"},
+		{"no pin to judge", full, ""},
+		{"a pin of pure whitespace", full, "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.c.rejects(tc.v) {
+				t.Errorf("rejects(%q) said yes with nothing to judge it against", tc.v)
+			}
+			if got := tc.c.nearest(tc.v); got != "" {
+				t.Errorf("nearest(%q) = %q with nothing to judge it against", tc.v, got)
+			}
+			if got := tc.c.ReplacementForInheritedPin(tc.v); got != "" {
+				t.Errorf("ReplacementForInheritedPin(%q) = %q — a spec would be written from\n"+
+					"this, and nothing here knows enough to choose", tc.v, got)
+			}
+		})
+	}
+}
+
+// TestSpellingOfSeparatesASlipFromARotation — the caller words two opposite
+// sentences off this, so it must answer "" for a genuine rotation and never
+// second-guess a verdict that was not a rejection.
+func TestSpellingOfSeparatesASlipFromARotation(t *testing.T) {
+	catalog := []string{"v1.34.6+lke2", "v1.32.9+lke4"}
+	withCatalog(t, &fakeVersionLister{versions: catalog})
+	c, err := ResolveK8sVersion("", Deployment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, v, want string }{
+		{"a missing leading v", "1.34.6+lke2", "v1.34.6+lke2"},
+		{"a missing +lke suffix", "v1.34.6", "v1.34.6+lke2"},
+		{"a genuine rotation", "v1.30.1+lke1", ""},
+		{"nothing to judge", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := c.SpellingOf(tc.v); got != tc.want {
+				t.Errorf("SpellingOf(%q) = %q, want %q", tc.v, got, tc.want)
+			}
+		})
+	}
+	// It is the message half of a verdict, never a second opinion about one: a pin
+	// the catalog CONFIRMS is not a misspelling of anything.
+	withCatalog(t, &fakeVersionLister{versions: []string{"v1.34.6", "v1.34.6+lke2"}})
+	d, err := ResolveK8sVersion("", Deployment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.SpellingOf("v1.34.6"); got != "" {
+		t.Errorf("SpellingOf(%q) = %q for a pin the catalog lists verbatim", "v1.34.6", got)
+	}
+}
