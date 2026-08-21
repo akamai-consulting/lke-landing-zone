@@ -508,7 +508,7 @@ func TestTheThirdCatalogStateCHANGESWhatLlzSays(t *testing.T) {
 		name string
 		fn   func(instanceresolve.K8sVersionChoice) string
 	}{
-		{"k8sVersionBanner", func(k instanceresolve.K8sVersionChoice) string { return k8sVersionBanner(k, false, "") }},
+		{"k8sVersionBanner", func(k instanceresolve.K8sVersionChoice) string { return k8sVersionBanner(k, false, true, "", "", "") }},
 		{"seedSource", seedSource},
 	} {
 		seen := map[string]string{}
@@ -748,33 +748,36 @@ func TestAnExplicitPinDoesNotBecomeTheSharedDefault(t *testing.T) {
 func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	catalog := []string{"v1.34.6+lke2"}
 	for name, c := range map[string]struct {
-		choice       instanceresolve.K8sVersionChoice
-		lzExists     bool
-		inheritedFix string
-		want         string
+		choice        instanceresolve.K8sVersionChoice
+		lzExists      bool
+		inheritedFix  string
+		inherited     string // what landingzone.yaml's spec.defaults holds
+		lzUnreadable  bool   // the spec did not parse (zero value = it did)
+		missingPinFix string
+		want          string
 	}{
 		"explicit pin wins": {
 			instanceresolve.K8sVersionChoice{Pin: "v1.32.9+lke4", Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered},
-			false, "", "v1.32.9+lke4",
+			false, "", "", false, "", "v1.32.9+lke4",
 		},
 		"first env add shows the derived version": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, false, "", "v1.34.6+lke2",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, false, "", "", false, "", "v1.34.6+lke2",
 		},
 		"later env add inherits": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "", "inherited",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "", "v1.33.6+lke7", false, "", "inherited",
 		},
 		"later env add overrides a rotated-out shared pin": {
-			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "v1.34.6+lke2", "this deployment only",
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered}, true, "v1.34.6+lke2", "v1.33.6+lke7", false, "", "this deployment only",
 		},
 		// THE TWO STATES THAT USED TO RENDER IDENTICALLY. One never reached the
 		// account; the other got an answer it cannot use — and the second one prints
 		// the catalog to stderr moments earlier, so "could not be asked" contradicted
 		// a message already on screen.
 		"account unreachable": {
-			instanceresolve.K8sVersionChoice{}, false, "", "could not be asked",
+			instanceresolve.K8sVersionChoice{}, false, "", "", false, "", "could not be asked",
 		},
 		"catalog answered but names no build id": {
-			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Offered: []string{"1.33", "1.34"}, Catalog: instanceresolve.CatalogAnswered}, false, "", "", false, "", "names no build id",
 		},
 		// THE FIXTURE THAT CAUGHT THE DRIFT. A read that SUCCEEDED and returned an
 		// empty catalog leaves Offered nil while Catalog is CatalogAnswered — so a banner
@@ -784,11 +787,27 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		// always sets the two together; a hand-built choice that omits it is a state
 		// ResolveK8sVersion cannot produce, and it hid this.
 		"catalog answered with nothing at all": {
-			instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered}, false, "", "names no build id",
+			instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered}, false, "", "", false, "", "names no build id",
+		},
+		// TWO STATES THAT USED TO RENDER AS AN INHERITANCE. sharedK8sVersion folds "the
+		// field is absent" and "the spec did not parse" into one "", and neither is an
+		// inheritance. The absent-field case is not asserted HERE because it cannot
+		// reach this function: with no shared pin and no --k8s-version, missingPinFix
+		// is always set and its arm wins, so the only way into an `inherited == ""`
+		// arm was a fixture Run cannot produce.
+		// TestADeploymentIsNotAuthoredAgainstNoVersionWhenTheAccountAnswered covers the
+		// reachable version of it end to end.
+		"landingzone.yaml did not parse": {
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered},
+			true, "", "", true, "", "could not be read",
+		},
+		"no shared default, so the account's answer is used here": {
+			instanceresolve.K8sVersionChoice{Newest: "v1.34.6+lke2", Offered: catalog, Catalog: instanceresolve.CatalogAnswered},
+			true, "", "", false, "v1.34.6+lke2", "this deployment only",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := k8sVersionBanner(c.choice, c.lzExists, c.inheritedFix)
+			got := k8sVersionBanner(c.choice, c.lzExists, !c.lzUnreadable, c.inherited, c.inheritedFix, c.missingPinFix)
 			if !strings.Contains(got, c.want) {
 				t.Errorf("banner = %q, want it to contain %q", got, c.want)
 			}
@@ -796,8 +815,8 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 	}
 	// And the two "no build id" states must not render the same string, which is the
 	// whole finding rather than a wording preference.
-	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, "")
-	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered}, false, "")
+	unreachable := k8sVersionBanner(instanceresolve.K8sVersionChoice{}, false, true, "", "", "")
+	coarse := k8sVersionBanner(instanceresolve.K8sVersionChoice{Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered}, false, true, "", "", "")
 	if unreachable == coarse {
 		t.Errorf("an unreachable account and a catalog llz cannot use both render %q — "+
 			"they are different events with different remedies", unreachable)
@@ -812,7 +831,7 @@ func TestK8sVersionBannerTellsTheOperatorWhichFileDecides(t *testing.T) {
 		"coarse read": {Offered: []string{"1.33"}, Catalog: instanceresolve.CatalogAnswered},
 		"no read":     {},
 	} {
-		banner, source := k8sVersionBanner(k8s, false, ""), seedSource(k8s)
+		banner, source := k8sVersionBanner(k8s, false, true, "", "", ""), seedSource(k8s)
 		if strings.Contains(banner, "could not be asked") != strings.Contains(source, "never asked") {
 			t.Errorf("%s: the banner says %q and the seed provenance says %q — one run, one request, "+
 				"two answers about whether the account was asked", name, banner, source)
@@ -1300,5 +1319,826 @@ func TestTheSeedSourceDoesNotClaimAnAccountWasNeverAsked(t *testing.T) {
 	derived := seedSource(instanceresolve.K8sVersionChoice{Catalog: instanceresolve.CatalogAnswered, Newest: "v1.34.6+lke2"})
 	if !strings.Contains(derived, "newest") {
 		t.Errorf("a derived seed must name where it came from; got %q", derived)
+	}
+}
+
+// misspellShared rewrites landingzone.yaml's shared pin to a spelling the account
+// rejects but which names the same version, and returns the deployment dir.
+func misspellShared(t *testing.T, dir, from, to string) {
+	t.Helper()
+	lzPath := filepath.Join(dir, clusterspec.LandingZoneFile)
+	b, err := os.ReadFile(lzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), from) {
+		t.Fatalf("premise: %s does not carry %s", lzPath, from)
+	}
+	if err := os.WriteFile(lzPath, []byte(strings.Replace(string(b), from, to, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestASpellingSlipInSpecDefaultsIsNotReportedAsARotation.
+//
+// docs/runbooks/first-build-failed.md documents both misspellings — a missing
+// leading `v`, a missing `+lke` suffix — and terraform sends the pin VERBATIM, so
+// the account rejects them while building the version the operator meant.
+// `ReplacementForInheritedPin` corrects the spelling; the MESSAGE still said "which
+// this Linode account can no longer build", which describes a rotation and sends
+// an operator hunting a replacement for a version sitting in their own catalog.
+func TestASpellingSlipInSpecDefaultsIsNotReportedAsARotation(t *testing.T) {
+	dir := t.TempDir()
+	catalog := []string{"v1.34.6+lke2", "v1.32.9+lke4"}
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: catalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	misspellShared(t, dir, "v1.34.6+lke2", "1.34.6+lke2") // the leading `v`
+
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: catalog},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	if !strings.Contains(out, "spelled differently") {
+		t.Errorf("a one-character misspelling was not reported as one:\n%s", out)
+	}
+	if strings.Contains(out, "can no longer build") {
+		t.Errorf("the account builds this version happily; calling it a rotation sends the\n"+
+			"operator looking for a replacement:\n%s", out)
+	}
+	// The deployment gets the SAME version in the catalog's spelling, not an upgrade.
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := inst.Env("dr"); strings.TrimSpace(e.Cluster.K8sVersion) != "v1.34.6+lke2" {
+		t.Errorf("dr pins %q, want the catalog's spelling of the version spec.defaults meant",
+			e.Cluster.K8sVersion)
+	}
+}
+
+// TestTheDivergenceRemedyOwnsItsCostAndNamesBothEdits.
+//
+// Two defects in one message. It promised the running deployments are untouched
+// and then offered a remedy that moves them — a control-plane upgrade nobody
+// scheduled, which is the whole reason the per-deployment override exists. And it
+// named only the spec.defaults edit: leave the override behind and it is identical
+// to the new shared value, therefore invisible, and this deployment silently stops
+// tracking every later bump.
+func TestTheDivergenceRemedyOwnsItsCostAndNamesBothEdits(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: theOtherAccountCatalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	rotated := []string{"v1.34.6+lke2", "v1.32.9+lke4"}
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: rotated},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	if !strings.Contains(out, "including the running ones") {
+		t.Errorf("the remedy reverses the \"running deployments are untouched\" guarantee printed\n"+
+			"four lines above it without saying so:\n%s", out)
+	}
+	for _, want := range []string{"delete", "environments/dr.yaml"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the remedy never says to %q, so following it leaves an invisible override\n"+
+				"that freezes dr out of later shared bumps:\n%s", want, out)
+		}
+	}
+}
+
+// TestTheDivergencePreviewDoesNotDescribeWritesItDidNotMake.
+//
+// printK8sVersionConsequences is called from BOTH paths — deliberately, so
+// `--dry-run` previews the version decision — which makes it easy for its wording
+// to describe writes that have not happened. It said "Pinning v1.34.6+lke2 for
+// "dr" alone so it can be created", and told the operator to delete a line from a
+// file the run never created.
+func TestTheDivergencePreviewDoesNotDescribeWritesItDidNotMake(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: theOtherAccountCatalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	rotated := []string{"v1.34.6+lke2"}
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: rotated},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", DryRun: true})
+	})
+	if runErr != nil {
+		t.Fatalf("dry-run `llz env add`: %v", runErr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, clusterspec.EnvironmentsDir, "dr.yaml")); err == nil {
+		t.Fatal("--dry-run authored environments/dr.yaml")
+	}
+	if strings.Contains(out, "Pinning ") {
+		t.Errorf("a --dry-run preview describes the pin as already made:\n%s", out)
+	}
+	if !strings.Contains(out, "Would pin ") {
+		t.Errorf("the --dry-run preview does not say the pin is hypothetical:\n%s", out)
+	}
+	if strings.Contains(out, "the line this run adds to") {
+		t.Errorf("a --dry-run preview tells the operator to edit a file it never created:\n%s", out)
+	}
+}
+
+// TestADeploymentIsNotAuthoredAgainstNoVersionWhenTheAccountAnswered.
+//
+// A landingzone.yaml that PARSES and names no spec.defaults.cluster.k8sVersion —
+// hand-authored from the example, or edited down — leaves a new deployment with no
+// version at all. `llz env add` wrote the env file anyway and walked into `llz
+// render`'s "cluster.k8sVersion is required", landing in the
+// env-file-without-overlay dead end this command has its own recovery error for —
+// while holding the account's answer and discarding it. That is the failure this
+// feature exists to remove, wearing a different hat.
+//
+// Per-deployment and not seeded into spec.defaults: EnsureLandingZone only writes
+// a file it CREATES, and silently editing an existing landingzone.yaml is a much
+// bigger licence than `llz env add` has ever taken. The message says how to make
+// it shared.
+func TestADeploymentIsNotAuthoredAgainstNoVersionWhenTheAccountAnswered(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: theOtherAccountCatalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	// Remove the first deployment: an EXISTING one inherits the shared pin, so
+	// stripping it would make the instance invalid before this command runs and the
+	// failure would be `llz validate`'s, not the one under test. The reachable state
+	// is a hand-authored spec with no shared pin and no deployments yet.
+	if err := os.RemoveAll(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "apl-values", "lab")); err != nil {
+		t.Fatal(err)
+	}
+	lzPath := filepath.Join(dir, clusterspec.LandingZoneFile)
+	b, err := os.ReadFile(lzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.Contains(line, "k8sVersion:") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(lzPath, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if lz, err := clusterspec.Load(lzPath); err != nil {
+		t.Fatalf("premise: the stripped spec must still parse: %v", err)
+	} else if strings.TrimSpace(lz.Spec.Defaults.Cluster.K8sVersion) != "" {
+		t.Fatal("premise: the shared pin was not actually removed")
+	}
+
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: []string{"v1.34.6+lke2"}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := inst.Env("dr")
+	if !ok {
+		t.Fatal("the deployment was not authored")
+	}
+	if got := strings.TrimSpace(e.Cluster.K8sVersion); got != "v1.34.6+lke2" {
+		t.Errorf("the deployment carries k8sVersion %q — `llz render` rejects it with\n"+
+			"\"cluster.k8sVersion is required\", and the account's answer was in hand all along", got)
+	}
+	for _, want := range []string{"nothing to inherit", "llz spec set defaults.cluster.k8sVersion"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a per-deployment pin was written and nothing said %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestSeedingAnUntestedMinorIsAnnounced.
+//
+// `llz doctor` and `llz ci assert-k8s-version` ask only whether the ACCOUNT can
+// build the pin — a different question from whether this llz release and the
+// apl-core baseline have been seen working on that minor. So the account offering
+// a brand-new minor the week Linode publishes it is enough for every gate to pass,
+// and a fresh instance lands there with nothing said.
+//
+// This does not revisit the newest-offered choice, only make it visible: the value
+// is written once, at scaffold time, and #455 adopts a running cluster's version
+// rather than re-seeding over it. What it must not do is move silently.
+func TestSeedingAnUntestedMinorIsAnnounced(t *testing.T) {
+	tested := envdef.SeedK8sVersion("")
+	if tested == "" {
+		t.Fatal("premise: there must be a compiled fallback to compare against")
+	}
+	// A catalog on a far-future minor, which also still offers the tested one.
+	newer := "v9.99.1+lke3"
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldWith(t, &fakeCatalog{versions: []string{newer, tested}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("llz env add: %v", runErr)
+	}
+	for _, want := range []string{newer, tested, "MINOR", "llz spec set defaults.cluster.k8sVersion=" + tested} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a fresh instance was seeded onto an untested minor and nothing said %q:\n%s",
+				want, out)
+		}
+	}
+	// NOT `--k8s-version`, which pins ONE deployment and never becomes
+	// spec.defaults, so re-running with it would leave the shared default on the
+	// newer minor and merely SPLIT the instance — the opposite of the intent.
+	if strings.Contains(out, "--k8s-version "+tested) {
+		t.Errorf("the remedy splits the instance instead of moving the shared default:\n%s", out)
+	}
+
+	// Staying on the tested minor says nothing at all.
+	quiet := captureStderr(t, func() {
+		if _, err := scaffoldWith(t, &fakeCatalog{versions: []string{tested}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+			t.Fatalf("llz env add: %v", err)
+		}
+	})
+	if strings.Contains(quiet, "MINOR") {
+		t.Errorf("a seed on the tested minor warned about minors:\n%s", quiet)
+	}
+}
+
+// TestTheOfflineOperatorStillGetsARenderableSpecWithNoSharedPin.
+//
+// k8s.Newest is empty precisely when the account could NOT be asked — the offline
+// or expired-token operator — so keying the no-shared-pin fix on it left exactly
+// that person with no pin at all: the env file authored without a version, `llz
+// render` rejecting it, and the dead end reached in silence. The compiled literal
+// may be stale, but a spec that renders beats one that cannot, and `llz doctor`
+// re-checks it before anything is built.
+func TestTheOfflineOperatorStillGetsARenderableSpecWithNoSharedPin(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: theOtherAccountCatalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "apl-values", "lab")); err != nil {
+		t.Fatal(err)
+	}
+	lzPath := filepath.Join(dir, clusterspec.LandingZoneFile)
+	b, err := os.ReadFile(lzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.Contains(line, "k8sVersion:") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(lzPath, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// nil catalog = no token at all, so k8s.Newest is "".
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", nil,
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("offline `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := inst.Env("dr")
+	if !ok {
+		t.Fatal("the deployment was not authored")
+	}
+	if got := strings.TrimSpace(e.Cluster.K8sVersion); got != envdef.SeedK8sVersion("") {
+		t.Errorf("offline, with no shared pin, the deployment carries k8sVersion %q — `llz render`\n"+
+			"rejects that with \"cluster.k8sVersion is required\" and nothing said so", got)
+	}
+	if !strings.Contains(out, "nothing to inherit") {
+		t.Errorf("the offline operator got no warning about the pin llz chose for them:\n%s", out)
+	}
+	// AND IT MUST NOT CLAIM THE ACCOUNT CHOSE IT. The message said "the newest your
+	// account offers" unconditionally; offline that is llz's compiled fallback, and
+	// the account was never reached at all — a claim about the account on the one
+	// path where nobody asked it.
+	if strings.Contains(out, "the newest your account offers") {
+		t.Errorf("offline, the pin came from llz's compiled fallback and the run credited it to\n"+
+			"the account:\n%s", out)
+	}
+}
+
+// TestTheUntestedMinorRemedyIsNotOfferedAgainstASpecTheDryRunNeverWrote — this was
+// the one consequence message that ignored dryRun, so `--dry-run` offered an
+// `llz spec set` against a landingzone.yaml the run never created.
+func TestTheUntestedMinorRemedyIsNotOfferedAgainstASpecTheDryRunNeverWrote(t *testing.T) {
+	tested := envdef.SeedK8sVersion("")
+	out := captureStderr(t, func() {
+		if _, err := scaffoldWith(t, &fakeCatalog{versions: []string{"v9.99.1+lke3", tested}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1", DryRun: true}); err != nil {
+			t.Fatalf("dry-run `llz env add`: %v", err)
+		}
+	})
+	if !strings.Contains(out, "MINOR") {
+		t.Fatalf("premise: the dry run should still preview the minor warning:\n%s", out)
+	}
+	if !strings.Contains(out, "after a real run") {
+		t.Errorf("a --dry-run preview offers `llz spec set` against a spec it never wrote:\n%s", out)
+	}
+	// AND THE CLAUSE THAT NAMES THE WRITE MUST AGREE WITH IT. chosenField asserts a
+	// write in the same sentence as the "after a real run (this one wrote nothing)"
+	// clause — "spec.defaults.cluster.k8sVersion is seeded with X" about a file this
+	// run never created, one line above an admission that it wrote nothing.
+	if strings.Contains(out, "k8sVersion is seeded with") {
+		t.Errorf("a --dry-run preview states the seed as done, in the same message that says it\n"+
+			"wrote nothing:\n%s", out)
+	}
+	if !strings.Contains(out, "would be seeded with") {
+		t.Errorf("the --dry-run preview does not put the seed in the conditional:\n%s", out)
+	}
+}
+
+// stripSharedPin removes spec.defaults.cluster.k8sVersion from landingzone.yaml,
+// leaving a spec that still parses. Deployments keep their own pins.
+func stripSharedPin(t *testing.T, dir string) {
+	t.Helper()
+	lzPath := filepath.Join(dir, clusterspec.LandingZoneFile)
+	b, err := os.ReadFile(lzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.Contains(line, "k8sVersion:") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(lzPath, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWithNoSharedPinTheNewDeploymentJoinsItsSiblingsMinor.
+//
+// ReplacementForInheritedPin prefers the family's minor when a SHARED pin rotates
+// out. A shared pin that was never there is not a reason to abandon that rule: with
+// no spec.defaults every existing deployment carries its own version — the spec
+// does not validate otherwise — so when they agree on a minor, that is this
+// instance's family and the new deployment belongs in it. Taking the account's
+// absolute newest instead is the same silent skew, reached down a different path.
+func TestWithNoSharedPinTheNewDeploymentJoinsItsSiblingsMinor(t *testing.T) {
+	dir := t.TempDir()
+	family := []string{"v9.98.4+lke1"}
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: family},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	// Give lab its own pin, then remove the shared default: the hand-authored shape
+	// where each deployment names its own version.
+	labFile := filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")
+	b, err := os.ReadFile(labFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labFile, append(b, []byte("\n    k8sVersion: v9.98.4+lke1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stripSharedPin(t, dir)
+
+	// The account now offers a much newer minor alongside the family's.
+	catalog := []string{"v9.99.9+lke9", "v9.98.7+lke3"}
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: catalog},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := inst.Env("dr")
+	if got := strings.TrimSpace(e.Cluster.K8sVersion); got != "v9.98.7+lke3" {
+		t.Errorf("dr pins %q, want v9.98.7+lke3 — the newest build of the minor its sibling runs", got)
+	}
+	if !strings.Contains(out, "the minor your other deployments run") {
+		t.Errorf("the run joined the family's minor and did not say so:\n%s", out)
+	}
+	// AND IT MUST NOT THEN SECOND-GUESS ITSELF. The family's minor is not the minor
+	// this llz release tests, and warning about that would argue with the choice the
+	// same run just made to keep dr beside lab.
+	if strings.Contains(out, "MINOR from") {
+		t.Errorf("the run kept dr with its siblings and then warned that it should not have:\n%s", out)
+	}
+}
+
+// TestAPerDeploymentPinOnANewMinorIsAnnouncedToo — the untested-minor warning was
+// gated on !lzExists, so the no-shared-pin path could pin a brand-new minor
+// per-deployment in silence: the exact thing the warning exists to prevent,
+// reached down the path added after it.
+func TestAPerDeploymentPinOnANewMinorIsAnnouncedToo(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: theOtherAccountCatalog},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	// No siblings left to join, and no shared pin.
+	if err := os.RemoveAll(filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "apl-values", "lab")); err != nil {
+		t.Fatal(err)
+	}
+	stripSharedPin(t, dir)
+
+	// The tested minor IS on offer, so the remedy branch fires and can be checked;
+	// the newest is on a far-future minor, so that is what llz picks.
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr",
+			&fakeCatalog{versions: []string{"v9.99.1+lke3", envdef.SeedK8sVersion("")}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	if !strings.Contains(out, "this deployment is pinned to") {
+		t.Errorf("a per-deployment pin on an untested minor was chosen in silence:\n%s", out)
+	}
+	// AND THE REMEDY MUST NAME THE FILE THAT GOVERNS. This run writes a
+	// per-deployment cluster.k8sVersion, which SHADOWS spec.defaults — so
+	// `llz spec set defaults…` would leave the deployment exactly where it is, while
+	// the warning beside it tells the operator to set defaults to a different
+	// version. Two remedies, one file, opposite values.
+	// THE TWO MESSAGES MUST NOT NAME OPPOSITE VERSIONS FOR THE SAME FIELD. The
+	// no-shared-pin block offers to promote llz's choice to the instance default;
+	// when that choice is the untested one the warning above just asked the operator
+	// to move off, promoting it is the opposite instruction — and it also deletes the
+	// override that would have held the line.
+	if strings.Contains(out, "llz spec set defaults.cluster.k8sVersion=v9.99.1+lke3") {
+		t.Errorf("one message says to move off v9.99.1+lke3 and the next offers to make it the\n"+
+			"instance default:\n%s", out)
+	}
+	if !strings.Contains(out, "llz spec set defaults.cluster.k8sVersion="+envdef.SeedK8sVersion("")) {
+		t.Errorf("the shared-default remedy does not name the tested version the warning above it\n"+
+			"asked for:\n%s", out)
+	}
+	if !strings.Contains(out, "llz env set dr cluster.k8sVersion=") {
+		t.Errorf("the remedy does not name environments/dr.yaml, the file this run actually\n"+
+			"wrote the pin into:\n%s", out)
+	}
+}
+
+// TestAReplacementThatAbandonsTheFamilyIsAnnounced.
+//
+// ReplacementForInheritedPin keeps a deployment in its own minor when it can and
+// falls through to the account's newest only when that minor is GONE — an
+// unconstrained choice, and the last one the untested-minor warning did not cover.
+// A spelling fix and a same-minor replacement both stay put, and warning about
+// those would argue with the rule that produced them, which is why the arm keys on
+// DifferentMinor against the pin it replaced.
+func TestAReplacementThatAbandonsTheFamilyIsAnnounced(t *testing.T) {
+	dir := t.TempDir()
+	// The instance is seeded on a family that will vanish entirely.
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v9.97.1+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	// Neither v9.97 nor the tested minor is on offer any more.
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: []string{"v9.99.1+lke3"}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := inst.Env("dr"); strings.TrimSpace(e.Cluster.K8sVersion) != "v9.99.1+lke3" {
+		t.Fatalf("premise: the replacement should have abandoned the family, got %q",
+			e.Cluster.K8sVersion)
+	}
+	if !strings.Contains(out, "this deployment is pinned to") {
+		t.Errorf("the replacement left the family for an untested minor in silence:\n%s", out)
+	}
+}
+
+// TestASameMinorReplacementIsNotSecondGuessed — the negative arm. When the
+// deployment stays in its own family, the untested-minor warning must not fire:
+// that choice was made deliberately to keep it beside its siblings.
+func TestASameMinorReplacementIsNotSecondGuessed(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	// That build rotates out; its MINOR is still offered, alongside a newer one.
+	var runErr error
+	out := captureStderr(t, func() {
+		_, runErr = scaffoldEnv(t, dir, "dr",
+			&fakeCatalog{versions: []string{"v9.99.9+lke9", "v9.98.7+lke3"}},
+			envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"})
+	})
+	if runErr != nil {
+		t.Fatalf("second `llz env add`: %v", runErr)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := inst.Env("dr"); strings.TrimSpace(e.Cluster.K8sVersion) != "v9.98.7+lke3" {
+		t.Fatalf("premise: the replacement should stay in the family, got %q", e.Cluster.K8sVersion)
+	}
+	if strings.Contains(out, "MINOR from") {
+		t.Errorf("the run kept dr in its own minor and then warned that it should not have:\n%s", out)
+	}
+}
+
+// TestTheSiblingScanIsKeyedTheWayEnvIsKeyed.
+//
+// existingDeployments returns FILE BASENAMES; Env() is keyed on metadata.name.
+// Looking one up with the other works only while the two happen to agree — and the
+// no-shared-pin path exists precisely for hand-authored specs, which are exactly
+// where they diverge. Keyed wrong, the instance silently loses its family and the
+// new deployment takes the account's absolute newest instead.
+func TestTheSiblingScanIsKeyedTheWayEnvIsKeyed(t *testing.T) {
+	dir := t.TempDir()
+	family := []string{"v9.98.4+lke1"}
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: family},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	labFile := filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")
+	b, err := os.ReadFile(labFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labFile, append(b, []byte("\n    k8sVersion: v9.98.4+lke1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// THE DIVERGENCE, and it is legal: the file is named one thing, metadata.name
+	// says another, and Env() answers to the latter.
+	renamed := filepath.Join(dir, clusterspec.EnvironmentsDir, "zz-renamed.yaml")
+	if err := os.Rename(labFile, renamed); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := inst.Env("lab"); !ok {
+		t.Skip("this spec model does not key envs on metadata.name; the finding does not apply")
+	}
+	stripSharedPin(t, dir)
+
+	if _, err := scaffoldEnv(t, dir, "dr",
+		&fakeCatalog{versions: []string{"v9.99.9+lke9", "v9.98.7+lke3"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("second `llz env add`: %v", err)
+	}
+	got, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := got.Env("dr")
+	if v := strings.TrimSpace(e.Cluster.K8sVersion); v != "v9.98.7+lke3" {
+		t.Errorf("dr pins %q, want v9.98.7+lke3 — the sibling family was found by file basename\n"+
+			"rather than by the key Env() answers to, so a renamed spec lost its family", v)
+	}
+}
+
+// TestOfflineTheNewDeploymentStillJoinsItsSiblingsFamily.
+//
+// The sibling-minor rule went through the account CATALOG, so it was silently
+// inert with no token: k8s.Offered is nil, the lookup finds nothing, and the pin
+// falls through to llz's compiled literal — possibly two minors from the family
+// sitting right there in environments/. Nothing named the skew either, because the
+// untested-minor warning compares against that same literal and so saw no
+// difference. The family is readable from disk; the account is not the only source.
+func TestOfflineTheNewDeploymentStillJoinsItsSiblingsFamily(t *testing.T) {
+	dir := t.TempDir()
+	family := "v9.98.4+lke1"
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{family}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	labFile := filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")
+	b, err := os.ReadFile(labFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labFile, append(b, []byte("\n    k8sVersion: "+family+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stripSharedPin(t, dir)
+
+	// nil catalog = no token at all.
+	if _, err := scaffoldEnv(t, dir, "dr", nil,
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("offline `llz env add`: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := inst.Env("dr")
+	got := strings.TrimSpace(e.Cluster.K8sVersion)
+	if got == envdef.SeedK8sVersion("") {
+		t.Errorf("offline, dr took llz's compiled literal %q while its sibling runs %s — the family\n"+
+			"was on disk the whole time and nothing named the skew", got, family)
+	}
+	if got != family {
+		t.Errorf("dr pins %q, want %s — the version this instance demonstrably runs", got, family)
+	}
+}
+
+// TestACatalogThatAnsweredAndLacksTheFamilyStillMoves — the negative arm. A
+// catalog that WAS read and holds no build of the siblings' minor means the minor
+// is genuinely gone, and pinning a version the account has stopped offering would
+// be worse than moving.
+func TestACatalogThatAnsweredAndLacksTheFamilyStillMoves(t *testing.T) {
+	dir := t.TempDir()
+	family := "v9.98.4+lke1"
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{family}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	labFile := filepath.Join(dir, clusterspec.EnvironmentsDir, "lab.yaml")
+	b, err := os.ReadFile(labFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labFile, append(b, []byte("\n    k8sVersion: "+family+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stripSharedPin(t, dir)
+
+	// The account answered, and that family is gone from it.
+	if _, err := scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: []string{"v9.99.9+lke9"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("second `llz env add`: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := inst.Env("dr"); strings.TrimSpace(e.Cluster.K8sVersion) != "v9.99.9+lke9" {
+		t.Errorf("dr pins %q — the account was asked and no longer offers %s, so pinning it would\n"+
+			"write a version that cannot be built", e.Cluster.K8sVersion, family)
+	}
+}
+
+// pinSibling gives an existing deployment its own cluster.k8sVersion.
+func pinSibling(t *testing.T, dir, env, version string) {
+	t.Helper()
+	f := filepath.Join(dir, clusterspec.EnvironmentsDir, env+".yaml")
+	b, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, append(b, []byte("\n    k8sVersion: "+version+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAMisspelledSiblingPinIsNeverCopiedIntoANewDeployment.
+//
+// sharedSiblingMinor's answer can BECOME the pin llz writes, and terraform sends
+// it verbatim — so a sibling carrying one of the two misspellings the runbook
+// documents (`v1.33.6`, no `+lke`) would have been copied into the new deployment
+// and killed its first apply on `[400] k8s_version is not valid`. clusterspec only
+// checks the field is non-empty, so nothing downstream catches it either. Every
+// other choosing path here is fenced by a build-id check; this one was not.
+func TestAMisspelledSiblingPinIsNeverCopiedIntoANewDeployment(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	pinSibling(t, dir, "lab", "v9.98.4") // the `+lke` suffix left off
+	stripSharedPin(t, dir)
+
+	if _, err := scaffoldEnv(t, dir, "dr", nil, // offline, so the sibling arm is live
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("offline `llz env add`: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := inst.Env("dr")
+	got := strings.TrimSpace(e.Cluster.K8sVersion)
+	if got == "v9.98.4" {
+		t.Errorf("dr copied its sibling's misspelled pin verbatim; terraform sends that as-is and\n" +
+			"the apply dies on [400] k8s_version is not valid")
+	}
+	if !linode.NamesABuild(got) {
+		t.Errorf("dr pins %q, which is not a full LKE-E build id", got)
+	}
+}
+
+// TestAnUnparseableSiblingDoesNotReadAsAgreement — DifferentMinor answers false
+// when either side names no minor, so a sibling pinned `latest` read as AGREEMENT
+// with everything, and if it sorted first it became the family value itself.
+func TestAnUnparseableSiblingDoesNotReadAsAgreement(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldEnv(t, dir, "aaa", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("first `llz env add`: %v", err)
+	}
+	if _, err := scaffoldEnv(t, dir, "bbb", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("second `llz env add`: %v", err)
+	}
+	// `latest+lke1` sorts first and PASSES the build-id fence — it carries a `+lke`
+	// suffix — while naming no minor at all. So the build-id check alone is not
+	// enough: DifferentMinor answers false against it, it reads as agreement with
+	// everything, and it becomes the family value that gets written.
+	pinSibling(t, dir, "aaa", "latest+lke1")
+	pinSibling(t, dir, "bbb", "v9.98.4+lke1")
+	stripSharedPin(t, dir)
+
+	if _, err := scaffoldEnv(t, dir, "dr", nil,
+		envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+		t.Fatalf("offline `llz env add`: %v", err)
+	}
+	inst, err := clusterspec.LoadInstance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := inst.Env("dr")
+	if got := strings.TrimSpace(e.Cluster.K8sVersion); got == "latest+lke1" {
+		t.Errorf("a sibling pin that names no minor became the family value and was written into dr")
+	} else if got != "v9.98.4+lke1" {
+		t.Errorf("dr pins %q, want the one sibling that names a real build id", got)
+	}
+}
+
+// TestACatalogThatAnsweredWithNothingUsableStillJoinsTheFamily.
+//
+// The arm was keyed on "the catalog was never read" (CatalogNotAsked) — but
+// accountLKEVersions reports a SUCCESSFUL read for an empty listing and for an
+// all-coarse catalog. In both, Offered holds no parseable build and Newest is "",
+// so the sibling arm stayed inert in two more states than the offline one, and the
+// untested-minor warning was silent too because `chosen` was empty. "The account
+// gave me nothing I can write" is `k8s.Newest == ""`.
+func TestACatalogThatAnsweredWithNothingUsableStillJoinsTheFamily(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		catalog []string
+	}{
+		{"a successful but empty listing", []string{}},
+		{"a catalog naming no build ids at all", []string{"9.98", "9.99"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := scaffoldEnv(t, dir, "lab", &fakeCatalog{versions: []string{"v9.98.4+lke1"}},
+				envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+				t.Fatalf("first `llz env add`: %v", err)
+			}
+			pinSibling(t, dir, "lab", "v9.98.4+lke1")
+			stripSharedPin(t, dir)
+
+			if _, err := scaffoldEnv(t, dir, "dr", &fakeCatalog{versions: tc.catalog},
+				envdef.Opts{Region: "us-ord", ObjCluster: "us-ord-1"}); err != nil {
+				t.Fatalf("second `llz env add`: %v", err)
+			}
+			inst, err := clusterspec.LoadInstance(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, _ := inst.Env("dr")
+			if got := strings.TrimSpace(e.Cluster.K8sVersion); got != "v9.98.4+lke1" {
+				t.Errorf("dr pins %q — the catalog answered with nothing llz can write, and the\n"+
+					"family was on disk the whole time", got)
+			}
+		})
 	}
 }
