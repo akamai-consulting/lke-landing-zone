@@ -117,12 +117,12 @@ const (
 // "this account was never asked" about accounts that had answered — a claim llz
 // never verified, in the sentence whose entire job is to say what it did and did
 // not do. Same class as the cluster read returning (running, asked).
-func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
+func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome CatalogOutcome) {
 	if c == nil {
 		// Silent on the no-token path, like objClustersInRegion: CheckRegion runs
 		// first in the same command and has already said it once, and
 		// reportSkippedAccountCheck is a once-per-process notice for that reason.
-		return nil, false, false
+		return nil, false, CatalogNotAsked
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountReadBudget)
 	defer cancel()
@@ -134,7 +134,7 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
 		// do. The spec field is what is actually being decided here, and it is the
 		// field they will go and look at.
 		reportSkippedAccountCheck("cluster.k8sVersion", err)
-		return nil, false, false
+		return nil, false, CatalogFailed
 	}
 	if len(all) == 0 {
 		// AN EMPTY ANSWER IS AN ANSWER, and routing it through
@@ -153,9 +153,9 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, read bool) {
 				"  The account answered — this is not a token problem. LKE-Enterprise may not be enabled\n"+
 				"  on it, or it may be a region/account combination that offers none.\n"+
 				"  Check it with `llz doctor` before building."))
-		return nil, false, true
+		return nil, false, CatalogAnswered
 	}
-	return all, true, true
+	return all, true, CatalogAnswered
 }
 
 // Deployment names the cluster `llz env add` is about to author, so the resolver
@@ -372,6 +372,23 @@ func mapString(m map[string]any, k string) string {
 	return s
 }
 
+// CatalogOutcome is what came of asking the account for its LKE-E version catalog.
+// Ordered by how much llz learned, so a caller may compare, but the names are the
+// point: each one licenses a different sentence and a different remedy.
+type CatalogOutcome int
+
+const (
+	// CatalogNotAsked — no token, so llz made no request at all.
+	CatalogNotAsked CatalogOutcome = iota
+	// CatalogFailed — llz asked and the API did not answer. NOT the same as
+	// NotAsked: the operator has a token and it did not work, which is a different
+	// thing to go and fix.
+	CatalogFailed
+	// CatalogAnswered — llz asked and got a list. It may be EMPTY or too coarse to
+	// use; that is still an answer, and blaming it on the credential is a lie.
+	CatalogAnswered
+)
+
 // K8sVersionChoice is everything `llz env add` needs in order to decide a
 // deployment's version, out of ONE catalog read.
 //
@@ -396,11 +413,18 @@ type K8sVersionChoice struct {
 	// landingzone.yaml is seeded with. "" when the catalog could not be read or
 	// holds nothing that could be sent to the create API.
 	Newest string
-	// CatalogRead records that the account ANSWERED, which len(Offered) cannot: a
-	// read that failed and a read that returned an empty catalog both leave Offered
-	// nil, and they license opposite sentences — "this account was never asked" is a
-	// claim, and it was being made about accounts that had answered.
-	CatalogRead bool
+	// Catalog is what happened when llz asked the account for its version catalog.
+	//
+	// THREE STATES, BECAUSE llz ALREADY DISTINGUISHES THEM AND THE CALLERS DID NOT.
+	// It began as one bool for "the account answered", which len(Offered) cannot
+	// express — a failed read and an empty catalog both leave Offered nil. But a
+	// bool cannot express the other half either: `not asked` and `asked and refused`
+	// collapsed together, so a token whose versions route 401s produced "the API did
+	// not answer" from the skip notice and "this account was never asked" from the
+	// seed provenance, in one run, about one request. The remedies are different —
+	// export a token, versus fix the one you have — which is the whole reason to say
+	// which happened.
+	Catalog CatalogOutcome
 	// Offered is the catalog itself; nil when the answer is unknown.
 	//
 	// It is here so a caller can judge a pin this function was never asked about —
@@ -463,8 +487,8 @@ type K8sVersionChoice struct {
 // everything above, unchanged.
 func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	client := LKEVersionClient()
-	offered, ok, catalogRead := accountLKEVersions(client)
-	c := K8sVersionChoice{Pin: strings.TrimSpace(want), CatalogRead: catalogRead}
+	offered, ok, catalog := accountLKEVersions(client)
+	c := K8sVersionChoice{Pin: strings.TrimSpace(want), Catalog: catalog}
 	var lk clusterLookup
 	if !ok {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its

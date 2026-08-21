@@ -881,7 +881,7 @@ func TestAnEmptyCatalogIsNotReportedAsAnUNREACHABLEAccount(t *testing.T) {
 		}
 	})
 	// THE FLAG THAT KEEPS THE BANNER AND THE NOTICE ON ONE STORY.
-	if !c.CatalogRead {
+	if c.Catalog != CatalogAnswered {
 		t.Error("the read succeeded, so CatalogRead must be true — the notice and the banner key on it")
 	}
 	if strings.Contains(out, "did not answer") || strings.Contains(out, "expired") {
@@ -911,6 +911,46 @@ func TestTheSkipNoticeNamesTheFieldItDecidesNotAFlagNobodyPassed(t *testing.T) {
 	}
 	if strings.Contains(out, "--k8s-version was NOT checked") {
 		t.Errorf("the notice blames a flag the operator never passed:\n%s", out)
+	}
+}
+
+// TestAskedAndRefusedIsNotNeverAsked.
+//
+// CatalogRead began as one bool, and a bool cannot hold this: "no token" and
+// "asked, and the API refused" both read as not-answered. So a token whose versions
+// route 401s produced "the API did not answer" from the skip notice and "this
+// account was never asked" from the seed provenance — one run, one request, two
+// contradictory claims, with different remedies attached (fix the token you have,
+// versus export one).
+func TestAskedAndRefusedIsNotNeverAsked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lister *fakeVersionLister
+		want   CatalogOutcome
+	}{
+		"no token":            {nil, CatalogNotAsked},
+		"the API refused":     {&fakeVersionLister{err: errors.New("401 unauthorized")}, CatalogFailed},
+		"answered with none":  {&fakeVersionLister{versions: nil}, CatalogAnswered},
+		"answered but coarse": {&fakeVersionLister{versions: []string{"1.33"}}, CatalogAnswered},
+		"answered properly":   {&fakeVersionLister{versions: e2eAccountCatalog}, CatalogAnswered},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if tc.lister == nil {
+				withCatalog(t, nil)
+			} else {
+				withCatalog(t, tc.lister)
+			}
+			var c K8sVersionChoice
+			captureStderr(t, func() {
+				var err error
+				if c, err = ResolveK8sVersion("", Deployment{}); err != nil {
+					t.Fatalf("ResolveK8sVersion: %v", err)
+				}
+			})
+			if c.Catalog != tc.want {
+				t.Errorf("Catalog = %v, want %v — the three outcomes license three different "+
+					"sentences and three different remedies", c.Catalog, tc.want)
+			}
+		})
 	}
 }
 
@@ -1036,8 +1076,8 @@ func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("an empty catalog must not fail the scaffold: %v", err)
 		}
-		if !c.CatalogRead {
-			t.Error("the catalog read succeeded, so CatalogRead must be true — an empty answer IS " +
+		if c.Catalog != CatalogAnswered {
+			t.Error("the catalog read succeeded, so Catalog must be CatalogAnswered — an empty answer IS " +
 				"an answer, and reporting it as 'never asked' is a claim llz never verified")
 		}
 	})
@@ -1048,8 +1088,8 @@ func TestAnAnsweredCatalogIsDistinguishableFromAnUnaskedOne(t *testing.T) {
 		if err != nil {
 			t.Fatalf("an unreadable catalog must not fail the scaffold: %v", err)
 		}
-		if c.CatalogRead {
-			t.Error("the read failed, so CatalogRead must be false — otherwise the flag is decorative " +
+		if c.Catalog == CatalogAnswered {
+			t.Error("the read failed, so Catalog must not be CatalogAnswered — otherwise the field is decorative " +
 				"and the caller is back to guessing from len(Offered)")
 		}
 	})
