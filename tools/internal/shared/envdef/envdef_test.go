@@ -39,7 +39,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		"cluster_label = \"x\"\nk8s_version = \"v0.0.0+ignored\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
 
 	// First env: creates landingzone.yaml from the answers + seeded defaults.
-	name, created, err := EnsureLandingZone(dir)
+	name, created, err := EnsureLandingZone(dir, "")
 	if err != nil || !created {
 		t.Fatalf("EnsureLandingZone created=%v err=%v", created, err)
 	}
@@ -47,7 +47,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		t.Fatalf("instance name = %q, want platform-support", name)
 	}
 	// Idempotent: a second call leaves it as-is.
-	if _, created2, _ := EnsureLandingZone(dir); created2 {
+	if _, created2, _ := EnsureLandingZone(dir, ""); created2 {
 		t.Error("EnsureLandingZone recreated an existing landingzone.yaml")
 	}
 

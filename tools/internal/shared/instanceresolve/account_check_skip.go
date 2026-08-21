@@ -30,7 +30,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 )
 
 // errEmptyAccountListing stands in for an API call that succeeded but returned
@@ -64,27 +64,52 @@ func resetAccountCheckSkip() { accountCheckSkipReported = false }
 
 // reportSkippedAccountCheck tells the operator that a validation they were
 // promised did not happen. cause is nil for "no token configured".
+//
+// IT SPEAKS ONLY FOR THE LOOKUP IT WAS GIVEN, and a k8sVersion sentence briefly
+// lived here that broke that. This notice is SHARED: `llz reap` reaches it through
+// AccountRegions to sweep orphaned resources, and it seeds no spec at all — so a
+// line about cluster.k8sVersion falling back to a compiled default was simply
+// untrue there. `llz env add` reports its own version consequence in its banner
+// ("scaffold default — the account could not be asked"), which is the right place:
+// beside the value, in the one command that writes one.
+//
+// THROUGH cigate, SO CI SEES IT TOO — and that is not cosmetic. On a laptop this
+// is a yellow paragraph nobody can miss. In a workflow it was plain step-log text
+// inside a green step, which is precisely the state it exists to make visible: a
+// run that validated nothing is indistinguishable from one that validated
+// everything. `llz ci assert-k8s-version` made this same call for the same reason,
+// and the repo's own e2e lane is the case that forced it here — its scaffold runs
+// in the template repo, where a Linode token is optional, so "this check did not
+// run" has to reach the run summary rather than line 400 of a step log.
+//
+// The alternative was three lines of `if [[ -z "$TOKEN" ]]` in the workflow, which
+// is the untestable-inline-bash the budget gate exists to refuse — and it would
+// have covered ONE caller, while this covers every one.
 func reportSkippedAccountCheck(what string, cause error) {
 	if accountCheckSkipReported {
 		return
 	}
 	accountCheckSkipReported = true
 	if cause == nil {
-		fmt.Fprintf(os.Stderr, "%s %s was NOT checked against your Linode account — no LINODE_TOKEN is set.\n",
-			color.Yellow("!"), what)
-		fmt.Fprintln(os.Stderr, "  Region and object-storage-cluster ids overlap (`us-sea` is a region, `us-sea-1`")
-		fmt.Fprintln(os.Stderr, "  is an OBJ cluster), so a swapped or typo'd value is caught by nothing local —")
-		fmt.Fprintln(os.Stderr, "  the first thing to notice is `terraform apply`, ~20 minutes in.")
-		fmt.Fprintf(os.Stderr, "  Export one and re-run to get the check: %s\n", color.Cyan("export LINODE_TOKEN=…"))
+		// ONE cigate.Warning CALL, NOT FOUR PRINTLNS. Under Actions a workflow
+		// command ends at the first raw newline, so a multi-line message keeps its
+		// headline in the annotation and drops the reason into step-log text — the
+		// half that says what to do about it. cigate.Annotation escapes them.
+		fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+			"%s was NOT checked against your Linode account — no LINODE_TOKEN is set.\n"+
+				"  Region and object-storage-cluster ids overlap (`us-sea` is a region, `us-sea-1` is an\n"+
+				"  OBJ cluster), so a swapped or typo'd value is caught by nothing local — the first thing\n"+
+				"  to notice is `terraform apply`, ~20 minutes in.\n"+
+				"  Export one and re-run to get the check: export LINODE_TOKEN=…", what)))
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s %s was NOT checked against your Linode account — the API did not answer.\n",
-		color.Yellow("!"), what)
-	fmt.Fprintf(os.Stderr, "  %s\n", color.Dim(firstLine(cause.Error())))
-	fmt.Fprintln(os.Stderr, "  A token that is set but expired, revoked, or under-scoped looks exactly like a")
-	fmt.Fprintln(os.Stderr, "  validated run from here. It will also fail the build: the same credential is")
-	fmt.Fprintln(os.Stderr, "  what CI uses. Check it, then re-run to get the check:")
-	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz doctor        # reports the same lookup, with the status code"))
+	fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf(
+		"%s was NOT checked against your Linode account — the API did not answer.\n"+
+			"  %s\n"+
+			"  A token that is set but expired, revoked, or under-scoped looks exactly like a validated\n"+
+			"  run from here. It will also fail the build: the same credential is what CI uses. Check it,\n"+
+			"  then re-run to get the check: llz doctor  # reports the same lookup, with the status code",
+		what, firstLine(cause.Error()))))
 }
 
 // firstLine is a local three-line copy. internal/extensions/clusteraccess has one

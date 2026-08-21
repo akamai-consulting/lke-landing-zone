@@ -465,7 +465,7 @@ tfvars before each terraform op:
 
 ```bash
 llz env add lab --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.34.6+lke2 --node-type g8-dedicated-8-4 --node-count 5 \
+  --node-type g8-dedicated-8-4 --node-count 5 \
   --runner-ipv4-cidrs 203.0.113.0/24
 ```
 
@@ -474,14 +474,14 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 **ADOPTER-MUST-SET** values (full table in
 [adopter-guide §3](adopter-guide.md#3-the-values-contract-what-you-must-set)):
 
-- `region` (**required**), `k8sVersion` (an LKE-E `+lke` version) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`)
+- `region` (**required**) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`). `k8sVersion` is **derived**: with a token set, the **first** `env add` seeds `spec.defaults` with the newest LKE-E version your account offers, so there is no version literal to copy from this page. Later deployments **inherit** that pin — and `env add` re-checks it, pinning a buildable version for the new deployment alone if the shared one has since rotated out of your account's catalog (it says so when it does, and leaves the running deployments untouched). Pass `--k8s-version` to pin one deployment explicitly: it is checked against your account, rejected if it cannot be built, and **does not** become the shared default
 - `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
 - `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the `--cluster-domain` flag is deprecated and ignored (it warns and writes nothing).
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
 > **Export `LINODE_TOKEN` (or `LINODE_API_TOKEN`) first** and `env add` checks
 > `--region` and `--obj-cluster` against your account, including that they belong
-> together — easy to mix up, since `us-sea-1` is an OBJ cluster and `de-fra-2` is
+> together, and derives `k8sVersion` from it — easy to mix up, since `us-sea-1` is an OBJ cluster and `de-fra-2` is
 > a region. `0.0.0.0/0` in either `--runner-*-cidrs` flag is rejected: it would
 > leave the Kubernetes API server open to the internet.
 

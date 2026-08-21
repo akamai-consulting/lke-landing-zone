@@ -51,6 +51,29 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #            E2E_INSTANCE_REPO (Variables:write is what lets the instantiate job
 #            pin TF_IMAGE/KUBE_IMAGE; pull-requests:write is what lets it open the
 #            throwaway PR that proves the instance's PR-gated CI actually runs).
+#
+# And one OPTIONAL secret, which the lane warns about rather than requiring:
+#   secrets: E2E_LINODE_TOKEN — a READ-ONLY Linode PAT for THE SAME ACCOUNT as the
+#            instance repo's infra-e2e LINODE_API_TOKEN. It lets the scaffold ask
+#            that account which LKE-Enterprise versions it can build instead of
+#            baking a literal, and it arms `llz env add`'s region / OBJ-cluster
+#            checks too. It must be the BUILDING account: LKE-E availability is
+#            per-account (two accounts measured offering disjoint versions in the
+#            same hour), so a token for a different one seeds a version this
+#            cluster may not be creatable at. Unset → the compiled default, and a
+#            ::warning saying so.
+#
+# And one OPTIONAL var, which you MUST set while you keep a warm cluster:
+#   vars:    E2E_K8S_VERSION — pins cluster.k8sVersion instead of deriving it.
+#            Empty is right when the run CREATES the cluster. It is WRONG the
+#            moment one survives into the next run (release-e2e-warm.yml, or this
+#            workflow with keep_cluster=true): `k8s_version` reaches the LKE-E API
+#            on a create OR A CHANGE, so re-scaffolding to a different version
+#            plans a control-plane UPGRADE inside a run that meant to skip the
+#            create. assert-k8s-version cannot catch it — the derived pin is a
+#            valid version, just not the one that cluster runs. Set it to what the
+#            warm cluster runs (`llz doctor --env e2e` names it); clear it when you
+#            go back to cold runs.
 # Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
 # set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
 #
@@ -245,6 +268,11 @@ jobs:
       forge_host: ${{ (inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_HOST || '' }}
     secrets:
       E2E_DISPATCH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+      # NOT forge-selected, unlike the dispatch token above. The forge hosts the
+      # repo; Linode builds the cluster, and both lanes build on the same Linode
+      # account — so one token serves both. Optional: absent, `llz env add` falls
+      # back to its compiled k8sVersion default.
+      E2E_LINODE_TOKEN: ${{ secrets.E2E_LINODE_TOKEN }}
 
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────

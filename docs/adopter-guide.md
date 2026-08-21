@@ -141,7 +141,8 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 
 | Variable | Class | Notes |
 |---|---|---|
-| `cluster_label`, `region`, `k8s_version` | MUST-SET | Cluster identity + Linode region + an LKE-E version live in your account |
+| `cluster_label`, `region` | MUST-SET | Cluster identity + Linode region |
+| `k8s_version` | derived | The **first** `llz env add` seeds `spec.defaults.cluster.k8sVersion` with the newest LKE-Enterprise version **your account** offers; later deployments inherit it, and `env add` re-checks that inherited pin — if it has rotated out of the catalog it pins a buildable version for the new deployment alone rather than creating it against one the account rejects. Availability is per-account and rotates within hours, so no literal in this repo is right for every reader. `--k8s-version` pins one deployment explicitly and is checked against the account before the spec is written; it does **not** become the shared default |
 | `github_runner_ipv4_cidrs` / `*_ipv6_cidrs` | optional | Static operator/CI/VPN egress CIDRs that seed the bootstrap control-plane ACL + node firewall. Leave empty for github.com-hosted runners (they open their egress IP at runtime via `llz ci runner-acl open`). **Never `0.0.0.0/0`** |
 | `node_type`, `node_count`, `vpc_subnet_cidr`, HA/audit toggles, autoscaler | default | Linode-shaped defaults; keep unless sizing differs |
 
@@ -341,8 +342,7 @@ instance with no scripts/ tree:
 llz env add <env> --region us-sea --obj-cluster us-sea-1 --dry-run
 
 # then create the scaffold (must-set values can be passed as flags up front)
-llz env add <env> --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.34.6+lke2 --promotion-rank 1
+llz env add <env> --region us-sea --obj-cluster us-sea-1 --promotion-rank 1
 ```
 
 It generates `terraform-iac-bootstrap/{cluster,object-storage,databases}/<env>.tfvars`

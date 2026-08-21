@@ -31,7 +31,7 @@ func newRenderableInstance(t *testing.T, pin string) string {
 		"upstream_org: akamai-consulting\ninstance_repo: my-org/platform-support\nllz_version: "+pin+"\nopenbao_team: ops\n")
 	writeInstanceFile(t, dir, "terraform-iac-bootstrap/cluster/terraform.tfvars.example",
 		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
-	if _, _, err := envdef.EnsureLandingZone(dir); err != nil {
+	if _, _, err := envdef.EnsureLandingZone(dir, ""); err != nil {
 		t.Fatalf("envdef.EnsureLandingZone: %v", err)
 	}
 	if err := envdef.WriteEnvDefinition(filepath.Join(dir, "environments", "lab.yaml"), "lab",

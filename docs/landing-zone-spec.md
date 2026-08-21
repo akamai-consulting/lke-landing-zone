@@ -98,7 +98,10 @@ spec:
                                            #  .copier-answers.yml, see below)
   defaults:                                # inherited by every ClusterDefinition
     cluster:
-      k8sVersion: v1.34.6+lke2             # → k8s_version (must be one YOUR account offers)
+      k8sVersion: v1.34.6+lke2             # → k8s_version. SEEDED by `llz env add` from your
+                                           # account's catalog (the newest it offers); this
+                                           # literal is just an example. Per-account and it
+                                           # rotates — `llz ci assert-k8s-version` re-checks it
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
       # MANDATORY and validated: LLZ never self-installs apl-core. `llz env add`
