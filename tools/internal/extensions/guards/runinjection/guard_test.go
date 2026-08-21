@@ -1010,25 +1010,70 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	// EVERY SPELLING OF THE SAME SKIP, because one of them was all this checked and
-	// the condition has three equivalent forms. Reversing the operands or asking
-	// `.fork` instead is the same exclusion written differently, and would have
-	// re-opened the hole under a passing test.
-	forkGates := []string{
-		"head.repo.full_name == github.repository",
-		"github.repository == github.event.pull_request.head.repo.full_name",
-		"head.repo.fork",
-	}
 	found := false
+	// NOT AN ENUMERATION OF SKIP SPELLINGS. The first cut listed the exact
+	// condition the Kubernetes job carries, and a review found two ways past it
+	// that are the same exclusion written differently: delete the spaces around
+	// `==`, or compare `head.repo.owner.login` to `github.repository_owner`, the
+	// other standard idiom. Any enumeration of a free-text expression loses that
+	// race — so this asks the question one level up.
+	//
+	// THE INVARIANT IS THAT THIS JOB IS NOT GATED ON REPOSITORY IDENTITY AT ALL,
+	// in either direction. Every way of excluding forks has to name the head repo
+	// or this repo to do it, so the two tokens below are what a fork gate cannot
+	// avoid, whatever shape it is written in. And the inverse — a condition that
+	// runs the job ONLY on forks — is just as wrong for a guard that has to see
+	// every PR, so it is a finding too rather than a case to exempt.
+	identityTokens := []string{"head.repo", "github.repository"}
+	// SCOPED to the job's own `if:` and to the guard step's `if:`. The whole job
+	// body would also catch an unrelated step gating an artifact upload on the
+	// repo name — a false red, and a false red on a security test gets the test
+	// deleted rather than the condition.
+	const stepPrefix = "      - "
 	for _, j := range jobs {
 		if !strings.Contains(j.body, "ci workflow-injection") {
 			continue
 		}
 		found = true
-		for _, g := range forkGates {
-			if strings.Contains(j.body, g) {
-				t.Errorf("job %s runs workflow-injection but is skipped for fork PRs (%s) — "+
-					"the population the guard exists for", j.name, g)
+		// THE STEP BLOCK IS ASSEMBLED BEFORE IT IS JUDGED. A single pass that turns
+		// "am I in the guard step?" on when it sees the `run:` line reads the step's
+		// `if:` — which is written ABOVE `run:` — while the flag is still false, so
+		// the one condition that matters most is the one it cannot see. Measured:
+		// that version passed an `if:` placed directly on this step.
+		var conditions []string
+		var block []string
+		blocks := [][]string{}
+		for _, line := range strings.Split(j.body, "\n") {
+			if strings.HasPrefix(line, stepPrefix) {
+				blocks = append(blocks, block)
+				block = nil
+			}
+			block = append(block, line)
+			// Job-level `if:` — exactly four spaces, so a step's own never matches here.
+			if strings.HasPrefix(line, "    if:") {
+				conditions = append(conditions, line)
+			}
+		}
+		blocks = append(blocks, block)
+		for _, b := range blocks {
+			joined := strings.Join(b, "\n")
+			if !strings.Contains(joined, "ci workflow-injection") {
+				continue
+			}
+			for _, line := range b {
+				if strings.HasPrefix(strings.TrimSpace(line), "if:") {
+					conditions = append(conditions, line)
+				}
+			}
+		}
+		for _, c := range conditions {
+			for _, tok := range identityTokens {
+				if strings.Contains(c, tok) {
+					t.Errorf("job %s runs workflow-injection under a condition on repository "+
+						"identity (%q in %q) — fork pull requests are the population the guard "+
+						"exists for, and any identity gate here decides whether it sees them",
+						j.name, tok, strings.TrimSpace(c))
+				}
 			}
 		}
 	}
