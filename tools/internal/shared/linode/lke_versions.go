@@ -419,7 +419,26 @@ func hasBuild(v string) bool { return strings.Contains(v, "+") }
 // `llz env add` told an operator "confirmed against the account's catalog" about a
 // pin of `1.33` that byte-matched a coarse `1.33` row, and then wrote it into the
 // spec for terraform to send verbatim.
-func NamesABuild(v string) bool { return hasBuild(normalizeVersion(v)) }
+// THE SAME PARSE NewestVersion CHOOSES WITH, not a second opinion about the same
+// question. This was `strings.Contains(v, "+")` while NewestVersion required a full
+// `v?MAJOR.MINOR.PATCH+lkeN`, so the two disagreed on any row carrying a build
+// suffix without a patch component — `v1.34+lke2`. NewestVersion skipped such a row
+// and llz reported "this catalog names no full build id"; NamesABuild called it a
+// build id, and coarsePinRemedy then offered that very row back as the thing to pin
+// instead. One catalog, one run, two contradictory claims — the contradiction that
+// remedy's own comment says it exists to remove.
+//
+// DELIBERATELY STRICTER THAN hasBuild, WHICH STAYS AS IT IS. That one feeds
+// everyEntryNamesABuild, which decides whether a catalog is entitled to REJECT a
+// pin — and there the loose reading is the safe direction, because it grants the
+// entitlement less often. Here the safe direction is the opposite: this decides
+// whether llz tells an operator a string CHECKED OUT, so failing to recognise a
+// build id costs a warning and wrongly recognising one costs a 15-minute apply.
+// The asymmetry is the point, and #443 owns the verdict either way.
+func NamesABuild(v string) bool {
+	_, ok := versionSortKey(v)
+	return ok
+}
 
 // NewestVersion returns the newest FULL BUILD ID in an account's catalog, or ""
 // when the catalog holds none.
