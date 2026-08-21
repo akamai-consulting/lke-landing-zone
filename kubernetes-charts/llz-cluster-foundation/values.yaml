@@ -96,8 +96,9 @@ syncWaves:
 # (OpenBao and our observability stack), both already restricted-compliant — and its
 # failure mode is LOUD: an admission rejection naming the rule, at upgrade time. The
 # failure mode of the stale pin is silence, which is the one this repo trades away
-# last. TestTheChartDoesNotPinAKubernetesMinorItCannotKnow keeps the literal from
-# coming back.
+# last. TestNoPodSecurityLabelPinsAKubernetesMinor keeps the literal from coming
+# back — here and in every other chart and delivered manifest that emits one of
+# these labels.
 podSecurityStandardsVersion: "latest"
 
 namespaces:

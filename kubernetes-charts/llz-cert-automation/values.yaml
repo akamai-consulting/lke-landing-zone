@@ -154,10 +154,17 @@ syncWaves:
 # Pod Security Admission level enforced on the namespace. `baseline` (not
 # restricted) because the buildah build-image step runs as root to construct
 # overlay layers; audit/warn stay restricted to track the gap.
+#
+# THE VERSIONS ARE `latest`, AND NOT BECAUSE v1.31 WAS OLD. A chart is published
+# once and installed on clusters running different LKE-E minors — availability is
+# per-ACCOUNT and rotates within hours — so no baked minor can be right for all of
+# them, and a lagging one enforces a WEAKER cumulative ruleset than the mode name
+# advertises, silently. Same reasoning, and the same gate, as
+# llz-cluster-foundation's podSecurityStandardsVersion (issue #447).
 podSecurity:
   enforce: baseline
-  enforceVersion: v1.31
+  enforceVersion: latest
   audit: restricted
-  auditVersion: v1.31
+  auditVersion: latest
   warn: restricted
-  warnVersion: v1.31
+  warnVersion: latest

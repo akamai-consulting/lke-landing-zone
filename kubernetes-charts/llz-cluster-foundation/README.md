@@ -61,7 +61,7 @@ Every allow rule here exists because a default-deny without it broke something:
 
 ```sh
 helm install llz-cluster-foundation oci://ghcr.io/akamai-consulting/charts/llz-cluster-foundation \
-  --version 0.1.13
+  --version 0.1.15
 ```
 
 In this repo it is consumed by an Argo CD Application at an early sync wave

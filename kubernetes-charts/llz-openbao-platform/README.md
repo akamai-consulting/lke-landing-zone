@@ -92,7 +92,7 @@ knobs live under `platform` and `openbaoPromtail`:
 ```sh
 helm dependency build kubernetes-charts/llz-openbao-platform
 helm install platform-openbao oci://ghcr.io/akamai-consulting/charts/llz-openbao-platform \
-  --version 0.1.21 \
+  --version 0.1.32 \
   -n llz-openbao --create-namespace
 ```
 
