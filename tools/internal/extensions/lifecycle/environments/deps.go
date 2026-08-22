@@ -53,6 +53,12 @@ type Deps struct {
 	// Render above is the pattern to copy — it closes over cliopts.Global and
 	// reads it when CALLED, which is after cobra has parsed. The two sat one line
 	// apart, one correct and one not.
+	//
+	// REMOVING IT CLOSES NOTHING, and should not be read as if it had. `llz
+	// --dry-run env set` still writes environments/<env>.yaml before the render
+	// it then dry-runs — yamledit.EditSpecFile has no dry-run notion, and that
+	// is a separate finding with its own fix. What is gone is a field that would
+	// have answered `false` to whoever wired that fix up first.
 
 	// LoadSpec reads the instance's LandingZone spec.
 	LoadSpec func() (*clusterspec.LandingZone, bool, error)

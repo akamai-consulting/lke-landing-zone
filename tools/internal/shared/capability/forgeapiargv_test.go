@@ -102,6 +102,21 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		// abandoned the scan and graded a real secret write as an ordinary
 		// mutation — the check failing OPEN.
 		{"a repo named exactly contents", []string{"api", "-X", "PUT", "repos/acme/contents/actions/secrets/FOO"}, capability.ForgeCustody},
+		// A FULL URL IS A LEGAL ENDPOINT, and the rules above are positional — a
+		// scheme and host shifted every index, so both the custody match and the
+		// Contents exclusion stopped meaning what they say.
+		{"absolute URL secret write", []string{"api", "-X", "PUT", "https://api.github.com/repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
+		{"GHES api/v3 secret write", []string{"api", "-X", "PUT", "https://ghes.example/api/v3/repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
+		// THESE TWO ARE THE ONLY ROWS THAT DISCRIMINATE, and the first cut of this
+		// block had neither. A contents path under a full URL grades Mutate with
+		// or without the normalisation as long as the segment before `secrets` is
+		// not a family name — so `contents/k8s/secrets/x.yaml` proved nothing. It
+		// takes a repository path that itself looks like an API family before the
+		// positional exclusion has to be reached at the right index.
+		{"absolute URL contents path shaped like a family", []string{"api", "-X", "PUT", "https://api.github.com/repos/o/r/contents/actions/secrets/x.yaml"}, capability.ForgeMutate},
+		{"GHES api/v3 contents path shaped like a family", []string{"api", "-X", "PUT", "https://ghes.example/api/v3/repos/o/r/contents/actions/secrets/x.yaml"}, capability.ForgeMutate},
+		// gh's own escape-sequence flag, absent from the first cut of the table.
+		{"allow-escape-sequences", []string{"api", "--allow-escape-sequences", "repos/o/r"}, capability.ForgeRead},
 		{"user codespaces secret is still custody", []string{"api", "-X", "PUT", "user/codespaces/secrets/FOO"}, capability.ForgeCustody},
 
 		// ── refusals: unknowable, not guessable ──────────────────────────────

@@ -354,6 +354,20 @@ func forgeSecretEndpoint(endpoint string) bool {
 	if i := strings.IndexAny(p, "?#"); i >= 0 {
 		p = p[:i]
 	}
+	// A FULL URL IS A LEGAL `gh api` ENDPOINT, and the rules below are
+	// positional — so a scheme and host shifted every index and the Contents
+	// exclusion stopped matching, bringing back the false-positive custody
+	// grading the comment above says was fixed. Reduce to the path first, so
+	// both spellings mean the same thing.
+	if i := strings.Index(p, "://"); i >= 0 {
+		if j := strings.Index(p[i+3:], "/"); j >= 0 {
+			p = p[i+3+j:]
+		} else {
+			p = "" // scheme and host only; no path to judge
+		}
+	}
+	// GHES serves the same API under /api/v3.
+	p = strings.TrimPrefix(strings.Trim(p, "/"), "api/v3/")
 	segs := strings.Split(strings.Trim(p, "/"), "/")
 	for i, seg := range segs {
 		// The Contents API is `repos/{owner}/{repo}/contents/{path}` and ONLY
@@ -390,6 +404,12 @@ func forgeSecretEndpoint(endpoint string) bool {
 // it, and the first caller to hit it makes the decision. That is the rule this
 // package already applies to an unclassified kubectl verb and to
 // `gh api graphql`.
+// Transcribed from `gh api --help` at gh 2.97.0 and re-checked in full; the
+// version is here because the list is a snapshot of another tool and the only
+// honest thing to say about it is when it was taken. A flag gh adds later is
+// refused rather than misread, which is the failure this table is shaped for —
+// `--allow-escape-sequences` was missing from the first cut and every argv using
+// it was refused, correctly but for the wrong reason.
 var ghAPIFlags = map[string]bool{
 	// take a value
 	"method": true, "field": true, "raw-field": true, "input": true,
@@ -397,7 +417,8 @@ var ghAPIFlags = map[string]bool{
 	"cache": true, "hostname": true,
 	// boolean
 	"include": false, "paginate": false, "silent": false,
-	"slurp": false, "verbose": false,
+	"slurp": false, "verbose": false, "allow-escape-sequences": false,
+	"help": false,
 }
 
 // ghAPIShorthand maps `gh api`'s single letters onto the long names above, so

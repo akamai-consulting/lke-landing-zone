@@ -1212,6 +1212,13 @@ symbol-ref-guard:
 #
 # --exclude-standard so .gitignore still applies: build output is not work.
 #
+# --full-name because THE TWO HALVES DISAGREED ABOUT WHAT A PATH IS. `git diff
+# --name-only` answers relative to the REPOSITORY ROOT; `git ls-files` answers
+# relative to the CWD. Run from anywhere but the root — `make -C`, or the
+# absolute `-f` this target's own tests use — the untracked half lost its prefix
+# and lint's anchored routing regexes (^tools/, ^kubernetes-charts/) silently
+# skipped every one of them. One vocabulary, chosen explicitly.
+#
 # NO GIT AT ALL IS A REFUSAL, NOT AN EMPTY SET. Both arms below shell out to git,
 # so outside a work tree (a release tarball, an unpacked source archive) each one
 # printed two lines of `fatal:` to stderr and nothing to stdout — and `make lint`
@@ -1262,10 +1269,10 @@ lint-changed:
 		exit 1; \
 	fi; \
 	if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
-		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard; } \
+		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard --full-name; } \
 			| grep -v '^$$' | sort -u; \
 	else \
-		{ git ls-files; git ls-files --others --exclude-standard; } \
+		{ git ls-files --full-name; git ls-files --others --exclude-standard --full-name; } \
 			| grep -v '^$$' | sort -u; \
 	fi
 

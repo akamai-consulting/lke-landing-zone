@@ -299,6 +299,41 @@ func TestLintRefusesOutsideAGitWorkTree(t *testing.T) {
 	}
 }
 
+// ONE PATH VOCABULARY, FROM ANYWHERE. `git diff --name-only` answers relative to
+// the repository ROOT and `git ls-files` relative to the CWD, so run from a
+// subdirectory the untracked half arrived without its prefix — and lint's
+// routing regexes are anchored (`^tools/`, `^kubernetes-charts/`), so every one
+// of those files was silently skipped. Two halves of one set, disagreeing about
+// what a path is.
+func TestLintReportsRepoRelativePathsFromASubdirectory(t *testing.T) {
+	dir := newRepo(t)
+	sub := filepath.Join(dir, "tools", "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "tracked.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "-qm", "sub")
+	if err := os.WriteFile(filepath.Join(sub, "tracked.go"), []byte("package x // edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "untracked.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, from := range []string{dir, sub} {
+		got := lintChanged(t, from)
+		for _, want := range []string{"tools/sub/tracked.go", "tools/sub/untracked.go"} {
+			if !contains(got, want) {
+				t.Errorf("run from %q: changed set = %v, want repo-relative %q — "+
+					"lint's routing regexes are anchored and skip anything else", from, got, want)
+			}
+		}
+	}
+}
+
 func contains(ss []string, want string) bool { return count(ss, want) > 0 }
 
 func count(ss []string, want string) int {
