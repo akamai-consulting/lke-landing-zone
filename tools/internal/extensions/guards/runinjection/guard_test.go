@@ -1060,6 +1060,7 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// (`make untestable-loc-check`, `make core-surface-check`). The guard would
 	// still be wired, unconditionally, and the test would be reporting the opposite.
 	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b`)
+	swallowsFailure := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b[^#\n]*\|\|\s*(true|:)\b`)
 	// `needs:` takes a scalar or a sequence, and a key with no value at all decodes
 	// to !!null — which an earlier cut enqueued as the empty string and then
 	// reported as a missing job.
@@ -1110,6 +1111,16 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			if armed(g.ContinueOnError) {
 				t.Errorf("the workflow-injection step in job %s is continue-on-error — it would "+
 					"run and report and never fail the build, which is not a guard", name)
+			}
+			// SWALLOWED IN THE SHELL, not in the YAML. `continue-on-error` is the
+			// declared way to make a step advisory; `|| true` is the undeclared one, and
+			// it reads as ordinary shell rather than as a policy decision. Same escape
+			// class as the `#`-in-run: fix above: the disarming lives one layer below
+			// where the check was looking.
+			if swallowsFailure.MatchString(g.Run) {
+				t.Errorf("the workflow-injection step in job %s swallows its exit status "+
+					"(%q) — it reports and the build stays green, which is not a guard",
+					name, strings.TrimSpace(swallowsFailure.FindString(g.Run)))
 			}
 		}
 		// The job itself, then everything it transitively needs: a skipped
@@ -1243,6 +1254,9 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// (matches), `dir/*` (does not: `*` stops at `/`). Only the ancestor-`/**` form
 	// counts, so a novel spelling fails loudly and a person decides.
 	ancestorGlob := func(pattern, root string) bool {
+		if pattern == "**" || pattern == "*" {
+			return true // matches every path: the broadest include there is
+		}
 		if !strings.HasSuffix(pattern, "/**") {
 			return false
 		}
@@ -1263,7 +1277,12 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			pre = pattern[:i]
 		}
 		if pre == "" {
-			return false // extension-scoped, e.g. `**.md`: cannot remove a whole tree
+			// UNANCHORED, so it is decided by what it matches rather than where.
+			// `**.md` cannot remove a tree the guard reads; `**/*.yml` and `**` remove
+			// every file in all four of them. An earlier cut returned false for the
+			// whole unanchored class and let the second kind through in silence.
+			return strings.HasSuffix(pattern, ".yml") || strings.HasSuffix(pattern, ".yaml") ||
+				pattern == "**" || pattern == "*"
 		}
 		return strings.HasPrefix(root+"/", pre) || strings.HasPrefix(pre, root+"/")
 	}
