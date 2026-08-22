@@ -2,8 +2,10 @@ package runinjection
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -236,8 +238,9 @@ func TestFlagsTheBranchNameContexts(t *testing.T) {
 
 func TestScansCompositeActions(t *testing.T) {
 	// A composite action holds its steps under `runs:`, not `jobs:` — so scanning
-	// only workflows printed OK over seven live sites, one of them reachable from
-	// a workflow_call input (breakglass → cluster-access → fetch-kubeconfig).
+	// only workflows saw 5 of the 11 live interpolations and missed 6, including
+	// the one reachable from a workflow_call input (breakglass → cluster-access →
+	// fetch-kubeconfig).
 	f := Scan("action.yml", parse(t, `
 runs:
   using: composite
@@ -488,7 +491,7 @@ func TestADeliveredTreeThatMovedIsAFailureNotAQuietPass(t *testing.T) {
 	// The absence is LEGITIMATE in an instance checkout, which has no
 	// instance-template/ at all — that must still pass, or the guard cannot run
 	// where half the value is. It DOES carry .github/actions: the managed lock
-	// delivers seven composite actions to every instance, so the fixture has one.
+	// delivers six composite actions to every instance, so the fixture has one.
 	inst := t.TempDir()
 	iwf := filepath.Join(inst, ".github", "workflows")
 	iact := filepath.Join(inst, ".github", "actions", "cluster-access")
@@ -971,50 +974,243 @@ jobs:
 	}
 }
 
+// invokes reports whether a run: script actually RUNS the guard, as opposed to
+// mentioning its name. Three cuts got this wrong in three ways, each leaving the
+// guard switched off in CI while this test reported success:
+//
+//	run: echo "workflow-injection guard disabled pending #999"   (a string literal)
+//	run: echo skipping workflow-injection pending issue 999      (a bare field!)
+//	run: make fmt-check # standing in for ci workflow-injection  (a trailing comment)
+//
+// The last two defeat a field test on their own, so the shape is what decides: the
+// verb has to sit where a verb goes — after `ci`, or as the target of `make`. And
+// a `#` field ends the line, because only a line STARTING with one was being
+// dropped and YAML strips trailing comments from plain scalars but not from the
+// block scalars these steps use.
+func invokes(run string) bool {
+	for _, line := range nonComment(run) {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if strings.HasPrefix(f, "#") {
+				break // the rest of the line is a comment
+			}
+			named := f == "workflow-injection" || strings.HasPrefix(f, "workflow-injection-")
+			if !named {
+				continue
+			}
+			if i > 0 && fields[i-1] == "ci" {
+				return true // `llz ci workflow-injection`, `go run ./cmd/llz ci workflow-injection`
+			}
+			if fields[0] == "make" {
+				return true // the Makefile-glue convention the neighbouring steps use
+			}
+		}
+	}
+	return false
+}
+
+// lintStep and lintJob are the slice of lint.yml's schema this test reads.
+//
+// `if` AS A NODE, not a string. `if: ”` and a bare `if:` both decode into an empty
+// string, indistinguishable from having no condition at all — and GitHub treats an
+// empty condition as FALSE, so both spellings skip on every event. Read as
+// "unconditional", they were the quietest way there is to switch the guard off.
+type lintStep struct {
+	Name            string    `yaml:"name"`
+	If              yaml.Node `yaml:"if"`
+	Run             string    `yaml:"run"`
+	ContinueOnError yaml.Node `yaml:"continue-on-error"`
+}
+
+type lintJob struct {
+	If              yaml.Node  `yaml:"if"`
+	Needs           yaml.Node  `yaml:"needs"`
+	ContinueOnError yaml.Node  `yaml:"continue-on-error"`
+	Steps           []lintStep `yaml:"steps"`
+}
+
+// Helpers for TestTheGuardRunsInAJobForkPullRequestsReach, split out because the
+// test is a specification and these are its vocabulary.
+
+// nonComment is the run: script's actual commands — blank and comment-only lines
+// removed, since neither can swallow an exit status.
+func nonComment(run string) []string {
+	var out []string
+	for _, line := range strings.Split(run, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// bareCommand returns the step's single command, or "" if it is anything more:
+// several lines, or one line carrying a shell operator. Three rounds of blacklists
+// (`|| true`, then `|| :`, then `set +e`) were each walked past by a spelling they
+// had not considered — `set -euo pipefail` before `set +e`, `set +o errexit`, a
+// backslash continuation, `if ! …; then`. Enumerating how a shell can eat an exit
+// status is not a finite job, so a guard invocation is required to have no shell
+// in it at all.
+func bareCommand(run string) string {
+	// A BACKSLASH CONTINUATION IS ONE COMMAND. Failing a reformat that only wrapped
+	// the invocation, with a message about shell swallowing the exit status, is the
+	// false red this test keeps being told not to produce.
+	run = regexp.MustCompile(`\\\n\s*`).ReplaceAllString(run, " ")
+	cmd := nonComment(run)
+	// `&` BACKGROUNDS IT — the step exits 0 while the guard is still starting — and
+	// a leading `!` inverts the status. Both were missing, in a function whose
+	// comment declares blacklists abandoned; the honest form of "no shell" is to
+	// name every operator that can appear, so any of them is a finding.
+	if len(cmd) != 1 || regexp.MustCompile(`\|\||&&|[;&|]|^\s*!|\bset\s+[-+]`).MatchString(cmd[0]) {
+		return ""
+	}
+	return cmd[0]
+}
+
+// closureCondition returns why the job running the guard is not reachable on every
+// pull request — its own condition, or one on a job it transitively needs, since a
+// skipped dependency skips the job just as effectively. "" means reachable.
+func closureCondition(t *testing.T, jobs map[string]lintJob, name string) string {
+	t.Helper()
+	seen := map[string]bool{name: true}
+	for queue := []string{name}; len(queue) > 0; {
+		cur := queue[0]
+		queue = queue[1:]
+		dep, ok := jobs[cur]
+		if !ok {
+			return fmt.Sprintf("it needs %q, which is not a job in lint.yml", cur)
+		}
+		if dep.If.Kind != 0 { // present, null included — see condition() in the test
+			if cur == name {
+				return fmt.Sprintf("the job is conditional (if: %q)", dep.If.Value)
+			}
+			return fmt.Sprintf("job %s, which it needs, is conditional (if: %q)", cur, dep.If.Value)
+		}
+		switch dep.Needs.Kind {
+		case yaml.ScalarNode:
+			if dep.Needs.Tag != "!!null" && dep.Needs.Value != "" && !seen[dep.Needs.Value] {
+				seen[dep.Needs.Value] = true
+				queue = append(queue, dep.Needs.Value)
+			}
+		case yaml.SequenceNode:
+			for _, n := range dep.Needs.Content {
+				if n.Value != "" && !seen[n.Value] {
+					seen[n.Value] = true
+					queue = append(queue, n.Value)
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
-	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only
-	// in a comment. This guard reached CI solely through `llz ci gates` in the
-	// Kubernetes job, which carries a `head.repo.full_name == github.repository`
-	// condition — so it ran on every population EXCEPT fork pull requests, which
-	// is how an attacker-chosen branch name or PR title reaches a workflow at all.
-	// Moving the step back, or adding that condition to the job it now lives in,
-	// would leave the whole tree green and fork PRs unscanned again.
+	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only in
+	// a comment. This guard reached CI solely through `llz ci gates` in the
+	// Kubernetes job, which is gated on the head repository — so it ran on every
+	// population EXCEPT fork pull requests, which is how an attacker-chosen branch
+	// name or PR title reaches a workflow at all.
+	//
+	// THE RULE IS UNCONDITIONAL, AND THAT IS THE POINT OF THE FOURTH REWRITE. Three
+	// earlier versions asked "is this job gated in a way I recognise?" — first by
+	// listing the fork condition verbatim, then by listing its spellings, then by
+	// naming the contexts a fork test must use. Review walked past all three, and
+	// the last escape ended the argument: `if: github.event_name != 'pull_request'`
+	// names no repository, no fork and no branch, and drops the guard from EVERY
+	// pull request, which is strictly worse than the fork-only skip this test was
+	// built to catch. There is no vocabulary of dangerous conditions, because the
+	// danger is the conditioning. A guard that must see every PR cannot be run
+	// conditionally, so the check is simply that nothing here is conditional:
+	//
+	//	no `if:` on the guard step, on its job, or on any job that job needs
+	//	no `continue-on-error` making the step advisory while it still "runs"
+	//
+	// The cost is that adding a legitimate condition to go-tests fails this test.
+	// That is the intended forcing function: the answer is to move the guard to an
+	// unconditional job, not to teach this test one more exception.
+	//
+	// PARSED AS YAML, NOT SCANNED AS TEXT. A substring match over the raw job body
+	// could not tell a comment quoting a condition from the condition, missed
+	// `if: >` folded scalars because it read only the line carrying the key, and
+	// hardcoded the step indent so a `    - name:` sequence style put every
+	// unrelated step on trial. The parser answers all three for free.
+	//
+	// MUTATION-TESTING THIS NEEDS `-count=1`. lint.yml lives outside the package, so
+	// the test cache does not know it is an input: edit the condition, re-run, and
+	// Go replays the previous verdict under a `(cached)` marker. Two mutations were
+	// scored as "the check missed it" that way before the marker was noticed.
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", ".github", "workflows", "lint.yml"))
 	if err != nil {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
-	// Split into jobs by top-level (2-space) keys under jobs:.
-	type job struct{ name, body string }
-	var jobs []job
-	var cur *job
-	for _, line := range strings.Split(string(b), "\n") {
-		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasSuffix(strings.TrimSpace(line), ":") {
-			jobs = append(jobs, job{name: strings.TrimSpace(line)})
-			cur = &jobs[len(jobs)-1]
-			continue
-		}
-		if cur != nil {
-			cur.body += line + "\n"
-		}
+	var wf struct {
+		Jobs map[string]lintJob `yaml:"jobs"`
 	}
-	if len(jobs) == 0 {
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing lint.yml: %v", err)
+	}
+	if len(wf.Jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	forkGate := "head.repo.full_name == github.repository"
-	found := false
-	for _, j := range jobs {
-		if !strings.Contains(j.body, "ci workflow-injection") {
-			continue
+	armed := func(n yaml.Node) bool {
+		// `False` and `FALSE` are YAML booleans too, and reading either as "armed"
+		// would put a false red on a security test.
+		return n.Kind != 0 && n.Tag != "!!null" && !strings.EqualFold(n.Value, "false")
+	}
+	// ONE GOOD SITE IS THE PROPERTY, not every site being good. The rule was
+	// universally quantified, so adding a deliberately conditional SECOND invocation
+	// — a schedule-gated deep scan, say — failed the test while the placement it
+	// exists to protect was untouched. What has to be true is that at least one
+	// invocation is reachable on every pull request; the others are free.
+	// PRESENT IS PRESENT, null included. Only Kind == 0 means the key is absent; a
+	// bare `if:` parses as !!null, and treating that as "unconditional" — which the
+	// first cut did, having correctly handled `if: ''` — missed the spelling that
+	// skips the job on every event without writing an expression at all. This is the
+	// opposite reading from `continue-on-error`, where a null IS falsy, and the two
+	// keys were being handled by one habit rather than by their own semantics.
+	condition := func(n yaml.Node) (string, bool) {
+		if n.Kind == 0 {
+			return "", false
 		}
-		found = true
-		if strings.Contains(j.body, forkGate) {
-			t.Errorf("job %s runs workflow-injection but is skipped for fork PRs — "+
-				"the population the guard exists for", j.name)
+		return n.Value, true
+	}
+	type site struct{ job, why string }
+	var sites, good []site
+	for name, j := range wf.Jobs {
+		for _, g := range j.Steps {
+			if !invokes(g.Run) {
+				continue
+			}
+			s := site{job: name}
+			if v, ok := condition(g.If); ok {
+				s.why = fmt.Sprintf("the step is conditional (if: %q)", v)
+			} else if armed(g.ContinueOnError) {
+				s.why = "the step is continue-on-error, so it reports and never fails the build"
+			} else if cmd := bareCommand(g.Run); cmd == "" {
+				s.why = fmt.Sprintf("the step is not a single bare command (%q), and any shell "+
+					"around it can swallow the exit status that is the point of running it",
+					strings.Join(nonComment(g.Run), " ; "))
+			} else if armed(j.ContinueOnError) {
+				s.why = "the job is continue-on-error, so the build stays green either way"
+			} else {
+				s.why = closureCondition(t, wf.Jobs, name)
+			}
+			sites = append(sites, s)
+			if s.why == "" {
+				good = append(good, s)
+			}
 		}
 	}
-	if !found {
+	if len(sites) == 0 {
 		t.Error("no lint.yml job runs `llz ci workflow-injection`")
+	} else if len(good) == 0 {
+		for _, s := range sites {
+			t.Errorf("job %s runs workflow-injection, but %s — fork pull requests are the "+
+				"population the guard exists for, and no invocation of it is reachable on "+
+				"every PR", s.job, s.why)
+		}
 	}
+
 }
 
 func TestABraceTypoIsNotReportedAsAnInjection(t *testing.T) {
