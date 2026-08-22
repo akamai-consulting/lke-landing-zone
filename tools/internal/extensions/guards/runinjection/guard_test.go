@@ -1031,7 +1031,8 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		// spelling decoded nothing and reported all four roots uncovered, which reads
 		// exactly like a real finding.
 		On struct {
-			PullRequest struct {
+			PullRequest *struct {
+				Branches    []string `yaml:"branches"`
 				Types       []string `yaml:"types"`
 				Paths       []string `yaml:"paths"`
 				PathsIgnore []string `yaml:"paths-ignore"`
@@ -1159,68 +1160,90 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// when the guard landed, so a PR editing only a first-party composite action —
 	// one of the two roots the guard exists to cover — triggered nothing.
 	//
-	// NO FILTER IS TOTAL COVERAGE, and reading its absence as zero was a false red
-	// on this test in its first cut: deleting the `paths:` block makes Lint run on
-	// every PR, which is strictly more coverage, and the check called it four
-	// findings. `paths-ignore` is the shape that actually subtracts, so that is what
-	// is examined when there is no `paths:`.
+	// EXACT FORMS, NOT A GLOB ENGINE. Two rounds of this block tried to decide
+	// whether an arbitrary pattern covers a root, and each cut was walked past by a
+	// spelling it had not considered: a bare directory (matches no file), then
+	// `dir/**/*.yml` (matches), then `dir/*` (does NOT — `*` stops at `/`, so it
+	// misses every nested action.yml). Re-deriving GitHub's matcher here is a
+	// losing game with a security trigger as the stake, so only the ancestor-`/**`
+	// form counts as coverage. A novel spelling fails loudly and the author decides
+	// deliberately whether to teach this test about it — the right direction for a
+	// wrong answer to fail in.
 	pr := wf.On.PullRequest
-	// covers reports whether a filter entry can match files under root. It must
-	// carry a glob — GitHub matches `paths:` against changed FILE paths, so a bare
-	// `.github/workflows` entry matches nothing while reading like coverage of the
-	// tree — and its literal prefix must reach the root. Anything from `dir/**` to
-	// `dir/**/*.yml` qualifies; pinning `/**` alone was the same "knew one spelling"
-	// defect this test removed from the job-condition half.
-	covers := func(pattern, root string) bool {
-		star := strings.Index(pattern, "*")
-		if star <= 0 {
-			return false
-		}
-		prefix := pattern[:star]
-		if !strings.HasPrefix(root+"/", prefix) {
-			return false
-		}
-		tail := pattern[star:]
-		return tail == "**" || strings.HasSuffix(tail, ".yml") || strings.HasSuffix(tail, ".yaml") ||
-			strings.HasSuffix(tail, "*")
+	if pr == nil {
+		t.Fatal("lint.yml has no pull_request trigger — the guard cannot run on a PR at all, " +
+			"which is the only event a fork contributor can reach")
 	}
-	for _, root := range scanRoots {
-		if len(pr.Paths) > 0 {
-			covered := false
-			for _, p := range pr.Paths {
-				if covers(p, root) {
-					covered = true
-					break
+	if len(pr.Branches) > 0 {
+		main := false
+		for _, b := range pr.Branches {
+			if b == "main" || b == "master" || b == "**" || b == "*" {
+				main = true
+			}
+		}
+		if !main {
+			t.Errorf("lint.yml's pull_request branches: %v does not include the default branch "+
+				"— a PR into main starts no run, and that is every PR the guard exists for",
+				pr.Branches)
+		}
+	}
+	// The default types are [opened, synchronize, reopened]. Naming the list must not
+	// drop either of the two that matter: without `opened` a PR that arrives carrying
+	// the injection starts nothing, and without `synchronize` one can open benign and
+	// force-push it in afterwards.
+	if len(pr.Types) > 0 {
+		for _, need := range []string{"opened", "synchronize"} {
+			has := false
+			for _, ty := range pr.Types {
+				if ty == need {
+					has = true
 				}
 			}
-			if !covered {
-				t.Errorf("lint.yml's pull_request paths: filter does not cover %s, a root "+
-					"workflow-injection scans — a PR touching only that tree starts no run at "+
-					"all, so the guard does not skip, it never happens", root)
+			if !has {
+				t.Errorf("lint.yml's pull_request types: %v omits %q — a revision carrying an "+
+					"injection can reach the merge box without the guard ever seeing it",
+					pr.Types, need)
+			}
+		}
+	}
+	// ancestorGlob reports whether pattern is the `<dir>/**` form for root or one of
+	// its parents, ignoring a leading `!` so a negated entry can be recognised as
+	// subtracting the same tree.
+	ancestorGlob := func(pattern, root string) bool {
+		pattern = strings.TrimPrefix(pattern, "!")
+		if !strings.HasSuffix(pattern, "/**") {
+			return false
+		}
+		return strings.HasPrefix(root+"/", strings.TrimSuffix(pattern, "**"))
+	}
+	for _, root := range scanRoots {
+		// No `paths:` at all is TOTAL coverage — the workflow runs on every PR. Reading
+		// its absence as zero was a false red on this test in an earlier cut. Only
+		// `paths-ignore` subtracts.
+		if pr.Paths == nil {
+			for _, p := range pr.PathsIgnore {
+				if ancestorGlob(p, root) {
+					t.Errorf("lint.yml's pull_request paths-ignore: excludes %s, a root "+
+						"workflow-injection scans — a PR touching only that tree starts no run", root)
+				}
 			}
 			continue
 		}
-		for _, p := range pr.PathsIgnore {
-			if covers(p, root) {
-				t.Errorf("lint.yml's pull_request paths-ignore: excludes %s, a root "+
-					"workflow-injection scans — a PR touching only that tree starts no run", root)
+		covered := false
+		for _, p := range pr.Paths {
+			if !ancestorGlob(p, root) {
+				continue
 			}
-		}
-	}
-	// `types:` IS A FOURTH WAY. The default is [opened, synchronize, reopened]; naming
-	// the list without `synchronize` means a fork PR can open benign and then force-push
-	// the injected line, and the revision that carries it starts no run at all.
-	if len(pr.Types) > 0 {
-		sync := false
-		for _, ty := range pr.Types {
-			if ty == "synchronize" {
-				sync = true
+			if strings.HasPrefix(p, "!") {
+				covered = false // a later negation takes the tree back out
+				continue
 			}
+			covered = true
 		}
-		if !sync {
-			t.Errorf("lint.yml's pull_request types: %v omits `synchronize` — a PR can be "+
-				"opened clean and then updated with the injection, and the guard never sees "+
-				"the revision that carries it", pr.Types)
+		if !covered {
+			t.Errorf("lint.yml's pull_request paths: has no `<dir>/**` entry covering %s, a "+
+				"root workflow-injection scans — a PR touching only that tree starts no run at "+
+				"all, so the guard does not skip, it never happens", root)
 		}
 	}
 }
