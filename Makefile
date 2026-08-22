@@ -1220,6 +1220,11 @@ symbol-ref-guard:
 # no arm of it can be right: with no git there is no changed set to compute. So
 # it says so and fails, and names LINT_ALL=1 as the way to check everything.
 #
+# TESTED ON THE OUTPUT, NOT THE EXIT STATUS, because `git rev-parse
+# --is-inside-work-tree` answers a BARE repository by printing `false` and
+# exiting 0. Keying on the status caught the no-repo case and missed that one —
+# which lands right back in the empty-set collapse, one refusal later.
+#
 # BOTH ARMS LIST UNTRACKED FILES, and the fallback did not. `git ls-files` alone
 # is TRACKED files, so the arm meaning "could not tell, lint everything" reported
 # nothing at all for the state that most often reaches it: a repository with no
@@ -1228,7 +1233,7 @@ symbol-ref-guard:
 # written to remove, surviving in the branch nobody exercised.
 .PHONY: lint-changed
 lint-changed:
-	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+	@if [ "$$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then \
 		echo "lint: not a git work tree, so there is no way to tell what changed." >&2; \
 		echo "      Run 'make LINT_ALL=1 lint' to check everything." >&2; \
 		exit 1; \

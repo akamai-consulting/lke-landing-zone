@@ -247,24 +247,42 @@ func TestTheFallbackStillIgnoresGitignoredFiles(t *testing.T) {
 // with no .git produced two `fatal:` lines on stderr, nothing on stdout, and
 // `make lint` read that as "nothing changed" and exited 0. There is no honest
 // changed set to compute without git, so the target says so and fails.
+//
+// BOTH SPELLINGS OF "NO WORK TREE". `git rev-parse --is-inside-work-tree` exits
+// 128 outside a repository but answers a BARE one by printing `false` and
+// exiting 0 — so a guard keyed on the exit status caught the first and let the
+// second walk into the same empty-set collapse. The bare case is the reason this
+// is a table.
 func TestLintRefusesOutsideAGitWorkTree(t *testing.T) {
 	if _, err := exec.LookPath("make"); err != nil {
 		t.Skip("make not on PATH")
 	}
-	dir := t.TempDir() // no `git init`
-	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("make", "-f", repoMakefile(t), "--no-print-directory", "lint-changed")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), isolatedGitEnv()...)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("lint-changed succeeded outside a git work tree, printing:\n%s\n\n"+
-			"`make lint` reads an empty set as \"nothing changed\" and exits 0 having run nothing", out)
-	}
-	if !strings.Contains(string(out), "LINT_ALL=1") {
-		t.Errorf("the refusal must name the way to check everything:\n%s", out)
+	for _, tc := range []struct {
+		name string
+		bare bool
+	}{
+		{"no repository at all", false},
+		{"inside a bare repository", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.bare {
+				git(t, dir, "init", "-q", "--bare", ".")
+			} else if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("make", "-f", repoMakefile(t), "--no-print-directory", "lint-changed")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), isolatedGitEnv()...)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("lint-changed succeeded with no work tree, printing:\n%s\n\n"+
+					"`make lint` reads an empty set as \"nothing changed\" and exits 0 having run nothing", out)
+			}
+			if !strings.Contains(string(out), "LINT_ALL=1") {
+				t.Errorf("the refusal must name the way to check everything:\n%s", out)
+			}
+		})
 	}
 }
 

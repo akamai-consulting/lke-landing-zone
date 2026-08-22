@@ -58,7 +58,16 @@ func runTreeCapturingExecs(t *testing.T, argv ...string) []string {
 		FirewallDeploymentName: "x",
 		FirewallConfigMapName:  "y",
 	})
-	t.Cleanup(func() { cliopts.Global = cliopts.Opts{} })
+	// RESTORE CONVERGE'S REAL SEAMS. converge.Install replaces the package
+	// global wholesale, so without this every test that runs after this file in
+	// package cli inherits a converge stubbed with six fields and nil for the
+	// rest — and nil-derefs while blaming itself. installConvergeDeps is the
+	// real installer, so the restore is exactly what the tree had rather than a
+	// second copy of it.
+	t.Cleanup(func() {
+		cliopts.Global = cliopts.Opts{}
+		installConvergeDeps()
+	})
 
 	root.SetArgs(argv)
 	root.SetOut(&bytes.Buffer{})
