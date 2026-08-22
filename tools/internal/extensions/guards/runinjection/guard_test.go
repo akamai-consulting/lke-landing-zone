@@ -974,6 +974,58 @@ jobs:
 	}
 }
 
+// globMatch answers GitHub's `paths:` question — does this filter pattern match
+// this changed file? — for the subset of the syntax that appears in a workflow.
+//
+// WRITTEN ONCE, PROPERLY, after three cuts that tried to avoid writing it. Each
+// reasoned about patterns in the abstract and each was walked past by a shape it
+// had not pictured: `**/*.yml` let through, `*.yml` reported although `*` cannot
+// cross `/`, `**/dependabot.yml` reported although it names one file,
+// `**/action.yml` let through although that is the ONLY filename the action roots
+// contain, then `.github/workflows/*.yml` and `.github/*/**` let through because
+// the prefix comparison could not see a wildcard in the directory part. The rules
+// are three lines of regex; guessing at them was the expensive option.
+func globMatch(pattern, path string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**/"):
+			b.WriteString("(?:.*/)?") // any number of directories, including none
+			i += 2
+		case strings.HasPrefix(pattern[i:], "**"):
+			b.WriteString(".*") // crosses separators
+			i++
+		case pattern[i] == '*':
+			b.WriteString("[^/]*") // stops at a separator
+		case pattern[i] == '?':
+			b.WriteString("[^/]")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(pattern[i])))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	return err == nil && re.MatchString(path)
+}
+
+// invokes reports whether a run: script actually runs the guard, as opposed to
+// merely containing its name. A step of `echo "workflow-injection disabled pending
+// #999"` passed the substring version — the guard off everywhere in CI and this
+// test reporting success, which is the prose-for-configuration defect one layer
+// below the two places it has already been fixed. A real invocation has the verb
+// as a bare field; a mention has it inside quotes or prose.
+func invokes(run string) bool {
+	for _, line := range nonComment(run) {
+		for _, f := range strings.Fields(line) {
+			if f == "workflow-injection" || strings.HasPrefix(f, "workflow-injection-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lintStep and lintJob are the slice of lint.yml's schema this test reads.
 //
 // `if` AS A NODE, not a string. `if: ”` and a bare `if:` both decode into an empty
@@ -1129,13 +1181,6 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// fork-gated Kubernetes job turned this red and blamed a job that does not
 	// carry the step. Requiring no `#` earlier on the line rules out both the
 	// comment line and the trailing comment.
-	// THE GUARD'S NAME ON A COMMAND LINE, not one spelling of how it is called.
-	// Pinning `ci workflow-injection` would have turned this red — with the message
-	// "no lint.yml job runs it" — the day someone moved the step to this repo's own
-	// Makefile-glue convention, which the two steps directly above it already use
-	// (`make untestable-loc-check`, `make core-surface-check`). The guard would
-	// still be wired, unconditionally, and the test would be reporting the opposite.
-	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b`)
 	armed := func(n yaml.Node) bool {
 		// `False` and `FALSE` are YAML booleans too, and reading either as "armed"
 		// would put a false red on a security test.
@@ -1162,7 +1207,7 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	var sites, good []site
 	for name, j := range wf.Jobs {
 		for _, g := range j.Steps {
-			if !invocation.MatchString(g.Run) {
+			if !invokes(g.Run) {
 				continue
 			}
 			s := site{job: name}
@@ -1281,109 +1326,57 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			}
 		}
 	}
-	// EXACT FORMS FOR `paths:`, NOT A GLOB ENGINE. Two rounds tried to decide whether
-	// an arbitrary pattern covers a root and were walked past each time by a spelling
-	// they had not considered — a bare directory (matches no file), `dir/**/*.yml`
-	// (matches), `dir/*` (does not: `*` stops at `/`). Only the ancestor-`/**` form
-	// counts, so a novel spelling fails loudly and a person decides.
-	ancestorGlob := func(pattern, root string) bool {
-		if pattern == "**" {
-			return true // matches every path, at any depth: the broadest include there is
-		}
-		// NOT bare `*`. It stops at `/`, so it matches only top-level files and covers
-		// none of these roots — the same fact this rule relies on two lines down, and
-		// contradicting it here made `paths: ['*']` read as total coverage.
-		if !strings.HasSuffix(pattern, "/**") {
-			return false
-		}
-		return strings.HasPrefix(root+"/", strings.TrimSuffix(pattern, "**"))
-	}
-	// ...AND THE `paths-ignore:` SIDE IS ANSWERED AGAINST THE REAL TREE, not by a
-	// matcher of my own. Two cuts tried to reason about patterns in the abstract and
-	// each got a different case wrong: `**/*.yml` was let through, then `*.yml` was
-	// reported although a bare `*` cannot cross `/`, then `**/dependabot.yml` was
-	// reported as removing a tree although it names one file — and `**/action.yml`,
-	// which names the ONLY filename either composite-action root contains, sailed
-	// past the carve-out written for `dependabot.yml`. The files the guard scans are
-	// on disk. So the question "does this exclude hide something the guard reads?"
-	// is asked of those files, with path.Match doing the globbing.
-	scanned := map[string][]string{}
+	// COVERAGE IS ASKED PER FILE, against the tree as it actually is. The files the
+	// guard scans are on disk, so "would a PR touching only this file start a run?"
+	// has a real answer for each one, and globMatch gives it. Earlier cuts tried to
+	// decide coverage from the shape of the pattern alone and were wrong in both
+	// directions — accepting `.github/workflows` (matches no file) and rejecting
+	// `dir/**/*.yml` (matches every one).
+	var files []string
 	for _, root := range scanRoots {
 		_ = filepath.Walk(filepath.Join("..", "..", "..", "..", "..", filepath.FromSlash(root)),
-			func(path string, info os.FileInfo, err error) error {
+			func(p string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() {
 					return nil //nolint:nilerr // an absent root is the vacuity check's business
 				}
-				if ext := filepath.Ext(path); ext == ".yml" || ext == ".yaml" {
-					scanned[root] = append(scanned[root], filepath.Base(path))
+				if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
+					rel := filepath.ToSlash(p)
+					files = append(files, rel[strings.Index(rel, root):])
 				}
 				return nil
 			})
 	}
-	// hides reports whether a paths-ignore entry can match a file the guard reads
-	// under root. `**` crosses separators and `*` does not, so an entry with no `**`
-	// only reaches files at the depth it spells out — none of these are at the repo
-	// root, so such an entry hides nothing here.
-	hides := func(pattern, root string) bool {
-		if strings.HasPrefix(pattern, "!") {
-			return false // a re-inclusion, not an exclusion
-		}
-		if pattern == "**" {
-			return true
-		}
-		if !strings.Contains(pattern, "**") {
-			return false
-		}
-		if dir := pattern[:strings.LastIndex(pattern, "/")+1]; dir != "" {
-			if prefix := strings.TrimSuffix(strings.TrimSuffix(dir, "**/"), "/"); prefix != "" &&
-				!strings.HasPrefix(root+"/", prefix+"/") && !strings.HasPrefix(prefix+"/", root+"/") {
-				return false
-			}
-		}
-		base := pattern[strings.LastIndex(pattern, "/")+1:]
-		base = strings.TrimPrefix(base, "**")
-		if base == "" {
-			return true // `<dir>/**`: the whole tree
-		}
-		for _, f := range scanned[root] {
-			if ok, _ := filepath.Match(base, f); ok {
-				return true
-			}
-			if strings.HasPrefix(base, ".") && strings.HasSuffix(f, base) {
-				return true // `**.yml` — a suffix pattern, not a basename glob
-			}
-		}
-		return false
+	if len(files) == 0 {
+		t.Fatal("found no workflow or action files under scanRoots — the trigger check " +
+			"would be vacuous")
 	}
-	for _, root := range scanRoots {
+	for _, f := range files {
 		for _, p := range pr.PathsIgnore {
-			if hides(p, root) {
-				t.Errorf("lint.yml's pull_request paths-ignore entry %q can exclude %s, a root "+
-					"workflow-injection scans — a PR touching only that tree starts no run", p, root)
+			if !strings.HasPrefix(p, "!") && globMatch(p, f) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q matches %s, a file "+
+					"workflow-injection scans — a PR touching only that file starts no run at "+
+					"all, so the guard does not skip, it never happens", p, f)
 			}
 		}
-		// No `paths:` at all is TOTAL coverage — the workflow runs on every PR that
-		// gets past the keys above. Reading its absence as zero coverage was a false
-		// red on this test in an earlier cut.
 		if pr.Paths == nil {
-			continue
+			continue // no filter at all: every PR runs, which is total coverage
 		}
 		covered := false
 		for _, p := range pr.Paths {
 			if strings.HasPrefix(p, "!") {
-				if ancestorGlob(strings.TrimPrefix(p, "!"), root) {
-					covered = false // a later negation takes the tree back out
+				if globMatch(strings.TrimPrefix(p, "!"), f) {
+					covered = false // a later negation takes it back out
 				}
 				continue
 			}
-			if ancestorGlob(p, root) {
+			if globMatch(p, f) {
 				covered = true
 			}
 		}
 		if !covered {
-			t.Errorf("lint.yml's pull_request paths: has no `<dir>/**` entry covering %s, a "+
-				"root workflow-injection scans — a PR touching only that tree starts no run at "+
-				"all, so the guard does not skip, it never happens", root)
+			t.Errorf("lint.yml's pull_request paths: matches no entry for %s, a file "+
+				"workflow-injection scans — a PR touching only that file starts no run at "+
+				"all, so the guard does not skip, it never happens", f)
 		}
 	}
 }
