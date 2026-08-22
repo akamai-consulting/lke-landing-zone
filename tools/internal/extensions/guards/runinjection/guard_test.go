@@ -998,8 +998,8 @@ func globMatch(pattern, path string) bool {
 			i++
 		case pattern[i] == '*':
 			b.WriteString("[^/]*") // stops at a separator
-		case pattern[i] == '?':
-			b.WriteString("[^/]")
+		case strings.ContainsRune("?+[", rune(pattern[i])):
+			return false // unsupported syntax — see unsupportedGlob, which reports it
 		default:
 			b.WriteString(regexp.QuoteMeta(string(pattern[i])))
 		}
@@ -1009,17 +1009,43 @@ func globMatch(pattern, path string) bool {
 	return err == nil && re.MatchString(path)
 }
 
-// invokes reports whether a run: script actually runs the guard, as opposed to
-// merely containing its name. A step of `echo "workflow-injection disabled pending
-// #999"` passed the substring version — the guard off everywhere in CI and this
-// test reporting success, which is the prose-for-configuration defect one layer
-// below the two places it has already been fixed. A real invocation has the verb
-// as a bare field; a mention has it inside quotes or prose.
+// unsupportedGlob reports a `paths:` syntax globMatch does not implement. GitHub's
+// `?` and `+` are quantifiers on the PRECEDING character and `[]` is a class — not
+// the shell meanings — and guessing at semantics is how six escapes got into this
+// check already. The two sides then fail in their own safe direction: an include
+// that cannot be understood does not count as coverage, and an exclude that cannot
+// be understood is reported rather than waved through.
+func unsupportedGlob(pattern string) bool { return strings.ContainsAny(pattern, "?+[") }
+
+// invokes reports whether a run: script actually RUNS the guard, as opposed to
+// mentioning its name. Three cuts got this wrong in three ways, each leaving the
+// guard switched off in CI while this test reported success:
+//
+//	run: echo "workflow-injection guard disabled pending #999"   (a string literal)
+//	run: echo skipping workflow-injection pending issue 999      (a bare field!)
+//	run: make fmt-check # standing in for ci workflow-injection  (a trailing comment)
+//
+// The last two defeat a field test on their own, so the shape is what decides: the
+// verb has to sit where a verb goes — after `ci`, or as the target of `make`. And
+// a `#` field ends the line, because only a line STARTING with one was being
+// dropped and YAML strips trailing comments from plain scalars but not from the
+// block scalars these steps use.
 func invokes(run string) bool {
 	for _, line := range nonComment(run) {
-		for _, f := range strings.Fields(line) {
-			if f == "workflow-injection" || strings.HasPrefix(f, "workflow-injection-") {
-				return true
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if strings.HasPrefix(f, "#") {
+				break // the rest of the line is a comment
+			}
+			named := f == "workflow-injection" || strings.HasPrefix(f, "workflow-injection-")
+			if !named {
+				continue
+			}
+			if i > 0 && fields[i-1] == "ci" {
+				return true // `llz ci workflow-injection`, `go run ./cmd/llz ci workflow-injection`
+			}
+			if fields[0] == "make" {
+				return true // the Makefile-glue convention the neighbouring steps use
 			}
 		}
 	}
@@ -1070,7 +1096,11 @@ func nonComment(run string) []string {
 // in it at all.
 func bareCommand(run string) string {
 	cmd := nonComment(run)
-	if len(cmd) != 1 || regexp.MustCompile(`\|\||&&|;|\||\bset\s+[-+]`).MatchString(cmd[0]) {
+	// `&` BACKGROUNDS IT — the step exits 0 while the guard is still starting — and
+	// a leading `!` inverts the status. Both were missing, in a function whose
+	// comment declares blacklists abandoned; the honest form of "no shell" is to
+	// name every operator that can appear, so any of them is a finding.
+	if len(cmd) != 1 || regexp.MustCompile(`\|\||&&|[;&|]|^\s*!|\bset\s+[-+]`).MatchString(cmd[0]) {
 		return ""
 	}
 	return cmd[0]
@@ -1352,6 +1382,12 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	}
 	for _, f := range files {
 		for _, p := range pr.PathsIgnore {
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q uses glob syntax this "+
+					"test does not implement — check by hand whether it hides %s, a file "+
+					"workflow-injection scans, then teach globMatch about it", p, f)
+				continue
+			}
 			if !strings.HasPrefix(p, "!") && globMatch(p, f) {
 				t.Errorf("lint.yml's pull_request paths-ignore entry %q matches %s, a file "+
 					"workflow-injection scans — a PR touching only that file starts no run at "+
