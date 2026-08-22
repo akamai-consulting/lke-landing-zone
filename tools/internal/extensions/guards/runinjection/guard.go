@@ -48,9 +48,11 @@ package runinjection
 // replacement — and the half it adds is exactly the half every site remediated in
 // the preceding commit was in: all eleven interpolations were `inputs.*`. And it
 // is worse than "passing" for six of them — those are in `action.yml` files, which
-// actionlint cannot parse at all (it reads them as malformed workflows: v1.7.7 says
-// "on" section is missing, v1.7.12 says "jobs" — the refusal is what is stable
-// across the two, not the wording), so it
+// actionlint cannot parse at all — it reads them as malformed workflows and
+// reports both `"on" section is missing` and `"jobs" section is missing`, on BOTH
+// versions measured (an earlier note here claimed the wording differed between
+// them; that came from reading the first two lines of the output instead of all of
+// it, and only the ORDER differs) — so it
 // never rendered a verdict on a composite action in its life. Five it read and
 // passed; six it could not open.
 //
@@ -272,10 +274,11 @@ func findExpressions(s string) (blocks []string, unterminated bool) {
 //	github              the whole context: `toJSON(github)` carries the payload
 //	env.*               the remedy's own back door — see the case below
 //
-// ALL EIGHT, because this list is read as the contract. It named the first four
-// while the switch returned true for eight, and a reader reconciling the two
-// narrows the code to the comment rather than the other way round — the defect
-// this file spent a commit correcting one paragraph up.
+// ALL EIGHT, because this list is read as the contract. Three cases were missing
+// from it — `github.ref`, `github.workflow_ref` and bare `github` — and a reader
+// reconciling a short list against longer code narrows the code, which is how a
+// case gets deleted. (`env.*` was already described in the prose below; it is in
+// the table now so the table is the single place to look.)
 //
 // NOT `github.event_name`, and that distinction is the whole reason this is not a
 // bare HasPrefix("github.event"). event_name and event_path are SERVER-SET — a

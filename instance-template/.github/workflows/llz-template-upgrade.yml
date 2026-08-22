@@ -207,17 +207,10 @@ jobs:
           # contents:write, pull-requests:write and actions:write. An env var is
           # data: the shell expands "$REF" after parsing, so its contents can
           # never become syntax. It was interpolated directly at first and nothing
-          # objected — NOT because actionlint skips this tree, which was the original
-          # explanation and is false (instance-test lints the rendered instance), but
-          # because actionlint exits 0 on `${{ inputs.* }}` in a run: script. Measured
-          # in the template repo, and deliberately not restated here with a version
-          # number: this file is DELIVERED and lock-covered, so editing it later to
-          # correct a number churns every adopter's upgrade diff for a fact that was
-          # never load-bearing here. The template repo closes that gap with a guard,
-          # `llz ci workflow-injection`, which scans this tree there and reds if the
-          # env: hop is removed — so the rule is enforced BEFORE this file ships.
-          # Nothing in a rendered instance runs it, though: if you edit this line in
-          # your own copy, no check here will catch you. Keep the hop.
+          # objected: actionlint exits 0 on `${{ inputs.* }}` in a run: script. The
+          # template repo's `llz ci workflow-injection` catches that before this file
+          # ships — but nothing in your instance runs that guard, so if you drop the
+          # env: hop in your copy, no check here will catch you. Keep it.
           REF: ${{ inputs.ref }}
         run: llz upgrade --ref "$REF" --commit --no-doctor
 
