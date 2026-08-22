@@ -24,7 +24,14 @@ func NudgeArgoCmd() *cobra.Command {
 			"call is best-effort; this never fails the job. Defaults to the llz-secret-store\n" +
 			"+ platform-bootstrap apps and the openbao store.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCINudgeArgo(deps.DryRun, o) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// cmd.Flags() includes the root's persistent flags, so this picks up
+			// the global --dry-run AT EXECUTION TIME. Reading it any earlier gets
+			// the pre-parse zero, which is what the retired Deps.DryRun field did
+			// and why this command mutated a live cluster under --dry-run.
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			return runCINudgeArgo(dryRun, o)
+		},
 	}
 	c.Flags().StringSliceVar(&o.apps, "apps", defaultNudgeApps, "Argo CD Applications (argocd namespace) to refresh + sync")
 	c.Flags().StringVar(&o.store, "secret-store", defaultSecretStore, "ClusterSecretStore to revalidate and wait Ready (empty skips that half)")

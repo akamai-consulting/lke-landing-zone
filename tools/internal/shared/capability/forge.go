@@ -166,31 +166,73 @@ func classifyAPIMethod(rest []string) ForgeAction {
 	var explicit string
 	var params, graphql bool
 
+	// apply records what one parsed flag means. Only three flags say anything
+	// about the method; the rest are consumed so their VALUES cannot be mistaken
+	// for one (`-f method=GET` is data, `--jq graphql` is a filter).
+	apply := func(name, val string) {
+		switch {
+		case name == "method":
+			explicit = val // LAST WINS — pflag's rule, and gh's by construction
+		case paramFlags[name]:
+			params = true
+		}
+	}
+
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch {
-		case a == "-X" || a == "--method":
-			if i+1 >= len(rest) {
-				// A dangling flag: the argv is malformed and its intent unknown.
+		case a == "--":
+			// pflag stops parsing here; everything after is positional.
+			for _, p := range rest[i+1:] {
+				if p == "graphql" {
+					graphql = true
+				}
+			}
+			i = len(rest)
+
+		case strings.HasPrefix(a, "--"):
+			name, val, attached := strings.Cut(a[2:], "=")
+			takesValue, known := ghAPIFlags[name]
+			if !known {
 				return ForgeUnclassified
 			}
-			// LAST WINS, not first — pflag's rule, and gh's by construction.
-			explicit = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--method="):
-			explicit = strings.TrimPrefix(a, "--method=")
-		case strings.HasPrefix(a, "-X="):
-			explicit = strings.TrimPrefix(a, "-X=")
-		case paramFlags[a]:
-			params = true
-			// Consume the value so a field like `-f method=GET` cannot be mistaken
-			// for anything but data.
-			if i+1 < len(rest) {
+			if takesValue && !attached {
+				if i+1 >= len(rest) {
+					return ForgeUnclassified // dangling flag; intent unknown
+				}
 				i++
+				val = rest[i]
 			}
-		case hasAnyPrefix(a, paramFlagPrefixes):
-			params = true
-		case a == "graphql" && !strings.HasPrefix(a, "-"):
+			apply(name, val)
+
+		case len(a) > 1 && a[0] == '-':
+			// A SHORTHAND CLUSTER, walked the way pflag walks it. See the header.
+			cluster := a[1:]
+			for len(cluster) > 0 {
+				name, known := ghAPIShorthand[cluster[0]]
+				if !known {
+					return ForgeUnclassified
+				}
+				cluster = cluster[1:]
+				if !ghAPIFlags[name] {
+					continue // a boolean; the next letter is another flag
+				}
+				var val string
+				switch {
+				case len(cluster) > 1 && cluster[0] == '=':
+					val, cluster = cluster[1:], "" // -X=DELETE
+				case len(cluster) > 0:
+					val, cluster = cluster, "" // -XDELETE — THE ONE THAT WAS OPEN
+				case i+1 < len(rest):
+					i++
+					val = rest[i] // -X DELETE
+				default:
+					return ForgeUnclassified // dangling
+				}
+				apply(name, val)
+			}
+
+		case a == "graphql":
 			graphql = true
 		}
 	}
@@ -221,21 +263,42 @@ func classifyAPIMethod(rest []string) ForgeAction {
 	return ForgeRead
 }
 
-// paramFlags and paramFlagPrefixes are the `gh api` flags that ADD PARAMETERS, and
-// therefore flip its default method from GET to POST.
-var paramFlags = map[string]bool{
-	"-f": true, "--raw-field": true, "-F": true, "--field": true, "--input": true,
+// ghAPIFlags is every flag `gh api` accepts, keyed by LONG name, valued by
+// whether it consumes a value. It is a closed set on purpose: an argv containing
+// a flag that is not here is ForgeUnclassified, which every grant refuses.
+//
+// FAILING CLOSED ON AN UNKNOWN FLAG IS THE POINT, not a limitation to apologise
+// for. The alternative — skip what we do not recognise and keep classifying — is
+// how `-ftitle=x` came to read as a GET: an unrecognised token was treated as
+// harmless when it was the token that made the request a POST. If gh grows a
+// flag, or one of these is misspelt, the argv is refused with a message naming
+// it, and the first caller to hit it makes the decision. That is the rule this
+// package already applies to an unclassified kubectl verb and to
+// `gh api graphql`.
+var ghAPIFlags = map[string]bool{
+	// take a value
+	"method": true, "field": true, "raw-field": true, "input": true,
+	"header": true, "jq": true, "template": true, "preview": true,
+	"cache": true, "hostname": true,
+	// boolean
+	"include": false, "paginate": false, "silent": false,
+	"slurp": false, "verbose": false,
 }
 
-var paramFlagPrefixes = []string{"-f=", "-F=", "--raw-field=", "--field=", "--input="}
+// ghAPIShorthand maps `gh api`'s single letters onto the long names above, so
+// the two spellings cannot disagree about what a flag is or whether it takes a
+// value — the disagreement that let `-XDELETE` through while `-X DELETE` was
+// caught.
+var ghAPIShorthand = map[byte]string{
+	'X': "method", 'F': "field", 'f': "raw-field", 'H': "header",
+	'q': "jq", 't': "template", 'p': "preview", 'i': "include",
+}
 
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	return false
+// paramFlags are the flags that ADD PARAMETERS, and therefore flip gh's default
+// method from GET to POST. From gh's own manual: "The default HTTP request
+// method is GET normally and POST if any parameters were added."
+var paramFlags = map[string]bool{
+	"field": true, "raw-field": true, "input": true,
 }
 
 // Forge is the handle a binding receives for the git forge. One Run, gated by
@@ -269,8 +332,19 @@ func (f forge) Permits(args ...string) error {
 			return fmt.Errorf("%w: `gh %s` places credential material", ErrNoForgeCustody, strings.Join(args, " "))
 		}
 	default:
-		return fmt.Errorf("%w: `gh %s` — add it to the table in capability/forge.go with "+
-			"the group it belongs to", ErrForgeUnclassified, strings.Join(args, " "))
+		// THE REMEDY DIFFERS BY WHICH TABLE FELL SHORT, and the generic one sent
+		// readers to the command table for an argv whose COMMAND is fine. `gh api`
+		// is classified by method rather than by name, so it has its own four ways
+		// of being unreadable and its own two tables to fix.
+		remedy := "add it to the table in capability/forge.go with the group it belongs to"
+		if len(args) > 0 && args[0] == "api" {
+			remedy = "an `api` argv is unclassified when the method it will send cannot be " +
+				"established — a flag missing from ghAPIFlags/ghAPIShorthand in " +
+				"capability/forge.go, a method that is neither a read nor a write, a " +
+				"dangling -X/--method, or `graphql`, whose document decides and reading " +
+				"it means parsing GraphQL"
+		}
+		return fmt.Errorf("%w: `gh %s` — %s", ErrForgeUnclassified, strings.Join(args, " "), remedy)
 	}
 	return nil
 }
@@ -350,4 +424,15 @@ func ForgeActions() (reads, mutations, custody []string) {
 	sort.Strings(mutations)
 	sort.Strings(custody)
 	return reads, mutations, custody
+}
+
+// hasAnyPrefix reports whether s starts with any of prefixes. Shared with
+// writer.go's flag allowlisting.
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }

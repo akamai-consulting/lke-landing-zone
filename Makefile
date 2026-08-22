@@ -1196,6 +1196,30 @@ symbol-ref-guard:
 # What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
 # kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
 # Those are not gates and the registry has no opinion about them.
+# lint-changed prints the file set `lint` decides from, one path per line.
+#
+# IT IS A TARGET RATHER THAN AN INLINE PIPELINE SO IT CAN BE TESTED. `lint` used
+# to compute this itself, as `git diff --name-only HEAD || git ls-files`, and that
+# set OMITS UNTRACKED FILES — so a branch whose only work so far is new files
+# produced an empty set, hit the "nothing changed" arm, and exited 0 having run
+# no checks and no gates at all. Every other guard in this repo sits behind this
+# target; a green `make lint` over an all-new package was the report.
+#
+# The `||` fallback is kept and is NOT the same thing: it fires when `git diff`
+# cannot answer (no repo, or a repo with no commits), and lints everything. That
+# is "could not tell", and it must stay distinct from "nothing to do" — the two
+# arriving at the same empty string is what made the bug invisible.
+#
+# --exclude-standard so .gitignore still applies: build output is not work.
+.PHONY: lint-changed
+lint-changed:
+	@if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
+		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard; } \
+			| grep -v '^$$$$' | sort -u; \
+	else \
+		git ls-files; \
+	fi
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
@@ -1204,9 +1228,9 @@ lint:
 		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \
 	fi; \
-	CHANGED=$$(git diff --name-only HEAD 2>/dev/null || git ls-files); \
+	CHANGED=$$($(MAKE) --no-print-directory lint-changed); \
 	if [ -z "$$CHANGED" ]; then \
-		echo "lint: nothing changed since last commit (use LINT_ALL=1 to run all checks)"; \
+		echo "lint: nothing changed and nothing untracked (use LINT_ALL=1 to run all checks)"; \
 		exit 0; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.go$$|go\.(mod|sum)$$'; then \

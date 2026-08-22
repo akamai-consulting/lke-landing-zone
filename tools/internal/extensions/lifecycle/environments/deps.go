@@ -42,9 +42,17 @@ type Deps struct {
 	// the second half of every mutation here.
 	Render func(env string) error
 
-	// DryRun suppresses every mutation and prints what would have run — the one
-	// field of package main's globalOpts this package uses.
-	DryRun bool
+	// THERE IS NO DryRun FIELD, for the reason converge/deps.go gives at length.
+	// One was here, set from cliopts.Global by an installer called from `func
+	// init()` — earlier even than converge's, which at least ran during tree
+	// construction. Nothing in this package ever read it, so it was a trap set
+	// rather than a bug shipped: the first caller to reach for `caps.DryRun`
+	// would have got false forever, on a package whose verbs write
+	// landingzone.yaml and environments/<env>.yaml.
+	//
+	// Render above is the pattern to copy — it closes over cliopts.Global and
+	// reads it when CALLED, which is after cobra has parsed. The two sat one line
+	// apart, one correct and one not.
 
 	// LoadSpec reads the instance's LandingZone spec.
 	LoadSpec func() (*clusterspec.LandingZone, bool, error)

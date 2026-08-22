@@ -50,10 +50,21 @@ type Deps struct {
 	// need raw output or a non-probe verb (rollout restart, annotate, patch, wait).
 	Exec func(name string, args ...string) ([]byte, error)
 
-	// DryRun suppresses every mutation and prints what would have run. This is the
-	// only half of package main's globalOpts this package uses; taking the whole
-	// struct would drag the command tree in behind it.
-	DryRun bool
+	// THERE IS NO DryRun FIELD, AND ITS ABSENCE IS THE FIX. It used to be here,
+	// set from package main's globalOpts, and it was permanently false: Install is
+	// called while the command TREE IS BEING BUILT, and cobra parses --dry-run when
+	// a command EXECUTES. The struct copied the global's zero value minutes before
+	// anything could set it.
+	//
+	// What that cost: `llz --dry-run ci nudge-argo` issued real `annotate
+	// … refresh=hard --overwrite` and `patch … {"sync":{}}` writes against both
+	// Argo Applications. The flag parsed, printed nothing, and mutated the cluster.
+	//
+	// cliopts' own header states the rule this broke — "the read must be LATE" —
+	// and the field was the one way to break it while looking wired. So the value
+	// is read from cmd.Flags() inside RunE, where cobra has parsed it, exactly as
+	// clusteraccess/cobra_cluster_access.go does; runCINudgeArgo takes it as an
+	// argument. A field cannot be re-frozen if there is no field.
 
 	// Summary appends to a GitHub Actions file (GITHUB_STEP_SUMMARY). Must do real
 	// work in fixtures: the convergence report IS the summary, so a no-op stub
