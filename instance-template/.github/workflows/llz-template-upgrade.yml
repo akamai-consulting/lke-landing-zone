@@ -213,13 +213,11 @@ jobs:
           # in the template repo, and deliberately not restated here with a version
           # number: this file is DELIVERED and lock-covered, so editing it later to
           # correct a number churns every adopter's upgrade diff for a fact that was
-          # never load-bearing here. That gap is closed by the guard
-          # `llz ci workflow-injection`, which does scan this tree and reds on this
-          # very line if the env: hop is removed — so the rule is enforced rather
-          # than merely written down here. (The verb is kept on ONE line on purpose:
-          # symbol-ref-guard resolves `llz ci <verb>` mentions, and wrapping mid-name
-          # drops this comment out of its count — measured, 1201 to 1200 — leaving a
-          # delivered file naming a verb nothing checks still exists.)
+          # never load-bearing here. The template repo closes that gap with a guard,
+          # `llz ci workflow-injection`, which scans this tree there and reds if the
+          # env: hop is removed — so the rule is enforced BEFORE this file ships.
+          # Nothing in a rendered instance runs it, though: if you edit this line in
+          # your own copy, no check here will catch you. Keep the hop.
           REF: ${{ inputs.ref }}
         run: llz upgrade --ref "$REF" --commit --no-doctor
 

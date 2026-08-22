@@ -26,12 +26,17 @@ package runinjection
 // identically, and unchanged by `-shellcheck=` (its shellcheck integration
 // substitutes a placeholder for the expression, so shellcheck reads the script
 // AFTER substitution and the injection is gone by the time it looks). It exits 1
-// on its own untrusted-input list, which is a FIXED SET OF PATHS and not a pattern
-// — `github.head_ref`, `github.event.pull_request.title` and `.body`,
-// `github.event.issue.title` and `.body`, `github.event.comment.body`, and the
-// `github['event'][…]` bracket spelling of those. Written as `event.*.title` it
-// reads as a wildcard, which overstates the overlap: `deployment.title`,
-// `milestone.title` and `workflow_run.display_title` are all exit 0. It exits 0 on `inputs.*`, `github.event.inputs.*`,
+// on its own untrusted-input list — an ENUMERATED SET of event-payload paths
+// (`github.head_ref`, the pull-request and issue title and body, comment and review
+// bodies, discussion fields, commit messages, the PR head fields), including
+// `*`-indexed array elements, plus the `github['event'][…]` bracket spelling of any
+// of them. Enumerated, not "every `github.event.*`": `deployment.title`,
+// `milestone.title` and `workflow_run.display_title` are all exit 0. The list is
+// not restated here, because a second copy of someone else's list is a thing to
+// keep in step forever — what matters is that it is a list, so paths outside it
+// pass, and this guard's rule is the tier rather than the enumeration.
+//
+// It exits 0 on `inputs.*`, `github.event.inputs.*`,
 // `github.ref_name`, `toJSON(github)`, `toJSON(github.event)`, and on any value
 // laundered through `env:` — INCLUDING the values it flags inline, which is the
 // sharper half: `github.event.pull_request.title` exits 1 in a run: script and 0
@@ -43,7 +48,9 @@ package runinjection
 // replacement — and the half it adds is exactly the half every site remediated in
 // the preceding commit was in: all eleven interpolations were `inputs.*`. And it
 // is worse than "passing" for six of them — those are in `action.yml` files, which
-// actionlint cannot parse at all ("jobs" section is missing, measured), so it
+// actionlint cannot parse at all (it reads them as malformed workflows: v1.7.7 says
+// "on" section is missing, v1.7.12 says "jobs" — the refusal is what is stable
+// across the two, not the wording), so it
 // never rendered a verdict on a composite action in its life. Five it read and
 // passed; six it could not open.
 //
