@@ -669,10 +669,13 @@ jobs:
       #
       # TWO SITES, like the run-interpolation guard below: `guard-workflow-shells`
       # is also a `llz ci gates` row (registry/gates.go), so this step is a second
-      # site rather than a relocation. Deleting it as redundant would leave the
-      # check reachable only from the Kubernetes job, which is skipped for fork
-      # pull requests. Weaker consequence than the guard below — a dash fallback is
-      # not attacker-controlled — but the same shape, and the reason both live here.
+      # site rather than a relocation, and deleting it as redundant would leave the
+      # check reachable only from the Kubernetes job — which is skipped for fork
+      # pull requests. NOT by design, though, and the difference is worth keeping
+      # straight: this step landed alone (fa8d5b99) and acquired its gates row two
+      # months later (ca1f731e), so the duplication is an accident that turned out
+      # to be load-bearing, where the guard below was placed here deliberately.
+      # Weaker consequence too — a dash fallback is not attacker-controlled.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
@@ -680,18 +683,22 @@ jobs:
       # Guard: no externally-supplied expression may be interpolated into a run:
       # script. ALSO a `llz ci gates` row (registry/gates.go) — this step is the
       # SECOND site, not a relocation, and the duplication is the whole point: the
-      # Kubernetes job that runs `llz ci gates` carries
-      # `if: … head.repo.full_name == github.repository`, so it is skipped for FORK
-      # pull requests, which is exactly the population this guard's threat model is
-      # about. A fork PR is how an attacker-chosen branch name or PR title reaches
+      # Kubernetes job that runs `llz ci gates` is conditioned on the event not
+      # being a pull request OR the head repository being this one, so it runs on
+      # every push and skips every FORK pull request — which is exactly the
+      # population this guard's threat model is about. (Described rather than
+      # quoted: the literal expression is two lines up in the `kubernetes` job, and
+      # a copy of it here is a second thing to keep in step with the first.) A fork PR is how an attacker-chosen branch name or PR title reaches
       # a workflow in the first place, so a guard reachable only from the gate set
       # is not protecting against the case it exists for. This job (go-tests) has
       # no such `if:` and runs on forks. The shell-default guard above is the same
       # shape — also a gates row, also duplicated here — but only this one has a
       # test holding the placement: TestTheGuardRunsInAJobForkPullRequestsReach,
       # which fails if this step, its job, or any job that job needs becomes
-      # conditional at all, if the step or its job goes continue-on-error, or if the
-      # trigger stops covering a root the guard scans. Deliberately NOT "gated on
+      # conditional at all, if the step or its job goes continue-on-error, if the
+      # step stops being a single bare command (`|| true` and `set +e` swallow an
+      # exit status as effectively as continue-on-error does), or if the trigger
+      # stops covering a root the guard scans. Deliberately NOT "gated on
       # repository identity", which is narrower than the test: the strongest skip is
       # `if: github.event_name != 'pull_request'`, which names no repository and
       # drops the guard from every PR there is.
