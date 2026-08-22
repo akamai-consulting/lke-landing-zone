@@ -99,10 +99,13 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
    credential, verifies the new token against the Linode API, writes
    `secret/linode/api-token` in the environment's OpenBao using the
    **`secret-propagator` GitHub-OIDC role** (not root — see below), then
-   drains older `llz-incluster-<region>` siblings past a 7-day grace window.
+   drains `llz-incluster-<region>` siblings superseded more than 7 days ago
+   (measured from when the next-newer sibling was minted, not from the token's
+   own age — the token being replaced is always a month old).
    The narrow token never crosses a job boundary and has no GitHub-secret copy.
 3. **revoke-linode-pat** (daily, 03:30 UTC) — `linode-pat-rotator revoke-old`
-   drains any same-labeled sibling **broad** PATs older than 7 days.
+   drains any same-labeled sibling **broad** PATs superseded more than 7 days
+   ago.
 
 #### Why GitHub-OIDC, not root
 

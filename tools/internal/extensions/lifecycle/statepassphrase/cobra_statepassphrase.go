@@ -38,6 +38,12 @@ func RotateStatePassphraseCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&apply, "apply", false, "perform the rollover (default: report what would be re-keyed)")
-	c.Flags().StringVar(&rootsDir, "roots-dir", "terraform", "directory holding the Terraform roots")
+	// `terraform-iac-bootstrap`, NOT `terraform`. The roots have never lived at
+	// the old path — `llz render` materialises them into
+	// terraform-iac-bootstrap/<root>, which is also where the terraform-init
+	// action cds. The wrong default did not error: every root simply failed its
+	// os.Stat and was recorded as "not present in this instance", and an
+	// all-skipped rollover then reported success. See RunRotate.
+	c.Flags().StringVar(&rootsDir, "roots-dir", "terraform-iac-bootstrap", "directory holding the Terraform roots")
 	return c
 }

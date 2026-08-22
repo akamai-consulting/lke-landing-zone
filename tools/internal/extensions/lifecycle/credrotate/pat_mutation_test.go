@@ -141,14 +141,22 @@ func TestCredentialsPATRevokeOldAcceptsZeroGrace(t *testing.T) {
 	}
 }
 
-// The cutoff is now - graceDays*DaySecs. Anchored on the real clock (not the
+// The window runs from SUPERSESSION — the moment the next-newer sibling was
+// minted — not from a credential's own age. Anchored on the real clock (not the
 // year-2099 sentinels the older tests use) so a sign flip or a *→/ moves the
 // cutoff across a sibling and changes who gets revoked.
-func TestCredentialsPATRevokeOldCutoffIsNowMinusGraceDays(t *testing.T) {
+//
+// THIS TEST USED TO ASSERT THE OTHER CLOCK, under the name
+// …CutoffIsNowMinusGraceDays, and it passed against the defect: with `created`
+// as the subject, id 10 at 30 days old fell outside a 7-day window and was
+// revoked — which is correct here only because it ALSO went out of service 10
+// days ago. The fixture now separates the two so the assertion can tell them
+// apart, which the old one could not.
+func TestCredentialsPATRevokeOldMeasuresGraceFromSupersession(t *testing.T) {
 	now := time.Now().Unix()
 	client := &fakeRotatorClient{listResp: []map[string]any{
-		patListEntry(10, "lbl", patTS(now-30*linode.DaySecs)), // well past the window → revoke
-		patListEntry(20, "lbl", patTS(now-3*linode.DaySecs)),  // inside a 7-day window → keep
+		patListEntry(10, "lbl", patTS(now-30*linode.DaySecs)), // superseded 10d ago → revoke
+		patListEntry(20, "lbl", patTS(now-10*linode.DaySecs)), // superseded an hour ago → keep
 		patListEntry(30, "lbl", patTS(now-3600)),              // an hour old → the live one
 	}}
 	var err error
@@ -163,7 +171,7 @@ func TestCredentialsPATRevokeOldCutoffIsNowMinusGraceDays(t *testing.T) {
 		t.Errorf("kept_pat_id = %v, want 30", rec["kept_pat_id"])
 	}
 	if got := fmt.Sprint(rec["revoked_ids"]); got != "[10]" {
-		t.Errorf("revoked_ids = %v, want [10] (3-day-old sibling is inside the 7-day grace window)", rec["revoked_ids"])
+		t.Errorf("revoked_ids = %v, want [10] (id 20 was superseded an hour ago, well inside the 7-day window)", rec["revoked_ids"])
 	}
 	if got := fmt.Sprint(rec["skipped_in_grace_ids"]); got != "[20]" {
 		t.Errorf("skipped_in_grace_ids = %v, want [20]", rec["skipped_in_grace_ids"])
@@ -173,10 +181,15 @@ func TestCredentialsPATRevokeOldCutoffIsNowMinusGraceDays(t *testing.T) {
 	}
 }
 
-// A sibling created exactly ON the cutoff is revoked — the comparison is
-// `created > cutoff` (strictly inside the window survives), not `>=`. Needs the
-// test's `now` and the one the function reads to be the same wall-clock second,
-// so we start just after a second tick and re-check afterwards.
+// A sibling SUPERSEDED exactly ON the cutoff is revoked — the comparison is
+// `supersededAt > cutoff` (strictly inside the window survives), not `>=`. Needs
+// the test's `now` and the one the function reads to be the same wall-clock
+// second, so we start just after a second tick and re-check afterwards.
+//
+// The fixture inverted with the clock: what has to land on the cutoff is now the
+// SUPERSEDER's creation, so id 20 carries the boundary timestamp and id 21 — the
+// one being judged — can be any age at all. That it is an hour old rather than a
+// second old is the point: its own age no longer participates.
 func TestCredentialsPATRevokeOldCutoffBoundaryIsExclusive(t *testing.T) {
 	for attempt := 0; attempt < 5; attempt++ {
 		// Land in the first 200ms of a second, leaving ~800ms of slack.
@@ -184,10 +197,11 @@ func TestCredentialsPATRevokeOldCutoffBoundaryIsExclusive(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		now := time.Now().Unix()
-		// grace-days=0 → cutoff == now; id 21 is created exactly at the cutoff.
+		// grace-days=0 → cutoff == now; id 20 (the superseder) is created exactly
+		// at the cutoff, so id 21 was superseded exactly on it.
 		client := &fakeRotatorClient{listResp: []map[string]any{
-			patListEntry(20, "lbl", patTS(now+3600)), // newest → kept
-			patListEntry(21, "lbl", patTS(now)),      // exactly on the cutoff
+			patListEntry(20, "lbl", patTS(now)),      // newest → kept; supersedes 21 AT the cutoff
+			patListEntry(21, "lbl", patTS(now-3600)), // an hour old — its own age is irrelevant
 		}}
 		var err error
 		stdout, _ := captureFirewallOutput(t, func() {
@@ -201,7 +215,7 @@ func TestCredentialsPATRevokeOldCutoffBoundaryIsExclusive(t *testing.T) {
 		}
 		rec := decodeRecord(t, stdout)
 		if got := fmt.Sprint(rec["revoked_ids"]); got != "[21]" {
-			t.Errorf("revoked_ids = %v, want [21]: created == cutoff is NOT inside the grace window", rec["revoked_ids"])
+			t.Errorf("revoked_ids = %v, want [21]: supersededAt == cutoff is NOT inside the grace window", rec["revoked_ids"])
 		}
 		if got := fmt.Sprint(rec["skipped_in_grace_ids"]); got != "[]" {
 			t.Errorf("skipped_in_grace_ids = %v, want []", rec["skipped_in_grace_ids"])
@@ -260,15 +274,20 @@ func TestCredentialsPATRevokeOldGraceLogAgeDays(t *testing.T) {
 	var found bool
 	for _, r := range recs {
 		msg, _ := r["msg"].(string)
-		if !strings.Contains(msg, "in grace window") {
+		if !strings.Contains(msg, "grace window") {
 			continue
 		}
 		found = true
 		if r["id"] != float64(20) {
 			t.Errorf("grace log id = %v, want 20", r["id"])
 		}
-		if r["age_days"] != float64(3) {
-			t.Errorf("grace log age_days = %v, want 3", r["age_days"])
+		// superseded_days_ago, NOT age_days. The old field printed the token's own
+		// age, which on the previously-live credential is the ROTATION cadence —
+		// "age_days=60" beside a decision to keep it for 7 more days invited
+		// exactly the wrong reading. Here id 20 was superseded an hour ago by the
+		// live token, so the honest number is 0.
+		if r["superseded_days_ago"] != float64(0) {
+			t.Errorf("grace log superseded_days_ago = %v, want 0", r["superseded_days_ago"])
 		}
 	}
 	if !found {

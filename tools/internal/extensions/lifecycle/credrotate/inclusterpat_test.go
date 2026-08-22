@@ -220,6 +220,11 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 	s := &patMintStub{stubLinode: stubLinode{pats: []map[string]any{
 		// An older same-labeled sibling past the 7-day grace → drained; a
 		// foreign label → untouched.
+		// Superseded 30 days ago by id 7, so it is past the window and drains.
+		{"label": "llz-incluster-acme-primary", "id": jn(6), "created": linode.FmtLinodeTS(now.Unix() - 60*linode.DaySecs)},
+		// The token that was live until this run. Its own age is ~30 days, which
+		// is the ROTATION cadence — the number the retired clock compared against
+		// a 7-day window and always lost. It is superseded seconds ago, so it stays.
 		{"label": "llz-incluster-acme-primary", "id": jn(7), "created": linode.FmtLinodeTS(now.Unix() - 30*linode.DaySecs)},
 		{"label": "gha-platform-platform_LINODE_API_TOKEN", "id": jn(8), "created": linode.FmtLinodeTS(now.Unix() - 40*linode.DaySecs)},
 		// The token this run just minted (newest — kept).
@@ -256,8 +261,9 @@ func TestRotateInclusterPATHappyPath(t *testing.T) {
 			t.Errorf("raw token leaked onto bao argv: %v", put[3:])
 		}
 	}
-	if len(s.deleted) != 1 || s.deleted[0] != 7 {
-		t.Errorf("drain must revoke only the old same-labeled sibling, got %v", s.deleted)
+	if len(s.deleted) != 1 || s.deleted[0] != 6 {
+		t.Errorf("drain must revoke only the long-superseded sibling (6), not the one this run "+
+			"just replaced (7), got %v", s.deleted)
 	}
 	if summary, _ := os.ReadFile(sum); !strings.Contains(string(summary), "new_pat_id=`101`") {
 		t.Errorf("summary missing the audit line:\n%s", summary)
