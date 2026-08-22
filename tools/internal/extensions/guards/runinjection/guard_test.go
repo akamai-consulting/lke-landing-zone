@@ -1030,14 +1030,14 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		// the 1.2 core schema, where `on` is an ordinary string. Measured: the `true`
 		// spelling decoded nothing and reported all four roots uncovered, which reads
 		// exactly like a real finding.
-		On struct {
-			PullRequest *struct {
-				Branches    []string `yaml:"branches"`
-				Types       []string `yaml:"types"`
-				Paths       []string `yaml:"paths"`
-				PathsIgnore []string `yaml:"paths-ignore"`
-			} `yaml:"pull_request"`
-		} `yaml:"on"`
+		// `on:` AS A RAW NODE, because it has three legal shapes and two of them are
+		// the SAFEST configurations there are. `on: [pull_request]` is a sequence and
+		// `pull_request:` with no value is a null — both mean "every pull request,
+		// unfiltered", and a typed struct decoded the first into a yaml TypeError and
+		// the second into nil. An earlier cut read that nil as "there is no
+		// pull_request trigger" and failed the build over the broadest trigger the
+		// workflow could have, which is the remedy the paths check below recommends.
+		On   yaml.Node          `yaml:"on"`
 		Jobs map[string]lintJob `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(b, &wf); err != nil {
@@ -1159,32 +1159,63 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// red X, nothing to notice. Not hypothetical: `.github/actions/**` was MISSING
 	// when the guard landed, so a PR editing only a first-party composite action —
 	// one of the two roots the guard exists to cover — triggered nothing.
-	//
-	// EXACT FORMS, NOT A GLOB ENGINE. Two rounds of this block tried to decide
-	// whether an arbitrary pattern covers a root, and each cut was walked past by a
-	// spelling it had not considered: a bare directory (matches no file), then
-	// `dir/**/*.yml` (matches), then `dir/*` (does NOT — `*` stops at `/`, so it
-	// misses every nested action.yml). Re-deriving GitHub's matcher here is a
-	// losing game with a security trigger as the stake, so only the ancestor-`/**`
-	// form counts as coverage. A novel spelling fails loudly and the author decides
-	// deliberately whether to teach this test about it — the right direction for a
-	// wrong answer to fail in.
-	pr := wf.On.PullRequest
-	if pr == nil {
+	type prFilters struct {
+		Branches       []string `yaml:"branches"`
+		BranchesIgnore []string `yaml:"branches-ignore"`
+		Types          []string `yaml:"types"`
+		Paths          []string `yaml:"paths"`
+		PathsIgnore    []string `yaml:"paths-ignore"`
+	}
+	var pr prFilters
+	present := false
+	switch wf.On.Kind {
+	case yaml.ScalarNode:
+		present = wf.On.Value == "pull_request"
+	case yaml.SequenceNode:
+		for _, n := range wf.On.Content {
+			if n.Value == "pull_request" {
+				present = true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(wf.On.Content); i += 2 {
+			if wf.On.Content[i].Value != "pull_request" {
+				continue
+			}
+			present = true
+			if v := wf.On.Content[i+1]; v.Kind == yaml.MappingNode {
+				if err := v.Decode(&pr); err != nil {
+					t.Fatalf("decoding on.pull_request: %v", err)
+				}
+			}
+		}
+	}
+	if !present {
 		t.Fatal("lint.yml has no pull_request trigger — the guard cannot run on a PR at all, " +
 			"which is the only event a fork contributor can reach")
 	}
+	// The default branch has to be reachable, through whichever of the two keys is
+	// used. `branches-ignore` was unmodelled in an earlier cut, so excluding main
+	// through it left the test green while no PR into main started a run at all.
+	isDefault := func(b string) bool { return b == "main" || b == "master" || b == "**" || b == "*" }
 	if len(pr.Branches) > 0 {
-		main := false
+		ok := false
 		for _, b := range pr.Branches {
-			if b == "main" || b == "master" || b == "**" || b == "*" {
-				main = true
+			if isDefault(b) {
+				ok = true
 			}
 		}
-		if !main {
+		if !ok {
 			t.Errorf("lint.yml's pull_request branches: %v does not include the default branch "+
 				"— a PR into main starts no run, and that is every PR the guard exists for",
 				pr.Branches)
+		}
+	}
+	for _, b := range pr.BranchesIgnore {
+		if isDefault(b) {
+			t.Errorf("lint.yml's pull_request branches-ignore: %v excludes the default branch "+
+				"— a PR into main starts no run at all", pr.BranchesIgnore)
+			break
 		}
 	}
 	// The default types are [opened, synchronize, reopened]. Naming the list must not
@@ -1206,39 +1237,60 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			}
 		}
 	}
-	// ancestorGlob reports whether pattern is the `<dir>/**` form for root or one of
-	// its parents, ignoring a leading `!` so a negated entry can be recognised as
-	// subtracting the same tree.
+	// EXACT FORMS FOR `paths:`, NOT A GLOB ENGINE. Two rounds tried to decide whether
+	// an arbitrary pattern covers a root and were walked past each time by a spelling
+	// they had not considered — a bare directory (matches no file), `dir/**/*.yml`
+	// (matches), `dir/*` (does not: `*` stops at `/`). Only the ancestor-`/**` form
+	// counts, so a novel spelling fails loudly and a person decides.
 	ancestorGlob := func(pattern, root string) bool {
-		pattern = strings.TrimPrefix(pattern, "!")
 		if !strings.HasSuffix(pattern, "/**") {
 			return false
 		}
 		return strings.HasPrefix(root+"/", strings.TrimSuffix(pattern, "**"))
 	}
+	// ...AND THE OPPOSITE RULE FOR `paths-ignore:`, because strictness has a
+	// direction. On the include side an unrecognised pattern must not count as
+	// coverage; on the exclude side it must not be waved through — the same
+	// ancestor-only rule applied here let `paths-ignore: ['.github/actions/**/*.yml']`
+	// hide a whole root in silence. So anything whose literal prefix overlaps a root,
+	// either way round, is reported.
+	touches := func(pattern, root string) bool {
+		if strings.HasPrefix(pattern, "!") {
+			return false // a re-inclusion, not an exclusion
+		}
+		pre := pattern
+		if i := strings.IndexAny(pattern, "*?["); i >= 0 {
+			pre = pattern[:i]
+		}
+		if pre == "" {
+			return false // extension-scoped, e.g. `**.md`: cannot remove a whole tree
+		}
+		return strings.HasPrefix(root+"/", pre) || strings.HasPrefix(pre, root+"/")
+	}
 	for _, root := range scanRoots {
-		// No `paths:` at all is TOTAL coverage — the workflow runs on every PR. Reading
-		// its absence as zero was a false red on this test in an earlier cut. Only
-		// `paths-ignore` subtracts.
-		if pr.Paths == nil {
-			for _, p := range pr.PathsIgnore {
-				if ancestorGlob(p, root) {
-					t.Errorf("lint.yml's pull_request paths-ignore: excludes %s, a root "+
-						"workflow-injection scans — a PR touching only that tree starts no run", root)
-				}
+		for _, p := range pr.PathsIgnore {
+			if touches(p, root) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q can exclude %s, a root "+
+					"workflow-injection scans — a PR touching only that tree starts no run", p, root)
 			}
+		}
+		// No `paths:` at all is TOTAL coverage — the workflow runs on every PR that
+		// gets past the keys above. Reading its absence as zero coverage was a false
+		// red on this test in an earlier cut.
+		if pr.Paths == nil {
 			continue
 		}
 		covered := false
 		for _, p := range pr.Paths {
-			if !ancestorGlob(p, root) {
-				continue
-			}
 			if strings.HasPrefix(p, "!") {
-				covered = false // a later negation takes the tree back out
+				if ancestorGlob(strings.TrimPrefix(p, "!"), root) {
+					covered = false // a later negation takes the tree back out
+				}
 				continue
 			}
-			covered = true
+			if ancestorGlob(p, root) {
+				covered = true
+			}
 		}
 		if !covered {
 			t.Errorf("lint.yml's pull_request paths: has no `<dir>/**` entry covering %s, a "+
