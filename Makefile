@@ -1196,6 +1196,86 @@ symbol-ref-guard:
 # What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
 # kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
 # Those are not gates and the registry has no opinion about them.
+# lint-changed prints the file set `lint` decides from, one path per line.
+#
+# IT IS A TARGET RATHER THAN AN INLINE PIPELINE SO IT CAN BE TESTED. `lint` used
+# to compute this itself, as `git diff --name-only HEAD || git ls-files`, and that
+# set OMITS UNTRACKED FILES — so a branch whose only work so far is new files
+# produced an empty set, hit the "nothing changed" arm, and exited 0 having run
+# no checks and no gates at all. Every other guard in this repo sits behind this
+# target; a green `make lint` over an all-new package was the report.
+#
+# The `||` fallback is kept and is NOT the same thing: it fires when `git diff`
+# cannot answer (no repo, or a repo with no commits), and lints everything. That
+# is "could not tell", and it must stay distinct from "nothing to do" — the two
+# arriving at the same empty string is what made the bug invisible.
+#
+# --exclude-standard so .gitignore still applies: build output is not work.
+#
+# --full-name because THE TWO HALVES DISAGREED ABOUT WHAT A PATH IS. `git diff
+# --name-only` answers relative to the REPOSITORY ROOT; `git ls-files` answers
+# relative to the CWD. Run from anywhere but the root — `make -C`, or the
+# absolute `-f` this target's own tests use — the untracked half lost its prefix
+# and lint's anchored routing regexes (^tools/, ^kubernetes-charts/) silently
+# skipped every one of them. One vocabulary, chosen explicitly.
+#
+# NO GIT AT ALL IS A REFUSAL, NOT AN EMPTY SET. Both arms below shell out to git,
+# so outside a work tree (a release tarball, an unpacked source archive) each one
+# printed two lines of `fatal:` to stderr and nothing to stdout — and `make lint`
+# read that as "nothing changed" and exited 0 having run no linter and no gate.
+# It is the third spelling of this target's one hazard, and the loudest, because
+# no arm of it can be right: with no git there is no changed set to compute. So
+# it says so and fails, and names LINT_ALL=1 as the way to check everything.
+#
+# TESTED ON THE OUTPUT, NOT THE EXIT STATUS, because `git rev-parse
+# --is-inside-work-tree` answers a BARE repository by printing `false` and
+# exiting 0. Keying on the status caught the no-repo case and missed that one —
+# which lands right back in the empty-set collapse, one refusal later.
+#
+# STDOUT DECIDES; BOTH STREAMS EXPLAIN. The DECISION reads stdout alone, because
+# capturing both with `2>&1` and comparing the lot to "true" meant any git
+# WARNING failed a perfectly good checkout —
+# `warning: unable to access '/root/.gitconfig'`, which containers emit on every
+# call, or GIT_TRACE_PERFORMANCE, which reproduces it locally. `make lint` and
+# the pre-commit hook then ran no linter and no gate: the outcome this target
+# exists to prevent, arrived at through the refusal added to prevent it. The
+# second call is on the failure path only, where an extra fork costs nothing.
+#
+# The EXPLANATION takes both streams, and taking stderr alone left it blank in
+# the case that most needs it: a bare repository answers on STDOUT, exiting 0
+# with `false`, so the message read "git said:" and stopped. An explanation that
+# is empty exactly where the reader has least to go on is worse than none, since
+# it looks like the diagnosis rather than the absence of one.
+#
+# AND IT QUOTES GIT RATHER THAN GUESSING. Anything that stops git answering lands
+# here, not just an absent repository — `detected dubious ownership`, on a
+# container-mounted checkout, is the one people actually hit. Announcing "not a
+# git work tree" for that sends the reader to look for a .git directory that is
+# right there. The refusal is still correct (nothing can be scoped without an
+# answer); only the diagnosis was, so git's own words go in the message.
+#
+# BOTH ARMS LIST UNTRACKED FILES, and the fallback did not. `git ls-files` alone
+# is TRACKED files, so the arm meaning "could not tell, lint everything" reported
+# nothing at all for the state that most often reaches it: a repository with no
+# commits, where every file is untracked by definition. That is the same empty
+# set, out of the same target, for the same reason — the defect this recipe was
+# written to remove, surviving in the branch nobody exercised.
+.PHONY: lint-changed
+lint-changed:
+	@if [ "$$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then \
+		echo "lint: cannot determine what changed, so it will not claim nothing did." >&2; \
+		echo "      git said: $$(git rev-parse --is-inside-work-tree 2>&1)" >&2; \
+		echo "      Run 'make LINT_ALL=1 lint' to check everything regardless." >&2; \
+		exit 1; \
+	fi; \
+	if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
+		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard --full-name; } \
+			| grep -v '^$$' | sort -u; \
+	else \
+		{ git ls-files --full-name; git ls-files --others --exclude-standard --full-name; } \
+			| grep -v '^$$' | sort -u; \
+	fi
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
@@ -1204,9 +1284,9 @@ lint:
 		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \
 	fi; \
-	CHANGED=$$(git diff --name-only HEAD 2>/dev/null || git ls-files); \
+	CHANGED=$$($(MAKE) --no-print-directory lint-changed); \
 	if [ -z "$$CHANGED" ]; then \
-		echo "lint: nothing changed since last commit (use LINT_ALL=1 to run all checks)"; \
+		echo "lint: nothing changed and nothing untracked (use LINT_ALL=1 to run all checks)"; \
 		exit 0; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.go$$|go\.(mod|sum)$$'; then \

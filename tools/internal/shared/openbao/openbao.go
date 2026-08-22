@@ -472,34 +472,107 @@ func (c *Client) DataHash(ctx context.Context, path string) (string, error) {
 
 // Rollback restores priorVersion's data as a new version. If priorVersion is 0
 // (no secret existed before), it deletes the metadata so the secret is removed.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// EVERY REQUEST HERE CHECKS ITS STATUS, AND NONE OF THEM USED TO. This function
+// is only ever called on a path that is already half-written — DualWrite's
+// secondary failed, the primary holds the NEW credential, and this is the call
+// that puts the OLD one back. A rollback that reports success without having
+// happened is therefore not a degraded outcome, it is the outcome the caller
+// most needs to be told about, announced as the one it was hoping for.
+//
+// c.do returns (*http.Response, error) and the error is TRANSPORT ONLY: a 403
+// from an expired token, a 429 from a rate limit, a 503 from a sealed node all
+// arrive as err == nil with a status nobody read. Two consequences, and the
+// second is worse than the first:
+//
+//   - the restore POST returning 403 made Rollback return nil, so DualWrite
+//     reported "primary rolled back to v7" while the primary still served the
+//     new credential and the secondary the old one — a split nothing else
+//     detects, because both regions read back fine on their own.
+//
+//   - the prior-version GET returning an error DECODES CLEANLY into kvResponse.
+//     OpenBao's error body is `{"errors":[…]}`, which has no `data` key, so
+//     kv.Data.Data is left nil and the restore then POSTs {"data":null} — over
+//     a LIVE SECRET, creating a new version whose content is nothing. The
+//     rollback destroys the credential it was invoked to preserve.
+//
+// So the GET's emptiness is refused as well as its status: a version that reads
+// back with no data is not something to write anywhere. readKV two hundred lines
+// up has checked status since it was written; this path is the same wire, and
+// the only reason it diverged is that it was added later and reached for c.do
+// directly.
+// ─────────────────────────────────────────────────────────────────────────────
 func (c *Client) Rollback(ctx context.Context, path string, priorVersion int) error {
 	if priorVersion == 0 {
+		// NOT best-effort any more. This branch DESTROYS the path and every
+		// version under it (KV v2 metadata delete), and a caller told the removal
+		// succeeded will not come back to check. A 403 here leaves the new
+		// credential live on the primary while DualWrite's message says it was
+		// withdrawn.
 		resp, err := c.do(ctx, http.MethodDelete, MetadataPath(path), nil)
-		if err == nil {
-			resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("rollback %s: deleting metadata: %w", path, err)
 		}
-		return err // best-effort
+		defer resp.Body.Close()
+		// 404 is the goal state reached by another route: nothing is there, which
+		// is what deleting it was for.
+		if resp.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("rollback %s: deleting metadata: HTTP %d: %s", path, resp.StatusCode, respBody(resp))
+		}
+		return nil
 	}
-	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s?version=%d", DataPath(path), priorVersion), nil)
+
+	prior, err := c.readVersion(ctx, path, priorVersion)
 	if err != nil {
 		return err
+	}
+	body, err := json.Marshal(map[string]any{"data": prior})
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(ctx, http.MethodPost, DataPath(path), body)
+	if err != nil {
+		return fmt.Errorf("rollback %s: restoring v%d: %w", path, priorVersion, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("rollback %s: restoring v%d: HTTP %d: %s",
+			path, priorVersion, resp.StatusCode, respBody(resp))
+	}
+	return nil
+}
+
+// readVersion GETs one specific version's data map, refusing everything that is
+// not an answer. Separate from readKV because readKV reads the CURRENT version
+// and treats 404 as "absent, not an error" — correct there, and wrong here: a
+// version the caller just measured and is now restoring cannot be missing, and
+// treating it as absent would send an empty map to the writer.
+func (c *Client) readVersion(ctx context.Context, path string, version int) (map[string]any, error) {
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s?version=%d", DataPath(path), version), nil)
+	if err != nil {
+		return nil, fmt.Errorf("rollback %s: reading v%d: %w", path, version, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("rollback %s: reading v%d: HTTP %d: %s",
+			path, version, resp.StatusCode, respBody(resp))
 	}
 	var kv kvResponse
-	dec := json.NewDecoder(resp.Body).Decode(&kv)
-	resp.Body.Close()
-	if dec != nil {
-		return dec
+	if err := json.NewDecoder(resp.Body).Decode(&kv); err != nil {
+		return nil, fmt.Errorf("rollback %s: parsing v%d: %w", path, version, err)
 	}
-	body, err := json.Marshal(map[string]any{"data": kv.Data.Data})
-	if err != nil {
-		return err
+	if len(kv.Data.Data) == 0 {
+		// A 2xx whose body carries no data. Either the version was destroyed or
+		// the response is not the shape we think it is; writing what we decoded
+		// would put an empty secret over a live one, which is the failure this
+		// whole function exists to prevent.
+		return nil, fmt.Errorf("rollback %s: v%d read back with no data — refusing to restore an empty secret over the live one", path, version)
 	}
-	r2, err := c.do(ctx, http.MethodPost, DataPath(path), body)
-	if err != nil {
-		return err
-	}
-	r2.Body.Close()
-	return nil
+	return kv.Data.Data, nil
 }
 
 // DualWrite transactionally writes data to both regions. Error semantics mirror
