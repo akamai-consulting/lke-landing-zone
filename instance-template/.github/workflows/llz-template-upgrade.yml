@@ -209,8 +209,12 @@ jobs:
           # never become syntax. It was interpolated directly at first and nothing
           # objected — NOT because actionlint skips this tree, which was the original
           # explanation and is false (instance-test lints the rendered instance), but
-          # because actionlint exits 0 on `${{ inputs.* }}` in a run: script, measured
-          # on the pinned v1.7.7. That gap is now closed by `llz ci workflow-injection`,
+          # because actionlint exits 0 on `${{ inputs.* }}` in a run: script — measured,
+          # and deliberately not restated here with a version number: this file is
+          # DELIVERED, so a pin written here is a fourth uncoupled copy that nothing
+          # checks, and correcting it later churns every adopter's managed lock. The
+          # template repo holds the measurement and the pin. That gap is now closed by
+          # `llz ci workflow-injection`,
           # which does scan this tree
           # and reds on exactly this line if the env: hop is removed — so the rule
           # is enforced rather than merely written down here.
