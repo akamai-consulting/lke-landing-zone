@@ -2,8 +2,10 @@ package runinjection
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -236,8 +238,9 @@ func TestFlagsTheBranchNameContexts(t *testing.T) {
 
 func TestScansCompositeActions(t *testing.T) {
 	// A composite action holds its steps under `runs:`, not `jobs:` — so scanning
-	// only workflows printed OK over seven live sites, one of them reachable from
-	// a workflow_call input (breakglass → cluster-access → fetch-kubeconfig).
+	// only workflows saw 5 of the 11 live interpolations and missed 6, including
+	// the one reachable from a workflow_call input (breakglass → cluster-access →
+	// fetch-kubeconfig).
 	f := Scan("action.yml", parse(t, `
 runs:
   using: composite
@@ -488,7 +491,7 @@ func TestADeliveredTreeThatMovedIsAFailureNotAQuietPass(t *testing.T) {
 	// The absence is LEGITIMATE in an instance checkout, which has no
 	// instance-template/ at all — that must still pass, or the guard cannot run
 	// where half the value is. It DOES carry .github/actions: the managed lock
-	// delivers seven composite actions to every instance, so the fixture has one.
+	// delivers six composite actions to every instance, so the fixture has one.
 	inst := t.TempDir()
 	iwf := filepath.Join(inst, ".github", "workflows")
 	iact := filepath.Join(inst, ".github", "actions", "cluster-access")
@@ -971,49 +974,463 @@ jobs:
 	}
 }
 
+// globMatch answers GitHub's `paths:` question — does this filter pattern match
+// this changed file? — for the subset of the syntax that appears in a workflow.
+//
+// WRITTEN ONCE, PROPERLY, after three cuts that tried to avoid writing it. Each
+// reasoned about patterns in the abstract and each was walked past by a shape it
+// had not pictured: `**/*.yml` let through, `*.yml` reported although `*` cannot
+// cross `/`, `**/dependabot.yml` reported although it names one file,
+// `**/action.yml` let through although that is the ONLY filename the action roots
+// contain, then `.github/workflows/*.yml` and `.github/*/**` let through because
+// the prefix comparison could not see a wildcard in the directory part. The rules
+// are three lines of regex; guessing at them was the expensive option.
+func globMatch(pattern, path string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**"):
+			b.WriteString(".*") // crosses separators
+			i++
+		case pattern[i] == '*':
+			b.WriteString("[^/]*") // stops at a separator
+		case strings.ContainsRune("?+[", rune(pattern[i])):
+			return false // unsupported syntax — see unsupportedGlob, which reports it
+		default:
+			b.WriteString(regexp.QuoteMeta(string(pattern[i])))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	return err == nil && re.MatchString(path)
+}
+
+// unsupportedGlob reports a `paths:` syntax globMatch does not implement. GitHub's
+// `?` and `+` are quantifiers on the PRECEDING character and `[]` is a class — not
+// the shell meanings — and guessing at semantics is how six escapes got into this
+// check already. The two sides then fail in their own safe direction: an include
+// that cannot be understood does not count as coverage, and an exclude that cannot
+// be understood is reported rather than waved through.
+func unsupportedGlob(pattern string) bool {
+	// AFTER the `!`, because a negation carries the same syntax and the same
+	// consequence: `- '!**/*.y?ml'` takes every scanned file back out of `paths:`,
+	// and a check that skipped negated entries could not see it.
+	return strings.ContainsAny(strings.TrimPrefix(pattern, "!"), "?+[")
+}
+
+// invokes reports whether a run: script actually RUNS the guard, as opposed to
+// mentioning its name. Three cuts got this wrong in three ways, each leaving the
+// guard switched off in CI while this test reported success:
+//
+//	run: echo "workflow-injection guard disabled pending #999"   (a string literal)
+//	run: echo skipping workflow-injection pending issue 999      (a bare field!)
+//	run: make fmt-check # standing in for ci workflow-injection  (a trailing comment)
+//
+// The last two defeat a field test on their own, so the shape is what decides: the
+// verb has to sit where a verb goes — after `ci`, or as the target of `make`. And
+// a `#` field ends the line, because only a line STARTING with one was being
+// dropped and YAML strips trailing comments from plain scalars but not from the
+// block scalars these steps use.
+func invokes(run string) bool {
+	for _, line := range nonComment(run) {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if strings.HasPrefix(f, "#") {
+				break // the rest of the line is a comment
+			}
+			named := f == "workflow-injection" || strings.HasPrefix(f, "workflow-injection-")
+			if !named {
+				continue
+			}
+			if i > 0 && fields[i-1] == "ci" {
+				return true // `llz ci workflow-injection`, `go run ./cmd/llz ci workflow-injection`
+			}
+			if fields[0] == "make" {
+				return true // the Makefile-glue convention the neighbouring steps use
+			}
+		}
+	}
+	return false
+}
+
+// lintStep and lintJob are the slice of lint.yml's schema this test reads.
+//
+// `if` AS A NODE, not a string. `if: ”` and a bare `if:` both decode into an empty
+// string, indistinguishable from having no condition at all — and GitHub treats an
+// empty condition as FALSE, so both spellings skip on every event. Read as
+// "unconditional", they were the quietest way there is to switch the guard off.
+type lintStep struct {
+	Name            string    `yaml:"name"`
+	If              yaml.Node `yaml:"if"`
+	Run             string    `yaml:"run"`
+	ContinueOnError yaml.Node `yaml:"continue-on-error"`
+}
+
+type lintJob struct {
+	If              yaml.Node  `yaml:"if"`
+	Needs           yaml.Node  `yaml:"needs"`
+	ContinueOnError yaml.Node  `yaml:"continue-on-error"`
+	Steps           []lintStep `yaml:"steps"`
+}
+
+// Helpers for TestTheGuardRunsInAJobForkPullRequestsReach, split out because the
+// test is a specification and these are its vocabulary.
+
+// nonComment is the run: script's actual commands — blank and comment-only lines
+// removed, since neither can swallow an exit status.
+func nonComment(run string) []string {
+	var out []string
+	for _, line := range strings.Split(run, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// bareCommand returns the step's single command, or "" if it is anything more:
+// several lines, or one line carrying a shell operator. Three rounds of blacklists
+// (`|| true`, then `|| :`, then `set +e`) were each walked past by a spelling they
+// had not considered — `set -euo pipefail` before `set +e`, `set +o errexit`, a
+// backslash continuation, `if ! …; then`. Enumerating how a shell can eat an exit
+// status is not a finite job, so a guard invocation is required to have no shell
+// in it at all.
+func bareCommand(run string) string {
+	// A BACKSLASH CONTINUATION IS ONE COMMAND. Failing a reformat that only wrapped
+	// the invocation, with a message about shell swallowing the exit status, is the
+	// false red this test keeps being told not to produce.
+	run = regexp.MustCompile(`\\\n\s*`).ReplaceAllString(run, " ")
+	cmd := nonComment(run)
+	// `&` BACKGROUNDS IT — the step exits 0 while the guard is still starting — and
+	// a leading `!` inverts the status. Both were missing, in a function whose
+	// comment declares blacklists abandoned; the honest form of "no shell" is to
+	// name every operator that can appear, so any of them is a finding.
+	if len(cmd) != 1 || regexp.MustCompile(`\|\||&&|[;&|]|^\s*!|\bset\s+[-+]`).MatchString(cmd[0]) {
+		return ""
+	}
+	return cmd[0]
+}
+
+// closureCondition returns why the job running the guard is not reachable on every
+// pull request — its own condition, or one on a job it transitively needs, since a
+// skipped dependency skips the job just as effectively. "" means reachable.
+func closureCondition(t *testing.T, jobs map[string]lintJob, name string) string {
+	t.Helper()
+	seen := map[string]bool{name: true}
+	for queue := []string{name}; len(queue) > 0; {
+		cur := queue[0]
+		queue = queue[1:]
+		dep, ok := jobs[cur]
+		if !ok {
+			return fmt.Sprintf("it needs %q, which is not a job in lint.yml", cur)
+		}
+		if dep.If.Kind != 0 { // present, null included — see condition() in the test
+			if cur == name {
+				return fmt.Sprintf("the job is conditional (if: %q)", dep.If.Value)
+			}
+			return fmt.Sprintf("job %s, which it needs, is conditional (if: %q)", cur, dep.If.Value)
+		}
+		switch dep.Needs.Kind {
+		case yaml.ScalarNode:
+			if dep.Needs.Tag != "!!null" && dep.Needs.Value != "" && !seen[dep.Needs.Value] {
+				seen[dep.Needs.Value] = true
+				queue = append(queue, dep.Needs.Value)
+			}
+		case yaml.SequenceNode:
+			for _, n := range dep.Needs.Content {
+				if n.Value != "" && !seen[n.Value] {
+					seen[n.Value] = true
+					queue = append(queue, n.Value)
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
-	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only
-	// in a comment. This guard reached CI solely through `llz ci gates` in the
-	// Kubernetes job, which carries a `head.repo.full_name == github.repository`
-	// condition — so it ran on every population EXCEPT fork pull requests, which
-	// is how an attacker-chosen branch name or PR title reaches a workflow at all.
-	// Moving the step back, or adding that condition to the job it now lives in,
-	// would leave the whole tree green and fork PRs unscanned again.
+	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only in
+	// a comment. This guard reached CI solely through `llz ci gates` in the
+	// Kubernetes job, which is gated on the head repository — so it ran on every
+	// population EXCEPT fork pull requests, which is how an attacker-chosen branch
+	// name or PR title reaches a workflow at all.
+	//
+	// THE RULE IS UNCONDITIONAL, AND THAT IS THE POINT OF THE FOURTH REWRITE. Three
+	// earlier versions asked "is this job gated in a way I recognise?" — first by
+	// listing the fork condition verbatim, then by listing its spellings, then by
+	// naming the contexts a fork test must use. Review walked past all three, and
+	// the last escape ended the argument: `if: github.event_name != 'pull_request'`
+	// names no repository, no fork and no branch, and drops the guard from EVERY
+	// pull request, which is strictly worse than the fork-only skip this test was
+	// built to catch. There is no vocabulary of dangerous conditions, because the
+	// danger is the conditioning. A guard that must see every PR cannot be run
+	// conditionally, so the check is simply that nothing here is conditional:
+	//
+	//	no `if:` on the guard step, on its job, or on any job that job needs
+	//	no `continue-on-error` making the step advisory while it still "runs"
+	//
+	// The cost is that adding a legitimate condition to go-tests fails this test.
+	// That is the intended forcing function: the answer is to move the guard to an
+	// unconditional job, not to teach this test one more exception.
+	//
+	// PARSED AS YAML, NOT SCANNED AS TEXT. A substring match over the raw job body
+	// could not tell a comment quoting a condition from the condition, missed
+	// `if: >` folded scalars because it read only the line carrying the key, and
+	// hardcoded the step indent so a `    - name:` sequence style put every
+	// unrelated step on trial. The parser answers all three for free.
+	//
+	// MUTATION-TESTING THIS NEEDS `-count=1`. lint.yml lives outside the package, so
+	// the test cache does not know it is an input: edit the condition, re-run, and
+	// Go replays the previous verdict under a `(cached)` marker. Two mutations were
+	// scored as "the check missed it" that way before the marker was noticed.
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", ".github", "workflows", "lint.yml"))
 	if err != nil {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
-	// Split into jobs by top-level (2-space) keys under jobs:.
-	type job struct{ name, body string }
-	var jobs []job
-	var cur *job
-	for _, line := range strings.Split(string(b), "\n") {
-		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ' && strings.HasSuffix(strings.TrimSpace(line), ":") {
-			jobs = append(jobs, job{name: strings.TrimSpace(line)})
-			cur = &jobs[len(jobs)-1]
-			continue
-		}
-		if cur != nil {
-			cur.body += line + "\n"
-		}
+	var wf struct {
+		// `yaml:"on"`, not `yaml:"true"`. `on` is YAML 1.1's boolean, and the first
+		// cut of this decoded the key as `true` on that basis — but yaml.v3 follows
+		// the 1.2 core schema, where `on` is an ordinary string. Measured: the `true`
+		// spelling decoded nothing and reported all four roots uncovered, which reads
+		// exactly like a real finding.
+		// `on:` AS A RAW NODE, because it has three legal shapes and two of them are
+		// the SAFEST configurations there are. `on: [pull_request]` is a sequence and
+		// `pull_request:` with no value is a null — both mean "every pull request,
+		// unfiltered", and a typed struct decoded the first into a yaml TypeError and
+		// the second into nil. An earlier cut read that nil as "there is no
+		// pull_request trigger" and failed the build over the broadest trigger the
+		// workflow could have, which is the remedy the paths check below recommends.
+		On   yaml.Node          `yaml:"on"`
+		Jobs map[string]lintJob `yaml:"jobs"`
 	}
-	if len(jobs) == 0 {
+	if err := yaml.Unmarshal(b, &wf); err != nil {
+		t.Fatalf("parsing lint.yml: %v", err)
+	}
+	if len(wf.Jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	forkGate := "head.repo.full_name == github.repository"
-	found := false
-	for _, j := range jobs {
-		if !strings.Contains(j.body, "ci workflow-injection") {
-			continue
+	armed := func(n yaml.Node) bool {
+		// `False` and `FALSE` are YAML booleans too, and reading either as "armed"
+		// would put a false red on a security test.
+		return n.Kind != 0 && n.Tag != "!!null" && !strings.EqualFold(n.Value, "false")
+	}
+	// ONE GOOD SITE IS THE PROPERTY, not every site being good. The rule was
+	// universally quantified, so adding a deliberately conditional SECOND invocation
+	// — a schedule-gated deep scan, say — failed the test while the placement it
+	// exists to protect was untouched. What has to be true is that at least one
+	// invocation is reachable on every pull request; the others are free.
+	// PRESENT IS PRESENT, null included. Only Kind == 0 means the key is absent; a
+	// bare `if:` parses as !!null, and treating that as "unconditional" — which the
+	// first cut did, having correctly handled `if: ''` — missed the spelling that
+	// skips the job on every event without writing an expression at all. This is the
+	// opposite reading from `continue-on-error`, where a null IS falsy, and the two
+	// keys were being handled by one habit rather than by their own semantics.
+	condition := func(n yaml.Node) (string, bool) {
+		if n.Kind == 0 {
+			return "", false
 		}
-		found = true
-		if strings.Contains(j.body, forkGate) {
-			t.Errorf("job %s runs workflow-injection but is skipped for fork PRs — "+
-				"the population the guard exists for", j.name)
+		return n.Value, true
+	}
+	type site struct{ job, why string }
+	var sites, good []site
+	for name, j := range wf.Jobs {
+		for _, g := range j.Steps {
+			if !invokes(g.Run) {
+				continue
+			}
+			s := site{job: name}
+			if v, ok := condition(g.If); ok {
+				s.why = fmt.Sprintf("the step is conditional (if: %q)", v)
+			} else if armed(g.ContinueOnError) {
+				s.why = "the step is continue-on-error, so it reports and never fails the build"
+			} else if cmd := bareCommand(g.Run); cmd == "" {
+				s.why = fmt.Sprintf("the step is not a single bare command (%q), and any shell "+
+					"around it can swallow the exit status that is the point of running it",
+					strings.Join(nonComment(g.Run), " ; "))
+			} else if armed(j.ContinueOnError) {
+				s.why = "the job is continue-on-error, so the build stays green either way"
+			} else {
+				s.why = closureCondition(t, wf.Jobs, name)
+			}
+			sites = append(sites, s)
+			if s.why == "" {
+				good = append(good, s)
+			}
 		}
 	}
-	if !found {
+	if len(sites) == 0 {
 		t.Error("no lint.yml job runs `llz ci workflow-injection`")
+	} else if len(good) == 0 {
+		for _, s := range sites {
+			t.Errorf("job %s runs workflow-injection, but %s — fork pull requests are the "+
+				"population the guard exists for, and no invocation of it is reachable on "+
+				"every PR", s.job, s.why)
+		}
+	}
+
+	// A THIRD WAY TO NEVER RUN, and the only one that leaves no trace in any job:
+	// the workflow's own trigger. If a root this guard scans cannot start a run, a
+	// PR touching only that tree produces no Lint run at all — no skipped job, no
+	// red X, nothing to notice. Not hypothetical: `.github/actions/**` was MISSING
+	// when the guard landed, so a PR editing only a first-party composite action —
+	// one of the two roots the guard exists to cover — triggered nothing.
+	type prFilters struct {
+		Branches       []string `yaml:"branches"`
+		BranchesIgnore []string `yaml:"branches-ignore"`
+		Types          []string `yaml:"types"`
+		Paths          []string `yaml:"paths"`
+		PathsIgnore    []string `yaml:"paths-ignore"`
+	}
+	var pr prFilters
+	present := false
+	switch wf.On.Kind {
+	case yaml.ScalarNode:
+		present = wf.On.Value == "pull_request"
+	case yaml.SequenceNode:
+		for _, n := range wf.On.Content {
+			if n.Value == "pull_request" {
+				present = true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(wf.On.Content); i += 2 {
+			if wf.On.Content[i].Value != "pull_request" {
+				continue
+			}
+			present = true
+			if v := wf.On.Content[i+1]; v.Kind == yaml.MappingNode {
+				if err := v.Decode(&pr); err != nil {
+					t.Fatalf("decoding on.pull_request: %v", err)
+				}
+			}
+		}
+	}
+	if !present {
+		t.Fatal("lint.yml has no pull_request trigger — the guard cannot run on a PR at all, " +
+			"which is the only event a fork contributor can reach")
+	}
+	// The default branch has to be reachable, through whichever of the two keys is
+	// used. `branches-ignore` was unmodelled in an earlier cut, so excluding main
+	// through it left the test green while no PR into main started a run at all.
+	// `main`, not "main or master". Accepting both meant `branches: [master]` passed
+	// while no PR into the branch this repo actually merges into started a run.
+	isDefault := func(b string) bool { return b == "main" || b == "**" || b == "*" }
+	if len(pr.Branches) > 0 {
+		// A NEGATION TAKES IT BACK OUT. `['**', '!main']` reads as "everything", and
+		// excludes every PR into the branch this repo merges to — the same escape as
+		// `branches-ignore`, spelled inside the include list instead.
+		ok := false
+		for _, b := range pr.Branches {
+			if strings.HasPrefix(b, "!") {
+				if isDefault(strings.TrimPrefix(b, "!")) {
+					ok = false
+				}
+				continue
+			}
+			if isDefault(b) {
+				ok = true
+			}
+		}
+		if !ok {
+			t.Errorf("lint.yml's pull_request branches: %v does not include the default branch "+
+				"— a PR into main starts no run, and that is every PR the guard exists for",
+				pr.Branches)
+		}
+	}
+	for _, b := range pr.BranchesIgnore {
+		if isDefault(b) {
+			t.Errorf("lint.yml's pull_request branches-ignore: %v excludes the default branch "+
+				"— a PR into main starts no run at all", pr.BranchesIgnore)
+			break
+		}
+	}
+	// The default types are [opened, synchronize, reopened]. Naming the list must not
+	// drop either of the two that matter: without `opened` a PR that arrives carrying
+	// the injection starts nothing, and without `synchronize` one can open benign and
+	// force-push it in afterwards.
+	if len(pr.Types) > 0 {
+		for _, need := range []string{"opened", "synchronize"} {
+			has := false
+			for _, ty := range pr.Types {
+				if ty == need {
+					has = true
+				}
+			}
+			if !has {
+				t.Errorf("lint.yml's pull_request types: %v omits %q — a revision carrying an "+
+					"injection can reach the merge box without the guard ever seeing it",
+					pr.Types, need)
+			}
+		}
+	}
+	// COVERAGE IS ASKED PER FILE, against the tree as it actually is. The files the
+	// guard scans are on disk, so "would a PR touching only this file start a run?"
+	// has a real answer for each one, and globMatch gives it. Earlier cuts tried to
+	// decide coverage from the shape of the pattern alone and were wrong in both
+	// directions — accepting `.github/workflows` (matches no file) and rejecting
+	// `dir/**/*.yml` (matches every one).
+	var files []string
+	for _, root := range scanRoots {
+		_ = filepath.Walk(filepath.Join("..", "..", "..", "..", "..", filepath.FromSlash(root)),
+			func(p string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil //nolint:nilerr // an absent root is the vacuity check's business
+				}
+				if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
+					rel := filepath.ToSlash(p)
+					files = append(files, rel[strings.Index(rel, root):])
+				}
+				return nil
+			})
+	}
+	if len(files) == 0 {
+		t.Fatal("found no workflow or action files under scanRoots — the trigger check " +
+			"would be vacuous")
+	}
+	for _, f := range files {
+		for _, p := range pr.PathsIgnore {
+			if strings.HasPrefix(p, "!") {
+				continue // a re-inclusion: it adds coverage back, it cannot hide anything
+			}
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q uses glob syntax this "+
+					"test does not implement — check by hand whether it hides %s, a file "+
+					"workflow-injection scans, then teach globMatch about it", p, f)
+				continue
+			}
+			if globMatch(p, f) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q matches %s, a file "+
+					"workflow-injection scans — a PR touching only that file starts no run at "+
+					"all, so the guard does not skip, it never happens", p, f)
+			}
+		}
+		if pr.Paths == nil {
+			continue // no filter at all: every PR runs, which is total coverage
+		}
+		covered := false
+		for _, p := range pr.Paths {
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths entry %q uses glob syntax this test "+
+					"does not implement — check by hand whether %s still starts a run, then "+
+					"teach globMatch about it", p, f)
+				continue
+			}
+			if strings.HasPrefix(p, "!") {
+				if globMatch(strings.TrimPrefix(p, "!"), f) {
+					covered = false // a later negation takes it back out
+				}
+				continue
+			}
+			if globMatch(p, f) {
+				covered = true
+			}
+		}
+		if !covered {
+			t.Errorf("lint.yml's pull_request paths: matches no entry for %s, a file "+
+				"workflow-injection scans — a PR touching only that file starts no run at "+
+				"all, so the guard does not skip, it never happens", f)
+		}
 	}
 }
 
