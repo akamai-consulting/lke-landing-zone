@@ -1032,7 +1032,9 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		// exactly like a real finding.
 		On struct {
 			PullRequest struct {
-				Paths []string `yaml:"paths"`
+				Types       []string `yaml:"types"`
+				Paths       []string `yaml:"paths"`
+				PathsIgnore []string `yaml:"paths-ignore"`
 			} `yaml:"pull_request"`
 		} `yaml:"on"`
 		Jobs map[string]lintJob `yaml:"jobs"`
@@ -1151,34 +1153,74 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	}
 
 	// A THIRD WAY TO NEVER RUN, and the only one that leaves no trace in any job:
-	// the workflow's own `paths:` filter. If a root this guard scans is not listed,
-	// a PR touching only that root starts no Lint run at all — no skipped job, no
-	// red X, nothing to notice. That is not hypothetical here: `.github/actions/**`
-	// was MISSING when the guard landed, so a PR editing only a first-party
-	// composite action — one of the two roots the guard exists to cover — triggered
-	// nothing, and the omission was found by asking which path starts the workflow
-	// rather than which gate reads the file. Checked on `pull_request`, the trigger
-	// a fork PR arrives on.
+	// the workflow's own trigger. If a root this guard scans cannot start a run, a
+	// PR touching only that tree produces no Lint run at all — no skipped job, no
+	// red X, nothing to notice. Not hypothetical: `.github/actions/**` was MISSING
+	// when the guard landed, so a PR editing only a first-party composite action —
+	// one of the two roots the guard exists to cover — triggered nothing.
+	//
+	// NO FILTER IS TOTAL COVERAGE, and reading its absence as zero was a false red
+	// on this test in its first cut: deleting the `paths:` block makes Lint run on
+	// every PR, which is strictly more coverage, and the check called it four
+	// findings. `paths-ignore` is the shape that actually subtracts, so that is what
+	// is examined when there is no `paths:`.
+	pr := wf.On.PullRequest
+	// covers reports whether a filter entry can match files under root. It must
+	// carry a glob — GitHub matches `paths:` against changed FILE paths, so a bare
+	// `.github/workflows` entry matches nothing while reading like coverage of the
+	// tree — and its literal prefix must reach the root. Anything from `dir/**` to
+	// `dir/**/*.yml` qualifies; pinning `/**` alone was the same "knew one spelling"
+	// defect this test removed from the job-condition half.
+	covers := func(pattern, root string) bool {
+		star := strings.Index(pattern, "*")
+		if star <= 0 {
+			return false
+		}
+		prefix := pattern[:star]
+		if !strings.HasPrefix(root+"/", prefix) {
+			return false
+		}
+		tail := pattern[star:]
+		return tail == "**" || strings.HasSuffix(tail, ".yml") || strings.HasSuffix(tail, ".yaml") ||
+			strings.HasSuffix(tail, "*")
+	}
 	for _, root := range scanRoots {
-		covered := false
-		for _, p := range wf.On.PullRequest.Paths {
-			// THE GLOB IS NOT DECORATION. GitHub matches `paths:` against changed FILE
-			// paths, so a bare `.github/workflows` entry matches nothing and starts no
-			// run — while reading, to a person, exactly like coverage of that tree. An
-			// earlier cut of this check accepted the bare form, which made the most
-			// likely way to reintroduce the bug the one way it could not see.
-			if !strings.HasSuffix(p, "/**") {
-				continue
+		if len(pr.Paths) > 0 {
+			covered := false
+			for _, p := range pr.Paths {
+				if covers(p, root) {
+					covered = true
+					break
+				}
 			}
-			if strings.HasPrefix(root+"/", strings.TrimSuffix(p, "**")) {
-				covered = true
-				break
+			if !covered {
+				t.Errorf("lint.yml's pull_request paths: filter does not cover %s, a root "+
+					"workflow-injection scans — a PR touching only that tree starts no run at "+
+					"all, so the guard does not skip, it never happens", root)
+			}
+			continue
+		}
+		for _, p := range pr.PathsIgnore {
+			if covers(p, root) {
+				t.Errorf("lint.yml's pull_request paths-ignore: excludes %s, a root "+
+					"workflow-injection scans — a PR touching only that tree starts no run", root)
 			}
 		}
-		if !covered {
-			t.Errorf("lint.yml's pull_request paths: filter does not cover %s, a root "+
-				"workflow-injection scans — a PR touching only that tree starts no run at "+
-				"all, so the guard does not skip, it never happens", root)
+	}
+	// `types:` IS A FOURTH WAY. The default is [opened, synchronize, reopened]; naming
+	// the list without `synchronize` means a fork PR can open benign and then force-push
+	// the injected line, and the revision that carries it starts no run at all.
+	if len(pr.Types) > 0 {
+		sync := false
+		for _, ty := range pr.Types {
+			if ty == "synchronize" {
+				sync = true
+			}
+		}
+		if !sync {
+			t.Errorf("lint.yml's pull_request types: %v omits `synchronize` — a PR can be "+
+				"opened clean and then updated with the injection, and the guard never sees "+
+				"the revision that carries it", pr.Types)
 		}
 	}
 }
