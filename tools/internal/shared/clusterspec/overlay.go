@@ -174,12 +174,46 @@ func RenderAppsOverlayShared() string {
 }
 
 // RenderAppsOverlayEnv is a deployment's per-env apps.yaml: apps.<name>.enabled
-// for every apl-core app a component owns, set from that component's toggle (the
-// same truth RenderValues writes into values.yaml, as an overlayable fragment).
-func RenderAppsOverlayEnv(components map[string]ComponentToggle) string {
+// for every apl-core app a component owns AND LLZ IS ENTITLED TO SPEAK FOR, set
+// from that component's toggle (the same truth RenderValues writes into
+// values.yaml, as an overlayable fragment).
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT USED TO SPEAK FOR ALL OF THEM, INCLUDING apl-core's OWN. Every other
+// renderer gates on Component.EmitOnManaged — kustomize.go:115 and render.go:473
+// both do — and this one walked the registry unfiltered. What the reconciler
+// then committed onto the machine-owned apl-<env> branch, on every managed
+// instance:
+//
+//   - `gitea: enabled: false`, because the gitea component is DefaultDisabled.
+//     On managed, apl-core runs its own in-cluster gitea AS THE VALUES-REPO
+//     BACKEND. The overlay's own transport is that repo, so this is a write that
+//     disables the thing carrying it. The component's registry entry says
+//     "managed apl-core runs its own in-cluster gitea" and carries ManagedSkip
+//     for exactly this reason; the flag was set and this function did not read it.
+//
+//   - `kyverno`, `policy-reporter` and `trivy` FORCE-ENABLED, from policyEngine
+//     and imageScanning — two more ManagedSkip components whose apps belong to
+//     apl-core on managed. Turning an app on that the operator did not ask for
+//     is quieter than turning one off, and no less wrong: LLZ has no manifest
+//     backend for any of them.
+//
+// The gate is the same one, not a second copy of the rule. A component LLZ does
+// not emit is a component LLZ has no opinion about, so its app is simply absent
+// from the overlay and apl-core's own value survives the merge — which is the
+// whole point of the overlay being a fragment rather than a file replacement.
+// ─────────────────────────────────────────────────────────────────────────────
+func RenderAppsOverlayEnv(boot Bootstrap, components map[string]ComponentToggle) string {
 	apps := map[string]appToggle{}
 	for _, c := range Components {
 		if len(c.AplCoreApps) == 0 {
+			continue
+		}
+		// SAY NOTHING about an app whose component this instance does not emit.
+		// Absent is not `enabled: false`: the overlay deep-merges onto apl-core's
+		// own settings, so omitting a key leaves apl-core's value and writing
+		// `false` overrides it.
+		if !c.EmitOnManaged(boot, components) {
 			continue
 		}
 		on := ComponentEnabled(components, c.Name)
