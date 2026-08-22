@@ -680,19 +680,25 @@ jobs:
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. ALSO a `llz ci gates` row (registry/gates.go) — and here BOTH sites
-      # arrived in one commit (ef7df96a), whose own message called this step the
-      # only one. So the duplication was not planned here either; what was chosen,
-      # and what matters, is the JOB.
+      # script. ALSO a `llz ci gates` row (registry/gates.go), and HERE THE SECOND
+      # SITE IS DELIBERATE. The row landed first; this step was added later the same
+      # day, once it was noticed that the job carrying the gate set skips fork pull
+      # requests, and the row was kept on purpose. (main's squashed commit ef7df96a
+      # shows both arriving together and reads like an accident — the two commits it
+      # squashes, 66101af7 and 65d5dacb, are where the reasoning is. A squash erases
+      # intent, so this is the one claim here not to take from `git log` on main.)
       #
       # The Kubernetes job that runs `llz ci gates` is conditioned on the event not
       # being a pull request OR the head repository being this one, so it skips every
       # FORK pull request — exactly the population this guard's threat model is
       # about, since a fork PR is how an attacker-chosen branch name or PR title
-      # reaches a workflow at all. This job (go-tests) has no `if:`, so it runs on
-      # every pull request, fork or not. (The condition is DESCRIBED, not quoted: the
-      # expression lives on the `kubernetes` job near the top of this file, and a
-      # copy here is a second thing to keep in step with it.)
+      # reaches a workflow at all. This job (go-tests) carries no `if:`, so whenever
+      # this workflow runs at all, the guard runs — fork or not. (What starts the
+      # workflow is a separate question, answered by the `on:` block at the top.)
+      #
+      # The fork condition is DESCRIBED, not quoted: it already appears verbatim on
+      # two jobs in this file, `kubernetes` and `terraform`, and a copy here would be
+      # the third place to keep in step.
       #
       # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for
       # what it enforces rather than trusting a list here, which is a second copy
