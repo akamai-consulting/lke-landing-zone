@@ -1025,6 +1025,16 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		Steps           []lintStep `yaml:"steps"`
 	}
 	var wf struct {
+		// `yaml:"on"`, not `yaml:"true"`. `on` is YAML 1.1's boolean, and the first
+		// cut of this decoded the key as `true` on that basis — but yaml.v3 follows
+		// the 1.2 core schema, where `on` is an ordinary string. Measured: the `true`
+		// spelling decoded nothing and reported all four roots uncovered, which reads
+		// exactly like a real finding.
+		On struct {
+			PullRequest struct {
+				Paths []string `yaml:"paths"`
+			} `yaml:"pull_request"`
+		} `yaml:"on"`
 		Jobs map[string]lintJob `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(b, &wf); err != nil {
@@ -1062,27 +1072,36 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		}
 		return nil
 	}
-	armed := func(n yaml.Node) bool { return n.Kind != 0 && n.Tag != "!!null" && n.Value != "false" }
+	// `False` and `FALSE` are YAML booleans too, and reading either as "armed"
+	// would put a false red on a security test.
+	armed := func(n yaml.Node) bool {
+		return n.Kind != 0 && n.Tag != "!!null" && !strings.EqualFold(n.Value, "false")
+	}
 
 	found := false
 	for name, j := range wf.Jobs {
-		var guard *lintStep
-		for i, s := range j.Steps {
+		// EVERY invocation, not the last one found. Keeping a single pointer meant a
+		// job with two of them had only the second judged, and the first could carry
+		// anything.
+		var guards []lintStep
+		for _, s := range j.Steps {
 			if invocation.MatchString(s.Run) {
-				guard = &j.Steps[i]
+				guards = append(guards, s)
 			}
 		}
-		if guard == nil {
+		if len(guards) == 0 {
 			continue
 		}
 		found = true
-		if guard.If != "" {
-			t.Errorf("the workflow-injection step in job %s is conditional (if: %s) — it has to "+
-				"see every pull request, so it cannot run only on some of them", name, guard.If)
-		}
-		if armed(guard.ContinueOnError) {
-			t.Errorf("the workflow-injection step in job %s is continue-on-error — it would run "+
-				"and report and never fail the build, which is not a guard", name)
+		for _, g := range guards {
+			if g.If != "" {
+				t.Errorf("the workflow-injection step in job %s is conditional (if: %s) — it has "+
+					"to see every pull request, so it cannot run only on some of them", name, g.If)
+			}
+			if armed(g.ContinueOnError) {
+				t.Errorf("the workflow-injection step in job %s is continue-on-error — it would "+
+					"run and report and never fail the build, which is not a guard", name)
+			}
 		}
 		// The job itself, then everything it transitively needs: a skipped
 		// dependency skips the job just as effectively as a condition on it.
@@ -1094,6 +1113,11 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			if !ok {
 				t.Errorf("job %s needs %q, which is not a job in lint.yml", name, cur)
 				continue
+			}
+			if armed(dep.ContinueOnError) {
+				t.Errorf("job %s runs workflow-injection but %s is continue-on-error — the step "+
+					"reports and the build stays green, which is not a guard", name,
+					map[bool]string{true: "it", false: "job " + cur + ", which it needs"}[cur == name])
 			}
 			if dep.If != "" {
 				where := "its own condition"
@@ -1114,6 +1138,30 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	}
 	if !found {
 		t.Error("no lint.yml job runs `llz ci workflow-injection`")
+	}
+
+	// A THIRD WAY TO NEVER RUN, and the only one that leaves no trace in any job:
+	// the workflow's own `paths:` filter. If a root this guard scans is not listed,
+	// a PR touching only that root starts no Lint run at all — no skipped job, no
+	// red X, nothing to notice. That is not hypothetical here: `.github/actions/**`
+	// was MISSING when the guard landed, so a PR editing only a first-party
+	// composite action — one of the two roots the guard exists to cover — triggered
+	// nothing, and the omission was found by asking which path starts the workflow
+	// rather than which gate reads the file. Checked on `pull_request`, the trigger
+	// a fork PR arrives on.
+	for _, root := range scanRoots {
+		covered := false
+		for _, p := range wf.On.PullRequest.Paths {
+			if strings.HasPrefix(root+"/", strings.TrimSuffix(p, "**")) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("lint.yml's pull_request paths: filter does not cover %s, a root "+
+				"workflow-injection scans — a PR touching only that tree starts no run at "+
+				"all, so the guard does not skip, it never happens", root)
+		}
 	}
 }
 
