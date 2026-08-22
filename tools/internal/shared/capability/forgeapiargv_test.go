@@ -68,6 +68,24 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		{"jq long", []string{"api", "users/o", "--jq", ".type"}, capability.ForgeRead},
 		{"hostname", []string{"api", "--hostname", "ghes.example", "x"}, capability.ForgeRead},
 
+		// ── a write is graded by WHAT it writes, not only by its verb ────────
+		{"secret write via the API", []string{"api", "-X", "PUT", "repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
+		{"secret write, attached shorthand", []string{"api", "-XPUT", "repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
+		{"secret delete", []string{"api", "-X", "DELETE", "repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
+		{"org secret", []string{"api", "-X", "PUT", "orgs/o/actions/secrets/FOO"}, capability.ForgeCustody},
+		{"environment secret", []string{"api", "-X", "PUT", "repos/o/r/environments/prod/secrets/FOO"}, capability.ForgeCustody},
+		{"codespaces secret", []string{"api", "-X", "PUT", "repos/o/r/codespaces/secrets/FOO"}, capability.ForgeCustody},
+		{"dependabot secret", []string{"api", "-X", "PUT", "repos/o/r/dependabot/secrets/FOO"}, capability.ForgeCustody},
+		{"parameter-inferred POST to a secret path", []string{"api", "repos/o/r/actions/secrets/FOO", "-f", "encrypted_value=x"}, capability.ForgeCustody},
+		// READS STAY READS. envreq lists this exact path to discover which
+		// credentials are configured; knowing a secret exists is not holding it.
+		{"secret list", []string{"api", "repos/o/r/actions/secrets"}, capability.ForgeRead},
+		{"secret read, explicit GET", []string{"api", "-X", "GET", "repos/o/r/actions/secrets/FOO"}, capability.ForgeRead},
+		{"public key read", []string{"api", "repos/o/r/actions/secrets/public-key"}, capability.ForgeRead},
+		// And an ordinary mutation is still an ordinary mutation.
+		{"branch policy write", []string{"api", "-X", "PUT", "repos/o/r/environments/prod/deployment-branch-policies"}, capability.ForgeMutate},
+		{"a repo whose NAME contains secrets", []string{"api", "-X", "PUT", "repos/o/my-secrets-repo/actions/variables/FOO"}, capability.ForgeMutate},
+
 		// ── refusals: unknowable, not guessable ──────────────────────────────
 		{"graphql", []string{"api", "graphql", "-f", "query=mutation{}"}, capability.ForgeUnclassified},
 		{"graphql after the terminator", []string{"api", "--", "graphql"}, capability.ForgeUnclassified},
@@ -107,6 +125,26 @@ func TestACloudReadHandleRefusesAnAttachedShorthandWrite(t *testing.T) {
 	// And an ordinary read still works, or the fence gets widened back.
 	if err := h.Forge.Permits("api", "repos/o/r", "--silent"); err != nil {
 		t.Errorf("a plain read through a cloud-read handle = %v, want nil", err)
+	}
+}
+
+// THE FENCE ACTS ON IT. branchpolicy declares cloud-mutate and NOT
+// secret-custody, and its own header cites that as the reason a `gh secret set`
+// from there would be refused. The API spelling of the same operation was not —
+// so the claim held for one way of writing a secret and not the other.
+func TestACloudMutateHandleCannotWriteASecretThroughTheAPI(t *testing.T) {
+	h := capability.For(binding(extension.CloudMutate))
+	if err := h.Forge.Permits("api", "-X", "PUT", "repos/o/r/actions/secrets/FOO"); !errors.Is(err, capability.ErrNoForgeCustody) {
+		t.Errorf("a cloud-mutate handle wrote a GitHub secret through `gh api`: %v", err)
+	}
+	// The mutation it IS entitled to still goes through, or the grant means
+	// nothing in the other direction.
+	if err := h.Forge.Permits("api", "-X", "PUT", "repos/o/r/environments/prod/deployment-branch-policies"); err != nil {
+		t.Errorf("a cloud-mutate handle must still write non-credential resources: %v", err)
+	}
+	// And it can still LIST secrets: envreq's discovery depends on it.
+	if err := h.Forge.Permits("api", "repos/o/r/actions/secrets"); err != nil {
+		t.Errorf("listing secret NAMES is a read: %v", err)
 	}
 }
 

@@ -169,6 +169,11 @@ func classifyAPIMethod(rest []string) ForgeAction {
 	// apply records what one parsed flag means. Only three flags say anything
 	// about the method; the rest are consumed so their VALUES cannot be mistaken
 	// for one (`-f method=GET` is data, `--jq graphql` is a filter).
+	// endpoint is the first POSITIONAL — the API path gh will call. Captured
+	// because the method alone does not say what an argv does: see
+	// forgeSecretEndpoint.
+	var endpoint string
+
 	apply := func(name, val string) {
 		switch {
 		case name == "method":
@@ -186,6 +191,9 @@ func classifyAPIMethod(rest []string) ForgeAction {
 			for _, p := range rest[i+1:] {
 				if p == "graphql" {
 					graphql = true
+				}
+				if endpoint == "" {
+					endpoint = p
 				}
 			}
 			i = len(rest)
@@ -234,6 +242,15 @@ func classifyAPIMethod(rest []string) ForgeAction {
 
 		case a == "graphql":
 			graphql = true
+			if endpoint == "" {
+				endpoint = a
+			}
+
+		default:
+			// A positional. The FIRST one is the endpoint; gh takes exactly one.
+			if endpoint == "" {
+				endpoint = a
+			}
 		}
 	}
 
@@ -242,7 +259,7 @@ func classifyAPIMethod(rest []string) ForgeAction {
 	if explicit != "" {
 		switch u := strings.ToUpper(explicit); {
 		case mutatingMethods[u]:
-			return ForgeMutate
+			return mutateOrCustody(endpoint)
 		case u == "GET" || u == "HEAD":
 			// A GraphQL GET is not a thing GitHub serves; if someone writes one the
 			// argv is confused enough to be worth refusing.
@@ -258,9 +275,62 @@ func classifyAPIMethod(rest []string) ForgeAction {
 		return ForgeUnclassified
 	}
 	if params {
-		return ForgeMutate
+		return mutateOrCustody(endpoint)
 	}
 	return ForgeRead
+}
+
+// mutateOrCustody grades a WRITE by what it writes, not only by its verb.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE METHOD ALONE DEFEATED THE CUSTODY GRANT. `gh secret set` is classified
+// ForgeCustody, so a binding without secret-custody is refused — and
+// branchpolicy/policy.go:239 says so in as many words, as the reason its
+// `cloud-mutate` declaration is safe. But `gh api -X PUT
+// repos/o/r/actions/secrets/FOO` writes the same secret through the same
+// credential, and by METHOD it is an ordinary mutation. The declaration was
+// enforced against one spelling of the operation.
+//
+// This is the `-XDELETE` defect one layer up: there the classifier disagreed
+// with the parser about what the argv SAYS, here it disagrees with GitHub about
+// what the argv DOES. Both let a narrower grant perform a wider act.
+//
+// Reads are untouched. `envreq` lists `repos/o/r/actions/secrets` to discover
+// which credentials are configured, and that must stay ForgeRead — knowing a
+// secret EXISTS is not holding it. Only a mutating method on a secret path
+// becomes custody.
+// ─────────────────────────────────────────────────────────────────────────────
+func mutateOrCustody(endpoint string) ForgeAction {
+	if forgeSecretEndpoint(endpoint) {
+		return ForgeCustody
+	}
+	return ForgeMutate
+}
+
+// forgeSecretEndpoint reports whether a `gh api` path addresses GitHub-held
+// credential material.
+//
+// Matched by PATH SEGMENT rather than substring, so `secrets` has to be a real
+// component and a repository named `my-secrets` is not swept in. It covers every
+// place GitHub keeps one — repo, org and environment scope, across actions,
+// codespaces and dependabot — because they are one concern and enumerating the
+// six current spellings is how the seventh gets missed.
+//
+// Erring wide is the safe direction: a path wrongly graded custody is REFUSED,
+// which is loud and one declaration away from fixed. Nothing in this tree writes
+// a secret through `gh api` today (the native writers in shared/forge and
+// shared/ghsecret speak HTTP directly), so this tightens without moving anyone.
+func forgeSecretEndpoint(endpoint string) bool {
+	p := strings.TrimSpace(endpoint)
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "secrets" {
+			return true
+		}
+	}
+	return false
 }
 
 // ghAPIFlags is every flag `gh api` accepts, keyed by LONG name, valued by

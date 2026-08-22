@@ -160,16 +160,66 @@ func TestLintReportsNothingForACleanTree(t *testing.T) {
 // `git diff HEAD`, and the fallback must lint EVERYTHING rather than collapsing
 // into the same empty set as a clean tree — the two answers arriving at one
 // string is what made the original bug invisible.
+//
+// BOTH SUB-CASES, BECAUSE THE FIRST CUT OF THIS TEST RAN ONLY THE STAGED ONE AND
+// THAT IS THE ONE INPUT THAT HID THE BUG. The fallback was `git ls-files`, which
+// lists TRACKED files — and `git add -A` is what makes a file tracked. So the
+// test passed while a repository with no commits and nothing staged, which is
+// the ordinary shape of the state that reaches this arm, still reported an empty
+// set out of the target whose entire purpose is not to.
 func TestLintFallsBackToEverythingWhenGitCannotAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stage bool
+	}{
+		{"staged but never committed", true},
+		{"nothing staged at all", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			git(t, dir, "init", "-q", ".")
+			if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stage {
+				git(t, dir, "add", "-A") // tracked, but there is still no HEAD
+			}
+			got := lintChanged(t, dir)
+			if !contains(got, "a.go") {
+				t.Errorf("changed set = %v, want the whole tree when git cannot diff against HEAD", got)
+			}
+		})
+	}
+}
+
+// THE FALLBACK RESPECTS .gitignore TOO. It is the arm that lints everything, not
+// the arm that lints build output — and the untracked listing it gained is the
+// one that could drag it in.
+func TestTheFallbackStillIgnoresGitignoredFiles(t *testing.T) {
 	dir := t.TempDir()
 	git(t, dir, "init", "-q", ".")
-	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package x\n"), 0o644); err != nil {
+	for name, body := range map[string]string{
+		".gitignore": "build/\n",
+		"a.go":       "package x\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(t, dir, "add", "-A") // staged, but never committed: there is no HEAD
+	if err := os.WriteFile(filepath.Join(dir, "build", "out.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got := lintChanged(t, dir)
 	if !contains(got, "a.go") {
-		t.Errorf("changed set = %v, want the whole tree when git cannot diff against HEAD", got)
+		t.Errorf("changed set = %v, want the real source file", got)
+	}
+	for _, p := range got {
+		if strings.HasPrefix(p, "build/") {
+			t.Errorf("the fallback listed the gitignored %q", p)
+		}
 	}
 }
 

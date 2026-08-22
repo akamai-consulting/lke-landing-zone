@@ -1211,13 +1211,21 @@ symbol-ref-guard:
 # arriving at the same empty string is what made the bug invisible.
 #
 # --exclude-standard so .gitignore still applies: build output is not work.
+#
+# BOTH ARMS LIST UNTRACKED FILES, and the fallback did not. `git ls-files` alone
+# is TRACKED files, so the arm meaning "could not tell, lint everything" reported
+# nothing at all for the state that most often reaches it: a repository with no
+# commits, where every file is untracked by definition. That is the same empty
+# set, out of the same target, for the same reason — the defect this recipe was
+# written to remove, surviving in the branch nobody exercised.
 .PHONY: lint-changed
 lint-changed:
 	@if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
 		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard; } \
-			| grep -v '^$$$$' | sort -u; \
+			| grep -v '^$$' | sort -u; \
 	else \
-		git ls-files; \
+		{ git ls-files; git ls-files --others --exclude-standard; } \
+			| grep -v '^$$' | sort -u; \
 	fi
 
 lint:
