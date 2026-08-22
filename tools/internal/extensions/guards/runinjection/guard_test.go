@@ -990,9 +990,6 @@ func globMatch(pattern, path string) bool {
 	b.WriteString("^")
 	for i := 0; i < len(pattern); i++ {
 		switch {
-		case strings.HasPrefix(pattern[i:], "**/"):
-			b.WriteString("(?:.*/)?") // any number of directories, including none
-			i += 2
 		case strings.HasPrefix(pattern[i:], "**"):
 			b.WriteString(".*") // crosses separators
 			i++
@@ -1015,7 +1012,12 @@ func globMatch(pattern, path string) bool {
 // check already. The two sides then fail in their own safe direction: an include
 // that cannot be understood does not count as coverage, and an exclude that cannot
 // be understood is reported rather than waved through.
-func unsupportedGlob(pattern string) bool { return strings.ContainsAny(pattern, "?+[") }
+func unsupportedGlob(pattern string) bool {
+	// AFTER the `!`, because a negation carries the same syntax and the same
+	// consequence: `- '!**/*.y?ml'` takes every scanned file back out of `paths:`,
+	// and a check that skipped negated entries could not see it.
+	return strings.ContainsAny(strings.TrimPrefix(pattern, "!"), "?+[")
+}
 
 // invokes reports whether a run: script actually RUNS the guard, as opposed to
 // mentioning its name. Three cuts got this wrong in three ways, each leaving the
@@ -1095,6 +1097,10 @@ func nonComment(run string) []string {
 // status is not a finite job, so a guard invocation is required to have no shell
 // in it at all.
 func bareCommand(run string) string {
+	// A BACKSLASH CONTINUATION IS ONE COMMAND. Failing a reformat that only wrapped
+	// the invocation, with a message about shell swallowing the exit status, is the
+	// false red this test keeps being told not to produce.
+	run = regexp.MustCompile(`\\\n\s*`).ReplaceAllString(run, " ")
 	cmd := nonComment(run)
 	// `&` BACKGROUNDS IT — the step exits 0 while the guard is still starting — and
 	// a leading `!` inverts the status. Both were missing, in a function whose
@@ -1204,13 +1210,6 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	if len(wf.Jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	// THE INVOCATION, NOT THE WORD. `strings.Contains(run, …)` also matched the
-	// guard's name written in a SHELL comment inside someone else's `run:` block —
-	// the prose-for-configuration defect this test was rewritten to escape, one
-	// layer further down. Measured: a `# … ci workflow-injection …` line in the
-	// fork-gated Kubernetes job turned this red and blamed a job that does not
-	// carry the step. Requiring no `#` earlier on the line rules out both the
-	// comment line and the trailing comment.
 	armed := func(n yaml.Node) bool {
 		// `False` and `FALSE` are YAML booleans too, and reading either as "armed"
 		// would put a false red on a security test.
@@ -1318,8 +1317,17 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// while no PR into the branch this repo actually merges into started a run.
 	isDefault := func(b string) bool { return b == "main" || b == "**" || b == "*" }
 	if len(pr.Branches) > 0 {
+		// A NEGATION TAKES IT BACK OUT. `['**', '!main']` reads as "everything", and
+		// excludes every PR into the branch this repo merges to — the same escape as
+		// `branches-ignore`, spelled inside the include list instead.
 		ok := false
 		for _, b := range pr.Branches {
+			if strings.HasPrefix(b, "!") {
+				if isDefault(strings.TrimPrefix(b, "!")) {
+					ok = false
+				}
+				continue
+			}
 			if isDefault(b) {
 				ok = true
 			}
@@ -1382,13 +1390,16 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	}
 	for _, f := range files {
 		for _, p := range pr.PathsIgnore {
+			if strings.HasPrefix(p, "!") {
+				continue // a re-inclusion: it adds coverage back, it cannot hide anything
+			}
 			if unsupportedGlob(p) {
 				t.Errorf("lint.yml's pull_request paths-ignore entry %q uses glob syntax this "+
 					"test does not implement — check by hand whether it hides %s, a file "+
 					"workflow-injection scans, then teach globMatch about it", p, f)
 				continue
 			}
-			if !strings.HasPrefix(p, "!") && globMatch(p, f) {
+			if globMatch(p, f) {
 				t.Errorf("lint.yml's pull_request paths-ignore entry %q matches %s, a file "+
 					"workflow-injection scans — a PR touching only that file starts no run at "+
 					"all, so the guard does not skip, it never happens", p, f)
@@ -1399,6 +1410,12 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		}
 		covered := false
 		for _, p := range pr.Paths {
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths entry %q uses glob syntax this test "+
+					"does not implement — check by hand whether %s still starts a run, then "+
+					"teach globMatch about it", p, f)
+				continue
+			}
 			if strings.HasPrefix(p, "!") {
 				if globMatch(strings.TrimPrefix(p, "!"), f) {
 					covered = false // a later negation takes it back out
