@@ -725,18 +725,42 @@ jobs:
       # container's /bin/sh (dash). A missing default silently broke the scheduled
       # discover → auto-unseal / scheduled-checks / secret-rotation workflows
       # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
+      #
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job — and this step is the
+      # OLDER of the two: it landed alone (fa8d5b99, 2026-06-26) and the gates row
+      # followed six weeks later (ca1f731e). Neither site is spare. The row is the
+      # only one a local `make lint` reaches, and this step is the only one a FORK
+      # pull request reaches, because the Kubernetes job that carries the gate set
+      # skips them. Weaker consequence than the guard below — a dash fallback is not
+      # attacker-controlled — but the same two-sites-two-audiences shape.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. HERE, NOT IN `llz-gates`, and the placement is the whole point —
-      # the Kubernetes job that runs `llz ci gates` is skipped for FORK pull
-      # requests, which is exactly the population this guard's threat model is
-      # about. A fork PR is how an attacker-chosen branch name or PR title reaches
-      # a workflow in the first place, so a guard that cannot run on one is not
-      # protecting against the case it exists for. Same reasoning, and the same
-      # relocation, as the shell-default guard above.
+      # script. ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and HERE THE
+      # SECOND SITE IS DELIBERATE: the row came first, and this step was added later
+      # the same day once it was noticed that the job carrying the gate set skips
+      # fork pull requests. main's squashed commit shows both arriving together and
+      # reads like an accident; the reasoning is in PR #438, whose branch commits are
+      # where the sequence and the argument live. A squash keeps the diff and throws
+      # away the why, so this is the one claim here not to take from `git log`.
+      #
+      # The Kubernetes job is conditioned on the event not being a pull request OR
+      # the head repository being this one, so it skips every FORK pull request —
+      # exactly the population this guard's threat model is about, since a fork PR is
+      # how an attacker-chosen branch name or PR title reaches a workflow at all.
+      # This job (go-tests) carries no `if:`, so whenever the workflow runs, the
+      # guard runs, fork or not. What starts the workflow is a separate question,
+      # answered by the `on:` block at the top.
+      #
+      # The fork condition is DESCRIBED, not quoted: it already appears verbatim on
+      # two jobs in this file, `kubernetes` and `terraform`, and a copy here would be
+      # a third place to keep in step with them.
+      #
+      # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for
+      # what it enforces rather than trusting a list here, which is a second copy
+      # that can only drift.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
