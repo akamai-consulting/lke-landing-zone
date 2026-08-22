@@ -1060,7 +1060,14 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// (`make untestable-loc-check`, `make core-surface-check`). The guard would
 	// still be wired, unconditionally, and the test would be reporting the opposite.
 	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b`)
-	swallowsFailure := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b[^#\n]*\|\|\s*(true|:)\b`)
+	// NO `\b` AFTER THE ALTERNATION. It was `(true|:)\b`, and a word boundary cannot
+	// follow `:` at end of line — both sides are non-word — so the `:` arm never
+	// matched anything. It looked verified because the mutation that "proved" it
+	// wrote a bare `|| :` into the YAML, which is not a valid plain scalar: the test
+	// went red on a PARSE ERROR and the harness counted any red as a kill.
+	swallowsFailure := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b[^#\n]*\|\|\s*(true|:)`)
+	// `set +e` disarms every command after it, including one on a later line.
+	disablesErrExit := regexp.MustCompile(`(?m)^[^#\n]*\bset\s+[-+][a-zA-Z]*e`)
 	// `needs:` takes a scalar or a sequence, and a key with no value at all decodes
 	// to !!null — which an earlier cut enqueued as the empty string and then
 	// reported as a missing job.
@@ -1121,6 +1128,10 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 				t.Errorf("the workflow-injection step in job %s swallows its exit status "+
 					"(%q) — it reports and the build stays green, which is not a guard",
 					name, strings.TrimSpace(swallowsFailure.FindString(g.Run)))
+			}
+			if m := disablesErrExit.FindString(g.Run); m != "" && strings.Contains(m, "+e") {
+				t.Errorf("the workflow-injection step in job %s disables errexit (%q) — a "+
+					"failing guard would not fail the step", name, strings.TrimSpace(m))
 			}
 		}
 		// The job itself, then everything it transitively needs: a skipped
@@ -1254,9 +1265,12 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// (matches), `dir/*` (does not: `*` stops at `/`). Only the ancestor-`/**` form
 	// counts, so a novel spelling fails loudly and a person decides.
 	ancestorGlob := func(pattern, root string) bool {
-		if pattern == "**" || pattern == "*" {
-			return true // matches every path: the broadest include there is
+		if pattern == "**" {
+			return true // matches every path, at any depth: the broadest include there is
 		}
+		// NOT bare `*`. It stops at `/`, so it matches only top-level files and covers
+		// none of these roots — the same fact this rule relies on two lines down, and
+		// contradicting it here made `paths: ['*']` read as total coverage.
 		if !strings.HasSuffix(pattern, "/**") {
 			return false
 		}
@@ -1277,12 +1291,22 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			pre = pattern[:i]
 		}
 		if pre == "" {
-			// UNANCHORED, so it is decided by what it matches rather than where.
-			// `**.md` cannot remove a tree the guard reads; `**/*.yml` and `**` remove
-			// every file in all four of them. An earlier cut returned false for the
-			// whole unanchored class and let the second kind through in silence.
-			return strings.HasSuffix(pattern, ".yml") || strings.HasSuffix(pattern, ".yaml") ||
-				pattern == "**" || pattern == "*"
+			// UNANCHORED, so it is decided by what it matches rather than where. Three
+			// cases, and two earlier cuts got a different one wrong each time: `**`
+			// and `**/*.yml` remove every file the guard reads; `**.md` removes none of
+			// them; and `**/dependabot.yml` names ONE file, which is not a tree —
+			// reporting that was a false red on a security test. So the basename
+			// decides: a wildcard basename over YAML removes the tree, a literal
+			// filename does not.
+			if pattern == "**" {
+				return true
+			}
+			base := pattern[strings.LastIndex(pattern, "/")+1:]
+			if !strings.Contains(base, "*") {
+				return false
+			}
+			return base == "*" || base == "**" ||
+				strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")
 		}
 		return strings.HasPrefix(root+"/", pre) || strings.HasPrefix(pre, root+"/")
 	}
