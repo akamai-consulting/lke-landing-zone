@@ -222,7 +222,18 @@ func classifyAPIMethod(rest []string) ForgeAction {
 					return ForgeUnclassified
 				}
 				cluster = cluster[1:]
-				if !ghAPIFlags[name] {
+				takesValue, mapped := ghAPIFlags[name]
+				if !mapped {
+					// THE TWO TABLES MUST AGREE, and only the long-flag arm was
+					// checking. A shorthand whose long name is missing from
+					// ghAPIFlags read as a boolean, so its VALUE became the
+					// endpoint and a secret write dropped back to ForgeMutate —
+					// fail-open, from a typo in a map literal.
+					// TestTheShorthandTableAgreesWithTheFlagTable makes it a
+					// build-time problem instead; this is the runtime backstop.
+					return ForgeUnclassified
+				}
+				if !takesValue {
 					// A BOOLEAN CAN STILL CARRY `=value`, and pflag checks for it
 					// BEFORE it consults NoOptDefVal — so `-i=true` spends the rest
 					// of the cluster as a value even though `-i` takes none.
@@ -345,8 +356,13 @@ func forgeSecretEndpoint(endpoint string) bool {
 	}
 	segs := strings.Split(strings.Trim(p, "/"), "/")
 	for i, seg := range segs {
-		if seg == "contents" {
-			return false // the rest is a repository path, not API structure
+		// The Contents API is `repos/{owner}/{repo}/contents/{path}` and ONLY
+		// that. Matching `contents` at any index made a repository literally
+		// named `contents` — `repos/acme/contents/actions/secrets/FOO` — abandon
+		// the scan and grade a real secret write as an ordinary mutation, which
+		// is this check failing OPEN. The position is part of the rule.
+		if seg == "contents" && i == 3 && segs[0] == "repos" {
+			return false // past here the URL is a repository path, not API structure
 		}
 		if seg != "secrets" || i == 0 {
 			continue
@@ -557,3 +573,10 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 	}
 	return false
 }
+
+// GHAPIShorthandForTest and GHAPIFlagsForTest expose the two halves of the flag
+// model so a test can assert they agree. Exported ONLY for that: the tables are
+// two literals joined by a long name, and nothing else in the package can catch
+// them drifting apart. See TestTheShorthandTableAgreesWithTheFlagTable.
+func GHAPIShorthandForTest() map[byte]string { return ghAPIShorthand }
+func GHAPIFlagsForTest() map[string]bool     { return ghAPIFlags }

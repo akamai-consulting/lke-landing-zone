@@ -97,6 +97,11 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		{"contents path containing secrets", []string{"api", "-X", "PUT", "repos/o/r/contents/kubernetes/secrets/x.yaml"}, capability.ForgeMutate},
 		{"contents path that IS secrets", []string{"api", "-X", "PUT", "repos/o/r/contents/secrets/x.yaml"}, capability.ForgeMutate},
 		{"a repo named exactly secrets", []string{"api", "-X", "PUT", "repos/o/secrets/contents/a.yaml"}, capability.ForgeMutate},
+		// A REPO NAMED `contents` MUST NOT DISARM THE SCAN. The Contents-API
+		// exclusion is positional for this: matched at any index, this argv
+		// abandoned the scan and graded a real secret write as an ordinary
+		// mutation — the check failing OPEN.
+		{"a repo named exactly contents", []string{"api", "-X", "PUT", "repos/acme/contents/actions/secrets/FOO"}, capability.ForgeCustody},
 		{"user codespaces secret is still custody", []string{"api", "-X", "PUT", "user/codespaces/secrets/FOO"}, capability.ForgeCustody},
 
 		// ── refusals: unknowable, not guessable ──────────────────────────────
@@ -195,6 +200,22 @@ func TestASecretWriteThroughTheAPINeedsBothGrants(t *testing.T) {
 	// different change. Pinned so that stays a decision rather than a drift.
 	if err := custodyOnly.Forge.Permits("secret", "set", "FOO"); err != nil {
 		t.Errorf("`gh secret set` must remain custody-only: %v", err)
+	}
+}
+
+// THE TWO FLAG TABLES ARE ONE TABLE IN TWO HALVES. ghAPIShorthand maps a letter
+// to a long name and ghAPIFlags says whether that name takes a value; a
+// shorthand whose long name is missing from the second reads as a boolean, so
+// its VALUE becomes the endpoint and a secret write drops back to ForgeMutate.
+// A typo in a map literal, failing open. The parser has a runtime backstop, and
+// this makes it a build-time problem instead — which is where a disagreement
+// between two literals belongs.
+func TestTheShorthandTableAgreesWithTheFlagTable(t *testing.T) {
+	for letter, long := range capability.GHAPIShorthandForTest() {
+		if _, ok := capability.GHAPIFlagsForTest()[long]; !ok {
+			t.Errorf("shorthand -%c maps to %q, which is not in ghAPIFlags — "+
+				"the parser cannot tell whether it takes a value", letter, long)
+		}
 	}
 }
 
