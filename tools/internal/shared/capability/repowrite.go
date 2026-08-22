@@ -108,8 +108,11 @@ var ErrNoRepoWrite = errors.New("this binding does not declare write-repo, so it
 
 type repoWriter struct{ root string }
 
-// resolveForWrite is the fence, and it differs from Repo.Resolve in exactly one
-// way: it resolves the PARENT. See the header for the escape that closes.
+// resolveForWrite is the fence. It differs from Repo.Resolve in two ways, and
+// the second one is newer than this comment used to admit: it resolves the
+// PARENT, so a create several directories deep can still be judged, AND it
+// resolves the TARGET when the target is already a link. The first alone was the
+// documented design and left the leaf escape open — see the header.
 func (w repoWriter) resolveForWrite(rel string) (string, error) {
 	// repo(w) rather than repo{root: w.root}: the two structs are identical, and
 	// the conversion says so instead of re-stating the field.

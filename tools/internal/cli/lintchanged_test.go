@@ -43,14 +43,30 @@ func repoMakefile(t *testing.T) string {
 	return abs
 }
 
+// isolatedGitEnv cuts the throwaway repositories off from the developer's own
+// git configuration.
+//
+// IDENTITY ALONE WAS NOT ENOUGH. This set author and committer and inherited
+// everything else — including `commit.gpgsign = true`, which is this repo's own
+// convention for real commits. On a machine configured that way `git commit`
+// here tries to sign with a key the test knows nothing about, fails, and every
+// test in this file goes red for a reason that has nothing to do with what they
+// check. A gate that fails on a correctly-configured machine gets deleted.
+func isolatedGitEnv() []string {
+	return []string{
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
+		// The throwaway repos must behave the same on every machine: no global
+		// signing, no hooks, no templates, no core.excludesFile.
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+	}
+}
+
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-	)
+	cmd.Env = append(os.Environ(), isolatedGitEnv()...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
@@ -64,6 +80,10 @@ func lintChanged(t *testing.T, dir string) []string {
 	}
 	cmd := exec.Command("make", "-f", repoMakefile(t), "--no-print-directory", "lint-changed")
 	cmd.Dir = dir
+	// The recipe shells out to git as well, so it gets the same isolation — a
+	// global core.excludesFile would otherwise change which untracked files the
+	// target reports.
+	cmd.Env = append(os.Environ(), isolatedGitEnv()...)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("make lint-changed: %v\n%s", err, out)
@@ -220,6 +240,31 @@ func TestTheFallbackStillIgnoresGitignoredFiles(t *testing.T) {
 		if strings.HasPrefix(p, "build/") {
 			t.Errorf("the fallback listed the gitignored %q", p)
 		}
+	}
+}
+
+// OUTSIDE A WORK TREE IT REFUSES. Both arms shell out to git, so a source archive
+// with no .git produced two `fatal:` lines on stderr, nothing on stdout, and
+// `make lint` read that as "nothing changed" and exited 0. There is no honest
+// changed set to compute without git, so the target says so and fails.
+func TestLintRefusesOutsideAGitWorkTree(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not on PATH")
+	}
+	dir := t.TempDir() // no `git init`
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "-f", repoMakefile(t), "--no-print-directory", "lint-changed")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), isolatedGitEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("lint-changed succeeded outside a git work tree, printing:\n%s\n\n"+
+			"`make lint` reads an empty set as \"nothing changed\" and exits 0 having run nothing", out)
+	}
+	if !strings.Contains(string(out), "LINT_ALL=1") {
+		t.Errorf("the refusal must name the way to check everything:\n%s", out)
 	}
 }
 

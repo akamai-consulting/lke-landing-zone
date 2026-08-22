@@ -1212,6 +1212,14 @@ symbol-ref-guard:
 #
 # --exclude-standard so .gitignore still applies: build output is not work.
 #
+# NO GIT AT ALL IS A REFUSAL, NOT AN EMPTY SET. Both arms below shell out to git,
+# so outside a work tree (a release tarball, an unpacked source archive) each one
+# printed two lines of `fatal:` to stderr and nothing to stdout — and `make lint`
+# read that as "nothing changed" and exited 0 having run no linter and no gate.
+# It is the third spelling of this target's one hazard, and the loudest, because
+# no arm of it can be right: with no git there is no changed set to compute. So
+# it says so and fails, and names LINT_ALL=1 as the way to check everything.
+#
 # BOTH ARMS LIST UNTRACKED FILES, and the fallback did not. `git ls-files` alone
 # is TRACKED files, so the arm meaning "could not tell, lint everything" reported
 # nothing at all for the state that most often reaches it: a repository with no
@@ -1220,7 +1228,12 @@ symbol-ref-guard:
 # written to remove, surviving in the branch nobody exercised.
 .PHONY: lint-changed
 lint-changed:
-	@if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
+	@if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		echo "lint: not a git work tree, so there is no way to tell what changed." >&2; \
+		echo "      Run 'make LINT_ALL=1 lint' to check everything." >&2; \
+		exit 1; \
+	fi; \
+	if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \
 		{ printf '%s\n' "$$TRACKED"; git ls-files --others --exclude-standard; } \
 			| grep -v '^$$' | sort -u; \
 	else \

@@ -316,10 +316,15 @@ func mutateOrCustody(endpoint string) ForgeAction {
 // codespaces and dependabot — because they are one concern and enumerating the
 // six current spellings is how the seventh gets missed.
 //
-// Erring wide is the safe direction: a path wrongly graded custody is REFUSED,
-// which is loud and one declaration away from fixed. Nothing in this tree writes
-// a secret through `gh api` today (the native writers in shared/forge and
-// shared/ghsecret speak HTTP directly), so this tightens without moving anyone.
+// Erring wide is the safe direction, and it is only safe because Permits requires
+// BOTH grants for an `api` secret write — see the ForgeCustody arm there. Graded
+// custody alone, a wide match would have WIDENED the custody-without-cloud-mutate
+// bindings instead of narrowing anything. A path wrongly matched here is refused
+// unless the caller holds both, which is loud and one declaration away from fixed.
+//
+// Nothing in this tree writes a secret through `gh api` today (the native writers
+// in shared/forge and shared/ghsecret speak HTTP directly), so this moves no
+// existing caller in either direction.
 func forgeSecretEndpoint(endpoint string) bool {
 	p := strings.TrimSpace(endpoint)
 	if i := strings.IndexAny(p, "?#"); i >= 0 {
@@ -400,6 +405,28 @@ func (f forge) Permits(args ...string) error {
 	case ForgeCustody:
 		if !f.custody {
 			return fmt.Errorf("%w: `gh %s` places credential material", ErrNoForgeCustody, strings.Join(args, " "))
+		}
+		// AN `api` SECRET WRITE NEEDS BOTH GRANTS, and grading it custody alone
+		// swapped one hole for its mirror image. Before, a cloud-mutate binding
+		// without custody could PUT a secret because the write graded as an
+		// ordinary mutation. Grading it custody fixed that and opened the other
+		// side: the bindings holding secret-custody WITHOUT cloud-mutate — the
+		// db-admin seeder, objenc's seed-ssec-key, two openbao lanes — gained a
+		// `gh api` write they had always been refused.
+		//
+		// Both directions are wrong for the same reason: writing a secret through
+		// the raw API is a mutation AND a placement of credential material, so it
+		// is not either grant's to authorise alone.
+		//
+		// Scoped to `api` deliberately. `gh secret set` has been custody-only
+		// since it was classified, and several bindings are declared against that
+		// contract; requiring cloud-mutate there too may well be right, but it
+		// changes what those declarations mean and belongs in a change that says
+		// so. The raw-API spelling is new to this classifier and has no such
+		// history to preserve.
+		if len(args) > 0 && args[0] == "api" && !f.mutate {
+			return fmt.Errorf("%w: `gh %s` writes credential material through the raw API, "+
+				"which needs cloud-mutate as well as secret-custody", ErrNoForgeMutate, strings.Join(args, " "))
 		}
 	default:
 		// THE REMEDY DIFFERS BY WHICH TABLE FELL SHORT, and the generic one sent

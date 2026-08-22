@@ -148,6 +148,37 @@ func TestACloudMutateHandleCannotWriteASecretThroughTheAPI(t *testing.T) {
 	}
 }
 
+// AND THE MIRROR IMAGE, which the first cut of this fix opened. Grading a secret
+// write as custody rescued the cloud-mutate-without-custody bindings and handed
+// the write to the custody-WITHOUT-cloud-mutate ones — the db-admin seeder,
+// objenc's seed-ssec-key, two openbao lanes. Both directions are the same error:
+// writing a secret through the raw API is a mutation and a placement, and
+// neither grant authorises it alone.
+func TestASecretWriteThroughTheAPINeedsBothGrants(t *testing.T) {
+	custodyOnly := capability.For(binding(extension.SecretCustody))
+	mutateOnly := capability.For(binding(extension.CloudMutate))
+	both := capability.For(binding(extension.SecretCustody, extension.CloudMutate))
+
+	argv := []string{"api", "-X", "PUT", "repos/o/r/actions/secrets/FOO"}
+
+	if err := custodyOnly.Forge.Permits(argv...); !errors.Is(err, capability.ErrNoForgeMutate) {
+		t.Errorf("secret-custody alone wrote a secret through the raw API: %v", err)
+	}
+	if err := mutateOnly.Forge.Permits(argv...); !errors.Is(err, capability.ErrNoForgeCustody) {
+		t.Errorf("cloud-mutate alone wrote a secret through the raw API: %v", err)
+	}
+	if err := both.Forge.Permits(argv...); err != nil {
+		t.Errorf("a binding holding both grants must be permitted: %v", err)
+	}
+
+	// `gh secret set` KEEPS its custody-only contract: several bindings are
+	// declared against it, and changing what those declarations mean is a
+	// different change. Pinned so that stays a decision rather than a drift.
+	if err := custodyOnly.Forge.Permits("secret", "set", "FOO"); err != nil {
+		t.Errorf("`gh secret set` must remain custody-only: %v", err)
+	}
+}
+
 // AN UNKNOWN FLAG IS REFUSED WITH ITS OWN NAME IN THE MESSAGE. Failing closed is
 // only usable if the reader can tell WHY, and "unclassified" over an argv of ten
 // tokens sends them to gh's manual to guess which one.
