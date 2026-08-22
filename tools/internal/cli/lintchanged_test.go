@@ -282,6 +282,13 @@ func TestLintRefusesOutsideAGitWorkTree(t *testing.T) {
 			if !strings.Contains(string(out), "LINT_ALL=1") {
 				t.Errorf("the refusal must name the way to check everything:\n%s", out)
 			}
+			// AND IT QUOTES GIT. Everything that stops git answering lands in
+			// this arm, not just an absent repository — `detected dubious
+			// ownership` is the one people actually hit — so the message carries
+			// git's own words instead of a guess at which of them it was.
+			if !strings.Contains(string(out), "git said:") {
+				t.Errorf("the refusal must quote git rather than diagnose for it:\n%s", out)
+			}
 		})
 	}
 }

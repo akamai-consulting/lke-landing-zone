@@ -1225,6 +1225,13 @@ symbol-ref-guard:
 # exiting 0. Keying on the status caught the no-repo case and missed that one —
 # which lands right back in the empty-set collapse, one refusal later.
 #
+# AND IT QUOTES GIT RATHER THAN GUESSING. Anything that stops git answering lands
+# here, not just an absent repository — `detected dubious ownership`, on a
+# container-mounted checkout, is the one people actually hit. Announcing "not a
+# git work tree" for that sends the reader to look for a .git directory that is
+# right there. The refusal is still correct (nothing can be scoped without an
+# answer); only the diagnosis was, so git's own words go in the message.
+#
 # BOTH ARMS LIST UNTRACKED FILES, and the fallback did not. `git ls-files` alone
 # is TRACKED files, so the arm meaning "could not tell, lint everything" reported
 # nothing at all for the state that most often reaches it: a repository with no
@@ -1233,9 +1240,11 @@ symbol-ref-guard:
 # written to remove, surviving in the branch nobody exercised.
 .PHONY: lint-changed
 lint-changed:
-	@if [ "$$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then \
-		echo "lint: not a git work tree, so there is no way to tell what changed." >&2; \
-		echo "      Run 'make LINT_ALL=1 lint' to check everything." >&2; \
+	@INSIDE=$$(git rev-parse --is-inside-work-tree 2>&1); \
+	if [ "$$INSIDE" != "true" ]; then \
+		echo "lint: cannot determine what changed, so it will not claim nothing did." >&2; \
+		echo "      git said: $$INSIDE" >&2; \
+		echo "      Run 'make LINT_ALL=1 lint' to check everything regardless." >&2; \
 		exit 1; \
 	fi; \
 	if TRACKED=$$(git diff --name-only HEAD 2>/dev/null); then \

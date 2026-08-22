@@ -60,6 +60,11 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		// ── clustered booleans, which pflag allows ───────────────────────────
 		{"bool cluster then value", []string{"api", "-iXDELETE", "x"}, capability.ForgeMutate},
 		{"bool cluster alone", []string{"api", "-i", "x"}, capability.ForgeRead},
+		// pflag checks for `=value` BEFORE it consults NoOptDefVal, so a boolean
+		// shorthand spends the rest of the cluster as a value. Leaving it behind
+		// made the next pass look up a shorthand named `=`.
+		{"bool with an attached value", []string{"api", "-i=true", "x"}, capability.ForgeRead},
+		{"bool with attached value then a write", []string{"api", "-i=false", "-X", "DELETE", "x"}, capability.ForgeMutate},
 
 		// ── plain reads ──────────────────────────────────────────────────────
 		{"bare", []string{"api", "repos/o/r"}, capability.ForgeRead},
@@ -85,9 +90,23 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		// And an ordinary mutation is still an ordinary mutation.
 		{"branch policy write", []string{"api", "-X", "PUT", "repos/o/r/environments/prod/deployment-branch-policies"}, capability.ForgeMutate},
 		{"a repo whose NAME contains secrets", []string{"api", "-X", "PUT", "repos/o/my-secrets-repo/actions/variables/FOO"}, capability.ForgeMutate},
+		// THE CONTENTS API EMBEDS A REPOSITORY PATH. A GitOps repo with a
+		// `secrets/` directory is the common case, not an exotic one, and a
+		// `secrets` segment anywhere used to grade the write as custody —
+		// refusing an ordinary content write for want of a grant it never needed.
+		{"contents path containing secrets", []string{"api", "-X", "PUT", "repos/o/r/contents/kubernetes/secrets/x.yaml"}, capability.ForgeMutate},
+		{"contents path that IS secrets", []string{"api", "-X", "PUT", "repos/o/r/contents/secrets/x.yaml"}, capability.ForgeMutate},
+		{"a repo named exactly secrets", []string{"api", "-X", "PUT", "repos/o/secrets/contents/a.yaml"}, capability.ForgeMutate},
+		{"user codespaces secret is still custody", []string{"api", "-X", "PUT", "user/codespaces/secrets/FOO"}, capability.ForgeCustody},
 
 		// ── refusals: unknowable, not guessable ──────────────────────────────
 		{"graphql", []string{"api", "graphql", "-f", "query=mutation{}"}, capability.ForgeUnclassified},
+		// gh always POSTs GraphQL, so an explicit method is the SAME request as
+		// the bare spelling and must reach the same verdict. Two of the three
+		// arms checked; the mutating one did not.
+		{"graphql with an explicit POST", []string{"api", "-X", "POST", "graphql"}, capability.ForgeUnclassified},
+		{"graphql with an explicit GET", []string{"api", "-X", "GET", "graphql"}, capability.ForgeUnclassified},
+		{"graphql with an attached method", []string{"api", "-XPOST", "graphql"}, capability.ForgeUnclassified},
 		{"graphql after the terminator", []string{"api", "--", "graphql"}, capability.ForgeUnclassified},
 		{"unknown method", []string{"api", "-XTRACE", "x"}, capability.ForgeUnclassified},
 		{"dangling spaced", []string{"api", "-X"}, capability.ForgeUnclassified},

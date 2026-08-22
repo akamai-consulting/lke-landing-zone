@@ -223,7 +223,17 @@ func classifyAPIMethod(rest []string) ForgeAction {
 				}
 				cluster = cluster[1:]
 				if !ghAPIFlags[name] {
-					continue // a boolean; the next letter is another flag
+					// A BOOLEAN CAN STILL CARRY `=value`, and pflag checks for it
+					// BEFORE it consults NoOptDefVal — so `-i=true` spends the rest
+					// of the cluster as a value even though `-i` takes none.
+					// Leaving `=true` in the cluster made the next pass look up a
+					// shorthand named `=` and refuse a legitimate read: the same
+					// classifier-vs-parser divergence this file exists to close,
+					// pointed the other way.
+					if len(cluster) > 1 && cluster[0] == '=' {
+						cluster = ""
+					}
+					continue // otherwise the next letter is another flag
 				}
 				var val string
 				switch {
@@ -257,15 +267,19 @@ func classifyAPIMethod(rest []string) ForgeAction {
 	// An explicit method beats every inference, in both directions: `-X GET` with
 	// fields is a GET with a body, which gh will send as written.
 	if explicit != "" {
+		// GRAPHQL IS REFUSED WHATEVER THE METHOD, and it was refused in only two
+		// of the three arms. gh always POSTs GraphQL, so `-X POST graphql` is the
+		// SAME REQUEST as bare `graphql` — and it graded ForgeMutate while the
+		// bare spelling correctly went to ForgeUnclassified. A document that can
+		// be a query or a mutation is not classifiable without parsing GraphQL,
+		// and that is true no matter how the argv spells the verb.
+		if graphql {
+			return ForgeUnclassified
+		}
 		switch u := strings.ToUpper(explicit); {
 		case mutatingMethods[u]:
 			return mutateOrCustody(endpoint)
 		case u == "GET" || u == "HEAD":
-			// A GraphQL GET is not a thing GitHub serves; if someone writes one the
-			// argv is confused enough to be worth refusing.
-			if graphql {
-				return ForgeUnclassified
-			}
 			return ForgeRead
 		default:
 			return ForgeUnclassified
@@ -310,28 +324,38 @@ func mutateOrCustody(endpoint string) ForgeAction {
 // forgeSecretEndpoint reports whether a `gh api` path addresses GitHub-held
 // credential material.
 //
-// Matched by PATH SEGMENT rather than substring, so `secrets` has to be a real
-// component and a repository named `my-secrets` is not swept in. It covers every
-// place GitHub keeps one — repo, org and environment scope, across actions,
-// codespaces and dependabot — because they are one concern and enumerating the
-// six current spellings is how the seventh gets missed.
+// MATCHED AGAINST THE REAL ENDPOINT SHAPES, not any path containing the word.
+// The first cut accepted a `secrets` segment anywhere, and the Contents API
+// embeds an arbitrary REPOSITORY PATH in its URL — so
+// `repos/o/r/contents/kubernetes/secrets/x.yaml` graded as custody and an
+// ordinary content write was refused for want of a grant it never needed. A
+// GitOps repo with a `secrets/` directory is not an exotic input; it is most of
+// them.
 //
-// Erring wide is the safe direction, and it is only safe because Permits requires
-// BOTH grants for an `api` secret write — see the ForgeCustody arm there. Graded
-// custody alone, a wide match would have WIDENED the custody-without-cloud-mutate
-// bindings instead of narrowing anything. A path wrongly matched here is refused
-// unless the caller holds both, which is loud and one declaration away from fixed.
+// Every place GitHub actually keeps one has `secrets` directly after an API
+// FAMILY — actions, codespaces, dependabot — or after `environments/<name>`.
+// That covers repo, org and user scope in one rule rather than six literals.
 //
-// Nothing in this tree writes a secret through `gh api` today (the native writers
-// in shared/forge and shared/ghsecret speak HTTP directly), so this moves no
-// existing caller in either direction.
+// Anything under `contents` is excluded outright: past that segment the URL is
+// the caller's file tree and no segment in it is an API family name.
 func forgeSecretEndpoint(endpoint string) bool {
 	p := strings.TrimSpace(endpoint)
 	if i := strings.IndexAny(p, "?#"); i >= 0 {
 		p = p[:i]
 	}
-	for _, seg := range strings.Split(p, "/") {
-		if seg == "secrets" {
+	segs := strings.Split(strings.Trim(p, "/"), "/")
+	for i, seg := range segs {
+		if seg == "contents" {
+			return false // the rest is a repository path, not API structure
+		}
+		if seg != "secrets" || i == 0 {
+			continue
+		}
+		switch segs[i-1] {
+		case "actions", "codespaces", "dependabot":
+			return true
+		}
+		if i >= 2 && segs[i-2] == "environments" {
 			return true
 		}
 	}
