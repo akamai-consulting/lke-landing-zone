@@ -974,40 +974,55 @@ jobs:
 }
 
 func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
-	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only
-	// in a comment. This guard reached CI solely through `llz ci gates` in the
+	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only in
+	// a comment. This guard reached CI solely through `llz ci gates` in the
 	// Kubernetes job, which is gated on the head repository — so it ran on every
 	// population EXCEPT fork pull requests, which is how an attacker-chosen branch
-	// name or PR title reaches a workflow at all. Moving the step back, or gating
-	// the job it now lives in, would leave the whole tree green and forks unscanned.
+	// name or PR title reaches a workflow at all.
 	//
-	// PARSED AS YAML, NOT SCANNED AS TEXT, and that is the third attempt. A
-	// substring match over the raw job body could not tell a comment quoting the
-	// condition from the condition (documenting the property failed the test that
-	// holds it); a line-scoped version then missed `if: >` folded scalars entirely,
-	// because only the line carrying the key was ever read, and hardcoded the step
-	// indent, so a `    - name:` sequence style collapsed the step split and put
-	// every unrelated step's condition on trial. Each fix was a smaller patch over
-	// the same mistake: reading YAML with string operations. The parser answers all
-	// three for free — it drops comments, joins folded scalars, and does not care
-	// how the file is indented.
+	// THE RULE IS UNCONDITIONAL, AND THAT IS THE POINT OF THE FOURTH REWRITE. Three
+	// earlier versions asked "is this job gated in a way I recognise?" — first by
+	// listing the fork condition verbatim, then by listing its spellings, then by
+	// naming the contexts a fork test must use. Review walked past all three, and
+	// the last escape ended the argument: `if: github.event_name != 'pull_request'`
+	// names no repository, no fork and no branch, and drops the guard from EVERY
+	// pull request, which is strictly worse than the fork-only skip this test was
+	// built to catch. There is no vocabulary of dangerous conditions, because the
+	// danger is the conditioning. A guard that must see every PR cannot be run
+	// conditionally, so the check is simply that nothing here is conditional:
 	//
-	// MUTATION-TESTING THIS NEEDS `-count=1`. lint.yml lives outside the package,
-	// so the test cache does not know it is an input: edit the condition, re-run,
-	// and Go replays the previous verdict under a `(cached)` marker. Two mutations
-	// were scored as "the check missed it" that way before the marker was noticed.
+	//	no `if:` on the guard step, on its job, or on any job that job needs
+	//	no `continue-on-error` making the step advisory while it still "runs"
+	//
+	// The cost is that adding a legitimate condition to go-tests fails this test.
+	// That is the intended forcing function: the answer is to move the guard to an
+	// unconditional job, not to teach this test one more exception.
+	//
+	// PARSED AS YAML, NOT SCANNED AS TEXT. A substring match over the raw job body
+	// could not tell a comment quoting a condition from the condition, missed
+	// `if: >` folded scalars because it read only the line carrying the key, and
+	// hardcoded the step indent so a `    - name:` sequence style put every
+	// unrelated step on trial. The parser answers all three for free.
+	//
+	// MUTATION-TESTING THIS NEEDS `-count=1`. lint.yml lives outside the package, so
+	// the test cache does not know it is an input: edit the condition, re-run, and
+	// Go replays the previous verdict under a `(cached)` marker. Two mutations were
+	// scored as "the check missed it" that way before the marker was noticed.
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", ".github", "workflows", "lint.yml"))
 	if err != nil {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
+	type lintStep struct {
+		Name            string    `yaml:"name"`
+		If              string    `yaml:"if"`
+		Run             string    `yaml:"run"`
+		ContinueOnError yaml.Node `yaml:"continue-on-error"`
+	}
 	type lintJob struct {
-		If    string    `yaml:"if"`
-		Needs yaml.Node `yaml:"needs"`
-		Steps []struct {
-			Name string `yaml:"name"`
-			If   string `yaml:"if"`
-			Run  string `yaml:"run"`
-		} `yaml:"steps"`
+		If              string     `yaml:"if"`
+		Needs           yaml.Node  `yaml:"needs"`
+		ContinueOnError yaml.Node  `yaml:"continue-on-error"`
+		Steps           []lintStep `yaml:"steps"`
 	}
 	var wf struct {
 		Jobs map[string]lintJob `yaml:"jobs"`
@@ -1018,71 +1033,61 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	if len(wf.Jobs) == 0 {
 		t.Fatal("parsed no jobs out of lint.yml — the check would be vacuous")
 	}
-	// NOT AN ENUMERATION OF SKIP SPELLINGS. The first cut listed the exact
-	// condition the Kubernetes job carries, and review walked past it three ways:
-	// delete the spaces around `==`, compare `head.repo.owner.login` to
-	// `github.repository_owner`, or match `head.label` against the org prefix. A
-	// list of expressions loses that race — the list is finite and the ways to
-	// write the condition are not.
-	//
-	// SO THE TOKENS ARE CONTEXTS, NOT EXPRESSIONS. Deciding a PR is "ours" needs
-	// the pull-request payload or this repo's name, whatever shape the comparison
-	// takes, so naming the two contexts covers every spelling of it at once. The
-	// invariant is that THIS JOB IS NOT GATED ON WHOSE PR IT IS, in either
-	// direction: a condition that runs the job only on forks is equally a finding,
-	// because a guard that cannot see every PR is the defect this test exists for.
-	identityContexts := []string{"github.event.pull_request", "github.repository", "github.head_ref"}
-	// SCOPED to the job's own `if:` and the guard step's `if:`. Judging every step
-	// would red-flag an artifact upload gated on the repo name — and a false red on
-	// a security test gets the test deleted rather than the condition.
 	// THE INVOCATION, NOT THE WORD. `strings.Contains(run, …)` also matched the
 	// guard's name written in a SHELL comment inside someone else's `run:` block —
 	// the prose-for-configuration defect this test was rewritten to escape, one
-	// layer further down. Measured: a `# … ci workflow-injection …` line added to
-	// the fork-gated Kubernetes job turned this red and blamed a job that does not
+	// layer further down. Measured: a `# … ci workflow-injection …` line in the
+	// fork-gated Kubernetes job turned this red and blamed a job that does not
 	// carry the step. Requiring no `#` earlier on the line rules out both the
 	// comment line and the trailing comment.
 	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bci[ \t]+workflow-injection\b`)
-	// A JOB IS ALSO SKIPPED WHEN WHAT IT NEEDS IS SKIPPED. `needs: [kubernetes]` on
-	// this job carries the Kubernetes job's fork condition onto it by dependency —
-	// the guard stops running on fork PRs and nothing in the job's own text says
-	// so. Measured: adding that line left this test green while the guard went
-	// dark for exactly the population it exists for. So the closure is walked, not
-	// just the job.
-	needsOf := func(j lintJob) []string {
-		switch j.Needs.Kind {
+	// `needs:` takes a scalar or a sequence, and a key with no value at all decodes
+	// to !!null — which an earlier cut enqueued as the empty string and then
+	// reported as a missing job.
+	needsOf := func(n yaml.Node) []string {
+		switch n.Kind {
 		case yaml.ScalarNode:
-			return []string{j.Needs.Value}
+			if n.Tag == "!!null" || n.Value == "" {
+				return nil
+			}
+			return []string{n.Value}
 		case yaml.SequenceNode:
 			var out []string
-			for _, n := range j.Needs.Content {
-				out = append(out, n.Value)
+			for _, c := range n.Content {
+				if c.Value != "" {
+					out = append(out, c.Value)
+				}
 			}
 			return out
 		}
 		return nil
 	}
+	armed := func(n yaml.Node) bool { return n.Kind != 0 && n.Tag != "!!null" && n.Value != "false" }
+
 	found := false
 	for name, j := range wf.Jobs {
-		runsGuard := false
-		var conditions []string
-		for _, s := range j.Steps {
-			if !invocation.MatchString(s.Run) {
-				continue
-			}
-			runsGuard = true
-			if s.If != "" {
-				conditions = append(conditions, s.If)
+		var guard *lintStep
+		for i, s := range j.Steps {
+			if invocation.MatchString(s.Run) {
+				guard = &j.Steps[i]
 			}
 		}
-		if !runsGuard {
+		if guard == nil {
 			continue
 		}
 		found = true
-		// The job's own condition, then every job it transitively needs.
+		if guard.If != "" {
+			t.Errorf("the workflow-injection step in job %s is conditional (if: %s) — it has to "+
+				"see every pull request, so it cannot run only on some of them", name, guard.If)
+		}
+		if armed(guard.ContinueOnError) {
+			t.Errorf("the workflow-injection step in job %s is continue-on-error — it would run "+
+				"and report and never fail the build, which is not a guard", name)
+		}
+		// The job itself, then everything it transitively needs: a skipped
+		// dependency skips the job just as effectively as a condition on it.
 		seen := map[string]bool{name: true}
-		queue := []string{name}
-		for len(queue) > 0 {
+		for queue := []string{name}; len(queue) > 0; {
 			cur := queue[0]
 			queue = queue[1:]
 			dep, ok := wf.Jobs[cur]
@@ -1091,22 +1096,18 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 				continue
 			}
 			if dep.If != "" {
-				conditions = append(conditions, dep.If)
+				where := "its own condition"
+				if cur != name {
+					where = "job " + cur + ", which it needs"
+				}
+				t.Errorf("job %s runs workflow-injection but is conditional via %s (if: %s) — "+
+					"fork pull requests are the population the guard exists for, and any "+
+					"condition in that closure decides whether it sees them", name, where, dep.If)
 			}
-			for _, n := range needsOf(dep) {
+			for _, n := range needsOf(dep.Needs) {
 				if !seen[n] {
 					seen[n] = true
 					queue = append(queue, n)
-				}
-			}
-		}
-		for _, c := range conditions {
-			for _, ctx := range identityContexts {
-				if strings.Contains(c, ctx) {
-					t.Errorf("job %s runs workflow-injection, but it or a job it needs is "+
-						"conditioned on whose pull request it is (%q in %q) — fork PRs are the "+
-						"population the guard exists for, and any such gate in that closure "+
-						"decides whether it sees them", name, ctx, c)
 				}
 			}
 		}
