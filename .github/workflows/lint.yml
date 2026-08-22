@@ -689,7 +689,12 @@ jobs:
       # no such `if:` and runs on forks. The shell-default guard above is the same
       # shape — also a gates row, also duplicated here — but only this one has a
       # test holding the placement: TestTheGuardRunsInAJobForkPullRequestsReach,
-      # which fails if this step moves to a job gated on repository identity.
+      # which fails if this step, its job, or any job that job needs becomes
+      # conditional at all, if the step goes continue-on-error, or if the trigger
+      # stops covering a root the guard scans. NOT "gated on repository identity",
+      # which is what this said first and is narrower than the test: the strongest
+      # skip is `if: github.event_name != 'pull_request'`, which names no
+      # repository and drops the guard from every PR there is.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
