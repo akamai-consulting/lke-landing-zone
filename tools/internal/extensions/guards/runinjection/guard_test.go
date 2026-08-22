@@ -1050,7 +1050,13 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// fork-gated Kubernetes job turned this red and blamed a job that does not
 	// carry the step. Requiring no `#` earlier on the line rules out both the
 	// comment line and the trailing comment.
-	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bci[ \t]+workflow-injection\b`)
+	// THE GUARD'S NAME ON A COMMAND LINE, not one spelling of how it is called.
+	// Pinning `ci workflow-injection` would have turned this red — with the message
+	// "no lint.yml job runs it" — the day someone moved the step to this repo's own
+	// Makefile-glue convention, which the two steps directly above it already use
+	// (`make untestable-loc-check`, `make core-surface-check`). The guard would
+	// still be wired, unconditionally, and the test would be reporting the opposite.
+	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b`)
 	// `needs:` takes a scalar or a sequence, and a key with no value at all decodes
 	// to !!null — which an earlier cut enqueued as the empty string and then
 	// reported as a missing job.
@@ -1114,10 +1120,14 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 				t.Errorf("job %s needs %q, which is not a job in lint.yml", name, cur)
 				continue
 			}
-			if armed(dep.ContinueOnError) {
-				t.Errorf("job %s runs workflow-injection but %s is continue-on-error — the step "+
-					"reports and the build stays green, which is not a guard", name,
-					map[bool]string{true: "it", false: "job " + cur + ", which it needs"}[cur == name])
+			// Only the guard's OWN job, not the closure: a dependency being
+			// continue-on-error does not stop this job from failing the build, and
+			// reporting it as if it did is a false red on a security test. `if:` is the
+			// opposite — a skipped dependency really does skip this job — so that one
+			// keeps walking.
+			if cur == name && armed(dep.ContinueOnError) {
+				t.Errorf("job %s runs workflow-injection but is continue-on-error — the step "+
+					"reports and the build stays green, which is not a guard", name)
 			}
 			if dep.If != "" {
 				where := "its own condition"
@@ -1152,6 +1162,14 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	for _, root := range scanRoots {
 		covered := false
 		for _, p := range wf.On.PullRequest.Paths {
+			// THE GLOB IS NOT DECORATION. GitHub matches `paths:` against changed FILE
+			// paths, so a bare `.github/workflows` entry matches nothing and starts no
+			// run — while reading, to a person, exactly like coverage of that tree. An
+			// earlier cut of this check accepted the bare form, which made the most
+			// likely way to reintroduce the bug the one way it could not see.
+			if !strings.HasSuffix(p, "/**") {
+				continue
+			}
 			if strings.HasPrefix(root+"/", strings.TrimSuffix(p, "**")) {
 				covered = true
 				break
