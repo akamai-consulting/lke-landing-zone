@@ -7,6 +7,11 @@ because it is a dated record rather than an instruction — it deliberately name
 flags, paths and symbols that were wrong or absent at that commit, and rewriting
 it to match a later CLI would falsify the record.
 
+The one part that is kept current is the RECOMMENDATION — which of these to fix
+next. See [Status at `d37d83cb`](#status-at-d37d83cb--2026-08-21), re-checked 81
+commits later, for what still holds and what has since been fixed. Everything
+outside that section is as written on 2026-08-13.
+
 ## Scope and method
 
 | Parameter | Value |
@@ -137,6 +142,129 @@ Fifteen findings ranked by blast radius.
     that no longer exists after the CLI move, so the linker drops it silently,
     every image reports a dev version, and the image-freshness guard takes its
     warn-and-skip path on every instance pipeline.
+
+## Status at `d37d83cb` — 2026-08-21
+
+Everything above is the record as written at `1276c08f` and stays that way. This
+section is the part that had to move: **what to fix next**, re-checked against
+`origin/main` @ `d37d83cb` — 81 commits and 171 files (+27,307 / −862) later.
+
+Method, so the confidence is legible. Each of the fifteen ranked findings was
+re-read in the current tree. Every other finding above whose file appears in
+`git diff --name-only 1276c08f origin/main` was re-read too. A finding whose file
+is byte-identical to the reviewed tree is carried forward unchanged without
+re-reading it: a fix cannot have happened in a file nobody touched.
+
+### The ranked list, re-checked
+
+Fourteen of fifteen still hold. Line numbers are the current ones where they moved.
+
+| # | Finding | At `d37d83cb` |
+| ---: | --- | --- |
+| 1 | `Makefile:1207` — `make lint` runs nothing on an untracked-only tree | **open**, verbatim: `git diff --name-only HEAD` still excludes untracked files and the empty-`CHANGED` branch still exits 0 |
+| 2 | state-passphrase rollover: `rotate.go:254`, `cobra_statepassphrase.go:41`, `llz-secret-rotation.yml:496,514` | **open**, all four parts. `--roots-dir` still defaults to `terraform` while the roots are under `terraform-iac-bootstrap/`; `aws-init-only` still resolves nowhere; an all-skipped run still prints that the old passphrase can be deleted. The R2 half is also unchanged — `secret-rotation.yml` still has no `state-passphrase` scope and no `state-passphrase-apply` input, so the rollover is still unreachable |
+| 3 | `capability/repowrite.go:105` — leaf symlink escapes the write fence | **open**; `resolveForWrite` still anchors on `filepath.Dir(abs)` |
+| 4 | `capability/forge.go:165` — `gh api -XDELETE` classifies as a read | **open**; the switch still handles `-X`, `--method=` and `-X=` and nothing else, so an attached shorthand falls through to `ForgeRead` |
+| 5 | `openbao/openbao.go:483,497` — `Rollback` checks neither HTTP status | **open**; both calls still go through the raw `c.do`, which returns the response unexamined. `readKV` 15 lines away does check |
+| 6 | `cli/ci.go:86` — `DryRun` frozen false at tree-construction time | **open**; `installConvergeDeps(cliopts.Global)` is still the first statement of `ciCmd()`, and the comment above it still claims the globals are parsed by then |
+| 7 | `clusterspec/overlay.go:179`, `apl/overlay/overlay.go:112` — the machine branch overwrites apl-core's own config | **open**; both files byte-identical |
+| 8 | `openbao-cert-watcher.yaml:168` — the watcher has zero egress | **open**; file byte-identical |
+| 9 | `terraform-modules/llz-cluster/main.tf:71` — ACL hardcoded on, every CIDR input empty | **open**. The file DID change — a `check` block for the create-time VPC binding, and `ignore_changes` widened to `vpc_id, subnet_id` — but nothing touched `enabled = true` or the empty defaults, and the widened `ignore_changes` leaves the "re-applying with CIDRs cannot fix it" half exactly as it was |
+| 10 | `llz-cert-automation/templates/rbac.yaml:23` — the runner cannot create Workflows | **open**; file byte-identical |
+| 11 | `tokeninv/inventory.go:179` — the dedupe guard skips both iterations | **open**; still `if scope == "" && env == ""`, so an empty env skips the probe entirely and every GitHub secret reports absent |
+| 12 | `credrotate/cobra_credentials_flagsets.go:79,146` — identity resolvers with no call sites | **open**; the whole `credrotate` package is byte-identical |
+| 13 | `credrotate/broadpat.go:260`, `inclusterpat.go:197` — grace window measured from creation | **open**; same |
+| 14 | `llz-terraform.yml:166,792` — PR plan without an environment; OpenBao bootstrap without the databases apply | **open**, both halves. The file changed by 57 lines elsewhere; `plan-cluster-pr` still declares no `environment:` while consuming `secrets.TF_STATE_*`, and `bootstrap-openbao` still reads `needs: [apply-cluster, apply-object-storage]` |
+| 15 | `dockerfiles/Dockerfile:47` — the version ldflag names a dead symbol | **FIXED** in `f0a4ea87`. The flag now stamps `internal/cli.Version`, and the comment block above it records the scar. `fd866602` closed the follow-on: a `dev-` stamp used to pass every pin check |
+
+### Fixed further down the list
+
+Four findings from the appendix and round two were fixed by work that was not
+aimed at this document.
+
+- `promote/gen.go:230` (C14) — `d8be9720`. `PlanWorkflow` now reads the on-disk
+  stages BEFORE the rank count and compares them to the declared deployments on
+  every path, so the `len(stages) < 2` branch can no longer pass green over a
+  stale `promote.yml`.
+- `callerperms/guard.go:174` (C25) — `c3f209ad`. `holdsWrite` became a
+  three-level `holds(scope, want)`, so a `read` escalation is caught too. Found
+  the same way the finding predicted it would bite: on a real branch, against a
+  guard printing OK.
+- `budget/count.go:46` (C23) — `2398b86f`, though not the defect as filed. The
+  fix exempts `defaults: run:` mappings rather than correcting the `- ` indent
+  arithmetic, so the specific miscount the finding measured on a `- run: |` step
+  is still there; what changed is that ~14 phantom lines left the tally.
+- `onboard/wizard.go:361` (R2) — `23d6d727`. The clobber guard now runs
+  regardless of whether the repo resolved, and refuses when it cannot tell.
+  The commit also establishes the push was never reachable, which the finding
+  did not know.
+
+Also worth recording as a partial: `doctor/linode.go:143` (C37) is fixed —
+`SpecK8sPins` (renamed from `SpecK8sVersions` in `63390fd2`) now returns nil for
+an absent env instead of falling through to every other one.
+
+### What has not moved
+
+Nothing in the nine failure classes has had its systemic fix. Spot-checks at HEAD:
+
+- **Unreadable state reported as clean** — `kubectlprobe/probe.go:165`,
+  `healthsla`, `converge/health.go`, `seedspecial` all byte-identical. There is
+  still no vet-style check on the non-`OK` probe variants, and the class remains
+  roughly a third of everything above.
+- **Guards that cannot fire** — `versionpins/pins.go` was substantially rewritten
+  (`pippins.go` is new, the header re-scoped), and `maskComments` still blanks
+  whole-line comments only, so a trailing `# … ci-tofu:1.9.8` is still scanned as
+  a live pin. `chartguard/version.go:143`, `plaintext/guard.go`,
+  `atrest/atrest.go:455`, `monitoringlabel/guard.go:65` unchanged.
+- **Code written, tested, never wired in** — `clusterspec/aplversion.go:136`
+  still has no production caller for `aplChartVersionError` /
+  `AplChartVersionWarnings`; the file changed only to move the baseline to
+  `v6.2.0`. Both credential-identity resolvers unchanged.
+- **Capability-fence bypasses** — `cloud.go` and `repo.go` changed by two comment
+  lines each (grant censuses, 44→47 of 64→67 extensions). `CloudFor`, `KubeFor`
+  and `RepoWriterAt` still read `b.Grants` directly.
+- **Registry namespace split** (C28) — `commands.go` gained four rows and still
+  keys `Extension` on Go package names while `gates.go` keys it on real extension
+  names, so the two tables still cannot be joined.
+- `assertplatform/deps.go:53` — `Install(d Deps) { deps = d }` is still a
+  wholesale replace. The file gained a comment naming `LoadSpec`'s default as
+  "the dangerous half", which is the finding restated rather than closed.
+- `clusteraccess/acl_configmap.go:275` — still `kubectl apply` with the dead
+  `isAlreadyExists` guard beside it.
+- `instanceresolve/region_resolve.go:75` — `AccountRegions` still returns
+  `len(ids) > 0` on a path that files no skip report.
+
+### Surface this sweep never covered
+
+About a third of the ~27.3k lines added since `1276c08f` — 9,381 across 24
+files, tests included — is in code that either did not exist when the chunks were
+partitioned or was rewritten past the version its chunk read. No chunk above
+owns any of it:
+
+- the k8s-version lane — `assertplatform/k8sversion.go`, `verdict.go`,
+  `cobra_k8sversion.go`, `instanceresolve/k8sversion_resolve.go` (1,047 lines on
+  its own) and the `linode/lke_versions.go` catalog rework (+620 lines onto a
+  file C29 did read, which is the second kind)
+- `upstreamupdates` — the `upgrade-pr` verb — and the two new template-upgrade
+  workflows delivered with it
+- two new guards — `mutabletags` and `runinjection` — neither of which addresses
+  any class above
+- `promote/stages.go`, `clusteraccess/pathvars.go`, `versionpins/pippins.go`,
+  `templatecommit/cobra_assert_release_image.go`
+
+The `dispatchwatch` gap recorded under **Known gaps** is unchanged for a reason
+worth updating: the package still is not on `main`. It was never merged, so it
+remains unreviewed rather than newly reviewable.
+
+### What this says about the recommendation
+
+The ranked order above survives with one deletion. That is not a comment on the
+81 commits — they closed real defects, four of them from this list, and the two
+new guards are the right shape. It is the convergence measurement showing up
+from the other side: a report-only sweep produces a list that decays only when
+someone works it, and this one was worked incidentally, by people fixing what
+they were already touching. Items 1 through 14 are still the order to take them
+in.
 
 ## Recurring failure classes
 
