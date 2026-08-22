@@ -135,28 +135,35 @@ func TestRotateBroadPATNeverRevokesTheJustMintedTokenOnACreatedTie(t *testing.T)
 }
 
 // The grace window is the only thing keeping a token a running workflow may
-// still be holding from being pulled out from under it. Pin BOTH edges: a PAT
-// created exactly ON the cutoff is outside the window (revoked), one second
-// newer is inside it (skipped).
+// still be holding from being pulled out from under it. Pin BOTH edges — but of
+// the SUPERSESSION clock, which is a different fixture from the one this test
+// used to carry.
+//
+// IT USED TO PIN THE EDGES OF THE WRONG CLOCK, and passed. Each PAT's own
+// `created` was compared to the cutoff, so the ladder below read as "one second
+// inside / exactly on / well past". Under supersession the thing that decides id
+// N is id N-1's creation, so the ladder shifts by one position and the ids that
+// change hands are different. Both edges are still pinned; they are edges of the
+// clock that governs.
 func TestRevokeOldBroadPATsGraceWindowEdges(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 	const graceDays int64 = 7
 	cutoff := now.Unix() - graceDays*linode.DaySecs
 
 	lc := &recordingBroadLinode{pats: []map[string]any{
-		{"id": jn(1), "label": "L", "created": linode.FmtLinodeTS(now.Unix())},      // newest — never revoked
-		{"id": jn(2), "label": "L", "created": linode.FmtLinodeTS(cutoff + 1)},      // just inside grace
-		{"id": jn(3), "label": "L", "created": linode.FmtLinodeTS(cutoff)},          // exactly ON the cutoff → outside
-		{"id": jn(4), "label": "L", "created": linode.FmtLinodeTS(cutoff - 86_400)}, // well past
+		{"id": jn(1), "label": "L", "created": linode.FmtLinodeTS(cutoff + 1)},      // newest — never revoked
+		{"id": jn(2), "label": "L", "created": linode.FmtLinodeTS(cutoff)},          // superseded at cutoff+1 → INSIDE
+		{"id": jn(3), "label": "L", "created": linode.FmtLinodeTS(cutoff - 86_400)}, // superseded AT the cutoff → outside
+		{"id": jn(4), "label": "L", "created": linode.FmtLinodeTS(cutoff - 99_999)}, // superseded a day past it
 		{"id": jn(9), "label": "OTHER", "created": linode.FmtLinodeTS(cutoff - 1)},  // another family entirely
 	}}
 
 	revoked, skipped := RevokeOldBroadPATs(context.Background(), lc, "L", graceDays, now)
 	if !sameIDs(revoked, []uint64{3, 4}) {
-		t.Errorf("revoked = %v, want [3 4] (a PAT created exactly on the cutoff is outside the window)", revoked)
+		t.Errorf("revoked = %v, want [3 4] (superseded exactly ON the cutoff is outside the window)", revoked)
 	}
 	if !sameIDs(skipped, []uint64{2}) {
-		t.Errorf("skipped-in-grace = %v, want [2]", skipped)
+		t.Errorf("skipped-in-grace = %v, want [2] (superseded one second inside the window)", skipped)
 	}
 	if !sameIDs(lc.deleted, []uint64{3, 4}) {
 		t.Errorf("DeleteProfileToken calls = %v, want [3 4]", lc.deleted)

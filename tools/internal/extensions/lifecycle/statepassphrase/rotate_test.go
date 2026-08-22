@@ -2,6 +2,7 @@ package statepassphrase
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,10 @@ func withRolloverSeams(t *testing.T, rekey, verify func(string) error, present m
 	ork, ov, oe := rekeyStateFn, verifyStateFn, statePassphraseRootExists
 	rekeyStateFn = func(dir string) error { return rekey(dir) }
 	verifyStateFn = func(dir, _ string) error { return verify(dir) }
-	statePassphraseRootExists = func(dir string) bool { return present[dir] }
+	// Keyed on the ROOT NAME, not the full path: --roots-dir is now a real
+	// temporary directory per test (RunRotate stats it), so a path-keyed map
+	// would silently miss every root and every test would read as all-skipped.
+	statePassphraseRootExists = func(dir string) bool { return present[filepath.Base(dir)] }
 	t.Cleanup(func() { rekeyStateFn, verifyStateFn, statePassphraseRootExists = ork, ov, oe })
 }
 
@@ -30,7 +34,7 @@ state {
 func allRoots() map[string]bool {
 	m := map[string]bool{}
 	for _, r := range statePassphraseRoots {
-		m["terraform/"+r] = true
+		m[r] = true
 	}
 	return m
 }
@@ -42,7 +46,7 @@ func allRoots() map[string]bool {
 func TestRotateStatePassphraseRefusesWithoutAFallback(t *testing.T) {
 	t.Setenv("TF_ENCRYPTION", `state { method = method.aes_gcm.n }`)
 	t.Setenv("TF_ENCRYPTION_NEW_ONLY", `state { method = method.aes_gcm.n }`)
-	err := RunRotate(true, "terraform")
+	err := RunRotate(true, tmpRootsDir(t))
 	if err == nil || !strings.Contains(err.Error(), "no fallback") {
 		t.Fatalf("want a no-fallback refusal, got %v", err)
 	}
@@ -54,7 +58,7 @@ func TestRotateStatePassphraseRefusesWithoutAFallback(t *testing.T) {
 func TestRotateStatePassphraseRequiresTheNewPassphrase(t *testing.T) {
 	t.Setenv("TF_ENCRYPTION", `state { fallback { method = method.aes_gcm.o } }`)
 	t.Setenv("TF_STATE_ENCRYPTION_PASSPHRASE", "")
-	err := RunRotate(true, "terraform")
+	err := RunRotate(true, tmpRootsDir(t))
 	if err == nil || !strings.Contains(err.Error(), "TF_STATE_ENCRYPTION_PASSPHRASE") {
 		t.Fatalf("want a refusal naming the passphrase, got %v", err)
 	}
@@ -108,7 +112,7 @@ func TestRotateStatePassphraseAllRootsVerify(t *testing.T) {
 		func(d string) error { rekeyed = append(rekeyed, d); return nil },
 		func(string) error { return nil },
 		allRoots())
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	if len(rekeyed) != len(statePassphraseRoots) {
@@ -131,7 +135,7 @@ func TestRotateStatePassphraseFailsWhenAnyRootDoesNot(t *testing.T) {
 			return nil
 		},
 		allRoots())
-	err := RunRotate(true, "terraform")
+	err := RunRotate(true, tmpRootsDir(t))
 	if err == nil {
 		t.Fatal("a root that fails verification MUST fail the command — the old passphrase is still load-bearing")
 	}
@@ -149,7 +153,7 @@ func TestRotateStatePassphraseRekeyedButUnverifiedIsAFailure(t *testing.T) {
 		func(string) error { return nil },
 		func(string) error { return errors.New("decryption failed for all attempted") },
 		allRoots())
-	if err := RunRotate(true, "terraform"); err == nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err == nil {
 		t.Fatal("re-keyed-but-unverified must fail")
 	}
 }
@@ -158,13 +162,13 @@ func TestRotateStatePassphraseRekeyedButUnverifiedIsAFailure(t *testing.T) {
 func TestRotateStatePassphraseSkipsAbsentRoots(t *testing.T) {
 	rotationWindowEnv(t)
 	present := allRoots()
-	delete(present, "terraform/databases")
+	delete(present, "databases")
 	var rekeyed []string
 	withRolloverSeams(t,
 		func(d string) error { rekeyed = append(rekeyed, d); return nil },
 		func(string) error { return nil },
 		present)
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("absent root should not fail the rollover: %v", err)
 	}
 	for _, d := range rekeyed {
@@ -181,7 +185,7 @@ func TestRotateStatePassphraseDryRunTouchesNothing(t *testing.T) {
 		func(string) error { t.Error("dry run must not re-key"); return nil },
 		func(string) error { t.Error("dry run must not verify"); return nil },
 		allRoots())
-	if err := RunRotate(false, "terraform"); err != nil {
+	if err := RunRotate(false, tmpRootsDir(t)); err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
 }

@@ -90,18 +90,13 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 	}
 
 	now := time.Now().Unix()
-	cutoff := now - graceDays*linode.DaySecs
 	tokens, err := client.ListProfileTokens(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Candidates: every PAT whose label matches exactly, newest first.
-	type cand struct {
-		id      uint64
-		created int64
-	}
-	var candidates []cand
+	var candidates []gracedToken
 	legacyN := 0
 	for _, t := range tokens {
 		s, _ := t["label"].(string)
@@ -119,9 +114,9 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		if !ok {
 			continue
 		}
-		candidates = append(candidates, cand{id, created})
+		candidates = append(candidates, gracedToken{ID: id, Created: created})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].created > candidates[j].created })
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Created > candidates[j].Created })
 	if label != legacyRotationLabels[rotationKindPAT] {
 		reportLegacyRotationLabels(rotationKindPAT, legacyN)
 	}
@@ -140,25 +135,28 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		})
 	}
 
-	keptID := candidates[0].id
+	keptID := candidates[0].ID
 	revoked := []uint64{}
+	// [0] is the live one and is never revoked. Every older sibling's window runs
+	// from when its replacement was MINTED — see graceperiod.go for why its own
+	// age is the wrong clock and what that cost.
 	skipped := []uint64{}
-	// Skip [0] (the live one); evaluate every older sibling.
-	for _, c := range candidates[1:] {
-		if c.created > cutoff {
-			slog.Info("in grace window — keeping for now", "id", c.id, "age_days", (now-c.created)/linode.DaySecs)
-			skipped = append(skipped, c.id)
+	for _, d := range decideByGrace(candidates, graceDays, now) {
+		if !d.Drain {
+			slog.Info("superseded within the grace window — keeping for now",
+				"id", d.ID, "superseded_days_ago", (now-d.SupersededAt)/linode.DaySecs, "grace_days", graceDays)
+			skipped = append(skipped, d.ID)
 			continue
 		}
 		if !apply {
-			slog.Warn("DRY-RUN: would DELETE PAT", "id", c.id)
+			slog.Warn("DRY-RUN: would DELETE PAT", "id", d.ID)
 		} else {
-			if err := client.DeleteProfileToken(ctx, c.id); err != nil {
+			if err := client.DeleteProfileToken(ctx, d.ID); err != nil {
 				return err
 			}
-			slog.Info("revoked", "id", c.id)
+			slog.Info("revoked", "id", d.ID, "superseded_days_ago", (now-d.SupersededAt)/linode.DaySecs)
 		}
-		revoked = append(revoked, c.id)
+		revoked = append(revoked, d.ID)
 	}
 
 	return cli.PrintRecord(map[string]any{

@@ -180,6 +180,18 @@ func RunRotate(apply bool, rootsDir string) error {
 		return err
 	}
 
+	// THE ROOTS DIRECTORY ITSELF MUST EXIST. Every root is probed with os.Stat
+	// and an absent one is recorded as "not present in this instance" — a real
+	// state (an instance with no databases root), and the reason a wrong
+	// --roots-dir produced four skips and no error at all. Checking the parent
+	// separates "this instance does not have that root" from "nobody has ever
+	// had a root here, so the path is wrong".
+	if st, err := os.Stat(rootsDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("--roots-dir %q is not a directory (%v) — refusing to report on roots "+
+			"that were never looked for. The roots live under terraform-iac-bootstrap/ in an "+
+			"instance checkout; run this from the instance root", rootsDir, err)
+	}
+
 	results := make([]rootRollover, 0, len(statePassphraseRoots))
 	for _, root := range statePassphraseRoots {
 		dir := rootsDir + "/" + root
@@ -251,6 +263,27 @@ func reportRollover(results []rootRollover, apply bool) error {
 		_ = ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
 		return fmt.Errorf("state-passphrase rollover incomplete: %d of %d root(s) failed — old passphrase MUST be retained", failed, verified+failed)
 	}
+	// ZERO VERIFIED IS NOT SUCCESS, and this is the arm the whole function turns
+	// on. The message below is the one the workflow gates deletion of
+	// TF_STATE_ENCRYPTION_PASSPHRASE_OLD on, and `failed == 0` was the only
+	// condition guarding it — which is also true of a run that re-keyed NOTHING.
+	// A wrong --roots-dir skipped all four roots, printed "All 0 present root(s)
+	// verified", and exited 0. Following that summary discards the only key that
+	// can read every state file in the instance.
+	//
+	// There is no legitimate all-skipped rollover: statePassphraseRoots is the
+	// closed list of roots that carry encrypted state, and an instance with none
+	// of them has no state to re-key and no reason to be running this.
+	if verified == 0 {
+		summary = append(summary, "",
+			"**DO NOT delete `TF_STATE_ENCRYPTION_PASSPHRASE_OLD`.** "+
+				fmt.Sprintf("No root was re-keyed (%d skipped). ", skipped)+
+				"Nothing has moved to the new passphrase, so the old one is still the only key that reads this state.")
+		_ = ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
+		return fmt.Errorf("state-passphrase rollover re-keyed NOTHING: all %d root(s) were skipped — "+
+			"check --roots-dir points at the instance's Terraform roots. The old passphrase MUST be retained", skipped)
+	}
+
 	summary = append(summary, "",
 		fmt.Sprintf("All %d present root(s) verified with the new passphrase alone (%d skipped). ", verified, skipped)+
 			"`TF_STATE_ENCRYPTION_PASSPHRASE_OLD` can now be deleted and "+

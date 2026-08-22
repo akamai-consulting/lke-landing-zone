@@ -137,7 +137,7 @@ func TestRotateStatePassphraseIncompleteErrorCountsEveryRoot(t *testing.T) {
 		},
 		allRoots())
 
-	err := RunRotate(true, "terraform")
+	err := RunRotate(true, tmpRootsDir(t))
 	if err == nil {
 		t.Fatal("a root that fails verification MUST fail the command")
 	}
@@ -159,13 +159,13 @@ func TestRotateStatePassphraseSummaryCountsVerifiedAndSkipped(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", sum)
 
 	present := allRoots()
-	delete(present, "terraform/databases")
+	delete(present, "databases")
 	withRolloverSeams(t,
 		func(string) error { return nil },
 		func(string) error { return nil },
 		present)
 
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	got, readErr := os.ReadFile(sum)
@@ -192,7 +192,7 @@ func TestRotateStatePassphraseReportsRootsInSortedOrder(t *testing.T) {
 		func(string) error { return nil },
 		allRoots())
 
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	got, readErr := os.ReadFile(sum)
