@@ -690,11 +690,14 @@ jobs:
       # shape — also a gates row, also duplicated here — but only this one has a
       # test holding the placement: TestTheGuardRunsInAJobForkPullRequestsReach,
       # which fails if this step, its job, or any job that job needs becomes
-      # conditional at all, if the step goes continue-on-error, or if the trigger
-      # stops covering a root the guard scans. NOT "gated on repository identity",
-      # which is what this said first and is narrower than the test: the strongest
-      # skip is `if: github.event_name != 'pull_request'`, which names no
-      # repository and drops the guard from every PR there is.
+      # conditional at all, if the step or its job goes continue-on-error, or if the
+      # trigger stops covering a root the guard scans. Deliberately NOT "gated on
+      # repository identity", which is narrower than the test: the strongest skip is
+      # `if: github.event_name != 'pull_request'`, which names no repository and
+      # drops the guard from every PR there is. That test ships in the same batch as
+      # this comment and has to land FIRST — until it does, main's version is a
+      # single hardcoded substring, and this comment describes protections that are
+      # not there yet.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
