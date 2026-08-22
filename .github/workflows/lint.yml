@@ -667,35 +667,36 @@ jobs:
       # discover → auto-unseal / scheduled-checks / secret-rotation workflows
       # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
       #
-      # TWO SITES, like the run-interpolation guard below: `guard-workflow-shells`
-      # is also a `llz ci gates` row (registry/gates.go), so this step is a second
-      # site rather than a relocation, and deleting it as redundant would leave the
-      # check reachable only from the Kubernetes job — which is skipped for fork
-      # pull requests. NOT by design: this step landed alone (fa8d5b99, 2026-06-26)
-      # and acquired its gates row six weeks later (ca1f731e), so the duplication is
-      # an accident that turned out to be load-bearing. Weaker consequence than the
-      # guard below, too — a dash fallback is not attacker-controlled.
+      # TWO SITES, and this one came first. `guard-workflow-shells` is also a
+      # `llz ci gates` row (registry/gates.go), but the row is the LATER of the two:
+      # this step landed alone (fa8d5b99, 2026-06-26) and the row followed six weeks
+      # after (ca1f731e). So neither site is redundant with the other, and the
+      # tempting cleanup — delete the newer one — would remove the row, while
+      # deleting this one leaves the check reachable only from the Kubernetes job,
+      # which fork pull requests skip. Weaker consequence than the guard below: a
+      # dash fallback is not attacker-controlled.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. ALSO a `llz ci gates` row (registry/gates.go), so this step is the
-      # SECOND site rather than a relocation — and here the duplication is the point.
-      # The Kubernetes job that runs `llz ci gates` is conditioned on the event not
-      # being a pull request OR the head repository being this one (the expression
-      # itself is on the `kubernetes` job, near the top of this file), so it runs on
-      # every push and skips every FORK pull request. That is exactly the population
-      # this guard's threat model is about: a fork PR is how an attacker-chosen
-      # branch name or PR title reaches a workflow at all. This job (go-tests) has no
-      # `if:` and runs on forks.
+      # script. ALSO a `llz ci gates` row (registry/gates.go) — and here BOTH sites
+      # arrived in one commit (ef7df96a), whose own message called this step the
+      # only one. So the duplication was not planned here either; what was chosen,
+      # and what matters, is the JOB.
       #
-      # Being in the gate set as well was NOT deliberate, and the shell guard above
-      # got there by accident too — ef7df96a added this step and the gates row in one
-      # commit while its own message said "NOT via `llz ci gates`". What WAS chosen
-      # is the job. TestTheGuardRunsInAJobForkPullRequestsReach holds that choice;
-      # read it for what it enforces rather than trusting a list here, which is a
-      # second copy that can only drift.
+      # The Kubernetes job that runs `llz ci gates` is conditioned on the event not
+      # being a pull request OR the head repository being this one, so it skips every
+      # FORK pull request — exactly the population this guard's threat model is
+      # about, since a fork PR is how an attacker-chosen branch name or PR title
+      # reaches a workflow at all. This job (go-tests) has no `if:`, so it runs on
+      # every pull request, fork or not. (The condition is DESCRIBED, not quoted: the
+      # expression lives on the `kubernetes` job near the top of this file, and a
+      # copy here is a second thing to keep in step with it.)
+      #
+      # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for
+      # what it enforces rather than trusting a list here, which is a second copy
+      # that can only drift.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
