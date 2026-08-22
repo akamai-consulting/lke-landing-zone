@@ -1060,14 +1060,18 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// (`make untestable-loc-check`, `make core-surface-check`). The guard would
 	// still be wired, unconditionally, and the test would be reporting the opposite.
 	invocation := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b`)
-	// NO `\b` AFTER THE ALTERNATION. It was `(true|:)\b`, and a word boundary cannot
-	// follow `:` at end of line — both sides are non-word — so the `:` arm never
-	// matched anything. It looked verified because the mutation that "proved" it
-	// wrote a bare `|| :` into the YAML, which is not a valid plain scalar: the test
-	// went red on a PARSE ERROR and the harness counted any red as a kill.
-	swallowsFailure := regexp.MustCompile(`(?m)^[^#\n]*\bworkflow-injection\b[^#\n]*\|\|\s*(true|:)`)
-	// `set +e` disarms every command after it, including one on a later line.
-	disablesErrExit := regexp.MustCompile(`(?m)^[^#\n]*\bset\s+[-+][a-zA-Z]*e`)
+	// ONE COMMAND, NO SHELL. Three rounds went at shell-level disarming as a
+	// blacklist — `|| true`, then `|| :`, then `set +e` — and review walked past
+	// every cut: `set -euo pipefail` before `set +e` (only the first match was
+	// read), `set +o errexit` (the pattern could not cross the space), a backslash
+	// continuation, `|| echo`, `if ! ...; then`. Enumerating the ways a shell can
+	// swallow an exit status is the glob-engine mistake in another costume.
+	//
+	// So the guard step must be a single command with no shell operators in it.
+	// That is what it is today, it is what a gate invocation should be, and anything
+	// more expressive — including a legitimate one — fails here and gets a person
+	// deciding, instead of being waved through by a pattern that did not think of it.
+	shellOperator := regexp.MustCompile(`\|\||&&|;|\||\bset\s+[-+]`)
 	// `needs:` takes a scalar or a sequence, and a key with no value at all decodes
 	// to !!null — which an earlier cut enqueued as the empty string and then
 	// reported as a missing job.
@@ -1124,14 +1128,18 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			// it reads as ordinary shell rather than as a policy decision. Same escape
 			// class as the `#`-in-run: fix above: the disarming lives one layer below
 			// where the check was looking.
-			if swallowsFailure.MatchString(g.Run) {
-				t.Errorf("the workflow-injection step in job %s swallows its exit status "+
-					"(%q) — it reports and the build stays green, which is not a guard",
-					name, strings.TrimSpace(swallowsFailure.FindString(g.Run)))
+			var cmd []string
+			for _, line := range strings.Split(g.Run, "\n") {
+				if tl := strings.TrimSpace(line); tl != "" && !strings.HasPrefix(tl, "#") {
+					cmd = append(cmd, tl)
+				}
 			}
-			if m := disablesErrExit.FindString(g.Run); m != "" && strings.Contains(m, "+e") {
-				t.Errorf("the workflow-injection step in job %s disables errexit (%q) — a "+
-					"failing guard would not fail the step", name, strings.TrimSpace(m))
+			if len(cmd) != 1 || shellOperator.MatchString(cmd[0]) {
+				t.Errorf("the workflow-injection step in job %s is not a single bare command "+
+					"(%q) — a guard's exit status is the whole point of running it, and any "+
+					"shell around it (`|| true`, `set +e`, a second line) can swallow that "+
+					"status while the step still reports as having run", name,
+					strings.Join(cmd, " ; "))
 			}
 		}
 		// The job itself, then everything it transitively needs: a skipped
@@ -1219,7 +1227,9 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 	// The default branch has to be reachable, through whichever of the two keys is
 	// used. `branches-ignore` was unmodelled in an earlier cut, so excluding main
 	// through it left the test green while no PR into main started a run at all.
-	isDefault := func(b string) bool { return b == "main" || b == "master" || b == "**" || b == "*" }
+	// `main`, not "main or master". Accepting both meant `branches: [master]` passed
+	// while no PR into the branch this repo actually merges into started a run.
+	isDefault := func(b string) bool { return b == "main" || b == "**" || b == "*" }
 	if len(pr.Branches) > 0 {
 		ok := false
 		for _, b := range pr.Branches {
@@ -1298,12 +1308,19 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 			// reporting that was a false red on a security test. So the basename
 			// decides: a wildcard basename over YAML removes the tree, a literal
 			// filename does not.
+			// IT HAS TO CROSS `/` TO REMOVE A TREE. Only `**` does; a bare `*` stops at
+			// a separator, so `*.yml` matches top-level files and takes nothing out of
+			// these roots. Reporting it was a false red, contradicting the rule stated
+			// on the include side twenty lines up.
+			if !strings.Contains(pattern, "**") {
+				return false
+			}
 			if pattern == "**" {
 				return true
 			}
 			base := pattern[strings.LastIndex(pattern, "/")+1:]
 			if !strings.Contains(base, "*") {
-				return false
+				return false // names one file, e.g. `**/dependabot.yml`: not a tree
 			}
 			return base == "*" || base == "**" ||
 				strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")
