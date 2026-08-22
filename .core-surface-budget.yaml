@@ -1363,8 +1363,9 @@ categories:
     #                       AddCommand, the usual cost of a gate. The gate itself
     #                       is guards/runinjection. It closes the half of the class
     #                       nothing in the tree detected: actionlint exits 0 on
-    #                       `${{ inputs.x }}` inside a run: script (measured on the
-    #                       pinned v1.7.7), and eleven such interpolations, across
+    #                       `${{ inputs.x }}` inside a run: script (measured on
+    #                       v1.7.7, the version of the day — evidence, not a pin),
+    #                       and eleven such interpolations, across
     #                       seven run: blocks in six files, were live in the tree
     #                       the remediation (6b158c66) fixed — the commit before
     #                       it, not the commit before this gate.

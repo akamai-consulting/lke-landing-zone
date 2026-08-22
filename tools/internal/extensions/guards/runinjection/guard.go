@@ -20,7 +20,9 @@ package runinjection
 // actionlint does not scan instance-template/. Measured, it does (instance-test
 // lints the rendered instance).
 //
-// WHAT actionlint ACTUALLY COVERS — measured on the pinned v1.7.7 and on v1.7.12,
+// WHAT actionlint ACTUALLY COVERS — measured on v1.7.7 and v1.7.12 (the pin at the
+// time was the former; these name the versions the measurement was TAKEN on, which
+// is dated evidence rather than a pin that has to track ACTIONLINT_VERSION),
 // identically, and unchanged by `-shellcheck=` (its shellcheck integration
 // substitutes a placeholder for the expression, so shellcheck reads the script
 // AFTER substitution and the injection is gone by the time it looks). It exits 1
@@ -528,10 +530,9 @@ func Run(root string, out, errOut io.Writer) error {
 			// not: the aggregate counts across ALL roots, and .github/workflows alone
 			// keeps it non-zero. .github/actions holds one file, so moving it printed
 			// a confident OK over every other file in the tree having never read a
-			// first-party composite action — the same omission, one root over, that
-			// left this guard's first
-			// cut blind to three of the seven live sites: setup-llz here, and
-			// fetch-kubeconfig and terraform-init in the DELIVERED action tree.
+			// first-party composite action — the same omission, one root over, that left
+			// this guard's first cut blind to three of the seven live sites: setup-llz
+			// here, and fetch-kubeconfig and terraform-init in the DELIVERED action tree.
 			//
 			// THREE CASES, THREE ANSWERS. Reporting "the delivered tree moved" for a
 			// root that is present and merely empty names the wrong cause, and a wrong
