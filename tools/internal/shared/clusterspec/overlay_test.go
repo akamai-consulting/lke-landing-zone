@@ -95,7 +95,13 @@ func TestRenderAppsOverlayShared(t *testing.T) {
 func TestRenderAppsOverlayEnv(t *testing.T) {
 	// ComponentEnabled(toggles, name) == present-in-map && !toggle.DefaultDisabled,
 	// so a component present with a zero toggle is enabled.
-	on := RenderAppsOverlayEnv(map[string]ComponentToggle{"observability": {}, "harbor": {}})
+	//
+	// The Bootstrap is no longer a zero value: observability and harbor are
+	// ManagedConditionalOn their apl-core apps, and the overlay now respects the
+	// same EmitOnManaged gate every other renderer uses. DefaultManagedApps is
+	// what Defaults() stamps, so this is the realistic input.
+	boot := Bootstrap{ManagedApps: append([]string(nil), DefaultManagedApps...)}
+	on := RenderAppsOverlayEnv(boot, map[string]ComponentToggle{"observability": {}, "harbor": {}})
 	var doc appsOverlayDoc
 	if err := yaml.Unmarshal([]byte(on), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -107,7 +113,7 @@ func TestRenderAppsOverlayEnv(t *testing.T) {
 	}
 	// Explicitly disabling observability (tri-state Enabled=false) flips its
 	// apl-core apps off — the toggle overrides the component's default-on.
-	off := RenderAppsOverlayEnv(map[string]ComponentToggle{"observability": {Enabled: boolPtr(false)}})
+	off := RenderAppsOverlayEnv(boot, map[string]ComponentToggle{"observability": {Enabled: boolPtr(false)}})
 	var offDoc appsOverlayDoc
 	if err := yaml.Unmarshal([]byte(off), &offDoc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
