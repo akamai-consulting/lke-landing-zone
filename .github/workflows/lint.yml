@@ -671,37 +671,31 @@ jobs:
       # is also a `llz ci gates` row (registry/gates.go), so this step is a second
       # site rather than a relocation, and deleting it as redundant would leave the
       # check reachable only from the Kubernetes job — which is skipped for fork
-      # pull requests. NOT by design, though, and the difference is worth keeping
-      # straight: this step landed alone (fa8d5b99) and acquired its gates row two
-      # months later (ca1f731e), so the duplication is an accident that turned out
-      # to be load-bearing, where the guard below was placed here deliberately.
-      # Weaker consequence too — a dash fallback is not attacker-controlled.
+      # pull requests. NOT by design: this step landed alone (fa8d5b99, 2026-06-26)
+      # and acquired its gates row six weeks later (ca1f731e), so the duplication is
+      # an accident that turned out to be load-bearing. Weaker consequence than the
+      # guard below, too — a dash fallback is not attacker-controlled.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. ALSO a `llz ci gates` row (registry/gates.go) — this step is the
-      # SECOND site, not a relocation, and the duplication is the whole point: the
-      # Kubernetes job that runs `llz ci gates` is conditioned on the event not
-      # being a pull request OR the head repository being this one, so it runs on
-      # every push and skips every FORK pull request — which is exactly the
-      # population this guard's threat model is about. (Described rather than
-      # quoted: the literal expression is two lines up in the `kubernetes` job, and
-      # a copy of it here is a second thing to keep in step with the first.) A fork PR is how an attacker-chosen branch name or PR title reaches
-      # a workflow in the first place, so a guard reachable only from the gate set
-      # is not protecting against the case it exists for. This job (go-tests) has
-      # no such `if:` and runs on forks. The shell-default guard above is the same
-      # shape — also a gates row, also duplicated here — but only this one has a
-      # test holding the placement: TestTheGuardRunsInAJobForkPullRequestsReach,
-      # which fails if this step, its job, or any job that job needs becomes
-      # conditional at all, if the step or its job goes continue-on-error, if the
-      # step stops being a single bare command (`|| true` and `set +e` swallow an
-      # exit status as effectively as continue-on-error does), or if the trigger
-      # stops covering a root the guard scans. Deliberately NOT "gated on
-      # repository identity", which is narrower than the test: the strongest skip is
-      # `if: github.event_name != 'pull_request'`, which names no repository and
-      # drops the guard from every PR there is.
+      # script. ALSO a `llz ci gates` row (registry/gates.go), so this step is the
+      # SECOND site rather than a relocation — and here the duplication is the point.
+      # The Kubernetes job that runs `llz ci gates` is conditioned on the event not
+      # being a pull request OR the head repository being this one (the expression
+      # itself is on the `kubernetes` job, near the top of this file), so it runs on
+      # every push and skips every FORK pull request. That is exactly the population
+      # this guard's threat model is about: a fork PR is how an attacker-chosen
+      # branch name or PR title reaches a workflow at all. This job (go-tests) has no
+      # `if:` and runs on forks.
+      #
+      # Being in the gate set as well was NOT deliberate, and the shell guard above
+      # got there by accident too — ef7df96a added this step and the gates row in one
+      # commit while its own message said "NOT via `llz ci gates`". What WAS chosen
+      # is the job. TestTheGuardRunsInAJobForkPullRequestsReach holds that choice;
+      # read it for what it enforces rather than trusting a list here, which is a
+      # second copy that can only drift.
       - name: Workflow run-interpolation guard
         working-directory: tools
         run: go run ./cmd/llz ci workflow-injection --root ..
