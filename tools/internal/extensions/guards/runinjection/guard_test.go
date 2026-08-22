@@ -974,6 +974,51 @@ jobs:
 	}
 }
 
+// globMatch answers GitHub's `paths:` question — does this filter pattern match
+// this changed file? — for the subset of the syntax that appears in a workflow.
+//
+// WRITTEN ONCE, PROPERLY, after three cuts that tried to avoid writing it. Each
+// reasoned about patterns in the abstract and each was walked past by a shape it
+// had not pictured: `**/*.yml` let through, `*.yml` reported although `*` cannot
+// cross `/`, `**/dependabot.yml` reported although it names one file,
+// `**/action.yml` let through although that is the ONLY filename the action roots
+// contain, then `.github/workflows/*.yml` and `.github/*/**` let through because
+// the prefix comparison could not see a wildcard in the directory part. The rules
+// are three lines of regex; guessing at them was the expensive option.
+func globMatch(pattern, path string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**"):
+			b.WriteString(".*") // crosses separators
+			i++
+		case pattern[i] == '*':
+			b.WriteString("[^/]*") // stops at a separator
+		case strings.ContainsRune("?+[", rune(pattern[i])):
+			return false // unsupported syntax — see unsupportedGlob, which reports it
+		default:
+			b.WriteString(regexp.QuoteMeta(string(pattern[i])))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	return err == nil && re.MatchString(path)
+}
+
+// unsupportedGlob reports a `paths:` syntax globMatch does not implement. GitHub's
+// `?` and `+` are quantifiers on the PRECEDING character and `[]` is a class — not
+// the shell meanings — and guessing at semantics is how six escapes got into this
+// check already. The two sides then fail in their own safe direction: an include
+// that cannot be understood does not count as coverage, and an exclude that cannot
+// be understood is reported rather than waved through.
+func unsupportedGlob(pattern string) bool {
+	// AFTER the `!`, because a negation carries the same syntax and the same
+	// consequence: `- '!**/*.y?ml'` takes every scanned file back out of `paths:`,
+	// and a check that skipped negated entries could not see it.
+	return strings.ContainsAny(strings.TrimPrefix(pattern, "!"), "?+[")
+}
+
 // invokes reports whether a run: script actually RUNS the guard, as opposed to
 // mentioning its name. Three cuts got this wrong in three ways, each leaving the
 // guard switched off in CI while this test reported success:
@@ -1144,6 +1189,19 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		t.Fatalf("reading lint.yml: %v", err)
 	}
 	var wf struct {
+		// `yaml:"on"`, not `yaml:"true"`. `on` is YAML 1.1's boolean, and the first
+		// cut of this decoded the key as `true` on that basis — but yaml.v3 follows
+		// the 1.2 core schema, where `on` is an ordinary string. Measured: the `true`
+		// spelling decoded nothing and reported all four roots uncovered, which reads
+		// exactly like a real finding.
+		// `on:` AS A RAW NODE, because it has three legal shapes and two of them are
+		// the SAFEST configurations there are. `on: [pull_request]` is a sequence and
+		// `pull_request:` with no value is a null — both mean "every pull request,
+		// unfiltered", and a typed struct decoded the first into a yaml TypeError and
+		// the second into nil. An earlier cut read that nil as "there is no
+		// pull_request trigger" and failed the build over the broadest trigger the
+		// workflow could have, which is the remedy the paths check below recommends.
+		On   yaml.Node          `yaml:"on"`
 		Jobs map[string]lintJob `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(b, &wf); err != nil {
@@ -1211,6 +1269,169 @@ func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
 		}
 	}
 
+	// A THIRD WAY TO NEVER RUN, and the only one that leaves no trace in any job:
+	// the workflow's own trigger. If a root this guard scans cannot start a run, a
+	// PR touching only that tree produces no Lint run at all — no skipped job, no
+	// red X, nothing to notice. Not hypothetical: `.github/actions/**` was MISSING
+	// when the guard landed, so a PR editing only a first-party composite action —
+	// one of the two roots the guard exists to cover — triggered nothing.
+	type prFilters struct {
+		Branches       []string `yaml:"branches"`
+		BranchesIgnore []string `yaml:"branches-ignore"`
+		Types          []string `yaml:"types"`
+		Paths          []string `yaml:"paths"`
+		PathsIgnore    []string `yaml:"paths-ignore"`
+	}
+	var pr prFilters
+	present := false
+	switch wf.On.Kind {
+	case yaml.ScalarNode:
+		present = wf.On.Value == "pull_request"
+	case yaml.SequenceNode:
+		for _, n := range wf.On.Content {
+			if n.Value == "pull_request" {
+				present = true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(wf.On.Content); i += 2 {
+			if wf.On.Content[i].Value != "pull_request" {
+				continue
+			}
+			present = true
+			if v := wf.On.Content[i+1]; v.Kind == yaml.MappingNode {
+				if err := v.Decode(&pr); err != nil {
+					t.Fatalf("decoding on.pull_request: %v", err)
+				}
+			}
+		}
+	}
+	if !present {
+		t.Fatal("lint.yml has no pull_request trigger — the guard cannot run on a PR at all, " +
+			"which is the only event a fork contributor can reach")
+	}
+	// The default branch has to be reachable, through whichever of the two keys is
+	// used. `branches-ignore` was unmodelled in an earlier cut, so excluding main
+	// through it left the test green while no PR into main started a run at all.
+	// `main`, not "main or master". Accepting both meant `branches: [master]` passed
+	// while no PR into the branch this repo actually merges into started a run.
+	isDefault := func(b string) bool { return b == "main" || b == "**" || b == "*" }
+	if len(pr.Branches) > 0 {
+		// A NEGATION TAKES IT BACK OUT. `['**', '!main']` reads as "everything", and
+		// excludes every PR into the branch this repo merges to — the same escape as
+		// `branches-ignore`, spelled inside the include list instead.
+		ok := false
+		for _, b := range pr.Branches {
+			if strings.HasPrefix(b, "!") {
+				if isDefault(strings.TrimPrefix(b, "!")) {
+					ok = false
+				}
+				continue
+			}
+			if isDefault(b) {
+				ok = true
+			}
+		}
+		if !ok {
+			t.Errorf("lint.yml's pull_request branches: %v does not include the default branch "+
+				"— a PR into main starts no run, and that is every PR the guard exists for",
+				pr.Branches)
+		}
+	}
+	for _, b := range pr.BranchesIgnore {
+		if isDefault(b) {
+			t.Errorf("lint.yml's pull_request branches-ignore: %v excludes the default branch "+
+				"— a PR into main starts no run at all", pr.BranchesIgnore)
+			break
+		}
+	}
+	// The default types are [opened, synchronize, reopened]. Naming the list must not
+	// drop either of the two that matter: without `opened` a PR that arrives carrying
+	// the injection starts nothing, and without `synchronize` one can open benign and
+	// force-push it in afterwards.
+	if len(pr.Types) > 0 {
+		for _, need := range []string{"opened", "synchronize"} {
+			has := false
+			for _, ty := range pr.Types {
+				if ty == need {
+					has = true
+				}
+			}
+			if !has {
+				t.Errorf("lint.yml's pull_request types: %v omits %q — a revision carrying an "+
+					"injection can reach the merge box without the guard ever seeing it",
+					pr.Types, need)
+			}
+		}
+	}
+	// COVERAGE IS ASKED PER FILE, against the tree as it actually is. The files the
+	// guard scans are on disk, so "would a PR touching only this file start a run?"
+	// has a real answer for each one, and globMatch gives it. Earlier cuts tried to
+	// decide coverage from the shape of the pattern alone and were wrong in both
+	// directions — accepting `.github/workflows` (matches no file) and rejecting
+	// `dir/**/*.yml` (matches every one).
+	var files []string
+	for _, root := range scanRoots {
+		_ = filepath.Walk(filepath.Join("..", "..", "..", "..", "..", filepath.FromSlash(root)),
+			func(p string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil //nolint:nilerr // an absent root is the vacuity check's business
+				}
+				if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
+					rel := filepath.ToSlash(p)
+					files = append(files, rel[strings.Index(rel, root):])
+				}
+				return nil
+			})
+	}
+	if len(files) == 0 {
+		t.Fatal("found no workflow or action files under scanRoots — the trigger check " +
+			"would be vacuous")
+	}
+	for _, f := range files {
+		for _, p := range pr.PathsIgnore {
+			if strings.HasPrefix(p, "!") {
+				continue // a re-inclusion: it adds coverage back, it cannot hide anything
+			}
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q uses glob syntax this "+
+					"test does not implement — check by hand whether it hides %s, a file "+
+					"workflow-injection scans, then teach globMatch about it", p, f)
+				continue
+			}
+			if globMatch(p, f) {
+				t.Errorf("lint.yml's pull_request paths-ignore entry %q matches %s, a file "+
+					"workflow-injection scans — a PR touching only that file starts no run at "+
+					"all, so the guard does not skip, it never happens", p, f)
+			}
+		}
+		if pr.Paths == nil {
+			continue // no filter at all: every PR runs, which is total coverage
+		}
+		covered := false
+		for _, p := range pr.Paths {
+			if unsupportedGlob(p) {
+				t.Errorf("lint.yml's pull_request paths entry %q uses glob syntax this test "+
+					"does not implement — check by hand whether %s still starts a run, then "+
+					"teach globMatch about it", p, f)
+				continue
+			}
+			if strings.HasPrefix(p, "!") {
+				if globMatch(strings.TrimPrefix(p, "!"), f) {
+					covered = false // a later negation takes it back out
+				}
+				continue
+			}
+			if globMatch(p, f) {
+				covered = true
+			}
+		}
+		if !covered {
+			t.Errorf("lint.yml's pull_request paths: matches no entry for %s, a file "+
+				"workflow-injection scans — a PR touching only that file starts no run at "+
+				"all, so the guard does not skip, it never happens", f)
+		}
+	}
 }
 
 func TestABraceTypoIsNotReportedAsAnInjection(t *testing.T) {
