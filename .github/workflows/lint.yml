@@ -667,38 +667,37 @@ jobs:
       # discover → auto-unseal / scheduled-checks / secret-rotation workflows
       # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
       #
-      # TWO SITES, and this one came first. `guard-workflow-shells` is also a
-      # `llz ci gates` row (registry/gates.go), but the row is the LATER of the two:
-      # this step landed alone (fa8d5b99, 2026-06-26) and the row followed six weeks
-      # after (ca1f731e). So neither site is redundant with the other, and the
-      # tempting cleanup — delete the newer one — would remove the row, while
-      # deleting this one leaves the check reachable only from the Kubernetes job,
-      # which fork pull requests skip. Weaker consequence than the guard below: a
-      # dash fallback is not attacker-controlled.
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job — and this step is the
+      # OLDER of the two: it landed alone (fa8d5b99, 2026-06-26) and the gates row
+      # followed six weeks later (ca1f731e). Neither site is spare. The row is the
+      # only one a local `make lint` reaches, and this step is the only one a FORK
+      # pull request reaches, because the Kubernetes job that carries the gate set
+      # skips them. Weaker consequence than the guard below — a dash fallback is not
+      # attacker-controlled — but the same two-sites-two-audiences shape.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. ALSO a `llz ci gates` row (registry/gates.go), and HERE THE SECOND
-      # SITE IS DELIBERATE. The row landed first; this step was added later the same
-      # day, once it was noticed that the job carrying the gate set skips fork pull
-      # requests, and the row was kept on purpose. (main's squashed commit ef7df96a
-      # shows both arriving together and reads like an accident — the two commits it
-      # squashes, 66101af7 and 65d5dacb, are where the reasoning is. A squash erases
-      # intent, so this is the one claim here not to take from `git log` on main.)
+      # script. ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and HERE THE
+      # SECOND SITE IS DELIBERATE: the row came first, and this step was added later
+      # the same day once it was noticed that the job carrying the gate set skips
+      # fork pull requests. main's squashed commit shows both arriving together and
+      # reads like an accident; the reasoning is in PR #438, whose branch commits are
+      # where the sequence and the argument live. A squash keeps the diff and throws
+      # away the why, so this is the one claim here not to take from `git log`.
       #
-      # The Kubernetes job that runs `llz ci gates` is conditioned on the event not
-      # being a pull request OR the head repository being this one, so it skips every
-      # FORK pull request — exactly the population this guard's threat model is
-      # about, since a fork PR is how an attacker-chosen branch name or PR title
-      # reaches a workflow at all. This job (go-tests) carries no `if:`, so whenever
-      # this workflow runs at all, the guard runs — fork or not. (What starts the
-      # workflow is a separate question, answered by the `on:` block at the top.)
+      # The Kubernetes job is conditioned on the event not being a pull request OR
+      # the head repository being this one, so it skips every FORK pull request —
+      # exactly the population this guard's threat model is about, since a fork PR is
+      # how an attacker-chosen branch name or PR title reaches a workflow at all.
+      # This job (go-tests) carries no `if:`, so whenever the workflow runs, the
+      # guard runs, fork or not. What starts the workflow is a separate question,
+      # answered by the `on:` block at the top.
       #
       # The fork condition is DESCRIBED, not quoted: it already appears verbatim on
       # two jobs in this file, `kubernetes` and `terraform`, and a copy here would be
-      # the third place to keep in step.
+      # a third place to keep in step with them.
       #
       # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for
       # what it enforces rather than trusting a list here, which is a second copy
