@@ -209,8 +209,9 @@ jobs:
           # never become syntax. It was interpolated directly at first and nothing
           # objected: actionlint exits 0 on `${{ inputs.* }}` in a run: script. The
           # template repo's `llz ci workflow-injection` catches that before this file
-          # ships — but nothing in your instance runs that guard, so if you drop the
-          # env: hop in your copy, no check here will catch you. Keep it.
+          # ships. Editing it HERE fails your own `llz lint` as managed drift (this
+          # file is digest-locked) — but that gate is about the edit, not the shape:
+          # write the same `${{ }}` into a workflow of your own and nothing flags it.
           REF: ${{ inputs.ref }}
         run: llz upgrade --ref "$REF" --commit --no-doctor
 
