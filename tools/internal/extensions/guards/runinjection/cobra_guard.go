@@ -24,8 +24,9 @@ func Cmd() *cobra.Command {
 			"parsing and it cannot become syntax.\n\n" +
 			"A SUPERSET OF actionlint, not a duplicate of it: measured, actionlint flags\n" +
 			"its own untrusted-input list (github.head_ref, the event title/body fields) and\n" +
-			"exits 0 on inputs.*, github.event.inputs.*, toJSON(github) and anything routed\n" +
-			"through env: from one of those — which is the half every site found here was in.",
+			"exits 0 on inputs.*, github.event.inputs.*, toJSON(github), and on anything\n" +
+			"routed through env: — even the values it flags inline. It also cannot parse an\n" +
+			"action.yml at all, so it has never rendered a verdict on a composite action.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return Run(root, cmd.OutOrStdout(), cmd.ErrOrStderr())

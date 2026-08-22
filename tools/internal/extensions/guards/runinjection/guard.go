@@ -28,7 +28,13 @@ package runinjection
 // `github.event.*.body`, `github.event.comment.body`, and the `github['event'][…]`
 // bracket spelling of them. It exits 0 on `inputs.*`, `github.event.inputs.*`,
 // `github.ref_name`, `toJSON(github)`, `toJSON(github.event)`, and on any value
-// laundered through `env:` from one of those. So this guard is a SUPERSET, not a
+// laundered through `env:` — INCLUDING the values it flags inline, which is the
+// sharper half: `github.event.pull_request.title` exits 1 in a run: script and 0
+// when the same value is routed through `env:` and read as "$T". Moving it to
+// `env:` is the remedy actionlint itself prescribes, and doing so removes
+// actionlint's own finding while leaving the vulnerability, if the env var is then
+// interpolated with `${{ }}` rather than expanded by the shell. That is the
+// measurement behind the `env.*` case below. So this guard is a SUPERSET, not a
 // replacement — and the half it adds is exactly the half every site remediated in
 // the preceding commit was in: all eleven interpolations were `inputs.*`. And it
 // is worse than "passing" for six of them — those are in `action.yml` files, which
@@ -42,8 +48,9 @@ package runinjection
 // wider net than the paragraph above describes: the branch-name contexts, which
 // are `github.head_ref` on a pull_request and `github.ref`, `github.ref_name` and
 // `github.workflow_ref` wherever the event's ref IS a branch someone else named —
-// a push or a dispatch, not a PR, where those three are the server-set
-// `refs/pull/N/merge`; bare `github`, because
+// a push or a dispatch. On a pull_request those three are server-derived instead
+// (`refs/pull/N/merge`, `N/merge`, and the workflow path at that ref), so it is
+// head_ref alone that carries attacker text there; bare `github`, because
 // `toJSON(github)` ships the event payload without ever naming it; and `env.*`,
 // which is the remedy's own back door. Each has its own case in
 // externallySupplied with the measurement that put it there. `matrix.*` is a THIRD
@@ -243,11 +250,20 @@ func findExpressions(s string) (blocks []string, unterminated bool) {
 // externallySupplied reports whether a context reference is a value someone
 // outside this repo can set.
 //
-//	inputs.*          whoever dispatches the workflow, or calls the reusable
-//	github.event.*    whoever opened the pull request or wrote the comment
-//	github.head_ref   the PR's SOURCE BRANCH NAME — attacker-chosen text, and
-//	                  GitHub's most-cited vector after github.event.*
-//	github.ref_name   the same string on the branch/tag paths
+//	inputs.*            whoever dispatches the workflow, or calls the reusable
+//	github.event.*      whoever opened the pull request or wrote the comment
+//	github.head_ref     the PR's SOURCE BRANCH NAME — attacker-chosen text, and
+//	                    GitHub's most-cited vector after github.event.*
+//	github.ref_name     the same string on the branch/tag paths
+//	github.ref          the same string under a refs/heads/ prefix
+//	github.workflow_ref the same string inside a longer path@ref string
+//	github              the whole context: `toJSON(github)` carries the payload
+//	env.*               the remedy's own back door — see the case below
+//
+// ALL EIGHT, because this list is read as the contract. It named the first four
+// while the switch returned true for eight, and a reader reconciling the two
+// narrows the code to the comment rather than the other way round — the defect
+// this file spent a commit correcting one paragraph up.
 //
 // NOT `github.event_name`, and that distinction is the whole reason this is not a
 // bare HasPrefix("github.event"). event_name and event_path are SERVER-SET — a
