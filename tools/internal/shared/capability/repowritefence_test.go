@@ -170,21 +170,77 @@ func TestALeafSymlinkDoesNotCarryAWriteOutOfTheTree(t *testing.T) {
 	if got, err := os.ReadFile(victim); err != nil || string(got) != original {
 		t.Fatalf("the outside file was modified: (%q, %v)", got, err)
 	}
+	// EACH OPERATION ON ITS OWN TREE. Sharing one made the table order-dependent
+	// the moment RemoveAll started succeeding: it unlinked the symlink, and the
+	// rows after it were then asserting against a path that no longer existed.
 	for _, tc := range []struct {
 		name string
-		err  error
+		call func(capability.RepoWriter) error
 	}{
-		{"MkdirAll", w.MkdirAll("out", 0o755)},
-		{"RemoveAll", w.RemoveAll("out")},
-		{"PermitsWrite", w.PermitsWrite("out")},
+		{"MkdirAll", func(w capability.RepoWriter) error { return w.MkdirAll("out", 0o755) }},
+		{"PermitsWrite", func(w capability.RepoWriter) error { return w.PermitsWrite("out") }},
 	} {
-		if !errors.Is(tc.err, capability.ErrOutsideRepo) {
-			t.Errorf("%s through a leaf symlink = %v, want ErrOutsideRepo", tc.name, tc.err)
+		t.Run(tc.name, func(t *testing.T) {
+			root, outside := t.TempDir(), t.TempDir()
+			if err := os.WriteFile(filepath.Join(outside, "passwd"), []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(outside, "passwd"), filepath.Join(root, "out")); err != nil {
+				t.Fatal(err)
+			}
+			w := capability.RepoWriterAt(binding(extension.WriteRepo), root)
+			if err := tc.call(w); !errors.Is(err, capability.ErrOutsideRepo) {
+				t.Errorf("%s through a leaf symlink = %v, want ErrOutsideRepo", tc.name, err)
+			}
+		})
+	}
+}
+
+// REMOVEALL IS THE EXCEPTION, AND IT HAS TO BE. os.RemoveAll unlinks the LINK,
+// so where the link points never comes into it — and refusing on that basis
+// broke the one caller that prunes a tree: deliverdocs walks an adopter's docs/
+// and returns on the first error, so a single outward or broken symlink in there
+// aborted `llz ci deliver-docs`.
+func TestRemoveAllUnlinksALeafSymlinkInsteadOfRefusingIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privilege on Windows")
+	}
+	root, outside := t.TempDir(), t.TempDir()
+	victim := filepath.Join(outside, "passwd")
+	const original = "root:x:0:0\n"
+	if err := os.WriteFile(victim, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(root, "out")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "gone"), filepath.Join(root, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	w := capability.RepoWriterAt(binding(extension.WriteRepo), root)
+
+	for _, rel := range []string{"out", "dangling"} {
+		if err := w.RemoveAll(rel); err != nil {
+			t.Errorf("RemoveAll(%q) = %v, want nil — removing a link is not following it", rel, err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, rel)); !os.IsNotExist(err) {
+			t.Errorf("RemoveAll(%q) left the link in place: %v", rel, err)
 		}
 	}
-	// RemoveAll refuses rather than unlinking the link, so the link is still there.
-	if _, err := os.Lstat(filepath.Join(root, "out")); err != nil {
-		t.Errorf("the refused RemoveAll should have left the link alone: %v", err)
+	// AND THE TARGET SURVIVES, which is the whole reason this is safe.
+	if got, err := os.ReadFile(victim); err != nil || string(got) != original {
+		t.Fatalf("RemoveAll followed the link and deleted the outside file: (%q, %v)", got, err)
+	}
+	// The parent anchor still applies: a link ABOVE the target is refused, so
+	// only the leaf is exempt.
+	if err := os.Symlink(outside, filepath.Join(root, "outdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RemoveAll(filepath.Join("outdir", "passwd")); !errors.Is(err, capability.ErrOutsideRepo) {
+		t.Errorf("RemoveAll THROUGH a symlinked parent = %v, want ErrOutsideRepo", err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("the outside file was removed through a symlinked parent: %v", err)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -286,8 +287,13 @@ func TestLintRefusesOutsideAGitWorkTree(t *testing.T) {
 			// this arm, not just an absent repository — `detected dubious
 			// ownership` is the one people actually hit — so the message carries
 			// git's own words instead of a guess at which of them it was.
-			if !strings.Contains(string(out), "git said:") {
-				t.Errorf("the refusal must quote git rather than diagnose for it:\n%s", out)
+			// NON-EMPTY, not merely present. Asserting the label alone passed
+			// vacuously for the bare-repo row: git answers that one on STDOUT,
+			// and the explanation was reading stderr, so the line was "git said:"
+			// and nothing else.
+			said := regexp.MustCompile(`git said:[ \t]*(\S.*)`).FindStringSubmatch(string(out))
+			if said == nil {
+				t.Errorf("the refusal must quote git, and say something:\n%s", out)
 			}
 		})
 	}

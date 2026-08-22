@@ -1225,13 +1225,20 @@ symbol-ref-guard:
 # exiting 0. Keying on the status caught the no-repo case and missed that one —
 # which lands right back in the empty-set collapse, one refusal later.
 #
-# STDOUT DECIDES; STDERR ONLY EXPLAINS. Capturing both with `2>&1` and comparing
-# the lot to "true" meant any git WARNING failed a perfectly good checkout —
+# STDOUT DECIDES; BOTH STREAMS EXPLAIN. The DECISION reads stdout alone, because
+# capturing both with `2>&1` and comparing the lot to "true" meant any git
+# WARNING failed a perfectly good checkout —
 # `warning: unable to access '/root/.gitconfig'`, which containers emit on every
 # call, or GIT_TRACE_PERFORMANCE, which reproduces it locally. `make lint` and
 # the pre-commit hook then ran no linter and no gate: the outcome this target
 # exists to prevent, arrived at through the refusal added to prevent it. The
 # second call is on the failure path only, where an extra fork costs nothing.
+#
+# The EXPLANATION takes both streams, and taking stderr alone left it blank in
+# the case that most needs it: a bare repository answers on STDOUT, exiting 0
+# with `false`, so the message read "git said:" and stopped. An explanation that
+# is empty exactly where the reader has least to go on is worse than none, since
+# it looks like the diagnosis rather than the absence of one.
 #
 # AND IT QUOTES GIT RATHER THAN GUESSING. Anything that stops git answering lands
 # here, not just an absent repository — `detected dubious ownership`, on a
@@ -1250,7 +1257,7 @@ symbol-ref-guard:
 lint-changed:
 	@if [ "$$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then \
 		echo "lint: cannot determine what changed, so it will not claim nothing did." >&2; \
-		echo "      git said: $$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null)" >&2; \
+		echo "      git said: $$(git rev-parse --is-inside-work-tree 2>&1)" >&2; \
 		echo "      Run 'make LINT_ALL=1 lint' to check everything regardless." >&2; \
 		exit 1; \
 	fi; \
