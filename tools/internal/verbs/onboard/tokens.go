@@ -553,13 +553,12 @@ func RepinPlanNote(repin []templatecommit.ImageSkew) string {
 }
 
 // clusterFromEndpoint: https://us-ord-1.linodeobjects.com -> us-ord-1.
+// A THIN ALIAS, because this was one of TWO implementations of the same rule and
+// both were wrong on the virtual-host spelling — this one returning
+// "<bucket>.us-ord-1" where the cluster is "us-ord-1". See
+// linode.ObjClusterFromEndpoint.
 func clusterFromEndpoint(endpoint string) string {
-	s := strings.TrimPrefix(endpoint, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	if i := strings.Index(s, ".linodeobjects.com"); i > 0 {
-		return s[:i]
-	}
-	return ""
+	return linode.ObjClusterFromEndpoint(endpoint)
 }
 
 // regionFromCluster strips the trailing cluster ordinal: us-ord-1 -> us-ord.
