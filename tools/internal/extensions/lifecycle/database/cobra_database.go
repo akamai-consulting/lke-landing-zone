@@ -18,7 +18,7 @@ import (
 func Init() {
 	// A delegating closure, not a direct assignment: openbao.ClientForward is itself
 	// reachable through seams a test may swap, and capturing its value at Init
-	// would freeze whatever it pointed at. That bug has cost this campaign twice.
+	// would freeze whatever it pointed at. That bug has recurred.
 	InstallOpenBaoForward(func(role string) (*openbao.Client, func(), error) {
 		return openbao.ClientForward(role)
 	})

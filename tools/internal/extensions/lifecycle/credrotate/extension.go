@@ -3,7 +3,7 @@ package credrotate
 // extension.go — TWO extensions declare themselves from one package, which no
 // earlier extraction has needed.
 //
-// FORTY-FIRST AND FORTY-SECOND. `credential-pat` and `credential-objkey` are
+// TWO EXTENSIONS, ONE PACKAGE. `credential-pat` and `credential-objkey` are
 // separate catalog rows and separate extensions — different credentials,
 // different Linode APIs, independently enable-able. They share a PACKAGE because
 // they share a FRAMEWORK: rotatorOpts' dry-run arming rule, the GitHub-secret

@@ -50,8 +50,8 @@ var SetSecret = func(name, env, value string) error {
 // Install wires the capability main owns. Call once, before any rotation runs.
 func Install(setSecret func(name, env, value string) error) { SetSecret = setSecret }
 
-// firstNonEmpty returns the first non-empty string. Pure, localised — the sixth
-// package in this campaign to reach that conclusion about these three lines.
+// firstNonEmpty returns the first non-empty string. Pure, localised: three lines
+// are cheaper than a shared package every caller would have to import.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {

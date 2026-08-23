@@ -89,5 +89,5 @@ func PrepareAplUpgradeBestEffort(d bootstrapDeps) {
 // tools/internal/extensions/lifecycle/kyverno; two package main files use it, and exporting a two-line
 // printf so both sides can reach it would put a symbol in a package's API whose
 // only job is to be reachable. Fixtures and printers travel by copy — the same
-// call the campaign made for firstNonEmpty, orAll and report.
+// call made for firstNonEmpty, orAll and report.
 func warn(msg string) { fmt.Printf("::warning::%s\n", msg) }

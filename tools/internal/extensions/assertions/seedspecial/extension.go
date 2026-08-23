@@ -9,7 +9,7 @@ package seedspecial
 // Kyverno's policy covers their namespace.
 //
 // THEY ARE ONE EXTENSION BECAUSE THEY SHARE A MOMENT, which is the weakest reason
-// this campaign has accepted and is recorded as such: both run in the seeding
+// this tree has accepted and is recorded as such: both run in the seeding
 // window, both read the cluster, neither writes. If either grows a write or a
 // second caller, split them — there is no deeper unity here of the kind that kept
 // `openbao-peer-ca`'s two halves or Harbor's active/standby pair together.

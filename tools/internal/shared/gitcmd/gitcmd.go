@@ -9,10 +9,10 @@
 //
 // That comment is the interesting part. It was accurate when written and quietly
 // false a few extractions later, which is the same way four Incomplete markers and
-// two "package main owns this" seams went stale in this campaign. A duplicated
+// two "package main owns this" seams went stale during the extraction. A duplicated
 // helper does not announce that it has acquired more callers.
 //
-// The campaign's own rule -- N callers of a private helper means a package -- was
+// The rule -- N callers of a private helper means a package -- was
 // applied a dozen times inside package main (guardwalk, kubectlprobe, pathglob,
 // shquote, color, cigate) and never once between extensions. This is that rule,
 // applied where the duplication actually was.

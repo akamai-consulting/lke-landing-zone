@@ -13,7 +13,7 @@ package argodiag
 //  2. withKubectl in package main stubs `execOutput`, which this package no
 //     longer calls: the extraction rewired it to kubectlprobe.Exec. Copying that
 //     helper verbatim would leave every probe reaching a REAL cluster while the
-//     test looked stubbed — the double-seam failure this campaign has hit before.
+//     test looked stubbed — the double-seam failure this tree has hit before.
 //     So this copy swaps kubectlprobe.Exec, which is the seam that is actually
 //     live here.
 

@@ -10,7 +10,7 @@
 // silent default.
 //
 // So this is a VALUE read at RunE time, not a parameter threaded at construction
-// time. That is the opposite of how the rest of this campaign moved things —
+// time. That is the opposite of how the rest of the extraction moved things —
 // `newinstance.Run(dryRun, yes bool, …)` takes them as arguments — and the
 // difference is exactly the binding moment: those are called from inside a RunE
 // that has already read the globals, and these ARE the globals.

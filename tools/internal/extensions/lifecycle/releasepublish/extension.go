@@ -13,7 +13,7 @@ package releasepublish
 //     and KUBE_IMAGE variables; e2e-instantiate.yml runs it with --instance.
 //
 // The row's own note is wrong about the majority of its contents, and the cause is
-// the one this campaign has now seen three times: A ROW GROUPED BY WHEN THINGS RUN
+// a recurring one: A ROW GROUPED BY WHEN THINGS RUN
 // RATHER THAN BY WHAT THEY TOUCH. Everything here happens around a release, so
 // everything here was filed as release machinery.
 //
@@ -51,7 +51,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // resolve until something builds it.
 //
 // A TRANSITION, NOT AN ASSERTION: it writes repository variables, and an assertion
-// may hold read grants only. Unlike the six forced spellings this campaign
+// may hold read grants only. Unlike the six forced spellings this model
 // recorded, nothing is forced here — pinning an image IS an act that moves the
 // instance toward a state, not an observation wearing a write grant.
 //

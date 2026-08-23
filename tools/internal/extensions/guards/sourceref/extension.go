@@ -12,7 +12,7 @@ package sourceref
 //
 // WHAT MAKES THE CLASS EXPENSIVE is not the broken pointer, it is the
 // INSTRUCTION attached to it. The worst instance read "add new seeds THERE, not
-// as steps here" beside a path that had not existed for the whole campaign — an
+// as steps here" beside a path that had not existed for the whole extraction — an
 // instruction nobody can follow, in a file only opened while changing the thing
 // it governs. A stale link is a dead end; a stale pointer with a direction on it
 // sends the reader somewhere wrong.

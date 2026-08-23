@@ -1,8 +1,8 @@
 package baoread
 
-// capture_test.go — the local captureStdout. Fifth package in this campaign to
-// need its own copy: a stdout-swapping helper cannot be shared without shipping
-// `testing` in a production package.
+// capture_test.go — the local captureStdout. Each package needs its own: a
+// stdout-swapping helper cannot be shared without shipping `testing` in a
+// production package.
 
 import (
 	"io"

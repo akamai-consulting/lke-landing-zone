@@ -11,9 +11,8 @@ import (
 	"testing"
 )
 
-// The upgrade-conflict test, returned to main: its subject is
-// conflictFiles in commands.go. Filename-as-subject, fourteenth
-// occurrence.
+// The upgrade-conflict test, returned to main: its subject is conflictFiles in
+// commands.go — filename-as-subject again.
 
 // The upgrade's conflict gate is conflictFiles (runUpgrade), which scans
 // what copier just changed — here, files left untracked in the worktree. A bare

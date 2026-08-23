@@ -3,7 +3,7 @@ package argodiag
 // moved_test.go — tests that were stranded in package main by their FILENAME.
 //
 // TestDiagnoseArgoCD lived in `ci_batch2_test.go`. That is the THIRD naming
-// pattern this campaign has found stranding tests, after files named for a
+// pattern this tree has found stranding tests, after files named for a
 // coverage METRIC (coverage_tier1/2, branch_coverage, uncovered_helpers) and
 // files named for the COMMAND that calls the code (env_set_test.go, which held
 // zero tests for env_set.go). This one is named for the BATCH it was written in —

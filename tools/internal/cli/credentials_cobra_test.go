@@ -90,7 +90,7 @@ func TestCredentialsCommandWiring(t *testing.T) {
 // A test fixture that exists to be reachable from two packages would have to be
 // EXPORTED from a production package, which puts a symbol in an API for no runtime
 // reason. Fixtures travel by copy — the same call made for withBaoReadSeam,
-// withKubectl and every localised printer in this campaign.
+// withKubectl and every localised printer here.
 // fakeRotatorClient implements both PATAPI and ObjKeyAPI.
 type fakeRotatorClient struct {
 	createResp map[string]any

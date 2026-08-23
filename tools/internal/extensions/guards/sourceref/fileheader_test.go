@@ -6,7 +6,7 @@ package sourceref
 // tools/ open with `// <name>.go — what this is`, which is the first thing a
 // reader sees and the only orientation an unfamiliar package offers. Nothing
 // compared that name to the file it sits in, so every rename during the
-// extraction campaign left the old name behind: `ci_gen_toc.go` heading toc.go,
+// extraction left the old name behind: `ci_gen_toc.go` heading toc.go,
 // `ci_harbor.go` heading two DIFFERENT files in the harbor package, deps.go
 // heading promotesync.go. FORTY-NINE files, found by an audit rather than a gate.
 //

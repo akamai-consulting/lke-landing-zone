@@ -134,8 +134,8 @@ func withKubeExec(t *testing.T, h func(args string) ([]byte, error)) {
 // withSeedBaoExec stubs ALL THREE bao seams a seed path touches: the stdin-carrying
 // exec it names, the plain Exec the seeded-path CHECK reads through, and KVPut.
 //
-// Stubbing only the first is the double-seam trap this campaign has now hit six
-// times. Delegating Exec to ExecStdin keeps one fake behaviour.
+// Stubbing only the first is the double-seam trap seen repeatedly
+// here. Delegating Exec to ExecStdin keeps one fake behaviour.
 func withSeedBaoExec(t *testing.T, fn func(token, stdin string, args ...string) (string, string, error)) {
 	t.Helper()
 	prevStdin, prevExec, prevPut := baoread.ExecStdin, baoread.Exec, baoread.KVPut

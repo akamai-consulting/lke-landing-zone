@@ -18,7 +18,7 @@ package baoread
 // Stubbing ExecRaw when the code under test calls ExecFn leaves the retry wrapper
 // live and multiplies each stubbed call by the backoff count; stubbing
 // kubectlprobe.Exec reaches only DumpDiagnostics. Both mistakes have been made in
-// this campaign, and neither errors — see execoutput_test.go.
+// this tree, and neither errors — see execoutput_test.go.
 //
 // WHAT DID NOT COME WITH IT. `llz ci bao-status`'s cobra wiring and appendGHAFile
 // went back to package main: a flag set is not an access layer, and appendGHAFile
@@ -361,8 +361,8 @@ func LoopbackEnv() []string {
 // container of pod with the standard env (token included). Pure, so the argv
 // shape + token placement are unit-tested.
 
-// firstNonEmpty returns the first non-empty string. Pure, localised — the eighth
-// package in this campaign to keep its own three lines.
+// firstNonEmpty returns the first non-empty string. Pure, localised: three lines
+// are cheaper than a shared package every caller would have to import.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

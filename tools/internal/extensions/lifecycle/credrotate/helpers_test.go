@@ -117,8 +117,8 @@ func withKubectl(t *testing.T, h func(args string) ([]byte, error)) {
 //
 // Package main's helper of the same name also reinstalls configreadiness's
 // capabilities, because there that seam is shared with half a dozen verbs. Copying
-// it wholesale drags an unrelated Deps install across the boundary to satisfy a
-// name — the third package in this campaign to need that correction.
+// it wholesale would drag an unrelated Deps install across the boundary to satisfy
+// a name.
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
 	prev := kubectlprobe.Exec

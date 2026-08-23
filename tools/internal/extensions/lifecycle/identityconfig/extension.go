@@ -3,9 +3,8 @@ package identityconfig
 // extension.go — `identity-plane` declares itself: the four lanes that make
 // Keycloak and OpenBao agree about who anyone is.
 //
-// FORTY-EIGHTH EXTENSION, AND THE LARGEST SINGLE SET IN THE CAMPAIGN — 1,713
-// lines across four files. It moved on a measurement that looks, at a glance,
-// like it says nothing:
+// THE LARGEST SINGLE SET HERE — 1,713 lines across four files. It moved on a
+// measurement that looks, at a glance, like it says nothing:
 //
 //	3 files                       11 outbound
 //	3 files + openbao_configure   11 outbound

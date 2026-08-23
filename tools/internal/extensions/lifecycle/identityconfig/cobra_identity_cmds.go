@@ -9,7 +9,7 @@ import (
 // cobra_identity_cmds.go — the cobra wiring for the five identity-plane lanes. The
 // lanes themselves are internal/identityconfig.
 //
-// `UsersAddCmd` is the one lane in this campaign that reads TWO fields off
+// `UsersAddCmd` is the one lane here that reads TWO fields off
 // globalOpts, not one: `dryRun` and `yes`. It is the only extracted command that
 // creates a human user, and it is print-what-you-would-do unless BOTH are
 // satisfied — so the pair travels as two bools rather than a struct, and package

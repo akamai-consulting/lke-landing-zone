@@ -1,7 +1,7 @@
 package versionpins
 
-// sortedKeys is copied, not shared. Eleventh package in this campaign to keep its
-// own three lines rather than import a helper package for a map-key sort.
+// sortedKeys is copied, not shared: three lines beat importing a helper package
+// for a map-key sort.
 
 import "sort"
 

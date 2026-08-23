@@ -1,6 +1,6 @@
 package openbao
 
-// quote.go — a local copy of ghcli.Quote, and the ONE copy in this campaign made
+// quote.go — a local copy of ghcli.Quote, and the one copy here made
 // to break an import cycle rather than to avoid ceremony.
 //
 // Importing internal/ghcli from here is a cycle five hops long:
@@ -36,8 +36,8 @@ func quote(argv []string) string {
 	return b.String()
 }
 
-// firstNonEmpty is copied, not shared. Twelfth package in this campaign to keep
-// its own three lines.
+// firstNonEmpty is copied, not shared. Three lines are cheaper than a
+// shared package every caller would have to import.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

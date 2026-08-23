@@ -8,9 +8,9 @@ package assertobs
 // boundaries. The nine that stayed test the ESO round-trip and the dashboard
 // manifest set, which are package main's.
 //
-// Twelfth, thirteenth and fourteenth stranded tests found this way. The two
-// naming patterns — a coverage METRIC, or the COMMAND that happens to call the
-// code — still account for every one.
+// Stranded tests keep turning up this way, and two naming patterns account for
+// every one: a file named for a coverage METRIC, or for the COMMAND that happens
+// to call the code.
 
 import (
 	"encoding/json"

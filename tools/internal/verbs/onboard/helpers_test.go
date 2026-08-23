@@ -8,7 +8,7 @@ import (
 
 // Tests that followed their subjects here rather than the subjects being
 // exported to reach them. Four symbols were briefly exported to satisfy these
-// from package main — that is the anti-pattern this campaign distinguishes from
+// from package main — that is the anti-pattern this tree distinguishes from
 // a genuine seam: Prompt stayed exported because commands.go really calls it;
 // these four had no caller outside a test.
 

@@ -70,7 +70,7 @@ func TestMaskIsSilentOutsideActions(t *testing.T) {
 	}
 }
 
-// captureStdout: the campaign's most-copied helper, local again for the usual
+// captureStdout: the most-copied test helper here, local again for the usual
 // reason — a stream-swapping helper cannot live in a shared package without
 // shipping `testing` into production code.
 func captureStdout(t *testing.T, fn func()) string {

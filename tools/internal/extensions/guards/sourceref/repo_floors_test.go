@@ -13,7 +13,7 @@ package sourceref
 //
 // Every unit test in this package supplies its own tiny tree, so none of them can
 // see it either: they assert behaviour GIVEN an index, never that the real repo
-// produces one. That is the same shape as the defect the whole campaign has been
+// produces one. That is the same shape as the defect the whole extraction has been
 // finding — a check that cannot fail for the thing it was built to catch — and it
 // was sitting in the checker.
 //

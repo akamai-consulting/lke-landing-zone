@@ -12,9 +12,8 @@ import (
 // holds? is it a pure function? is it already injectable elsewhere?) removed four:
 //
 //   - `appendGHAFile` is a file append to a path the ENVIRONMENT names. Localised
-//     below — the fifth package in this campaign to reach that conclusion, and for
-//     the reason internal/envtopology wrote down: a no-op default turns every test
-//     asserting on the summary into a tautology, so the copy does the real thing.
+//     below, and doing the REAL append rather than defaulting to a no-op: a no-op
+//     default turns every test asserting on the summary into a tautology.
 //   - `ghHost` reads $GH_HOST with a default. Four lines, pure.
 //   - `isNotFoundErr` is `strings.Contains(err.Error(), "HTTP 404")`. One line, pure.
 //   - `globalOpts` was reached for two BOOLEANS, `dryRun` and `yes`. Flags are not

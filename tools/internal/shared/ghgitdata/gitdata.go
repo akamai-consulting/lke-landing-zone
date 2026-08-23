@@ -328,7 +328,7 @@ func ghCheck2xx(resp *http.Response, token, what string) error {
 
 // redactSecret strips a token out of text before it reaches an error message.
 //
-// Copied from cmd/llz rather than shared, and this is the ONE copy in the campaign
+// Copied from cmd/llz rather than shared, and this is the one copy here
 // that is not about avoiding an import. A redaction helper is the last thing that
 // should live behind a package boundary where a caller might reasonably reach for
 // a similarly-named neighbour: cmd/llz also has `redactSecrets` (plural, a slice),

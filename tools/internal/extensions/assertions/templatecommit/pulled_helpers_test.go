@@ -34,8 +34,8 @@ func chdirTemp(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 }
 
-// withExecOutput stubs the ONE seam. Ninth minimal local version in this
-// campaign — the copied one drags installConfigReadinessDeps.
+// withExecOutput stubs the ONE seam; a minimal local version, because the copied
+// one drags installConfigReadinessDeps.
 func withExecOutput(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
 	t.Helper()
 	orig := kubectlprobe.Exec

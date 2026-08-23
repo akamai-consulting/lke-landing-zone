@@ -357,7 +357,7 @@ func TestExtensionsDoNotTakeTheUndeclaredCloud(t *testing.T) {
 // just paid its debt off, which is the fastest way to teach someone that the
 // allowlist is where you put things to make a test quiet.
 //
-// Same rule this campaign already had on record from the other direction: a rename
+// Same rule already on record here from the other direction: a rename
 // rewrote the English word "answered" in six prose sentences because it was also a
 // method name. Comments are not code, in both directions.
 //

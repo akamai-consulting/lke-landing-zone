@@ -248,10 +248,9 @@ func policyName(manifest string) string {
 	return doc.Metadata.Name
 }
 
-// firstNonEmpty returns the first non-empty string. Pure, localised — package
-// main keeps its own copy for the token path, and there is no behaviour to drift.
-// The fifth package in this campaign to reach that conclusion about these three
-// lines.
+// firstNonEmpty returns the first non-empty string. Pure, localised — other
+// packages keep their own copy of these three lines, and there is no behaviour to
+// drift.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

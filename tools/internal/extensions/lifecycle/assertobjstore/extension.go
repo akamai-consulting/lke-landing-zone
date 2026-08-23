@@ -85,7 +85,7 @@ func Extension() extension.Extension {
 // does to the cluster is more than looking.
 //
 // Reached through a function rather than stored, so the seam is read at call time
-// — the capture bug this campaign has on record.
+// — the capture bug this tree has on record.
 func objstoreCluster() capability.Cluster { return capability.For(roundtripBinding()).Cluster }
 
 // roundtripBinding returns the transition whose grants scope the reads above. By

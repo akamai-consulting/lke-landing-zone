@@ -71,7 +71,7 @@ func TestVerbsDoNotDeclareExtensions(t *testing.T) {
 	}
 
 	// A guard that scans nothing passes forever. This is the same failure the
-	// campaign has already paid for once, when a corpus walk found no files and
+	// this tree has already paid for once, when a corpus walk found no files and
 	// reported clean.
 	if checked == 0 {
 		t.Fatal("scanned no non-test sources under internal/verbs — the tree moved or the " +

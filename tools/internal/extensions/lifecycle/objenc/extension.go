@@ -3,14 +3,11 @@ package objenc
 // extension.go — `obj-encryption` declares itself, and is the first extension to
 // bind `seeded`.
 //
-// TENTH EXTRACTION, AND THE GROUP THE OLD CEILING BANNED OUTRIGHT. PR #15's
-// `kind: check|tool` menu had no seeder skeleton, so the whole `→ seeded` group —
-// 6,874 lines of credential provisioning — was inexpressible *by omission*. That
-// omission is the single defect the declaration model was built to fix. This is
-// the first extension to actually occupy the state, which makes it the test of
-// whether the fix was real or only argued.
-//
-// It was real. No ceiling change was needed.
+// IT IS THE GROUP THE OLD CEILING BANNED OUTRIGHT. PR #15's `kind: check|tool`
+// menu had no seeder skeleton, so the whole `→ seeded` group — 6,874 lines of
+// credential provisioning — was inexpressible *by omission*. That omission is the
+// single defect the declaration model was built to fix, and this is the first
+// extension to actually occupy the state: it needed no ceiling change.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 
@@ -101,7 +98,7 @@ func Extension() extension.Extension {
 // LOOKED UP BY KIND AND STATE, NOT BY INDEX. `Bindings[0]` would be correct today
 // and silently wrong the moment someone reorders the slice or adds a binding above
 // it — and what it would be wrong ABOUT is which grants the custody handle is built
-// from. This campaign has a positional test that survived a reorder on record;
+// from. A positional test that survived a reorder is on record here;
 // this is the same hazard pointed at production wiring instead.
 //
 // It panics rather than returning a zero Binding, because a zero Binding declares

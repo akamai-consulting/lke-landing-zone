@@ -4,7 +4,7 @@ import "testing"
 
 // Tests that followed their subjects. first3 and quote are one-liners in this
 // package and have NO production caller in package main — so the tests moved
-// rather than the symbols being exported, which is the check this campaign
+// rather than the symbols being exported, which is the check this tree
 // applies before accepting any export.
 
 func TestFirst3(t *testing.T) {

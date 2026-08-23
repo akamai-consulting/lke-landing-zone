@@ -20,7 +20,7 @@ import (
 //
 // Reached at CALL TIME through a function rather than stored, for the reason the
 // old comment gave: a stored value snapshots whatever the seam pointed at when
-// this package initialised, which is the capture bug this campaign has on record.
+// this package initialised, which is the capture bug this tree has on record.
 func forgeHandle() capability.Forge { return capability.For(readBinding()).Forge }
 
 // existingPaths filters a list down to the paths that exist. Copied from

@@ -1,7 +1,7 @@
 package envtopology
 
 // writeCluster, copied not shared -- same rule as every other fixture in this
-// campaign. The HA topology MODEL moved down here and its tests came with it; the
+// tree. The HA topology MODEL moved down here and its tests came with it; the
 // tfvars fixture they read is four lines and lives in both packages rather than
 // dragging a `testing` import into production code.
 

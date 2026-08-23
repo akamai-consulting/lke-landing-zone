@@ -29,7 +29,7 @@ import (
 // when this package initialised, so a test swapping kubectlprobe.Exec would stub
 // gitOut's side of the package and leave the real `gh pr create` and `git push`
 // live underneath it. seedspecial, reachability and identityconfig each carry the
-// same note; that bug has cost this campaign three times.
+// same note; that bug has recurred.
 var execSeam = func(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
 // upgradePR is one of this repo's upgrade pull requests: its head branch and the

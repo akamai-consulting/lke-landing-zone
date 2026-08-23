@@ -26,7 +26,7 @@ import (
 // kubectlprobe.Exec through a CLOSURE rather than being assigned its value: a
 // direct assignment would snapshot whatever kubectlprobe.Exec pointed at when
 // this package initialised, freezing it before any test could swap it. That bug
-// has cost this campaign three times.
+// has recurred.
 func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 
 // kubectlOut is execOutput with the binary name fixed and the bytes stringified.
