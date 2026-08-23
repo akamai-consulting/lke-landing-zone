@@ -86,6 +86,16 @@ var (
 		return cmd.Run()
 	}
 	pinSleep = func(d time.Duration) { time.Sleep(d) }
+	// pinNow is seamed so the watermark is deterministic under test.
+	pinNow = time.Now
+
+	// pinWatermarkSlack backdates the dispatch watermark. GitHub's created_at is
+	// whole seconds, so an exact stamp loses a race with its own dispatch under
+	// jq's strict `>`; a few seconds of slack also absorbs clock skew between the
+	// runner and the API. Small enough that a corpse from a previous workflow run
+	// — minutes or hours old, which is the case the watermark exists to exclude —
+	// stays excluded.
+	pinWatermarkSlack = 5 * time.Second
 
 	// pinBuildInProgress reports whether a "Build Container Images" run for sha is
 	// currently queued/running — so we wait for it instead of starting a duplicate.
@@ -111,10 +121,25 @@ var (
 	//
 	// Same query shape as pinBuildInProgress above, deliberately: one endpoint, one
 	// filter, so the two cannot disagree about which runs count.
-	pinBuildFailed = func(token, templateRepo, sha string) (string, bool) {
+	// SCOPED TO RUNS STARTED AFTER `since`, WHICH IS WHAT MAKES SELF-HEAL POSSIBLE.
+	// Unbounded, this returned the first failed run for the sha EVER — so once any
+	// build for a commit had failed, `--build-if-missing` would dispatch a fresh one
+	// and then abort on poll zero against the corpse of the old one. The self-heal
+	// could never work for exactly the sha it exists for: the GHCR secondary
+	// rate-limit failure this comment describes is a per-sha, permanent gravestone
+	// under the old query.
+	//
+	// created_at is RFC3339, so jq's lexicographic > is a real time comparison. An
+	// empty `since` keeps the old unbounded behaviour for callers that have no
+	// dispatch to anchor on.
+	pinBuildFailed = func(token, templateRepo, sha, since string) (string, bool) {
+		newer := ""
+		if since != "" {
+			newer = fmt.Sprintf(` | select(.created_at > "%s")`, since)
+		}
 		out, err := pinGH(token, "api",
 			fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", templateRepo, sha),
-			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images") | select(.status=="completed") | select(.conclusion!="success") | .html_url] | first // ""`)
+			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images")`+newer+` | select(.status=="completed") | select(.conclusion!="success") | .html_url] | first // ""`)
 		if err != nil {
 			return "", false // could not tell — NOT the same as "it failed"; keep waiting
 		}
@@ -195,11 +220,33 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 	// mid-flight build on main AND a fresh branch build. One build covers every
 	// pinImages entry.
 	wantSha := built || o.BuildIfMissing
+	// The failure probe's watermark is anchored to THIS INVOCATION'S OWN DISPATCH
+	// and to nothing else. It stays EMPTY on every other path, and that emptiness
+	// is the load-bearing half.
+	//
+	// Stamping it at process start looks equivalent and is not, because the
+	// trigger and the wait are routinely DIFFERENT PROCESSES: release-e2e's
+	// instantiate job dispatches with --trigger-only, and a separate full
+	// invocation does the waiting minutes later. A watermark stamped when THAT
+	// process started sits AFTER the run it is waiting on, so a build that failed
+	// at its push step — the GHCR secondary-rate-limit case pinBuildFailed's own
+	// header describes — is filtered straight out of the probe and the wait burns
+	// its whole budget on a build that is already dead. Same blindness on the
+	// main/release path (`built && !BuildIfMissing`, where build-images auto-ran
+	// long before this process) and whenever pinBuildInProgress found a run
+	// already flying. Those callers have no dispatch to anchor on, so they get the
+	// unbounded query, which is the behaviour that was correct for them all along.
+	var buildWatermark string
 	if o.BuildIfMissing && anyShaImageMissing(o.Owner, o.SHA) {
 		if pinBuildInProgress(o.TemplateToken, o.TemplateRepo, o.SHA) {
 			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.SHA)
 		} else {
 			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.SHA, o.Ref)
+			// Stamped immediately BEFORE the dispatch, and backdated: created_at
+			// has whole-second granularity, so a run created in the same second as
+			// an exact stamp fails jq's strict `>` and our own build's failure
+			// would be the one thing the probe cannot see.
+			buildWatermark = pinNow().Add(-pinWatermarkSlack).UTC().Format(time.RFC3339)
 			if err := pinTriggerBuild(o.TemplateToken, o.TemplateRepo, o.Ref, o.SHA); err != nil {
 				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.Ref, err)
 			}
@@ -219,7 +266,7 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 		ref := imageRef(base, o.SHA, wantSha)
 		if wantSha {
 			fmt.Printf("Waiting for %s to publish…\n", ref)
-			ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, o.Retries, o.Interval)
+			ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, buildWatermark, o.Retries, o.Interval)
 			if !ok {
 				if failedURL != "" {
 					return fmt.Errorf("%s will never publish: Build Container Images FAILED for %.8s — %s "+
@@ -236,13 +283,13 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 		}
 		fmt.Printf("Pinned %s %s=%s\n", o.Instance, im.Var, ref)
 	}
-	return waitForRequiredImages(o, wantSha)
+	return waitForRequiredImages(o, wantSha, buildWatermark)
 }
 
 // waitForRequiredImages blocks until every image the CLUSTER will pull for this
 // commit is published. Nothing pins a variable at these, so the loop above never
 // looked at them — see requiredShaImages for the release-e2e round that cost.
-func waitForRequiredImages(o PinImagesOpts, wantSha bool) error {
+func waitForRequiredImages(o PinImagesOpts, wantSha bool, buildWatermark string) error {
 	if !wantSha {
 		// Pinning :latest — the cluster is rendered against a moving tag that
 		// already exists, so there is nothing commit-specific to wait for.
@@ -251,7 +298,7 @@ func waitForRequiredImages(o PinImagesOpts, wantSha bool) error {
 	for _, name := range requiredShaImages {
 		ref := fmt.Sprintf("ghcr.io/%s/%s:sha-%s", o.Owner, name, o.SHA)
 		fmt.Printf("Waiting for %s to publish (consumed in-cluster; Kyverno verifies it at admission)…\n", ref)
-		ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, o.Retries, o.Interval)
+		ok, failedURL := waitForManifest(ref, o.TemplateToken, o.TemplateRepo, o.SHA, buildWatermark, o.Retries, o.Interval)
 		if ok {
 			continue
 		}
@@ -345,12 +392,12 @@ func parseBuildCount(out []byte) int {
 // The abort is what turns a 20-minute dead wait into an immediate, named failure.
 // The image check stays FIRST: a build can fail after a successful push (a later
 // image in the matrix), and in that case the artifact we need is already there.
-func waitForManifest(image, token, templateRepo, sha string, retries int, delay time.Duration) (bool, string) {
+func waitForManifest(image, token, templateRepo, sha, since string, retries int, delay time.Duration) (bool, string) {
 	for attempt := 0; ; attempt++ {
 		if pinManifestExists(image) {
 			return true, ""
 		}
-		if url, failed := pinBuildFailed(token, templateRepo, sha); failed {
+		if url, failed := pinBuildFailed(token, templateRepo, sha, since); failed {
 			return false, url
 		}
 		if attempt >= retries {
