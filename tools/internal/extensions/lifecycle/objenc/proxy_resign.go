@@ -237,11 +237,14 @@ func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 	//
 	// Checking each chunk header BEFORE copying its bytes also turns a late,
 	// expensive rejection into an early, cheap one that names the same defect.
-	if expected >= 0 && expected <= objProxyResignMaxBody {
-		// Right-sized in one allocation. bytes.Buffer grows by doubling, so a
-		// 32 MiB payload otherwise lands in a 64 MiB backing array.
-		out.Grow(int(expected))
-	}
+	// NO PRE-ALLOCATION FROM `expected`. It is the CLIENT'S DECLARED length, read
+	// off a header, and resignForUpstream reads the raw body before calling this —
+	// so it is fully decoupled from the bytes actually sent. Growing to it turned a
+	// 23-byte request declaring 32 MiB into a 32 MiB allocation made BEFORE the
+	// first chunk was parsed: about sixteen concurrent 200-byte requests then
+	// OOMKill the 512Mi DaemonSet, which is the exact failure this bound exists to
+	// prevent, reached with a millionth of the traffic. Doubling from zero costs
+	// one extra copy on a real 32 MiB payload; that is the cheaper mistake.
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -255,10 +258,21 @@ func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("chunk length %q is not hex: %w", header, err)
 		}
+		if n < 0 {
+			// ParseInt accepts a leading '-' in base 16, and a negative length makes
+			// io.CopyN a silent no-op — the chunk contributes nothing, out.Len()
+			// never advances, and the loop reads framing that is already corrupt.
+			return nil, fmt.Errorf("chunk length %q is negative", header)
+		}
 		if n == 0 {
 			break // terminal chunk; whatever follows is trailers, deliberately discarded
 		}
-		if lim := decodeLimit(expected); int64(out.Len())+n > lim {
+		// SUBTRACTION, NOT ADDITION. `out.Len()+n > lim` OVERFLOWS: a chunk header of
+		// 0x7FFFFFFFFFFFFC17 wraps the sum negative, the guard passes, and io.CopyN
+		// buffers everything the client sends — the 64 MiB worst case this bound was
+		// added to remove, reachable from one crafted header. lim is never negative,
+		// so lim-out.Len() cannot underflow.
+		if lim := decodeLimit(expected); n > lim-int64(out.Len()) {
 			return nil, fmt.Errorf("chunked body exceeds %d bytes at chunk %d (already decoded %d) — "+
 				"refusing to buffer past the bound; x-amz-decoded-content-length said %d",
 				lim, n, out.Len(), expected)

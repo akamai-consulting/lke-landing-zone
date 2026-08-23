@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ── the decode bound ─────────────────────────────────────────────────────────
@@ -140,6 +140,35 @@ func TestDNSCheckDoesNotReportAnUnreadableConfigMapAsPlaintextTraffic(t *testing
 	}
 }
 
+// TestAnAbsentConfigMapIsStillAMissingRewrite.
+//
+// The other half, and the one the first cut of the fix broke.
+// kube-system/coredns-custom is an OPTIONAL CoreDNS extension point, and this
+// repo's own coredns-rewrite.yaml records that no LLZ-managed cluster ships one —
+// so on a cluster that never applied objProxy the get exits 1 with NotFound, not
+// with an empty document. Treating every error as "could not read" told the one
+// cluster genuinely writing plaintext that the answer was UNKNOWN and that it
+// should NOT apply the rewrite: the check steered its only real target away from
+// its own fix. kubectlprobe.ClassifyErr is the seam that already separates
+// "asked and answered: not there" from "no answer".
+func TestAnAbsentConfigMapIsStillAMissingRewrite(t *testing.T) {
+	for _, stderr := range []string{
+		`Error from server (NotFound): configmaps "coredns-custom" not found`,
+		`error: the server doesn't have a resource type "configmap"`,
+	} {
+		d := withObjEncKubectl(t, "", errors.New(stderr))
+		f := checkEndpointResolvesToProxy(d, "us-ord-10.linodeobjects.com")
+		if len(f) != 1 {
+			t.Fatalf("%q: want exactly one finding, got %+v", stderr, f)
+		}
+		if !strings.Contains(f[0].Problem, "going DIRECT") {
+			t.Errorf("%q: a cluster with no coredns-custom at all is a cluster with no rewrite — "+
+				"reporting UNKNOWN steers the one cluster actually writing plaintext away from the "+
+				"fix. Got: %s", stderr, f[0].Problem)
+		}
+	}
+}
+
 // ── the loader that had nothing to fall back to ──────────────────────────────
 
 // TestCredsLoaderKeepsTheSeededCredentialOnAReadError.
@@ -173,5 +202,79 @@ func TestCredsLoaderKeepsTheSeededCredentialOnAReadError(t *testing.T) {
 			"%+v — an unusable one silently disables the #397 re-signing repair for that request, with "+
 			"every counter still at zero", got)
 	}
-	_ = time.Now
+}
+
+// TestTheChunkBoundSurvivesAnOverflowingHeader.
+//
+// `int64(out.Len()) + n > lim` OVERFLOWS. A chunk header of 0x7FFFFFFFFFFFFC17
+// after a couple of kilobytes wraps the sum NEGATIVE, so the guard passes and
+// io.CopyN buffers everything the client is willing to send — the 64 MiB worst
+// case the bound was added to remove, reached from one crafted header. The
+// subtraction form cannot wrap: lim is never negative and out.Len() never
+// exceeds it, so lim-out.Len() stays in range.
+func TestTheChunkBoundSurvivesAnOverflowingHeader(t *testing.T) {
+	var body bytes.Buffer
+	first := bytes.Repeat([]byte("a"), 2000)
+	fmt.Fprintf(&body, "%x\r\n", len(first))
+	body.Write(first)
+	body.WriteString("\r\n")
+	// A length that makes out.Len()+n overflow int64.
+	fmt.Fprintf(&body, "%x\r\n", int64(0x7FFFFFFFFFFFFC17))
+	body.Write(bytes.Repeat([]byte("b"), 5<<20))
+
+	_, err := decodeAWSChunked(bytes.NewReader(body.Bytes()), 3000)
+	if err == nil {
+		t.Fatal("a chunk header that overflows the bound check must be refused")
+	}
+	// The distinguishing symptom: with the overflow, CopyN is entered and fails
+	// on EOF having buffered the remainder. Rejected at the bound, the error
+	// names the bound instead.
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("the overflow let the request past the bound and into io.CopyN — it should have been "+
+			"refused by the limit check, got: %v", err)
+	}
+}
+
+// TestANegativeChunkLengthIsRefused. strconv.ParseInt accepts a leading '-' in
+// base 16, and io.CopyN with a negative n is a SILENT NO-OP: the chunk
+// contributes nothing, out.Len() never advances, and the loop carries on reading
+// framing that is already corrupt.
+func TestANegativeChunkLengthIsRefused(t *testing.T) {
+	body := "-10\r\n" + strings.Repeat("a", 16) + "\r\n0\r\n\r\n"
+	_, err := decodeAWSChunked(strings.NewReader(body), 16)
+	if err == nil {
+		t.Fatal("a negative chunk length must be refused, not passed to io.CopyN as a no-op")
+	}
+	// The message matters: unrejected, CopyN is a no-op and the loop reads the
+	// chunk DATA as the next header, so the failure surfaces as a bogus "not hex"
+	// complaint about payload bytes — pointing the reader at the wrong end of the
+	// request entirely.
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("the negative length must be named as such, got: %v", err)
+	}
+}
+
+// TestTheDecodeDoesNotAllocateTheDECLAREDLength.
+//
+// `out.Grow(int(expected))` pre-allocated the CLIENT'S DECLARED size. expected is
+// read off a header and resignForUpstream reads the raw body before calling this,
+// so it is fully decoupled from the bytes actually sent: a 23-byte request
+// declaring 32 MiB allocated 32 MiB before parsing its first chunk. About sixteen
+// concurrent 200-byte requests then OOMKill the 512Mi DaemonSet — the exact
+// failure the bound exists to prevent, at a millionth of the traffic.
+func TestTheDecodeDoesNotAllocateTheDECLAREDLength(t *testing.T) {
+	const declared = 32 << 20
+	body := "b\r\nhello world\r\n0\r\n\r\n" // 11 bytes, declaring 32 MiB
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, _ = decodeAWSChunked(strings.NewReader(body), declared)
+	runtime.ReadMemStats(&after)
+
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > declared/4 {
+		t.Errorf("decoding a 23-byte body that DECLARED %d bytes allocated %d — the declaration is the "+
+			"client's, not a measurement, and sizing the buffer from it hands any caller a %d-byte "+
+			"allocation for free", declared, grew, declared)
+	}
 }
