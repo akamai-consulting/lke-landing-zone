@@ -452,22 +452,60 @@ func stripHCLNoise(lines []string) []string {
 			}
 		}
 		code, _ := shquote.StripSpans(l)
-		if k := strings.Index(code, "/*"); k >= 0 {
-			if e := strings.Index(code[k:], "*/"); e >= 0 {
-				code = code[:k] + code[k+e+2:]
-			} else {
-				code, inBlock = code[:k], true
-			}
-		}
-		if k := strings.Index(code, "#"); k >= 0 {
-			code = code[:k]
-		}
-		if k := strings.Index(code, "//"); k >= 0 {
-			code = code[:k]
-		}
+		code, inBlock = stripLineComments(code)
 		out[i] = code
 	}
 	return out
+}
+
+// stripLineComments removes comments from ONE already-string-stripped line,
+// reporting whether an unterminated /* was left open.
+//
+// LEFT TO RIGHT, TAKING WHICHEVER OPENER COMES FIRST — and doing it in a fixed
+// order instead is a false negative on a security gate. stripHCLNoise used to
+// search for `/*` BEFORE cutting `#` and `//`, so an ordinary HCL line comment
+// containing a glob —
+//
+//	# see modules/*/main.tf
+//
+// — matched `/*` inside `modules/*`, found no closing `*/`, and put the scanner
+// into block-comment mode FOR THE REST OF THE FILE. Brace counting stopped, the
+// depth walk ran to EOF, and every resource below that line went silently
+// unscanned. Probe-verified on the same fixture: 1 finding without the comment,
+// 0 with it.
+//
+// Reversing the order does not fix it, which is worth stating because it is the
+// obvious move: cutting `#` first breaks `x = 1 /* note # */` by truncating
+// mid-block-comment and opening the same run-past one case over. Only "whichever
+// opener appears first wins" is correct for both.
+func stripLineComments(code string) (string, bool) {
+	var kept strings.Builder
+	for {
+		h, sl, bl := strings.Index(code, "#"), strings.Index(code, "//"), strings.Index(code, "/*")
+		first, kind := -1, ""
+		for _, c := range []struct {
+			at   int
+			kind string
+		}{{h, "line"}, {sl, "line"}, {bl, "block"}} {
+			if c.at >= 0 && (first < 0 || c.at < first) {
+				first, kind = c.at, c.kind
+			}
+		}
+		if first < 0 {
+			kept.WriteString(code)
+			return kept.String(), false
+		}
+		kept.WriteString(code[:first])
+		if kind == "line" {
+			return kept.String(), false
+		}
+		rest := code[first+2:]
+		e := strings.Index(rest, "*/")
+		if e < 0 {
+			return kept.String(), true // block comment runs past this line
+		}
+		code = rest[e+2:]
+	}
 }
 
 // braceDelta is the net HCL block-depth change of one already-denoised line.

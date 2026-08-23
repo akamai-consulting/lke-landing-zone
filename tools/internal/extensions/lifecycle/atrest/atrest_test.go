@@ -292,3 +292,90 @@ func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
 func atRestRepo(root string) capability.Repo {
 	return capability.RepoAt(atRestBinding(), root)
 }
+
+// ── C14: a line comment that stopped the scanner ────────────────────────────
+
+// TestAGlobInACommentDoesNotBlindTheScanner — PROBE-VERIFIED in the 2026-08-13
+// review, and reproduced here.
+//
+// stripHCLNoise searched for `/*` BEFORE cutting `#` and `//`, so an ordinary
+// HCL line comment containing a glob —
+//
+//	# see modules/* for the shared definition
+//
+// — matched `/*` inside `modules/*`, found no closing `*/`, and put the scanner
+// into block-comment mode FOR THE REST OF THE FILE. Brace counting stopped, the
+// depth walk ran to EOF, and every resource below that line went silently
+// unscanned. On a SECURITY gate, in the direction that reports clean.
+//
+// The two trees below are identical but for the comment. They must produce the
+// same verdict.
+func TestAGlobInACommentDoesNotBlindTheScanner(t *testing.T) {
+	// TWO watched resources, and the comment sits INSIDE the first one's body.
+	// That is the shape that bites: the spurious block blanks every line below it,
+	// so the depth counter for the first resource never returns to 0, the inner
+	// loop runs to EOF, and the outer loop's `i = j - 1` skips the SECOND resource
+	// entirely. It is reported clean having never been looked at.
+	body := func(comment string) string {
+		return "resource \"linode_volume\" \"first\" {\n" +
+			"  label = \"a\"\n" +
+			comment +
+			"}\n" +
+			"resource \"linode_volume\" \"second\" {\n" +
+			"  label = \"b\"\n" +
+			"}\n"
+	}
+
+	countFindings := func(t *testing.T, tf string) int {
+		t.Helper()
+		root := writeTFRoot(t, map[string]string{"newroot/main.tf": tf})
+		f, _, err := collectAtRestFindings(atRestRepo(root), ScanDirs(atRestRepo(root)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(f)
+	}
+
+	base := countFindings(t, body(""))
+	if base < 2 {
+		t.Fatalf("the fixture must produce a finding for BOTH volumes (got %d), or this test cannot "+
+			"detect the second one being skipped", base)
+	}
+	// `modules/*` and NOT `modules/*/…`: the latter contains `*/` one character
+	// later, which closes the spurious block and hides the bug. The glob with no
+	// trailing slash is both the dangerous one and the common way to write it.
+	got := countFindings(t, body("  # see modules/* for the shared definition\n"))
+	if got != base {
+		t.Errorf("a comment containing `modules/*` changed the verdict from %d finding(s) to %d — "+
+			"everything below it went unscanned, on a gate whose whole job is to notice unencrypted "+
+			"storage", base, got)
+	}
+}
+
+// TestStripLineCommentsTakesWhicheverOpenerComesFirst. Reversing the order does
+// not fix the bug, which is worth pinning because it is the obvious move: cutting
+// `#` first breaks a real inline block comment by truncating mid-block and
+// opening the same run-past one case over. Only "first opener wins" is correct
+// for both.
+func TestStripLineCommentsTakesWhicheverOpenerComesFirst(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in       string
+		want     string
+		wantOpen bool
+	}{
+		"glob inside a line comment":  {"# see modules/*/main.tf", "", false},
+		"glob inside a // comment":    {"x = 1 // modules/*", "x = 1 ", false},
+		"real inline block comment":   {"x = 1 /* note # */ y = 2", "x = 1  y = 2", false},
+		"real unterminated block":     {"x = 1 /* opens here", "x = 1 ", true},
+		"hash inside a block comment": {"/* # */ z = 3", " z = 3", false},
+		"no comment at all":           {"resource \"x\" \"y\" {", "resource \"x\" \"y\" {", false},
+		"block after a line comment":  {"# a /* b", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, open := stripLineComments(tc.in)
+			if got != tc.want || open != tc.wantOpen {
+				t.Errorf("stripLineComments(%q) = (%q, %v), want (%q, %v)", tc.in, got, open, tc.want, tc.wantOpen)
+			}
+		})
+	}
+}
