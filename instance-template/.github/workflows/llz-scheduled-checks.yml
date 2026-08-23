@@ -481,8 +481,18 @@ jobs:
           # nobody keeps and a reader cannot tell the safe case at a glance.
           DRIFT_STRICT: ${{ (inputs.drift_strict && '--strict') || '' }}
         run: |
+          # THE HOST COMES FROM GITHUB_SERVER_URL, NEVER A LITERAL github.com. A
+          # hardcoded host matches nothing on GHES, so the rewrite silently does
+          # not apply and `llz drift` fails at `git ls-remote` against a private
+          # template — reading as an unreachable template rather than as an auth
+          # rewrite that never fired. llz-template-upgrade.yml derives it the same
+          # way, and .github/actions/_lib/git-auth.sh derives it the same way for
+          # the ssh:// module sources; this was the one site that did not, while a
+          # comment in llz-template-upgrade.yml asserted that it did.
+          # release-e2e runs a github-enterprise-server forge, so GHES is a
+          # supported target rather than a hypothetical one.
           git config --global \
-            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+            url."https://x-access-token:${GH_TOKEN}@${GITHUB_SERVER_URL#https://}/".insteadOf "${GITHUB_SERVER_URL}/"
           # DRIFT_STRICT is unquoted on purpose: it is a flag or empty, and must
           # word-split away entirely when empty.
           # shellcheck disable=SC2086
