@@ -268,9 +268,18 @@ Two more in the same category, listed so nobody mistakes them for dead code:
   use `fetch-kubeconfig-state` (reads the Terraform state output); this one exists
   precisely because it needs no `terraform init`, no S3 backend and no git auth —
   the things most likely to be broken when you need a kubeconfig by hand.
-- `llz ci openbao-login` — exchanges a GitHub OIDC token for a short-lived
-  OpenBao token (jwt auth), the primitive behind the cross-org thin-caller
-  pattern.
+- `llz ci openbao-login` — obtains a short-lived OpenBao token. The default
+  `--method kubernetes` exchanges the pod's ServiceAccount token (the CI-agnostic
+  path an Argo Workflow, a CronJob or the reconciler uses); `--method oidc`
+  exchanges a GitHub Actions OIDC token via jwt auth, the primitive behind the
+  cross-org thin-caller pattern.
+
+  **Where the token goes depends on `$GITHUB_ENV`.** Inside GitHub Actions it is
+  masked and appended to `$GITHUB_ENV` as `OPENBAO_TOKEN=…` for later steps.
+  Everywhere else — which is the primary case for `--method kubernetes` — it is
+  written **bare to stdout**, so capture it: `T=$(llz ci openbao-login)`. It is
+  deliberately not masked on that path, because `::add-mask::` is itself written
+  to stdout and would land inside the capture.
 
 > These verbs report **zero callers** to any "is this still used?" scan. That is
 > expected: a break-glass tool is used by a human during an incident, not by a

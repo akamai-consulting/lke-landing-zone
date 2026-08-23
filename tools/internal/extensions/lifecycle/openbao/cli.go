@@ -58,7 +58,17 @@ func RunGet(region, path, key string) error {
 	if !ok {
 		return fmt.Errorf("key %q not found at %s in %s", key, path, region)
 	}
-	ghsecret.Mask(val)
+	// Deliberately NOT ghsecret.Mask(val), on exactly the precedent teamlogin.go
+	// records: Mask writes a `::add-mask::<value>` workflow command to STDOUT, and
+	// this command's stdout IS its return value. Under GITHUB_ACTIONS every
+	// documented use — `diff <(llz openbao get …) <(…)`, `llz openbao get … |
+	// shasum`, `V=$(llz openbao get …)` — would receive two lines where one was
+	// asked for, and compare or hash the wrong thing.
+	//
+	// The trade is stated rather than assumed: not masking risks a value appearing
+	// in a log only if the CALLER echoes it, and a caller that does can mask it in
+	// one line. Masking here corrupts the value unconditionally. A certain break
+	// loses to a conditional risk.
 	fmt.Print(val) // raw value to stdout; diagnostics went to stderr
 	return nil
 }

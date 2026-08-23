@@ -828,12 +828,27 @@ func warmUp(base string) error {
 // to decode one field.
 
 func ParseStatus(s string) (sealed bool, threshold int) {
+	sealed, threshold, _ = ParseStatusOK(s)
+	return sealed, threshold
+}
+
+// ParseStatusOK is ParseStatus with "there was usable JSON" reported separately.
+//
+// The third return is the whole point, and callers that DECIDE on the seal state
+// need it. `bao status` EXITS NON-ZERO when the pod is sealed and still prints
+// valid JSON — so a caller that bails on the exec error never reaches the sealed
+// branch, and a caller that swallows the parse error cannot tell "sealed" from
+// "nothing answered": both arrive here as the zero value, which reads as UNSEALED.
+// baoread.ParsePodStatus's doc states the same rule for the same reason.
+func ParseStatusOK(s string) (sealed bool, threshold int, ok bool) {
 	var v struct {
 		Sealed bool `json:"sealed"`
 		T      int  `json:"t"`
 	}
-	_ = json.Unmarshal([]byte(s), &v)
-	return v.Sealed, v.T
+	if json.Unmarshal([]byte(s), &v) != nil {
+		return false, 0, false
+	}
+	return v.Sealed, v.T, true
 }
 
 func PoliciesIncludeRoot(lookupJSON string) bool {

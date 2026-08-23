@@ -22,7 +22,9 @@ package openbao
 import (
 	"encoding/base64"
 	"fmt"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
@@ -113,7 +115,31 @@ func RunSeedSealKey(dryRun bool, region string) error {
 	}
 
 	// An existing Secret is the live unseal key — never overwrite it.
-	if kubectlprobe.Exists("-n", baoread.Namespace, "get", "secret", sealKeySecretName) {
+	//
+	// ExistsOK, NOT Exists, AND THE DIFFERENCE IS THE WHOLE CLUSTER. Exists folds
+	// "the apiserver did not answer" into "absent", and absent here means GENERATE
+	// A FRESH 32-BYTE KEY AND `kubectl apply` IT over whatever is there. The static
+	// seal key is what decrypts OpenBao's seal: overwriting it means the cluster can
+	// never unseal again, and the original key is gone. There is no recovery from
+	// that inside the cluster.
+	//
+	// The dangerous window is narrow and entirely real: a probe that fails for a
+	// reason the subsequent apply does NOT fail for — a throttled or timed-out
+	// `get`, an RBAC grant that permits create/patch but not get, a transient
+	// konnectivity blip on one call and not the next. Every one of those reads as
+	// "no seal key here yet" and is answered by minting one.
+	//
+	// Fail closed: if we cannot tell, we do not decide. Re-running is free; the
+	// other branch is not.
+	exists, answered := kubectlprobe.ExistsOK("-n", baoread.Namespace, "get", "secret", sealKeySecretName)
+	if !answered {
+		return fmt.Errorf("cannot determine whether %s/%s already exists — the apiserver did not answer. "+
+			"Refusing to continue: this command's next step is to generate a fresh static auto-unseal key "+
+			"and apply it, and doing that over a LIVE key leaves OpenBao permanently unable to unseal with "+
+			"no way back. Re-run once the cluster is reachable",
+			baoread.Namespace, sealKeySecretName)
+	}
+	if exists {
 		fmt.Printf("%s/%s already exists — leaving the static seal key untouched.\n", baoread.Namespace, sealKeySecretName)
 		return nil
 	}
@@ -126,8 +152,22 @@ func RunSeedSealKey(dryRun bool, region string) error {
 	// The Secret stores the RAW 32 bytes under unseal.key; the chart mounts it at
 	// /openbao/seal/unseal.key and the `seal "static"` stanza reads it as
 	// file:///openbao/seal/unseal.key.
-	if err := KubectlApply(sealKeySecretManifest(baoread.Namespace, sealKeySecretName, key)); err != nil {
-		return fmt.Errorf("apply %s/%s: %w", baoread.Namespace, sealKeySecretName, err)
+	// CREATE, NOT APPLY, AND THE PROBE ABOVE IS NOT ENOUGH ON ITS OWN. ExistsOK
+	// closes the case where we could not SEE the Secret; it cannot close the case
+	// where two seed runs both looked before either wrote. apply is an upsert, so
+	// both would write, and the second would destroy the key that decrypts the
+	// first one's seal — with the escrowed copy already pointing at the loser.
+	//
+	// create fails AlreadyExists instead, which is the answer that lets this say
+	// "someone else got there" and leave the live key alone. Between the two, the
+	// invariant stops depending on a read and starts depending on the apiserver.
+	if out, err := KubectlCreate(sealKeySecretManifest(baoread.Namespace, sealKeySecretName, key)); err != nil {
+		if kube.IsAlreadyExists(out) {
+			fmt.Printf("%s/%s was created by a concurrent run — leaving that key in place.\n",
+				baoread.Namespace, sealKeySecretName)
+			return nil
+		}
+		return fmt.Errorf("create %s/%s: %w: %s", baoread.Namespace, sealKeySecretName, err, strings.TrimSpace(out))
 	}
 	fmt.Printf("Created %s/%s (32-byte static auto-unseal key).\n", baoread.Namespace, sealKeySecretName)
 	return nil

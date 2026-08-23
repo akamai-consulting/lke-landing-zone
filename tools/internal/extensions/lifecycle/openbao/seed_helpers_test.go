@@ -44,15 +44,39 @@ func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (strin
 	}, &calls
 }
 
-// withSeedKubectlApply records what the seal-key path applies, without a cluster.
+// withSeedKubectlApply records what the seal-key path WRITES, without a cluster.
+//
+// Both seams, because the seal key moved from apply to create (apply is an upsert
+// and two concurrent seeds would both write) while the CA path still applies.
+// Stubbing one and leaving the other live is how a test starts shelling out.
 func withSeedKubectlApply(t *testing.T) *string {
 	t.Helper()
 	var applied string
-	prev := KubectlApply
+	prevApply, prevCreate := KubectlApply, KubectlCreate
 	KubectlApply = func(manifest string) error { applied = manifest; return nil }
-	t.Cleanup(func() { KubectlApply = prev })
+	KubectlCreate = func(manifest string) (string, error) { applied = manifest; return "", nil }
+	t.Cleanup(func() { KubectlApply, KubectlCreate = prevApply, prevCreate })
 	return &applied
 }
+
+// withSeedKubectlCreateConflict makes the seal-key create lose the race, which is
+// the answer `apply` could never produce.
+func withSeedKubectlCreateConflict(t *testing.T) *int {
+	t.Helper()
+	n := new(int)
+	prev := KubectlCreate
+	KubectlCreate = func(string) (string, error) {
+		*n++
+		return `Error from server (AlreadyExists): secrets "openbao-unseal-key" already exists`,
+			errString("exit 1")
+	}
+	t.Cleanup(func() { KubectlCreate = prev })
+	return n
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
 
 // withSetGitHubSecret records the escrow write.
 func withGHSetSecretErr(t *testing.T, err error) *[]string {

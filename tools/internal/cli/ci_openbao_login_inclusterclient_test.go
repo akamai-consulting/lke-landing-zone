@@ -24,7 +24,7 @@ func TestOpenBaoLoginRequiresClientIdentity(t *testing.T) {
 	openbao.InClusterHTTPClient = openbao.NewInClusterHTTPClient()
 	t.Cleanup(func() { openbao.InClusterHTTPClient = prev })
 
-	err := openbaoext.RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes", "", "OPENBAO_TOKEN")
+	err := openbaoext.RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes", "", "OPENBAO_TOKEN", "")
 	if err == nil {
 		t.Fatal("expected an error when no client identity is mounted")
 	}

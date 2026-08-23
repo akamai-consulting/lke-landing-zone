@@ -9,7 +9,7 @@ import (
 // internal/openbao.
 
 func OpenBaoLoginCmd() *cobra.Command {
-	var method, role, addr, mount, saTokenFile, exportVar string
+	var method, role, addr, mount, saTokenFile, exportVar, outputFile string
 	c := &cobra.Command{
 		Use:   "openbao-login",
 		Short: "obtain an OpenBao token via ServiceAccount (default) or GitHub OIDC and export it",
@@ -30,7 +30,7 @@ func OpenBaoLoginCmd() *cobra.Command {
 			"`kubectl port-forward … :8210` (the loopback listener) instead.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return RunCILogin(cliopts.Global.DryRun, method, role, addr, mount, saTokenFile, exportVar)
+			return RunCILogin(cliopts.Global.DryRun, method, role, addr, mount, saTokenFile, exportVar, outputFile)
 		},
 	}
 	c.Flags().StringVar(&method, "method", "kubernetes", "auth method: kubernetes (ServiceAccount, default) | oidc (GitHub OIDC)")
@@ -39,5 +39,6 @@ func OpenBaoLoginCmd() *cobra.Command {
 	c.Flags().StringVar(&mount, "kubernetes-mount", "", "kubernetes auth mount path (default: $OPENBAO_KUBERNETES_MOUNT, else kubernetes)")
 	c.Flags().StringVar(&saTokenFile, "sa-token-file", "", "ServiceAccount token file for --method kubernetes (default: $SA_TOKEN_FILE, else the projected SA token)")
 	c.Flags().StringVar(&exportVar, "export-var", "OPENBAO_TOKEN", "$GITHUB_ENV variable to export the token as")
+	c.Flags().StringVar(&outputFile, "output-file", "", "write the token to this file (0600) instead of $GITHUB_ENV or stdout — use it when this command is a container ENTRYPOINT, whose stdout is collected into the pod log")
 	return c
 }

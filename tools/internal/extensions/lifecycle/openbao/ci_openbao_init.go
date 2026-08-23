@@ -198,17 +198,32 @@ func RunRegenRootCI(dryRun bool, region string) error {
 	}
 	ghsecret.Mask(otp)
 
-	// Submit the 3 keys against the same nonce; the final submission returns
-	// encoded_token. Keys ride stdin (`-`), not argv.
+	// Submit keys against the same nonce until the quorum COMPLETES; the completing
+	// submission returns encoded_token. Keys ride stdin (`-`), not argv.
+	//
+	// BREAKING ON `complete` IS LOAD-BEARING, and this loop used to run all three
+	// unconditionally. The unseal THRESHOLD is not necessarily three: at a threshold
+	// of two, the second key completes generate-root and OpenBao mints the root
+	// token right there. Submitting a third key against a nonce that has already
+	// completed is an error, so the loop returned "generate-root rejected key 3/3" —
+	// after the token existed and before anything decoded it.
+	//
+	// The result is the worst outcome this command has: a LIVE root token nobody
+	// holds, no record that it was created, and an error message pointing the
+	// operator at unseal-key correctness — the one thing that was fine.
+	// regenroot.go's interactive loop has always exited on `complete`
+	// (`for progress := 1; encoded == ""; progress++`); this is the same rule, and
+	// the two paths differing on it is how it went unnoticed.
 	var encoded string
 	for i, key := range keys {
 		out, errOut, err := baoread.ExecFn(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		if err != nil {
-			return fmt.Errorf("generate-root rejected key %d/3: %s", i+1, strings.TrimSpace(firstNonEmpty(errOut, out)))
+			return fmt.Errorf("generate-root rejected key %d/%d: %s", i+1, len(keys), strings.TrimSpace(firstNonEmpty(errOut, out)))
 		}
 		if complete, _, _, enc := parseGenRootStep(out); complete {
 			encoded = enc
+			break
 		}
 	}
 	if encoded == "" {

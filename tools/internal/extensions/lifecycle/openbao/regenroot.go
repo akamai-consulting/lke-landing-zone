@@ -33,30 +33,47 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	if region == "" {
 		return fmt.Errorf("usage: llz openbao regen-root <region> [--update-gha-secret] [--repo owner/repo]")
 	}
+	// DRY-RUN BEFORE ANY EXEC. findLeaderPod probes three pods, and now that this
+	// file goes through the RESILIENT exec each probe carries the 24-try transient
+	// budget — so under a konnectivity outage a --dry-run sat silent for ~16
+	// minutes before printing its first line and returning. A dry run must not
+	// touch the cluster at all.
+	if dryRun {
+		fmt.Fprintln(os.Stderr, "→ (dry-run) would resolve the raft leader and run the bao generate-root quorum flow against it")
+		return nil
+	}
 	pod := findLeaderPod()
 	ctx, _ := kubectlprobe.Exec("kubectl", "config", "current-context")
 	fmt.Printf("kubectl context: %s\n", strings.TrimSpace(string(ctx)))
 	fmt.Printf("Target pod:      %s/%s (active raft leader)\n", baoread.Namespace, pod)
 	fmt.Printf("Region (for GHA env name only): %s\n\n", region)
-	if dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) would run the bao generate-root quorum flow against the leader pod")
-		return nil
-	}
 
 	// Sanity: reachable + unsealed.
-	statusOut, _, err := baoread.ExecPod(pod, "", "", "status", "-format=json")
-	if err != nil {
-		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", baoread.Namespace, pod)
+	//
+	// PARSE STDOUT REGARDLESS OF THE EXEC ERROR — the same rule this PR applies to
+	// healthsla's baoStatus, and the same one baoread.ParsePodStatus's doc states.
+	// `bao status` EXITS 2 WHEN SEALED and still prints valid JSON, so returning on
+	// err made the `if sealed` branch below dead in production: an operator with a
+	// sealed cluster was told "cannot reach OpenBao … via the current kubectl
+	// context" and sent to check their kubeconfig, which was fine. The test stubbed
+	// (json, nil) — a combination the real CLI never emits — which is why it did
+	// not show.
+	statusOut, _, err := baoread.ExecFn(pod, "", "", "status", "-format=json")
+	sealed, threshold, parsed := openbao.ParseStatusOK(statusOut)
+	if !parsed {
+		return fmt.Errorf("cannot read OpenBao's seal state at %s/%s: no usable JSON from `bao status` (%v). "+
+			"A SEALED pod exits non-zero and still prints JSON, so this means the exec did not reach a "+
+			"running bao — check the pod is Ready and the kubectl context is right",
+			baoread.Namespace, pod, err)
 	}
-	sealed, threshold := openbao.ParseStatus(statusOut)
 	if sealed {
 		return fmt.Errorf("%s is sealed — unseal it first, then re-run", pod)
 	}
 	fmt.Printf("OpenBao unsealed. Unseal threshold: %d.\n", threshold)
 
 	// Clean slate, then init.
-	_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
-	initOut, _, err := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-init", "-format=json")
+	_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
+	initOut, _, err := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-init", "-format=json")
 	if err != nil {
 		return fmt.Errorf("initialize generate-root: %w", err)
 	}
@@ -82,11 +99,11 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 			progress--
 			continue
 		}
-		out, errOut, err := baoread.ExecPod(pod, "", key+"\n",
+		out, errOut, err := baoread.ExecFn(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		key = ""
 		if err != nil {
-			_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
+			_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
 			return fmt.Errorf("generate-root rejected key #%d: %s\n"+
 				"  (wrong/duplicate key, or keys from a different OpenBao init — compare cluster_id)",
 				progress, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -102,10 +119,10 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	}
 
 	// Decode (local op against the OTP) inside the pod for binary parity.
-	decodeOut, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
+	decodeOut, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
 	newRoot := parseTokenField(decodeOut)
 	if newRoot == "" { // older bao prints a bare token
-		bare, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
+		bare, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
 		newRoot = strings.TrimSpace(bare)
 	}
 	if newRoot == "" {
@@ -113,7 +130,7 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	}
 
 	// Verify it actually works and is root.
-	lookupOut, _, err := baoread.ExecPod(pod, newRoot, "", "token", "lookup", "-format=json")
+	lookupOut, _, err := baoread.ExecFn(pod, newRoot, "", "token", "lookup", "-format=json")
 	if err != nil {
 		emitRecoveryToken(newRoot, "self-lookup failed")
 		return fmt.Errorf("new root token failed self-lookup")
@@ -171,7 +188,7 @@ func updateRootGHASecret(region, newRoot string, o RegenRootOpts) error {
 // falling back to platform-openbao-0.
 func findLeaderPod() string {
 	for _, cand := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		out, _, err := baoread.ExecPod(cand, "", "", "status", "-format=json")
+		out, _, err := baoread.ExecFn(cand, "", "", "status", "-format=json")
 		if err == nil && parseIsSelf(out) {
 			return cand
 		}
@@ -179,7 +196,13 @@ func findLeaderPod() string {
 	return "platform-openbao-0"
 }
 
-func readSecretLine() (string, error) {
+// readSecretLine is a package var so a test can reach the quorum loop. Without a
+// seam here the interactive read blocks and the loop this file's retry fix is
+// about is unreachable — which is exactly why its first gate stopped at the
+// sealed check and passed with the fix reverted.
+var readSecretLine = readSecretLineFromTerminal
+
+func readSecretLineFromTerminal() (string, error) {
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	return strings.TrimRight(string(b), "\r\n"), err
 }

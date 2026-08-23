@@ -12,16 +12,16 @@ import (
 
 func TestOpenBaoLoginDryRun(t *testing.T) {
 	// dry-run must not touch the network or the filesystem, for either method.
-	if err := RunCILogin(true, "kubernetes", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(true, "kubernetes", "", "", "", "", "OPENBAO_TOKEN", ""); err != nil {
 		t.Fatalf("kubernetes dry-run should be a no-op success: %v", err)
 	}
-	if err := RunCILogin(true, "oidc", "", "", "", "", "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(true, "oidc", "", "", "", "", "OPENBAO_TOKEN", ""); err != nil {
 		t.Fatalf("oidc dry-run should be a no-op success: %v", err)
 	}
 }
 
 func TestOpenBaoLoginUnknownMethod(t *testing.T) {
-	if err := RunCILogin(false, "carrier-pigeon", "", "", "", "", "OPENBAO_TOKEN"); err == nil {
+	if err := RunCILogin(false, "carrier-pigeon", "", "", "", "", "OPENBAO_TOKEN", ""); err == nil {
 		t.Fatal("expected an error for an unknown --method")
 	}
 }
@@ -57,7 +57,7 @@ func TestOpenBaoLoginKubernetesExportsToken(t *testing.T) {
 	t.Setenv("GITHUB_ENV", ghEnv)
 
 	stubInClusterBaoClient(t, srv.Client())
-	if err := RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN"); err != nil {
+	if err := RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN", ""); err != nil {
 		t.Fatalf("kubernetes login: %v", err)
 	}
 	got, err := os.ReadFile(ghEnv)
@@ -72,7 +72,7 @@ func TestOpenBaoLoginKubernetesExportsToken(t *testing.T) {
 func TestOpenBaoLoginKubernetesMissingSAToken(t *testing.T) {
 	// No SA token file → a clear error (not a panic), the "not running in-cluster" case.
 	if err := RunCILogin(false, "kubernetes", "reconciler", "https://x", "kubernetes",
-		filepath.Join(t.TempDir(), "nope"), "OPENBAO_TOKEN"); err == nil {
+		filepath.Join(t.TempDir(), "nope"), "OPENBAO_TOKEN", ""); err == nil {
 		t.Fatal("expected an error when the SA token file is absent")
 	}
 }
