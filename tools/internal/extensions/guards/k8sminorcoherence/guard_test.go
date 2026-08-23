@@ -100,11 +100,11 @@ const applyStep = "      - name: Server-side dry-run of the rendered charts\n" +
 // liveStep is the step that asks the cluster what minor it actually is —
 // VERBATIM from .github/workflows/lint.yml, not a paraphrase.
 //
-// The first cut of this fixture was a no-op: it piped to `jq -e
-// '.serverVersion.gitVersion'`, which exits 0 for any server, so every test
-// asserting "the live half is present and healthy" was asserting it over a step
-// that compared nothing. A fixture that has drifted from the thing it stands in
-// for is worse than no fixture — it makes the suite agree with itself.
+// A fixture that has drifted from the thing it stands in for is worse than no
+// fixture — it makes the suite agree with itself. Piping to `jq -e
+// '.serverVersion.gitVersion'`, for instance, exits 0 for any server, so every
+// test asserting "the live half is present and healthy" asserts it over a step
+// that compares nothing.
 const liveStep = "      - name: The cluster must run the version its tag names\n" +
 	"        run: kubectl version -o json | jq -e --arg t \"${KIND_NODE_IMAGE#kindest/node:v}\" " +
 	"'.serverVersion.gitVersion == \"v\" + ($t | split(\"@\")[0])'\n"

@@ -706,9 +706,8 @@ func TestPreflightChecksImageSkewBeforeTheNewFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The DOC is in the corpus too. It carries a fourth copy of this job, and the
-	// previous cut of this test checked the three real ones only — so the doc drifted
-	// out of step with the rule in the same commit that established it.
+	// The DOC is in the corpus too: it carries a fourth copy of this job, and a test
+	// checking the three real ones only lets it drift out of step with the rule.
 	doc, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "environments-and-promotion.md"))
 	if err != nil {
 		t.Fatal(err)

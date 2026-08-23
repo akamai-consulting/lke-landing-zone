@@ -257,7 +257,7 @@ func TestLiveWorkflowPasses(t *testing.T) {
 	}
 	// The live file's own scripts must also come out BALANCED. That is what proves
 	// the scanner is still reading them as shell rather than losing the block
-	// structure in prose — the defect that made an earlier cut of this guard blind.
+	// structure in prose, which is the defect that makes this guard blind.
 	if len(sc.unbalanced) != 0 {
 		t.Fatalf("the live publisher's scripts did not close their if blocks: %v", sc.unbalanced)
 	}

@@ -446,8 +446,11 @@ func ciCmd() *cobra.Command {
 	// Cluster-bootstrap native command + its former local-exec bodies. bootstrap-
 	// cluster is the whole in-cluster bootstrap (apl-core install + Argo bridge +
 	// the race-ahead Kyverno policies) that used to be the cluster-bootstrap
-	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
-	// separately runnable (bootstrap-cluster calls them in-process), and
+	// Terraform workspace. wait-apl-pipeline and apply-kyverno-policy are SEPARATE
+	// verbs that bootstrap-cluster does NOT call in-process — it imports neither
+	// package — so anything relying on one of them running must invoke it. See the
+	// header of platform-apl/components/objProxy/obj-proxy/kyverno-harbor-ca.yaml,
+	// which is why that policy ships through Argo rather than through this verb.
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
 	c.AddCommand(bootstrapcluster.BootstrapClusterCmd(), converge.WaitAplPipelineCmd(), kyverno.ApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ghsecret.ClearClusterSecretsCmd())

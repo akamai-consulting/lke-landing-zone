@@ -18,8 +18,8 @@ func repoForTest(t *testing.T) capability.Repo {
 
 // pinsFrom runs the REAL collector over a Dockerfile body, through a temp tree.
 //
-// NOT A REIMPLEMENTATION OF THE SCAN. The first cut of this helper re-ran the
-// regex itself, so it kept passing when collectPipPins grew the pip-install line
+// NOT A REIMPLEMENTATION OF THE SCAN. A helper that re-runs the regex itself keeps
+// passing when collectPipPins grows the pip-install line
 // scoping the regex now depends on — a test that restates the code under test
 // agrees with the version of it that lived in the test.
 func pinsFrom(t *testing.T, body string) []pipPin {

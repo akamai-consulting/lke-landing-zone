@@ -233,10 +233,8 @@ const (
 // be a genuinely confusing failure. There is deliberately no revision parameter — a
 // revision that cannot be passed cannot be passed wrongly.
 //
-// (An earlier revision of this function took apps_repo_revision and pinned everything to
-// it, reading the old extending-llz.md advice — "if you pin apps_repo_revision, pin the
-// Application's targetRevision to match" — as intent. That advice was the bug; it has
-// been removed.)
+// Do NOT thread apps_repo_revision through here to "pin everything to match". That
+// reading is the bug this design rejects, and the advice recommending it is gone.
 func RenderInstanceCustom(repoURL string) string {
 	return genHeader + `apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -379,16 +377,11 @@ spec:
 // instead, so both land in the prediction and the App reads Synced when it IS in
 // sync.
 //
-// Measured on lke639228 (2026-08-03, Argo CD v3.4.4). Submitting each drifting
-// object's git form through `kubectl apply --server-side --dry-run=server`
-// returned exactly the live object in all three classes — the ExternalSecret with
-// every default filled in, the ClusterPolicy likewise, and the reconciler
-// Deployment with the tag rewritten to the digest. Setting these options on
-// llz-observability (defaults class) and llz-reconciler (image class) took both
-// from OutOfSync to Synced, and a deliberate `scale --replicas=2` on the
-// reconciler was still caught: OutOfSync within a second, auto-healed back to 1.
-// The prediction absorbs what the cluster writes without blinding the diff to
-// what an operator writes.
+// Measured on Argo CD v3.4.4: `kubectl apply --server-side --dry-run=server` on
+// each drifting object's git form returned exactly the live object in all three
+// classes, and a deliberate `scale --replicas=2` was still caught — OutOfSync
+// within a second, auto-healed back. The prediction absorbs what the cluster
+// writes without blinding the diff to what an operator writes.
 //
 // ON AN EXISTING CLUSTER THIS NEEDS ONE REFRESH. Argo does not re-diff an App
 // just because its compare-options changed — llz-harbor sat OutOfSync for ten

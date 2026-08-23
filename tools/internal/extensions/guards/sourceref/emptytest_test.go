@@ -18,10 +18,9 @@ package sourceref
 // This is the vacuous-green shape every corpus guard in this tree refuses, sitting
 // in the test suite rather than in the code under test.
 //
-// PARSED, NOT GREPPED. An earlier cut of this check used a regex and reported eight
-// findings, all of them Go source inside the symbols guard's FIXTURE STRINGS. go/ast
-// gets string literals right by construction, which is the whole reason to pay for a
-// parser here.
+// PARSED, NOT GREPPED. A regex reports findings for Go source inside the symbols
+// guard's FIXTURE STRINGS; go/ast gets string literals right by construction, which
+// is the whole reason to pay for a parser here.
 //
 // WHAT IT DOES NOT CLAIM. A non-empty body is not a meaningful body — a test whose
 // only statement is a call that cannot fail is still vacuous, and this check cannot

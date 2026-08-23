@@ -3,22 +3,15 @@ package instanceresolve
 // k8sversion_resolve.go — seed `cluster.k8sVersion` from the ACCOUNT at
 // `llz env add`, instead of from a literal baked into the scaffold.
 //
-// WHY A LITERAL CANNOT WORK HERE, AND THIS IS THE WHOLE ARGUMENT. LKE-Enterprise
-// version availability is per-ACCOUNT and rotates fast: measured on 2026-08-11,
-// one account still listed `v1.33.6+lke7` while the e2e account offered exactly
-// `v1.34.6+lke2` and `v1.32.9+lke4` — in the same hour. A pin accepted at 16:04
-// was rejected at 17:06. So a version compiled into the scaffold is not stale
-// eventually, it is stale by construction, and refreshing it is a manual edit in
-// several files that nothing gates.
-//
-// WHY IT GOT WORSE RATHER THAN BETTER WHEN THE GATE LANDED. `llz ci
-// assert-k8s-version` and `llz doctor` now hard-fail on a pin the account cannot
-// build, which is the improvement — but it means a fresh `llz new` → `llz env add`
-// → `llz up` could stop at the doctor stage on a version THE OPERATOR NEVER CHOSE.
-// The failure names the versions the account does offer, so it is recoverable; it
-// is still the tool asking the operator to fix its own default. `llz env add`
-// already asks this account about `--region` and `--obj-cluster` in the same
-// breath (see region_resolve.go), so the answer was one request away.
+// WHY A LITERAL CANNOT WORK HERE. LKE-Enterprise version availability is
+// per-ACCOUNT and rotates within hours (linode/lke_versions.go has the
+// measurement), so a version compiled into the scaffold is not stale eventually,
+// it is stale by construction. And `llz ci assert-k8s-version` and `llz doctor`
+// hard-fail on a pin the account cannot build — so a baked default means a fresh
+// `llz new` → `llz env add` → `llz up` can stop at the doctor stage on a version
+// THE OPERATOR NEVER CHOSE. `llz env add` already asks this account about
+// `--region` and `--obj-cluster` in the same breath (see region_resolve.go), so
+// the answer was one request away.
 //
 // BEST-EFFORT, EXACTLY LIKE ITS NEIGHBOURS. `llz env add` has never needed a
 // Linode token or a network and must not start: with no token, an unreachable API,
@@ -41,18 +34,15 @@ import (
 )
 
 // LKEVersionLister is the slice of the Linode client this needs — a seam so the
-// tests never touch the network.
-// LKEVersionLister is EXPORTED for the same reason RegionLister is: the gate that
+// tests never touch the network. It is EXPORTED for the same reason RegionLister is: the gate that
 // proves `llz env add` still asks the account lives in the package that WIRES this
 // (extensions/lifecycle/environments), and a fake it cannot name is a seam only
 // this package can test through — which is how the wiring half goes unwatched.
 //
-// BOTH READS ARE ON ONE INTERFACE, not two seams over one account. #453 added the
-// cluster read, and the tempting shape was a second package var with its own token
-// discovery — which is two places to wire, and a fake that satisfies one of them
-// silently answers "no clusters" for the other. That is the exact failure mode this
-// repo already paid for once (a seam whose default said "the caller assigns it" and
-// no caller did). One client, one substitution point, both questions.
+// BOTH READS ARE ON ONE INTERFACE, not two seams over one account. A second
+// package var with its own token discovery is two places to wire, and a fake that
+// satisfies one of them silently answers "no clusters" for the other. One client,
+// one substitution point, both questions.
 type LKEVersionLister interface {
 	ListLKEVersions(ctx context.Context, tier string) ([]string, error)
 	// ListClusters answers "does a cluster for this deployment already exist, and
@@ -84,12 +74,10 @@ var LKEVersionClient = func() LKEVersionLister {
 // this is the third copy on purpose, because the alternative is a fourth spelling
 // of the sizing rule.
 //
-// THE READ BUDGET IS APPLIED PER ATTEMPT, NOT MERELY USED TO SIZE THE PARENT, and
-// the first cut of the retry below got this wrong in the way that makes a retry
-// decorative: one 20s context wrapped the whole loop while the HTTP client's own
-// timeout was also 20s, so a single SLOW request exhausted the shared budget,
-// tripped the ctx.Err() break, and attempt 2 never ran. The retry existed and
-// could not fire.
+// THE READ BUDGET IS APPLIED PER ATTEMPT, NOT MERELY USED TO SIZE THE PARENT.
+// Wrapping the whole loop in one budget the size of the client's own timeout makes
+// the retry decorative: a single SLOW request exhausts it, trips the ctx.Err()
+// break, and attempt 2 never runs.
 const (
 	accountRequestTimeout = 20 * time.Second
 	accountReadPages      = 5
@@ -139,26 +127,15 @@ func accountLKEVersions(c LKEVersionLister) (ids []string, ok bool, outcome Cata
 		return nil, false, CatalogFailed
 	}
 	if len(all) == 0 {
-		// AN EMPTY ANSWER IS AN ANSWER, and routing it through
-		// reportSkippedAccountCheck said the opposite: that notice's error arm reads
-		// "the API did not answer" and tells the operator their token is probably
-		// expired, revoked or under-scoped. Their token worked. In the same run
-		// k8sVersionBanner correctly reported the catalog as READ, so llz made two
-		// contradictory statements about one request and sent the operator off to
-		// re-mint a PAT that was fine.
+		// AN EMPTY ANSWER IS AN ANSWER, so this does NOT route through
+		// reportSkippedAccountCheck: that notice's error arm reads "the API did not
+		// answer" and sends the operator off to re-mint a token that worked.
 		//
-		// The CatalogAnswered return below is the same distinction, and it was already
-		// being made here — the notice simply had not been told about it.
-		//
-		// AND IT SAYS NOTHING ABOUT WHAT THE SPEC ENDS UP WITH, which the first cut
-		// did ("the spec keeps its compiled default"). This fires from
-		// accountLKEVersions, BEFORE the pin is decided, and three things can still
-		// happen after it: a live cluster is adopted and Pin becomes the version it
-		// runs, an explicit --k8s-version is written as given, or a later `env add`
-		// inherits spec.defaults and falls back to nothing at all. The sibling warning
-		// below carries a comment spelling out this same rule — "only the FIRST
-		// `llz env add` seeds anything ... this function cannot tell which, so it says
-		// what it actually knows" — and this one contradicted it from 400 lines up.
+		// AND IT SAYS NOTHING ABOUT WHAT THE SPEC ENDS UP WITH. This fires BEFORE the
+		// pin is decided, and three things can still happen after it: a live cluster
+		// is adopted and Pin becomes the version it runs, an explicit --k8s-version is
+		// written as given, or a later `env add` inherits spec.defaults and falls back
+		// to nothing at all. Say only what is known here.
 		fmt.Fprintln(os.Stderr, cigate.Warning(
 			"this Linode account lists NO LKE-Enterprise versions, so its catalog cannot decide\n"+
 				"  cluster.k8sVersion — whatever the spec ends up pinning is not a version llz confirmed\n"+
@@ -196,10 +173,9 @@ var clusterReadSleep = time.Sleep
 
 // clusterLookup is everything the account said about THIS deployment's cluster.
 //
-// IT IS A STRUCT BECAUSE FIVE OUTCOMES WERE BEING SQUEEZED INTO A STRING, AND THE
-// MESSAGES LIED. Successive reviews found three separate false statements, all the
-// same root cause: "no version to adopt" was the only thing the caller could see,
-// and it is true of five situations that need five different sentences —
+// IT IS A STRUCT BECAUSE FIVE OUTCOMES WERE BEING SQUEEZED INTO A STRING. "No
+// version to adopt" is true of five situations that need five different
+// sentences —
 //
 //	skipped     no token, or no label to match on: llz never looked
 //	failed      the read errored after its retries
@@ -219,8 +195,7 @@ type clusterLookup struct {
 	// THROUGH linode.MatchClusterIDs, WHICH DECODES IT. `id` arrives from the API as
 	// a json.Number or a float64, so formatting the raw map value with %v prints
 	// `1.234567e+06` for any account whose ids are seven digits — an id nobody can
-	// paste into a delete command. An earlier revision did exactly that, and its
-	// test hid it by writing int literals into the fixture.
+	// paste into a delete command. A fixture written with int literals hides this.
 	ID uint64
 	// Matches is how many clusters carried this deployment's label+region. Only
 	// meaningful when Asked.
@@ -235,13 +210,11 @@ func (l clusterLookup) Unreadable() bool { return l.Asked && l.Matches == 1 && l
 // lookupCluster asks the account what THIS deployment's cluster is, if anything.
 //
 // IT RETRIES, ON THE SAME BUDGET AS THE TWO CALLERS THAT ALREADY READ THIS ROUTE
-// (linode.ClusterReadAttempts). An earlier revision was single-attempt on the
-// grounds that the fallback is "behave as `llz env add` did before" — true for the
-// no-pin arm, and false for the one that matters: an explicit --k8s-version is
-// REJECTED unless this read acquits it, so one 503 turns a deployment whose cluster
-// is running the pin into a hard failure, on exactly the remedy
-// `llz ci assert-k8s-version` recommends. The preflight refuses to let an
-// unprovable exemption decide that, and so does this.
+// (linode.ClusterReadAttempts). Single-attempt looks defensible — the fallback is
+// "behave as `llz env add` did before" — but that is false for the arm that
+// matters: an explicit --k8s-version is REJECTED unless this read acquits it, so
+// one 503 turns a deployment whose cluster is running the pin into a hard failure,
+// on exactly the remedy `llz ci assert-k8s-version` recommends.
 //
 // WHAT IT DOES NOT DO IS GO QUIET on the two outcomes that are neither evidence nor
 // an answer: a failed read and an ambiguous account both fall through to seeding
@@ -316,8 +289,8 @@ func classifyClusters(clusters []map[string]any, d Deployment) clusterLookup {
 		// an orphan sitting beside the live deployment, where falling through plans a
 		// control-plane upgrade on whichever one is real.
 		//
-		// THE REMEDY MUST NOT BE `llz reap --cluster-label`, and the first cut of this
-		// warning said exactly that. That flag is LABEL-scoped: it lists every cluster
+		// THE REMEDY MUST NOT BE `llz reap --cluster-label`. That flag is
+		// LABEL-scoped: it lists every cluster
 		// carrying the label and DELETEs each one (teardown/reap.go), which is correct
 		// for a sweep after a deployment is gone and catastrophic here — this warning
 		// fires precisely BECAUSE two clusters share the label, so the advice, followed
@@ -524,11 +497,10 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// Unknown, not wrong — the pin (if any) survives and the caller keeps its
 		// offline default.
 		//
-		// BUT THE CLUSTER READ STILL HAPPENS, and an earlier revision skipped it on
-		// the reasoning that "a catalog that could not be answered means no token or
-		// no reachable API, so the second request would fail the same way". That is
-		// three different failures collapsed into one, and two of them are measured
-		// shapes in this repo:
+		// BUT THE CLUSTER READ STILL HAPPENS. "A catalog that could not be answered
+		// means no token or no reachable API, so the second request fails the same
+		// way" collapses three different failures into one, and two of them are
+		// measured shapes here:
 		//
 		//   - the two endpoints are not the same endpoint. #426 recorded the e2e token
 		//     401ing on the VERSIONS route from some contexts; /v4beta/lke/clusters is
@@ -539,7 +511,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		//     has clusters.
 		//
 		// The cost of getting this wrong is the whole feature: a re-scaffold over a
-		// live cluster would silently re-seed today's newest and plan the upgrade #453
+		// live cluster silently re-seeds today's newest and plans the upgrade #453
 		// exists to prevent, with nothing on disk left to warn from. No token still
 		// costs nothing — lookupCluster returns immediately on a nil client.
 		//
@@ -599,11 +571,7 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 	// if that is precisely what the cluster runs).
 	//
 	// THE SAME RULE HOLDS ON THE UNREADABLE-CATALOG PATH ABOVE, which returns early
-	// on a pin for exactly this reason. An earlier revision of this comment claimed
-	// the opposite — that the cluster read happens there "whatever --k8s-version
-	// says" — and described behaviour the code beside it did not have. Stating a rule
-	// and then breaking it is how a cost comment stops being read; so is stating an
-	// exception that does not exist.
+	// on a pin for exactly this reason.
 	//
 	// AN EXPLICIT PIN THEREFORE NEVER TRIGGERS THE READ, on either path, and the
 	// consequence is worth naming: `--k8s-version` that differs from what a live
@@ -673,12 +641,9 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 		// refuse to let the operator walk away believing it checked out.
 		//
 		// AND THE REMEDY MAY NOT NAME THE ROW IT JUST REJECTED. `offered` is the
-		// catalog that MATCHED — coarse rows and all — so printing it whole told the
+		// catalog that MATCHED — coarse rows and all — so printing it whole tells the
 		// operator to "pass a build id from this list" whose only entry, on an
-		// all-coarse catalog, was the pin they had just been warned about. In that same
-		// run the "names no full build id" warning above has already printed the same
-		// list, so llz said two contradictory things about one catalog: exactly the
-		// defect this arm was added to remove, one message along.
+		// all-coarse catalog, is the pin they were just warned about.
 		c.Warning = fmt.Sprintf(
 			"--k8s-version %q matches a row in this account's catalog, but it is not a full LKE-E build id\n"+
 				"  (MAJOR.MINOR.PATCH plus an `+lkeN` build, e.g. v1.34.6+lke2) — and terraform sends cluster.k8sVersion\n"+
@@ -793,28 +758,19 @@ func ResolveK8sVersion(want string, d Deployment) (K8sVersionChoice, error) {
 // omitRemedy is the closing line of a hard rejection: what actually happens if the
 // operator drops the flag.
 //
-// IT MUST NOT PROMISE A DERIVE THAT YIELDS NOTHING, and the unconditional version
-// did. Two rules decide different halves of this message on purpose — the catalog's
-// entitlement to REJECT runs off the loose `hasBuild` (via everyEntryNamesABuild),
-// while what llz would CHOOSE runs off the strict versionSortKey — and the gap
-// between them is a real catalog shape: `["v1.34+lke2"]` licenses the rejection and
-// derives "". So the message said "omit it and llz picks the newest your account
-// offers" in a run that had already printed "this catalog names no full build id",
-// and omitting the flag would have fallen through to llz's compiled literal.
+// IT MUST NOT PROMISE A DERIVE THAT YIELDS NOTHING. Two rules decide different
+// halves of this message on purpose — the catalog's entitlement to REJECT runs off
+// the loose `hasBuild` (via everyEntryNamesABuild), while what llz would CHOOSE
+// runs off the strict versionSortKey — and the gap between them is a real catalog
+// shape: `["v1.34+lke2"]` licenses the rejection and derives "". Each direction is
+// the safe one for its own question (#443 owns the verdict), but a remedy may only
+// promise what THIS catalog can deliver.
 //
-// The asymmetry itself stays — each direction is the safe one for its own question,
-// and #443 owns the verdict — but a remedy may only promise what THIS catalog can
-// actually deliver.
-// AND IT NAMES NO DESTINATION, WHICH IS THE OTHER HALF. Both branches used to say
-// where the version would come from if the flag were dropped — "llz picks the newest
-// your account offers", "llz would fall back to its compiled default" — and this
-// package cannot know either. Only the FIRST `llz env add` seeds anything; a later
-// one leaves the deployment inheriting spec.defaults, and nothing falls back at all.
-// That is the rule the "names no full build id" warning already states about itself,
-// and the same defect just removed from the empty-catalog warning in
-// accountLKEVersions — reintroduced in a new message the moment one was written.
-// What is safe to say is what dropping the FLAG changes, and what the account can
-// supply.
+// AND IT NAMES NO DESTINATION. This package cannot know where the version would
+// come from if the flag were dropped: only the FIRST `llz env add` seeds anything,
+// and a later one leaves the deployment inheriting spec.defaults with nothing
+// falling back at all. What is safe to say is what dropping the FLAG changes, and
+// what the account can supply.
 func omitRemedy(offered []string, d Deployment, lk clusterLookup) string {
 	// A FAILED READ IS NOT A CLOSED DOOR, and both branches below have to know it.
 	// ADOPTION NEEDS NO CATALOG — it copies a version off a running cluster — so a
@@ -918,12 +874,10 @@ func orAnyRegion(r string) string {
 // documents at the preflight, bounded the same way (`llz reap` sweeps orphans), and
 // it is named here because this is the one caller that WRITES the pin rather than
 // judging one.
-// TENSE MATTERS HERE AND THE FIRST CUT GOT IT WRONG. These lines are printed on
-// the `--dry-run` path too, where nothing is written — so "pinned it" and "can no
-// longer be RE-CREATED" were past-tense claims about a write that never happened,
-// which is the exact defect printK8sVersionConsequences was extracted to fix for
-// the other two version consequences. Both are phrased as the DECISION rather than
-// the deed, which is true before the write and still true after it.
+// TENSE MATTERS HERE. These lines print on the `--dry-run` path too, where nothing
+// is written, so "pinned it" and "can no longer be RE-CREATED" would be past-tense
+// claims about a write that never happened. Both arms are phrased as the DECISION
+// rather than the deed, which is true before the write and still true after it.
 func adoptionMessage(d Deployment, lk clusterLookup, offered []string) (note, warning string) {
 	if verdict, _ := linode.CheckVersion(lk.Running, offered); verdict != linode.VersionNotOffered {
 		return fmt.Sprintf("cluster %s (%s) already runs %s — pinning it for this deployment, so terraform plans no control-plane change.",

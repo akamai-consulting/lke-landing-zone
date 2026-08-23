@@ -38,89 +38,32 @@ import (
 
 // guardedPrefixes are the trees whose path literals are resolved.
 //
-// `tools/` is the tree under active decomposition — 60 extension packages and
-// counting — so it is where a reference goes stale, and every one of the ~90
-// rotted references that motivated this guard named it. `kubernetes-charts/` is
-// here because it measured genuinely clean, and a ratchet is what keeps it that
-// way; nothing was wrong with it.
+// Adding a prefix means modelling the prose in it that merely LOOKS like a path,
+// because there is no ignore-list to fall back on (see this file's header). Two
+// classes needed modelling and both are shared, not re-derived:
 //
-// ────────────────────────────────────────────────────────────────────────────
-// THE OTHER SIX WERE ADDED AFTER MEASURING, and the measurement is the story.
+//  1. RENDER-TIME ARTIFACTS. `docs/README.md` is cited widely and does not exist
+//     here BY DESIGN — deliver-docs writes it into a rendered instance. The set of
+//     paths a render creates comes from shared/platform, which docs-guard reads
+//     too; it is a fact both guards consult, not a capability either owns.
+//  2. PROSE WEARING A PATH'S CLOTHES. Three shapes, each with a rule that cannot
+//     mask a real reference: an illustrative segment (a single letter, verified
+//     absent from every tracked path), a hyphenated adjective hanging off a
+//     directory ("the docs/-scoped rewrite"), and a name broken across a line
+//     (trimRef).
 //
-// An earlier version of this comment claimed they "were scanned during
-// development and are quiet". That was never measured — it was inferred, in a
-// file whose whole subject is unverified claims about the repo. Measured, they
-// held 95 findings: docs 35, platform-apl 33, template-scripts 14,
-// instance-template 6, terraform-modules 3, dockerfiles 3.
+// KNOWN BLIND SPOT: MODULE-RELATIVE PATHS. Every prefix here is repo-root-relative,
+// so a reference written relative to `tools/` — `cmd/llz/x.go`, `internal/health/
+// allowlists.go` — is invisible rather than resolved-and-clean, and the summary
+// line still says every reference resolves. It has hidden real rot before.
 //
-// TWO CLASSES HAD TO BE MODELLED FIRST, because both are prose that merely LOOKS
-// like a path, and an ignore-list is not available here — see this file's header:
-//
-//  1. RENDER-TIME ARTIFACTS. `docs/README.md` is cited 21 times and does not exist
-//     here BY DESIGN: deliver-docs writes it into a rendered instance and the docs
-//     skill says never to create one. All 21 citations are correct, so shipping
-//     this prefix naively would have told 21 authors to fix working prose — which
-//     is how a guard earns its deletion. docs-guard already modelled it, so the
-//     set is SHARED rather than copied — from shared/platform, not from docsguard:
-//     importing a peer extension is refused by TestNoNewExtensionToExtensionImports,
-//     correctly, and which paths a render creates is a FACT both guards consult
-//     rather than a capability either owns.
-//
-//  2. PROSE THAT WEARS A PATH'S CLOTHES. Three shapes, each with a rule that
-//     cannot mask a real reference: an illustrative segment (a single letter,
-//     verified absent from every tracked path), a hyphenated adjective hanging off
-//     a directory ("the docs/-scoped rewrite"), and a name broken across a line
-//     (trimRef). Nobody writes a `tools/`-shaped path to mean "some file", which
-//     is why none of this surfaced under the first prefix.
-//
-// The 68 that survived those rules were real, and are fixed.
-//
-// ────────────────────────────────────────────────────────────────────────────
-// A KNOWN, MEASURED BLIND SPOT: MODULE-RELATIVE PATHS. Every prefix here is
-// repo-root-relative, so a reference written relative to `tools/` — `cmd/llz/x.go`,
-// `internal/health/allowlists.go` — is not a candidate at all. It is invisible
-// rather than resolved-and-clean, which is the worse of the two failures: the
-// summary line says every reference resolves while these are not counted.
-//
-// It hid a real cluster. After the CLI tree moved to `internal/cli` and the
-// extensions were re-filed under assertions/ guards/ lifecycle/, eleven live
-// present-tense claims pointed at files that no longer exist — five health headers
-// saying "the kubectl orchestration lives in cmd/llz", promote's own declaration
-// contradicting itself six lines apart, "See internal/extension/validate.go" — and
-// this guard reported 1,128 references all resolving over them.
-//
-// A ROW IS NOT EARNED YET, AND THE SHAPE OF THE POPULATION IS WHY, not caution:
-//
-//	`internal/…`   ~150 candidates, and roughly three quarters do not resolve —
-//	               because the bare `internal/<pkg>` form is now SHORTHAND for a
-//	               package that lives at internal/shared/<pkg> or
-//	               internal/extensions/<bucket>/<pkg>. Most are prose NAMING A
-//	               PACKAGE, not a false claim about a file, and a row would demand
-//	               a hundred-odd edits that mostly make the prose longer without
-//	               making it truer.
-//	`cmd/llz/…`    a couple of dozen, and almost all are "moved here from X" notes —
-//	               the class the docs doctrine explicitly says to KEEP, because an
-//	               operator upgrading an older tree searches for the thing that
-//	               vanished. A guard reporting those would be fighting the rule.
-//
-// THE MAGNITUDES ARE DELIBERATELY APPROXIMATE, which is a correction to how this
-// note was first written. It carried exact figures — 148/116 and 23 — and the very
-// commit that recorded them repointed a batch of stale references and moved all
-// three. An unpinned exact count in a comment is wrong by the time it is read, and
-// here it would be wrong while LOOKING like the measurement the argument rests on.
-// The argument rests on the SHAPE (shorthand, and history worth keeping), which is
-// stable. Re-measure with the recipe below if you need a figure:
-//
-//	grep -rhoE '(^|[^A-Za-z0-9_./-])internal/[A-Za-z0-9_-]+(/[A-Za-z0-9_.-]+)*' \
-//	  --include='*.md' --include='*.go' docs tools | sort -u
-//	# then test each against tools/<path>
-//
-// So the shape a row needs is a way to tell a LIVE claim from a historical one,
-// and nothing here can read tense. That is the modelling this prefix set had to do
-// twice already (render-time artifacts, prose wearing a path's clothes) and it is
-// not done for this class. The gap is written down at its measured size so the
-// next person meets a known number rather than an unexamined green.
-// ────────────────────────────────────────────────────────────────────────────
+// A row is not earned yet because of the population's shape, not caution: bare
+// `internal/<pkg>` is now SHORTHAND for internal/shared/<pkg> or
+// internal/extensions/<bucket>/<pkg>, so most non-resolving hits are prose naming
+// a package rather than a false claim about a file; and `cmd/llz/…` hits are
+// almost all "moved here from X" notes, which the docs doctrine says to KEEP so an
+// operator can find what vanished. Closing this class needs a way to tell a LIVE
+// claim from a historical one, and nothing here can read tense.
 var guardedPrefixes = []string{"tools", "kubernetes-charts", "docs", "platform-apl",
 	"template-scripts", "instance-template", "terraform-modules", "dockerfiles"}
 

@@ -5,24 +5,20 @@ package k8sminorcoherence
 // LKE-Enterprise minor this repo actually deploys.
 //
 // WHY (#427): `kubectl apply --dry-run=server -f rendered/` is the most
-// load-bearing manifest gate in the repo — it is the only check that asks a real
-// API server whether these manifests are acceptable, which is what catches a
-// removed API, an immutable-field change, or a field only a newer server
-// validates. It is answered by whatever kind boots. lint.yml pinned kind's
-// VERSION and never its NODE IMAGE, so the answer came from kind's default image
-// — v1.31.2 under kind v0.25.0 — while the cluster root pinned v1.34.6+lke2.
-// Three minors of API churn were outside the gate's field of view, and the gate
-// stayed green the whole time, because a 1.31 server accepting a manifest is a
-// perfectly ordinary thing for it to do.
+// load-bearing manifest gate in the repo — the only check that asks a real API
+// server whether these manifests are acceptable, which is what catches a removed
+// API, an immutable-field change, or a field only a newer server validates. It is
+// answered by whatever kind boots, so a lint.yml that pins kind's VERSION and not
+// its NODE IMAGE validates against kind's default minor rather than the one the
+// cluster root pins, and stays green while minors of API churn sit outside its
+// field of view.
 //
-// NOTHING COULD SEE IT, which is the class this repo keeps rediscovering. Both
-// pins are individually well-formed: `KIND_VERSION: v0.25.0` is a real kind
-// release and `k8s_version = "v1.34.6+lke2"` is a real LKE-E build. The defect is
-// only visible as a RELATION between them — the same shape as version-pins,
-// setup-go-sole-site and mutable-tag-guard — and it was created by a change to
-// NEITHER site: bumping kubectl in #425 broke a pairing (kubectl 1.31 ↔ kind's
-// 1.31.2 image) that nobody had written down, so no reviewer of that diff had
-// anything to notice.
+// NOTHING ELSE CAN SEE IT, which is the class this repo keeps rediscovering. Both
+// pins are individually well-formed; the defect is only visible as a RELATION
+// between them — the same shape as version-pins, setup-go-sole-site and
+// mutable-tag-guard — and it can be created by a change to NEITHER site, as
+// bumping kubectl once did to a kubectl ↔ node-image pairing nobody had written
+// down.
 //
 // WHAT IT COMPARES, AND AT WHAT PRECISION. The MINOR, and only the minor. The two
 // sides cannot be equal and must not be allowed to drift: Linode offers full LKE-E
@@ -39,11 +35,10 @@ package k8sminorcoherence
 // into a cross-repo sequence. The bound catches what #427 names — a +3 skew — and
 // leaves the ordinary one-minor lead alone.
 //
-// IT IS MEASURED AGAINST THE NODE IMAGE, not against the tfvars pin, and the
-// distinction is invisible on a healthy tree because the two are equal there —
-// which is how the first cut got it wrong and still passed every test. In the
-// #427 state itself (node 1.31, kubectl 1.34) measuring against the pin reported
-// a skew of 0, so the paragraph above was a claim the code did not honour.
+// IT IS MEASURED AGAINST THE NODE IMAGE, not against the tfvars pin. The
+// distinction is invisible on a healthy tree because the two are equal there, and
+// a test written on one will not catch it — in the #427 state itself (node 1.31,
+// kubectl 1.34) measuring against the pin reports a skew of 0.
 //
 // THE OTHER KUBECTL RULE IS AN EQUALITY, because it is a different question: the
 // job installs kubectl TWICE (azure/setup-kubectl and kind-action) and both

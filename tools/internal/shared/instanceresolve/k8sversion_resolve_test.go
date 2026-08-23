@@ -1333,9 +1333,9 @@ func TestNoTokenCostsNoRequestsAtAll(t *testing.T) {
 // `1.33` comes back Offered — and terraform sends cluster.k8sVersion verbatim, so
 // the LKE-E create API rejects it.
 //
-// The first cut of this guard tested c.Newest — "does the catalog name a build
-// anywhere" — which reads like the same question and is not: against a MIXED
-// catalog it is non-empty, so a coarse pin still got a confident confirmation.
+// Testing c.Newest instead — "does the catalog name a build anywhere" — reads like
+// the same question and is not: against a MIXED catalog it is non-empty, so a
+// coarse pin still gets a confident confirmation.
 func TestAConfirmationIsOnlyClaimedForAPinTheCreateAPICanTake(t *testing.T) {
 	// THE MIXED CATALOG IS THE FIXTURE THAT SEPARATES THE TWO RULES. A purely coarse
 	// one has Newest == "" and would pass under either, so it cannot tell them apart.

@@ -63,9 +63,9 @@ func PodIsStarting(s PodStatus) bool {
 		return s.Phase == "Pending"
 	}
 	// INIT AND MAIN CONTAINERS ARE JUDGED SEPARATELY, because RUNNING means
-	// opposite things for the two. Flattening them into one list is what the
-	// first version of this did, and it reintroduced the very incident the file
-	// exists to prevent: a non-sidecar init container reports ready=false for its
+	// opposite things for the two. Flattening them into one list reintroduces the
+	// incident this file exists to prevent: a non-sidecar init container reports
+	// ready=false for its
 	// whole run, so a pod sitting in a perfectly normal `wait-for-db` init was
 	// recorded CatFail and aborted converge.
 	for _, c := range s.InitContainerStatuses {

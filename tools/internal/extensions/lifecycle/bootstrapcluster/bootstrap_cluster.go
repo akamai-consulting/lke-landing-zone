@@ -503,10 +503,10 @@ var lkeStockStorageClasses = []string{"linode-block-storage", "linode-block-stor
 //   - promoting block-storage-retain to cluster default does nothing, because an
 //     explicit storageClassName never consults the default;
 //   - a Kyverno mutation cannot win the race. apl-core installs Kyverno AND creates
-//     the PVCs, and it creates most of them FIRST. Measured on lke637888:
-//     kyverno-admission-controller went Available at 15:59:50, by which point 11 of
-//     the 13 PVCs already existed (first at 15:57:10). A policy applied the instant
-//     Kyverno can admit one still arrives too late for 11 of 13.
+//     the PVCs, and it creates most of them FIRST. Measured live:
+//     kyverno-admission-controller went Available roughly three minutes after the
+//     first PVC, by which point 11 of the 13 already existed. A policy applied the
+//     instant Kyverno can admit one still arrives too late for 11 of 13.
 //
 // What DOES have a head start is this command. bootstrap-cluster applied its
 // StorageClass at 15:56:03 — 67 seconds before the first PVC — and needs nothing
@@ -1050,10 +1050,9 @@ const aplGiteaInClusterURL = "http://git-server.git-server.svc.cluster.local/oto
 // It keeps the CREDENTIALS from gitCloneCmd but discards its HOST. gitCloneCmd
 // carries the PUBLIC name (git.<domainSuffix>), and apl-core deploys git-server
 // with httproute.enabled=false — no public route — so cloning it from inside the
-// cluster is not known to work. An earlier version of this code used gitCloneCmd
-// as-is on the strength of a clone I believed had been verified; re-reading the
-// evidence, what succeeded was a clone of the in-cluster Service DNS URL. Rebuilding
-// against aplGiteaInClusterURL uses the address with actual evidence behind it.
+// cluster is not known to work. The clone that HAS been observed to succeed is of
+// the in-cluster Service DNS URL, so this rebuilds against aplGiteaInClusterURL —
+// the address with evidence behind it.
 //
 // NOT verified live: this path only runs on a re-bootstrap whose destination branch
 // has gone missing, which no run has reproduced since the fix. It fails loudly if

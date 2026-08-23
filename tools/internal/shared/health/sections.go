@@ -164,9 +164,9 @@ func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pend
 			fmt.Sprintf("Service %s has %d endpoint(s) and NONE Ready — this is a steady-state check, so the "+
 				"backing pods are not starting, they are failing their readiness probe", key, totalCount))
 	}
-	// ZERO ENDPOINTS IS ALSO PENDING, and the earlier draft of this function got
-	// that wrong in a way worth recording. It assumed "endpoints exist but are
-	// notReady" covered the still-starting case — but a pod only appears in an
+	// ZERO ENDPOINTS IS ALSO PENDING, which is easy to get wrong: "endpoints exist
+	// but are notReady" looks like it covers the still-starting case, but a pod only
+	// appears in an
 	// EndpointSlice once it HAS a PodIP, so a Service whose pods are still
 	// Pending/ContainerCreating has no endpoints AT ALL. The young-cluster abort
 	// this whole change set exists to stop would have survived it, now wearing a

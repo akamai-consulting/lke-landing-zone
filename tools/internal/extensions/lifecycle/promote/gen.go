@@ -42,9 +42,8 @@ const localTerraformUses = "./.github/workflows/llz-terraform.yml"
 // GitHub would reject the whole workflow with an error naming neither cause.
 //
 // The `llz-` prefix makes the collision unlikely, NOT impossible: EnvNameRe
-// accepts `llz-preflight` perfectly well, and an earlier version of this comment
-// asserted the opposite with nothing checking it. validate.ReservedEnvNames is
-// what actually holds the name now; keep the two in step (a coupling test does).
+// accepts `llz-preflight` perfectly well. validate.ReservedEnvNames is what holds
+// the name; keep the two in step (a coupling test does).
 const preflightJob = "llz-preflight"
 
 // checkoutAction is the pinned actions/checkout the preflight job uses — the same

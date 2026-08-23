@@ -1152,10 +1152,9 @@ var notInTheLocalMirror = map[string]string{
 	"argocd-rendered-apps-check": "its check runs in LINT_ALL through llz-gates as guard-manifests; the standalone target is CI's dry-run job and local iteration",
 }
 
-// The first cut of this map also listed `llz` and `build` as exemptions. lint.yml
-// runs neither, and the ratchet's reverse direction said so on its first run —
-// which is the argument for having that direction at all: an exemption nobody
-// needs reads as a decision that was made.
+// The ratchet's REVERSE direction is what keeps this map honest: an exemption for
+// something lint.yml does not run reads as a decision that was made, so an entry
+// nobody needs has to fail too.
 
 // THE OTHER DIRECTION: A CHECK CI RUNS THAT NOTHING LOCAL DOES.
 //

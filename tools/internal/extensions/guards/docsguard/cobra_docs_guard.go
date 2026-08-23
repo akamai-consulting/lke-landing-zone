@@ -81,9 +81,9 @@ func docsGuardCmd(tree *cobra.Command) *cobra.Command {
 			// commands did not have a command-free docs tree — it had a broken tree.
 			// A bare Invocations==0 check would fail on a legitimately command-free
 			// repo, and a guard that fails on a true state is one people delete.
-			// NOTHING AT ALL is the first case, and my first version of this check
-			// missed it: it fired on "commands zero, links non-zero", which an EMPTY
-			// TREE fails to satisfy because both are zero. A guard pointed at the
+			// NOTHING AT ALL is the first case, and it is easy to miss: firing on
+			// "commands zero, links non-zero" is a condition an EMPTY TREE fails to
+			// satisfy, because both are zero. A guard pointed at the
 			// wrong directory would have sailed through the very check written to
 			// stop it. Caught by the driver-wide empty-corpus test, which is the
 			// argument for that test existing rather than trusting each guard.

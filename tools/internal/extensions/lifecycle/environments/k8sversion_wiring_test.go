@@ -623,8 +623,7 @@ func TestEnvAddRefusesAnExplicitPinTheAccountCannotBuild(t *testing.T) {
 }
 
 // TestALaterDeploymentIsNotCreatedAgainstARotatedOutSharedPin is the second half
-// of the gate, and it exists because the first cut of this feature did not cover
-// it.
+// of the gate.
 //
 // spec.defaults.cluster.k8sVersion is seeded ONCE, on the first `llz env add`.
 // Every deployment added afterwards — a second region, a DR peer, a deployment
@@ -925,10 +924,10 @@ func TestTheE2ELaneScaffoldsAgainstTheAccountItBuildsOn(t *testing.T) {
 	//
 	// A reusable workflow only receives a secret its caller passes (or inherits),
 	// and this repo has THREE call sites — the cold lane, the warm lane, and the
-	// driver. Listing them here would have been the bug: the first cut of this test
-	// named the warm caller alone and passed while release-e2e-lane.yml, the ACTUAL
-	// cold path, still dropped the secret. So the callers are discovered, and a new
-	// one is covered the moment it is added.
+	// driver. Listing them here would be the bug: a test naming the warm caller
+	// alone passes while release-e2e-lane.yml, the ACTUAL cold path, still drops the
+	// secret. So the callers are discovered, and a new one is covered the moment it
+	// is added.
 	callers := e2eInstantiateCallers(t)
 	if len(callers) == 0 {
 		t.Fatal("found no workflow calling e2e-instantiate.yml — this test would pass having checked nothing")

@@ -112,10 +112,9 @@ func FuzzParseTFVars(f *testing.F) {
 		}
 
 		// Every string field must have come from the content — EXCEPT the two that
-		// ParseTFVars deliberately defaults when absent. The seed corpus caught
-		// this immediately: an earlier version of this invariant flagged
-		// VPCSubnetCIDR="10.0.0.0/13" as "invented" when it is DefaultVPCSubnetCIDR
-		// applied on purpose. Encoding the exception rather than dropping the check
+		// ParseTFVars deliberately defaults when absent — VPCSubnetCIDR="10.0.0.0/13"
+		// is DefaultVPCSubnetCIDR applied on purpose, not an invented value, and the
+		// seed corpus flags it at once. Encoding the exception rather than dropping the check
 		// keeps the useful half: a value that is neither from the input nor the
 		// documented default would name real infrastructure after nothing.
 		for name, v := range map[string]string{

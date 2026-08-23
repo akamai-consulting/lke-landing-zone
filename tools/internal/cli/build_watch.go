@@ -22,9 +22,8 @@ package cli
 // the first seconds that query answers with the PREVIOUS one, which on an
 // established instance is a completed run from days ago. Printing that is worse
 // than printing nothing: `gh run watch` on a finished run returns instantly
-// green, and the operator concludes the build succeeded. The first cut of this
-// file described that hazard in a comment and then guarded it with a single
-// three-second sleep, which is a hope rather than a check.
+// green, and the operator concludes the build succeeded. A fixed sleep before
+// querying is a hope rather than a check.
 //
 // So the run id observed BEFORE the dispatch is the baseline, and only a run
 // with a HIGHER id is ours. Linode-style monotonic ids make that exact rather

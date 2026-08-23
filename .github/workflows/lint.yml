@@ -104,14 +104,12 @@ concurrency:
 env:
   # kind, and the node image the dry-run's API server actually runs.
   #
-  # THE NODE IMAGE IS THE PIN THAT MATTERS, and for a long time nothing set it
-  # (#427). Given only `version:`, kind boots ITS OWN default node image —
-  # v1.31.2 under the v0.25.0 that used to sit here — so this repo's most
-  # load-bearing manifest gate, `kubectl apply --dry-run=server`, answered "would
-  # a 1.31 server accept these manifests?" while we deploy v1.34.6+lke2. An API
-  # removed in 1.32/1.33/1.34, or a field only a newer server validates, passed
-  # here and failed on a real cluster. Closing that gap is the entire reason the
-  # gate exists, so it was answering the wrong question the whole time.
+  # THE NODE IMAGE IS THE PIN THAT MATTERS. Given only `version:`, kind boots ITS
+  # OWN default node image, so this repo's most load-bearing manifest gate —
+  # `kubectl apply --dry-run=server` — would answer "would kind's default server
+  # accept these manifests?" rather than the LKE-E minor we deploy. An API removed
+  # in a later minor, or a field only a newer server validates, then passes here
+  # and fails on a real cluster (#427).
   #
   # `llz ci k8s-minor-coherence` now ASSERTS the relation rather than trusting
   # this comment: the image's minor must equal the LKE-E minor pinned in the
@@ -197,62 +195,29 @@ jobs:
     container:
       # Fall back to the image build-images.yml publishes under this repo's owner
       # when KUBE_IMAGE isn't set. (Owner must be lowercase for GHCR — true for
-      # org logins.)
-      #
-      # AND IT IS NOT SET HERE. Calling this the fresh-fork path understates it:
-      # this repo sets neither KUBE_IMAGE nor TF_IMAGE, so the fallback is what
-      # every Lint run on this repo actually resolves — which is why the scar
-      # below happened here at all, rather than only to some hypothetical fork.
+      # org logins.) This repo sets neither KUBE_IMAGE nor TF_IMAGE, so the
+      # fallback is what every Lint run here actually resolves — not a fresh-fork
+      # edge case.
       #
       # :latest, NOT :${KUBECTL_VERSION}, AND `llz ci version-pins` ENFORCES THAT.
-      # This used to restate the Dockerfile's KUBECTL_VERSION, which made a
-      # kubectl bump self-defeating: version-pins (correctly) required the two to
-      # agree, so the bump pointed this job at a tag build-images.yml had not
-      # published yet — it builds on pushes to main, this runs on the bump's own
-      # push — and Lint died with `manifest unknown` on a reference that looked
-      # broken rather than early. Every bump cost one confusing red and a manual
-      # re-run. Where no variable pins the image, a moving tag is the honest
-      # answer; set KUBE_IMAGE (to a :sha-<commit> tag) for a reproducible pin.
-      # (`:1.34.10` was less of an upgrade on that than it looked —
-      # build-images.yml pushes :latest, :sha-<commit> and :<version> from the
-      # SAME build, so while a version is current the two names resolve to the
-      # same digest. They diverge AFTER a bump: the old version tag is never
-      # republished and freezes there, while :latest keeps moving — so an
-      # un-rebased branch re-running Lint now gets the post-bump toolchain rather
-      # than the one its own tree declares. A :sha- pin is the fix for anyone who
-      # needs that; a version tag was never it.)
+      # Restating the Dockerfile's KUBECTL_VERSION here makes a kubectl bump
+      # self-defeating: version-pins (correctly) requires the two to agree, so the
+      # bump points this job at a tag build-images.yml has not published yet — it
+      # builds on pushes to main, this runs on the bump's own push — and Lint dies
+      # with `manifest unknown` on a reference that looks broken rather than early.
+      # Where no variable pins the image, a moving tag is the honest answer; set
+      # KUBE_IMAGE to a :sha-<commit> tag for a reproducible pin.
       #
-      # BRANCH BUILDS USED TO CONTAMINATE THIS TAG, and the honest version of that
-      # took two cases — earlier comments here got each of them wrong on its own.
-      # build-images.yml's workflow_dispatch is not gated on the ref and it
-      # published :latest, :sha-<commit> AND :<version> from whatever branch it ran
-      # on, while e2e-instantiate.yml dispatches it on the branch automatically
-      # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`) — so
-      # it was routine rather than deliberate.
+      # `:latest` IS SAFE TO FOLLOW because build-images.yml publishes the mutable
+      # tags only from the default branch's HEAD (PUBLISH_MUTABLE); every other ref
+      # gets :sha-<commit> and nothing else, and `llz ci mutable-tag-guard` fails
+      # the PR that undoes it.
       #
-      #   branch does NOT bump the version — it republished :<version> as well as
-      #     :latest, so the old pinned fallback was repointed exactly the same way.
-      #     Nothing changed here.
-      #   branch DOES bump the version — it published :latest plus a :<new> tag
-      #     nobody pins yet, leaving the old :<current> pin untouched. The pinned
-      #     fallback insulated other PRs from that build; :latest does not.
-      #
-      # FIXED IN build-images.yml (#451), which is where the defect lived: the
-      # mutable tags are now published only from the default branch's HEAD
-      # (PUBLISH_MUTABLE), every other ref gets :sha-<commit> and nothing else, and
-      # `llz ci mutable-tag-guard` fails the PR that undoes it. The two cases stay
-      # written out because they are why the `:latest` fallback below is safe, not
-      # because either is still live.
-      #
-      # WHAT THIS COSTS, STATED PLAINLY: on the push that bumps KUBECTL_VERSION,
-      # this job runs the PREVIOUS image, so its baked kubectl is one version
-      # behind for that run. It is not the skew it sounds like — `make
-      # k8s-validate` passes `-kubernetes-version $(KUBECTL_VERSION)` from the
-      # Makefile's own pin (which version-pins gates and the bump moves), so the
-      # schema validation that actually depends on the version follows the bump
-      # immediately. And the old behaviour was no better: build-images only
-      # publishes on main, so a bump PR could not run the new image either — it
-      # just failed instead of passing.
+      # WHAT THIS COSTS: on the push that bumps KUBECTL_VERSION this job runs the
+      # PREVIOUS image, so its baked kubectl is one version behind for that run.
+      # `make k8s-validate` passes -kubernetes-version $(KUBECTL_VERSION) from the
+      # Makefile's own pin, so the schema validation that depends on the version
+      # follows the bump immediately.
       image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:latest', github.repository_owner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -623,9 +588,7 @@ jobs:
       - name: Instantiate the template + assert render + structure + actionlint
         run: SKIP_TF=1 template-scripts/ci/instance-test.sh
 
-      # The day-2 half. instance-test proves `copier copy`; this proves the
-      # UPGRADE — which appeared in no workflow, target or script until now, so
-      # the path every adopter takes on their second week was gated by nobody.
+      # The day-2 half: instance-test proves `copier copy`, this proves the UPGRADE.
       #
       # THE DEFAULT DEPTH IS 3 AND IS NOT PASSED HERE: the gate's own default is
       # what a maintainer gets from `make upgrade-test`, and pinning a different
@@ -801,24 +764,16 @@ jobs:
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
 
       # Guard: no externally-supplied expression may be interpolated into a run:
-      # script. ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and HERE THE
-      # SECOND SITE IS DELIBERATE: the row came first, and this step was added later
-      # the same day once it was noticed that the job carrying the gate set skips
-      # fork pull requests. main's squashed commit shows both arriving together and
-      # reads like an accident; the reasoning is in PR #438, whose branch commits are
-      # where the sequence and the argument live. A squash keeps the diff and throws
-      # away the why, so this is the one claim here not to take from `git log`.
-      #
-      # The Kubernetes job is conditioned on the event not being a pull request OR
-      # the head repository being this one, so it skips every FORK pull request —
-      # exactly the population this guard's threat model is about, since a fork PR is
-      # how an attacker-chosen branch name or PR title reaches a workflow at all.
-      # This job (go-tests) carries no `if:`, so whenever the workflow runs, the
-      # guard runs, fork or not. What starts the workflow is a separate question,
-      # answered by the `on:` block at the top.
+      # script. ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and THE
+      # SECOND SITE IS DELIBERATE: that job is conditioned on the event not being a
+      # pull request OR the head repository being this one, so it skips every FORK
+      # pull request — exactly the population this guard's threat model is about,
+      # since a fork PR is how an attacker-chosen branch name or PR title reaches a
+      # workflow at all. This job (go-tests) carries no `if:`, so whenever the
+      # workflow runs, the guard runs, fork or not.
       #
       # The fork condition is DESCRIBED, not quoted: it already appears verbatim on
-      # two jobs in this file, `kubernetes` and `terraform`, and a copy here would be
+      # the `kubernetes` and `terraform` jobs in this file, and a copy here would be
       # a third place to keep in step with them.
       #
       # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for

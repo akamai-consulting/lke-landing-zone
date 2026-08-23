@@ -343,8 +343,8 @@ func (p Plan) UndeclaredErr() error {
 // the stages are re-read from the bytes just written, and Undeclared is gone
 // because the generated stages come from the declared deployments by construction.
 //
-// IT RE-READS RATHER THAN CLEARING. The first cut of this cleared Undeclared and
-// left Stages holding what was on disk BEFORE the write, so
+// IT RE-READS RATHER THAN CLEARING. Clearing Undeclared while leaving Stages
+// holding what was on disk BEFORE the write means
 // `llz env pipeline --require-pipeline` regenerated a two-stage pipeline and then
 // exited 1 reporting "declares 0 stage(s)" about the file it had just written.
 // Parsing the new bytes with the same predicate the checker uses cannot drift out

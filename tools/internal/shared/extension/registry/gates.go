@@ -1,92 +1,50 @@
 package registry
 
 // gates.go — THE FIRST DISPATCH. A gate binding runs because the registry says it
-// exists, not because someone wrote a call.
-//
-// This is issue #399's Phase 2 acceptance criterion, open since the declaration
-// model landed: "a gate binding RUNS FROM THE REGISTRY, not from a hardcoded call.
-// Without that this is a directory, not a framework." Sixty-one declarations had
-// exactly one non-test consumer — `llz extension list` — so every binding was
-// inert, and the model described a system that nothing consulted.
+// exists, not because someone wrote a call. Without that the declaration model is
+// a directory rather than a framework.
 //
 // WHY GATES FIRST. A gate is the one kind that needs no capability plumbing: the
 // validator permits it `read-repo` and nothing else, so there is no client to
 // scope, no credential to fence, and no argument about what a handle should look
-// like. The guards/ bucket was 15 packages and 15-for-15 all-Gate when this was
-// chosen, which is what made it a clean target rather than a convenient one.
+// like. Do NOT navigate by "the guards/ bucket is all gates" — it no longer is
+// (guard-coverage carries a `transition:scaffolded` beside its gate).
+// TestEveryDrivenGateIsReadRepoOnly holds the line, and it checks the BINDING
+// rather than the bucket.
 //
-// IT IS NO LONGER ALL-GATE, and the exception is worth knowing rather than
-// papering over: the bucket is now 16 packages, and `guard-coverage` carries a
-// `transition:scaffolded` named `floor-bank` beside its gate. That does not
-// weaken the reasoning above — a gate still needs no plumbing, and every row in
-// the table below is still a gate binding — but "the bucket is all gates" has
-// stopped being a fact about the tree, so nobody should navigate by it.
-// TestEveryDrivenGateIsReadRepoOnly is what actually holds the line, and it
-// checks the BINDING rather than the bucket.
-//
-// ────────────────────────────────────────────────────────────────────────────
-// IT NEEDS NO ACTION ABI, AND THAT IS THE DESIGN, not a shortcut.
-//
-// The obvious route was a `Run func(Handles) error` on Binding — the ABI the
-// design doc has deferred since Phase 1 for want of a consumer. Two things ruled
-// it out, and both were measured rather than assumed:
+// IT NEEDS NO ACTION ABI, AND THAT IS THE DESIGN, not a shortcut. The obvious
+// route was a `Run func(Handles) error` on Binding. Two things ruled it out:
 //
 //   - THE GUARDS' ENTRY POINTS ARE NOT UNIFORM. Five are `Run(root string) error`;
 //     the rest want a config path, a profile, an io.Writer pair, or the live cobra
 //     tree (docs-guard resolves documented `llz …` invocations against it). Several
-//     expose no exported run function at all. A single signature would have meant
-//     rewriting fifteen packages to fit an ABI invented for them — the tail wagging
-//     the dog, and the exact way a wrong ABI gets frozen.
+//     expose no exported run function at all. A single signature would mean
+//     rewriting fifteen packages to fit an ABI invented for them, which is how a
+//     wrong ABI gets frozen.
 //   - THE REGISTRY ALREADY HOLDS RUNNABLE THINGS. commands.go maps each extension
 //     to its cobra constructors, by FUNCTION REFERENCE, so the compiler checks the
-//     wiring. A *cobra.Command is an entry point that already exists, already takes
-//     its own flags, and already works.
+//     wiring. A *cobra.Command already exists, already takes its own flags, and
+//     already works.
 //
 // So a gate is a BINDING plus the command that runs it, and the table below is the
-// same shape commands.go established for the same reason: a function reference
-// costs one line and renaming it breaks the build rather than a test three weeks
-// later.
+// shape commands.go established for the same reason: a function reference costs one
+// line and renaming it breaks the build rather than a test three weeks later.
 //
-// WHAT THIS DEFERRED, AND WHAT HAPPENED INSTEAD.
+// GATES DO CONSUME A CAPABILITY — `read-repo` has a handle and every gate here is
+// fenced to a tree — but they acquire it WITHOUT AN ABI: each binding looks itself
+// up from its own declaration at the point of use (capability.RepoForGate, and the
+// cloudBinding/repoBinding accessors beside it), and this driver passes nothing but
+// flags.
 //
-// This paragraph used to say "nothing here delivers a capability to anything. A
-// gate holds `read-repo`, and reading the repo is what a process does by
-// existing" — and predicted that the first binding kind needing
-// `capability.Handles` delivered through dispatch would be an assertion or a
-// transition, which is where the ABI question would become real.
-//
-// BOTH HALVES ARE NOW FALSE, and the second is the interesting one.
-//
-// Reading the repo is no longer what a process does by existing: `read-repo` has
-// a handle, and every gate here is fenced to a tree. So gates DO consume a
-// capability. But they acquire it WITHOUT AN ABI — each binding looks itself up
-// from its own declaration at the point of use (capability.RepoForGate, and the
-// cloudBinding/repoBinding accessors beside it), and this driver still passes
-// nothing but flags.
-//
-// Self-service turned out to have a property a dispatcher could not offer.
-// teardown selects its binding from `--yes`/`--dry-run` at RUNTIME, narrowing
-// itself to a read-only handle on a dry run; a `Run func(Handles) error` would
-// have had to choose the handle before the flags were parsed. An ABI would have
-// foreclosed that.
-//
-// So the open question is no longer "when will something need Handles delivered
-// through dispatch" but "does anything, given self-service works". The honest
-// candidates are the cases self-service demonstrably cannot serve: a lane that
-// must be handed a NARROWED capability by something other than itself, and an
-// auditor that needs a central record of what was handed out.
-//
-// `template-sustain` USED TO BE THE THIRD, and losing it is evidence about the
-// question rather than a detail. Its command was undriveable because its Deps were
-// assembled in package main, which internal/shared cannot import — so it read as a
-// case needing dispatch to hand it something. It was not. Moving the assembler to
-// cli/deps made it an ordinary row in the table below, and the driver still passes
-// nothing but flags. One of the three candidates for an ABI turned out to be a
-// package-placement problem wearing an ABI's clothes.
-//
-// That is a smaller question than the one deferred here, and it should be
-// answered before an ABI is built rather than by building one.
-// ────────────────────────────────────────────────────────────────────────────
+// SELF-SERVICE HAS A PROPERTY A DISPATCHER CANNOT OFFER. teardown selects its
+// binding from `--yes`/`--dry-run` at RUNTIME, narrowing itself to a read-only
+// handle on a dry run; a `Run func(Handles) error` would have to choose the handle
+// before the flags are parsed. So the open question is not "when will something
+// need Handles delivered through dispatch" but "does anything, given self-service
+// works" — and the honest candidates are the cases self-service demonstrably
+// cannot serve: a lane that must be handed a NARROWED capability by something
+// other than itself, and an auditor needing a central record of what was handed
+// out. Answer that before building an ABI.
 
 import (
 	"fmt"
@@ -140,11 +98,10 @@ import (
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
 //
-// THOSE NUMBERS ARE PINNED by TestTheDefaultedMajorityIsStillTheMajority, because
-// the previous version of this sentence said "eighteen of nineteen … and the two
-// that differ" — stale on both counts and self-contradictory on its face, since
-// eighteen of nineteen leaves one. A count in a comment that nothing compares is
-// the same footnote-not-measurement shape the name/package count fell into.
+// THOSE NUMBERS ARE PINNED by TestTheDefaultedMajorityIsStillTheMajority. A count
+// written in a comment and compared by nothing is a footnote, not a measurement:
+// it goes stale silently and can contradict itself on its face without anyone
+// noticing.
 type Gate struct {
 	Extension string
 	New       func() *cobra.Command

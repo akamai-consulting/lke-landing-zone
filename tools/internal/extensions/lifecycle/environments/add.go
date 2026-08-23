@@ -266,28 +266,24 @@ func Run(dryRun bool, name string, o envdef.Opts) error {
 	// tfvars are gitignored build artifacts), so there is no value to restore and
 	// no honest way to choose one. What llz can do is refuse to be quiet about it.
 	//
-	// WHAT IT DOES NOT COVER, stated because the boundary is easy to misread: it
-	// needs ANOTHER deployment to still be defined. A re-scaffold that removes
-	// landingzone.yaml, environments/<env>.yaml AND the overlay together — which is
-	// exactly what e2e-instantiate.yml does, and what add.go's own start-over hint
-	// leads to for a single-deployment instance — is indistinguishable ON DISK from
-	// a first run, so nothing here fires.
-	//
-	// THAT CASE IS COVERED ELSEWHERE NOW, and deliberately not here (#453). The only
-	// witness left is the ACCOUNT, so the resolver asks it: a cluster matching this
-	// deployment's label+region makes the run a re-scaffold whatever the tree looks
-	// like, and K8sVersionChoice.Running carries both the fact and the version. What
-	// remains this warning's job is the OTHER deployments — the ones that inherit a
-	// re-seeded spec.defaults, which llz does not pin for them and cannot restore.
+	// WHAT IT DOES NOT COVER, because the boundary is easy to misread: it needs
+	// ANOTHER deployment to still be defined. A re-scaffold that removes
+	// landingzone.yaml, environments/<env>.yaml AND the overlay together — what
+	// e2e-instantiate.yml does, and what add.go's start-over hint leads to on a
+	// single-deployment instance — is indistinguishable ON DISK from a first run.
+	// That case belongs to the resolver, which asks the ACCOUNT instead (#453): a
+	// cluster matching this deployment's label+region makes the run a re-scaffold
+	// whatever the tree looks like. This warning's job is the OTHER deployments,
+	// which inherit a re-seeded spec.defaults that llz cannot restore.
 	orphanedEnvs := existingDeployments(specRoot)
 	reseeding := !lzExists && len(orphanedEnvs) > 0
 
 	field := func(label, val string) { fmt.Printf("    %s%s\n", color.Dim(label), val) }
 	fmt.Println(color.Bold("llz env add") + color.Dim(" — spec-first scaffold"))
 	field("env:            ", name)
-	// NO --cluster-domain warning here: cobra's MarkDeprecated (main.go) already
-	// emits one at parse time, before this banner. Printing a second warning mid-
-	// banner said the same thing twice and split the field list in half.
+	// NO --cluster-domain warning here: cobra's MarkDeprecated already emits one at
+	// parse time, before this banner. A second warning mid-banner says the same
+	// thing twice and splits the field list in half.
 	field("Linode Region:  ", o.Region)
 	field("OBJ cluster:    ", o.ObjCluster)
 	field("k8sVersion:     ", k8sVersionBanner(k8s, lzExists, lzReadable, inherited, inheritedFix, missingPinFix))
@@ -463,12 +459,11 @@ func PrintNextSteps(name, envFile string, o envdef.Opts) {
 	fmt.Println(color.Dim(fmt.Sprintf("  landingzone.yaml + %s are the source; `llz render` reconciled them into", envFile)))
 	fmt.Println(color.Dim(fmt.Sprintf("  the tfvars + apl-values/%s overlay. To change the cluster, edit %s", name, envFile)))
 	fmt.Println(color.Dim(fmt.Sprintf("  and re-run `llz render %s` (CI re-renders on every build).", name)))
-	// The "what is left to fill" half is PrintPlaceholderChecklist's, and ONLY
-	// its: this used to print an unconditional "Still to fill … the
-	// REPLACE_PER_ENV / REPLACE_ME placeholders" block that the checklist then
-	// contradicted two lines later with "✓ no placeholders left to fill". A
-	// reader going top-to-bottom went hunting for placeholders that were not
-	// there.
+	// The "what is left to fill" half is PrintPlaceholderChecklist's, and ONLY its.
+	// An unconditional "Still to fill … REPLACE_PER_ENV / REPLACE_ME" block here is
+	// contradicted two lines later by the checklist's "✓ no placeholders left to
+	// fill", and a reader going top-to-bottom goes hunting for placeholders that are
+	// not there.
 }
 
 // printNextCommand prints the follow-on command. Called AFTER the placeholder

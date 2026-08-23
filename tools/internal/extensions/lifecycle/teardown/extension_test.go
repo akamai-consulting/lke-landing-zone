@@ -99,9 +99,9 @@ func TestTheDryRunBindingCannotDelete(t *testing.T) {
 // SELECTION MAY ONLY NARROW, and this compares EFFECTIVE PERMISSION rather than
 // the grant lists — which is the level the property actually lives at.
 //
-// The first version of this test compared the two Grants slices and failed: the
-// assertion declares `cloud-read` and the transition declares `cloud-mutate`
-// WITHOUT it, so read looked like a grant the wide binding lacked. It is not —
+// Comparing the two Grants slices instead fails spuriously: the assertion declares
+// `cloud-read` and the transition declares `cloud-mutate` WITHOUT it, so read looks
+// like a grant the wide binding lacks. It is not —
 // cloud-mutate implies cloud-read, exactly as cluster-write implies cluster-read.
 // Comparing the literal lists tested a proxy for the property and got the wrong
 // answer about a correct declaration.

@@ -31,120 +31,36 @@ RETRY := template-scripts/ci/with-retry.sh
 # pkg-suffix matches the END of a Go import path (internal/cli -> .../tools/internal/cli).
 # `make coverage` fails the build if any listed package drops below its floor.
 # It's a ratchet: bump a floor UP as that package's coverage improves, never
-# down.
-# Override on the CLI, e.g. `make coverage COVERAGE_MINS="internal/cli=20"`.
+# down. Override on the CLI, e.g. `make coverage COVERAGE_MINS="internal/cli=20"`.
 #
-# THESE ARE PACKAGE-LOCAL NUMBERS, and extraction can move one a long way without
-# a test being deleted. internal/docsguard measures 74% here and 93% with
-# `-coverpkg=./internal/docsguard/... ./internal/docsguard/ ./cmd/llz/`: six of its
-# tests had to stay in package main, because they assert against the LIVE cobra
-# tree that only package main can build, and `go test -coverprofile` credits
-# coverage to the package under test rather than the package exercised. Set a floor
-# from the number this target prints, but read a LOW one on a freshly extracted
-# package as "its tests are elsewhere" before reading it as "it is untested" — and
-# say which in the comment, as here.
-#
-# internal/kube WENT DOWN, 88 -> 86, for a narrower reason than sustain's: the
-# generic Secret helpers moved in from cmd/llz, and Apply's DEFAULT is a five-line
-# `kubectl apply -f -` shell-out that cannot be unit-tested — it is the seam, not
-# the seamed. SecretManifest gained a test in the same commit (it was 0%); what
-# remains uncovered is the exec wrapper itself. Dilution by untestable-by-nature
-# code, not by untested logic.
-#
-# internal/sustain WENT DOWN, 84 -> 55, and that is the documented exception rather
-# than a ratchet failure. The managed-fresh guard moved INTO that package while its
-# tests stayed in package main: they assert which files the .template-manifest class
-# table locks, and ADR 0014 pins that table to main as the single ownership
-# authority, so a fixture on the other side could only reimplement the
-# classification it is meant to be checking. Same shape as docsguard above. The
-# tests did not go anywhere — `go test -coverprofile` credited them to cmd/llz.
-#
-# cmd/llz=48 IS GONE, REPLACED BY internal/cli=71, and this is the "code MOVED out"
-# case rather than a lowering. The whole command tree left package main for
-# tools/internal/cli; the 79 test files went with it, and the floor went UP because
-# the number this target prints did (48 -> 71.4). internal/cli/deps=41 is the
-# assembly layer split out of it so the gate driver could reach sustainDeps.
-#
-# WHAT IS LEFT IN cmd/llz IS DELIBERATELY UNGATED HERE. It is six lines whose whole
-# content is `func main() { os.Exit(cli.Main()) }`, and os.Exit is the one thing a
-# test cannot observe — a floor over it could only ever be 0 or a lie. Three
-# stronger gates cover that package instead, and none of them is a percentage:
-# `cmd-llz-entrypoint` in .core-surface-budget.yaml pins it at exactly six lines,
-# and entrypoint_boundary_test.go refuses any import but internal/cli, a second
-# file, or a main that stops calling cli.Main.
-#
-# The docsguard and sustain notes above are now HISTORY rather than live
-# constraints: both said their tests had to stay in package main because only main
-# could build the cobra tree. internal/cli is an ordinary package, so that is no
-# longer true for anything — but neither floor is raised here on that argument
-# alone, because no test has actually moved yet. Raise them when one does.
 # A `#` COMMENT CANNOT GO INSIDE THIS LIST. The entries are backslash-continued,
 # and a comment consumes the rest of its line INCLUDING the continuation — so an
-# annotation next to one floor silently truncates every floor after it. That is
-# not hypothetical: annotating internal/shared/capability dropped the list from
-# 119 entries to 100, and `make coverage` went GREEN because the packages it
-# stopped knowing about were the ones it stopped checking. Per-floor reasoning
-# goes here, above the assignment.
+# annotation next to one floor silently truncates every floor after it, and
+# `make coverage` goes GREEN because the packages it stopped knowing about are the
+# ones it stopped checking. It has happened twice, once dropping 123 packages to
+# 115. Per-floor reasoning goes HERE, above the assignment, never inside it.
 #
-# internal/shared/capability=94 was LOWERED from 95, the one sanctioned reason
-# being that code MOVED IN: capability.RelTo and resolveEvenIfAbsent came from
-# deliverdocs' local relTo, bringing their defensive fallbacks with them
-# (filepath.Abs failing; filepath.Rel refusing two paths resolveEvenIfAbsent has
-# already made absolute). Those branches are unreachable on a real filesystem, so
-# recording the transfer is more honest than a test that cannot fail.
-# deliverdocs rose 92 -> 93 in the same commit — the other half of the move.
-# THREE FLOORS HERE WERE BANKED IN THE WRONG ENVIRONMENT, and the rule that
-# floors only ratchet UP is why that has to be said out loud rather than quietly
-# corrected. atrest, verbs/phasetiming and lifecycle/render were introduced on
-# this branch at 90 / 63 / 58 — the values `make coverage-bank` measured on a
-# developer's macOS/arm64 box. CI is linux/amd64, measures 89.9 / 62.5 / 57.1 for
-# the same commits, and had therefore NEVER passed: the "Go tests + coverage" job
-# was red on every run of this branch, on exactly these three, for the same
-# reasons at two different commits.
+# THESE ARE PACKAGE-LOCAL NUMBERS. `go test -coverprofile` credits coverage to the
+# package under test, not the package exercised, so a low floor on a freshly
+# extracted package usually means "its tests are elsewhere" rather than "it is
+# untested". Set a floor from the number this target prints, and say which case it
+# is in a note here.
 #
-# Verified it is the environment and not the code: both Go 1.25.0 (CI's pin) and
-# 1.26.4 give the local numbers, no test in the three packages skips, and none of
-# them branches on GOOS — so the delta is the platform, not a lost test.
+# `make coverage-bank` BANKS THE LOCAL READING, which on macOS/arm64 runs up to
+# ~1pp above what CI (linux/amd64) measures for the same commit — enough to bank a
+# floor that has never once passed the gate. After banking: revert every floor for
+# a package your diff added no test to (the raise is measurement noise), and knock
+# the rest ~1.5pp below the local number. A floor is a promise about the GATING
+# environment, so that is the environment allowed to set it.
 #
-# Lowering a floor to dodge a real regression is banned and this is not that: no
-# coverage was lost, the number was never achievable where the gate runs. A floor
-# is a promise about the GATING environment, so that is the environment allowed to
-# set it. Corrected to what CI measures.
-#
-# THE TRAP: `make coverage-bank` on macOS will try to raise these three straight
-# back. If you bank, check these three against a CI run before committing.
-#
-# IT HAS NOW HAPPENED TWICE, one day apart, so here is the rule rather than the
-# warning: `coverage-bank` banks the LOCAL reading, which on this box is up to
-# ~1pp above what the gate measures. After banking, revert every floor for a
-# package your diff added no test to — the raise is measurement noise, not
-# coverage — and knock the rest down ~1.5pp from the local number. A floor you
-# cannot verify in the gating environment is only worth banking with margin.
-# ── internal/extensions/lifecycle/reconciler = 69, NOT 70 ────────────────────
-# NOT A LOWERED FLOOR DODGING A REGRESSION. That package's coverage is
-# SCHEDULING-DEPENDENT: reconcile.go starts the metrics and health servers in
-# goroutines (`go func() { healthSrv.ListenAndServe() }`, and the same for
-# serveMetrics), and whether those are scheduled before the test's context
-# cancels decides whether three blocks — reconcile.go:234, 282 and 283 — are
-# recorded as covered. Measured: 70.3% at GOMAXPROCS 1 and 8, oscillating
-# 69.9/70.3 at 2; CI has read both 70.1 (main) and 69.6 (a branch changing
-# nothing in the package).
-#
-# So a floor of 70 sat INSIDE the measurement's own variance — a coin flip
-# rather than a promise, and main's last green run was luck. No coverage was
-# lost and no test was removed; the number was never reliably achievable where
-# the gate runs. 69 is below the whole observed band.
-#
-# THE REAL FIX is to make those three blocks deterministic — have the test wait
-# until the health endpoint answers before cancelling, rather than racing
-# goroutine startup — and then raise this back. A floor inside the band only
-# teaches people to re-run CI.
-#
-# AND NOTE WHERE THIS COMMENT LIVES: above the assignment, never inside it. A
-# `#` on a backslash-continued line ENDS the logical line, so the first attempt
-# at this note — written between two entries — silently truncated COVERAGE_MINS
-# from 123 packages to 115. Eight gates switched off by a comment, with every
-# remaining package still reporting "all gated packages meet their thresholds".
+# internal/extensions/lifecycle/reconciler = 69, NOT 70, and this is not a floor
+# lowered to dodge a regression. Its coverage is SCHEDULING-DEPENDENT: reconcile.go
+# starts the metrics and health servers in goroutines, and whether they are
+# scheduled before the test's context cancels decides whether three blocks are
+# recorded as covered. Measured 70.3% at GOMAXPROCS 1 and 8, oscillating 69.9/70.3
+# at 2; CI has read both 70.1 and 69.6. A floor of 70 sits inside that variance —
+# a coin flip, not a promise. The real fix is to make the test wait until the
+# health endpoint answers before cancelling, then raise this back.
 COVERAGE_MINS := \
 	internal/cli=71 \
 	internal/cli/deps=41 \
@@ -525,68 +441,41 @@ k8s-validate: render-charts
 # bake it), else builds from source.
 # LLZ_CI — invoke one `llz ci <verb>`. Nine targets stamped out this same
 # if/else, and getting it wrong is not cosmetic: the two branches had already
-# drifted (most pass --root, prom-rules passes --rules-dir instead) and, worse,
-# the PATH branch silently wins on a workstation where `llz` is whatever you
-# last installed — so a guard can report a pass that says nothing about your
-# working tree.
+# drifted, and the PATH branch silently wins on a workstation where `llz` is
+# whatever you last installed — so a guard can report a pass that says nothing
+# about your working tree.
 #
-#   $(1) verb + the flags that read the same from either branch
-#   $(2) flags needed ONLY when running from $(GO_DIR) (re-basing relative paths)
+#   $(1) verb + flags
+#   $(2) further flags
 #
-# PATH-first is right for CI: the ci-kubernetes / ci-terraform images bake llz
-# and carry no Go toolchain, so `go run` cannot fire there at all. Set
-# LLZ_FORCE_SOURCE=1 to invert it and always build from source — what you want
-# locally the moment you have touched tools/. `make chart-guards` sets it.
-# NOTE ON THE ASYMMETRY: $(2) is passed ONLY to the source branch, and that is
-# deliberate — do not "fix" it by threading $(2) into the PATH branch. The two
-# branches run from different working directories: the source branch cds into
-# $(GO_DIR), so it needs `--root ..` to climb back to the repo root, while the
-# PATH branch already runs there and its `--root .` default is correct. Passing
-# `--root ..` to the PATH branch would point every guard OUTSIDE the repo.
+# Both branches cd into $(GO_DIR) and take $(2), so there is no "args that work
+# from the repo root" vs "args that work from tools/" convention to remember. They
+# used to differ, with the PATH branch silently DROPPING $(2); it survived only
+# because every --root .. happened to match the repo-root default.
 #
-# NOTE ON VERSION SKEW: the PATH branch runs whatever `llz` is installed, which
-# is NOT your working tree. That is the point in CI (the images bake a known
-# build), but locally it means editing a guard and running its make target can
-# report the OLD guard's verdict — a silent, very convincing wrong answer. So
-# the branch taken is announced on every run. Set LLZ_FORCE_SOURCE=1 to always
-# build from source when iterating on a guard.
+# PATH-FIRST IS RIGHT FOR CI: the ci-kubernetes / ci-terraform images bake llz and
+# carry no Go toolchain, so `go run` cannot fire there at all. Two conditions
+# override it, because both make the installed binary answer a different question
+# from the one asked:
 #
-# The announcement was NOT enough on its own: it scrolls past in a wall of lint
-# output, and the wrong answer it labels is indistinguishable from a right one.
-# So the choice is now made from the tree's state rather than left to the reader —
-# if $(GO_DIR) has uncommitted changes, the installed binary would be answering
-# for code you did not write, and source wins automatically. CI is unaffected: a
-# clean checkout takes the PATH branch exactly as before.
+#   * $(GO_DIR) HAS UNCOMMITTED CHANGES — the installed binary would answer for
+#     code you did not write. Announcing the branch was not enough on its own: it
+#     scrolls past in a wall of lint output, and the wrong answer it labels is
+#     indistinguishable from a right one. CI is unaffected; a clean checkout takes
+#     the PATH branch exactly as before.
+#   * A `gates …` INVOCATION, whatever the tree's state. The gate driver's subject
+#     IS the extension registry in this tree — which gates exist, what each is
+#     named, what its command does — so an installed binary answers from the
+#     registry IT was built with: a gate this tree adds is "unknown" to it, and a
+#     gate this tree CHANGED runs as the older implementation. That shipped once as
+#     `make LINT_ALL=1 lint` dying on `unknown flag: --only` from an older llz on
+#     PATH, invisible during development because the tree is dirty while you work.
+#     Four targets had the right behaviour via an explicit `export
+#     LLZ_FORCE_SOURCE := 1` — the shape that rots, since the tenth target added
+#     would have forgotten it. Deciding it from the invocation cannot be forgotten.
 #
-# BOTH BRANCHES NOW cd INTO $(GO_DIR) AND TAKE $(2). They used to differ — the
-# PATH branch ran from the repo root and silently DROPPED $(2) — which made $(1)
-# "args that work from the repo root" and $(2) "args that work from tools/", an
-# unnamed convention with one job: be got wrong. It survived only because every
-# --root .. happened to match the repo-root default, and the two template-manifest
-# callers hand-compensated by repeating the flag in $(1). A new caller passing any
-# other flag would have had it silently ignored on the PATH branch. One cwd, one
-# argument list, no convention to remember.
-#
-# A `gates …` INVOCATION ALWAYS BUILDS FROM SOURCE, whatever the tree's state.
-# The gate driver's whole subject is the extension registry IN THIS TREE — which
-# gates exist, what each one is named, and what its command does. An installed
-# binary answers from the registry IT was built with, so `gates --only <name>`
-# routed to it is not a faster way to ask the same question, it is a different
-# question: a gate this tree adds is "unknown" to it, and a gate this tree
-# CHANGED runs as the older implementation and reports that verdict.
-#
-# It was not hypothetical, and the symptom was worse than a wrong answer. Nine
-# gate targets (untestable-loc-check, core-surface-check, mesh-egress-guard,
-# wave-health-guard, mtls-wiring-guard, plaintext-guard, chart-pin-guard,
-# argocd-rendered-apps-check, externalsecret-paths-check) took the PATH branch on
-# a clean tree, and `--only` is newer than any released llz — so `make LINT_ALL=1
-# lint`, the authoritative gate, died on `unknown flag: --only` from a v0.0.39 on
-# PATH. Nothing saw it during development because the tree is DIRTY while you
-# work: the macro built from source, everything passed, and the failure appeared
-# at exactly the moment the work was committed. Four targets had the right
-# behaviour via an explicit `export LLZ_FORCE_SOURCE := 1`, which is the shape
-# that rots — the tenth target added would have forgotten it too. Deciding it
-# from the invocation instead means it cannot be forgotten.
+# LLZ_FORCE_SOURCE=1 forces source unconditionally — what you want locally the
+# moment you have touched tools/.
 define LLZ_CI
 	@set -e; \
 	dirty=""; \
@@ -883,48 +772,24 @@ actions-lint:
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-# THIRTEEN TARGETS COLLAPSED INTO `llz-gates`. Every one of them was a separate
-# `llz ci <verb>` shell-out that the extension registry already knows how to run,
-# so the Makefile and the registry each held a list of which guards exist — and
-# the registry's list drifted (its own comment claimed 6 driven gates when there
-# were 13, naming seven as undriven that were in the table above it).
+# GATES DO NOT GET A TARGET HERE. Every guard used to be a separate `llz ci
+# <verb>` shell-out listed in these variables, so the Makefile and the extension
+# registry each held a list of which guards exist — and the registry's drifted
+# from its own table. `llz ci gates` is now the single source of that truth: the
+# gates it drives are whatever the declarations say, so adding a guard is a
+# registry edit and nothing else.
 #
-# `llz ci gates` is now the single source of that truth. The gates it drives are
-# whatever the declarations say, so adding a guard is a registry edit rather than
-# a registry edit plus a Makefile edit that someone forgets.
+# TO RUN ONE WHILE ITERATING, use `llz ci gates --only <extension|command>`, with
+# the flags coming from the model rather than a second copy here. A surviving gate
+# target is one line of that plus whatever Makefile knowledge the driver has no
+# business holding — a render-charts prerequisite, an LLZ_FORCE_SOURCE export.
+# Add a target back only when something NAMES it (a workflow step, a guard's own
+# remediation message), and make it a `--only` line when you do.
 #
-# ──────────────────────────────────────────────────────────────────────────────
-# THE COLLAPSE WAS ONLY HALF DONE, AND THIS IS THE OTHER HALF.
-#
-# Removing those targets from LINT_K8S/LINT_TF left the targets THEMSELVES in
-# place, each still spelling out its own `llz ci <verb> --root ..`. So every gate
-# still had two invocations — the driver's and the Makefile's — and a flag change
-# had two places to land. Thirteen of them had no caller left at all, which is
-# worse than a duplicate: an invocation nobody runs cannot disagree loudly.
-#
-# TWO JOBS WERE BEING CONFLATED. A gate target used to mean both "this is in the
-# CI set" and "run just this one while I iterate on it". The driver took the first
-# and could not take the second, because it runs all nineteen.
-#
-# So the second job is now `llz ci gates --only <extension|command>`: one guard,
-# with the flags coming from the model rather than from a second copy here. Every
-# surviving target is one line of that. What a target still carries is Makefile
-# knowledge the driver has no business holding — a render-charts prerequisite, an
-# LLZ_FORCE_SOURCE export — and nothing else.
-#
-# TARGETS WITH NO CALLER AND NO CITATION WERE DELETED (placeholder-guard,
-# wave-dependency-guard, monitoring-label-guard, dropped-apiversions-check,
-# cosign-subject-guard). Their prose lived here and in the extension declaration
-# that owns the guard; the declaration is the copy that cannot drift from the code,
-# so this file stopped being a second catalogue of what the guards are for. Add a
-# target back only when something NAMES it — a workflow step, or a guard's own
-# remediation message — and make it a `--only` line when you do.
-#
-# WHAT DID NOT MOVE, and cannot: k8s-lint (kube-linter), k8s-validate
-# (kubeconform), the three helm-lint targets, and prom-rules-check — which needs
-# promtool on PATH and is an ASSERTION binding rather than a gate. External tools
-# are not gates and the driver has no business pretending otherwise.
-# ──────────────────────────────────────────────────────────────────────────────
+# WHAT CANNOT MOVE: k8s-lint (kube-linter), k8s-validate (kubeconform), the three
+# helm-lint targets, and prom-rules-check — which needs promtool on PATH and is an
+# ASSERTION binding rather than a gate. External tools are not gates and the driver
+# has no business pretending otherwise.
 LINT_K8S := k8s-lint k8s-validate prom-rules-check \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
@@ -932,33 +797,20 @@ LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
 
 # llz-gates: every gate binding the extension registry declares AND can drive.
 #
-# render-charts is a prerequisite because several of the collapsed guards had it
-# individually (k8s-lint, argocd-rendered-apps, placeholder-guard, mesh-egress,
-# monitoring-label) — the chart-shipped NetworkPolicies and the openbao
-# ServiceMonitor are only real YAML once rendered. The driver has no notion of
-# per-gate prerequisites, so the requirement is hoisted here: it must hold for the
-# whole set, and running it unnecessarily costs a render nobody minds.
+# render-charts is a prerequisite because several gates need it — the
+# chart-shipped NetworkPolicies and the openbao ServiceMonitor are only real YAML
+# once rendered. The driver has no notion of per-gate prerequisites, so the
+# requirement is hoisted to the whole set; running it unnecessarily costs a render
+# nobody minds. That hoist is also why a `--only` target still carries its own
+# `: render-charts` — the driver cannot know that mesh-egress needs a rendered
+# tree and core-surface does not.
 #
-# THE SAME HOIST IS WHY A `--only` TARGET STILL CARRIES ITS OWN PREREQUISITE. The
-# driver cannot know that mesh-egress needs a rendered tree and core-surface does
-# not, so a single-guard target keeps the `: render-charts` it always had. That is
-# the whole of what those targets are allowed to know.
-#
-# ONE PROCESS INSTEAD OF THIRTEEN. With LLZ_FORCE_SOURCE=1 each collapsed target
-# rebuilt the binary; this pays that once — and it has to PAY it, which the
-# collapse dropped.
-#
-# THE DRIVER MUST RUN THE WORKING TREE'S GATE SET, NOT THE INSTALLED BINARY'S.
-# Eight single-gate targets below carry LLZ_FORCE_SOURCE for a reason each states
-# in its own words: a prebuilt binary is built from the merge-base and does not
-# have the verb on the PR that introduces it. The AGGREGATE has that property
-# over the whole set — an installed llz runs the gates IT knows, so a PR adding
-# or changing one is judged by the binary that predates it, silently and with a
-# clean result.
-#
-# It is not hypothetical: an installed v0.0.39 on this machine answers `unknown
-# command "gates"`, and LLZ_CI's dirty-tree detection does not cover it — that
-# detects an UNCOMMITTED tools/, and a PR's gate changes are committed.
+# LLZ_FORCE_SOURCE BECAUSE THE DRIVER MUST RUN THE WORKING TREE'S GATE SET. An
+# installed llz runs the gates IT knows, so a PR adding or changing a gate would
+# be judged by a binary that predates it — silently, with a clean result. LLZ_CI's
+# dirty-tree detection does not cover this: that detects an UNCOMMITTED tools/,
+# and a PR's gate changes are committed. Building once here also pays the source
+# build once for the whole suite instead of per gate.
 llz-gates: export LLZ_FORCE_SOURCE := 1
 llz-gates: export RENDER_DIR := $(RENDER_DIR)
 llz-gates: render-charts
@@ -968,36 +820,24 @@ llz-gates: render-charts
 # llz-gates IS NAMED HERE EXPLICITLY, not folded into LINT_K8S, and the
 # distinction is load-bearing: LINT_K8S is the CHART-tool list the recipe below
 # runs on a kubernetes-charts change, while the gate suite must run whenever this
-# job runs at all. Collapsing them once already removed the gates from CI
-# entirely — `make lint-k8s` is the only entry point any CI job calls, so a gate
-# absent from this line is a gate that exists, passes review, and never runs.
+# job runs at all. `make lint-k8s` is the only entry point any CI job calls, so a
+# gate absent from this line is a gate that exists, passes review, and never runs
+# — which collapsing the two once already caused.
 #
-# `actions-lint` IS HERE FOR THAT REASON, and it is the THIRD thing found missing
-# from a CI entry point in as many passes (after `make lint LINT_ALL=1` skipping
-# the gate suite, and lint.yml having no `platform-apl/**` trigger).
+# `actions-lint` IS HERE FOR THAT REASON. It lints THIS repo's own
+# .github/workflows/*.yml; the only actionlint that otherwise runs is inside
+# instance-test.sh, over the RENDERED INSTANCE's workflows — a different tree — so
+# the workflows that decide what CI does were checked by nothing but the
+# pre-commit hook, which lives in .git/hooks: per-clone, never committed, absent
+# for a web edit and for Dependabot's own workflow bumps.
 #
-# It lints THIS repo's own .github/workflows/*.yml. Nothing in CI did. The only
-# actionlint that ran was inside template-scripts/ci/instance-test.sh, over the
-# RENDERED INSTANCE's workflows — a different tree entirely — so the 13 workflows
-# that decide what CI does were checked by nothing but the pre-commit hook. That
-# hook lives in .git/hooks: per-clone, never committed, and absent for anyone who
-# has not run `llz hooks`, for a web edit, and for Dependabot's own workflow bumps.
-#
-# IT DID NOT COST NOTHING, AND THIS LINE USED TO CARRY `actions-lint`. The
-# comment justifying that read "the CI image already ships actionlint
-# (dockerfiles/Dockerfile)". It does not: actionlint is COPYed into the
-# `devcontainer` stage only — the adopter-workstation image — while ci-tofu and
-# ci-kubernetes ship neither it nor a Go toolchain. The Dockerfile does contain
-# the string, which is what made the claim look checked.
-#
-# The result was the exact failure the change was meant to prevent, one layer
-# over: the Kubernetes lint job died on `actionlint: command not found` (exit
-# 127) the first time CI ran the commit. It passed locally because a developer
-# has actionlint on PATH, which is also why it survived review.
-#
-# actionlint now runs in lint.yml's `go-tests` job, which is a HOST runner with
-# Go — so the `go run` fallback on the target resolves. shellcheck stays here
-# because ci-kubernetes genuinely does ship it (line 319 of the Dockerfile).
+# IT RUNS IN lint.yml's `go-tests` JOB, NOT HERE, because ci-tofu and ci-kubernetes
+# ship neither actionlint nor a Go toolchain (it is COPYed into the `devcontainer`
+# stage only, which is what makes a Dockerfile grep look reassuring). Putting it on
+# this line died on `actionlint: command not found` the first time CI ran it, and
+# passed locally because a developer has it on PATH. `go-tests` is a host runner
+# with Go, so the target's `go run` fallback resolves there. shellcheck stays here
+# because ci-kubernetes genuinely does ship it.
 lint-k8s: $(LINT_K8S) shellcheck llz-gates
 #
 # `tf-fmt-check` IS ON THIS LINE FOR THE SAME REASON, and it is the fourth of the
@@ -1011,30 +851,17 @@ lint-tf: $(LINT_TF) tf-fmt-check template-manifest-check managed-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
-# THE TWO-ROOT TRICK IS GONE, and this is the target it was written for. Both
-# LLZ_CI branches needed a --root and needed DIFFERENT ones, so $(1) carried the
-# repo-root spelling, $(2) appended the re-based one, and the source branch passed
-# --root twice relying on pflag's last-wins. The driver resolves the root by
-# walking up for a `.git`, which is the same answer from either branch, so there is
-# nothing left to compensate for. The subtree (instance-template) is declared in
-# registry/gates.go beside the gate it belongs to.
-# FROM SOURCE, for exactly the reason spelled out on managed-lock-check below —
-# and this target sat directly above that paragraph without obeying it.
+# The subtree it checks (instance-template) is declared in registry/gates.go
+# beside the gate it belongs to, not spelled out here.
 #
-# It classifies the WORKING TREE's instance-template/ scaffold against the WORKING
-# TREE's .template-manifest, so it must run the working tree's llz. LLZ_CI's
-# PATH-first branch takes an `llz` from PATH whenever the tree is clean, and in the
-# `terraform` CI job that llz is the one BAKED INTO ci-tofu at image-build time:
-# the terraform job runs .github/actions/setup-llz with NO install-path, so it
-# installs the Go toolchain and does not rebuild the binary. Its two neighbours in
-# lint-tf (at-rest-guard, managed-lock-check) force source and are the real reason
-# that toolchain is there; this one silently used the merge-base binary.
-#
-# The failure modes differ in the worst way. On a PR that ADDS or renames this
-# gate the stale binary knows no such gate and `--only` fails loudly. On a PR that
-# CHANGES the classification logic it passes, having validated the new scaffold
-# with the old rules — which is the shape this whole macro's PATH branch exists to
-# warn about.
+# FROM SOURCE, because it classifies the WORKING TREE's scaffold against the
+# WORKING TREE's .template-manifest and must therefore run the working tree's llz.
+# LLZ_CI's PATH-first branch takes an `llz` from PATH whenever the tree is clean,
+# and in the `terraform` CI job that is the binary BAKED INTO ci-tofu at
+# image-build time — setup-llz runs there with no install-path, so it installs the
+# Go toolchain without rebuilding. On a PR that ADDS this gate the stale binary
+# fails loudly on `--only`; on a PR that CHANGES the classification logic it
+# passes, having validated the new scaffold with the old rules.
 template-manifest-check: export LLZ_FORCE_SOURCE := 1
 template-manifest-check:
 	$(call LLZ_CI,gates --only template-manifest,)
@@ -1046,26 +873,14 @@ template-manifest-check:
 # assembled in the CLI layer — see undrivenGates in registry/gates.go), so unlike
 # the target above it is called as a bare verb rather than through `gates --only`.
 #
-# IT NO LONGER COMPENSATES FOR TWO BRANCHES, AND HAD STOPPED NEEDING TO. This
-# comment used to say it "still has to compensate for the two LLZ_CI branches by
-# hand", and the call passed `--root` TWICE — the repo-root spelling in $(1) and
-# the re-based one in $(2) — working only because pflag takes the last. Both
-# branches of the macro now `cd $(GO_DIR)` and run the same argv, so there are no
-# longer two spellings to reconcile; the first --root was dead weight that only
-# looked load-bearing. Anyone "cleaning up" the duplicate by deleting the SECOND
-# one would have pointed the gate at an instance-template directory UNDER the Go
-# module — the recipe cds to $(GO_DIR) first — which does not exist.
+# FROM SOURCE, for the same reason as template-manifest-check above and a sharper
+# one: this gate compares the WORKING TREE's scaffold against the WORKING TREE's
+# lock, and LLZ_CI's PATH-first default would use the prebuilt image binary, which
+# is built from the merge-base and does not even have this verb on the PR that
+# introduces it.
 #
-# (That sentence originally spelled the non-existent path out, and
-# source-ref-guard flagged it: the guard resolves `tools/`-prefixed literals and
-# cannot tell an illustration from a claim. Rephrasing is the fix; an ignore-list
-# would be a place to bury real breakage.)
-#
-# FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
-# the WORKING TREE's scaffold against the WORKING TREE's lock, so it must run the
-# working tree's llz. LLZ_CI's PATH-first default would use the prebuilt image
-# binary — which is built from the merge-base and therefore doesn't even have this
-# verb on the PR that introduces it.
+# The recipe cds to $(GO_DIR) first, so `--root ../instance-template` is relative
+# to tools/ — do not "simplify" it to the repo-root spelling.
 managed-lock-check: export LLZ_FORCE_SOURCE := 1
 managed-lock-check:
 	$(call LLZ_CI,managed-fresh --root ../instance-template,)
@@ -1092,21 +907,15 @@ version-pins-check:
 # k8s-minor-coherence: `llz ci k8s-minor-coherence` — the kind cluster lint.yml
 # server-side dry-runs against must run the Kubernetes MINOR we deploy.
 #
-# THE GATE WAS ANSWERING THE WRONG QUESTION FOR THREE MINORS (#427). lint.yml
-# pinned kind's VERSION and never its NODE IMAGE, so `kubectl apply
-# --dry-run=server -f rendered/` — the only check in the repo that asks a real API
-# server whether the manifests are acceptable — ran against kind v0.25.0's default
-# image, v1.31.2, while the cluster root pinned v1.34.6+lke2. An API removed in
-# 1.32/1.33/1.34, or a field only a newer server validates, passed here and would
-# have failed on a real cluster. Lint was green throughout, which is the point: a
-# 1.31 server accepting those manifests is an entirely ordinary thing for it to do.
+# lint.yml pins kind's VERSION; if it does not also pin the NODE IMAGE, `kubectl
+# apply --dry-run=server -f rendered/` — the only check here that asks a real API
+# server whether the manifests are acceptable — runs against kind's default image
+# rather than the minor the cluster root pins. An API removed in a later minor, or
+# a field only a newer server validates, then passes green (#427).
 #
-# NOTHING COULD SEE IT. `KIND_VERSION: v0.25.0` is a real kind release and
-# `k8s_version = "v1.34.6+lke2"` is a real LKE-E build; only the RELATION between
-# them is wrong, which is the same shape as version-pins, setup-go-sole-site and
-# mutable-tag-guard. And it was created by a change to neither site — bumping
-# kubectl (#425) broke a kubectl-1.31 ↔ kind-1.31.2 pairing nobody had written
-# down, so that diff gave no reviewer anything to notice.
+# NOTHING ELSE CAN SEE IT: both pins are individually valid, only the RELATION
+# between them is wrong — the same shape as version-pins, setup-go-sole-site and
+# mutable-tag-guard — and it can be created by a change to neither site.
 #
 # FROM SOURCE, for version-pins-check's reason: it compares the working tree
 # against itself, and the prebuilt image binary is built from the merge-base (so
@@ -1182,22 +991,18 @@ setup-go-sole-site:
 # mutable-tag-guard: `llz ci mutable-tag-guard` — build-images.yml may publish a
 # MUTABLE tag (`:latest`, `:<version>`) only from the default branch's HEAD.
 #
-# A BRANCH BUILD REPOINTED `:latest` FOR EVERYONE, and it was routine rather than
-# deliberate (#451). That workflow's `workflow_dispatch` is deliberately not gated
-# on the ref — release-e2e and e2e-instantiate drive it on feature branches, and
-# e2e-instantiate dispatches it automatically (`pin-instance-images --ref
-# "${GITHUB_REF_NAME}" --build-if-missing`) — so every branch that ran an e2e
-# republished `:latest` and `:<version>` from its own content. Three readers move
-# with it at once: lint.yml's container fallback (this repo sets neither TF_IMAGE
-# nor KUBE_IMAGE, so the fallback is what every Lint run here resolves),
-# `llz ci assert-image-fresh`, which reads the baked sha expecting the template
-# ref's commit, and any instance that never pinned an image. The no-path-filter
-# design at the top of build-images.yml exists solely to keep `:latest` == main's
-# HEAD; a branch dispatch falsified it until the next main push.
+# build-images.yml's `workflow_dispatch` is deliberately NOT gated on the ref —
+# release-e2e and e2e-instantiate drive it on feature branches — so without this
+# guard every branch that runs an e2e republishes `:latest` and `:<version>` from
+# its own content (#451). Three readers move with it at once: lint.yml's container
+# fallback (this repo sets neither TF_IMAGE nor KUBE_IMAGE), `llz ci
+# assert-image-fresh`, which reads the baked sha expecting the template ref's
+# commit, and any instance that never pinned an image. The no-path-filter design
+# at the top of build-images.yml exists solely to keep `:latest` == main's HEAD.
 #
-# NOTHING COULD SEE IT: each `--tag` is individually well-formed and the tag looks
-# identical after it moves. Only the relation between the publish and the ref is
-# checkable, which is the same shape as version-pins and setup-go-sole-site.
+# NOTHING ELSE CAN SEE IT: each `--tag` is individually well-formed and the tag
+# looks identical after it moves. Only the relation between the publish and the
+# ref is checkable.
 #
 # FROM SOURCE for the usual reason: on the PR that introduces the verb, the
 # merge-base image binary does not have it.
@@ -1225,92 +1030,54 @@ symbol-ref-guard: export LLZ_FORCE_SOURCE := 1
 symbol-ref-guard:
 	$(call LLZ_CI,gates --only symbol-ref-guard,)
 
-# THE PER-GATE TRIGGERS ARE GONE, AND THE MEASUREMENT IS WHY. This recipe used to
-# carry a hand-written `grep -qE` per gate — which gate cares about which paths,
-# in a shell string beside the gate that knows. It is the same duplication the
-# thirteen-target collapse removed one layer up, and it had already failed the
-# same way: docs-guard shipped tested and wired in here with a filter matching no
-# Markdown, so the single change class it was built for could not run it.
+# NO PER-GATE TRIGGERS. This recipe once carried a hand-written `grep -qE` per
+# gate — a copy of "which gate cares about which paths" sitting beside the gate
+# that knows. The whole 24-gate suite runs in 3.8s, so selection bought nothing
+# and cost a copy that can drift, and it had already drifted: docs-guard was
+# wired in with a filter matching no Markdown, so the one change class it was
+# built for never ran it. `llz-gates` now runs unconditionally instead.
 #
-# The obvious fix was to move the mapping onto the Gate declaration. Measuring
-# first made that unnecessary: the WHOLE suite of 24 gates runs in 3.8s, so
-# selection was buying nothing and costing a copy that can drift. `llz-gates` now
-# runs unconditionally and the copy is deleted rather than relocated.
+# UNCONDITIONALLY MEANS BOTH BRANCHES. LINT_ALL=1 runs a fixed list and exits;
+# the changed-file path falls through to `llz-gates` at the bottom. With the gate
+# call only at the bottom, `make lint LINT_ALL=1` — documented in three places as
+# running "every check" — was the one mode that skipped the entire gate suite.
+# Roughly half of it (posture-plaintext, mesh-egress, mtls-wiring, guard-source-refs,
+# guard-cosign-subject, guard-monitoring-labels, guard-manifests, wave-health,
+# pin-coherence) is reachable ONLY through `llz-gates`.
 #
-# "UNCONDITIONALLY" MEANS BOTH BRANCHES, AND FOR A WHILE IT MEANT ONE. The recipe
-# has two: LINT_ALL=1 runs a fixed list and then `exit 0`, and the changed-file
-# path falls through to `llz-gates` at the very bottom. The gate call was only at
-# the bottom — so `make lint LINT_ALL=1`, the mode documented in three places as
-# running "every check" / "all checks" / "the full local mirror", was the ONE mode
-# that skipped the entire gate suite. The narrower mode ran more than the
-# exhaustive one.
+# What stays conditional below is genuinely conditional: EXTERNAL tools
+# (shellcheck, tflint, kube-linter, actionlint) and the two expensive ones
+# (instance-test, coverage). Those are not gates and the registry has no opinion
+# about them.
+
+# lint-changed prints the file set `lint` decides from, one path per line. It is a
+# target rather than an inline pipeline so it can be tested.
 #
-# Roughly half the suite has no equivalent in the LINT_ALL list: posture-plaintext,
-# mesh-egress, mtls-wiring, guard-source-refs, guard-cosign-subject,
-# guard-monitoring-labels, guard-manifests, wave-health and pin-coherence are
-# reachable only through `llz-gates`. A contributor running the "everything" target
-# before pushing got a clean pass over none of them, then met them in CI — which is
-# the local/CI divergence the preflight notes exist to prevent, manufactured here.
-#
-# It cost 3.8s to fix. The lesson is the one lint-k8s' comment already carries: a
-# gate absent from an entry point is a gate that exists, passes review, and never
-# runs — and an entry point that CLAIMS to be exhaustive is the worst place to be
-# missing one, because it is the claim people rely on instead of checking.
-#
-# What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
-# kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
-# Those are not gates and the registry has no opinion about them.
-# lint-changed prints the file set `lint` decides from, one path per line.
-#
-# IT IS A TARGET RATHER THAN AN INLINE PIPELINE SO IT CAN BE TESTED. `lint` used
-# to compute this itself, as `git diff --name-only HEAD || git ls-files`, and that
-# set OMITS UNTRACKED FILES — so a branch whose work so far is new files produced
-# an empty set, hit the "nothing changed" arm, and exited 0 having run no checks
-# and no gates. Every other guard in this repo sits behind that arm.
-#
-# ─────────────────────────────────────────────────────────────────────────────
 # EVERYTHING HERE ANSWERS ONE QUESTION: does this target ever say "nothing" when
-# the answer is "something"? It has done, six ways, and each fix was narrower
-# than the defect — so the shape below is chosen to make whole classes of them
-# unrepresentable rather than to patch them one at a time.
+# the answer is "something"? Every arm of `lint` sits behind that answer.
 #
 # ASK GIT FROM THE REPOSITORY ROOT. `git ls-files` reports CWD-relative paths and
-# lists only the subtree; `git diff --name-only` reports repo-relative paths
-# unless diff.relative is set, and then reports nothing at all for a file outside
-# the CWD. Three separate ways for the set to shrink when `make` runs from
-# anywhere but the root — `make -C`, or the absolute `-f` this target's own tests
-# use — and lint's routing regexes are anchored (^tools/, ^kubernetes-charts/),
-# so a mis-spelled prefix silently skips the file.
-#
-# `-C "$$ROOT"` retires all three: from the root there is no subtree to be
-# scoped to, no prefix to lose and nothing for diff.relative to be relative to.
-# It replaced --full-name, `-- :/` and --no-relative, which is three flags whose
-# individual absence each looked survivable.
+# lists only the subtree; `git diff --name-only` reports repo-relative paths unless
+# diff.relative is set, and then nothing at all for a file outside the CWD. lint's
+# routing regexes are anchored (^tools/, ^kubernetes-charts/), so a lost prefix
+# silently skips the file. `-C "$$ROOT"` retires all three at once.
 #
 # THE SAME COMMAND IS THE GUARD. `git rev-parse --show-toplevel` fails outside a
 # repository AND inside a bare one — the two states where no changed set can
-# honestly be computed, and where every arm below would otherwise print nothing
-# and let `make lint` read that as "nothing changed". Getting the root and
-# deciding whether there is one are the same question, so they are one call.
+# honestly be computed. Getting the root and deciding whether there is one are the
+# same question, so they are one call.
 #
-# STDOUT DECIDES; STDERR ONLY EXPLAINS. The decision reads stdout alone, because
-# folding both together and testing the result means any git WARNING fails a
-# perfectly good checkout — `warning: unable to access '/root/.gitconfig'`, which
-# containers emit on every call, or GIT_TRACE_PERFORMANCE. The explanation takes
-# both, on a second call on the failure path only, because a bare repository
-# answers on STDOUT and an explanation that is blank exactly where the reader has
-# least to go on is worse than none.
+# STDOUT DECIDES; STDERR ONLY EXPLAINS. Folding both together and testing the
+# result fails a perfectly good checkout on any git WARNING (`unable to access
+# '/root/.gitconfig'`, which containers emit on every call). The explanation takes
+# both, on the failure path only, because a bare repository answers on stdout.
 #
-# A REPOSITORY WITH NO COMMITS IS ASKED ABOUT DIRECTLY. There is no HEAD to diff
-# against, and the old code inferred that from a command substitution's exit
-# status — which is also how a dozen other failures look. `rev-parse --verify
-# HEAD` asks the question the branch is actually about. Both arms list untracked
-# files: the fallback means "could not tell, so lint everything", and its first
-# cut was `git ls-files` alone, which lists TRACKED files — nothing, in the state
-# that reaches it.
-#
-# --exclude-standard so .gitignore still applies: build output is not work.
-# ─────────────────────────────────────────────────────────────────────────────
+# A REPOSITORY WITH NO COMMITS IS ASKED ABOUT DIRECTLY — `rev-parse --verify HEAD`
+# rather than inferring it from a command substitution's exit status, which is also
+# how a dozen other failures look. Both arms list untracked files: the fallback
+# means "could not tell, so lint everything", and `git ls-files` alone lists
+# TRACKED files — nothing, in the state that reaches it. --exclude-standard so
+# .gitignore still applies: build output is not work.
 .PHONY: lint-changed
 lint-changed:
 	@ROOT=$$(git rev-parse --show-toplevel 2>/dev/null); \

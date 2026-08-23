@@ -107,9 +107,9 @@ func repoRootForTLSTest(t *testing.T) string {
 }
 
 // listsResource reports whether a kustomization declares `name` as a list entry,
-// ignoring comment lines. A bare strings.Contains would be envreq.Satisfied by a comment
-// that merely mentions the file, which is exactly how the first version of this
-// guard stayed color.Green after the resource entry was deleted.
+// ignoring comment lines. A bare strings.Contains would be envreq.Satisfied by a
+// comment that merely mentions the file, leaving the guard color.Green after the
+// resource entry was deleted.
 func listsResource(kustomization, name string) bool {
 	for _, line := range strings.Split(kustomization, "\n") {
 		trimmed := strings.TrimSpace(line)

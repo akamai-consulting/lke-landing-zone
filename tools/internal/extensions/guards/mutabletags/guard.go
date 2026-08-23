@@ -19,11 +19,10 @@ package mutabletags
 //     keep `:latest` == main's HEAD, and a branch dispatch falsified it until the
 //     next main push.
 //
-// It was not hypothetical, and not deliberate either: e2e-instantiate.yml
-// dispatches the build ON THE BRANCH automatically (`pin-instance-images --ref
-// "${GITHUB_REF_NAME}" --build-if-missing`), so every branch that ran an e2e did
-// this. Nothing could see it — each `--tag` was individually well-formed, and the
-// tag that moved looked identical afterwards.
+// It is routine rather than deliberate: e2e-instantiate.yml dispatches the build
+// ON THE BRANCH automatically (`pin-instance-images --ref "${GITHUB_REF_NAME}"
+// --build-if-missing`). And nothing else can see it — each `--tag` is individually
+// well-formed, and the tag that moved looks identical afterwards.
 //
 // WHAT IT CHECKS, and each arm is one way the fix can be undone:
 //

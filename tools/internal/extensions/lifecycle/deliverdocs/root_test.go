@@ -365,9 +365,9 @@ func TestDeliverDocs_WalkErrorFailsClosed(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, blockedRel string }{
 		{"the instance-root pass", "sub"}, // repointInstanceRootLinks
-		// Must live under a KEPT dir: deliver-docs prunes docs/ first, and a
-		// blocked dir outside the keep-set fails at the PRUNE instead — which
-		// made the first cut of this subtest pass without ever reaching the walk.
+		// Must live under a KEPT dir: deliver-docs prunes docs/ first, so a blocked
+		// dir outside the keep-set fails at the PRUNE and the subtest passes without
+		// ever reaching the walk.
 		{"the docs-scoped pass", "docs/runbooks/nested"}, // repointReferencedLinks
 	} {
 		t.Run(tc.name, func(t *testing.T) {

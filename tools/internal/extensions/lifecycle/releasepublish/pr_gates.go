@@ -312,10 +312,10 @@ func namesOf(cs []check) []string {
 
 // inconclusiveStates are terminal states that are NOT a verdict on the gate.
 //
-// CANCELLED is the one that matters and the one that was miscounted. It is NOT
+// CANCELLED is the one that matters, and it is easy to miscount. It is NOT
 // concurrency-group supersession — llz-terraform.yml sets cancel-in-progress:
-// false, so that group queues and never cancels, and an earlier draft of this
-// comment said the opposite. It is a run somebody or something cancelled: a
+// false, so that group queues and never cancels. It is a run somebody or something
+// cancelled: a
 // force-push to the throwaway branch while the checks were in flight, a manual
 // cancel, or the whole workflow run being cancelled. SKIPPED and NEUTRAL mean the job did
 // not execute — its `if:` excluded it — which is a real regression in the
