@@ -356,10 +356,18 @@ func RunForceDelete(d Deps, region, tfDir string) error {
 	if err != nil {
 		return err
 	}
-	// RunForceDelete DELETEs the cluster, unconditionally.
-	client := newTeardownClient(token, true)
-	ctx := context.Background()
+	// THE FENCE NARROWS WITH THE RUN, and these two verbs were the exception.
+	// extension.go's cloudBinding header states the invariant: `--dry-run` not
+	// deleting is enforced by one early `return` inside the closure below, and
+	// selecting the READ binding puts a second, independent refusal at the
+	// transport so a bug in that `if` is caught by the fence and not by an operator
+	// reading the aftermath. Every other construction site narrows on
+	// `Yes && !DryRun`; this one and RunDeleteVPC passed a hardcoded `true` — so
+	// the two most destructive verbs in the package were the two holding a
+	// DELETE-capable transport through a dry run.
 	confirm := d.Confirm()
+	client := newTeardownClient(token, confirm)
+	ctx := context.Background()
 	if !confirm {
 		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
 	}
@@ -484,8 +492,9 @@ func RunDeleteVPC(d Deps, region, tfDir, clusterID string, attempts, retryDelay 
 	if err != nil {
 		return err
 	}
-	// RunDeleteVPC DELETEs the VPC and its subnets, unconditionally.
-	client := newTeardownClient(token, true)
+	// The read binding on a dry run — see RunForceDelete above for why these two
+	// were the exception and why that is backwards.
+	client := newTeardownClient(token, d.Confirm())
 	ctx := context.Background()
 	clusterID = firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID"))
 

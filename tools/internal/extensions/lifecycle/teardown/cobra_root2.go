@@ -195,8 +195,22 @@ func runCIReapVolumes(g cliopts.Opts, env, region, volumeIDs, tagMustInclude str
 	//
 	// The happy path is unchanged either way — waitVolumesDetached returns on its
 	// first poll when the volumes are already detached.
+	//
+	// NOT ON A DRY RUN, and the reason is the capability fence rather than
+	// tidiness. waitVolumesDetached POSTs /detach, and this client is built from
+	// `cloudBinding(g.Yes && !g.DryRun)` — so on a dry run every POST is refused at
+	// the TRANSPORT, the wait can never converge, and it burns the full --wait-detach
+	// budget (600s on the destroy job's real flags) emitting a warning per volume
+	// per poll before the sweep it precedes prints "would delete" anyway. A dry run
+	// deletes nothing, so there is nothing for a detach to be a precondition of.
+	// `g.Yes && !g.DryRun` is the same expression the client above is built from, so
+	// the wait runs exactly when the transport can carry it.
 	if waitDetach > 0 && volumeIDs != "" {
-		waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
+		if g.Yes && !g.DryRun {
+			waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
+		} else {
+			fmt.Printf("DRY-RUN — would wait up to %ds for volume(s) %s to detach before sweeping.\n", waitDetach, volumeIDs)
+		}
 	}
 
 	return sweepUntilEmpty(ctx, g, client, sweepOpts{
