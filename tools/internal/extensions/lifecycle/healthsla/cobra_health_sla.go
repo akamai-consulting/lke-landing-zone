@@ -20,8 +20,10 @@ import (
 func HealthSLADeps() Deps {
 	return Deps{
 		Summary: ghaout.Append,
-		BaoExec: func(pod, addr, token string, args ...string) (string, string, error) {
-			return baoread.ExecFn(pod, addr, token, args...)
+		// Named to match baoread.ExecFn's own parameters — see Deps.BaoExec for the
+		// slot mismatch this shape prevents.
+		BaoExec: func(pod, token, stdin string, args ...string) (string, string, error) {
+			return baoread.ExecFn(pod, token, stdin, args...)
 		},
 		Exec:        execOutput,
 		Reachable:   kubectlprobe.Reachable,
