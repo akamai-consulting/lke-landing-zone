@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -156,6 +156,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/monitoringlabel=66 \
 	internal/extensions/guards/setupgosite=79 \
 	internal/extensions/guards/mutabletags=96 \
+	internal/extensions/guards/providerlock=83 \
 	internal/extensions/guards/sourceref=87 \
 	internal/extensions/guards/workflowshells=71 \
 	internal/shared/answers=87 \
@@ -226,6 +227,7 @@ help:
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
 	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
 	@echo "  mutable-tag-guard  build-images.yml may publish :latest / :<version> only from the default branch"
+	@echo "  provider-lock-guard delivered .terraform.lock.hcl pins satisfy the shipped provider constraints"
 	@echo "  k8s-minor-coherence  lint.yml's kind node image must run the k8s minor we deploy to LKE-E"
 	@echo
 	@echo "Kubernetes targets:"
@@ -1009,6 +1011,28 @@ setup-go-sole-site:
 mutable-tag-guard: export LLZ_FORCE_SOURCE := 1
 mutable-tag-guard:
 	$(call LLZ_CI,gates --only mutable-tag-guard,)
+
+# provider-lock-guard: the delivered .terraform.lock.hcl vs. the constraints the
+# roots and modules ship — `llz ci provider-lock-guard`.
+#
+# THE FAILURE MODE. An instance commits no Terraform code: the roots are
+# generated at every terraform op by the llz inside vars.TF_IMAGE, and
+# terraform-iac-bootstrap/*/*.tf is gitignored. What it DOES commit is the
+# provider lockfile, which .template-manifest classes `owned` — seeded once at
+# scaffold time and never re-touched by an upgrade. So the CONSTRAINT ships in
+# the image and the PIN sits in the adopter's repo, and nothing compared them.
+#
+# Raise linode past the shipped pin and a new adopter is fine, release-e2e is
+# green (it force-pushes a fresh instantiation every run), and EVERY EXISTING
+# INSTANCE is hard-blocked at `tofu init` — which the terraform-init composite
+# runs with no -upgrade, so there is no recovery inside CI. Greenfield passes,
+# brownfield breaks, and no lane can see the difference.
+#
+# FROM SOURCE for the usual reason: on the PR that introduces the verb, the
+# merge-base image binary does not have it.
+provider-lock-guard: export LLZ_FORCE_SOURCE := 1
+provider-lock-guard:
+	$(call LLZ_CI,gates --only guard-provider-lock,)
 
 # symbol-ref-guard: the OTHER half of a reference — `llz ci symbol-ref-guard`.
 #
