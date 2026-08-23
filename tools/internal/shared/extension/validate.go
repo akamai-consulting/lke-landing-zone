@@ -130,73 +130,41 @@ var grantStates = map[Grant][]State{
 	CloudMutate:  {Configured, Provisioned, Seeded, Converged, Operating, Destroyed},
 	ClusterWrite: {Provisioned, Seeded, Converged, Operating, Destroyed},
 
-	// FIRST ROW ADDED RATHER THAN WIDENED, because write-repo is the first grant
-	// added since this table was written (see the Grant block in extension.go for
-	// why it took four cases).
+	// THREE STATES, EACH EARNED BY A SHIPPING EXTRACTION. Repo writes are the
+	// opposite shape from every other mutating grant: `cluster-write` and
+	// `secret-custody` start at `provisioned` (you cannot mutate a cluster or hold a
+	// platform credential before one exists) and `cloud-mutate` reaches back to
+	// `configured`, while a repo write happens when the REPO changes — before any
+	// substrate exists, and again when the template moves under it. This is the only
+	// row holding `scaffolded`.
 	//
-	// THE ROW SHIPPED WITH TWO STATES AND HAS THREE; read this block as strata, and
-	// `configured` is the later one (see FOURTH WIDENING below). The paragraph that
-	// follows is about the original pair, and it said "the two states" and "nothing
-	// else is listed" for a while after the third arrived — a comment contradicting
-	// itself in reading order, above a table a reader is checking it against.
+	//   scaffolded / upgraded  the two moments `deliver-docs` runs, by construction:
+	//                          copier invokes it from `_tasks`, which fire on render
+	//                          (`llz new`) and on `copier update`. Its
+	//                          repointInstanceRootLinks walk is gated on template
+	//                          ownership precisely because on update it runs against
+	//                          a LIVE instance holding files that are none of the
+	//                          template's business.
+	//   configured             configuring an instance is not a passive
+	//                          "resolve some inputs, touch nothing" moment — it is
+	//                          the state whose whole content is AUTHORING the
+	//                          instance's own files. `environments` (`llz spec set` /
+	//                          `llz env set`, through yamledit.EditSpecFile) and
+	//                          `render` (writeTargets → os.WriteFile) are two
+	//                          independent shipping cases, in different extensions,
+	//                          both transition:configured and both previously
+	//                          declaring read-repo alone.
 	//
-	// `scaffolded` and `upgraded` are the two moments `deliver-docs` runs, and it
-	// runs at both by construction: copier invokes it from `_tasks`, which fire on
-	// render (`llz new` → scaffolded) and on `copier update` (→ upgraded). Its own
-	// repointInstanceRootLinks comment is about the second — the walk is gated on
-	// template ownership precisely because on update it runs against a LIVE
-	// instance holding files that are none of the template's business.
-	//
-	// NOTHING BEYOND THOSE THREE IS LISTED, and the omissions are deliberate rather
-	// than pending. `promoted` looks obvious — promote-pipeline generates
+	// NOTHING BEYOND THOSE THREE, and the omissions are deliberate rather than
+	// pending. `promoted` looks obvious — promote-pipeline generates
 	// .github/workflows/promote.yml — but that extension does not hold this grant:
-	// its rendering is pure and its os.WriteFile stayed in internal/cli, so adding
-	// the state would list a row no shipping code exercises. The rule this table
-	// has followed for both earlier widenings is that a state earns its place by an
-	// extraction that needed it, not by seeming plausible. When promote-pipeline's
-	// write moves in, `promoted` can be argued then, and there is a test that will
-	// notice: TestGrantStatesTableIsPinned.
-	//
-	// Note this row also reaches EARLIER than any other. `cluster-write` and
-	// `secret-custody` start at `provisioned` — you cannot mutate a cluster or hold a
-	// platform credential before one exists — and `cloud-mutate` reaches back one
-	// further, to `configured`. Repo writes are the opposite shape: they happen when
-	// the REPO changes, which is before any substrate exists and again when the
-	// template moves under it, so this is the only row that holds `scaffolded`.
-	//
-	// FOURTH WIDENING: `configured`, and it took two extractions to earn.
-	//
-	// The row read repo writes as bracketing the lifecycle — the instance is
-	// created (`scaffolded`), and the template later moves under it (`upgraded`) —
-	// with everything between treated as reading a tree somebody else wrote. That
-	// is the same misreading cloud-mutate's `configured` widening corrects one row
-	// up: "resolve some inputs, touch nothing". Configuring an instance is not a
-	// passive moment. It is the state whose whole content is AUTHORING the
-	// instance's own files.
-	//
-	// TWO INDEPENDENT SHIPPING CASES, which is the bar, and they are in different
-	// extensions rather than two commands of one:
-	//
-	//   - `environments` — `llz spec set` and `llz env set` edit landingzone.yaml
-	//     and environments/<env>.yaml through yamledit.EditSpecFile. Their bindings
-	//     are transition:configured, and they held read-repo ALONE: the declaration
-	//     said they only read, and they did not.
-	//   - `render` — `llz render` writes the rendered values and manifests into the
-	//     instance repo (writeTargets → os.WriteFile). One binding,
-	//     transition:configured, read-repo alone, and its entire job is to produce
-	//     files.
-	//
-	// Both were found the same way the earlier widenings were: by extracting a
-	// capability that already shipped and watching the ceiling refuse code that had
-	// been running for months. Neither could be fixed by declaring the grant — the
-	// row forbade it — so the honest options were to widen here, to move the writes
-	// under a `scaffolded` binding they do not belong to, or to leave two
-	// declarations saying something false. The third is what the model exists to
-	// prevent.
-	//
-	// `provisioned` and later stay ABSENT deliberately. Once a cluster exists, a
-	// process writing the instance repo is doing configuration out of order, and
-	// the reconciler lanes that run then write to the CLUSTER, not the tree.
+	// its rendering is pure and its os.WriteFile stayed in internal/cli, so the row
+	// would list a state no shipping code exercises. A state earns its place by an
+	// extraction that needed it, not by seeming plausible; TestGrantStatesTableIsPinned
+	// is what notices when one is added without that. `provisioned` and later stay
+	// absent because once a cluster exists, a process writing the instance repo is
+	// doing configuration out of order — the reconciler lanes that run then write to
+	// the CLUSTER, not the tree.
 	WriteRepo: {Scaffolded, Configured, Upgraded},
 }
 

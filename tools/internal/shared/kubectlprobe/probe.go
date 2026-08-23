@@ -68,22 +68,15 @@ import (
 // Hand it something that works: a nil Exec panics rather than returning an error,
 // and the probes below would report the panic as probeUnknown if it did not.
 //
-// IT ATTACHES STDERR TO THE ERROR, AND THAT USED TO LIVE IN PACKAGE MAIN. This
-// body was `execOutput` in cmd/llz/exec.go, and an init() there overwrote this
-// var with it at startup — so the wrapper was present in the llz binary and
-// absent everywhere else, including in every test of the (then eleven, now
-// thirty-nine) packages that delegate here. ErrText survived that split because it reads ee.Stderr off the
-// *exec.ExitError itself; what did not survive is the MESSAGE, which is what a
-// caller wrapping with %w actually prints:
-//
-//	llz: patch llz-openbao/platform-openbao hostAliases: exit status 1:
-//
-// That is a failure with its cause structurally discarded. .Output() captures
-// stdout only, and every tool this runs — kubectl, gh, bao, tofu — writes its
-// diagnosis to stderr. Go carries the text on ExitError.Stderr when Stderr is
-// unset; it was simply never read. Wrapped with %w so errors.Is/As still work.
-// Without it a failure arrived as a bare "exit status 1" with an empty message,
-// and callers that dutifully appended the captured output appended nothing.
+// IT ATTACHES STDERR TO THE ERROR, AND THAT MUST STAY HERE rather than in a
+// wrapper some entry point installs — a wrapper is present only in the binary that
+// installs it and absent from every test of the ~39 packages that delegate here.
+// .Output() captures stdout only, and every tool this runs — kubectl, gh, bao,
+// tofu — writes its diagnosis to stderr. Without this the caller's %w wrap prints
+// `llz: patch llz-openbao/platform-openbao hostAliases: exit status 1:` — a failure
+// with its cause structurally discarded — and callers that dutifully append the
+// captured output append nothing. Go carries the text on ExitError.Stderr when
+// Stderr is unset; wrapped with %w so errors.Is/As still work.
 // ── WHY THIS STAYS EXPORTED, AND WILL. ──────────────────────────────────────
 //
 // It is a package-level mutable var, so any code can call it and any code can
@@ -92,11 +85,10 @@ import (
 // capability/seambypass_test.go ratchets every remaining caller.
 //
 // The obvious next move is to unexport it so capability.For is the only door. IT
-// WAS MEASURED AND REFUSED: 70 assignments across 24 distinct packages' tests swap
-// this var to keep their subjects runnable without a cluster. That seam is the
-// single largest win of the decomposition — `assert-storage` went 0% -> 85.3%
-// purely by taking its capabilities as parameters instead of reaching for them —
-// and unexporting would trade it for a guarantee the ratchet already approximates.
+// WAS MEASURED AND REFUSED: ~70 assignments across two dozen packages' tests swap
+// this var to keep their subjects runnable without a cluster, and that seam is the
+// single largest win of the decomposition. Unexporting would trade it for a
+// guarantee the ratchet already approximates.
 //
 // So the enforcement is a counted allowlist rather than the compiler, deliberately,
 // and the trade is written down here rather than rediscovered. What WOULD change
@@ -106,14 +98,10 @@ import (
 // unexporting cheap and both are the shape to reach for if this is revisited.
 //
 // NOTE THE NAME IS WRONG, TOO. This runs whatever binary it is given — kubectl,
-// gh, bao, tofu, ssh-keyscan — as the comment above already says. It is the tree's
-// general process seam and four extensions use it purely for `gh`. Renaming it
-// touches several hundred references across ~39 packages — it was 66 production
-// and 70 test when that was first measured and is well past double that now, which
-// is the direction this number only ever moves — so it has not been done; read
-// "kubectlprobe" as where it started rather than what it is. The count is left
-// approximate deliberately: an exact one here would be re-rotting by the next
-// extraction, and the decision it supports turns on the order of magnitude.
+// gh, bao, tofu, ssh-keyscan — and four extensions use it purely for `gh`. Renaming
+// it touches several hundred references across ~39 packages, a number that only
+// grows, so it has not been done: read "kubectlprobe" as where it started rather
+// than what it is.
 var Exec = func(name string, args ...string) ([]byte, error) {
 	out, err := exec.Command(name, args...).Output()
 	if err == nil {

@@ -199,58 +199,40 @@ func RenderAppsOverlayShared() string {
 // from that component's toggle (the same truth RenderValues writes into
 // values.yaml, as an overlayable fragment).
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// IT USED TO SPEAK FOR ALL OF THEM, INCLUDING apl-core's OWN. Every other
-// renderer gates on Component.EmitOnManaged — kustomize.go:115 and render.go:473
-// both do — and this one walked the registry unfiltered. What the reconciler
-// then committed onto the machine-owned apl-<env> branch, on every managed
-// instance:
+// IT MUST NOT SPEAK FOR apl-core's OWN APPS, so it gates on
+// Component.EmitOnManaged like every other renderer (kustomize.go and render.go
+// both do). Walking the registry unfiltered writes two classes of nonsense onto
+// the machine-owned apl-<env> branch of every managed instance:
 //
 //   - `gitea: enabled: false`, because the gitea component is DefaultDisabled.
 //     On managed, apl-core runs its own in-cluster gitea AS THE VALUES-REPO
-//     BACKEND. The overlay's own transport is that repo, so this is a write that
-//     disables the thing carrying it. The component's registry entry says
-//     "managed apl-core runs its own in-cluster gitea" and carries ManagedSkip
-//     for exactly this reason; the flag was set and this function did not read it.
-//
+//     BACKEND — so that is a write that disables the thing carrying it.
 //   - `kyverno`, `policy-reporter` and `trivy` FORCE-ENABLED, from policyEngine
-//     and imageScanning — two more ManagedSkip components whose apps belong to
-//     apl-core on managed. Turning an app on that the operator did not ask for
-//     is quieter than turning one off, and no less wrong: LLZ has no manifest
-//     backend for any of them.
+//     and imageScanning. Turning on an app the operator did not ask for is
+//     quieter than turning one off and no less wrong: LLZ has no manifest backend
+//     for any of them.
 //
-// The gate is the same one, not a second copy of the rule. A component LLZ does
-// not emit is a component LLZ has no opinion about, so its app is simply absent
-// from the overlay and apl-core's own value survives the merge — which is the
-// whole point of the overlay being a fragment rather than a file replacement.
+// A component LLZ does not emit is a component LLZ has no opinion about, so its
+// app is simply absent from the overlay and apl-core's own value survives the
+// merge — the whole point of the overlay being a fragment rather than a file
+// replacement.
 //
-// THE WHOLE GATE, NOT JUST ManagedSkip, and the difference is worth stating
-// because it changes what a declared-but-unlisted app does. EmitOnManaged also
-// honours ManagedConditionalOn, so with an explicit `managedApps: [harbor,
-// kyverno]` the observability component's apps (prometheus, loki, grafana, otel,
-// alertmanager) leave the overlay too.
+// THE WHOLE GATE, NOT JUST ManagedSkip. EmitOnManaged also honours
+// ManagedConditionalOn, so with an explicit `managedApps: [harbor, kyverno]` the
+// observability component's apps (prometheus, loki, grafana, otel, alertmanager)
+// leave the overlay too. `llz ci bootstrap-cluster` is what enables an env's
+// managedApps in apl-core; the overlay drives the toggles of components LLZ ships
+// alongside them, and render.go already drops observability's MANIFESTS under the
+// same condition.
 //
-// That is the consistent answer rather than a new one. `llz ci bootstrap-cluster`
-// is what enables an env's managedApps in apl-core; the overlay drives the
-// toggles of components LLZ ships alongside them, and render.go:473 already
-// dropped observability's MANIFESTS under the same condition. Emitting
-// `prometheus: enabled: true` from a tree that ships none of the glue was the
-// half that disagreed.
-//
-// It does surface a separate, older gap, in two places: DependsOn is enforced
-// over toggles and not over this gate. llzReconciler emits a ServiceMonitor and
-// PrometheusRule when observability does not emit, and imageSignature ships a
-// Kyverno ClusterPolicy gated only on kyverno being DECLARED in managedApps —
-// both against CRDs that may then be absent. The overlay used to paper over the
-// second by force-enabling kyverno on every managed cluster, which is the
-// ownership violation this function exists to stop: a continuous re-assertion of
-// someone else's app is not a dependency mechanism, it is a bug that happened to
-// be load-bearing.
-//
-// Neither is fixed here. They belong to components.go's dependency model, and
-// keeping the overlay inconsistent to hide them would leave the real gap in place
-// with nothing pointing at it.
-// ─────────────────────────────────────────────────────────────────────────────
+// A KNOWN, UNFIXED GAP SITS BEHIND THIS: DependsOn is enforced over toggles and
+// not over this gate. llzReconciler emits a ServiceMonitor and PrometheusRule when
+// observability does not emit, and imageSignature ships a Kyverno ClusterPolicy
+// gated only on kyverno being DECLARED in managedApps — both against CRDs that may
+// then be absent. Do not paper over the second by force-enabling kyverno here: a
+// continuous re-assertion of someone else's app is not a dependency mechanism. It
+// belongs to components.go's dependency model, and keeping the overlay
+// inconsistent to hide it would leave the real gap with nothing pointing at it.
 func RenderAppsOverlayEnv(boot Bootstrap, components map[string]ComponentToggle) string {
 	apps := map[string]appToggle{}
 	for _, c := range Components {
