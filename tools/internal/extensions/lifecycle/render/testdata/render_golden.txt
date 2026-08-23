@@ -1,5 +1,7 @@
 === apl-values/_shared/apl-overlay/apps.yaml
 apps:
+  gitea:
+    enabled: false
   knative:
     enabled: false
   kserve:
@@ -26,23 +28,15 @@ spec:
 apps:
   alertmanager:
     enabled: true
-  gitea:
-    enabled: false
   grafana:
     enabled: true
   harbor:
     enabled: false
-  kyverno:
-    enabled: true
   loki:
     enabled: true
   otel:
     enabled: true
-  policy-reporter:
-    enabled: true
   prometheus:
-    enabled: true
-  trivy:
     enabled: true
 === apl-values/prod/apl-overlay/obj.yaml
 kind: AplObjectStorage
@@ -445,23 +439,15 @@ spec:
 apps:
   alertmanager:
     enabled: true
-  gitea:
-    enabled: false
   grafana:
     enabled: true
   harbor:
-    enabled: true
-  kyverno:
     enabled: true
   loki:
     enabled: true
   otel:
     enabled: true
-  policy-reporter:
-    enabled: true
   prometheus:
-    enabled: true
-  trivy:
     enabled: true
 === apl-values/staging/apl-overlay/obj.yaml
 kind: AplObjectStorage
