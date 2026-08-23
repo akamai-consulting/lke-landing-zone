@@ -44,7 +44,7 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	}
 
 	// Sanity: reachable + unsealed.
-	statusOut, _, err := baoread.ExecPod(pod, "", "", "status", "-format=json")
+	statusOut, _, err := baoread.ExecFn(pod, "", "", "status", "-format=json")
 	if err != nil {
 		return fmt.Errorf("cannot reach OpenBao at %s/%s via the current kubectl context", baoread.Namespace, pod)
 	}
@@ -55,8 +55,8 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	fmt.Printf("OpenBao unsealed. Unseal threshold: %d.\n", threshold)
 
 	// Clean slate, then init.
-	_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
-	initOut, _, err := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-init", "-format=json")
+	_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
+	initOut, _, err := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-init", "-format=json")
 	if err != nil {
 		return fmt.Errorf("initialize generate-root: %w", err)
 	}
@@ -82,11 +82,11 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 			progress--
 			continue
 		}
-		out, errOut, err := baoread.ExecPod(pod, "", key+"\n",
+		out, errOut, err := baoread.ExecFn(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		key = ""
 		if err != nil {
-			_, _, _ = baoread.ExecPod(pod, "", "", "operator", "generate-root", "-cancel")
+			_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
 			return fmt.Errorf("generate-root rejected key #%d: %s\n"+
 				"  (wrong/duplicate key, or keys from a different OpenBao init — compare cluster_id)",
 				progress, strings.TrimSpace(firstNonEmpty(errOut, out)))
@@ -102,10 +102,10 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	}
 
 	// Decode (local op against the OTP) inside the pod for binary parity.
-	decodeOut, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
+	decodeOut, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp, "-format=json")
 	newRoot := parseTokenField(decodeOut)
 	if newRoot == "" { // older bao prints a bare token
-		bare, _, _ := baoread.ExecPod(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
+		bare, _, _ := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-decode="+encoded, "-otp="+otp)
 		newRoot = strings.TrimSpace(bare)
 	}
 	if newRoot == "" {
@@ -113,7 +113,7 @@ func RunRegenRoot(dryRun bool, region string, o RegenRootOpts) error {
 	}
 
 	// Verify it actually works and is root.
-	lookupOut, _, err := baoread.ExecPod(pod, newRoot, "", "token", "lookup", "-format=json")
+	lookupOut, _, err := baoread.ExecFn(pod, newRoot, "", "token", "lookup", "-format=json")
 	if err != nil {
 		emitRecoveryToken(newRoot, "self-lookup failed")
 		return fmt.Errorf("new root token failed self-lookup")
@@ -171,7 +171,7 @@ func updateRootGHASecret(region, newRoot string, o RegenRootOpts) error {
 // falling back to platform-openbao-0.
 func findLeaderPod() string {
 	for _, cand := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		out, _, err := baoread.ExecPod(cand, "", "", "status", "-format=json")
+		out, _, err := baoread.ExecFn(cand, "", "", "status", "-format=json")
 		if err == nil && parseIsSelf(out) {
 			return cand
 		}

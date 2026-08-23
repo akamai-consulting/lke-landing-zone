@@ -93,6 +93,31 @@ func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar s
 	if err != nil {
 		return err
 	}
+	// $GITHUB_ENV OR STDOUT, and the fallback is the whole point of the command.
+	//
+	// ghaout.Append is a SILENT NO-OP when its env var is unset — deliberately, so
+	// the commands run from a workstation. That is right for a step summary and
+	// wrong for a token: outside GitHub Actions this minted a real OpenBao token,
+	// wrote it nowhere, printed "exported to $GITHUB_ENV" and exited 0. The caller
+	// got no token and no error.
+	//
+	// AND OUTSIDE ACTIONS IS THE PRIMARY CASE. This file's own header argues that
+	// `--method kubernetes` is the default because it "ties the job to NOTHING
+	// GitHub-specific: it works from an Argo Workflow, a CronJob, the reconciler" —
+	// none of which set $GITHUB_ENV. The one output channel was the one those
+	// callers do not have.
+	//
+	// The fallback writes the BARE token to stdout so `T=$(llz ci openbao-login …)`
+	// works, and does not mask on that path: ghaout.Mask writes `::add-mask::` to
+	// STDOUT, which would land inside the capture. teamlogin.go records the same
+	// trade for the same reason. Masking still happens on the $GITHUB_ENV path,
+	// where stdout carries nothing.
+	if os.Getenv("GITHUB_ENV") == "" {
+		fmt.Fprintf(os.Stderr, "openbao-login: method=%s role=%s → token on stdout ($GITHUB_ENV is unset). "+
+			"Capture it, e.g. %s=$(llz ci openbao-login …)\n", method, role, exportVar)
+		fmt.Print(token) // stdout only, unmasked, so a capture gets the token and nothing else
+		return nil
+	}
 	ghaout.MaskLines(token)
 	if err := ghaout.Append("GITHUB_ENV", exportVar+"="+token); err != nil {
 		return err
