@@ -513,7 +513,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if obj := clusterspec.RenderObjOverlayEnv(id.ObjLabelPrefix, env, e.Cluster.ObjectStorage.Cluster); obj != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
 	}
-	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Components)
+	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Cluster.Bootstrap, e.Components)
 
 	// Team declarations (spec.teams) — restore managed team provisioning that
 	// ADR-0005 dropped with values.yaml: emit each team's apl-core CRs

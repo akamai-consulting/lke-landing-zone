@@ -17,11 +17,13 @@
 package overlay
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+
+	yaml "gopkg.in/yaml.v3"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
@@ -101,15 +103,39 @@ func envOverlayPath(env, base string) string {
 // ok=false). A genuine API/merge failure IS returned (the manager records up=0).
 func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, reg *metrics.Registry) error {
 	files := map[string]string{}
+	// Published unconditionally below, so it goes to 0 on the pass that fixes the
+	// overlay rather than silently ceasing to exist — an alert on an absent series
+	// never evaluates, which is the shape this whole campaign keeps finding.
+	objSourceEmpty := 0.0
 
 	// obj.yaml — LLZ owns the whole AplObjectStorage settings CR: merge the _shared +
 	// per-env source, fill accessKeyId from the credential store, and write
 	// env/settings/obj.yaml.
-	objMerged, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayObjFile)
+	objMerged, objFound, objEnvFound, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayObjFile)
 	if err != nil {
 		return err
 	}
-	if len(bytes.TrimSpace(objMerged)) > 0 {
+	switch {
+	case !objFound:
+		// No obj overlay source on the source branch. LLZ has nothing to say, so
+		// it says nothing — apl-core's own AplObjectStorage CR stands.
+		fmt.Println("apl-overlay: no obj.yaml overlay source for this env — leaving apl-core's obj settings alone")
+	case !objOverlayIsWritable(objMerged):
+		// Present but empty. Writing it would blank the CR exactly as an absent
+		// source used to, so it skips — and it has to be VISIBLE, because unlike
+		// the case above this one means the committed overlay is wrong.
+		//
+		// A GAUGE, NOT AN ANNOTATION. The first cut printed `::warning::`, which
+		// is a GitHub Actions instruction — and this code runs in a pod, on a
+		// reconcile loop, where nothing reads stdout for annotations and no job
+		// summary exists. The condition was invisible to the only thing that
+		// watches this lane. Prometheus sees it now, alongside the synced gauge
+		// converge's own message points readers at.
+		fmt.Println("apl-overlay: the obj.yaml overlay source has no region and/or no buckets — " +
+			"refusing to write it over apl-core's AplObjectStorage CR, which would blank both. " +
+			"The per-env layer supplies them; re-run `llz render` and commit the result")
+		objSourceEmpty = 1
+	default:
 		ak, ok, err := objCreds(ctx)
 		if err != nil {
 			return fmt.Errorf("read obj platform credential: %w", err)
@@ -123,11 +149,52 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 		}
 	}
 
+	// PUBLISHED HERE, NOT AT THE END, because the end is not always reached. A pass
+	// whose only obj source is the empty one writes no files at all and returns
+	// early at `len(files) == 0` — so the gauge announcing that exact condition
+	// was skipped by the exact condition. The fact is known now; it is recorded
+	// now.
+	reg.SetGauge("llz_apl_overlay_obj_source_empty",
+		"1 when the obj.yaml overlay source exists but merged to an empty document, so it was NOT written",
+		map[string]string{"branch": cfg.TargetBranch}, objSourceEmpty)
+
+	// A PASS THAT FOUND NOTHING MUST NOT LOOK LIKE A HEALTHY ONE. The skips above
+	// are correct — no source means no opinion — but "correctly nothing to do"
+	// and "looking at the wrong branch" produce the identical outcome: no error,
+	// no files, and llz_apl_overlay_synced never published, because it has no 0
+	// arm and the pass returns before it. A misspelled Env or SourceBranch, or a
+	// token GitHub answers 404 for on a private repo, lands exactly there.
+	//
+	// This is the series that tells them apart, and it is published on EVERY pass
+	// so it can be alerted on — a gauge that only exists when things are fine
+	// cannot be.
+
 	// apps — fan LLZ's desired {app: enabled} out to apl-core's per-app AplApp CRs at
 	// env/apps/<name>.yaml (apl-core has no env/settings/apps.yaml). Key-level merge.
-	if err := appOverlayFiles(ctx, repo, cfg, files); err != nil {
+	appsEnvFound, err := appOverlayFiles(ctx, repo, cfg, files)
+	if err != nil {
 		return err
 	}
+
+	// FROM THE ENV LAYER, NOT `objFound`, and keying it on objFound made this the
+	// guard-that-cannot-fire the alert beside it is named for. objFound is the OR
+	// of the two layers, and the _shared path has NO env in it — so a misspelled
+	// REGION, the exact case LLZAplOverlayNoSource describes, still reads the
+	// shared file, still sets 1, and the alert can never fire. Same for an env
+	// whose per-env tree was never rendered.
+	//
+	// The apps layer is the reliable witness: `llz render` emits
+	// apl-values/<env>/apl-overlay/apps.yaml unconditionally, while the obj env
+	// layer is conditional on the deployment declaring object storage. So an
+	// absent apps env layer means the env is not in this tree; an absent obj one
+	// does not. ORed anyway, so a hand-written obj-only overlay still counts.
+	sourcePresent := 0.0
+	if objEnvFound || appsEnvFound {
+		sourcePresent = 1
+	}
+	reg.SetGauge("llz_apl_overlay_source_present",
+		"1 when this ENV's overlay layer was found on the source branch; 0 means the reconciler is reading a tree that does not carry this env",
+		map[string]string{"branch": cfg.SourceBranch, "env": cfg.Env}, sourcePresent)
 
 	// teams — CREATE each declared team's apl-core CRs at env/teams/<name>/ when
 	// absent, so apl-operator provisions the namespace + Keycloak group + realm role
@@ -162,20 +229,76 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 // readMergedOverlay reads the _shared + <env> layers of one overlay file (base,
 // e.g. OverlayObjFile) from the source branch and deep-merges them (env wins) —
 // the read→read→merge sequence the obj and apps passes share.
-func readMergedOverlay(ctx context.Context, repo Repo, cfg Config, base string) ([]byte, error) {
-	shared, _, err := repo.ReadFile(ctx, cfg.SourceBranch, sharedOverlayPath(base))
+// It returns found=false when NEITHER layer exists on the source branch, which
+// is the difference between "LLZ has nothing to say about this file" and "LLZ
+// says this file is empty" — and both `found` flags used to be discarded.
+//
+// THE DISCARDED FLAGS TURNED AN ABSENT SOURCE INTO AN INSTRUCTION TO BLANK A CR.
+// repo.ReadFile answers a missing path with ("", false, nil), so two absent
+// layers merged as MergeOverlay([]byte(""), []byte("")) — and that does not come
+// back empty. It comes back "{}\n", the canonical YAML for an empty map. The
+// caller's `len(bytes.TrimSpace(objMerged)) > 0` guard therefore PASSED, and the
+// reconciler wrote `{}` to env/settings/obj.yaml on the machine branch, over
+// apl-core's live AplObjectStorage CR. Object storage for loki and harbor stops
+// resolving, and nothing about it looks like a failure: the commit succeeds, the
+// lane reports synced, and the file it wrote is valid YAML.
+//
+// A guard that cannot fire is worse than no guard, because it is the reason
+// nobody looked again.
+func readMergedOverlay(ctx context.Context, repo Repo, cfg Config, base string) (merged []byte, found, envFound bool, err error) {
+	shared, sharedFound, err := repo.ReadFile(ctx, cfg.SourceBranch, sharedOverlayPath(base))
 	if err != nil {
-		return nil, fmt.Errorf("read _shared %s overlay: %w", base, err)
+		return nil, false, false, fmt.Errorf("read _shared %s overlay: %w", base, err)
 	}
-	envLayer, _, err := repo.ReadFile(ctx, cfg.SourceBranch, envOverlayPath(cfg.Env, base))
+	envLayer, envFound, err := repo.ReadFile(ctx, cfg.SourceBranch, envOverlayPath(cfg.Env, base))
 	if err != nil {
-		return nil, fmt.Errorf("read %s %s overlay: %w", cfg.Env, base, err)
+		return nil, false, false, fmt.Errorf("read %s %s overlay: %w", cfg.Env, base, err)
 	}
-	merged, err := clusterspec.MergeOverlay([]byte(shared), []byte(envLayer))
+	if !sharedFound && !envFound {
+		return nil, false, false, nil
+	}
+	merged, err = clusterspec.MergeOverlay([]byte(shared), []byte(envLayer))
 	if err != nil {
-		return nil, fmt.Errorf("merge %s overlay: %w", base, err)
+		return nil, false, false, fmt.Errorf("merge %s overlay: %w", base, err)
 	}
-	return merged, nil
+	return merged, true, envFound, nil
+}
+
+// objOverlayIsWritable reports whether a merged obj overlay carries enough to
+// REPLACE apl-core's AplObjectStorage CR, which is what writing it does.
+//
+// NON-EMPTY WAS NOT THE RIGHT BAR, and the first cut used it. The _shared layer
+// alone is a valid, non-empty document — kind, metadata, showWizard, the
+// accessKeyId placeholder — and carries NO region and NO buckets, because those
+// are the per-env layer's whole contribution. Writing it wholesale blanks both
+// on the live CR, which is the same loki/harbor outage as the `{}` case by a
+// narrower route — and the gate that existed for it asserted the bug as intended
+// behaviour, which is why it took a second reviewer to see. It is
+// TestASharedOnlyObjOverlayIsRefusedBecauseItCarriesNoRegionOrBuckets now, with
+// TestACompleteObjOverlayInOneLayerIsWritten holding the other side.
+//
+// The bar is CONTENT, not layer count: an operator who hand-writes a complete
+// obj.yaml into _shared is fine, and an instance whose per-env layer was never
+// rendered is not. region and buckets are what apl-core resolves storage with,
+// so they are what must be present.
+func objOverlayIsWritable(merged []byte) bool {
+	var doc struct {
+		Spec struct {
+			Provider struct {
+				Linode struct {
+					Region  string            `yaml:"region"`
+					Buckets map[string]string `yaml:"buckets"`
+				} `yaml:"linode"`
+			} `yaml:"provider"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(merged, &doc); err != nil {
+		// Undecodable is NOT writable, and not silently either — the writers
+		// below surface it.
+		return false
+	}
+	l := doc.Spec.Provider.Linode
+	return strings.TrimSpace(l.Region) != "" && len(l.Buckets) > 0
 }
 
 // appOverlayFiles reads LLZ's merged apps source (the desired {app: enabled} map)
@@ -185,14 +308,21 @@ func readMergedOverlay(ctx context.Context, repo Repo, cfg Config, base string) 
 // them) are skipped until it has — and an app already at the desired enabled is
 // skipped (SetAppEnabled's semantic no-op), so the reconciler never churns against
 // apl-operator's re-populated/re-formatted file.
-func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string) error {
-	merged, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayAppsFile)
+func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string) (envFound bool, err error) {
+	merged, found, envFound, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayAppsFile)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !found {
+		// Same rule as obj: no source means no opinion. An empty toggle map would
+		// write no files either, so this changes no behaviour today — it is here
+		// so the two passes cannot drift into answering the question differently.
+		fmt.Println("apl-overlay: no apps.yaml overlay source for this env — leaving apl-core's app toggles alone")
+		return envFound, nil
 	}
 	toggles, err := clusterspec.AppToggles(merged)
 	if err != nil {
-		return fmt.Errorf("parse apps toggles: %w", err)
+		return envFound, fmt.Errorf("parse apps toggles: %w", err)
 	}
 	apps := make([]string, 0, len(toggles))
 	for a := range toggles {
@@ -203,20 +333,20 @@ func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[strin
 		target := aplAppTarget(app)
 		current, found, err := repo.ReadFile(ctx, cfg.TargetBranch, target)
 		if err != nil {
-			return fmt.Errorf("read target %s: %w", target, err)
+			return envFound, fmt.Errorf("read target %s: %w", target, err)
 		}
 		if !found {
 			continue // apl-operator has not created this app's CR yet — next pass
 		}
 		updated, changed, err := clusterspec.SetAppEnabled([]byte(current), toggles[app])
 		if err != nil {
-			return fmt.Errorf("set enabled on %s: %w", target, err)
+			return envFound, fmt.Errorf("set enabled on %s: %w", target, err)
 		}
 		if changed {
 			files[target] = string(updated)
 		}
 	}
-	return nil
+	return envFound, nil
 }
 
 // teamOverlayFiles reads LLZ's per-env teams manifest and, for each declared team,

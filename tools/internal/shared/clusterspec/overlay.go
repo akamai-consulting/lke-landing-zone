@@ -56,6 +56,27 @@ const (
 // apps overlay. Keep in lockstep with that values.yaml block. external-dns is NOT
 // here: its schema permits no `enabled` key (it is gated by otomi.hasExternalDNS).
 var aplStaticDisabledApps = []string{
+	// GITEA IS HERE AND NOT A PER-ENV COMPONENT TOGGLE, and putting it here is
+	// what keeps this list in the lockstep its own comment claims — the values.yaml
+	// block it mirrors has listed `gitea: { enabled: false }` all along.
+	//
+	// It arrived here by a wrong turn worth recording. The per-env overlay used to
+	// emit it from the DefaultDisabled gitea component, and that was removed as an
+	// ownership violation on the grounds that apl-core's in-cluster gitea is the
+	// values-repo backend the overlay travels through. It is not: bootstrap-cluster
+	// repoints apl-core at the external GitHub apl-<env> branch (patchAplGitConfig)
+	// before any of this runs, so the transport is GitHub and gitea is just another
+	// app. Removing the emission therefore removed the ONLY thing that turns gitea
+	// off on managed — values.yaml is not rendered there — and a new cluster would
+	// have kept it running, with the unencrypted gitea-valkey PVC that
+	// health/workloads.go documents.
+	//
+	// Why LLZ has standing to disable it, unlike kyverno or trivy: apl-core 6.x
+	// gates apl-gitea-operator on gitea.enabled, and with BYO-Git that operator's
+	// clone path is dead weight pointing at a repo the platform does not use. This
+	// is a stated platform decision, which is exactly what this list is for — the
+	// per-env gate is for apps whose toggle LLZ merely happens to know about.
+	"gitea",
 	"knative",
 	"kserve",
 	"kubeflow-pipelines",
@@ -174,12 +195,73 @@ func RenderAppsOverlayShared() string {
 }
 
 // RenderAppsOverlayEnv is a deployment's per-env apps.yaml: apps.<name>.enabled
-// for every apl-core app a component owns, set from that component's toggle (the
-// same truth RenderValues writes into values.yaml, as an overlayable fragment).
-func RenderAppsOverlayEnv(components map[string]ComponentToggle) string {
+// for every apl-core app a component owns AND LLZ IS ENTITLED TO SPEAK FOR, set
+// from that component's toggle (the same truth RenderValues writes into
+// values.yaml, as an overlayable fragment).
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// IT USED TO SPEAK FOR ALL OF THEM, INCLUDING apl-core's OWN. Every other
+// renderer gates on Component.EmitOnManaged — kustomize.go:115 and render.go:473
+// both do — and this one walked the registry unfiltered. What the reconciler
+// then committed onto the machine-owned apl-<env> branch, on every managed
+// instance:
+//
+//   - `gitea: enabled: false`, because the gitea component is DefaultDisabled.
+//     On managed, apl-core runs its own in-cluster gitea AS THE VALUES-REPO
+//     BACKEND. The overlay's own transport is that repo, so this is a write that
+//     disables the thing carrying it. The component's registry entry says
+//     "managed apl-core runs its own in-cluster gitea" and carries ManagedSkip
+//     for exactly this reason; the flag was set and this function did not read it.
+//
+//   - `kyverno`, `policy-reporter` and `trivy` FORCE-ENABLED, from policyEngine
+//     and imageScanning — two more ManagedSkip components whose apps belong to
+//     apl-core on managed. Turning an app on that the operator did not ask for
+//     is quieter than turning one off, and no less wrong: LLZ has no manifest
+//     backend for any of them.
+//
+// The gate is the same one, not a second copy of the rule. A component LLZ does
+// not emit is a component LLZ has no opinion about, so its app is simply absent
+// from the overlay and apl-core's own value survives the merge — which is the
+// whole point of the overlay being a fragment rather than a file replacement.
+//
+// THE WHOLE GATE, NOT JUST ManagedSkip, and the difference is worth stating
+// because it changes what a declared-but-unlisted app does. EmitOnManaged also
+// honours ManagedConditionalOn, so with an explicit `managedApps: [harbor,
+// kyverno]` the observability component's apps (prometheus, loki, grafana, otel,
+// alertmanager) leave the overlay too.
+//
+// That is the consistent answer rather than a new one. `llz ci bootstrap-cluster`
+// is what enables an env's managedApps in apl-core; the overlay drives the
+// toggles of components LLZ ships alongside them, and render.go:473 already
+// dropped observability's MANIFESTS under the same condition. Emitting
+// `prometheus: enabled: true` from a tree that ships none of the glue was the
+// half that disagreed.
+//
+// It does surface a separate, older gap, in two places: DependsOn is enforced
+// over toggles and not over this gate. llzReconciler emits a ServiceMonitor and
+// PrometheusRule when observability does not emit, and imageSignature ships a
+// Kyverno ClusterPolicy gated only on kyverno being DECLARED in managedApps —
+// both against CRDs that may then be absent. The overlay used to paper over the
+// second by force-enabling kyverno on every managed cluster, which is the
+// ownership violation this function exists to stop: a continuous re-assertion of
+// someone else's app is not a dependency mechanism, it is a bug that happened to
+// be load-bearing.
+//
+// Neither is fixed here. They belong to components.go's dependency model, and
+// keeping the overlay inconsistent to hide them would leave the real gap in place
+// with nothing pointing at it.
+// ─────────────────────────────────────────────────────────────────────────────
+func RenderAppsOverlayEnv(boot Bootstrap, components map[string]ComponentToggle) string {
 	apps := map[string]appToggle{}
 	for _, c := range Components {
 		if len(c.AplCoreApps) == 0 {
+			continue
+		}
+		// SAY NOTHING about an app whose component this instance does not emit.
+		// Absent is not `enabled: false`: the overlay deep-merges onto apl-core's
+		// own settings, so omitting a key leaves apl-core's value and writing
+		// `false` overrides it.
+		if !c.EmitOnManaged(boot, components) {
 			continue
 		}
 		on := ComponentEnabled(components, c.Name)

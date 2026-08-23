@@ -1,4 +1,6 @@
 apps:
+  gitea:
+    enabled: false
   knative:
     enabled: false
   kserve:

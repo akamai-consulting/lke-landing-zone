@@ -107,12 +107,23 @@ func firstAplSignals(repos []repoInventory) *aplSignals {
 
 // aplAppComponent maps an APL app key to the LLZ component toggle it enables.
 var aplAppComponent = map[string]string{
-	"harbor":           "harbor",
-	"loki":             "observability",
-	"grafana":          "observability",
-	"prometheus":       "observability",
-	"alertmanager":     "observability",
-	"otel":             "observability",
+	"harbor":       "harbor",
+	"loki":         "observability",
+	"grafana":      "observability",
+	"prometheus":   "observability",
+	"alertmanager": "observability",
+	"otel":         "observability",
+	// THESE THREE MAP TO INERT TOGGLES on the managed platform, which is the only
+	// platform LLZ builds for. policyEngine, imageScanning and gitea are all
+	// ManagedSkip: `llz render` emits no manifests for them and the apps overlay
+	// emits no toggle, so writing `enabled` into a generated spec changes nothing
+	// on the cluster. Kept in the map so the scan still REPORTS what the source
+	// had — the import report is the value here — but see init.go, which no
+	// longer tells the adopter that enabling the component turns the app back on.
+	//
+	// gitea is a further step removed: LLZ disables apl-core's in-cluster gitea
+	// unconditionally via aplStaticDisabledApps, so a source that had it enabled
+	// does not get it back whatever the spec says.
 	"kyverno":          "policyEngine",
 	"trivy":            "imageScanning",
 	"gitea":            "gitea",

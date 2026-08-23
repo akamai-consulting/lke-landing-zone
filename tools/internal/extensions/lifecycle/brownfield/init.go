@@ -265,12 +265,23 @@ func buildMigrationTodo(d Deps, rep importReport, env string) string {
 	w("- [ ] **DNS cutover**: the new cluster gets new IPs; repoint records once validated (source domain suffix was %s).\n\n", orNA(rep.DNS.DomainSuffix))
 
 	// Platform apps the source DISABLED. LLZ components are coarser than APL's
-	// per-app flags (e.g. observability bundles alertmanager; policyEngine bundles
-	// policy-reporter), so enabling a component turns these back on — they can't be
-	// expressed as component toggles and must be re-disabled via apl-values
-	// _rawValues if the source's intent is to be preserved.
+	// per-app flags (e.g. observability bundles alertmanager), so enabling a
+	// component turns those back on — they can't be expressed as component
+	// toggles and must be re-disabled via apl-values _rawValues if the source's
+	// intent is to be preserved.
+	//
+	// EXCEPT FOR THE apl-core-OWNED ONES, and the text used to name exactly those
+	// as the example. policyEngine (kyverno, policy-reporter), imageScanning
+	// (trivy) and gitea are ManagedSkip, so their component toggles are inert on
+	// managed — enabling one turns nothing back on, because LLZ does not drive
+	// those apps at all. They are the App Platform Console's, and gitea is
+	// disabled by LLZ policy regardless. Saying otherwise sent an adopter to a
+	// switch that does nothing.
 	if apl := firstAplSignals(rep.Repos); apl != nil && len(apl.DisabledApps) > 0 {
 		w("## Platform apps disabled in the source (LLZ components are coarser)\n")
+		w("\n> `kyverno`, `policy-reporter`, `trivy` and `gitea` are apl-core's on the managed\n")
+		w("> platform: their LLZ component toggles do nothing, so re-disable them in the App\n")
+		w("> Platform Console rather than in the spec. (`gitea` LLZ keeps off regardless.)\n")
 		w("The source had these apps disabled. Enabling a component re-enables its\n")
 		w("bundled sub-apps, so re-disable any you still want off via apl-values `_rawValues`:\n")
 		w("- [ ] %s\n\n", strings.Join(apl.DisabledApps, ", "))
