@@ -69,7 +69,9 @@ func TestRotateBroadPAT_DryRun(t *testing.T) {
 func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 	now := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
 	bao := &stubBao{data: map[string]map[string]string{BroadPATBaoPath: {"rotated_at": itoa(now.AddDate(0, 0, -90).Unix())}}}
-	// Two OLD siblings (past grace) to revoke + one recent (in grace) to keep.
+	// A ladder of supersession: 11 was replaced by 12 seventy days ago (drains),
+	// 12 was replaced by 13 two days ago (inside the window), 13 is the outgoing
+	// live one.
 	old1 := now.AddDate(0, 0, -80)
 	old2 := now.AddDate(0, 0, -70)
 	recent := now.AddDate(0, 0, -2) // within 7d grace
@@ -103,10 +105,12 @@ func TestRotateBroadPAT_ApplyFullFlow(t *testing.T) {
 		w.calls[1] != "LINODE_API_TOKEN@infra-secondary=new-pat" {
 		t.Errorf("env publish wrong: %v", w.calls)
 	}
-	// Revoked the two OLD same-labeled siblings (11, 12); kept the in-grace 13 + the
-	// different-label 99.
-	if !sameIDs(lc.deleted, []uint64{11, 12}) {
-		t.Errorf("revoked wrong ids: %v (want 11,12)", lc.deleted)
+	// Revoked only id 11. Id 12 is 70 days old but was SUPERSEDED two days ago,
+	// when id 13 was minted — so it is inside the 7-day window and a workflow that
+	// resolved LINODE_API_TOKEN before that mint may still be holding it. Its own
+	// age is not the question; the retired clock asked it and revoked 12 here.
+	if !sameIDs(lc.deleted, []uint64{11}) {
+		t.Errorf("revoked wrong ids: %v (want only 11; 12 was superseded 2 days ago)", lc.deleted)
 	}
 }
 

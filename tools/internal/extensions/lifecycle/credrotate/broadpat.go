@@ -99,7 +99,7 @@ type BroadPATOpts struct {
 	label       string
 	deployments []string // infra-<d> environments to publish LINODE_API_TOKEN into
 	rotateAfter int      // days; rotate when the OpenBao rotated_at is older
-	graceDays   int64    // don't revoke a sibling newer than this (CI may still use it)
+	graceDays   int64    // don't revoke a sibling SUPERSEDED more recently than this (a run may still hold it)
 	apply       bool
 }
 
@@ -237,11 +237,7 @@ func RevokeOldBroadPATs(ctx context.Context, lc LinodeAPI, label string, graceDa
 		fmt.Fprintf(os.Stderr, "::warning::broad-pat: list for drain failed (new PAT is live; converges next run): %v\n", err)
 		return revoked, skipped
 	}
-	type cand struct {
-		id      uint64
-		created int64
-	}
-	var cands []cand
+	var cands []gracedToken
 	for _, it := range items {
 		if cli.AsString(it["label"]) != label {
 			continue
@@ -250,24 +246,34 @@ func RevokeOldBroadPATs(ctx context.Context, lc LinodeAPI, label string, graceDa
 		if !ok {
 			continue
 		}
-		created, _ := linode.ParseTS(cli.AsString(it["created"]))
-		cands = append(cands, cand{id, created})
-	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].created > cands[j].created })
-	if len(cands) == 0 {
-		return revoked, skipped
-	}
-	cutoff := now.Unix() - graceDays*linode.DaySecs
-	for _, c := range cands[1:] { // [0] is the newest (just minted) — never revoke it
-		if c.created > cutoff {
-			skipped = append(skipped, c.id) // still in grace — a consumer may hold it
+		// THE ok FLAG IS NOT DISCARDABLE, and dropping it here was its own
+		// defect. linode.ParseTS returns 0 for a `created` it cannot read, and 0
+		// is the epoch — older than any cutoff, so an unparseable timestamp was
+		// a revocation. If the JUST-MINTED PAT is the one that fails to parse it
+		// sorts last, loses its place as the live credential, and the token
+		// already published to every infra-<env> secret is the one deleted.
+		// Skipping it instead leaks a token an operator can see and revoke;
+		// pat.go:118 has always done this.
+		created, ok := linode.ParseTS(cli.AsString(it["created"]))
+		if !ok {
+			fmt.Fprintf(os.Stderr, "::warning::broad-pat: PAT id=%d has an unreadable `created` (%q) — "+
+				"excluded from the drain rather than assumed old\n", id, cli.AsString(it["created"]))
 			continue
 		}
-		if err := lc.DeleteProfileToken(ctx, c.id); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::broad-pat: revoke id=%d failed (retries next run): %v\n", c.id, err)
+		cands = append(cands, gracedToken{ID: id, Created: created})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].Created > cands[j].Created })
+	// [0] is the newest (just minted) and is never revoked. The window for every
+	// other sibling runs from when it was SUPERSEDED, not from when it was
+	// created — see graceperiod.go.
+	drain, skipped := splitByGrace(cands, graceDays, now.Unix())
+	revoked = []uint64{}
+	for _, id := range drain {
+		if err := lc.DeleteProfileToken(ctx, id); err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::broad-pat: revoke id=%d failed (retries next run): %v\n", id, err)
 			continue
 		}
-		revoked = append(revoked, c.id)
+		revoked = append(revoked, id)
 	}
 	return revoked, skipped
 }

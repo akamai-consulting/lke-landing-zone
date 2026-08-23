@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
@@ -215,13 +216,21 @@ func TestCredentialsPATRevokeOldNoMatches(t *testing.T) {
 }
 
 func TestCredentialsPATRevokeOldDrains(t *testing.T) {
-	// Newest (id 3, today-ish) is kept; id 2 is in the grace window; id 1 is
-	// old enough to drain. Entries are deliberately unsorted.
+	// Newest (id 3) is kept; id 2 was superseded an hour ago so it is inside the
+	// window; id 1 was superseded 10 days ago so it drains. Deliberately unsorted.
+	//
+	// THE SENTINEL DATES HAD TO GO. This fixture used 2020-01-01 against
+	// 2099-01-09/10, which is coherent only under the retired clock: with the
+	// window measured from supersession, a live credential minted in 2099
+	// superseded everything below it in 2099, so nothing is ever drainable and
+	// the dates say nothing about the rule. Real relative offsets separate "old"
+	// from "long superseded", which is the distinction under test.
+	now := time.Now().Unix()
 	client := &fakeRotatorClient{listResp: []map[string]any{
-		patListEntry(1, "lbl", "2020-01-01T00:00:00"),
-		patListEntry(3, "lbl", "2099-01-10T00:00:00"),
-		patListEntry(2, "lbl", "2099-01-09T00:00:00"),
-		patListEntry(9, "other", "2099-01-08T00:00:00"),
+		patListEntry(1, "lbl", patTS(now-40*linode.DaySecs)), // superseded 10d ago → drain
+		patListEntry(3, "lbl", patTS(now-3600)),              // the live one
+		patListEntry(2, "lbl", patTS(now-10*linode.DaySecs)), // superseded an hour ago → keep
+		patListEntry(9, "other", patTS(now-11*linode.DaySecs)),
 		{"id": json.Number("8"), "label": "lbl", "created": "not-a-timestamp"},
 	}}
 	var err error
@@ -247,9 +256,10 @@ func TestCredentialsPATRevokeOldDrains(t *testing.T) {
 }
 
 func TestCredentialsPATRevokeOldDryRunDeletesNothing(t *testing.T) {
+	now := time.Now().Unix()
 	client := &fakeRotatorClient{listResp: []map[string]any{
-		patListEntry(1, "lbl", "2020-01-01T00:00:00"),
-		patListEntry(2, "lbl", "2099-01-01T00:00:00"),
+		patListEntry(1, "lbl", patTS(now-40*linode.DaySecs)), // superseded 10d ago → would drain
+		patListEntry(2, "lbl", patTS(now-10*linode.DaySecs)), // the live one
 	}}
 	var err error
 	stdout, _ := captureFirewallOutput(t, func() {
@@ -277,10 +287,11 @@ func TestCredentialsPATRevokeOldErrors(t *testing.T) {
 		t.Fatalf("want list error, got %v", err)
 	}
 
+	now := time.Now().Unix()
 	client = &fakeRotatorClient{
 		listResp: []map[string]any{
-			patListEntry(1, "lbl", "2020-01-01T00:00:00"),
-			patListEntry(2, "lbl", "2099-01-01T00:00:00"),
+			patListEntry(1, "lbl", patTS(now-40*linode.DaySecs)), // superseded 10d ago → drains
+			patListEntry(2, "lbl", patTS(now-10*linode.DaySecs)),
 		},
 		deleteErr: fmt.Errorf("delete boom"),
 	}
