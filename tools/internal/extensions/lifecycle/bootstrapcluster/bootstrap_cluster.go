@@ -412,10 +412,17 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 }
 
 // ResolveKubeconfig returns a filesystem path the KUBECONFIG env can point at,
-// in priority order: an explicit --kubeconfig file (if non-empty); the EFFECTIVE
-// kubeconfig — $KUBECONFIG if it points at a NON-EMPTY file, else kubectl's default
-// ~/.kube/config (reusing ci diagnose-argocd's effectiveKubeconfig); else
-// KUBECONFIG_RAW spilled to a 0600 tempfile.
+// in priority order:
+//
+//  1. an explicit --kubeconfig. NAMING ONE IS AN INSTRUCTION, so a path that is
+//     missing or zero-byte is an ERROR here, not a reason to look elsewhere —
+//     this command deletes and recreates StorageClasses, and doing that against
+//     a cluster the operator did not name is worse than stopping. It used to
+//     fall through, silently, to whatever the machine was already pointed at.
+//  2. KUBECONFIG_RAW spilled to a 0600 tempfile.
+//  3. the ambient environment — an empty return, leaving kubectl/helm to resolve
+//     $KUBECONFIG (if it points at a NON-EMPTY file) or the default
+//     ~/.kube/config themselves.
 //
 // The non-empty check is load-bearing: fetch-kubeconfig writes the real kubeconfig
 // to ~/.kube/config and most steps rely on that default, while $KUBECONFIG is
@@ -1215,7 +1222,8 @@ spec:
           # answer for one that does not exist. awk compares the field exactly, which
           # also sidesteps a branch name containing regex metacharacters.
           #
-%[8]s          # RE-BOOTSTRAP REPAIR ONLY. apl-core has been reconciling $DST_BRANCH since the
+%[8]s
+          # RE-BOOTSTRAP REPAIR ONLY. apl-core has been reconciling $DST_BRANCH since the
           # first migration, and its Gitea tree has been abandoned since — so pushing that
           # stale tree over a healthy branch would revert every values change made after
           # the switch. Rebuild only when the branch is genuinely gone.

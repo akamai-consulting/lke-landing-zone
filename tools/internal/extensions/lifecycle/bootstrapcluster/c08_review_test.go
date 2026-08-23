@@ -276,3 +276,38 @@ func TestMigrateWaitDoesNotAbortWhileTheJobIsStillRetrying(t *testing.T) {
 			"deletes the Job and kills the retry backoffLimit: 1 exists to provide: %v", err)
 	}
 }
+
+// ── from the code review of this PR ─────────────────────────────────────────
+
+// TestTheInterpolatedScriptKeepsItsOwnLine. indentScript emits no trailing
+// newline, and the `%[8]s` placeholder shared a source line with the comment
+// after it — so the rendered Job ran `}          # RE-BOOTSTRAP REPAIR ONLY. …`
+// as one line, making the repair rationale read as a comment on branch_state's
+// closing brace. It parses in both sh and YAML, which is exactly why it would
+// have survived: the only symptom is a reader being told the wrong thing.
+func TestTheInterpolatedScriptKeepsItsOwnLine(t *testing.T) {
+	y := aplMigrateJobManifest("main", "apl-e2e", []string{"harbor"}, true)
+	if !strings.Contains(y, "}\n          # RE-BOOTSTRAP REPAIR ONLY.") {
+		t.Errorf("the interpolated branch_state block must end its own line before the next comment;\n"+
+			"rendered:\n%s", excerptAround(y, "RE-BOOTSTRAP REPAIR ONLY"))
+	}
+}
+
+// excerptAround returns a few lines of context around needle, for a failure
+// message that shows the reader what actually rendered.
+func excerptAround(body, needle string) string {
+	lines := strings.Split(body, "\n")
+	for i, ln := range lines {
+		if strings.Contains(ln, needle) {
+			lo, hi := i-2, i+2
+			if lo < 0 {
+				lo = 0
+			}
+			if hi > len(lines) {
+				hi = len(lines)
+			}
+			return strings.Join(lines[lo:hi], "\n")
+		}
+	}
+	return "(not found)"
+}
