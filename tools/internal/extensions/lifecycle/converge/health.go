@@ -742,11 +742,42 @@ func checkStorageClasses(r *health.Report) {
 // filesystem Loki is intentional (no objectStorage.cluster) → nothing to await.
 // Skipped in phase1 (Loki/apl-secrets not installed yet).
 func checkLokiObjStorage(r *health.Report, phase1 bool) {
-	if phase1 || !kubectlprobe.Exists("get", "secret", "obj-secrets", "-n", "apl-secrets") {
+	if phase1 {
+		return
+	}
+	// ExistsOK, because a silent `return` is the strongest possible pass: the
+	// section records nothing at all, and Report.Verdict() is default-Converged.
+	// With bare Exists an unreadable apiserver skipped the whole check, so the
+	// question "is Loki still filesystem-backed?" was never asked and converge
+	// exited 0. Absence is a legitimate skip; not knowing is not.
+	objSeeded, answered := kubectlprobe.ExistsOK("get", "secret", "obj-secrets", "-n", "apl-secrets")
+	if !answered {
+		hdr("apl-overlay obj storage (Loki S3)")
+		cat, msg := health.PendingIfBudgeted(
+			"apl-overlay: could not read apl-secrets/obj-secrets, so whether this deployment uses obj storage is unknown — retrying against the budget",
+			"apl-overlay: apl-secrets/obj-secrets could not be read after retries, so this section rendered no verdict on whether Loki is S3-backed")
+		record(r, cat, msg)
+		return
+	}
+	if !objSeeded {
 		return
 	}
 	hdr("apl-overlay obj storage (Loki S3)")
-	cfg := health.LokiConfigText("loki")
+	// LokiConfigTextOK, because "" has two meanings and only one of them is a pass.
+	// LokiConfigText concatenates every matching ConfigMap's data, and its source —
+	// kubectlprobe.Items — returns nil on ANY error. So an unreadable
+	// `get configmap -A` produced "" and was graded "Loki not deployed", recording
+	// CatOK and letting converge exit 0 with Loki still filesystem-backed. The one
+	// state this section exists to catch was reported as the state where it does not
+	// apply.
+	cfg, listed := health.LokiConfigTextOK("loki")
+	if !listed {
+		cat, msg := health.PendingIfBudgeted(
+			"apl-overlay: ConfigMaps unreadable — cannot yet tell whether Loki is deployed; retrying against the budget",
+			"apl-overlay: ConfigMaps could not be read after retries, so whether Loki is S3-backed is UNKNOWN — this is not evidence that Loki is undeployed")
+		record(r, cat, msg)
+		return
+	}
 	if strings.TrimSpace(cfg) == "" {
 		record(r, health.CatOK, "Loki not deployed — no obj overlay to await")
 		return
@@ -1020,7 +1051,24 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 	hdr("controller Lease freshness")
 	now := time.Now()
 	stale := false
-	for _, ns := range []string{"argocd", "cert-manager", "external-secrets", "cert-automation", "openbao", "kube-system"} {
+	// healthNamespaces, NOT a second hand-written list — and the second list is
+	// exactly what was here. It still said "cert-automation" and "openbao", the
+	// PRE-llz-rename names, so `if !inv.nsExists[ns] { continue }` skipped both
+	// silently and `stale` stayed false, and this section recorded
+	// "all controller Leases renewed" having never looked at the OpenBao or
+	// cert-automation leader Leases at all.
+	//
+	// That is the regression healthNamespaces' own header records, one function
+	// over: the rename was fixed in the list above and not in the copy down here,
+	// because nothing joined them. Iterating the shared list is the fix — correcting
+	// two strings would leave the next rename free to do it again.
+	//
+	// IT WIDENS THE CHECK, and that is deliberate and worth stating: the shared list
+	// adds llz-observability, harbor and istio-system. Every one runs leader-elected
+	// controllers whose stale Lease is a real signal, the loop is skip-if-absent so
+	// they cost nothing where they do not exist, and LeaseStale's 4x leaseDuration
+	// threshold is generous. TestLeaseCheckUsesTheSharedNamespaceList pins the join.
+	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] {
 			continue
 		}
@@ -1184,13 +1232,41 @@ func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 	// policy its own way and LLZ applies none — a namespace with no LLZ NPs is then not a
 	// failure. Gate the hard-fail on cluster-foundation actually being deployed (self-
 	// install); namespaces that DO carry their own NPs still pass either way.
-	ownsNetpols := kubectlprobe.Exists("-n", "argocd", "get", "application", "cluster-foundation")
+	//
+	// ExistsOK, NOT Exists, AND THE DIRECTION OF THE MISTAKE IS THE PROBLEM. Exists
+	// folds "the apiserver did not answer" into "absent", and absent here means
+	// `ownsNetpols = false`, which REWRITES a genuine missing-default-deny CatFail
+	// into CatOK. So the one probe failing did not weaken this section — it deleted
+	// its findings and reported them as passes. Fail open on a question, not on an
+	// answer.
+	ownsNetpols, ownsAnswered := kubectlprobe.ExistsOK("-n", "argocd", "get", "application", "cluster-foundation")
 	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
-		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kubectlprobe.Items("-n", ns, "get", "networkpolicies")))
+		// ItemsOK for the same reason one line down: an unreadable list returns zero
+		// items, and zero items is the literal input ClassifyNamespaceNetpol turns
+		// into "no default-deny". A read that did not happen must not be graded as a
+		// namespace that has no policies.
+		nps, listed := kubectlprobe.ItemsOK("-n", ns, "get", "networkpolicies")
+		if !listed {
+			cat, msg := health.PendingIfBudgeted(
+				fmt.Sprintf("Namespace %s NetworkPolicy list unreadable — retrying against the budget", ns),
+				fmt.Sprintf("Namespace %s NetworkPolicy list could not be read after retries — this check rendered no verdict, so the default-deny posture of %s is UNKNOWN, not confirmed", ns, ns))
+			record(r, cat, msg)
+			continue
+		}
+		cat, msg := health.ClassifyNamespaceNetpol(ns, len(nps))
 		if cat == health.CatFail && !ownsNetpols {
+			if !ownsAnswered {
+				// Cannot tell whether LLZ owns the policies here, so the skip is not
+				// available: keep the finding rather than convert it to a pass.
+				cat, msg := health.PendingIfBudgeted(
+					fmt.Sprintf("%s — and whether cluster-foundation is deployed could not be read, so the managed-cluster skip cannot be applied; retrying against the budget", msg),
+					fmt.Sprintf("%s — and whether cluster-foundation is deployed could not be read after retries, so this cannot be dismissed as apl-core owning NPs on a managed cluster", msg))
+				record(r, cat, msg)
+				continue
+			}
 			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
 			continue
 		}

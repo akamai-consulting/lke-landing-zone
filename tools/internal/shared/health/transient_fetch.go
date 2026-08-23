@@ -90,9 +90,26 @@ func ArgoComparisonError(d cigate.Deps, namespace, parent string) string {
 // lokiConfigText concatenates the data values of every name-matching ConfigMap
 // (where the rendered Loki config lives) so the S3 detection can scan it.
 func LokiConfigText(match string) string {
+	text, _ := LokiConfigTextOK(match)
+	return text
+}
+
+// LokiConfigTextOK is LokiConfigText with "the cluster answered" reported
+// separately, the same split ItemsOK makes and for the same reason.
+//
+// The empty string has two meanings here — "no ConfigMap matched" and "the list
+// could not be read" — and a caller that grades "" as "Loki is not deployed"
+// turns an apiserver failure into a pass on the one section that exists to catch
+// filesystem-backed Loki. Any caller deciding anything on emptiness must use
+// this one; LokiConfigText above is kept for the callers that only render text.
+func LokiConfigTextOK(match string) (string, bool) {
 	re := regexp.MustCompile(match)
 	var b strings.Builder
-	for _, raw := range kubectlprobe.Items("get", "configmap", "-A") {
+	items, answered := kubectlprobe.ItemsOK("get", "configmap", "-A")
+	if !answered {
+		return "", false
+	}
+	for _, raw := range items {
 		var cm struct {
 			Metadata struct {
 				Name string `json:"name"`
@@ -107,5 +124,5 @@ func LokiConfigText(match string) string {
 			b.WriteByte('\n')
 		}
 	}
-	return b.String()
+	return b.String(), true
 }
