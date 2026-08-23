@@ -59,8 +59,8 @@ on:
 			wantRequired: nil,
 		},
 		{
-			// Hyphenated names are legal and were the source of a false positive
-			// when the first cut of this parser matched [a-z_] only.
+			// Hyphenated names are legal, and a parser matching [a-z_] only reports
+			// them as a false positive.
 			name: "hyphenated input names are captured",
 			yaml: `
 on:

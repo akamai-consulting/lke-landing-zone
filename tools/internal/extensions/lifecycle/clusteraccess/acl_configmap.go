@@ -381,9 +381,9 @@ func isAlreadyExists(out string) bool {
 // runnerACLKubectlEnv is the environment the kubectl child runs with. Pure, and
 // separated from the exec seam FOR THE REASON THE FILE ALREADY GIVES ABOVE:
 // tests replace runnerACLKubectlFn wholesale, so anything inline in that closure
-// is never exercised. The first cut of this put the expansion inline and it was
-// invisible — deleting it left the package green, and since leaseOutcome always
-// returns nil the regression is silent end to end: `runner-acl open` reports
+// is never exercised. Inline, the expansion is invisible — deleting it leaves the
+// package green, and since leaseOutcome always returns nil the regression is silent
+// end to end: `runner-acl open` reports
 // success, the ConfigMap lease is never written, and the EAA controller evicts
 // the runner IP mid-job.
 //

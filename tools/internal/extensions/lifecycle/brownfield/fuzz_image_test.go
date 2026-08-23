@@ -19,10 +19,9 @@ import (
 //
 // Note the registry prefix REQUIRES its trailing slash. That is not pedantry: a
 // port colon is only meaningful when a path follows it, so "0:0:0" — host, port,
-// tag, no path — is not a reference at all. An earlier version of this pattern
-// made the "/" optional and the fuzzer immediately produced exactly that string,
-// where imageName returns "0:0". The parser was right and the predicate was
-// wrong, twice; writing the shape down precisely is the point.
+// tag, no path — is not a reference at all. Make the "/" optional and the fuzzer
+// produces exactly that string, where imageName returns "0:0": the parser is right
+// and the predicate is wrong. Writing the shape down precisely is the point.
 //
 // Conservative on purpose — it gates the CONTRACT assertions, so being too narrow
 // only means fuzzing checks fewer inputs strictly, while being too wide makes the

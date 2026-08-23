@@ -107,8 +107,8 @@ func TestEveryPflagSpellingOfTheMethodIsClassifiedTheSame(t *testing.T) {
 		// Contents exclusion stopped meaning what they say.
 		{"absolute URL secret write", []string{"api", "-X", "PUT", "https://api.github.com/repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
 		{"GHES api/v3 secret write", []string{"api", "-X", "PUT", "https://ghes.example/api/v3/repos/o/r/actions/secrets/FOO"}, capability.ForgeCustody},
-		// THESE TWO ARE THE ONLY ROWS THAT DISCRIMINATE, and the first cut of this
-		// block had neither. A contents path under a full URL grades Mutate with
+		// THESE TWO ARE THE ONLY ROWS THAT DISCRIMINATE. A contents path under a full
+		// URL grades Mutate with
 		// or without the normalisation as long as the segment before `secrets` is
 		// not a family name — so `contents/k8s/secrets/x.yaml` proved nothing. It
 		// takes a repository path that itself looks like an API family before the
@@ -187,9 +187,9 @@ func TestACloudMutateHandleCannotWriteASecretThroughTheAPI(t *testing.T) {
 	}
 }
 
-// AND THE MIRROR IMAGE, which the first cut of this fix opened. Grading a secret
-// write as custody rescued the cloud-mutate-without-custody bindings and handed
-// the write to the custody-WITHOUT-cloud-mutate ones — the db-admin seeder,
+// AND THE MIRROR IMAGE, which the obvious fix opens. Grading a secret write as
+// custody rescues the cloud-mutate-without-custody bindings and hands the write to
+// the custody-WITHOUT-cloud-mutate ones — the db-admin seeder,
 // objenc's seed-ssec-key, two openbao lanes. Both directions are the same error:
 // writing a secret through the raw API is a mutation and a placement, and
 // neither grant authorises it alone.

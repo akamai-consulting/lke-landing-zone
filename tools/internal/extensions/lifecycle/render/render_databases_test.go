@@ -17,10 +17,10 @@ import (
 //
 // It must hold WITHOUT a tofu/terraform binary. Tfvars pipes through
 // `tofu fmt`, but fmtHCL is a best-effort pass-through when neither binary is
-// installed — which is exactly the CI container. An earlier version of this test
-// asserted the indentation `tofu fmt` adds and so passed locally and failed in CI;
-// hclDatabases now emits already-formatted HCL, so the bytes are the same either
-// way. Assert on bytes, not on layout the environment might supply.
+// installed — which is exactly the CI container. Asserting the indentation `tofu
+// fmt` adds therefore passes locally and fails in CI; hclDatabases emits
+// already-formatted HCL, so the bytes are the same either way. Assert on bytes, not
+// on layout the environment might supply.
 //
 // The unit test in internal/clusterspec pins the mapping; this pins the seam.
 func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {

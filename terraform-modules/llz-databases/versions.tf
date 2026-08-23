@@ -12,8 +12,8 @@ terraform {
       # That is a shared constraint, NOT a shared version: what an instance actually
       # runs is whatever each root's .terraform.lock.hcl pins, and those are already
       # per-root and already differ — cluster locks 3.12.0, object-storage 3.13.0.
-      # An earlier version of this comment claimed the constraint made an instance
-      # "pin one linode provider version"; it does not, and nothing here does.
+      # This constraint does not make an instance pin ONE linode provider version,
+      # and nothing here does.
       #
       # The databases root has NO tracked lock file (neither does vpc), so its
       # provider floats within this constraint at every init and it is invisible to

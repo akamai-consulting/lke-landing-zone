@@ -36,8 +36,8 @@ var stringLiteral = regexp.MustCompile(`"([^"\\]*)"`)
 // `repos/...` literal. A REST path is built by concatenation —
 // `"repos/"+repo+"/environments/"+envName+"/Deployment-branch-policies"` — so the
 // misspelling lived in its own fragment that a scan anchored on `repos/` cannot
-// see. The first cut of this test was anchored that way and stayed GREEN when the
-// capital D was reintroduced: a guard for a bug it could not have caught.
+// see — such a test stays GREEN when the capital D is reintroduced, which is a
+// guard for a bug it cannot catch.
 //
 // Widening it to every path-shaped literal instead flags seven honest ones
 // (`/etc/harbor-admin/...`, `/Namespace`, `/Chart.yaml`), and a gate that cries

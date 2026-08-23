@@ -1012,10 +1012,9 @@ const aplGiteaInClusterURL = "http://git-server.git-server.svc.cluster.local/oto
 // It keeps the CREDENTIALS from gitCloneCmd but discards its HOST. gitCloneCmd
 // carries the PUBLIC name (git.<domainSuffix>), and apl-core deploys git-server
 // with httproute.enabled=false — no public route — so cloning it from inside the
-// cluster is not known to work. An earlier version of this code used gitCloneCmd
-// as-is on the strength of a clone I believed had been verified; re-reading the
-// evidence, what succeeded was a clone of the in-cluster Service DNS URL. Rebuilding
-// against aplGiteaInClusterURL uses the address with actual evidence behind it.
+// cluster is not known to work. The clone that HAS been observed to succeed is of
+// the in-cluster Service DNS URL, so this rebuilds against aplGiteaInClusterURL —
+// the address with evidence behind it.
 //
 // NOT verified live: this path only runs on a re-bootstrap whose destination branch
 // has gone missing, which no run has reproduced since the fix. It fails loudly if

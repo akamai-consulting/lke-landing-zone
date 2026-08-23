@@ -132,9 +132,9 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 			// Observed on run 30485106067 only because a DIFFERENT command happened
 			// to log it: "couldn't get current server API group list: ... EOF".
 			// execCombined, NOT the captured stdout: kubectl writes these errors to
-			// STDERR, so the first version of this printed "exit status 1: " with an
-			// empty reason on all 15 polls of run 30499831638 — a diagnostic that
-			// looked like one and carried nothing.
+			// STDERR, so reading stdout alone prints "exit status 1: " with an empty
+			// reason on every poll — a diagnostic that looks like one and carries
+			// nothing.
 			detail := cigate.FirstLine(strings.TrimSpace(deps.ExecCombined("kubectl", "get", "--raw", "/readyz",
 				fmt.Sprintf("--request-timeout=%ds", requestTimeout))))
 			if detail == "" {

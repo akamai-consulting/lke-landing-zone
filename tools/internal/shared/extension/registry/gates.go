@@ -138,11 +138,10 @@ import (
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
 //
-// THOSE NUMBERS ARE PINNED by TestTheDefaultedMajorityIsStillTheMajority, because
-// the previous version of this sentence said "eighteen of nineteen … and the two
-// that differ" — stale on both counts and self-contradictory on its face, since
-// eighteen of nineteen leaves one. A count in a comment that nothing compares is
-// the same footnote-not-measurement shape the name/package count fell into.
+// THOSE NUMBERS ARE PINNED by TestTheDefaultedMajorityIsStillTheMajority. A count
+// written in a comment and compared by nothing is a footnote, not a measurement:
+// it goes stale silently and can contradict itself on its face without anyone
+// noticing.
 type Gate struct {
 	Extension string
 	New       func() *cobra.Command

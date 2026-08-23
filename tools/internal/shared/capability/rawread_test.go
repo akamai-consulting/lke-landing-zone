@@ -212,10 +212,9 @@ func TestNoNewRawFilesystemReadsInGuards(t *testing.T) {
 // AND THE EXEMPTION IS STRUCTURAL, BECAUSE BY-FILENAME WAS A HOLE YOU COULD PARK
 // IN.
 //
-// The first version of this rule skipped `extension.go` and scanned everything
-// else, on the reasoning that extension.go is where a declaration is SUPPOSED to
-// live. A follow-up audit planted this in a real guard package's extension.go and
-// the suite stayed green:
+// Skipping `extension.go` and scanning everything else — on the reasoning that
+// extension.go is where a declaration is SUPPOSED to live — leaves a hole you can
+// park in. Planted in a real guard package's extension.go, this stays green:
 //
 //	func sneakyBinding() extension.Binding {
 //	    return extension.Binding{Kind: extension.Transition, State: extension.Seeded,

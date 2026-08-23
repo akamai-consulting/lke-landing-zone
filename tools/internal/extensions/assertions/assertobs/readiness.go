@@ -137,10 +137,10 @@ func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string
 	// asked whether a byte was written.
 	//
 	// TWO SIGNALS, because neither alone is enough. Flush ERRORS catch active
-	// breakage but only once Loki has tried, and on a fresh cluster it has not: the
-	// first version of this scanned a 60s window and passed on a cluster that had
-	// written nothing at all, which is precisely the blindness it was added to
-	// remove. The OUTCOME signal — has anything reached the bucket since the
+	// breakage but only once Loki has tried, and on a fresh cluster it has not: a
+	// scan of a 60s window alone passes on a cluster that has written nothing at
+	// all, which is precisely the blindness this exists to remove. The OUTCOME
+	// signal — has anything reached the bucket since the
 	// ingesters started — covers that, but only after enough time has passed that a
 	// healthy Loki would have flushed. Together they cover both.
 	failed, lines := applyLokiWriteVerdict(lokiWriteFindings(nameMatch, region, allowFlush))

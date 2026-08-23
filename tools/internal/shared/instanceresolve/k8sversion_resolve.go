@@ -289,8 +289,8 @@ func classifyClusters(clusters []map[string]any, d Deployment) clusterLookup {
 		// an orphan sitting beside the live deployment, where falling through plans a
 		// control-plane upgrade on whichever one is real.
 		//
-		// THE REMEDY MUST NOT BE `llz reap --cluster-label`, and the first cut of this
-		// warning said exactly that. That flag is LABEL-scoped: it lists every cluster
+		// THE REMEDY MUST NOT BE `llz reap --cluster-label`. That flag is
+		// LABEL-scoped: it lists every cluster
 		// carrying the label and DELETEs each one (teardown/reap.go), which is correct
 		// for a sweep after a deployment is gone and catastrophic here — this warning
 		// fires precisely BECAUSE two clusters share the label, so the advice, followed

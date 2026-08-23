@@ -343,8 +343,8 @@ func clustersForExemption(ctx context.Context) ([]map[string]any, error) {
 		// then tells the operator to "re-run if that read was transient" about a budget
 		// that will expire identically next time. Stop and say which it was.
 		//
-		// ASKED OF ctx ONLY, NEVER OF THE ERROR — and the first version of this did
-		// both, which broke the retry it was added next to. `http.Client.Timeout`
+		// ASKED OF ctx ONLY, NEVER OF THE ERROR. Asking both breaks the retry beside
+		// it: `http.Client.Timeout`
 		// reports as a WRAPPED context.DeadlineExceeded (measured: `Get "…": context
 		// deadline exceeded (Client.Timeout exceeded while awaiting headers)`, and
 		// errors.Is says true), so classifying on the error made one slow request

@@ -344,9 +344,9 @@ func catalogSample() []extension.Extension {
 	}, {
 		// The catalog declares this as ONE transition to `provisioned` holding
 		// own-paths, and the validator rejects that — own-paths is only meaningful
-		// where files are written. The resolution is not to drop the grant (an
-		// earlier draft of this sample did, which made a test named for checking the
-		// catalog quietly disagree with it) but to see that import does two things:
+		// where files are written. The resolution is not to drop the grant — that
+		// makes a test named for checking the catalog quietly disagree with it — but
+		// to see that import does two things:
 		// it writes an instance repo, and it adopts cloud substrate. That is the
 		// pairing pattern, and each half is scoped on its own.
 		Name: "import-brownfield", Short: "adopt an existing cluster",

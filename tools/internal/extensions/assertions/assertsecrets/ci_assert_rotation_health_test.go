@@ -390,9 +390,8 @@ func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
 
 // The Harbor robot pair is legitimately absent on a standby peer until the ACTIVE
 // peer's provisioner has published it, and on any deployment before Harbor first
-// comes up. Gating on it — as the first draft did, classing both `present` —
-// would fail the daily credential job on a healthy standby, which is a worse
-// outcome than the gap it was meant to close.
+// comes up. Gating on it — classing both `present` — fails the daily credential
+// job on a healthy standby, which is a worse outcome than the gap it closes.
 func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
 	m := presenceSteadyState()
 	var optional []string

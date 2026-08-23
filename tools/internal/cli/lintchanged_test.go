@@ -323,9 +323,9 @@ func TestLintReportsRepoRelativePathsFromASubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// FILES OUTSIDE THE SUBDIRECTORY TOO, which the first cut of this test did not
-	// have — both its files lived inside `sub`, so it could see the path FORMAT
-	// bug and not the SCOPE one. `git ls-files` lists only the subtree whatever
+	// FILES OUTSIDE THE SUBDIRECTORY TOO. A fixture whose files all live inside
+	// `sub` sees the path FORMAT bug and not the SCOPE one: `git ls-files` lists
+	// only the subtree whatever
 	// --full-name does to the spelling, so an untracked file elsewhere in the repo
 	// vanished from the set entirely, including from the arm that means "lint
 	// everything".

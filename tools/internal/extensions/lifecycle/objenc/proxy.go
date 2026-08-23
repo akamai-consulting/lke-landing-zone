@@ -209,9 +209,8 @@ func RunProxy(ctx context.Context, o ProxyOpts) error {
 // A RAW 32-byte file is still accepted, for an operator who does
 // `openssl rand 32 > key` by hand.
 //
-// THE TWO FORMS CAN BE CONFUSED, contrary to what an earlier version of this
-// comment claimed — a test caught it. A 32-character ASCII key drawn from the
-// base64 alphabet decodes cleanly as base64, to 24 bytes. So decoding succeeding is
+// THE TWO FORMS CAN BE CONFUSED. A 32-character ASCII key drawn from the base64
+// alphabet decodes cleanly as base64, to 24 bytes. So decoding succeeding is
 // NOT evidence the input was base64; only decoding to exactly 32 bytes is. A
 // decode that yields any other length therefore falls THROUGH to the raw check
 // rather than failing, and only an input that is neither is an error.

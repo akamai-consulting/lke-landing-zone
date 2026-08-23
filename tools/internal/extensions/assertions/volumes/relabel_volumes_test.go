@@ -188,11 +188,11 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 // reaper's real filter — so the same divergence cannot recur silently. The
 // namespaces are the ones actually observed leaking.
 func TestReaperRecognisesRelabelerOutput(t *testing.T) {
-	// Deployment names of DIFFERENT LENGTHS. The first version of this guard used
-	// only "e2e" — exactly three characters, the one length at which the
-	// relabeler's linode.RegionShort(env) prefix and the reaper's env prefix are the same
-	// string. On "primary" the relabeler writes "pri-harbor-…" while the reaper
-	// looked for "primary-…", so the sweep stayed blind on every real deployment
+	// Deployment names of DIFFERENT LENGTHS. "e2e" alone proves nothing — three
+	// characters is the one length at which the relabeler's linode.RegionShort(env)
+	// prefix and the reaper's env prefix are the same string. On "primary" the
+	// relabeler writes "pri-harbor-…" while the reaper looks for "primary-…", so the
+	// sweep stays blind on every real deployment
 	// and the guard that existed to catch it passed. A coupling test that fixes
 	// the one input where two rules agree is a test of the test.
 	for _, env := range []string{"e2e", "primary", "secondary", "standby", "lab"} {

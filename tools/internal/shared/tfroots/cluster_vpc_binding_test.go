@@ -48,8 +48,8 @@ const clusterModuleDir = "../../../../terraform-modules/llz-cluster"
 //
 // Bracket-MATCHED rather than regexed to the first `]`, because the list's own
 // first entry is `control_plane[0].acl` — a `\[([^\]]*)\]` reads that inner
-// bracket as the end of the list and reports the remaining entries missing. The
-// first cut of this test did exactly that and failed on a correct module.
+// bracket as the end of the list and reports the remaining entries missing — a
+// failure on a correct module.
 func ignoreChangesList(hcl string) string {
 	i := strings.Index(hcl, "ignore_changes")
 	if i < 0 {
