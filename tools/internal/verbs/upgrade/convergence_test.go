@@ -287,11 +287,17 @@ func TestUpgradeUnderTestArgvDrivesTheRealCommand(t *testing.T) {
 	if len(argv) < 2 || argv[0] != "/opt/llz" || argv[1] != "upgrade" {
 		t.Fatalf("UpgradeUnderTestArgv = %v; want the llz binary under test running `upgrade`", argv)
 	}
-	for _, want := range []string{"--ref", "abc123", "--no-render", "--no-doctor"} {
+	for _, want := range []string{"--ref", "abc123", "--no-doctor"} {
 		if !containsArgv(argv, want) {
 			t.Errorf("UpgradeUnderTestArgv is missing %q: %v", want, argv)
 		}
 	}
+	// --no-render USED TO BE REQUIRED HERE, and dropping it is the point rather
+	// than a relaxation. It was passed to keep the gate offline, but render reads a
+	// spec and writes files — it was never online — and while it was skipped the
+	// upgrade's Lever 2 (re-render every `?ref=` the new pin invalidates) was
+	// exercised by nothing. TestUpgradeUnderTestArgvRenders in repin_test.go now
+	// holds the inverse.
 	// --commit would leave the probe's upgrade in a commit and change what the
 	// conflict scan sees; the gate inspects the WORKING TREE.
 	if containsArgv(argv, "--commit") {
