@@ -215,8 +215,8 @@ func runCIReapVolumes(g cliopts.Opts, env, region, volumeIDs, tagMustInclude str
 		// the sweep see volumes the volume-labels reconciler has RENAMED. Left
 		// empty (as it was) the predicate matches only `pvc-*`, so every relabeled
 		// volume is invisible to the destroy-time sweep and leaks. Measured: 15
-		// volumes survived the destroy of lke637974, then squatted their labels so
-		// the NEXT cluster could not relabel 12 of its 17. `llz reap` already passed
+		// volumes survived a destroy, then squatted their labels so the NEXT cluster
+		// could not relabel 12 of its 17. `llz reap` already passed
 		// env here; this path never did.
 		return ReapVolumes(ctx, client, ReapOpts{Env: env, Region: region, VolumeIDs: volumeIDs, TagMustInclude: tagMustInclude}, del)
 	}, func() (int, error) {
@@ -398,10 +398,10 @@ func countVolumesPresent(ctx context.Context, client interface {
 //
 // Waiting alone is not enough, and that gap failed a destroy. Detachment is a
 // side effect of the node Linodes being reaped after the cluster DELETE, so when
-// that async reap stalls there is nothing left to wait FOR: on run 30643426633
-// the LKE API 500'd during `tofu plan -destroy`, force-delete removed the
-// cluster object, and 16 of 17 tracked Volumes then sat attached across all 59
-// polls of the full 600s window — flat, never draining — so the sweep could
+// that async reap stalls there is nothing left to wait FOR. Observed: the LKE API
+// 500'd during `tofu plan -destroy`, force-delete removed the cluster object, and
+// 16 of 17 tracked Volumes then sat attached across all 59 polls of the full 600s
+// window — flat, never draining — so the sweep could
 // delete only the one Volume that happened to already be detached and the
 // destroy failed with 16 orphans. An explicit detach does not depend on the node
 // reap making progress; it is also a no-op (400/404) on the Volumes that already

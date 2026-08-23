@@ -372,10 +372,10 @@ func healthExitCodeState(st *convergeState) healthResult {
 	//
 	// The downgrade is vetoed by a git-auth failure. Its premise — "not yet
 	// installed" — does not hold for a credential the remote has already rejected:
-	// no later helmfile phase mints one, so every extra poll is dead time. gsap-apl
-	// run 29709276389 burned its whole 1200s budget exactly this way, then reported
-	// "budget exhausted with the cluster still in-progress" for a cluster that was
-	// not progressing at all.
+	// no later helmfile phase mints one, so every extra poll is dead time. A converge
+	// run has burned its whole 1200s budget exactly this way, then reported "budget
+	// exhausted with the cluster still in-progress" for a cluster that was not
+	// progressing at all.
 	demotePhase1 := phase1 && !r.GitAuthFailure
 	code := health.PhaseAwareExitCode(r.ExitCode(), demotePhase1)
 	switch {

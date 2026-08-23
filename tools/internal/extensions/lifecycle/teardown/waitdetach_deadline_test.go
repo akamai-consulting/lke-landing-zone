@@ -91,9 +91,9 @@ func TestWaitVolumesDetachedVerdicts(t *testing.T) {
 		}
 	})
 
-	// The failure this closes: on run 30643426633 the LKE node reap stalled after
-	// a force-delete, so 16 tracked Volumes sat attached across all 59 polls of a
-	// 600s window and the destroy failed with 16 orphans. Nothing was ever going
+	// The failure this closes: the LKE node reap stalls after a force-delete, so
+	// tracked Volumes sit attached across every poll of the 600s window and the
+	// destroy fails with orphans. Nothing was ever going
 	// to detach them, because detachment was only ever a side effect of a reap
 	// that had stopped making progress. Bound the budget with the poll interval
 	// zeroed: a pass that merely watches never converges here.

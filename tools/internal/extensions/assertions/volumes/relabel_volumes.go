@@ -211,8 +211,8 @@ const labelTailKeep = 8
 //
 // Linode Volume labels are account-UNIQUE, so the first replica won and the other
 // two failed `PUT /v4/volumes/<id>` with 400 {"reason":"Must be unique"} — for the
-// entire life of the relabeler. Observed on lke637974: 17 of 17 renames rejected,
-// which is why every Volume kept its opaque pvc-<uuid> label.
+// entire life of the relabeler — observed live, 17 of 17 renames rejected, which
+// is why every Volume kept its opaque pvc-<uuid> label.
 //
 // Truncation is still lossy, so this is not a uniqueness GUARANTEE — two claims
 // agreeing on both the head and the last 8 characters would still collide. It

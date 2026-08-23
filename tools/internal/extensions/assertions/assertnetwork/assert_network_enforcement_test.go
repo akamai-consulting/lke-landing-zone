@@ -222,8 +222,8 @@ func TestResultFromExitWithoutALogIsUnchanged(t *testing.T) {
 
 // The probe's DNS allow must match CoreDNS on LKE-Enterprise, where it is
 // labelled k8s-app=coredns and there is no kube-dns Service at all. Selecting
-// only kube-dns matched nothing on lke638084, so DNS egress was denied and every
-// dial — including the positive control — failed to resolve.
+// only kube-dns matches nothing there, so DNS egress is denied and every dial —
+// including the positive control — fails to resolve.
 func TestProbePodManifestAllowsBothDNSLabels(t *testing.T) {
 	m := probePodManifest("ns", "img", "a:1", "d:2", "m:3", time.Second)
 	for _, want := range []string{"kube-dns", "coredns"} {

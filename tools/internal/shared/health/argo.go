@@ -198,8 +198,8 @@ func IsRepoServerCacheAuthError(specErr string) bool {
 // refusing Argo's credential — as opposed to a network flake, a manifest fault,
 // or the Redis cache split above.
 //
-// The distinction is the whole point. gsap-apl run 29709276389 spent its entire
-// 1200s convergence budget polling this:
+// The distinction is the whole point: a converge run has spent its entire 1200s
+// budget polling this —
 //
 //	gitops-global (Unknown/Healthy) — ComparisonError: failed to list refs:
 //	  authentication required: Unauthorized

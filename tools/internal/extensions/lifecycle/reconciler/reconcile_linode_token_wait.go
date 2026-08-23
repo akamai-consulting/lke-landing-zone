@@ -3,7 +3,7 @@ package reconciler
 // reconcile_linode_token_wait.go closes the first-boot gap between a
 // linode-dependent reconciler lane's TRIGGERS and its PRECONDITION.
 //
-// THE BUG (measured on lke637937, release-e2e run 30568560562):
+// THE BUG, measured on a release-e2e run:
 //
 //	18:26:09 .. 18:30:56  apl-core creates all 17 PVCs → PV watch fires → the
 //	                      volume-labels lane runs → requireLinodeToken finds no

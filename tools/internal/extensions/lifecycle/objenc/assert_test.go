@@ -631,7 +631,7 @@ func TestObjEncryptionSamplesEveryBucketAndAttributesFindings(t *testing.T) {
 
 // The Harbor push must run BEFORE the object sample. It writes the one post-cutover
 // object this gate can guarantee, so sampling first samples a bucket nothing has
-// written to yet — which is the ordering bug that failed e2e run 30844253067.
+// written to yet — the ordering bug that has failed an e2e.
 func TestHarborPushRunsBeforeTheObjectSample(t *testing.T) {
 	src, err := os.ReadFile("assert.go")
 	if err != nil {

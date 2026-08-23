@@ -53,7 +53,7 @@ var defaultLogNamespaces = []string{"llz-reconciler", "llz-openbao"}
 // Two different producers reach Loki, and they use different tenants. The OpenBao
 // sidecar pushes with promtail `tenant_id: platform`, which is what
 // assert-openbao-audit reads. apl-core's platform-logs-collector routes by
-// namespace instead (its `routing` connector, read off lke638084):
+// namespace instead (its `routing` connector, read off a live cluster):
 //
 //	namespace == "team-admin"     → X-Scope-OrgID: admin
 //	namespace == "team-platform"  → X-Scope-OrgID: platform

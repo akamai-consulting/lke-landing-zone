@@ -13,7 +13,7 @@
 # measured), so the Host the client signed must survive to the upstream untouched.
 # DNS is the only layer that redirects the traffic without altering what was signed.
 #
-# THIS IS NOT A COREFILE PATCH — verified against the live e2e cluster (lke638381).
+# THIS IS NOT A COREFILE PATCH — verified against a live e2e cluster.
 # The Corefile is a Flux-managed Helm resource (helm.toolkit.fluxcd.io/name:
 # workload, ConfigMap kube-system/workload-coredns), so editing it directly would be
 # reverted on the next reconcile. It ships CoreDNS's standard extension hooks:

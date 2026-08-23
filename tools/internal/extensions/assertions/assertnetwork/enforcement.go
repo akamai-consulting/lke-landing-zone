@@ -282,10 +282,10 @@ spec:
     # "to: ipBlock: 0.0.0.0/0" reads like "anywhere" and is not. Cilium turns an
     # ipBlock into a CIDR rule, and CIDR rules match entities OUTSIDE the cluster;
     # the kube-apiserver carries a cluster identity, so the rule never applied to
-    # it and the dial was blackholed. Two rounds on real clusters said the same
-    # thing — lke638103 and lke638247 both reported the control as blocked by
-    # TIMEOUT, a drop rather than a refusal — including one round where 6443 had
-    # been added alongside 443, which ruled the port out as the cause.
+    # it and the dial was blackholed. Two rounds on real clusters both reported
+    # the control as blocked by TIMEOUT, a drop rather than a refusal — including
+    # one round where 6443 had been added alongside 443, which ruled the port out
+    # as the cause.
     #
     # Both ports stay: on LKE-Enterprise the "kubernetes" Service DNATs 443 to 6443
     # and Cilium evaluates egress on the post-DNAT port. The OpenBao policy

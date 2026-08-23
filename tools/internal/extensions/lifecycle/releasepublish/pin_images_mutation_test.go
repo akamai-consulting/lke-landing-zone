@@ -8,7 +8,7 @@ import (
 
 // TestPinGHRetryBacksOff pins the retry CADENCE, not just the retry count. The
 // retry exists to ride out a live GitHub API incident (a 503 on the first
-// Instantiate query killed release-e2e run 29540787054 at minute one) — three
+// Instantiate query has killed a release-e2e dispatch at minute one) — three
 // attempts fired back-to-back inside a few milliseconds retry straight through
 // the same outage and buy nothing, so the growing gap between them is the part
 // that does the work.

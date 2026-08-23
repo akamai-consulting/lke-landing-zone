@@ -222,9 +222,9 @@ func TestVolumeVerdict_HealableSplit(t *testing.T) {
 // in isolation.
 //
 // reap selects Volumes by label prefix. The volume-labels reconciler renames
-// Volumes. When the rename produced a shape reap's prefix list did not accept,
-// destroying lke637974 leaked all 15 of its renamed Volumes, which then squatted
-// their account-unique labels and made relabeling impossible on the next cluster.
+// Volumes. When the rename produces a shape reap's prefix list does not accept,
+// destroying a cluster leaks all its renamed Volumes, which then squat their
+// account-unique labels and make relabeling impossible on the next cluster.
 func TestJudgeVolume_DryRunReap(t *testing.T) {
 	pvc := encPV("harbor", "data-harbor-redis-0", "17094415")
 

@@ -813,9 +813,9 @@ func TestLongPoleCandidatesAndReport(t *testing.T) {
 }
 
 // A git-auth ComparisonError must hard-fail AND raise GitAuthFailure, which is
-// what vetoes the phase1 downgrade. Without the veto this exact Application —
-// gsap-apl run 29709276389's gitops-global — read as "in-progress" for 1200s and
-// then reported a budget exhaustion for a cluster that was never progressing.
+// what vetoes the phase1 downgrade. Without the veto this Application reads as
+// "in-progress" for the whole 1200s budget and then reports a budget exhaustion
+// for a cluster that was never progressing.
 func TestCheckArgoAppsGitAuthFailure(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
 		if a != "-n argocd get applications.argoproj.io -o json" {

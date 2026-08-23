@@ -3,7 +3,7 @@ package templatecommit
 // cobra_assert_release_image.go implements `llz ci assert-release-image` — the
 // preflight that refuses to publish a release whose image was never built.
 //
-// THE INCIDENT (v0.0.44, run 31550387167). The release workflow retags the
+// THE INCIDENT (v0.0.44). The release workflow retags the
 // commit's `sha-<sha>` image as `vX.Y.Z`. For v0.0.44 that image did not exist, so
 // `imagetools create` failed:
 //

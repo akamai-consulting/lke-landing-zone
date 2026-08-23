@@ -9,10 +9,9 @@ package assertobs
 // THE TENANT HEADER IS ALWAYS SENT, AND IT IS LOAD-BEARING — not, as this comment
 // used to claim, inert.
 //
-// The old text said apl-core ships Loki with `auth_enabled` unset (single-tenant),
-// so the header was ignored and any value would do. That is wrong. Read off
-// lke638084, monitoring/loki has `auth_enabled: true`, and a read with no header
-// answers "no org id" rather than serving anything.
+// apl-core does NOT ship Loki single-tenant: read off a live cluster,
+// monitoring/loki has `auth_enabled: true`, so a read with no header answers
+// "no org id" rather than serving anything, and the value is not ignorable.
 //
 // So the tenant PARTITIONS reads, and each caller must send the one its own writer
 // used. There is more than one writer: the OpenBao promtail sidecar pushes

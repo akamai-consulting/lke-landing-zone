@@ -272,8 +272,8 @@ func TestRegionShortIsTheOneDerivation(t *testing.T) {
 // Linode Volume labels are account-UNIQUE. The old `s[:32]` truncation cut from the
 // right, which is exactly where a StatefulSet's ordinal lives, so all three OpenBao
 // replicas asked for one label. The first won; the rest got
-// 400 {"reason":"Must be unique"}. Measured on lke637974: 17 of 17 renames rejected,
-// so every Volume kept its opaque pvc-<uuid> name.
+// 400 {"reason":"Must be unique"} — measured live, 17 of 17 renames rejected, so
+// every Volume kept its opaque pvc-<uuid> name.
 func TestDesiredVolumeLabel_StatefulSetReplicasStayDistinct(t *testing.T) {
 	seen := map[string]string{}
 	for _, pvc := range []string{

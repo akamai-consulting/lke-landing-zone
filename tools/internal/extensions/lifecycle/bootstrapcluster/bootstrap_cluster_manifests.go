@@ -196,7 +196,7 @@ func platformBootstrapApplicationManifest(o bootstrapClusterOpts) map[string]any
 			// this App's own tree includes the verify-llz-image-signature ClusterPolicy,
 			// whose Kyverno-defaulted spec fields made it the ONE resource keeping
 			// platform-bootstrap permanently OutOfSync — with selfHeal re-applying it in
-			// a loop (autoHealAttemptsCount 7 on lke638381). See #394.
+			// a loop (observed at autoHealAttemptsCount 7). See #394.
 			"annotations": map[string]any{
 				"argocd.argoproj.io/compare-options": clusterspec.CompareOptions,
 			},

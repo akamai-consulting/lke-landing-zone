@@ -616,8 +616,8 @@ func TestManagedDomainFromIssuer(t *testing.T) {
 	}
 }
 
-// TestKeycloakAuthConfigDoesNotPinACustomCA pins the fix for the team-write failure
-// in e2e run 30510747640. jwks_ca_pem REPLACES the system trust store, so pinning
+// TestKeycloakAuthConfigDoesNotPinACustomCA pins the fix for a team-login failure
+// seen on a managed e2e. jwks_ca_pem REPLACES the system trust store, so pinning
 // apl-core's custom-ca made the JWKS fetch fail with
 // "x509: certificate signed by unknown authority" — on managed clusters Linode
 // issues the keycloak.<domain> wildcard from a PUBLIC CA, which custom-ca is not in.
