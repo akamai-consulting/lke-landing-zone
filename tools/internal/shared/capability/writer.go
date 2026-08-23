@@ -95,18 +95,25 @@ type Writer interface {
 	Delete(ns, kind string, target ...string) ([]byte, error)
 	// PatchMerge applies a JSON MERGE patch (`--type merge`), not a strategic one.
 	//
-	// THE DISTINCTION IS NOT COSMETIC and it has already blocked one conversion.
-	// identity-plane patches a StatefulSet's `hostAliases` with `--type=strategic`,
-	// where the API server merges LIST ENTRIES by key; a JSON merge patch REPLACES
-	// the whole list. Routing that call through here would have looked like a
-	// refactor and silently changed what the patch does to a list, which is the
-	// worst shape a "mechanical" conversion can take.
+	// THE DISTINCTION IS NOT COSMETIC, and the example this comment used to cite
+	// has since turned around, which makes the point better than the original did.
+	// identity-plane patched a StatefulSet's `hostAliases` with `--type=strategic`
+	// — where the API server merges LIST ENTRIES by key — and that was recorded
+	// here as a reason the call could not be squeezed through this operation,
+	// because a JSON merge patch REPLACES the whole list.
 	//
-	// So a caller needing strategic merge is NOT a caller that should be squeezed
-	// through this operation. It stays on the raw seam and stays counted by the
-	// bypass ratchet, until someone adds PatchStrategic with a test that pins the
-	// list semantics — one case is not yet enough to know whether the right answer
-	// is a second operation or a patch-type argument on this one.
+	// It turned out the strategic semantics were the BUG. HostAliases carries
+	// `patchStrategy:"merge" patchMergeKey:"ip"`, so a changed gateway ClusterIP
+	// was a new key: the entry was APPENDED and the stale one kept, the pod got two
+	// /etc/hosts lines for one hostname and resolved the dead one, and the branch
+	// that patch exists for could never converge. That call is `--type=merge` now
+	// and would route through here cleanly.
+	//
+	// The rule the example was illustrating still stands: a caller that genuinely
+	// needs strategic merge is not a caller to convert mechanically, and would need
+	// a PatchStrategic with a test pinning the list semantics. What has changed is
+	// that there is currently no such caller — so the next person to look does not
+	// have to work out whether the one cited case is still real.
 	PatchMerge(ns, kind, name, patchJSON string) ([]byte, error)
 	// RolloutRestart rolls a workload (target is e.g. "deploy/argocd-redis").
 	RolloutRestart(ns, target string) ([]byte, error)

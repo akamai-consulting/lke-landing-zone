@@ -270,15 +270,41 @@ func registerRunnerACLIP(ip string, reassert reassertACL) error {
 			return nil
 		}
 		// The ConfigMap may not exist yet — create it with just this lease.
+		//
+		// `create`, NOT `apply`, AND THE DIFFERENCE EVICTS A RUNNER. This manifest
+		// carries ONE key: the lease being taken. `kubectl apply` is an upsert whose
+		// three-way merge computes DELETIONS from the live object's
+		// last-applied-configuration — so when two runners both see NotFound and both
+		// apply, the second one's apply removes the first one's lease key. The
+		// controller reconciles, evicts that runner's IP from the control-plane ACL,
+		// and its kubectl calls start failing mid-job for no reason it can see.
+		//
+		// `create` fails with AlreadyExists on that race instead, which is the answer
+		// the isAlreadyExists branch below was written for — and which it could never
+		// receive, because apply does not return AlreadyExists. That branch was dead
+		// code guarding against the exact race the call it guarded was causing.
 		if isNotFound(out) {
 			manifest := runnerACLConfigMapManifest(map[string]string{runnerACLDataKey(ip): string(val)})
-			if cout, cerr := runnerACLKubectlFn(manifest, "apply", "-f", "-"); cerr == nil {
+			if cout, cerr := runnerACLKubectlFn(manifest, "create", "-f", "-"); cerr == nil {
 				fmt.Printf("runner-acl: created %s/%s with %s lease.\n", runnerACLConfigMapNS, runnerACLConfigMapName, ip)
 				return nil
 			} else if !isAlreadyExists(cout) {
 				lastOut, lastErr = cout, cerr
 			} else {
-				lastOut, lastErr = out, perr // raced a creator; retry the patch
+				// RACED A CREATOR — RETRY THE PATCH NOW, not on the next lap.
+				// Falling through spent the attempt on a ConfigMap that demonstrably
+				// EXISTS, and on the LAST attempt it exited with no lease at all,
+				// where the old `apply` would at least have written one. The
+				// backstop this change added must not cost the thing it protects.
+				fmt.Fprintf(os.Stderr, "runner-acl: another runner created %s/%s first (attempt %d/%d) — patching the lease onto it\n",
+					runnerACLConfigMapNS, runnerACLConfigMapName, attempt, runnerACLPatchN)
+				if pout, perr2 := runnerACLKubectlFn("", "patch", "configmap", runnerACLConfigMapName,
+					"-n", runnerACLConfigMapNS, "--type", "merge", "-p", string(body)); perr2 == nil {
+					fmt.Printf("runner-acl: leased %s in %s/%s for %s.\n", ip, runnerACLConfigMapNS, runnerACLConfigMapName, runnerACLLeaseTTL)
+					return nil
+				} else {
+					lastOut, lastErr = pout, perr2
+				}
 			}
 		} else {
 			lastOut, lastErr = out, perr

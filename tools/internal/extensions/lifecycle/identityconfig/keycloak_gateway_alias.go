@@ -266,8 +266,22 @@ func statefulSetHostAliasIP(ns, name, host string) (ip string, ok bool) {
 func patchWithWebhookRetry(patch string) error {
 	deadline := keycloakPinNow().Add(keycloakPinWebhookBudget)
 	for attempt := 1; ; attempt++ {
+		// --type=merge, NOT strategic. PodSpec.HostAliases is declared
+		// `patchStrategy:"merge" patchMergeKey:"ip"`, so a STRATEGIC patch merges the
+		// list BY IP: a new ClusterIP is a new key, so the entry is APPENDED and the
+		// old one is kept. The pod then gets two /etc/hosts lines for the same
+		// hostname and resolves the FIRST — the stale, dead IP. The JWKS fetch breaks,
+		// and the "gateway Service was recreated" branch this patch exists to handle
+		// can never converge: every subsequent run reads the stale first entry, sees
+		// it differ, and appends another.
+		//
+		// A JSON merge patch replaces the array wholesale, which is the semantic
+		// intended here. LLZ owns this field outright — platform-apl's openbao
+		// Application lists /spec/template/spec/hostAliases under ignoreDifferences
+		// precisely because this command writes it — so replacing it takes nothing
+		// from anyone.
 		out, err := execOutput("kubectl", "-n", baoread.Namespace, "patch", "statefulset", openbaoStatefulSet,
-			"--type=strategic", "-p", patch)
+			"--type=merge", "-p", patch)
 		if err == nil {
 			return nil
 		}

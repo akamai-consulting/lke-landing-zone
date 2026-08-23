@@ -375,8 +375,19 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 		// project_path, not repository.
 		f, err := forgeFromEnv()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::forge resolution failed (%v) — skipping OIDC (jwt) auth setup\n", err)
-			return steps
+			// SKIP THIS BLOCK, DO NOT RETURN. `return steps` here also skipped the
+			// keycloakTeamSteps append below — so `LLZ_FORGE=ghes` without
+			// LLZ_FORGE_HOST silently omitted the entire `keycloak` auth mount and
+			// every <name>-writer policy and role, permanently breaking
+			// `llz openbao login --team` for every operator, under a warning that
+			// mentions only GitHub-OIDC. The two are unrelated: one is CI identity,
+			// the other is human identity, and a failure to resolve the forge says
+			// nothing about the second.
+			fmt.Fprintf(os.Stderr, "::warning::forge resolution failed (%v) — skipping OIDC (jwt) auth setup. "+
+				"Keycloak team auth is unaffected and still configured; `llz ci rotate-incluster-pat` and any "+
+				"GitHub workflow authenticating to OpenBao by OIDC will not work until LLZ_FORGE/LLZ_FORGE_HOST "+
+				"resolve.\n", err)
+			return appendKeycloakTeamSteps(steps, keycloakIssuer, teams)
 		}
 		discoveryURL, boundIssuer := forge.OpenBaoJWTAuthConfig(f)
 		// SECURITY — bound_claims pins each role to THIS instance repo and
@@ -413,8 +424,15 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 	// apl-core realm role `team-<name>`. Appended only when a realm issuer is known
 	// (derived from the env's domainSuffix) AND teams are declared; otherwise
 	// omitted, so a domain-less or team-less instance is unchanged.
-	steps = append(steps, keycloakTeamSteps(keycloakIssuer, teams)...)
-	return steps
+	return appendKeycloakTeamSteps(steps, keycloakIssuer, teams)
+}
+
+// appendKeycloakTeamSteps exists so the keycloak team auth is appended on EVERY
+// exit from the function above, not only the one that falls off the end. It was
+// reachable from one path and skipped by the other, which is how a forge
+// resolution failure took human team-login down with CI OIDC.
+func appendKeycloakTeamSteps(steps []baoConfigStep, issuer string, teams []clusterspec.Team) []baoConfigStep {
+	return append(steps, keycloakTeamSteps(issuer, teams)...)
 }
 
 // keycloakRoleBody is the JSON body for a `keycloak` jwt-auth role. bound_claims
