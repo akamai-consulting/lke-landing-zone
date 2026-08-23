@@ -32,6 +32,15 @@ var (
 	// to prevent, and an inert default reintroduces it one layer up.
 	KubectlApply = func(manifest string) error { return fmt.Errorf("baoseed: KubectlApply not installed") }
 
+	// KubectlCreate writes a manifest that must NOT replace an existing object,
+	// returning kubectl's combined output so the caller can recognise AlreadyExists.
+	// The static seal key is the reason it exists: apply is an upsert, so two seed
+	// runs that both find the Secret absent both write, and the second destroys the
+	// key that decrypts the first one's seal.
+	KubectlCreate = func(manifest string) (string, error) {
+		return "", fmt.Errorf("baoseed: KubectlCreate not installed")
+	}
+
 	// SetGitHubSecret writes a secret, scoped to an environment when env != "" —
 	// where the seal key and the recovery material are escrowed.
 	SetGitHubSecret = func(name, env, value string) error {
@@ -40,8 +49,8 @@ var (
 )
 
 // Install wires the capabilities main owns. Call once, before any seed runs.
-func Install(apply func(string) error, setSecret func(name, env, value string) error) {
-	KubectlApply, SetGitHubSecret = apply, setSecret
+func Install(apply func(string) error, create func(string) (string, error), setSecret func(name, env, value string) error) {
+	KubectlApply, KubectlCreate, SetGitHubSecret = apply, create, setSecret
 }
 
 // ── localised pure helpers: copies, not seams ──────────────────────────────

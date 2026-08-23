@@ -19,6 +19,7 @@ func Init() {
 	// seam, and capturing its value at Init would freeze whatever it pointed at.
 	Install(
 		func(manifest string) error { return kube.Apply(manifest) },
+		func(manifest string) (string, error) { return kube.Create(manifest) },
 		func(name, env, value string) error { return ghsecret.SetFn(name, env, value) },
 	)
 }

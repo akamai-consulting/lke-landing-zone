@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
@@ -44,7 +45,7 @@ func runCILoginCapturingStdout(t *testing.T, token string) string {
 	stubInClusterBaoClient(t, srv.Client())
 	var err error
 	out := captureStdout(t, func() {
-		err = RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN")
+		err = RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN", "")
 	})
 	if err != nil {
 		t.Fatalf("kubernetes login: %v", err)
@@ -167,8 +168,15 @@ func TestCILoginStillWritesGithubEnvWhenItIsSet(t *testing.T) {
 	t.Setenv("GITHUB_ENV", env)
 	t.Setenv("GITHUB_ACTIONS", "true")
 	out := runCILoginCapturingStdout(t, "s.the-minted-token")
-	if strings.Contains(out, "s.the-minted-token") && !strings.Contains(out, "::add-mask::") {
-		t.Errorf("inside Actions the token belongs in $GITHUB_ENV, not bare on stdout: %q", out)
+	// THE `&& !contains(mask)` FORM WAS VACUOUS: the ::add-mask:: line CONTAINS the
+	// token, so the conjunction could never be true and the assertion could never
+	// fail. Mutation-confirmed by the review: adding fmt.Print(token) to the
+	// $GITHUB_ENV branch left both tests green. Assert on what must NOT be there
+	// instead — a bare token line, i.e. the token with no `::add-mask::` prefix.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "s.the-minted-token") && !strings.HasPrefix(line, "::add-mask::") {
+			t.Errorf("inside Actions the token belongs in $GITHUB_ENV, not bare on stdout — found %q", line)
+		}
 	}
 	b, err := os.ReadFile(env)
 	if err != nil {
@@ -202,6 +210,8 @@ func TestGenerateRootStopsWhenTheQuorumCompletes(t *testing.T) {
 		switch {
 		case strings.Contains(joined, "-init"):
 			return `{"nonce":"N","otp":"OTP"}`, "", nil
+		case strings.Contains(joined, "token lookup"):
+			return `{"data":{"policies":["root"]}}`, "", nil
 		case strings.Contains(joined, "-decode="):
 			return `{"token":"s.new-root"}`, "", nil
 		case strings.Contains(joined, "-cancel"):
@@ -238,27 +248,47 @@ func TestGenerateRootStopsWhenTheQuorumCompletes(t *testing.T) {
 // mismatch. Calling ExecPod also made the function unstubabble, which is why it
 // had no test at all: this one exists because the fix made it possible.
 func TestRegenRootGoesThroughTheRetryingExec(t *testing.T) {
-	sleeps := withBaoSleep(t)
-	var raw int
-	withBaoExecRaw(t, func(_, _, _ string, _ ...string) (string, string, error) {
-		raw++
-		if raw == 1 {
-			// A transient the wrapper is meant to absorb.
-			return "", "error dialing backend: No agent available", errors.New("exit 1")
+	sleeps := withBaoSleepSeam(t)
+	quorum := 0
+	withBaoExecRaw(t, func(_, _, _ string, args ...string) (string, string, error) {
+		// ONE transient, ON THE FIRST QUORUM SUBMISSION rather than on the first
+		// call of any kind. The first cut of this test made the SEALED CHECK
+		// transient, so the flow stopped there and never reached the loop the fix is
+		// about — reverting the quorum submissions to ExecPod left it green.
+		// Counting quorum calls specifically (rather than every call, mod 2) makes
+		// which call fails independent of how many the rest of the flow makes.
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "generate-root -nonce=") {
+			quorum++
+			if quorum == 1 {
+				return "", "error dialing backend: No agent available", errors.New("exit 1")
+			}
 		}
-		return `{"sealed":true,"t":3}`, "", nil
+		switch {
+		case strings.Contains(joined, "status"):
+			return `{"sealed":false,"t":1}`, "", nil
+		case strings.Contains(joined, "-init"):
+			return `{"nonce":"N","otp":"OTP"}`, "", nil
+		case strings.Contains(joined, "-decode="):
+			return `{"token":"s.new-root"}`, "", nil
+		case strings.Contains(joined, "token lookup"):
+			return `{"data":{"policies":["root"]}}`, "", nil
+		case strings.Contains(joined, "generate-root -nonce="):
+			return `{"complete":true,"progress":1,"required":1,"encoded_token":"ENC"}`, "", nil
+		}
+		return "", "", nil
 	})
+	withRegenRootKeyReader(t, "unseal-key-1")
+	withKubectlProbeStub(t)
+	withGHSetSecret(t, nil)
+
 	err := RunRegenRoot(false, "primary", RegenRootOpts{})
-	if raw < 2 {
-		t.Fatalf("the first exec was not retried (%d raw call(s)) — RunRegenRoot is not going through "+
-			"the resilient wrapper, so a blip mid-quorum still aborts the flow", raw)
+	if err != nil {
+		t.Fatalf("a transient mid-quorum must be ridden out, not aborted: %v", err)
 	}
 	if *sleeps == 0 {
-		t.Error("a retry must back off; zero sleeps means the wrapper was bypassed")
-	}
-	// Sealed → it stops there, which is the point: the retry happened first.
-	if err == nil || !strings.Contains(err.Error(), "sealed") {
-		t.Errorf("expected the sealed check to be reached after the retry, got %v", err)
+		t.Error("no backoff happened — the quorum submission is not going through the resilient wrapper, " +
+			"so a konnectivity blip mid-quorum still aborts and reports itself as a key mismatch")
 	}
 }
 
@@ -274,5 +304,148 @@ func TestOpenBaoGetWritesOnlyTheValue(t *testing.T) {
 	out := runOpenBaoGetCapturingStdout(t, "the-secret-value")
 	if out != "the-secret-value" {
 		t.Fatalf("stdout must carry the value and nothing else, got %q", out)
+	}
+}
+
+// withRegenRootKeyReader feeds the interactive unseal-key prompt.
+func withRegenRootKeyReader(t *testing.T, keys ...string) {
+	t.Helper()
+	prev := readSecretLine
+	i := 0
+	readSecretLine = func() (string, error) {
+		if i < len(keys) {
+			k := keys[i]
+			i++
+			return k, nil
+		}
+		return keys[len(keys)-1], nil
+	}
+	t.Cleanup(func() { readSecretLine = prev })
+}
+
+// withKubectlProbeStub stops the `kubectl config current-context` call from
+// shelling out to the host's real kubectl — which the first cut of
+// TestRegenRootGoesThroughTheRetryingExec did, on whatever cluster the machine
+// running the tests happened to be pointed at.
+func withKubectlProbeStub(t *testing.T) {
+	t.Helper()
+	prev := kubectlprobe.Exec
+	kubectlprobe.Exec = func(string, ...string) ([]byte, error) { return []byte("test-context\n"), nil }
+	t.Cleanup(func() { kubectlprobe.Exec = prev })
+}
+
+// withBaoSleepSeam counts the resilient wrapper's backoffs.
+func withBaoSleepSeam(t *testing.T) *int {
+	t.Helper()
+	prev := baoread.Sleep
+	n := new(int)
+	baoread.Sleep = func(time.Duration) { *n++ }
+	t.Cleanup(func() { baoread.Sleep = prev })
+	return n
+}
+
+// ── from the code review of this PR ─────────────────────────────────────────
+
+// TestRegenRootDryRunTouchesNothing. findLeaderPod probes three pods, and now
+// that this file goes through the RESILIENT exec each probe carries the 24-try
+// transient budget — so under a konnectivity outage a --dry-run sat silent for
+// ~16 minutes before printing its first line. A dry run must not touch the
+// cluster at all, and it now returns before anything does.
+func TestRegenRootDryRunTouchesNothing(t *testing.T) {
+	var execs int
+	withBaoExecRaw(t, func(string, string, string, ...string) (string, string, error) {
+		execs++
+		return "", "", errors.New("a dry run must not reach the cluster")
+	})
+	withKubectlProbeStub(t)
+	if err := RunRegenRoot(true, "primary", RegenRootOpts{}); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if execs != 0 {
+		t.Errorf("a --dry-run made %d exec(s) — findLeaderPod alone is three pods x the 24-try transient "+
+			"budget, so an unreachable cluster makes this sit silent for ~16 minutes", execs)
+	}
+}
+
+// TestRegenRootReadsASealedPod. `bao status` exits 2 when sealed and still prints
+// valid JSON, so bailing on the exec error made the `if sealed` branch DEAD in
+// production: an operator with a sealed cluster was told "cannot reach OpenBao …
+// via the current kubectl context" and sent to check a kubeconfig that was fine.
+// The same defect this PR fixes in healthsla, in the file it was already editing.
+func TestRegenRootReadsASealedPod(t *testing.T) {
+	withBaoExecRaw(t, func(_, _, _ string, args ...string) (string, string, error) {
+		if strings.Contains(strings.Join(args, " "), "status") {
+			return `{"sealed":true,"t":3}`, "", errors.New("command terminated with exit code 2")
+		}
+		return "", "", nil
+	})
+	withKubectlProbeStub(t)
+	err := RunRegenRoot(false, "primary", RegenRootOpts{})
+	if err == nil || !strings.Contains(err.Error(), "sealed") {
+		t.Fatalf("a sealed pod must be reported as SEALED, not as unreachable; got %v", err)
+	}
+}
+
+// TestSeedSealKeyLeavesAConcurrentCreatorsKeyAlone. ExistsOK closes the case
+// where the probe could not SEE the Secret; it cannot close the case where two
+// seed runs both looked before either wrote. `apply` is an upsert, so both would
+// write and the second would destroy the key that decrypts the first one's seal —
+// with the escrowed copy already pointing at the loser. `create` fails
+// AlreadyExists instead, which is an answer this path can act on.
+func TestSeedSealKeyLeavesAConcurrentCreatorsKeyAlone(t *testing.T) {
+	withSeedNamespace(t, true)
+	t.Setenv("OPENBAO_SEAL_KEY", "")
+	t.Setenv("GH_TOKEN", "ghp_write")
+	withSeedRand(t, 0x9)
+	withExecOutput(t, func(string, ...string) ([]byte, error) {
+		return nil, errors.New("Error from server (NotFound)")
+	})
+	creates := withSeedKubectlCreateConflict(t)
+	withGHSetSecretErr(t, nil)
+
+	if err := RunSeedSealKey(false, "primary"); err != nil {
+		t.Fatalf("losing the create race is not an error — the live key is intact: %v", err)
+	}
+	if *creates == 0 {
+		t.Error("the seal key must be written with create, not apply: apply is an upsert and would have " +
+			"overwritten the winner's key")
+	}
+}
+
+// TestCILoginWritesTheTokenToAFileWhenAsked. stdout is a LOG for the caller this
+// fallback was added for: `llz ci openbao-login` as a container ENTRYPOINT has
+// its stdout collected by the kubelet and shipped to Loki, so writing a live
+// OpenBao credential there is worse than the silence the fallback replaced.
+func TestCILoginWritesTheTokenToAFileWhenAsked(t *testing.T) {
+	t.Setenv("GITHUB_ENV", "")
+	t.Setenv("GITHUB_ACTIONS", "")
+	path := filepath.Join(t.TempDir(), "token")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"auth":{"client_token":"s.file-token"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	saFile := filepath.Join(t.TempDir(), "sa")
+	if err := os.WriteFile(saFile, []byte("jwt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubInClusterBaoClient(t, srv.Client())
+
+	out := captureStdout(t, func() {
+		if err := RunCILogin(false, "kubernetes", "reconciler", srv.URL, "kubernetes", saFile, "OPENBAO_TOKEN", path); err != nil {
+			t.Fatalf("login: %v", err)
+		}
+	})
+	if strings.Contains(out, "s.file-token") {
+		t.Error("with --output-file the token must NOT also go to stdout — that is the pod log")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "s.file-token" {
+		t.Fatalf("token file = (%q, %v), want the token", b, err)
+	}
+	st, err := os.Stat(path)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Errorf("token file mode = %v, want 0600", st.Mode().Perm())
 	}
 }

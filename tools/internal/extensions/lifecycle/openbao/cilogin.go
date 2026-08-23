@@ -51,7 +51,7 @@ import (
 // OpenBao at — the same endpoint the reconciler and CronJobs use.
 const InClusterAddr = "https://platform-llz-svc.cluster.local:8200"
 
-func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar string) error {
+func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar, outputFile string) error {
 	if addr == "" {
 		if addr = os.Getenv("OPENBAO_ADDR"); addr == "" {
 			addr = InClusterAddr
@@ -112,9 +112,26 @@ func RunCILogin(dryRun bool, method, role, addr, mount, saTokenFile, exportVar s
 	// STDOUT, which would land inside the capture. teamlogin.go records the same
 	// trade for the same reason. Masking still happens on the $GITHUB_ENV path,
 	// where stdout carries nothing.
+	// --output-file FIRST, because stdout is a LOG for the caller this fallback was
+	// added for. `llz ci openbao-login` as a container ENTRYPOINT has its stdout
+	// collected by the kubelet and shipped to Loki — so writing the token there
+	// puts a live OpenBao credential in log storage, which is worse than the
+	// silence the fallback replaced. A capture (`T=$(…)`) keeps it out of the log;
+	// an entrypoint cannot. Only the caller knows which it is, so this offers the
+	// channel that is safe in both and defaults to the one that works today.
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, []byte(token), 0o600); err != nil {
+			return fmt.Errorf("write the token to %s: %w", outputFile, err)
+		}
+		fmt.Fprintf(os.Stderr, "openbao-login: method=%s role=%s → token written to %s (0600)\n",
+			method, role, outputFile)
+		return nil
+	}
 	if os.Getenv("GITHUB_ENV") == "" {
 		fmt.Fprintf(os.Stderr, "openbao-login: method=%s role=%s → token on stdout ($GITHUB_ENV is unset). "+
-			"Capture it, e.g. %s=$(llz ci openbao-login …)\n", method, role, exportVar)
+			"Capture it, e.g. %s=$(llz ci openbao-login …). If this command is a container ENTRYPOINT "+
+			"rather than a capture, pass --output-file instead: stdout is collected into the pod log.\n",
+			method, role, exportVar)
 		fmt.Print(token) // stdout only, unmasked, so a capture gets the token and nothing else
 		return nil
 	}
