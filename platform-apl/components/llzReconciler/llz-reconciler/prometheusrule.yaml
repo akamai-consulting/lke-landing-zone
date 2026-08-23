@@ -359,3 +359,43 @@ spec:
             summary: llz reconciler has no leader
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: A driving reconciler is enabled but no replica holds the lease; nothing is being driven.
+        - alert: LLZAplOverlayObjSourceEmpty
+          # The obj.yaml overlay source EXISTS on the source branch but merges to
+          # an empty document, so the reconciler refuses to write it — writing it
+          # would blank apl-core's AplObjectStorage CR and take loki + harbor
+          # object storage with it. Refusing is right; staying quiet about it is
+          # not, because the committed overlay is wrong until someone re-renders.
+          #
+          # `== 1` rather than `> 0` and no absent() wrapper: the reconciler
+          # publishes this gauge on EVERY pass, 0 included, so an absent series
+          # means the lane is not running — which LLZReconcilerNoLeader and the
+          # target-down rules already own.
+          expr: max by (branch) (llz_apl_overlay_obj_source_empty{namespace="llz-reconciler"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the apl-overlay obj source for {{ $labels.branch }} is empty'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/apl-values-propagation.md"
+            description: 'apl-values/<env>/apl-overlay/obj.yaml merges to an empty document, so the reconciler is refusing to write it onto {{ $labels.branch }} rather than blanking apl-core AplObjectStorage CR. Object storage settings are frozen at whatever apl-core last had. Re-run `llz render` and commit the result.'
+        - alert: LLZAplOverlayNoSource
+          # A pass that finds NO overlay source is silent by construction: no
+          # error, no files, and llz_apl_overlay_synced is never published because
+          # it has no 0 arm. That is correct for an instance with nothing to
+          # overlay and indistinguishable from a misspelled env or source branch,
+          # or a token GitHub 404s on a private repo. This is the series that
+          # tells them apart.
+          #
+          # Deliberately long: an instance genuinely without an overlay is a real
+          # state, so this fires on a lane that has been reading an empty tree for
+          # an hour rather than on the first pass after a bootstrap.
+          expr: max by (branch, env) (llz_apl_overlay_source_present{namespace="llz-reconciler"}) == 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the apl-overlay lane finds no source for {{ $labels.env }} on {{ $labels.branch }}'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/apl-values-propagation.md"
+            description: 'The reconciler has found no apl-overlay source on {{ $labels.branch }} for an hour, so it is writing nothing and reporting no error. Either this instance has no overlay to apply, or the lane is reading the wrong branch/env — check the reconciler Deployment env against apl-values/{{ $labels.env }}/apl-overlay/ on {{ $labels.branch }}.'
