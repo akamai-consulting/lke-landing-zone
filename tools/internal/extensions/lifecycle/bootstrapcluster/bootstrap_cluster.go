@@ -425,10 +425,28 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 func ResolveKubeconfig(path string) (string, func(), error) {
 	noop := func() {}
 	// 1. Explicit --kubeconfig (non-empty file) → override the child env with it.
+	//
+	// AN EXPLICIT PATH THAT CANNOT BE USED IS AN ERROR, NOT A FALLBACK. This used
+	// to fall through silently to KUBECONFIG_RAW and then to the ambient
+	// ~/.kube/config, so an operator who named the wrong file — or a workflow whose
+	// fetch step produced a zero-byte one — ran the whole bootstrap against
+	// WHATEVER CLUSTER THE MACHINE WAS ALREADY POINTED AT, and it reported success.
+	// This command deletes and recreates StorageClasses; landing that on a
+	// different cluster is not a case worth being lenient about. Naming a
+	// kubeconfig is an instruction, so honour it or say why not.
 	if path != "" {
-		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
-			return path, noop, nil
+		st, err := os.Stat(path)
+		switch {
+		case err != nil:
+			return "", noop, fmt.Errorf("--kubeconfig %s: %w (refusing to fall back to $KUBECONFIG_RAW or the "+
+				"ambient ~/.kube/config — this command deletes and recreates StorageClasses, and doing that "+
+				"against a cluster you did not name is worse than stopping)", path, err)
+		case st.Size() == 0:
+			return "", noop, fmt.Errorf("--kubeconfig %s is empty (0 bytes) — refusing to fall back to "+
+				"$KUBECONFIG_RAW or the ambient ~/.kube/config. A zero-byte file is usually a fetch step "+
+				"that failed without failing the job", path)
 		}
+		return path, noop, nil
 	}
 	// 2. KUBECONFIG_RAW → spill to a 0600 tempfile → override.
 	if raw := os.Getenv("KUBECONFIG_RAW"); raw != "" {
@@ -873,7 +891,20 @@ func readAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
 		out, ok := d.kubectl("-n", aplGitSecretNS, "get", "secret", aplGitSecretName,
 			"-o", "jsonpath={.data."+key+"}")
 		if !ok {
-			return "", fmt.Errorf("read %s/%s: is apl-core installed? %s", aplGitSecretNS, aplGitSecretName, strings.TrimSpace(out))
+			// WRAPPED IN errAplNotBYOGitReady, WHICH IS THE WHOLE POINT OF THE WAIT.
+			// waitAplGitConfig returns immediately on any error that is NOT this one,
+			// and an ABSENT Secret returned a plain error — so on a fresh managed
+			// cluster, where Linode installs apl-core and the Secret does not exist
+			// yet, the ten-minute wait gave up on attempt 1 and failed the bootstrap
+			// terminally. The wait only ever worked for the "Secret exists, repoUrl
+			// empty" case, which is the only case its tests exercised.
+			//
+			// A permanently unreadable Secret is not silently tolerated: it exhausts
+			// the budget and produces waitAplGitConfig's loud never-published error,
+			// which is the right answer for both. What stays terminal is a decode
+			// failure — that cannot fix itself.
+			return "", fmt.Errorf("read %s/%s (%s): %w", aplGitSecretNS, aplGitSecretName,
+				strings.TrimSpace(out), errAplNotBYOGitReady)
 		}
 		if strings.TrimSpace(out) == "" {
 			return "", nil
@@ -1076,7 +1107,18 @@ func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, bran
 		if s, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName, "-o", "jsonpath={.status.succeeded}"); strings.TrimSpace(s) == "1" {
 			return nil
 		}
-		if f, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName, "-o", "jsonpath={.status.failed}"); f != "" && strings.TrimSpace(f) != "0" {
+		// THE Failed CONDITION, NOT `.status.failed`. The Job sets backoffLimit: 1, so
+		// Kubernetes runs the pod TWICE — and the moment the first pod fails,
+		// `.status.failed` becomes 1 while the retry is still pending. Reading that as
+		// terminal returned an error here, and the caller's deferred del() then deleted
+		// the Job, killing the retry Kubernetes was about to run. The one attempt the
+		// backoffLimit exists to provide could never happen.
+		//
+		// `.status.conditions[?(@.type=="Failed")].status == "True"` is the signal that
+		// means the Job is done retrying — and it also covers activeDeadlineSeconds
+		// being exceeded, which `.status.failed` alone does not distinguish.
+		if c, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName,
+			"-o", `jsonpath={.status.conditions[?(@.type=="Failed")].status}`); strings.TrimSpace(c) == "True" {
 			logs, _ := d.kubectl("-n", aplMigrateJobNS, "logs", "job/"+aplMigrateJobName, "--tail=40")
 			return fmt.Errorf("apl-values migration Job failed: %s", redactSecrets(logs, secrets))
 		}
@@ -1099,6 +1141,35 @@ func aplMigrateSecretManifest(srcAuth, dstAuth string) string {
 		"type: Opaque\nstringData:\n" +
 		"  SRC_URL: " + yamlSingleQuote(srcAuth) + "\n" +
 		"  DST_URL: " + yamlSingleQuote(dstAuth) + "\n"
+}
+
+// AplBranchStateScript is the shell function the migration Job uses to ask whether
+// a branch exists on a remote. It is a NAMED CONSTANT rather than inline text so a
+// test can run the exact same bytes the Job runs — see
+// TestAplBranchStateSeparatesAbsentFromUnreachable. Extracting it by regex from the
+// rendered manifest would test a copy of the thing under test.
+//
+// Rendered into the Job at ten spaces of indent; every line here is at column 0.
+const AplBranchStateScript = `# Returns: 0 present, 1 absent, 2 could-not-ask.
+branch_state() {
+  if ! out=$(git ls-remote --heads "$1" "$2" 2>&1); then
+    echo "::error::git ls-remote failed — cannot tell whether $2 exists: $out" >&2
+    return 2
+  fi
+  printf '%s\n' "$out" | awk -v want="refs/heads/$2" '$2 == want { found = 1 } END { exit !found }'
+}`
+
+// indentScript re-indents a column-0 script block for embedding in a YAML literal
+// scalar. Blank lines stay blank — trailing whitespace inside a `|` block is
+// preserved by YAML and shows up as diff noise.
+func indentScript(script, indent string) string {
+	lines := strings.Split(script, "\n")
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			lines[i] = indent + ln
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // aplMigrateJobManifest builds the migration Job. The inline script's env/apps/<app>.yaml
@@ -1128,27 +1199,56 @@ spec:
         args:
         - |
           set -e
-          # RE-BOOTSTRAP REPAIR ONLY. apl-core has been reconciling $DST_BRANCH since the
+          # branch_state answers TWO questions that a bare "ls-remote | grep -q"
+          # collapsed into one. ls-remote EXIT STATUS says whether the remote could be
+          # ASKED; its OUTPUT says whether the branch is THERE. Piped straight into
+          # grep, an ls-remote that failed on auth, DNS, a proxy or a rate limit
+          # produces no output — indistinguishable from "the branch does not exist",
+          # which is the answer that makes this Job FORCE-PUSH apl-core abandoned
+          # in-cluster tree over a healthy $DST_BRANCH and revert every values change
+          # made since the switch. That is the exact regression SKIP_IF_DST_EXISTS was
+          # added to prevent.
+          #
+          # And the match is now on the WHOLE ref. A grep for "refs/heads/$B" is a
+          # SUBSTRING test: "main" matches refs/heads/maintenance and "apl-primary"
+          # matches refs/heads/apl-primary-backup, so a similarly-named branch could
+          # answer for one that does not exist. awk compares the field exactly, which
+          # also sidesteps a branch name containing regex metacharacters.
+          #
+%[8]s          # RE-BOOTSTRAP REPAIR ONLY. apl-core has been reconciling $DST_BRANCH since the
           # first migration, and its Gitea tree has been abandoned since — so pushing that
           # stale tree over a healthy branch would revert every values change made after
           # the switch. Rebuild only when the branch is genuinely gone.
           if [ "$SKIP_IF_DST_EXISTS" = "true" ]; then
-            if git ls-remote --heads "$DST_URL" "$DST_BRANCH" | grep -q "refs/heads/$DST_BRANCH"; then
+            branch_state "$DST_URL" "$DST_BRANCH" && dst=0 || dst=$?
+            if [ "$dst" -eq 2 ]; then
+              echo "refusing to rebuild $DST_BRANCH: the remote could not be queried, so a verdict of gone is a GUESS. Rebuilding on that guess force-pushes apl-core abandoned in-cluster tree over a branch that may be perfectly healthy." >&2
+              exit 1
+            fi
+            if [ "$dst" -eq 0 ]; then
               echo "$DST_BRANCH already exists and apl-core is pointed at it — nothing to migrate."
               exit 0
             fi
-            echo "::warning::$DST_BRANCH is MISSING while apl-core is pointed at it (half-migrated) — rebuilding it from apl-core's in-cluster values repo."
+            echo "::warning::$DST_BRANCH is MISSING while apl-core is pointed at it (half-migrated) — rebuilding it from apl-core in-cluster values repo."
             if [ -z "$SRC_URL" ]; then
-              echo "cannot rebuild $DST_BRANCH: apl-core is pointed at it, the branch is gone, and apl-git-config carried no gitCloneCmd to recover the Gitea credentials from. Recreate the branch from apl-core's values tree, or reset apl-git-config back to the in-cluster repo and re-run." >&2
+              echo "cannot rebuild $DST_BRANCH: apl-core is pointed at it, the branch is gone, and apl-git-config carried no gitCloneCmd to recover the Gitea credentials from. Recreate the branch from apl-core values tree, or reset apl-git-config back to the in-cluster repo and re-run." >&2
               exit 1
             fi
           fi
-          echo "waiting for apl-core's values repo branch $SRC_BRANCH (apl-core may still be initializing)..."
+          echo "waiting for apl-core values repo branch $SRC_BRANCH (apl-core may still be initializing)..."
           i=0
-          until git ls-remote --heads "$SRC_URL" "$SRC_BRANCH" | grep -q "refs/heads/$SRC_BRANCH"; do
+          # A could-not-ask here is RETRIED rather than fatal: apl-core in-cluster Gitea
+          # is genuinely not up yet on a cold bootstrap, which is what this wait is for.
+          # Same 48-attempt bound, and the failure names which of the two it ran out on.
+          while :; do
+            branch_state "$SRC_URL" "$SRC_BRANCH" && src=0 || src=$?
+            [ "$src" -eq 0 ] && break
             i=$((i+1))
-            if [ "$i" -gt 48 ]; then echo "values repo branch $SRC_BRANCH never appeared (apl-core not ready); heads present:" >&2; git ls-remote --heads "$SRC_URL" >&2 || true; exit 1; fi
-            echo "  not ready (attempt $i); sleeping 10s..."
+            if [ "$i" -gt 48 ]; then
+              if [ "$src" -eq 2 ]; then echo "values repo $SRC_URL was never reachable (apl-core in-cluster Gitea not up, or the credentials in apl-git-config are wrong)" >&2; else echo "values repo branch $SRC_BRANCH never appeared (apl-core not ready); heads present:" >&2; git ls-remote --heads "$SRC_URL" >&2 || true; fi
+              exit 1
+            fi
+            echo "  not ready (attempt $i, state $src); sleeping 10s..."
             sleep 10
           done
           echo "cloning apl-core values repo (branch $SRC_BRANCH)..."
@@ -1185,7 +1285,8 @@ spec:
         - secretRef:
             name: %[1]s
 `, aplMigrateJobName, aplMigrateJobNS, aplMigrateImage,
-		yamlSingleQuote(srcBranch), yamlSingleQuote(dstBranch), yamlSingleQuote(strings.Join(apps, " ")), skipIfDstExists)
+		yamlSingleQuote(srcBranch), yamlSingleQuote(dstBranch), yamlSingleQuote(strings.Join(apps, " ")), skipIfDstExists,
+		indentScript(AplBranchStateScript, "          "))
 }
 
 // yamlSingleQuote wraps a scalar in single quotes (doubling any embedded quote) so
