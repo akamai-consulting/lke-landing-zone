@@ -1451,7 +1451,27 @@ categories:
     #                       extensions/guards/k8sminorcoherence under unit test — it
     #                       holds lint.yml's kind node image to the LKE-E minor the
     #                       cluster root pins (#427).
-    budget: 1967
+    #   1,965 / 129 files  -2 A PAYDOWN, and the two lines were a defect. This layer
+    #                       held `installConvergeDeps(cliopts.Global)` and, inside
+    #                       it, `DryRun: g.DryRun` — a global copied while the
+    #                       command TREE was being built, which is before cobra
+    #                       parses a persistent flag. The field was permanently
+    #                       false, so `llz --dry-run ci nudge-argo` issued real
+    #                       annotate and patch writes against both Argo
+    #                       Applications. --dry-run is read inside RunE now and the
+    #                       installer takes no globals at all, so the shape cannot
+    #                       come back. Wiring that reads a flag at the wrong moment
+    #                       is exactly the logic ADR 0014 wants out of this layer.
+    #   1,964 / 129 files  -1 the same defect, unfired, one file over:
+    #                       envtopology.go's `DryRun: cliopts.Global.DryRun`, set
+    #                       from `func init()` — earlier still — into a field the
+    #                       environments package never read. The line above it,
+    #                       `Render: func(...) { render.Run(cliopts.Global.DryRun,
+    #                       …) }`, reads the same global correctly because it does
+    #                       so when CALLED. Removing the frozen one leaves only the
+    #                       late read, which is the pattern the next installer
+    #                       should copy.
+    budget: 1964
     exact: true
     include:
       - "tools/internal/cli/*.go"

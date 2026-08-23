@@ -67,7 +67,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension/registry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/argodiag"
@@ -81,10 +80,14 @@ import (
 )
 
 func ciCmd() *cobra.Command {
-	// Install converge's capability set before any of its verbs can run. Here
-	// rather than in main() because cliopts.Global is populated by flag parsing, and DryRun
-	// is one of the capabilities.
-	installConvergeDeps(cliopts.Global)
+	// Install converge's capability set before any of its verbs can run.
+	//
+	// THE COMMENT HERE USED TO SAY "because cliopts.Global is populated by flag
+	// parsing", which was exactly backwards: this runs during tree CONSTRUCTION,
+	// which is before cobra parses anything. The set below is capability handles
+	// and seams, none of which depend on a flag; the one thing that did —
+	// --dry-run — is read inside RunE now. See installConvergeDeps.
+	installConvergeDeps()
 	installAssertPlatformDeps()
 	installAssertReconcilerDeps()
 	c := &cobra.Command{

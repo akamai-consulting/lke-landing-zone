@@ -8,6 +8,8 @@ package clusteraccess
 // eight things wanted it.
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +37,21 @@ func RunnerACLCmd() *cobra.Command {
 			// cmd.Flags() includes flags inherited from the root, so this picks up
 			// the global --dry-run. It was previously never read: the flag parsed
 			// fine, printed nothing, and the command mutated the ACL anyway.
-			o.DryRun, _ = cmd.Flags().GetBool("dry-run")
+			//
+			// THE ERROR IS NOT DISCARDABLE EITHER, and this line is cited by
+			// converge/deps.go and cobra_nudge.go as the pattern they copy — so it
+			// discarding the error made those comments point at a file doing the
+			// thing they argue against. GetBool answers (false, err) for a flag
+			// that is not registered, and the flag lives in root.go joined to this
+			// line by a string literal: rename it there and this opens the LKE-E
+			// control-plane ACL under --dry-run, silently.
+			dryRun, err := cmd.Flags().GetBool("dry-run")
+			if err != nil {
+				return fmt.Errorf("cannot read the global --dry-run flag (%w) — refusing to run, "+
+					"because the alternative is treating an unreadable flag as \"not a dry run\" "+
+					"and changing the control-plane ACL", err)
+			}
+			o.DryRun = dryRun
 			return RunACL(ClusterAccessDeps(), args[0], o)
 		},
 	}

@@ -36,8 +36,13 @@ func installEnvTopologyDeps() {
 		},
 		// `llz env set` writes the declarative source and then re-renders; this is
 		// the second half of every mutation the extension performs.
+		//
+		// READ INSIDE THE CLOSURE, NOT BESIDE IT. This installer runs from `func
+		// init()`, so anything evaluated HERE captures cliopts.Global before main
+		// has bound a flag to it, let alone before cobra parsed one. A sibling
+		// `DryRun: cliopts.Global.DryRun` line used to sit directly below and did
+		// exactly that; it is gone, along with the field it fed.
 		Render:      func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
-		DryRun:      cliopts.Global.DryRun,
 		PromoteDeps: promoteDeps,
 	})
 }

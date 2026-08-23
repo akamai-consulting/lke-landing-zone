@@ -51,9 +51,10 @@ var installers = map[string]func(){
 	"installConfigReadinessDeps":  installConfigReadinessDeps,
 	"installDoctorDeps":           installDoctorDeps,
 	"installEnvTopologyDeps":      installEnvTopologyDeps,
-	// The zero globalOpts is what matters here: this asks whether the capability
-	// wiring is sound, and no flag can change which binding was selected.
-	"installConvergeDeps": func() { installConvergeDeps(globalOpts{}) },
+	// It takes no globalOpts any more, which is the point: no flag can change
+	// which binding was selected, and the one flag it used to carry froze at its
+	// pre-parse zero. See installConvergeDeps.
+	"installConvergeDeps": installConvergeDeps,
 }
 
 // TestEveryInstalledCapabilityIsLive runs each installer. A Deps that selects a
