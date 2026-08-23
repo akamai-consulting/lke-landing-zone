@@ -46,15 +46,100 @@ import (
 // .template-workflows.lock, scoped to .github/, and the name outlived the scope.
 const ManagedLockPath = ".template-managed.lock"
 
+// ManagedDrift is the template-owned files whose bytes no longer match the
+// digests the template shipped: edited locally, or deleted.
+//
+// SPLIT OUT SO `llz upgrade` CAN ASK THE SAME QUESTION. The upgrade overwrites
+// every `managed` file from a clean render, so a local edit to one is discarded —
+// and the only moment that edit is still observable is BEFORE copier runs. Having
+// the upgrade recompute "does this file match the lock" would be a second copy of
+// the rule this file defines, which is the split-contract shape docs/e2e-gates.md
+// warns about: two implementations of one digest comparison, each with its own
+// idea of which classes are locked.
+type ManagedDrift struct {
+	Edited  []string // present, and its bytes differ from the lock
+	Missing []string // recorded in the lock, absent from the tree
+}
+
+// Any reports whether anything drifted.
+func (m ManagedDrift) Any() bool { return len(m.Edited)+len(m.Missing) > 0 }
+
+// All is every drifted path, missing first — the order the guard reports them in.
+func (m ManagedDrift) All() []string {
+	return append(append([]string{}, m.Missing...), m.Edited...)
+}
+
+// DriftedManaged compares an instance's digest-locked files against the lock it
+// carries, and also returns the lock so a caller that needs its size does not
+// read it twice.
+//
+// A MISSING LOCK IS NOT DRIFT. An instance rendered before the lock existed has
+// nothing to compare against; it reports clean with a nil lock, and both callers
+// treat that as "nothing to say" rather than as a clean bill of health.
+func DriftedManaged(d Deps, root string) (ManagedDrift, map[string]string, error) {
+	// AN UNWIRED SEAM IS AN ERROR, NOT A PANIC. Deps is assembled caller-side and
+	// LockableScaffoldFiles is optional in practice — the upgrade package's own
+	// TestMain leaves it nil, on the then-true reasoning that nothing reachable
+	// needed it. A new advisory caller made it reachable, and a bare call turned
+	// "this deps set cannot answer" into a crash in `llz upgrade`. That is the
+	// shape a seam defaulting to "package main assigns it" always fails in; an
+	// error lets the advisory degrade to silence while the guard, which cannot
+	// work without it, still fails loudly.
+	if d.LockableScaffoldFiles == nil {
+		return ManagedDrift{}, nil, fmt.Errorf("managed-drift: no LockableScaffoldFiles in Deps — " +
+			"the caller assembled a Deps that cannot resolve the scaffold")
+	}
+	scaffoldRoot, _, err := d.LockableScaffoldFiles(root)
+	if err != nil {
+		return ManagedDrift{}, nil, err
+	}
+	want, err := ReadManagedLock(managedLockPathFor(scaffoldRoot))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ManagedDrift{}, nil, nil
+		}
+		return ManagedDrift{}, nil, err
+	}
+	return compareManagedLock(scaffoldRoot, want), want, nil
+}
+
+// compareManagedLock is the digest comparison itself — the one loop both the
+// guard and `llz upgrade` reach, so neither can grow its own opinion of what
+// "matches the template" means.
+//
+// AN UNREADABLE FILE COUNTS AS MISSING, not as a match. sha256File fails the same
+// way for a deleted file and an unreadable one, and treating either as clean
+// would report the strongest verdict on the weakest evidence.
+func compareManagedLock(scaffoldRoot string, want map[string]string) ManagedDrift {
+	var drift ManagedDrift
+	for _, rel := range sortedKeys(want) {
+		sum, err := sha256File(filepath.Join(scaffoldRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			drift.Missing = append(drift.Missing, rel)
+			continue
+		}
+		if sum != want[rel] {
+			drift.Edited = append(drift.Edited, rel)
+		}
+	}
+	return drift
+}
+
+// managedLockPathFor keeps the one join-or-not rule in a single place; a
+// scaffoldRoot of "." must not produce "./.template-managed.lock".
+func managedLockPathFor(scaffoldRoot string) string {
+	if scaffoldRoot == "." {
+		return ManagedLockPath
+	}
+	return filepath.Join(scaffoldRoot, ManagedLockPath)
+}
+
 func RunManagedFresh(d Deps, root string, write bool, out, errOut io.Writer) error {
 	scaffoldRoot, lockable, err := d.LockableScaffoldFiles(root)
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(scaffoldRoot, ManagedLockPath)
-	if scaffoldRoot == "." {
-		lockPath = ManagedLockPath
-	}
+	lockPath := managedLockPathFor(scaffoldRoot)
 
 	if write {
 		return writeManagedLock(scaffoldRoot, lockable, lockPath, out)
@@ -71,18 +156,9 @@ func RunManagedFresh(d Deps, root string, write bool, out, errOut io.Writer) err
 		return err
 	}
 
-	var drifted, missing []string
-	for _, rel := range sortedKeys(want) {
-		sum, err := sha256File(filepath.Join(scaffoldRoot, filepath.FromSlash(rel)))
-		if err != nil {
-			missing = append(missing, rel)
-			continue
-		}
-		if sum != want[rel] {
-			drifted = append(drifted, rel)
-		}
-	}
-	if len(drifted) == 0 && len(missing) == 0 {
+	drift := compareManagedLock(scaffoldRoot, want)
+	drifted, missing := drift.Edited, drift.Missing
+	if !drift.Any() {
 		if err := checkLockComplete(scaffoldRoot, lockable, want, errOut); err != nil {
 			return err
 		}
