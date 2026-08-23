@@ -89,6 +89,15 @@ func Lock(dryRun bool, repo, env string) error {
 		return fmt.Errorf("parse environment %s: %w", envName, err)
 	}
 
+	// The PRIOR deployment_branch_policy, captured BEFORE step 3 flips it. The
+	// rollback needs it: assuming the prior state was "any branch may deploy" turns
+	// a failed lock into an UNRESTRICTED environment on an installation that had
+	// protected-branch or custom restrictions already — a fail-closed failure made
+	// fail-open, on the one boundary that keeps the OpenBao unseal keys off a
+	// branch. Present-but-nil and absent are both "no policy", and both marshal to
+	// the `null` GitHub wants, so one value covers all three cases.
+	priorPolicy := envCfg["deployment_branch_policy"]
+
 	// 2. Already locked to a custom `main` policy? Skip.
 	if policyKind(envCfg) == "custom" && HasMainBranchRule(repo, envName, branch) {
 		fmt.Fprintf(os.Stderr, "  ✓ %s already restricted to %s — skipping\n", envName, branch)
@@ -101,56 +110,38 @@ func Lock(dryRun bool, repo, env string) error {
 	//    protection rule, which 422s on private repos without a paid plan; including
 	//    only already-set values both avoids that and preserves a paid repo's
 	//    manually-configured reviewers across the policy flip.
-	body := map[string]any{
-		"deployment_branch_policy": map[string]any{
-			"protected_branches":     false,
-			"custom_branch_policies": true,
-		},
-	}
-	// READ FROM protection_rules[], WHICH IS WHERE GITHUB PUTS THEM. These three
-	// branches keyed on top-level envCfg["reviewers"] / ["wait_timer"] /
-	// ["prevent_self_review"], and the environments API returns none of those at the
-	// top level — they arrive as entries in `protection_rules`, each tagged by
-	// `type`. So all three were dead, and the PUT below always went out WITHOUT
-	// them: every run of this dropped a paid repo's manually-configured required
-	// reviewers and wait timer, which is precisely what the comment above says it
-	// exists to prevent.
-	//
-	// The shapes also differ between reading and writing, which is the other half
-	// of why a naive copy would not have worked: GET returns
-	// {"type":"User","reviewer":{"id":1,…}} and PUT wants {"type":"User","id":1}.
-	if rv := existingReviewers(envCfg); len(rv) > 0 {
-		body["reviewers"] = rv
-	}
-	if wt := existingWaitTimer(envCfg); wt > 0 {
-		body["wait_timer"] = wt
-	}
-	if existingPreventSelfReview(envCfg) {
-		body["prevent_self_review"] = true
-	}
+	body := envUpdateBody(envCfg, map[string]any{
+		"protected_branches":     false,
+		"custom_branch_policies": true,
+	})
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
 	if out, err := ghAPIBody("PUT", "repos/"+repo+"/environments/"+envName, payload); err != nil {
-		if isPlanLimitErr(out) {
+		detail := ghDetail(out, err)
+		if isPlanLimitErr(detail) {
 			return ErrUnsupported // env exists; caller warns + continues
 		}
-		return fmt.Errorf("set policy mode on %s: %s", envName, strings.TrimSpace(out))
+		return fmt.Errorf("set policy mode on %s: %s", envName, detail)
 	}
 
 	// 4. Add the `main` rule. POST returns 422 if it already exists — tolerate.
 	if out, err := ghForge().Run("api", "-X", "POST",
 		branchPoliciesPath(repo, envName),
 		"-f", "name="+branch, "-f", "type=branch"); err != nil {
-		s := string(out)
+		// ghDetail, not string(out): Forge.Run returns stdout only and `gh api`
+		// writes its error bodies to stderr, which kubectlprobe.Exec folds into the
+		// error. Classifying on stdout alone sent every transport-level failure to
+		// the `default` arm below and printed no reason with it.
+		s := ghDetail(string(out), err)
 		switch {
 		case strings.Contains(s, "already exists") || strings.Contains(s, "already been taken"):
 			fmt.Fprintf(os.Stderr, "  ✓ %s rule on %s already exists (race-tolerated)\n", branch, envName)
 		case isPlanLimitErr(s):
 			// The mode flip took but the rule cannot be added on this plan. That is
 			// the same lockout as the default case below, so undo it too.
-			rollbackBranchPolicyMode(repo, envName)
+			rollbackBranchPolicyMode(envCfg, repo, envName, priorPolicy)
 			return ErrUnsupported
 		default:
 			// CUSTOM MODE WITH ZERO RULES BLOCKS EVERY DEPLOY TO THIS ENVIRONMENT.
@@ -165,7 +156,16 @@ func Lock(dryRun bool, repo, env string) error {
 			// mode of not-applied is "the branch policy is missing", which the next
 			// run repairs and which llz warns about. The failure mode of
 			// applied-empty is a dead environment.
-			rollbackBranchPolicyMode(repo, envName)
+			// The rollback's OWN outcome decides what this error says. Claiming
+			// "has been rolled back" unconditionally, when the rollback PUT may
+			// itself have failed, tells the operator the environment is fine at
+			// exactly the moment it is locked out — the one message they act on.
+			if rerr := rollbackBranchPolicyMode(envCfg, repo, envName, priorPolicy); rerr != nil {
+				return fmt.Errorf("add %s rule on %s: %s — AND THE ROLLBACK FAILED (%v). %s is in "+
+					"custom-branch-policy mode with NO rules, which blocks EVERY deploy to it. Fix it by "+
+					"hand before anything else",
+					branch, envName, strings.TrimSpace(s), rerr, envName)
+			}
 			return fmt.Errorf("add %s rule on %s: %s — the custom-branch-policy mode set a moment ago has "+
 				"been rolled back, because an environment in custom mode with no rules blocks EVERY deploy to it",
 				branch, envName, strings.TrimSpace(s))
@@ -186,10 +186,13 @@ func Lock(dryRun bool, repo, env string) error {
 // removing CloudMutate from the declaration would have changed nothing an
 // operator could observe: the fence was documentation.
 //
-// The body rides in --field-style args rather than stdin because the handle's
-// contract is an argv it can inspect; `--input -` would hand it a command whose
-// payload it cannot see. `gh api --input` is replaced by writing the JSON to a
-// temp file, which keeps the payload out of the process table too.
+// The body goes in a TEMP FILE named by `--input`, not on stdin. The handle
+// classifies an argv, and neither form shows it the payload — `--input -` and
+// `--input /tmp/x.json` are equally opaque to it, and pretending otherwise would
+// be claiming a fence this does not have. What the file buys is real but
+// narrower: the JSON stays out of the process table, where `--field` args would
+// have put it, and the argv stays a fixed shape the handle can classify without
+// having to parse a body.
 func ghAPIBody(method, path string, body []byte) (string, error) {
 	f, err := os.CreateTemp("", "llz-branchpolicy-*.json")
 	if err != nil {
@@ -436,21 +439,95 @@ func isNotFoundErr(err error) bool {
 	return strings.Contains(s, "404") || strings.Contains(s, "not found")
 }
 
-// rollbackBranchPolicyMode undoes step 3's custom_branch_policies flip.
+// rollbackBranchPolicyMode undoes step 3's custom_branch_policies flip by putting
+// back the deployment_branch_policy the environment had BEFORE the flip.
 //
-// `deployment_branch_policy: null` restores "any branch may deploy", which is the
-// state the environment was in before this function touched it. Best-effort and
-// LOUD on failure: if the rollback itself cannot run, the operator has to know the
-// environment is currently unable to deploy at all.
-func rollbackBranchPolicyMode(repo, envName string) {
-	payload := []byte(`{"deployment_branch_policy":null}`)
+// IT GOES THROUGH envUpdateBody FOR THE SAME REASON STEP 3 DOES. A PUT to this
+// endpoint is a REPLACE: whatever this body omits, GitHub reads as null. A
+// rollback body of `{"deployment_branch_policy":null}` alone therefore deletes
+// the operator's required reviewers, wait timer and prevent_self_review — the
+// exact wipe finding #1 of this review is about, reintroduced in the recovery
+// path for it. Sharing the builder is what stops the two from drifting again.
+//
+// It also restores `prior` rather than hardcoding null. Null means "any branch
+// may deploy", which is right only if that is where the environment started; on
+// one that already had protected-branch or custom restrictions it strictly
+// WEAKENS them, turning a fail-closed failure into a fail-open one.
+//
+// Best-effort and LOUD: the error is both logged and RETURNED, so the caller's
+// message can say which of the two states the operator is actually in.
+func rollbackBranchPolicyMode(envCfg map[string]any, repo, envName string, prior any) error {
+	payload, err := json.Marshal(envUpdateBody(envCfg, prior))
+	if err != nil {
+		return err
+	}
 	if out, err := ghAPIBody("PUT", "repos/"+repo+"/environments/"+envName, payload); err != nil {
+		detail := ghDetail(out, err)
 		fmt.Fprintf(os.Stderr, "::error::%s is in custom-branch-policy mode with NO rules and the rollback "+
 			"failed (%s). NOTHING CAN DEPLOY to this environment until it is fixed: set its deployment branch "+
-			"policy back to \"all branches\" in the repository settings, or re-run this command once the API "+
-			"is reachable.\n", envName, strings.TrimSpace(out))
-		return
+			"policy back in the repository settings, or re-run this command once the API is reachable.\n",
+			envName, detail)
+		return fmt.Errorf("rollback %s: %s", envName, detail)
 	}
-	fmt.Fprintf(os.Stderr, "  ↩ rolled %s back to unrestricted deploys — custom mode with no rules would "+
-		"have blocked every deploy to it\n", envName)
+	fmt.Fprintf(os.Stderr, "  ↩ rolled %s back to its previous deployment branch policy — custom mode with "+
+		"no rules would have blocked every deploy to it\n", envName)
+	return nil
+}
+
+// envUpdateBody builds a PUT body for the environments endpoint that carries the
+// requested deployment_branch_policy AND everything else the environment already
+// had.
+//
+// THE ENDPOINT IS A REPLACE, NOT A PATCH: every field this body omits, GitHub
+// reads as null. So a body naming only the policy silently deletes the
+// operator's required reviewers, wait timer and prevent_self_review.
+//
+// READ FROM protection_rules[], WHICH IS WHERE GITHUB PUTS THEM. The three
+// readers below used to key on top-level envCfg["reviewers"] / ["wait_timer"] /
+// ["prevent_self_review"], and the environments API returns none of those at the
+// top level — they arrive as entries in `protection_rules`, each tagged by
+// `type`. So all three were dead and every PUT went out without them, dropping a
+// paid repo's manually-configured protections on every single run.
+//
+// The shapes also differ between reading and writing, which is the other half of
+// why a naive copy would not have worked: GET returns
+// {"type":"User","reviewer":{"id":1,…}} and PUT wants {"type":"User","id":1}.
+//
+// Only ALREADY-SET values are included. Sending an empty reviewers/wait_timer
+// makes GitHub validate the "required reviewers" protection rule, which 422s on
+// a private repo without a paid plan.
+func envUpdateBody(envCfg map[string]any, policy any) map[string]any {
+	body := map[string]any{"deployment_branch_policy": policy}
+	if rv := existingReviewers(envCfg); len(rv) > 0 {
+		body["reviewers"] = rv
+	}
+	if wt := existingWaitTimer(envCfg); wt > 0 {
+		body["wait_timer"] = wt
+	}
+	if existingPreventSelfReview(envCfg) {
+		body["prevent_self_review"] = true
+	}
+	return body
+}
+
+// ghDetail is the diagnostic text of a `gh` failure: stdout plus the stderr that
+// capability.Forge folds into the error.
+//
+// Forge.Run returns STDOUT ONLY (kubectlprobe.Exec uses Output(), not
+// CombinedOutput), and `gh api` writes its API error bodies to stderr. Every
+// caller here that classified on the returned string alone — isPlanLimitErr, the
+// "already exists" match, the messages printed to the operator — was reading an
+// empty buffer for a transport-level failure, so a 403 or a plan limit reached
+// the `default` arm and reported no reason at all.
+func ghDetail(out string, err error) string {
+	parts := strings.TrimSpace(out)
+	if err != nil {
+		if e := strings.TrimSpace(err.Error()); e != "" {
+			if parts == "" {
+				return e
+			}
+			return parts + ": " + e
+		}
+	}
+	return parts
 }

@@ -317,3 +317,149 @@ func TestEveryGhCallGoesThroughTheDeclaredHandle(t *testing.T) {
 		t.Error("the rule POST did not reach the seam — it is bypassing the declared handle")
 	}
 }
+
+// ── the rollback, which repeated the wipe it exists to recover from ──────────
+
+// lockWithFailingRulePOST drives Lock to the rollback path: the environment
+// reads back as `env`, the mode PUT succeeds, and the rule POST fails. When
+// rollbackErr is non-nil the SECOND body-carrying PUT — the rollback — fails too.
+func lockWithFailingRulePOST(t *testing.T, env string, rollbackErr error) (*[]ghCall, error) {
+	t.Helper()
+	bodyPUTs := 0
+	calls := stubGH(t, func(args []string) ([]byte, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.Contains(j, "deployment-branch-policies") && strings.Contains(j, "-X POST"):
+			return nil, errors.New("HTTP 403: Resource not accessible by integration")
+		case strings.Contains(j, "deployment-branch-policies"):
+			return []byte(`{"branch_policies":[]}`), nil
+		case strings.Contains(j, "--input"):
+			// Both the mode flip and the rollback are body-carrying PUTs; the
+			// rollback is the second.
+			bodyPUTs++
+			if bodyPUTs >= 2 && rollbackErr != nil {
+				return nil, rollbackErr
+			}
+			return []byte("{}"), nil
+		}
+		return []byte(env), nil
+	})
+	return calls, Lock(false, "acme/instance", "prod")
+}
+
+// TestTheRollbackDoesNotWipeTheOperatorsProtections.
+//
+// The rollback PUT carried `{"deployment_branch_policy":null}` and nothing else.
+// This endpoint is a REPLACE — every field omitted reads as null — so the
+// recovery path deleted the operator's required reviewers, wait timer and
+// prevent_self_review: the exact wipe this review's first finding is about,
+// reintroduced in the code written to recover from it.
+func TestTheRollbackDoesNotWipeTheOperatorsProtections(t *testing.T) {
+	const env = `{
+	  "protection_rules": [
+	    {"id":1,"type":"required_reviewers","prevent_self_review":true,
+	     "reviewers":[{"type":"User","reviewer":{"id":42,"login":"ops"}}]},
+	    {"id":2,"type":"wait_timer","wait_timer":30}
+	  ],
+	  "deployment_branch_policy": null
+	}`
+	calls, err := lockWithFailingRulePOST(t, env, nil)
+	if err == nil {
+		t.Fatal("a failed rule POST must be reported")
+	}
+	bodies := putBodies(*calls)
+	if len(bodies) < 2 {
+		t.Fatalf("want a mode PUT and a rollback PUT, got %d: %v", len(bodies), bodies)
+	}
+	rollback := bodies[len(bodies)-1]
+	for _, want := range []string{`"id":42`, `"wait_timer":30`, `"prevent_self_review":true`} {
+		t.Run(want, func(t *testing.T) {
+			if !strings.Contains(rollback, want) {
+				t.Errorf("the rollback dropped %s — recovering from a lockout by deleting the "+
+					"operator's protections trades one incident for another.\nbody: %s", want, rollback)
+			}
+		})
+	}
+}
+
+// TestTheRollbackRestoresThePREVIOUSPolicyNotNull.
+//
+// `deployment_branch_policy: null` means "any branch may deploy". Hardcoding it
+// is right only if that is where the environment started; on one that already
+// restricted deploys to protected branches it strictly WEAKENS the setting —
+// turning a fail-closed failure into a fail-open one, on the single boundary
+// that keeps the OpenBao unseal keys off a pushed branch.
+func TestTheRollbackRestoresThePREVIOUSPolicyNotNull(t *testing.T) {
+	const env = `{
+	  "protection_rules": [],
+	  "deployment_branch_policy": {"protected_branches": true, "custom_branch_policies": false}
+	}`
+	calls, err := lockWithFailingRulePOST(t, env, nil)
+	if err == nil {
+		t.Fatal("a failed rule POST must be reported")
+	}
+	bodies := putBodies(*calls)
+	if len(bodies) < 2 {
+		t.Fatalf("want a mode PUT and a rollback PUT, got %d: %v", len(bodies), bodies)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(bodies[len(bodies)-1]), &got); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := got["deployment_branch_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("the rollback set deployment_branch_policy to %v — the environment restricted deploys "+
+			"to protected branches before this ran, and it is now UNRESTRICTED", got["deployment_branch_policy"])
+	}
+	if b, _ := p["protected_branches"].(bool); !b {
+		t.Errorf("protected_branches was not restored: %v", p)
+	}
+}
+
+// TestAFailedRollbackIsNotReportedAsARolledBackEnvironment. The error said "has
+// been rolled back" unconditionally, and the rollback returned nothing — so on
+// the one path where the environment really is locked out, the operator was told
+// it had been repaired.
+func TestAFailedRollbackIsNotReportedAsARolledBackEnvironment(t *testing.T) {
+	const env = `{"protection_rules":[],"deployment_branch_policy":null}`
+	_, err := lockWithFailingRulePOST(t, env, errors.New("HTTP 502: Bad gateway"))
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if strings.Contains(err.Error(), "has been rolled back") {
+		t.Errorf("the rollback itself failed and the environment is locked out, but the error claims "+
+			"it was repaired: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ROLLBACK FAILED") {
+		t.Errorf("the message must name the state the operator is actually in: %v", err)
+	}
+}
+
+// TestAFailureReasonSurvivesTheForgeHandle. capability.Forge.Run returns STDOUT
+// ONLY (kubectlprobe.Exec uses Output(), not CombinedOutput) and `gh api` writes
+// its API error bodies to stderr. Classifying on the returned string alone meant
+// a plan-limit 422 on the rule POST read as an unclassified failure and reported
+// no reason at all.
+func TestAFailureReasonSurvivesTheForgeHandle(t *testing.T) {
+	const env = `{"protection_rules":[],"deployment_branch_policy":null}`
+	calls := stubGH(t, func(args []string) ([]byte, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.Contains(j, "deployment-branch-policies") && strings.Contains(j, "-X POST"):
+			// stdout EMPTY, reason in the error — what Forge.Run really returns.
+			return nil, errors.New("HTTP 422: Deployment protection rules are not available for private repositories on this billing plan")
+		case strings.Contains(j, "deployment-branch-policies"):
+			return []byte(`{"branch_policies":[]}`), nil
+		case strings.Contains(j, "--input"):
+			return []byte("{}"), nil
+		}
+		return []byte(env), nil
+	})
+	err := Lock(false, "acme/instance", "prod")
+	if !errors.Is(err, ErrUnsupported) {
+		t.Errorf("a plan-limit failure whose text is on stderr must still classify as unsupported, got %v", err)
+	}
+	if !sawArgs(*calls, "-X", "PUT", "--input") {
+		t.Error("fixture drift: no PUT with a body was made")
+	}
+}
