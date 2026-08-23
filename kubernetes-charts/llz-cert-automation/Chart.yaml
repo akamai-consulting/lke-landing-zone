@@ -10,53 +10,9 @@ description: >-
 type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-cert-automation by .github/workflows/publish-charts.yml.
-# 0.1.1: strip internal fingerprints from comments for open-sourcing (no rendered change).
-# 0.1.2: pin the EventBus JetStream version (was `latest`) to 2.10.10 for reproducibility.
-# 0.1.3: externalSecrets.refreshInterval 1h -> 1m so cert-automation's ExternalSecrets
-#        re-sync within ~1m of the OpenBao store going Ready on first boot (was ~14m idle).
-# 0.1.4: derive the harbor docker config.json in-cluster — the harborDockerConfig
-#        ExternalSecret now reads the robot creds (username/password/registry_host)
-#        from secret/harbor/robot and renders the dockerconfigjson via an ESO v2
-#        template, replacing the separate secret/harbor/docker-config seed.
-# 0.1.5: fix the harborDockerConfig configTemplate — `{"auths":{{{ .registry_host`
-#        was an unparseable Go template (`{{{` = `{{` delimiter + literal `{` →
-#        "unexpected \"{\" in command"), so the ExternalSecret never rendered and the
-#        harbor-docker-config Secret was never created. Separate the brace: `{ {{- `.
-# 0.1.6: bump the ExternalSecret apiVersion external-secrets.io/v1beta1 → v1.
-#        apl-core 6.x's bundled ESO (external-secrets 2.4.1) dropped the v1beta1
-#        served version, so a v1beta1 manifest fails to apply ("no matches for kind
-#        … in version external-secrets.io/v1beta1") and the harbor-docker-config
-#        ExternalSecret never syncs.
-# 0.1.7: doc-only — retarget a stale apl-values/_shared/… comment path ref in
-#        network-policies.yaml to the platform-apl/ layout (behavior unchanged;
-#        bumped so the guard republishes the corrected artifact).
-# 0.1.9: doc-only — the README pointed at `manifest/cert-automation/`,
-#        a directory that never existed in the platform-apl/ layout; retargeted to
-#        the real consumer `components/certManager/cert-automation.yaml`
-#        (behavior unchanged; bumped so the guard republishes the corrected artifact).
-# 0.1.10: add values.schema.json — root-strict, so a typo'd top-level key is
-#        REJECTED AT RENDER instead of silently activating nothing. Nested
-#        objects stay permissive; no rendered change for valid values.
-# 0.1.11: doc-only — 0.1.9 retargeted the README at
-#        `components/certManager/cert-automation.yaml` as "the real
-#        consumer"; that file does not exist, and on Managed App Platform (the
-#        only supported mode, ADR 0005) cert-automation is apl-core's, so the
-#        component is ManagedSkip and NOTHING in this repo deploys this chart.
-#        The README now says so and points at the cutover table
-#        (behavior unchanged; bumped so the guard republishes the corrected artifact).
-# 0.1.12: doc-only — the source-ref sweep that moved package main into
-#        tools/internal/** repointed three comment path literals in this chart
-#        (the two README pointers restated in 0.1.9/0.1.11 above, and values.yaml's
-#        reference to the retired `seed-harbor-dockerconfig` verb) and did NOT bump.
-#        publish-charts.yml only pushes a NEW version, so the corrected artifact
-#        was never going to be published: the registry would keep serving 0.1.11
-#        with the stale pointers, and the fix would live only in git. Bumped so the
-#        corrections actually ship (behavior unchanged).
-# 0.1.13: podSecurity.{enforce,audit,warn}Version v1.31 -> latest (issue #447).
-#         RENDERED CHANGE on the namespace's PSS labels. A published chart cannot
-#         name the Kubernetes minor of every cluster it lands on, and a lagging PSS
-#         pin enforces a weaker cumulative ruleset than the mode advertises.
-version: 0.1.13
+# Per-version history lives in CHANGELOG.md beside this file, not here: a
+# changelog inside Chart.yaml only grows, and nothing renders or checks it.
+version: 0.1.14
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

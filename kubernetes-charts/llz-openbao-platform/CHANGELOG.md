@@ -1,0 +1,123 @@
+# llz-openbao-platform
+
+Chart version history. Bump `version:` in `Chart.yaml` on any template or
+values change — `publish-charts.yml` pushes a chart only when its version is
+not already in the registry, and never overwrites a tag, so an unbumped change
+is silently never published.
+
+## 0.1.33
+
+Documentation only — the per-version history moved out of `Chart.yaml`
+into this file. No rendered change.
+
+## 0.1.32
+
+doc-only README correction — the PSS profile the StatefulSet's securityContexts satisfy is named WITHOUT a version, because llz-cluster-foundation 0.1.15 stopped pinning one (issue #447). The old `restricted:v1.33` named a ruleset no cluster was still being held to, in the chart whose README an operator reads mid-incident. Behavior unchanged; bumped so the correction ships.
+
+## 0.1.31
+
+doc-only — the source-ref sweep that moved package main into tools/internal/** repointed two comment path literals here (values.yaml's `baoEnv` pointer, now tools/internal/shared/openbao/openbao.go, and one in templates/openbao-tls-cert.yaml) and did NOT bump. publish-charts.yml only pushes a NEW version, so 0.1.30 would keep being served with pointers to files that no longer exist — and this is the chart whose comments an operator reads mid-incident, which is exactly when a dead pointer costs. Bumped so the corrections ship (behavior unchanged).
+
+## 0.1.30
+
+FINISH 0.1.29. It repointed the audit pipeline at `monitoring` and left the egress allow on :80, but the loki-gateway Service publishes :80 and its pods listen on :8080, and Cilium evaluates egress on the TARGET port — so every push was still dropped at the CNI. Observed on lke638084: promtail tailing the audit device correctly and retrying `context deadline exceeded` against loki-gateway.monitoring.svc.cluster.local forever, while the gateway's own access log showed apl-core's collector POSTing successfully from inside `monitoring`. :8080 is now allowed alongside :80 — the same post-DNAT correction this policy already carries for the apiserver (443 → 6443) a few rules above.
+
+## 0.1.29
+
+FIX the OpenBao audit-log pipeline, which was shipping nowhere. The promtail sidecar pushed to loki-gateway.llz-observability, but apl-core runs Loki in `monitoring` and nothing ever created that Service — so the audit stream had no destination, and the NetworkPolicy egress allow pointed at the same empty namespace, granting nothing while looking complete. Both now target `monitoring`. The hop stays PLAINTEXT and stays registered in plaintextAllowed: the gateway is nginx with no TLS material from apl-core (its own otel-operator ships to it over http://), so https:// would connect to nothing. Meshing closes it.
+
+## 0.1.28
+
+FIX the Keycloak JWKS fetch, the last mTLS casualty. 0.1.24 moved it to https://keycloak-keycloakx-http…:8443 on the stated PREREQUISITE that Keycloak's internal Service serves TLS there. It does not: apl-core runs Keycloak with `args: [start]`, KC_HTTP_ENABLED=true and proxy-mode xforwarded and gives it no TLS key material, so it never opens an HTTPS listener. The port is declared on both Service and container and is dead. Live symptom was `read: connection reset by peer` rather than `refused`, because Keycloak IS meshed (contrary to the netpol comment) and its Envoy sidecar accepts the connection before resetting it. The trust anchor was right all along — only the endpoint was wrong. Keycloak's TLS is terminated by the Istio ingress gateway serving apl-core's `otomi-wildcard` cert (SAN *.<domainSuffix>, issued by the same custom-ca that openbao-apl-ca chains to), so jwks_url now targets the PUBLIC hostname — identical to bound_issuer, so the two can never disagree — and `llz ci pin-keycloak-gateway-alias` pins that name to the gateway's ClusterIP via hostAliases, keeping the request in-cluster (the public name resolves to the external LB, and hairpinning through it is unsupported on LKE-E) while Host/SNI still match the certificate. The egress allow moves from keycloak:{8443,8080} to istio-system:443: both old targets were dead ends — 8080 was the plaintext fetch ADR 0010 exists to eliminate, 8443 never had a listener — so keeping either was a standing permission for a path nothing uses.
+
+## 0.1.27
+
+FIX the StatefulSet never being created at all. 0.1.26 overrode the subchart's hardcoded BAO_ADDR from extraEnvironmentVars, on the premise that the later of two duplicate env entries wins. It does not: `container.env` is a server-side-apply list-map keyed on `name`, and SSA REJECTS duplicate keys rather than resolving them. This Application syncs with ServerSideApply=true, so the apply failed, no StatefulSet was ever created, and the app sat OutOfSync/Healthy with no pod — a failure with no container, no restart and no log to read. `helm template`, `helm lint` and client-side `kubectl apply` all accept the duplicate, so nothing local caught it. The address is no longer overridden. Instead the in-pod clients are given the one thing :8200 actually wanted: a CLIENT CERTIFICATE, via BAO_CLIENT_CERT / BAO_CLIENT_KEY / BAO_CACERT — three names the subchart does not set, so they add without shadowing anything. The identity is the existing `openbao-raft-client`, already mounted and already trusted by this listener (raft retry_join presents it for the same reason), so this adds no new Secret the pod must block on at startup. Probes stay `exec` for the 0.1.26 reason, which is unchanged.
+
+## 0.1.26
+
+FIX the same mTLS outage properly; 0.1.25 moved the probes to :8210 but left them httpGet, which cannot reach that listener. A Kubernetes httpGet has no `host` field in the subchart's template, so kubelet dials the POD IP — and :8210 binds 127.0.0.1 only, so it would have been `connection refused` instead of `certificate required`: the same restart loop with a new error string. There is no port a kubelet probe can legally reach, so BOTH probes are now `exec`, which runs inside the pod's network namespace. Readiness returns to the subchart's built-in `bao status` exec (its 0/2 exit codes already carry the standby- and sealed-semantics the httpGet query parameters were emulating); liveness gets an execCommand that treats exit 2 (sealed/uninitialized) as alive so it tolerates the window before `bao operator init`, on a 6×10s threshold rather than the subchart's trigger-happy 2×5s. Also fixes the half of the outage 0.1.25 misattributed to the probes: the subchart hardcodes BAO_ADDR=https://127.0.0.1:8200, and OpenBao prefers a present BAO_* over its VAULT_* alias unconditionally (api/env.go), so the VAULT_ADDR=:8210 that `llz` exports on every `kubectl exec … bao …` was silently overridden onto the mTLS listener — which is where "http2: client conn could not be established" actually came from. extraEnvironmentVars now repoints BAO_ADDR/BAO_CACERT at the loopback listener for every in-pod client. NEVER DEPLOYED — the BAO_ADDR override was rejected at apply; see 0.1.27.
+
+## 0.1.25
+
+FIX OpenBao never reaching Ready under mTLS. 0.1.24 made the :8200 listener require a client certificate, but both probes still targeted it — readiness via the subchart's hardcoded `bao status` (which resolves VAULT_ADDR to :8200) and liveness via httpGet :8200. A kubelet probe cannot present a client certificate, so every probe failed the handshake: pods never went Ready, raft never formed, and `bao operator init` died with "http2: client conn could not be established". Both now target the loopback listener :8210. Readiness becomes an httpGet (the subchart exposes no execCommand for it) with standbyok=true, which preserves the replaced exec's behaviour of keeping raft standbys in the Service. NEVER DEPLOYED CLEANLY — superseded by 0.1.26, which explains why the httpGet form could not have worked.
+
+## 0.1.24
+
+mTLS on the OpenBao API (ADR 0010). The :8200 listener now sets tls_require_and_verify_client_cert against the llz-client-ca root, so pod→OpenBao is mutually authenticated instead of TLS-with-verification- off (every consumer ran VAULT_SKIP_VERIFY). BREAKING for any client without a client certificate — ESO, the reconciler and both CronJobs gain one; see the staged rollout in the ADR before deploying. Also: a 127.0.0.1:8210 loopback listener (no client cert) for the in-pod `bao` CLI and `kubectl port-forward`, since those callers hold no identity; a 127.0.0.1 SAN on openbao-tls so they verify the server rather than skipping; raft retry_join gains leader_client_cert_file (a joining peer is a client too, and without it no follower can join); the ServiceMonitor swaps insecureSkipVerify for real CA + client certs; and the Keycloak JWKS egress moves to :8443.
+
+## 0.1.23
+
+add values.schema.json — root-strict, so a typo'd top-level key is REJECTED AT RENDER instead of silently activating nothing. Nested objects stay permissive; no rendered change for valid values.
+
+## 0.1.22
+
+add an egress NetworkPolicy rule letting OpenBao reach Keycloak's internal HTTP (keycloak-keycloakx-http.keycloak:8080) so the team keycloak/jwt auth mount can fetch the realm JWKS at login. Without this the openbao namespace's default-deny egress L4-blocks the fetch and team OIDC logins time out. (values.yaml keycloakEgress + the netpol template.) Must ship together with the openbao.yaml Argo targetRevision.
+
+## 0.1.21
+
+doc-only README corrections — the Application name (llz-openbao, not the releaseName platform-openbao), the PSS version (v1.33, not v1.31), the missing llz-pat-rotator/broad-pat-rotator allowedClientPods entry added in 0.1.19, and a Bootstrap section that predated static-key auto-unseal (0.1.10) and cited a workflow path that does not exist.
+
+## 0.1.19
+
+allow the in-cluster broad-PAT rotator CronJob (llz-pat-rotator/broad-pat-rotator) through the :8200 ingress NetworkPolicy. It authenticates via Kubernetes-auth to read/rotate secret/linode/broad-pat; without the allowedClientPods entry its login is L4-blocked (TCP timeout), and the rotator Job fails on its 300s deadline — the broad-pat e2e assertion never passed. Symmetric with the harbor-robot-provisioner entry (0.1.12).
+
+## 0.1.18
+
+FIX vault_* STILL never scraped — the L4 complement to 0.1.16. 0.1.16 fixed the ServiceMonitor's label+port so Prometheus DISCOVERS the target, but the default-deny NetworkPolicy has no ingress rule for apl-core's Prometheus (pod app.kubernetes.io/name=prometheus in the `monitoring` namespace), so every scrape of :8200 resets/times out at L4 — confirmed live (connection reset by peer) on a converged cluster, with the OpenBao alerts DEAD? in `llz ci alert-eval`. Adds a pod-scoped allowedClientPods entry {namespace: monitoring, name: prometheus}.
+
+## 0.1.17
+
+harden serviceMonitor.selectorLabels with `| default (dict "prometheus" "system")` so an adopter who nulls the map can't render an invalid `labels: null`. No change to the default rendered output.
+
+## 0.1.16
+
+FIX vault_* never scraped. The ServiceMonitor selected on a `release:` label apl-core's Prometheus ignores (it selects `prometheus: system`) AND its endpoint used a `http` port name the OpenBao Service doesn't expose (the TLS listener port is named `https`). Both confirmed live on a converged cluster; either alone left OpenBao's metrics unscraped and every OpenBao alert silently never-firing. serviceMonitor.releaseLabel → serviceMonitor.selectorLabels {prometheus: system}; port http → https.
+
+## 0.1.15
+
+drop the linode-cred-rotator allowedClientPods entry — that CronJob was retired (its work moved to the in-cluster reconciler, which already has its own entry). Inert cleanup: the entry matched a pod that no longer exists. The harbor-robot-provisioner entry stays (still a CronJob).
+
+## 0.1.14
+
+allow the in-cluster reconciler pod (llz-reconciler/llz-reconciler) through the OpenBao :8200 ingress NetworkPolicy for its --reconcile-openbao-gauges sampler (seal-status + credential-age).
+
+## 0.1.13
+
+v6 migration — swap the retired `llz-external-secrets` client namespace for apl-core 6.x's core ESO namespace `external-secrets` in the OpenBao :8200 allow list (the self-managed ESO controller is gone).
+
+## 0.1.12
+
+allow the in-cluster harbor + cred-rotator CronJobs through OpenBao's ingress NetworkPolicy (they authenticate at :8200 to seed/read secrets).
+
+## 0.1.11
+
+fix the promtail audit-shipper sidecar — add `-config.expand-env=true` (+ a downward-API HOSTNAME env) so the `pod: ${HOSTNAME}` label resolves to the pod name instead of shipping the literal string `${HOSTNAME}` to Loki on every OpenBao audit line.
+
+## 0.1.10
+
+static-key auto-unseal — add a `seal "static"` stanza (key mounted from the openbao-unseal-key Secret at file:///openbao/seal/unseal.key) so pods unseal themselves at boot. Replaces the Shamir submit-keys flow and the openbao-auto-unseal re-unseal cron. The key Secret is created by `llz ci bao-seed-seal-key` before bootstrap.
+
+## 0.1.9
+
+doc-only — drop the stale AppRole-rotation CronWorkflow mention from the chart description/keywords/README (the subsystem was removed in 0.1.8; no rendered change).
+
+## 0.1.8
+
+retire the AppRole-rotation subsystem — ESO now uses Kubernetes auth and GitHub CI uses GitHub-OIDC, so the platform-ci AppRole, the rotation CronWorkflow + its NetworkPolicy/ESO, and the in-cluster PAT are gone.
+
+## 0.1.7
+
+drop the retired secret-propagator AppRole rotation pipeline from the approle-rotation CronWorkflow (GitHub CI now authenticates via GitHub-OIDC).
+
+## 0.1.6
+
+doc-only — point the openbao-tls cert-watcher references at openbao-cert-watcher (the eso-cert-watcher chart was removed; no rendered change).
+
+## 0.1.5
+
+doc-only — correct stale apl-values paths in README (no rendered change).
+
+## 0.1.4
+
+strip internal fingerprints from comments for open-sourcing (no rendered change).
