@@ -148,7 +148,7 @@ func RunPublishCharts(o PublishChartsOpts) error {
 		return fmt.Errorf("listing charts under %s: %w", o.ChartsDir, err)
 	}
 
-	pushed, resigned := 0, 0
+	pushed, resigned, matched := 0, 0, 0
 	for _, dir := range dirs {
 		name, version, err := pcInspect(dir)
 		if err != nil {
@@ -157,6 +157,7 @@ func RunPublishCharts(o PublishChartsOpts) error {
 		if o.Selected != "all" && o.Selected != name {
 			continue
 		}
+		matched++
 		ociRef := ociDest + "/" + name
 		regRef := regDest + "/" + name
 
@@ -201,6 +202,23 @@ func RunPublishCharts(o PublishChartsOpts) error {
 			return err
 		}
 		pushed++
+	}
+	// A --selected THAT MATCHED NOTHING IS A TYPO, NOT A NO-OP. `--selected
+	// llz-cluster-foundaton` published nothing and exited 0, so the caller — a
+	// workflow_dispatch, or chart-publish-check's self-heal — reported success and
+	// then waited for a chart that was never going to appear. The name comes from a
+	// human or from another command's output; either way, not matching it is the
+	// one thing worth saying out loud.
+	if matched == 0 {
+		names := make([]string, 0, len(dirs))
+		for _, dir := range dirs {
+			if n, _, err := pcInspect(dir); err == nil {
+				names = append(names, n)
+			}
+		}
+		return fmt.Errorf("publish-charts: --selected %q matched none of the %d chart(s) under %s (%s) — "+
+			"publishing nothing and exiting 0 would report success for a chart that will never be published",
+			o.Selected, len(dirs), o.ChartsDir, strings.Join(names, ", "))
 	}
 	fmt.Printf("::notice::Published %d chart(s); re-signed %d already-published unsigned chart(s)\n", pushed, resigned)
 	return nil

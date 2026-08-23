@@ -127,6 +127,19 @@ func TestChartPublishCheckWaitPropagatesRegistryError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ghcr boom") {
 		t.Errorf("registry error during the wait = %v, want it surfaced", err)
 	}
+	// And it must have RIDDEN IT OUT first. Returning on the first registry error
+	// killed the self-heal that had just been dispatched — and a GHCR secondary
+	// rate limit is exactly what makes a publish need self-healing. The error is
+	// still surfaced (above) because a budget that expired without a clean read
+	// cannot conclude "still unpublished"; it must say which of the two happened.
+	if n < 3 {
+		t.Errorf("polled the registry %d time(s); one transient must not abort the wait — the retry "+
+			"budget is what the self-heal runs on", n)
+	}
+	if !strings.Contains(err.Error(), "UNKNOWN") {
+		t.Errorf("a budget that expired without a clean read must say the outcome is unknown, not report "+
+			"the charts unpublished: %v", err)
+	}
 }
 
 // TestScanPublishPinsOnlyYAML pins the extension filter. A .md (or any non-YAML)
@@ -180,5 +193,99 @@ func TestExtractPublishPinsBlockScanEdges(t *testing.T) {
 	// A chart: line whose block runs to the end of the file must not walk past it.
 	if got := extractPublishPins("chart: llz-orphan\n"); len(got) != 0 {
 		t.Errorf("pins = %+v, want none (no repoURL/version siblings)", got)
+	}
+}
+
+// ── C09: the pins this check could not see ───────────────────────────────────
+
+// TestExtractPublishPinsResolvesTheDefaultRegistry.
+//
+// `repoURL != "" && version != ""` dropped every pin that inherits
+// `global.chartsRegistry` — which, measured on this repo, was all but ONE of
+// them. llz-cluster-foundation and llz-cert-automation in
+// kubernetes-charts/llz-argo-bootstrap-apps/values.yaml both omit repoURL, and
+// those two are the exact charts this file's header cites as the reason the check
+// exists. The len(pins)==0 vacuity guard could never fire either, because
+// llz-openbao-platform DOES carry a repoURL and kept the count at one — a green
+// run over a corpus of one, reported as "all pinned charts are published".
+func TestExtractPublishPinsResolvesTheDefaultRegistry(t *testing.T) {
+	const content = `
+global:
+  chartsRegistry: ghcr.io/acme/charts
+components:
+  clusterFoundation:
+    source:
+      type: oci
+      # repoURL omitted -> defaults to global.chartsRegistry
+      chart: llz-cluster-foundation
+      version: 0.1.14
+  openbao:
+    source:
+      type: oci
+      repoURL: ghcr.io/acme/charts
+      chart: llz-openbao-platform
+      version: 0.1.22
+  argoWorkflows:
+    source:
+      type: oci
+      repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-workflows
+      version: 0.45.0
+`
+	got := map[string]string{}
+	for _, p := range extractPublishPins(content) {
+		got[p.Chart] = p.RepoURL
+	}
+	if got["llz-cluster-foundation"] != "ghcr.io/acme/charts" {
+		t.Errorf("a first-party pin with no repoURL must inherit global.chartsRegistry, got %q — "+
+			"dropping it is why this check ran over one chart and called it all of them",
+			got["llz-cluster-foundation"])
+	}
+	if got["llz-openbao-platform"] != "ghcr.io/acme/charts" {
+		t.Errorf("an explicit repoURL must still win, got %q", got["llz-openbao-platform"])
+	}
+	// A THIRD-PARTY chart with no repoURL must NOT be resolved against our
+	// registry: guessing would send the check looking for argo-workflows in GHCR.
+	// (Here it has one, so it is only present to prove the llz- prefix is what
+	// gates the fallback — see the sibling case below.)
+	if got["argo-workflows"] != "https://argoproj.github.io/argo-helm" {
+		t.Errorf("a third-party pin keeps its own repoURL, got %q", got["argo-workflows"])
+	}
+}
+
+func TestExtractPublishPinsDoesNotAdoptThirdPartyCharts(t *testing.T) {
+	const content = `
+global:
+  chartsRegistry: ghcr.io/acme/charts
+components:
+  x:
+    source:
+      chart: some-vendor-chart
+      version: 1.2.3
+`
+	for _, p := range extractPublishPins(content) {
+		if p.Chart == "some-vendor-chart" {
+			t.Errorf("a third-party chart with no repoURL was resolved to %q — a missing repoURL there is a "+
+				"template error, and guessing sends this check hunting for it in our registry", p.RepoURL)
+		}
+	}
+}
+
+// TestChartPublishCheckRefusesWhenNothingResolvedToGHCR. len(pins) > 0 says pins
+// were PARSED; `checked` counts the ones resolved against GHCR. Every pin
+// resolving to another host, or failing parseOCIRef, left checked at 0 and printed
+// "0 pinned first-party chart(s) are published" — the same vacuous green the
+// len(pins) guard exists to refuse, one step later.
+func TestChartPublishCheckRefusesWhenNothingResolvedToGHCR(t *testing.T) {
+	root := cpWriteRepo(t, map[string]string{
+		"platform-apl/manifest/applications/cf.yaml": "spec:\n  source:\n    repoURL: registry.example.com/acme/charts\n" +
+			"    chart: llz-cluster-foundation\n    targetRevision: 0.1.6\n",
+	})
+	var err error
+	captureStdout(t, func() {
+		err = Run(Opts{Root: root, Published: func(string, string, string) (bool, error) { return true, nil }})
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolved NONE") {
+		t.Errorf("checking zero charts must not report them published; got %v", err)
 	}
 }

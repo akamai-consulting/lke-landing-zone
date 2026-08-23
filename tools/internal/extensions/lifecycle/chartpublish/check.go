@@ -147,6 +147,16 @@ func Run(o Opts) error {
 	if err != nil {
 		return err
 	}
+	// CHECKED, not just FOUND. len(pins) > 0 says pins were parsed; `checked`
+	// counts the ones actually resolved against GHCR. Every pin resolving to a
+	// non-ghcr.io host, or failing parseOCIRef, leaves checked at 0 — and printing
+	// "0 pinned first-party chart(s) are published" was the same vacuous green the
+	// guard above exists to refuse, one step later.
+	if checked == 0 {
+		return fmt.Errorf("chart-publish-check: parsed %d first-party chart pin(s) but resolved NONE of them "+
+			"against ghcr.io — every one either failed to parse as an OCI ref or pointed at another host. "+
+			"Reporting them published having checked none is the failure this guard exists to prevent", len(pins))
+	}
 	if len(missing) == 0 {
 		fmt.Printf("chart-publish-check: %d pinned first-party chart(s) are published.\n", checked)
 		return nil
@@ -173,17 +183,35 @@ func Run(o Opts) error {
 	if err := o.Dispatch(o.Token, o.TemplateRepo, o.Ref); err != nil {
 		return fmt.Errorf("dispatching publish-charts.yml on %s: %w", o.Ref, err)
 	}
+	// A TRANSIENT REGISTRY ERROR IS NOT A VERDICT ON THE PUBLISH. Returning on the
+	// first one meant a single GHCR 429 or 5xx during the wait killed the self-heal
+	// that had just been dispatched — and GHCR secondary rate limits are exactly
+	// what makes a publish need self-healing in the first place.
+	//
+	// But riding it out silently would trade a precise error for a vague one: if
+	// the budget expires having never got a clean read, "still unpublished" is a
+	// conclusion the polls do not support. lastReadErr keeps the real reason, and
+	// the final error says which of the two happened.
+	var lastReadErr error
 	for i := 0; i < cpMax1(o.Retries); i++ {
 		o.Sleep(o.Interval)
 		still, _, cerr := collectMissingPins(missing, o.Published)
 		if cerr != nil {
-			return cerr
+			lastReadErr = cerr
+			fmt.Fprintf(os.Stderr, "chart-publish-check: registry read failed while waiting (%v) — retrying (%d/%d)\n",
+				cerr, i+1, cpMax1(o.Retries))
+			continue
 		}
+		lastReadErr = nil
 		if len(still) == 0 {
 			fmt.Printf("chart-publish-check: all %d chart(s) published after dispatch.\n", len(missing))
 			return nil
 		}
 		missing = still
+	}
+	if lastReadErr != nil {
+		return fmt.Errorf("chart-publish-check: publish-charts.yml was dispatched, but the registry could not "+
+			"be read on the final attempt, so whether the %d chart(s) published is UNKNOWN: %w", len(missing), lastReadErr)
 	}
 	for _, m := range missing {
 		printMissingChart(m)
@@ -257,10 +285,28 @@ func scanPublishPins(root string) ([]publishPin, error) {
 	return pins, err
 }
 
+// defaultChartsRegistryRe reads `chartsRegistry:` out of the same document. The
+// bootstrap-apps values file documents the rule this implements: "Components with
+// `source.type: oci` whose `source.repoURL` is empty default to this registry."
+var defaultChartsRegistryRe = regexp.MustCompile(`(?m)^\s*chartsRegistry:\s*(\S+)\s*$`)
+
 // extractPublishPins pairs each `chart: <name>` line with its sibling `repoURL:`
 // and `targetRevision:`/`version:` keys in the same source block (same indent).
+//
+// AN OMITTED repoURL IS THE DEFAULT, NOT AN ABSENCE, and reading it as an absence
+// is what made this whole check vacuous. `repoURL != "" && version != ""` dropped
+// every pin that inherits `global.chartsRegistry` — which, measured on this repo,
+// is all but ONE of them. llz-cluster-foundation and llz-cert-automation in
+// kubernetes-charts/llz-argo-bootstrap-apps/values.yaml both omit it, and those
+// two are the exact charts this file's header cites as the reason the check
+// exists. The len(pins)==0 guard could never fire either, because llz-openbao-
+// platform DOES carry a repoURL and kept the count at one.
 func extractPublishPins(content string) []publishPin {
 	lines := strings.Split(content, "\n")
+	fallback := ""
+	if m := defaultChartsRegistryRe.FindStringSubmatch(content); m != nil {
+		fallback = strings.Trim(m[1], `"'`)
+	}
 	var pins []publishPin
 	for i, line := range lines {
 		m := pubChartRe.FindStringSubmatch(line)
@@ -272,6 +318,14 @@ func extractPublishPins(content string) []publishPin {
 		version := charty.SiblingValue(lines, i, indent, "targetRevision")
 		if version == "" {
 			version = charty.SiblingValue(lines, i, indent, "version")
+		}
+		if repoURL == "" {
+			// Only for FIRST-PARTY charts. A third-party pin with no repoURL is a
+			// template error, not something to resolve against our registry — and
+			// guessing would send this check looking for argo-workflows in GHCR.
+			if strings.HasPrefix(name, "llz-") {
+				repoURL = fallback
+			}
 		}
 		if repoURL != "" && version != "" {
 			pins = append(pins, publishPin{RepoURL: repoURL, Chart: name, Version: version, Line: i + 1})

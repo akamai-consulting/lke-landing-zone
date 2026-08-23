@@ -3,6 +3,7 @@ package releasepublish
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,4 +159,60 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// TestPublishChartsRefusesASelectionThatMatchesNothing.
+//
+// `--selected llz-cluster-foundaton` published nothing and exited 0, so the
+// caller — a workflow_dispatch, or chart-publish-check's self-heal, which builds
+// the name from a pin it just read — reported success and then waited for a chart
+// that was never going to appear. The name comes from a human or from another
+// command's output; either way, failing to match it is the one thing worth saying
+// out loud.
+func TestPublishChartsRefusesASelectionThatMatchesNothing(t *testing.T) {
+	reg := &fakeRegistry{published: map[string]bool{}, signed: map[string]bool{}}
+	stubPublishSeams(t, reg, map[string][2]string{
+		"llz-cluster-foundation": {"llz-cluster-foundation", "0.1.14"},
+		"llz-openbao-platform":   {"llz-openbao-platform", "0.1.22"},
+	})
+	root := mkChartDirs(t, "llz-cluster-foundation", "llz-openbao-platform")
+
+	err := RunPublishCharts(PublishChartsOpts{
+		ChartsDir: root, Selected: "llz-cluster-foundaton", // typo, one letter
+		Registry: "ghcr.io", Owner: "acme", RepoPath: "acme/charts", DestDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("a --selected that matched no chart published nothing and reported success — the caller " +
+			"then waits for a chart that will never appear")
+	}
+	if !strings.Contains(err.Error(), "llz-cluster-foundaton") {
+		t.Errorf("the error must quote the selection that missed, got: %v", err)
+	}
+	// And it must name what WAS there, because the fix is almost always a typo and
+	// the reader cannot spot it against a list they do not have.
+	if !strings.Contains(err.Error(), "llz-cluster-foundation") {
+		t.Errorf("the error must list the charts that exist, got: %v", err)
+	}
+	if len(reg.pushes) != 0 {
+		t.Errorf("nothing may be published on a missed selection, got %v", reg.pushes)
+	}
+}
+
+// TestPublishChartsStillHonoursARealSelection pins the exclusion.
+func TestPublishChartsStillHonoursARealSelection(t *testing.T) {
+	reg := &fakeRegistry{published: map[string]bool{}, signed: map[string]bool{}}
+	stubPublishSeams(t, reg, map[string][2]string{
+		"llz-cluster-foundation": {"llz-cluster-foundation", "0.1.14"},
+		"llz-openbao-platform":   {"llz-openbao-platform", "0.1.22"},
+	})
+	root := mkChartDirs(t, "llz-cluster-foundation", "llz-openbao-platform")
+	if err := RunPublishCharts(PublishChartsOpts{
+		ChartsDir: root, Selected: "llz-cluster-foundation",
+		Registry: "ghcr.io", Owner: "acme", RepoPath: "acme/charts", DestDir: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("a real selection must publish: %v", err)
+	}
+	if len(reg.pushes) != 1 {
+		t.Errorf("expected exactly the selected chart to be pushed, got %v", reg.pushes)
+	}
 }
