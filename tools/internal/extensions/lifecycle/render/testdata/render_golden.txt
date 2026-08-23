@@ -1108,7 +1108,7 @@ autoscaler_enabled = false
 # Managed App Platform: true → Linode installs+manages apl-core + provisions the
 # akamai-apl.net domain (bootstrap-cluster skips its own apl-core install). ADR 0005.
 apl_enabled = false
---- terraform-iac-bootstrap/cluster/variables.tf  sha256=b4b86b915499a80bd3056ec340cf51f5a9f43ac1c45e748f01b2cbb72e6b3bda  bytes=7017
+--- terraform-iac-bootstrap/cluster/variables.tf  sha256=f5695913aeea924f5875e27c9a3a96bc110fbf4bcdfeaa64c2562d5d2ac697e7  bytes=7024
 --- terraform-iac-bootstrap/cluster/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
 --- terraform-iac-bootstrap/databases/backend.tf  sha256=05b5bc85fcc4dbf59e7040db9e5b0ecd68673d4da0295b5315702e41894da6a6  bytes=1820
 --- terraform-iac-bootstrap/databases/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
@@ -1294,7 +1294,7 @@ obj_cluster = "us-sea-1"
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
 # TF_VAR_linode_token Linode account API token (object-storage:read_write)
---- terraform-iac-bootstrap/object-storage/variables.tf  sha256=6ac2987c6fe7b92b068baf03eb43a2b0e3305abe3119189f411757884d72c65f  bytes=2983
+--- terraform-iac-bootstrap/object-storage/variables.tf  sha256=4e19d9244519fe2e3f48e4166c8d7ccb338d71cb9165be218fb5d83e171479c7  bytes=2990
 --- terraform-iac-bootstrap/object-storage/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
 --- terraform-iac-bootstrap/vpc/backend.tf  sha256=5079fd70224c8b0a7a4ba7229ca655b7d779ee5e2d80bed952db0b4d40ab7081  bytes=1151
 --- terraform-iac-bootstrap/vpc/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563

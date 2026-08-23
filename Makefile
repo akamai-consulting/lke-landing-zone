@@ -607,8 +607,21 @@ define LLZ_CI
 	fi
 endef
 
+# --rules-dir is THE WHOLE platform-apl TREE, not the one directory named after
+# the concern. check-prom-rules walks a root and filters by `kind: PrometheusRule`,
+# so pointing it at a subdirectory did not scope the check to the interesting
+# rules — it scoped it to the rules that happened to live in the folder someone
+# thought of, and llz-reconciler's PrometheusRule has never been in it. Nineteen
+# rules, including every alert on the reconciler's own gauges, were outside the
+# corpus of the gate that validates PromQL.
+#
+# A gate with a hole in its corpus is the vacuous-pass shape one level up: it
+# passes, it prints a count, and the count is of the files it was pointed at
+# rather than the files that exist. TestEveryPrometheusRuleIsInTheCheckedCorpus
+# is the other half — it fails when a PrometheusRule lands outside whatever root
+# this line names.
 prom-rules-check:
-	$(call LLZ_CI,check-prom-rules,--rules-dir ../platform-apl/components/observability/prometheus-rules)
+	$(call LLZ_CI,check-prom-rules,--rules-dir ../platform-apl)
 
 helm-repos:
 	$(RETRY) helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update

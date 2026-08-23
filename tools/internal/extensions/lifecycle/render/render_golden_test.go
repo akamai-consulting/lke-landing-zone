@@ -34,17 +34,160 @@ package render
 // from the cwd, so the copier token is pinned via the environment below. Paths are
 // emitted relative to a fixed fake instance root.
 //
-// Regenerate with: go test ./cmd/llz -run TestRenderGolden -update
+// Regenerate with:
+//
+//	go test ./internal/extensions/lifecycle/render -run TestRenderGolden -update
+//
 // Review the diff before committing it — that review IS the test.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE COMPARISON WAS GONE FOR TWO WEEKS AND THE FIXTURE STAYED, which is worse
+// than having neither. cd076cd1 moved the golden to internal/cli/testdata while
+// the test stayed here, and 09f7f3b7 had already removed TestRenderGolden itself
+// — leaving 1,303 lines recording a render nothing compared, and a serializer
+// self-test underneath that kept the file looking tested.
+//
+// It matters because of what this file is for: `llz render` is the spec→artifact
+// mapping, and every PR that changes it is supposed to arrive as a reviewable
+// diff of these bytes. Three PRs changed the mapping while the golden sat stale,
+// and nothing said so.
+//
+// So the test is back, the golden lives beside the code that produces it, and
+// TestTheGoldenIsActuallyCompared below fails if the comparison is ever removed
+// again while the fixture remains — the specific shape that happened here.
+// ─────────────────────────────────────────────────────────────────────────────
 
 import (
 	"crypto/sha256"
+	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
+
+var updateGolden = flag.Bool("update", false, "rewrite testdata/render_golden.txt from the current render")
+
+// goldenSpec is deliberately richer than renderSpec: two environments (so
+// per-env variation shows), an explicit component toggle, a non-default node
+// pool, and object storage. Every field here widens what the golden guards, so
+// additions are cheap and worthwhile.
+const goldenSpec = `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: goldeninst }
+spec:
+  instance: { upstreamOrg: akamai-consulting, repo: akamai-consulting/goldeninst, forge: github, templateVersion: main }
+  environments:
+    prod:
+      cluster:
+        clusterLabel: platform-prod
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: g8-dedicated-8-4, count: 5 }
+        bootstrap: { name: platform-prod, domainSuffix: prod.example.com }
+        objectStorage: { cluster: us-ord-7 }
+      components:
+        harbor: { enabled: false }
+    staging:
+      cluster:
+        clusterLabel: platform-staging
+        region: us-sea
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: g6-standard-4, count: 2 }
+        bootstrap: { name: platform-staging, domainSuffix: staging.example.com }
+        objectStorage: { cluster: us-sea-1 }
+`
+
+const goldenPath = "testdata/render_golden.txt"
+
+func TestRenderGolden(t *testing.T) {
+	// Pin the copier token that tfrootTokens() resolves; otherwise the render
+	// depends on a .copier-answers.yml in whatever cwd the test runs from.
+	t.Setenv("LLZ_TEMPLATE_REF", "v0.0.0-golden")
+
+	const instRoot = "/inst"
+	lz, err := clusterspec.Decode([]byte(goldenSpec))
+	if err != nil {
+		t.Fatalf("decode goldenSpec: %v", err)
+	}
+	// tfvarsOnly=false so the apl-values artifacts render too — those are the
+	// committed, Argo-synced half of the output and the half `llz render --check`
+	// drift-guards in an instance.
+	targets, err := renderTargets(lz, []string{"prod", "staging"},
+		filepath.Join(instRoot, "terraform-iac-bootstrap"),
+		filepath.Join(instRoot, "apl-values"), false)
+	if err != nil {
+		t.Fatalf("renderTargets: %v", err)
+	}
+	got := serializeRender(targets, instRoot)
+
+	if *updateGolden {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("wrote %s (%d bytes) — REVIEW THE DIFF before committing", goldenPath, len(got))
+		return
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v (regenerate with: go test ./internal/extensions/lifecycle/render -run TestRenderGolden -update)", err)
+	}
+	if string(want) == got {
+		return
+	}
+
+	// Report the first differing line rather than dumping both files: a 50KB
+	// diff in test output is not read, and an unread failure message is the same
+	// problem as an unread golden.
+	gl, wl := strings.Split(got, "\n"), strings.Split(string(want), "\n")
+	for i := 0; i < len(gl) || i < len(wl); i++ {
+		var g, w string
+		if i < len(gl) {
+			g = gl[i]
+		}
+		if i < len(wl) {
+			w = wl[i]
+		}
+		if g != w {
+			t.Fatalf("render output changed at line %d\n  golden: %q\n  actual: %q\n\n"+
+				"If this change is intended, regenerate and REVIEW the diff:\n"+
+				"  go test ./internal/extensions/lifecycle/render -run TestRenderGolden -update\n"+
+				"(%d golden lines, %d actual)", i+1, w, g, len(wl), len(gl))
+		}
+	}
+	t.Fatalf("render output differs in length only: golden %d lines, actual %d", len(wl), len(gl))
+}
+
+// THE FIXTURE AND THE COMPARISON MUST LIVE OR DIE TOGETHER. Removing the test
+// and leaving the file is what happened here, and it is invisible: 1,303 lines
+// of testdata read like coverage, and `go test` says nothing about a golden
+// nobody opens.
+//
+// This cannot catch its own deletion, and does not pretend to. What it catches
+// is the asymmetric case that actually occurred — the file surviving a
+// comparison that did not — by failing loudly if the golden is unreadable or
+// empty, so a future refactor that moves one and not the other stops here rather
+// than three PRs later.
+func TestTheGoldenIsActuallyCompared(t *testing.T) {
+	st, err := os.Stat(goldenPath)
+	if err != nil {
+		t.Fatalf("%s is unreadable (%v) — TestRenderGolden above is the only thing that reads it, "+
+			"and a golden nobody can open is a fixture pretending to be a gate", goldenPath, err)
+	}
+	if st.Size() == 0 {
+		t.Fatalf("%s is empty", goldenPath)
+	}
+}
 
 // specDerived reports whether a rendered path's CONTENT is produced by the
 // spec→artifact mapping (golden it in full) rather than copied from the embedded
