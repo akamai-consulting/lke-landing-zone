@@ -209,6 +209,37 @@ jobs:
         with:
           install-path: ${{ github.workspace }}/bin/llz
 
+      # PRESENCE IS NOT VALIDITY, and the Preconditions step above can only check
+      # presence — it runs before llz is built, so it has nothing to probe with.
+      #
+      # WHAT THAT COST, measured rather than imagined. A run on 2026-08-23 printed
+      # "E2E config OK" and then died 20 seconds later at "Stamp provenance +
+      # force-push instantiation" with
+      #
+      #   remote: Invalid username or token. Password authentication is not
+      #   supported for Git operations.
+      #   ##[error]Process completed with exit code 128
+      #
+      # An expired PAT, reported as a git exit code at the tenth step, on a run
+      # that had already spent four steps and a Go build getting there. Nothing in
+      # the message names the credential, says it expired, or says which repo to
+      # rotate it on.
+      #
+      # `llz ci validate-tokens` is the verb for exactly this and already existed —
+      # "a set-but-dead token fails FAST with 'rotate it' instead of 401/403-ing
+      # deep inside a 45-minute provision". It was wired into the instance
+      # pipeline and not into the lane that instantiates it, which is the one place
+      # a dead E2E_DISPATCH_TOKEN can stop everything.
+      #
+      # It probes only what is IN THE ENVIRONMENT and skips the rest, so mapping
+      # one secret here probes exactly that one. Vacuity is covered by the
+      # Preconditions step above rather than here: it already fails when the
+      # secret is empty, so by this point there is something to probe.
+      - name: E2E_DISPATCH_TOKEN authenticates (presence was already checked)
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci validate-tokens
+
       # Fire the ci-image build for this commit NOW (if one is needed) so its
       # publish overlaps the scaffold/render/push work below instead of the
       # "Pin instance CI images" step serially waiting out the whole build at the
