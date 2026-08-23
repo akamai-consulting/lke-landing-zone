@@ -23,6 +23,9 @@ type fakeACLKubectl struct {
 	getErr  bool   // get returns a transport-style error
 	patchNF int    // first N `patch` calls fail NotFound, then succeed
 	patches int
+	// createAlreadyExists makes `create` lose the race, which is the answer the
+	// old `apply` fallback could never produce.
+	createAlreadyExists bool
 }
 
 func (f *fakeACLKubectl) run(stdin string, args ...string) (string, error) {
@@ -43,6 +46,11 @@ func (f *fakeACLKubectl) run(stdin string, args ...string) (string, error) {
 		}
 		return "configmap/firewall-runner-acl patched", nil
 	case "apply":
+		return "configmap/firewall-runner-acl created", nil
+	case "create":
+		if f.createAlreadyExists {
+			return `Error from server (AlreadyExists): configmaps "firewall-runner-acl" already exists`, errString("exit 1")
+		}
 		return "configmap/firewall-runner-acl created", nil
 	}
 	return "", nil
@@ -149,17 +157,57 @@ func TestRegisterCreatesConfigMapWhenAbsent(t *testing.T) {
 
 	_ = registerRunnerACLIP("1.2.3.4", nil)
 
-	var applied bool
+	var created bool
 	for _, c := range fake.calls {
 		if c.args[0] == "apply" {
-			applied = true
+			t.Error("the NotFound fallback must not `apply`. It carries ONE key — this runner's lease — " +
+				"and apply is an upsert whose three-way merge computes DELETIONS from the live object's " +
+				"last-applied-configuration. Two runners both seeing NotFound means the second one's apply " +
+				"REMOVES the first one's lease, the controller evicts that runner's IP from the " +
+				"control-plane ACL, and its kubectl calls start failing mid-job.")
+		}
+		if c.args[0] == "create" {
+			created = true
 			if !strings.Contains(c.stdin, "kind: ConfigMap") || !strings.Contains(c.stdin, "ip-1.2.3.4") {
-				t.Errorf("apply manifest missing fields:\n%s", c.stdin)
+				t.Errorf("create manifest missing fields:\n%s", c.stdin)
 			}
 		}
 	}
-	if !applied {
-		t.Errorf("expected apply to create the ConfigMap on NotFound")
+	if !created {
+		t.Errorf("expected create to make the ConfigMap on NotFound")
+	}
+}
+
+// TestRegisterRetriesThePatchWhenItRacesACreator. `create` returning AlreadyExists
+// is the answer the isAlreadyExists branch was written for — and could never
+// receive, because `apply` does not return it. That branch was dead code guarding
+// against the exact race the call it guarded was causing.
+func TestRegisterRetriesThePatchWhenItRacesACreator(t *testing.T) {
+	now := time.Date(2026, 6, 12, 17, 0, 0, 0, time.UTC)
+	// NotFound on the first patch, then a creator wins the race, then our retry
+	// patch succeeds against the ConfigMap they made.
+	fake := &fakeACLKubectl{getJSON: "", patchNF: 1, createAlreadyExists: true}
+	withFakeKubectl(t, fake, now)
+
+	if err := registerRunnerACLIP("1.2.3.4", nil); err != nil {
+		t.Fatalf("racing a creator must converge, not fail: %v", err)
+	}
+	var patchesAfterCreate int
+	seenCreate := false
+	for _, c := range fake.calls {
+		switch {
+		case c.args[0] == "create":
+			seenCreate = true
+		case c.args[0] == "patch" && seenCreate:
+			patchesAfterCreate++
+		}
+	}
+	if !seenCreate {
+		t.Fatal("no create attempt — this test is not exercising the race")
+	}
+	if patchesAfterCreate == 0 {
+		t.Error("after losing the create race the lease must be re-PATCHED onto the winner's ConfigMap; " +
+			"giving up here leaves this runner with no lease and the controller evicts its IP")
 	}
 }
 
