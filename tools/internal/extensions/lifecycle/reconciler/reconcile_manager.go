@@ -75,7 +75,42 @@ type reconciler struct {
 // watchReconnectBackoff is the pause before re-establishing a dropped watch
 // stream, so a persistently-failing watch does not hot-loop. A package var so
 // tests can shrink it.
+//
+// FLAT, IT DID NOT PREVENT THE HOT LOOP IT NAMES. A watch that fails IMMEDIATELY —
+// RBAC denied on the collection, the CRD version gone, a field selector the
+// apiserver rejects — returns at once, the catch-up fire() runs a FULL RELIST, and
+// one second later it all happens again. For the life of the pod: roughly 1Hz of
+// list traffic against the apiserver, with llz_reconcile_up pinned at 1 the whole
+// time, because the reconcile passes are succeeding. It is the watch that is dead,
+// and nothing said so — the error was discarded with `_ =`.
 var watchReconnectBackoff = time.Second
+
+// watchReconnectBackoffMax caps the exponential retreat. One minute keeps a
+// recovering watch responsive while costing a permanently broken one ~60 relists
+// an hour instead of ~3,600; the reconciler's own resync interval is what keeps
+// correctness while the watch is down, so backing off loses nothing but load.
+var watchReconnectBackoffMax = time.Minute
+
+// watchBackoffWait is the seam the reconnect loop actually pauses on. It exists
+// so a test can observe the DURATIONS THE LOOP ASKS FOR — asserting that
+// watchBackoffFor is exponential proves nothing about whether the loop calls it,
+// and a first cut of that test stayed green while the call site was reverted to
+// the flat constant.
+var watchBackoffWait = func(d time.Duration) <-chan time.Time { return time.After(d) }
+
+// watchBackoffFor returns the pause after n consecutive watch failures: the base
+// doubled per failure, capped. n == 0 (the watch ran and closed cleanly) is the
+// base, which is the old behaviour for the case it was written for.
+func watchBackoffFor(n int) time.Duration {
+	d := watchReconnectBackoff
+	for i := 0; i < n && d < watchReconnectBackoffMax; i++ {
+		d *= 2
+	}
+	if d > watchReconnectBackoffMax {
+		d = watchReconnectBackoffMax
+	}
+	return d
+}
 
 // kicker fans a one-shot "reconcile now" signal out to every manager loop. It lets
 // leader-election acquisition (leaderElector.onAcquire) re-run the gated reconcilers
@@ -159,16 +194,51 @@ func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		lbl := map[string]string{"reconciler": r.name}
+		fails := 0
+		// PUBLISHED BEFORE THE FIRST STREAM, so the series exists from pod start.
+		// Written only after r.watch returned, a healthy long-lived stream produced
+		// NO SERIES AT ALL — nothing exists until the first close — and an alert on
+		// `llz_watch_connected == 0` cannot fire on a metric that is absent, which
+		// is precisely the state a wedged watch leaves behind. 1 is the honest
+		// starting value: the loop is about to connect, and a failure drives it to 0
+		// on the next line, where it STAYS until a stream closes cleanly. So a
+		// permanently broken watch pins 0 rather than flapping at the backoff
+		// cadence, and a stream that never closes stays 1.
+		reg.SetGauge("llz_watch_connected",
+			"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 1)
 		for ctx.Err() == nil {
-			_ = r.watch(ctx, fire)
+			err := r.watch(ctx, fire)
 			if ctx.Err() != nil {
 				return
+			}
+			if err != nil {
+				fails++
+				reg.AddCounter("llz_watch_errors_total",
+					"total watch-stream failures per reconciler", lbl, 1)
+				reg.SetGauge("llz_watch_connected",
+					"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 0)
+				// Logged on the first failure and then on powers of two, so a
+				// permanently broken watch is visible without burying every other
+				// line in the pod's log. Discarding it entirely — which is what
+				// `_ = r.watch(...)` did — left an RBAC denial looking exactly like
+				// a healthy stream that happened to close.
+				if fails == 1 || fails&(fails-1) == 0 {
+					log.Printf("reconcile %q: watch failed (%d consecutive): %v", r.name, fails, err)
+				}
+			} else {
+				if fails > 0 {
+					log.Printf("reconcile %q: watch re-established after %d failure(s)", r.name, fails)
+				}
+				fails = 0
+				reg.SetGauge("llz_watch_connected",
+					"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 1)
 			}
 			fire() // stream dropped mid-run — reconcile to catch anything missed
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(watchReconnectBackoff):
+			case <-watchBackoffWait(watchBackoffFor(fails)):
 			}
 		}
 	}()

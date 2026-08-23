@@ -1,9 +1,11 @@
 package reconciler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -289,5 +291,209 @@ func waitFor(t *testing.T, counter *atomic.Int64, want int64) {
 		default:
 			time.Sleep(2 * time.Millisecond)
 		}
+	}
+}
+
+// ── C04: a watch that fails instantly used to hot-loop, silently ─────────────
+
+// TestWatchBackoffRetreatsOnConsecutiveFailures.
+//
+// `_ = r.watch(ctx, fire)` discarded the error, and the reconnect pause was FLAT.
+// A watch that fails immediately — RBAC denied on the collection, the CRD version
+// gone, a field selector the apiserver rejects — returned at once, the catch-up
+// fire() ran a FULL RELIST, and one second later it all happened again. Roughly
+// 1Hz of list traffic against the apiserver for the life of the pod, with
+// llz_reconcile_up pinned at 1 the whole time, because the reconcile passes were
+// succeeding. It was the watch that was dead.
+func TestWatchBackoffRetreatsOnConsecutiveFailures(t *testing.T) {
+	prevBase, prevMax := watchReconnectBackoff, watchReconnectBackoffMax
+	t.Cleanup(func() { watchReconnectBackoff, watchReconnectBackoffMax = prevBase, prevMax })
+	watchReconnectBackoff, watchReconnectBackoffMax = time.Second, time.Minute
+
+	// A clean close keeps the base pause — that is the case the constant was
+	// written for and it must not get slower.
+	if got := watchBackoffFor(0); got != time.Second {
+		t.Errorf("a watch that ran and closed cleanly = %v, want the base %v", got, time.Second)
+	}
+	if got := watchBackoffFor(1); got != 2*time.Second {
+		t.Errorf("after 1 failure = %v, want 2s", got)
+	}
+	if got := watchBackoffFor(4); got != 16*time.Second {
+		t.Errorf("after 4 failures = %v, want 16s", got)
+	}
+	// Capped, so a permanently broken watch settles instead of retreating forever.
+	if got := watchBackoffFor(30); got != time.Minute {
+		t.Errorf("after 30 failures = %v, want the cap %v", got, time.Minute)
+	}
+}
+
+// TestWatchLoopActuallyBacksOff is the half the function test above cannot cover.
+// Asserting watchBackoffFor is exponential says nothing about whether the LOOP
+// calls it — a first cut of this gate stayed green with the call site reverted to
+// the flat constant, which is precisely the defect. This records the durations the
+// loop asks for.
+func TestWatchLoopActuallyBacksOff(t *testing.T) {
+	prevBase, prevMax, prevWait := watchReconnectBackoff, watchReconnectBackoffMax, watchBackoffWait
+	t.Cleanup(func() {
+		watchReconnectBackoff, watchReconnectBackoffMax, watchBackoffWait = prevBase, prevMax, prevWait
+	})
+	watchReconnectBackoff, watchReconnectBackoffMax = time.Second, time.Minute
+
+	var mu sync.Mutex
+	var waited []time.Duration
+	watchBackoffWait = func(d time.Duration) <-chan time.Time {
+		mu.Lock()
+		waited = append(waited, d)
+		mu.Unlock()
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{} // fire immediately; the test is about the VALUE asked for
+		return ch
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var watches int32
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(context.Context, func()) error {
+			if atomic.AddInt32(&watches, 1) >= 4 {
+				cancel()
+			}
+			return errors.New("watch denied")
+		},
+	}
+	runWatchReconcilerLoop(ctx, metrics.NewRegistry(), time.Now, r, nil)
+
+	mu.Lock()
+	got := append([]time.Duration(nil), waited...)
+	mu.Unlock()
+	if len(got) < 3 {
+		t.Fatalf("expected at least 3 reconnect pauses, got %v", got)
+	}
+	for i := 1; i < 3; i++ {
+		if got[i] <= got[i-1] {
+			t.Errorf("pause %d (%v) did not grow past pause %d (%v) — the loop is still using a flat "+
+				"interval, which is the ~1Hz apiserver relist loop this backoff exists to end",
+				i, got[i], i-1, got[i-1])
+		}
+	}
+}
+
+// TestWatchFailurePublishesItsState. The error was discarded entirely: no log, no
+// metric. An RBAC denial looked exactly like a healthy stream that happened to
+// close, and llz_reconcile_up stayed 1 because the reconcile passes were fine.
+func TestWatchFailurePublishesItsState(t *testing.T) {
+	prevBase, prevMax := watchReconnectBackoff, watchReconnectBackoffMax
+	t.Cleanup(func() { watchReconnectBackoff, watchReconnectBackoffMax = prevBase, prevMax })
+	watchReconnectBackoff, watchReconnectBackoffMax = time.Millisecond, 2*time.Millisecond
+
+	reg := metrics.NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+	var watches int32
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(ctx context.Context, _ func()) error {
+			if atomic.AddInt32(&watches, 1) >= 3 {
+				cancel()
+			}
+			return errors.New("clusterrole denies watch on clustersecretstores")
+		},
+	}
+	runWatchReconcilerLoop(ctx, reg, time.Now, r, nil)
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "llz_watch_errors_total") {
+		t.Error("a failing watch must publish llz_watch_errors_total — otherwise the only symptom is " +
+			"apiserver load nobody attributes to this pod")
+	}
+	if !strings.Contains(out, `llz_watch_connected{reconciler="es-store-recovery"} 0`) {
+		t.Errorf("a failing watch must publish llz_watch_connected 0; got:\n%s", out)
+	}
+}
+
+// TestWatchConnectedIsPublishedBeforeTheFirstClose.
+//
+// llz_watch_connected was written only after r.watch RETURNED, so a healthy
+// long-lived stream — the normal case — published no series at all: nothing
+// existed from pod start until the first close. An alert on
+// `llz_watch_connected == 0` cannot fire on a metric that is absent, which is
+// exactly the state a wedged watch leaves behind, so the gauge could not do the
+// one job it was added for.
+func TestWatchConnectedIsPublishedBeforeTheFirstClose(t *testing.T) {
+	prevWait := watchBackoffWait
+	t.Cleanup(func() { watchBackoffWait = prevWait })
+	watchBackoffWait = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reg := metrics.NewRegistry()
+	open := make(chan struct{})
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(wctx context.Context, _ func()) error {
+			close(open)
+			<-wctx.Done() // a stream that stays up, which is what healthy looks like
+			return wctx.Err()
+		},
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); runWatchReconcilerLoop(ctx, reg, time.Now, r, nil) }()
+	<-open
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+
+	if !strings.Contains(buf.String(), `llz_watch_connected{reconciler="es-store-recovery"} 1`) {
+		t.Errorf("a stream that is up published no llz_watch_connected series, so an alert on == 0 "+
+			"has nothing to evaluate and a permanently dead watch pages nobody. Registry was:\n%s", buf.String())
+	}
+}
+
+// TestAFailingWatchPinsTheGaugeAtZero — the other side. The gauge must not flap
+// back to 1 at the backoff cadence just because the loop re-entered the watch;
+// only a stream that closed CLEANLY may claim health.
+func TestAFailingWatchPinsTheGaugeAtZero(t *testing.T) {
+	prevWait := watchBackoffWait
+	t.Cleanup(func() { watchBackoffWait = prevWait })
+	watchBackoffWait = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reg := metrics.NewRegistry()
+	var n int32
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(context.Context, func()) error {
+			if atomic.AddInt32(&n, 1) >= 5 {
+				cancel()
+			}
+			return errors.New("watch denied")
+		},
+	}
+	runWatchReconcilerLoop(ctx, reg, time.Now, r, nil)
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `llz_watch_connected{reconciler="es-store-recovery"} 0`) {
+		t.Errorf("a watch that never establishes must pin the gauge at 0:\n%s", buf.String())
 	}
 }
