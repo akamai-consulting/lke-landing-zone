@@ -399,3 +399,47 @@ spec:
             summary: 'the apl-overlay lane finds no source for {{ $labels.env }} on {{ $labels.branch }}'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/apl-values-propagation.md"
             description: 'The reconciler has found no apl-overlay source on {{ $labels.branch }} for an hour, so it is writing nothing and reporting no error. Either this instance has no overlay to apply, or the lane is reading the wrong branch/env — check the reconciler Deployment env against apl-values/{{ $labels.env }}/apl-overlay/ on {{ $labels.branch }}.'
+        - alert: LLZReconcilerWatchDown
+          # A reconciler's watch stream is how it reacts in seconds instead of on
+          # the 300s resync. A permanently broken one — an RBAC denial, a CRD that
+          # went away, an aggregated apiserver refusing the stream — is SILENT:
+          # every lane still reports healthy on its resync, so llz_reconcile_up
+          # stays 1 and nothing else notices that the event path is dead.
+          #
+          # The gauge is published at loop start, before the first stream, so this
+          # series exists from pod start. Written only after a stream CLOSED, a
+          # healthy long-lived watch published nothing at all and this alert could
+          # not fire on the metric being absent, which is exactly the shape a
+          # wedged watch leaves behind.
+          #
+          # 15m: the watch backoff caps well inside that, so a stream that is
+          # merely being re-established rides through.
+          expr: max by (reconciler) (llz_watch_connected{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the {{ $labels.reconciler }} reconciler watch stream is down'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'The {{ $labels.reconciler }} watch stream has been failing for 15m, so this lane only reacts on its 300s resync and reacts to nothing in between. The reconciler pod log names the failure (it logs the first one and then on powers of two); llz_watch_errors_total gives the rate. An RBAC denial on the watched kind and an apiserver ERROR frame (410 Gone, aggregation failure) both land here.'
+        - alert: LLZESRecoveryFanOutStuck
+          # The es-store-recovery lane withholds its Ready transition when the
+          # force-sync fan-out fails, so the next pass retries it. That is right
+          # for a transient failure and catastrophic for a stable one: the lane
+          # runs on a 300s resync AND on every ClusterSecretStore watch event, and
+          # each retry MergePatches a fresh force-sync stamp onto every
+          # ExternalSecret in the cluster, each of which makes ESO refetch from
+          # OpenBao. The code bounds the retries and then consumes the transition,
+          # which stops the write storm but leaves the underlying error unfixed —
+          # and leaves whatever the fan-out could not patch on ESO's own ~16m
+          # backoff with nothing driving it.
+          expr: max(rate(llz_reconcile_errors_total{namespace="llz-reconciler",reconciler="es-store-recovery"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: the es-store-recovery force-sync fan-out keeps failing
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'es-store-recovery has been erroring for 30m. Its job is to force-sync every ExternalSecret when the openbao ClusterSecretStore recovers, and llz_es_recovery_nudges_total is the evidence that authorised removing the CI-side force-sync — if that counter is flat while this fires, nothing is driving ESO after a store recovery. The pod log names the first failing object.'

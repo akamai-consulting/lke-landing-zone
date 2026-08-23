@@ -44,10 +44,28 @@ const (
 )
 
 // ESStoreRecovery carries the lane's poll-to-poll memory: the store's last
-// observed readiness ("" until first observed, else "true"/"false").
+// observed readiness ("" until first observed, else "true"/"false") and how many
+// consecutive fan-outs have failed while holding the transition open.
 type ESStoreRecovery struct {
 	lastReady string
+	fanoutErr int
 }
+
+// esFanoutRetryBudget bounds how long an unconsumed transition may be retried.
+//
+// WITHHOLDING THE TRANSITION IS ONLY SAFE IF THE FAILURE CAN STOP. Retrying
+// forever turns a STABLY failing condition into a permanent write loop: this lane
+// runs on a 300s resync AND on every ClusterSecretStore watch event, and each
+// retry MergePatches a fresh force-sync stamp onto every ExternalSecret in the
+// cluster, each of which makes ESO do a full fetch from OpenBao. Meanwhile
+// llz_reconcile_up sits at 0 and llz_reconcile_errors_total climbs, so
+// LLZReconcilerReportingDown and LLZReconcilerErroring page continuously about a
+// loop that will never converge on its own.
+//
+// After the budget the transition is CONSUMED and the error still returned, so
+// the failure stays visible as an error rather than as an outage. A real
+// transient — a 409, a rolling apiserver — is gone long before three passes.
+const esFanoutRetryBudget = 3
 
 // reconcileESStoreRecovery reads the store's Ready condition, publishes the
 // llz_es_store_ready gauge, and bumps every ExternalSecret/PushSecret when the
@@ -112,19 +130,36 @@ func (s *ESStoreRecovery) Reconcile(ctx context.Context, client capability.KubeA
 	// held its trigger in memory and threw it away before doing the work.
 	bumped, err := forceSyncESKinds(ctx, client)
 	if err != nil {
-		// lastReady deliberately UNCHANGED: the next poll re-enters this branch and
-		// re-runs the fan-out. force-sync is an annotation write with a fresh
-		// timestamp, so repeating it is free.
-		fmt.Printf("es-store-recovery: store Ready — force-sync incomplete after %d object(s) (%v); "+
-			"leaving the transition unconsumed so the next poll retries\n", bumped, err)
+		s.fanoutErr++
+		if s.fanoutErr < esFanoutRetryBudget {
+			// lastReady deliberately UNCHANGED: the next poll re-enters this branch
+			// and re-runs the fan-out. force-sync is an annotation write with a
+			// fresh timestamp, so repeating it is free — for a BOUNDED number of
+			// passes. See esFanoutRetryBudget for why it cannot be unbounded.
+			fmt.Printf("es-store-recovery: store Ready — force-sync incomplete after %d object(s) (%v); "+
+				"leaving the transition unconsumed, retry %d/%d\n", bumped, err, s.fanoutErr, esFanoutRetryBudget)
+			return err
+		}
+		s.lastReady = fmt.Sprintf("%t", ready)
+		s.fanoutErr = 0
+		fmt.Printf("es-store-recovery: store Ready — force-sync has failed %d consecutive times (%v); "+
+			"CONSUMING the transition so this lane stops re-patching every ExternalSecret in the cluster "+
+			"every pass. %d object(s) were bumped. This is a stable failure, not a slow one — fix the "+
+			"underlying error; ESO's own ~16m backoff is what retries the rest.\n",
+			esFanoutRetryBudget, err, bumped)
 		return err
 	}
 	s.lastReady = fmt.Sprintf("%t", ready)
-	// COUNTED ONLY ON SUCCESS. Incrementing before the error check made a fan-out
-	// that patched nothing indistinguishable from one that patched everything, on
-	// the one counter an operator would consult to ask which it was.
-	reg.AddCounter("llz_es_recovery_nudges_total",
-		"count of store-recovery force-sync fan-outs (one per Ready transition)", nil, 1)
+	s.fanoutErr = 0
+	// COUNTED ON WORK DONE, not on the absence of an error. `err == nil` made a
+	// fan-out that patched nothing indistinguishable from one that patched
+	// everything on the one counter an operator would consult to ask which it was —
+	// and this counter is the recorded evidence that authorised deleting the
+	// CI-side ES force-sync (docs/designs/secrets-before-apps.md).
+	if bumped > 0 {
+		reg.AddCounter("llz_es_recovery_nudges_total",
+			"count of store-recovery force-sync fan-outs (one per Ready transition)", nil, 1)
+	}
 	fmt.Printf("es-store-recovery: store Ready — force-synced %d ExternalSecret/PushSecret object(s)\n", bumped)
 	return nil
 }
@@ -190,9 +225,17 @@ func forceSyncESKinds(ctx context.Context, client capability.KubeAPI) (int, erro
 	var firstErr error
 	for _, listPath := range []string{esListPath, pushListPath} {
 		obj, status, err := client.GetJSON(ctx, listPath)
+		if err == nil && status == 404 {
+			// THE KIND IS NOT SERVED — not applicable, not a failure. PushSecret is
+			// still v1alpha1 upstream and a cluster on a different CRD version simply
+			// has no such collection. Counting that as an error kept firstErr
+			// permanently non-nil, and the caller withholds its transition on any
+			// error: a cluster without PushSecrets would have re-patched every
+			// ExternalSecret it has, on every 300s resync and every watch event,
+			// forever. Skip it and let ExternalSecrets get their bump.
+			continue
+		}
 		if err != nil || status < 200 || status >= 300 || obj == nil {
-			// PushSecrets may legitimately be absent (CRD version drift) — record
-			// and continue so ExternalSecrets still get their bump.
 			if firstErr == nil {
 				if err == nil {
 					err = fmt.Errorf("status %d", status)

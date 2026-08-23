@@ -196,6 +196,17 @@ func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func
 		defer wg.Done()
 		lbl := map[string]string{"reconciler": r.name}
 		fails := 0
+		// PUBLISHED BEFORE THE FIRST STREAM, so the series exists from pod start.
+		// Written only after r.watch returned, a healthy long-lived stream produced
+		// NO SERIES AT ALL — nothing exists until the first close — and an alert on
+		// `llz_watch_connected == 0` cannot fire on a metric that is absent, which
+		// is precisely the state a wedged watch leaves behind. 1 is the honest
+		// starting value: the loop is about to connect, and a failure drives it to 0
+		// on the next line, where it STAYS until a stream closes cleanly. So a
+		// permanently broken watch pins 0 rather than flapping at the backoff
+		// cadence, and a stream that never closes stays 1.
+		reg.SetGauge("llz_watch_connected",
+			"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 1)
 		for ctx.Err() == nil {
 			err := r.watch(ctx, fire)
 			if ctx.Err() != nil {
@@ -206,7 +217,7 @@ func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func
 				reg.AddCounter("llz_watch_errors_total",
 					"total watch-stream failures per reconciler", lbl, 1)
 				reg.SetGauge("llz_watch_connected",
-					"1 if the reconciler's watch stream last closed cleanly", lbl, 0)
+					"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 0)
 				// Logged on the first failure and then on powers of two, so a
 				// permanently broken watch is visible without burying every other
 				// line in the pod's log. Discarding it entirely — which is what
@@ -221,7 +232,7 @@ func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func
 				}
 				fails = 0
 				reg.SetGauge("llz_watch_connected",
-					"1 if the reconciler's watch stream last closed cleanly", lbl, 1)
+					"1 if the reconciler's watch stream is established or last closed cleanly", lbl, 1)
 			}
 			fire() // stream dropped mid-run — reconcile to catch anything missed
 			select {

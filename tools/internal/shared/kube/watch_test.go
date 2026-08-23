@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,5 +159,61 @@ func TestWatchMalformedFrameErrors(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("fn called %d times, want 1 (the one valid frame before the garbage)", calls)
+	}
+}
+
+// TestWatchAnErrorFrameIsNotACleanClose.
+//
+// The apiserver reports 410 Gone (the requested resourceVersion aged out),
+// aggregation failures and cache errors IN BAND: an ERROR frame carrying a
+// metav1.Status, followed by EOF. Neither the transport-error nor the non-2xx
+// path above sees any of that. Handing the frame to fn — which every caller in
+// this repo ignores — and then returning nil on the EOF scored a stream the
+// server had just killed as a healthy close, so the reconcile loop reset its
+// consecutive-failure count, published llz_watch_connected=1, left
+// llz_watch_errors_total flat, and re-established at the 1s backoff floor: a
+// ~1Hz relist loop with a gauge asserting it was fine.
+func TestWatchAnErrorFrameIsNotACleanClose(t *testing.T) {
+	c, _ := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		streamEvents(t, w,
+			WatchEvent{Type: "ADDED", Object: app("a")},
+			WatchEvent{Type: "ERROR", Object: map[string]any{
+				"kind": "Status", "code": float64(410), "reason": "Expired",
+				"message": "too old resource version: 1 (2)",
+			}},
+		)
+	})
+
+	seen := 0
+	err := c.Watch(context.Background(), "/apis/argoproj.io/v1alpha1/applications", "", func(WatchEvent) error {
+		seen++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("an ERROR frame ends the stream and is NOT a clean close — returning nil resets the " +
+			"caller's failure count and its backoff, producing a relist loop the metrics call healthy")
+	}
+	// The reason and code are what separate "relist, this is routine" from "your
+	// RBAC is wrong"; collapsing them to "watch failed" sends the reader to a
+	// live cluster to find out which they have.
+	for _, want := range []string{"410", "Expired", "too old resource version"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must carry the status detail %q, got: %v", want, err)
+		}
+	}
+	if seen != 1 {
+		t.Errorf("frames before the ERROR must still be delivered, got %d", seen)
+	}
+}
+
+// TestWatchAnErrorFrameWithNoStatusStillErrors — fail closed. A frame this code
+// cannot parse is still an ERROR frame, and reading it as a clean close is the
+// same defect with a less helpful message.
+func TestWatchAnErrorFrameWithNoStatusStillErrors(t *testing.T) {
+	c, _ := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		streamEvents(t, w, WatchEvent{Type: "ERROR"})
+	})
+	if err := c.Watch(context.Background(), "/api/v1/nodes", "", func(WatchEvent) error { return nil }); err == nil {
+		t.Error("an ERROR frame with an unreadable status must still end the stream as an error")
 	}
 }

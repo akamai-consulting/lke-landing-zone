@@ -415,3 +415,85 @@ func TestWatchFailurePublishesItsState(t *testing.T) {
 		t.Errorf("a failing watch must publish llz_watch_connected 0; got:\n%s", out)
 	}
 }
+
+// TestWatchConnectedIsPublishedBeforeTheFirstClose.
+//
+// llz_watch_connected was written only after r.watch RETURNED, so a healthy
+// long-lived stream — the normal case — published no series at all: nothing
+// existed from pod start until the first close. An alert on
+// `llz_watch_connected == 0` cannot fire on a metric that is absent, which is
+// exactly the state a wedged watch leaves behind, so the gauge could not do the
+// one job it was added for.
+func TestWatchConnectedIsPublishedBeforeTheFirstClose(t *testing.T) {
+	prevWait := watchBackoffWait
+	t.Cleanup(func() { watchBackoffWait = prevWait })
+	watchBackoffWait = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reg := metrics.NewRegistry()
+	open := make(chan struct{})
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(wctx context.Context, _ func()) error {
+			close(open)
+			<-wctx.Done() // a stream that stays up, which is what healthy looks like
+			return wctx.Err()
+		},
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); runWatchReconcilerLoop(ctx, reg, time.Now, r, nil) }()
+	<-open
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+
+	if !strings.Contains(buf.String(), `llz_watch_connected{reconciler="es-store-recovery"} 1`) {
+		t.Errorf("a stream that is up published no llz_watch_connected series, so an alert on == 0 "+
+			"has nothing to evaluate and a permanently dead watch pages nobody. Registry was:\n%s", buf.String())
+	}
+}
+
+// TestAFailingWatchPinsTheGaugeAtZero — the other side. The gauge must not flap
+// back to 1 at the backoff cadence just because the loop re-entered the watch;
+// only a stream that closed CLEANLY may claim health.
+func TestAFailingWatchPinsTheGaugeAtZero(t *testing.T) {
+	prevWait := watchBackoffWait
+	t.Cleanup(func() { watchBackoffWait = prevWait })
+	watchBackoffWait = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reg := metrics.NewRegistry()
+	var n int32
+	r := reconciler{
+		name: "es-store-recovery",
+		run:  func(context.Context) error { return nil },
+		watch: func(context.Context, func()) error {
+			if atomic.AddInt32(&n, 1) >= 5 {
+				cancel()
+			}
+			return errors.New("watch denied")
+		},
+	}
+	runWatchReconcilerLoop(ctx, reg, time.Now, r, nil)
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `llz_watch_connected{reconciler="es-store-recovery"} 0`) {
+		t.Errorf("a watch that never establishes must pin the gauge at 0:\n%s", buf.String())
+	}
+}

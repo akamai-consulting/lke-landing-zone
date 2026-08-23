@@ -225,6 +225,19 @@ func (c *Client) Watch(ctx context.Context, path, resourceVersion string, fn fun
 			}
 			return fmt.Errorf("watch %s: decoding stream: %w", path, err)
 		}
+		if ev.Type == "ERROR" {
+			// AN IN-BAND ERROR ENDS THE STREAM AND IT IS NOT A CLEAN CLOSE. The
+			// apiserver reports 410 Gone (the requested resourceVersion aged out),
+			// aggregation failures and cache errors as an ERROR frame followed by
+			// EOF — not as a transport error and not as a non-2xx, both of which are
+			// already handled above. Passing the frame to fn (which every caller
+			// ignores) and then returning nil on the following EOF scored a stream
+			// the server had just killed as a healthy close: the reconcile loop reset
+			// its consecutive-failure count, published llz_watch_connected=1, left
+			// llz_watch_errors_total flat, and re-established at the 1s backoff floor
+			// — a ~1Hz relist loop with a gauge asserting it was fine.
+			return fmt.Errorf("watch %s: server ended the stream with an ERROR frame: %s", path, watchErrorDetail(ev.Object))
+		}
 		if err := fn(ev); err != nil {
 			return err
 		}
@@ -239,4 +252,24 @@ func truncate(b []byte) string {
 		return s[:max] + "…"
 	}
 	return s
+}
+
+// watchErrorDetail renders the metav1.Status carried by an ERROR watch frame.
+// The reason and code are what separate "relist, this is routine" (410
+// Gone/Expired) from "your RBAC is wrong" — collapsing both to "watch failed"
+// sends the reader to a live cluster to find out which they have.
+func watchErrorDetail(obj map[string]any) string {
+	if obj == nil {
+		return "no status object"
+	}
+	reason, _ := obj["reason"].(string)
+	message, _ := obj["message"].(string)
+	code := ""
+	if c, ok := obj["code"].(float64); ok {
+		code = fmt.Sprintf("%d ", int(c))
+	}
+	if reason == "" && message == "" {
+		return fmt.Sprintf("%sunparseable status", code)
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s%s: %s", code, reason, message))
 }
