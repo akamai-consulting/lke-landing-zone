@@ -5,7 +5,7 @@ package capability
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry, so a
 // hand-transcribed number cannot quietly drift out of the argument it supports.
 //
-// `read-repo` is declared by 51 of 71 extensions — more than any other grant. The
+// `read-repo` is declared by 52 of 72 extensions — more than any other grant. The
 // validator refuses a gate that declares anything ELSE (checkBindingCeiling), so
 // without this fence the entire safety claim of `llz ci gates` — "these touch
 // nothing but files" — rests on a check of the DECLARATION, with nothing stopping

@@ -119,6 +119,10 @@ var componentless = map[string]bool{
 	// instance cannot turn it off, and turning it off is never the right answer —
 	// the state it detects hard-blocks every existing instance's `tofu init`.
 	"guard-provider-lock": true,
+	// Whether an upgrade may destroy a live resource is a property of the RELEASE,
+	// not of any component an instance can turn off — and an instance that could
+	// disable it would be the one most in need of it.
+	"assert-upgrade-plan": true,
 	// Same: the caller/callee permission contract is a property of the workflow
 	// files themselves, not of any component an instance can disable.
 	"reusable-workflow-caller-permissions": true,

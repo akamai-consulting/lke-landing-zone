@@ -1530,7 +1530,15 @@ categories:
     #                       the fence and the reporting are all in
     #                       extensions/guards/providerlock, which is where ADR 0013
     #                       says they belong.
-    budget: 1967
+    #   1,968 / 129 files  +1 the `upgradeplan` import for `llz ci
+    #                       assert-upgrade-plan`. IRREDUCIBLE, the same shape as the
+    #                       entry above: the verb's command was folded onto the
+    #                       existing assert-adopter-pin AddCommand call and every
+    #                       line of its logic, reporting and parsing lives in
+    #                       extensions/assertions/upgradeplan, so the only line here
+    #                       is the import that makes the constructor nameable. A
+    #                       verb cannot be wired with fewer.
+    budget: 1968
     exact: true
     include:
       - "tools/internal/cli/*.go"

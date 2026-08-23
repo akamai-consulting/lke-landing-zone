@@ -23,6 +23,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/upgradeplan"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/callerperms"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
@@ -467,7 +468,11 @@ func ciCmd() *cobra.Command {
 	// at a release TAG (every e2e run pins a sha) whose images come from `llz tokens`
 	// (every e2e run uses pin-instance-images). That blind spot shipped a broken
 	// first-run to a live adopter with e2e color.Green throughout.
-	c.AddCommand(templatecommit.AssertAdopterPinCmd())
+	// Beside assert-adopter-pin: both exist because every e2e lane runs the ONE
+	// configuration in which the thing under test cannot be wrong — a fresh
+	// instantiation at the commit under test. That one pins the release-tag image
+	// chain; this one reads a plan taken against state an OLDER release created.
+	c.AddCommand(templatecommit.AssertAdopterPinCmd(), upgradeplan.Cmd())
 	// Two CI guards over this repo's own workflow files, neither of which any single
 	// file can be wrong about on its own: setup-go-sole-site holds the Go toolchain
 	// action to ONE site (a second copy had already drifted a major version), and
