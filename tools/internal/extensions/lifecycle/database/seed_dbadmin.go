@@ -23,6 +23,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +83,37 @@ func RunSeedDBAdmin(region string) error {
 		return err
 	}
 	if len(conns) == 0 {
+		// EMPTY IS ONLY OK IF NOTHING WAS DECLARED, and this is the whole reason the
+		// check exists. `terraform output connections` on a databases root that has
+		// not been applied yet is indistinguishable, at this line, from one applied
+		// against a deployment that declares no clusters — both are an empty map.
+		//
+		// The delivered pipeline used to make that difference reachable: on
+		// `module=all`, bootstrap-openbao did not depend on apply-databases, so it
+		// ran WHILE Postgres was provisioning. The seed steps are gated on
+		// `llz ci db-declared`, which reads the SPEC, so they ran; this line then
+		// reported "nothing to seed" and exited 0. OpenBao finished the bootstrap
+		// with no db-admin credential, rotate-on-create had nothing to rotate, and
+		// the PROVISIONING password Terraform had just written into state stayed
+		// live — with the run green from end to end. llz-terraform.yml now orders
+		// the two jobs; this refuses the contradiction from the other side, which is
+		// the half that also covers a hand-run seed and a standalone
+		// llz-bootstrap-openbao.yml dispatch.
+		//
+		// It names what IS there (the tfvars it read) rather than only what is
+		// missing, because "declared" and "applied" are different repairs.
+		if d := dbDeclares(region); d.Declared || !d.Answered {
+			why := fmt.Sprintf("%s declares database clusters", d.Path)
+			if !d.Answered {
+				why = fmt.Sprintf("%s could not be read, so an empty output cannot be confirmed harmless", d.Path)
+			}
+			cwd, _ := os.Getwd()
+			return fmt.Errorf("seed-db-admin: %s, but `terraform output -json connections` (run in %s) is empty — "+
+				"the databases root has not been applied for %q yet, so there is nothing to copy into OpenBao. "+
+				"Run the databases apply first (Terraform Infrastructure → action=apply, module=databases or all) "+
+				"and re-run the bootstrap. Exiting 0 here would leave OpenBao with no db-admin credential while the "+
+				"PROVISIONING password stayed live in Terraform state", why, cwd, region)
+		}
 		fmt.Println("seed-db-admin: no database clusters in this deployment — nothing to seed.")
 		return nil
 	}

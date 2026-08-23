@@ -2,6 +2,8 @@ package database
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -252,4 +254,114 @@ func equalStrs(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ── "declared but absent" is the state the bootstrap used to sail through ─────
+//
+// llz-terraform.yml's bootstrap-openbao did not depend on apply-databases, so on
+// module=all the seed ran while Postgres was still provisioning: the workflow's
+// gate (`llz ci db-declared`) reads the SPEC and said yes, `terraform output
+// connections` read the STATE and came back empty, and the command called that
+// "nothing to seed" and exited 0 — leaving OpenBao with no db-admin credential
+// and the provisioning password live in Terraform state, run green.
+//
+// The ordering fix and this check catch it from opposite sides, which is why both
+// exist: the `needs:` covers the pipeline, this covers a hand-run seed and a
+// standalone llz-bootstrap-openbao.yml dispatch, where no ordering applies.
+
+// TestSeedDBAdminRefusesDeclaredButUnapplied is the mutation-sensitive half: it
+// must fail if the guard is removed, and the empty output alone must not be
+// enough to trigger it (TestSeedDBAdminIsANoOpWithoutClusters pins that side).
+func TestSeedDBAdminRefusesDeclaredButUnapplied(t *testing.T) {
+	for _, tc := range []struct{ name, outputs string }{
+		{"empty map", connectionsOutput(`{}`)},
+		{"null value", connectionsOutput(`null`)},
+		{"output absent entirely", `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeDBTfvars(t, "prod", "databases = {\n  main = {}\n}\n")
+			h := newSeedDBAdminHarness(t, tc.outputs, nil)
+			err := RunSeedDBAdmin("prod")
+			if err == nil {
+				t.Fatal("a deployment that DECLARES clusters and has none in state must not report a clean no-op — " +
+					"that is the run that finished with no db-admin credential and the provisioning password live in state")
+			}
+			// Name what IS there, not only what is missing: "declared" and
+			// "applied" are different repairs and the message has to separate them.
+			for _, want := range []string{"prod.tfvars", "has not been applied", "databases"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error should mention %q, got: %v", want, err)
+				}
+			}
+			if len(h.writes) != 0 {
+				t.Errorf("expected no writes, got %v", h.writeOrder)
+			}
+		})
+	}
+}
+
+// TestSeedDBAdminRefusesWhenItCannotTellWhatWasDeclared — an unreadable tfvars is
+// "could not tell", not "nothing declared". Folding the two together is how the
+// fail-closed arm above gets quietly disarmed by a permissions problem.
+func TestSeedDBAdminRefusesWhenItCannotTellWhatWasDeclared(t *testing.T) {
+	writeDBTfvars(t, "prod", "")
+	// A DIRECTORY where the tfvars belongs: os.ReadFile fails with something that
+	// is not IsNotExist, on every platform, without depending on running as a
+	// non-root user (a 0o000 file is readable by root, so CI would skip the arm).
+	if err := os.MkdirAll(filepath.Join("terraform-iac-bootstrap", "databases", "prod.tfvars"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newSeedDBAdminHarness(t, connectionsOutput(`{}`), nil)
+	err := RunSeedDBAdmin("prod")
+	if err == nil {
+		t.Fatal("an unreadable tfvars must not be treated as `no clusters declared`")
+	}
+	if !strings.Contains(err.Error(), "could not be read") {
+		t.Errorf("error should say the tfvars could not be read, got: %v", err)
+	}
+	if len(h.writes) != 0 {
+		t.Errorf("expected no writes, got %v", h.writeOrder)
+	}
+}
+
+// TestSeedDBAdminNoOpStaysCleanWhenNothingIsDeclared pins the exclusion. A guard
+// that only proves it fires is one edit from failing every instance that declared
+// no databases — which is most of them.
+func TestSeedDBAdminNoOpStaysCleanWhenNothingIsDeclared(t *testing.T) {
+	for _, tc := range []struct{ name, tfvars string }{
+		{"tfvars absent entirely", ""},
+		{"tfvars present, no databases assignment", "# rendered, nothing declared\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeDBTfvars(t, "prod", tc.tfvars)
+			h := newSeedDBAdminHarness(t, connectionsOutput(`{}`), nil)
+			if err := RunSeedDBAdmin("prod"); err != nil {
+				t.Fatalf("expected a clean no-op, got %v", err)
+			}
+			if len(h.writes) != 0 {
+				t.Errorf("expected no writes, got %v", h.writeOrder)
+			}
+		})
+	}
+}
+
+// TestSeedDBAdminFindsTheTfvarsFromTheDatabasesRoot. The delivered pipeline runs
+// db-declared from the repo root and seed-db-admin with the databases root as its
+// working directory — it has to, because it reads that root's state. A single
+// hardcoded path would make the seed answer "nothing declared" from the only
+// directory it is ever actually run in, disarming the check above in production
+// while every test above still passed.
+func TestSeedDBAdminFindsTheTfvarsFromTheDatabasesRoot(t *testing.T) {
+	writeDBTfvars(t, "prod", "databases = {\n  main = {}\n}\n")
+	if err := os.Chdir(filepath.Join("terraform-iac-bootstrap", "databases")); err != nil {
+		t.Fatal(err)
+	}
+	newSeedDBAdminHarness(t, connectionsOutput(`{}`), nil)
+	err := RunSeedDBAdmin("prod")
+	if err == nil {
+		t.Fatal("run from the databases root, the seed must still see that prod declares clusters")
+	}
+	if !strings.Contains(err.Error(), "prod.tfvars") {
+		t.Errorf("error should name the tfvars it read, got: %v", err)
+	}
 }

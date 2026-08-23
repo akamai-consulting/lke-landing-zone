@@ -25,26 +25,74 @@ import (
 // declared at least one cluster.
 var dbDeclaredAssignRe = regexp.MustCompile(`(?m)^[ \t]*databases[ \t]*=`)
 
+// dbTFVarsCandidates are the two places <region>.tfvars can be, because the
+// delivered pipeline runs these commands from two different directories:
+// `llz ci db-declared` from the repo root, `llz ci seed-db-admin` with the
+// databases root as its working directory (it has to — it reads that root's
+// terraform state). One path would have made whichever command moved silently
+// answer "no tfvars, nothing declared", which is the exact wrong answer for the
+// half that fails closed on it.
+func dbTFVarsCandidates(region string) []string {
+	return []string{
+		filepath.Join("terraform-iac-bootstrap", "databases", region+".tfvars"),
+		region + ".tfvars",
+	}
+}
+
+// dbDeclaration is what the rendered tfvars says about a deployment's databases,
+// and — separately — whether that could be ANSWERED at all. The two callers want
+// different things from an indefinite answer: db-declared treats it as "none" so
+// a skip decision cannot fail a bootstrap, while seed-db-admin refuses to call it
+// "none" when nothing was seeded.
+type dbDeclaration struct {
+	Declared bool   // the tfvars carries a `databases = …` assignment
+	Present  bool   // a tfvars was found at one of the candidate paths
+	Answered bool   // false only when a tfvars existed and could not be READ
+	Path     string // the path consulted, for the message
+}
+
+// dbDeclares reads the deployment's rendered databases tfvars. An ABSENT file is
+// a definite "none declared": DatabasesTFVars omits the assignment for an empty
+// map, and `llz render` writes no databases tfvars for a deployment that declares
+// none. An UNREADABLE one (a permission error, a directory in its place) is
+// indefinite and says so.
+func dbDeclares(region string) dbDeclaration {
+	first := ""
+	for _, p := range dbTFVarsCandidates(region) {
+		if first == "" {
+			first = p
+		}
+		body, err := os.ReadFile(p)
+		if err == nil {
+			return dbDeclaration{Declared: dbDeclaredAssignRe.Match(body), Present: true, Answered: true, Path: p}
+		}
+		if !os.IsNotExist(err) {
+			return dbDeclaration{Answered: false, Path: p}
+		}
+	}
+	return dbDeclaration{Answered: true, Path: first}
+}
+
 func RunDBDeclared(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	path := filepath.Join("terraform-iac-bootstrap", "databases", region+".tfvars")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		// A missing tfvars is a deployment that never rendered the databases root
-		// (or predates it) — that is "none declared", not a failure. Anything that
-		// genuinely matters fails later, loudly, in terraform itself.
-		fmt.Printf("db-declared: %s not present — no database clusters declared for %s.\n", path, region)
-		return ghaout.Append("GITHUB_OUTPUT", "declared=false")
+	d := dbDeclares(region)
+	switch {
+	case !d.Answered:
+		// Unreadable is not the same as absent, but the SKIP decision is the wrong
+		// place to fail over the difference: anything that genuinely matters fails
+		// later, loudly, in terraform itself. seed-db-admin is the half that fails
+		// closed, and it re-reads this for exactly that reason.
+		fmt.Printf("db-declared: %s could not be read — treating as no database clusters declared for %s.\n", d.Path, region)
+	case !d.Present:
+		fmt.Printf("db-declared: %s not present — no database clusters declared for %s.\n", d.Path, region)
+	case d.Declared:
+		fmt.Printf("db-declared: %s declares database clusters for %s — the admin seed will run.\n", d.Path, region)
+	default:
+		fmt.Printf("db-declared: %s declares no database clusters for %s — skipping the admin seed.\n", d.Path, region)
 	}
-	declared := dbDeclaredAssignRe.Match(body)
-	if declared {
-		fmt.Printf("db-declared: %s declares database clusters for %s — the admin seed will run.\n", path, region)
-	} else {
-		fmt.Printf("db-declared: %s declares no database clusters for %s — skipping the admin seed.\n", path, region)
-	}
-	return ghaout.Append("GITHUB_OUTPUT", fmt.Sprintf("declared=%t", declared))
+	return ghaout.Append("GITHUB_OUTPUT", fmt.Sprintf("declared=%t", d.Declared))
 }
 
 func RunDBSummary(region, phase string) error {

@@ -623,6 +623,26 @@ and stops there. PR previews use `plan-cluster-pr`.
   asserts the object-storage state is populated before `mint-bootstrap-objkeys`
   mints the scoped keys against them. It now runs on `module=cluster` too; the
   `|| skipped` arm in the `if:` above is a forward-compat backstop.
+- `apply-databases` — the Managed Postgres clusters exist before `llz ci
+  seed-db-admin` is asked to seed their credentials. **This dependency was missing,
+  and the failure was silent in both directions.** On `module=all` the two ran in
+  parallel; the seed steps are gated on `llz ci db-declared`, which reads the
+  *spec*, so they ran — and `terraform output -json connections` against a
+  databases root that had not applied yet came back empty, which `seed-db-admin`
+  reported as "no database clusters in this deployment — nothing to seed" and
+  exited 0. OpenBao finished the bootstrap with no `db-admin` credential,
+  rotate-on-create therefore never ran, and the **provisioning password Terraform
+  had just written into state stayed live** — with the whole run green.
+  `seed-db-admin` now fails closed on that contradiction (declared in the tfvars,
+  absent from the state), so the ordering and the check each catch it from one
+  side; the check is also what covers a hand-run seed or a standalone
+  `llz-bootstrap-openbao.yml` dispatch, where no ordering applies.
+
+  **The cost is real and accepted.** On `module=all`, a deployment that declares a
+  Managed Postgres now waits for it (15+ minutes) before bootstrap starts, where it
+  used to overlap. A deployment that declares none renders `databases = {}`,
+  applies in seconds, is `skipped` on `module=cluster`, and loses nothing — the
+  `|| skipped` arm covers both.
 
 ### `secrets: inherit`
 
