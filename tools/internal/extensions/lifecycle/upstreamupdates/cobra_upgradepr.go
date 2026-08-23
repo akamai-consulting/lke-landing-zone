@@ -149,12 +149,16 @@ var (
 		// skipped"), and on the fallback that claim is false about the very pull
 		// request carrying it. The reviewer reads the body; the ::warning below goes
 		// to a run log they have no reason to open.
+		// Read ONCE, outside the attempt closure: the deployments do not change
+		// between a 422 retry and the attempt before it, and re-reading the spec per
+		// attempt would let two attempts disagree about what the body says.
+		envs := DeploymentsToApply(".")
 		attempt := func(draft, label bool) error {
 			args := []string{"pr", "create"}
 			if draft {
 				args = append(args, "--draft")
 			}
-			args = append(args, "--title", title, "--body", prBody(draft), "--base", base, "--head", head)
+			args = append(args, "--title", title, "--body", prBody(draft, envs), "--base", base, "--head", head)
 			if label {
 				args = append(args, "--label", "template-upgrade")
 			}

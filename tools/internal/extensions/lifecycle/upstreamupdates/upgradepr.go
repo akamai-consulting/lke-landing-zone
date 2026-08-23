@@ -231,6 +231,10 @@ func (d Decision) Summary(s State) string {
 // resolves every CLI invocation inside a `run:` script against the real cobra
 // tree, and it does not exempt prose — so a backticked command in a workflow
 // heredoc reds the gate. In Go it is just a string.
+// prBody TAKES `envs` because the body's last section names the deployments a
+// human has to dispatch after merging — see applyafter.go for why merging alone
+// changes nothing, and why that is invisible in the diff.
+//
 // prBody TAKES `draft` BECAUSE THE BODY MAKES A CLAIM ABOUT IT. createPR drops
 // --draft when the repository cannot open draft pull requests (a private repo on a
 // Free plan), and a fixed body then tells the reviewer the state-writing
@@ -238,22 +242,40 @@ func (d Decision) Summary(s State) string {
 // only other signal is a ::warning in the run log, which nobody reading the pull
 // request sees. Composed per attempt, so the body the reviewer reads describes the
 // pull request that was actually opened.
-func prBody(draft bool) string {
-	return prBodyHead + draftNote(draft) + prBodyTail
+func prBody(draft bool, envs []string) string {
+	return prBodyHead + draftNote(draft) + prBodyTail + applySection(envs)
 }
 
 // draftNote is the one paragraph that differs between the two.
+//
+// BOTH HALVES WERE STALE, and the draft half was actively misleading. They
+// described `plan-cluster-pr` — "marking it ready is what asks for the plan", and
+// on the fallback a warning that its `llz ci tf-import` step would write
+// cluster/<deployment>/terraform.tfstate against a concurrent apply. That job is
+// RETIRED (see the note in llz-terraform.yml where it used to be: a plan against
+// live state needs env-scoped credentials a pull_request run cannot hold, and the
+// environment form fails the branch-policy lock). So there is no plan to ask for
+// on any pull request, and no tf-import on any pull-request path to warn about.
+//
+// The prose outlived the job because it lives in Go and the job lived in YAML —
+// the retirement edited the workflow and this text describes the workflow. What a
+// reviewer was told, on every automated upgrade since, was that a check existed
+// which they could summon and which would not run.
+//
+// The draft itself is KEPT and its reason restated rather than removed: a bot's
+// pull request opening un-reviewed is worth signalling, and whether to keep
+// drafting at all is a behaviour change this correction does not make.
 func draftNote(draft bool) string {
 	if draft {
-		return "- This PR opens as a DRAFT on purpose: `plan-cluster-pr` writes Terraform\n" +
-			"  state and skips drafts, so marking it ready is what asks for the plan.\n"
+		return "- This PR opens as a DRAFT because nothing has reviewed it yet. Note that no\n" +
+			"  pull request runs a Terraform plan — that needs deployment-scoped credentials\n" +
+			"  a pull_request run cannot hold — so marking it ready summons tflint, checkov\n" +
+			"  and repo-readiness, not a diff against live state.\n"
 	}
-	return "- ⚠️ **This PR is NOT a draft, and it was meant to be.** This repository cannot\n" +
-		"  open draft pull requests (a private repo on a Free plan), so the protection\n" +
-		"  below is absent: `plan-cluster-pr` IS selected, and its tf-import step writes\n" +
-		"  `cluster/<deployment>/terraform.tfstate` with nothing serialising it against\n" +
-		"  a concurrent apply. Convert this PR to a draft, or merge it promptly — do not\n" +
-		"  leave it open across an apply.\n"
+	return "- This repository cannot open draft pull requests (a private repo on a Free\n" +
+		"  plan), so this one is not one. Nothing is lost by that: the draft only ever\n" +
+		"  signalled that the PR is un-reviewed, and the state-writing job it used to\n" +
+		"  hold off is retired.\n"
 }
 
 const prBodyHead = "Automated template upgrade — opened by `.github/workflows/template-upgrade.yml`.\n" +

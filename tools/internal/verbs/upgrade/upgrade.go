@@ -23,6 +23,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -203,6 +204,16 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// Re-rendering cannot reach it. Left unsaid, the skew surfaces as a failed
 	// `llz ci assert-image-fresh` on the first pipeline run after every upgrade.
 	reportCIImageSkew(newRef)
+
+	// ── Lever 5: what the upgrade has NOT done, which reads like something it did ──
+	// Same family as levers 3 and 4 and the easiest of the three to miss, because
+	// nothing about the tree looks unfinished. The roots are gitignored and
+	// generated from the pin at every terraform op, so an upgrade that changes what
+	// Terraform DOES to a cluster produces no .tf diff; and llz-terraform.yml
+	// neither plans nor applies on push to main. So a merged upgrade can sit
+	// unapplied indefinitely with every check green. `llz drift` cannot see it —
+	// it compares the repo's pin to the template head and never asks a cluster.
+	reportDeploymentsToApply()
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
 	// single reviewable summary rather than a scattered surprise at commit time.
@@ -403,6 +414,34 @@ var reportCIImageSkew = func(ref string) {
 		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan(fmt.Sprintf("gh variable set %s --repo %s --body %s", s.Name, repo, s.Want)))
 	}
 	fmt.Fprintln(os.Stderr, color.Dim("  Until then the first pipeline run fails `llz ci assert-image-fresh`."))
+}
+
+// reportDeploymentsToApply names the deployments the operator still has to
+// dispatch, because merging or committing an upgrade applies nothing.
+//
+// ADVISORY, and phrased as a LIST OF DEPLOYMENTS rather than a list of stale
+// ones. Whether any of them has been applied since is not recorded anywhere this
+// command can read, and a reminder that overclaims is one people learn to skip.
+//
+// Silent outside an instance and silent for an instance with no deployment yet:
+// both are states where there is nothing useful to say, and neither is worth a
+// paragraph on every upgrade.
+//
+// Package var for the same reason its neighbours are: the real one reads the
+// spec off disk.
+var reportDeploymentsToApply = func() {
+	tfDir, _, _ := instancelayout.Detect()
+	envs := upstreamupdates.DeploymentsToApply(filepath.Dir(tfDir))
+	if len(envs) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\n%s the upgrade is in your working tree; it has not reached any cluster.\n",
+		color.Yellow("!"))
+	fmt.Fprintf(os.Stderr, "  Terraform runs on dispatch, not on push, and the roots are generated from the pin\n"+
+		"  at every op — so a change to what Terraform does shows no diff here. Apply each deployment:\n")
+	for _, e := range envs {
+		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz build "+e+" --yes"))
+	}
 }
 
 // commit stages the whole tree and records the upgrade as one labeled
