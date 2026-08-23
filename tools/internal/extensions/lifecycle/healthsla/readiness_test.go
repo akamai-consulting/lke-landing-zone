@@ -18,8 +18,10 @@ func TestRunHealthOpenbao(t *testing.T) {
 			switch {
 			case argsContain(args, "clustersecretstores"): // CSS Ready jsonpath
 				return []byte("True"), nil
-			default: // externalsecrets list
-				return itemsJSON(), nil
+			default: // externalsecrets list — NON-EMPTY: "all Ready" over zero
+				// items is not an all-clear, and asserting it here is what let the
+				// vacuous branch stand.
+				return itemsJSON(readyItem("harbor", "harbor-registry-s3")), nil
 			}
 		})
 		out := captureStdout(t, func() {

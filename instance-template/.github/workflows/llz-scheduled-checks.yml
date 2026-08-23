@@ -70,10 +70,14 @@ jobs:
   # SHARED LKE-E ACL object weekly). Daily→weekly: the in-cluster llz-reconciler
   # now alerts on all of this continuously; this run is belt-and-suspenders.
   #
-  # NO continue-on-error, anywhere — deliberately. The openbao/certmanager checks
-  # are warn-only in Go, so it could only ever hide a probe-path failure (dead
-  # checkout, failed ACL open, bad image pull) — the thing this run proves.
-  # `if: always()` on each check so one failure does not skip its siblings.
+  # NO continue-on-error, anywhere — deliberately, and the reason is no longer
+  # only "the checks are warn-only". `llz ci health-openbao` still warns and
+  # exits 0 for every unhealthy state it finds, but `llz ci health-certmanager`
+  # now FAILS when it could not read the Certificates at all — a check that
+  # rendered no verdict is not a check that passed, and continue-on-error would
+  # put that back to green. It also still catches a probe-path failure (dead
+  # checkout, failed ACL open, bad image pull), which is the thing this run
+  # proves. `if: always()` on each check so one failure does not skip its siblings.
   weekly-cluster-checks:
     name: Weekly cluster checks (${{ matrix.region }})
     needs: discover

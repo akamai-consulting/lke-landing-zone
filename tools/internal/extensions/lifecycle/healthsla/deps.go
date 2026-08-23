@@ -16,8 +16,17 @@ type Deps struct {
 	Summary func(envVar string, lines ...string) error
 
 	// BaoExec runs `bao <args>` inside an OpenBao pod, returning stdout/stderr.
+	//
+	// THE PARAMETER NAMES MATCH baoread.ExecFn EXACTLY, and that is the fix rather
+	// than a style choice. This was declared `(pod, addr, token string, ...)` and
+	// forwarded positionally into `ExecFn(pod, token, stdin string, ...)` — so
+	// `addr` landed in the TOKEN slot and `token` in the STDIN slot. Inert today
+	// because the only call site passes "" for both, but the first authenticated
+	// caller would have piped its token to the child's stdin and run the command
+	// UNAUTHENTICATED, with the token in a place nothing redacts. Identical
+	// signatures leave the forwarding with nothing to get wrong.
 	// Used for seal status, which is a read.
-	BaoExec func(pod, addr, token string, args ...string) (string, string, error)
+	BaoExec func(pod, token, stdin string, args ...string) (string, string, error)
 
 	// Exec captures a command's stdout. Only the Loki OBJ-key check needs it: it
 	// builds a `kubectl exec … bao kv metadata get` argv that carries the OpenBao

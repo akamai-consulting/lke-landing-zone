@@ -101,13 +101,18 @@ func stubKubectl(t *testing.T, fn func(args []string) ([]byte, error)) {
 // check reads seal state through this (not a bare kubectl exec) so that
 // documented transient failures — konnectivity "No agent available" and friends —
 // retry instead of being reported as a sealed pod.
+// STDOUT IS FORWARDED EVEN WHEN THE STUB ERRORS. Discarding it made the real
+// sealed shape — valid JSON on stdout, exit 2 — inexpressible through this
+// helper, so every sealed test written with it had to use `(json, nil)`, a shape
+// the real exec never produces. That is precisely what let the "sealed reads as
+// UNKNOWN" defect survive a test suite that appeared to cover it.
 func stubBaoExec(t *testing.T, fn func(pod string, args []string) (string, error)) {
 	t.Helper()
 	ensureDeps(t)
 	td.BaoExec = func(pod, _, _ string, args ...string) (string, string, error) {
 		out, err := fn(pod, args)
 		if err != nil {
-			return "", err.Error(), err
+			return out, err.Error(), err
 		}
 		return out, "", nil
 	}

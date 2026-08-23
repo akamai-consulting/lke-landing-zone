@@ -5,8 +5,13 @@ package healthsla
 // + ESO ClusterSecretStore/ExternalSecrets) and `llz ci health-certmanager`
 // (every Certificate's Ready condition) — the native ports of the openbao-health
 // and certmanager-health jobs. Both reuse the unit-tested health predicates
-// (ParseBaoStatus/ClassifyBaoSeal, FindReady) and only emit warnings + a step
-// summary; neither fails the job (the jobs are continue-on-error).
+// (ParseBaoStatus/ClassifyBaoSeal, FindReady) and emit warnings + a step summary.
+//
+// THEY DIFFER ON EXIT STATUS, and the delivered workflow's job wiring depends on
+// which. RunOpenBao warns and returns nil for every unhealthy state it finds.
+// RunCertManager RETURNS AN ERROR when it could not read the Certificates at all
+// — not when one is unhealthy, but when it rendered no verdict — because a check
+// that cannot see is not a check that passed.
 
 import (
 	"encoding/json"
@@ -108,6 +113,14 @@ func RunOpenbao(d Deps) error {
 		// were examined.
 		fmt.Fprintf(os.Stderr, "::warning::Could not list ExternalSecrets (%s) — health unknown, not 'all Ready'\n", reg)
 		summary = append(summary, "- **ExternalSecrets: UNKNOWN** — the list call failed; nothing was examined")
+	case len(esRaw) == 0:
+		// ANSWERED, AND THE ANSWER WAS "NONE". `answered` is true for a genuinely
+		// empty list AND for "the server doesn't have a resource type" — the CRD is
+		// not installed — so an ESO-less cluster reached the all-clear below having
+		// examined nothing. Both are honestly reported the same way: there is
+		// nothing here, which is not the same claim as everything being healthy.
+		fmt.Printf("No ExternalSecrets found on %s.\n", reg)
+		summary = append(summary, "- ExternalSecrets: **none found** — nothing was examined (ESO may not be installed)")
 	default:
 		fmt.Printf("All ExternalSecrets Ready on %s.\n", reg)
 		summary = append(summary, "- All ExternalSecrets: Ready")
@@ -124,8 +137,24 @@ func RunCertManager(d Deps) error {
 		"|-----------|-------------|-------|---------|",
 	}
 
+	// ItemsOK, NOT Items. A failed apiserver read yields zero items, the loop body
+	// never runs, notReady stays 0, and this printed "All cert-manager Certificates
+	// Ready" — the false all-clear the ExternalSecrets branch twenty lines below
+	// already guards against. An expiring certificate is exactly what nobody would
+	// then be told about.
+	certs, listed := kubectlprobe.ItemsOK("get", "certificates.cert-manager.io", "-A")
+	if !listed {
+		fmt.Fprintf(os.Stderr, "::error::could not list cert-manager Certificates on %s — this check "+
+			"rendered NO verdict. It is not evidence that every Certificate is Ready.\n", reg)
+		summary = append(summary, "> **Could not read Certificates** — no verdict. Check RBAC and apiserver reachability.")
+		if err := d.Summary("GITHUB_STEP_SUMMARY", summary...); err != nil {
+			return err
+		}
+		return fmt.Errorf("cert-manager Certificate list unreadable on %s", reg)
+	}
+
 	notReady := 0
-	for _, raw := range kubectlprobe.Items("get", "certificates.cert-manager.io", "-A") {
+	for _, raw := range certs {
 		var it readyResourceItem
 		if json.Unmarshal(raw, &it) != nil {
 			continue
@@ -142,10 +171,22 @@ func RunCertManager(d Deps) error {
 	}
 
 	summary = append(summary, "")
-	if notReady > 0 {
+	switch {
+	case notReady > 0:
 		fmt.Fprintf(os.Stderr, "::warning::%d Certificate(s) not Ready on %s — check cert-manager logs and ACME challenge status\n", notReady, reg)
 		summary = append(summary, fmt.Sprintf("> **Action required:** %d Certificate(s) not Ready. Run: kubectl describe certificate -A", notReady))
-	} else {
+	case len(certs) == 0:
+		// ANSWERED, AND THE ANSWER WAS "NONE". kubectlprobe treats "the server
+		// doesn't have a resource type" — the cert-manager CRDs are not installed —
+		// as an ANSWERED absence, so `listed` is true, the loop never runs, notReady
+		// stays 0, and the all-clear below fired over a corpus of zero. That is the
+		// same false all-clear the ItemsOK conversion above was made to remove, one
+		// branch further on: a cluster with no cert-manager at all reported every
+		// Certificate Ready.
+		fmt.Printf("No cert-manager Certificates found on %s.\n", reg)
+		summary = append(summary, "> **No Certificates found** — nothing was examined. cert-manager may not be "+
+			"installed, or its CRDs are not served. This is not a report that certificates are healthy.")
+	default:
 		fmt.Printf("All cert-manager Certificates Ready on %s.\n", reg)
 		summary = append(summary, "> All Certificates Ready.")
 	}
@@ -182,13 +223,28 @@ func RunCertManager(d Deps) error {
 // stub ignores args and returns canned JSON, which is why it never showed up.
 // Args are now bare, matching every other baoExecFn caller; the VAULT_* env is
 // baoExec's job alone.
+// PARSE STDOUT REGARDLESS OF THE EXEC ERROR, which is the rule
+// baoread.ParsePodStatus's own doc states and this function broke: `bao status`
+// exits NON-ZERO PRECISELY WHEN THE POD IS SEALED (2) or uninitialised (2), and
+// still prints valid JSON on stdout. Returning early on err therefore reported
+// every sealed pod as "seal state UNKNOWN" — so the `sealed` counter this
+// readiness summary publishes could never increment, and the one state it exists
+// to surface was the one state it could not see.
+//
+// The unknown case survives and still matters: no JSON at all means the exec did
+// not reach a running bao, which is a different problem from a sealed one and
+// must not be counted as sealed (that sends the operator to the unseal key, the
+// static seal key and Raft storage — three places that are all fine).
+//
+// The test's sealed case returned (json, nil), a shape the real exec never
+// produces, which is why the defect survived it.
 func baoStatus(d Deps, pod string) (st health.BaoStatus, ok bool) {
 	stdout, _, err := d.BaoExec(pod, "", "", "status", "-format=json")
-	if err != nil {
-		return health.BaoStatus{}, false
-	}
 	parsed, perr := health.ParseBaoStatus([]byte(stdout))
 	if perr != nil {
+		// No usable JSON. If the exec ALSO failed, this is "could not ask";
+		// either way there is no seal state to report.
+		_ = err
 		return health.BaoStatus{}, false
 	}
 	return parsed, true
