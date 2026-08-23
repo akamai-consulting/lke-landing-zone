@@ -115,7 +115,11 @@ func Extension() extension.Extension {
 // AFTER the sweep and never suppresses a delete, and the assertion has its own
 // entry point (RunAssertNoOrphans) whose client comes from a Deps seam. The six
 // construction sites are all transition-side. What is genuinely runtime-varying
-// is only whether a given reap run deletes at all.
+// is only whether a given run deletes at all — and EVERY site now narrows on
+// that. Two did not: RunForceDelete and RunDeleteVPC passed a hardcoded `true`,
+// so the two most destructive verbs in the package were the only two holding a
+// DELETE-capable transport through a dry run. That is what the read binding here
+// exists to prevent, and it was absent from exactly the paths that most need it.
 // ────────────────────────────────────────────────────────────────────────────
 func cloudBinding(mutating bool) extension.Binding {
 	want := extension.Assertion

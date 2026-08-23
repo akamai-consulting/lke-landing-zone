@@ -275,7 +275,7 @@ const (
 // which is a GET/HEAD probe helper used by the encryption gates — widening it would
 // put a body path through code whose whole value is that it is simple enough to
 // trust.
-var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (int, string, error) {
+var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (int, string, bool, error) {
 	host := s3sig.Host(endpoint)
 	region := s3sig.Region(endpoint)
 	now := time.Now().UTC()
@@ -302,7 +302,7 @@ var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (in
 
 	req, err := http.NewRequest(http.MethodPost, "https://"+host, bytes.NewReader(body))
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	req.URL.Path = path
 	req.URL.RawPath = escapedPath
@@ -316,12 +316,48 @@ var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (in
 
 	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
-	return resp.StatusCode, string(rb), nil
+	// READ LIMIT + TRUNCATION SIGNAL, because one caller COUNTS in this body.
+	//
+	// The cap was 16 KiB and the response was treated as complete. s3DeleteObjects
+	// derives its survivor count from `strings.Count(body, "<Error>")`, and a
+	// DeleteObjects response reporting all 1000 keys failed runs to roughly 200 KB —
+	// so a batch in which NOTHING was deleted was read as about 80 failures, i.e.
+	// ~920 deleted. `deleted == 0` never tripped, the stall detector never fired,
+	// the running total was inflated by objects that are still there, and the drain
+	// ground through all 200 pages before failing with "still not empty", which
+	// names the wrong problem.
+	//
+	// 1 MiB comfortably holds a full 1000-key failure report; reading one byte past
+	// it is how the caller learns the body did NOT fit, so it can decline to count
+	// rather than count wrong.
+	respBody, truncated := readBoundedBody(resp.Body)
+	return resp.StatusCode, respBody, truncated, nil
 }
+
+// readBoundedBody reads at most s3ResponseReadLimit bytes and reports whether
+// there was more.
+//
+// EXTRACTED SO THE TRUNCATION FLAG IS TESTABLE. Every test in this package stubs
+// s3PostWithBody, so the flag's own derivation had no coverage at all: dropping
+// the `+1` makes `truncated` permanently false, turns the guard that reads it
+// into dead code, and leaves the suite green. Reading one byte PAST the limit is
+// the whole mechanism — io.LimitReader returns a short read with no error, so
+// without the extra byte a truncated body is indistinguishable from a complete
+// one.
+func readBoundedBody(r io.Reader) (string, bool) {
+	rb, _ := io.ReadAll(io.LimitReader(r, s3ResponseReadLimit+1))
+	if len(rb) > s3ResponseReadLimit {
+		return string(rb[:s3ResponseReadLimit]), true
+	}
+	return string(rb), false
+}
+
+// s3ResponseReadLimit bounds how much of an S3 response body is read. See
+// s3PostWithBody for why the number and the truncation flag both matter.
+const s3ResponseReadLimit = 1 << 20
 
 // s3DeleteObjects issues a bulk DeleteObjects. Content-MD5 is REQUIRED by the API
 // for this call — omit it and S3 answers 400 rather than deleting anything.
@@ -343,12 +379,20 @@ var s3DeleteObjects = func(ak, sk, endpoint, bucket string, keys []string) (int,
 	if err != nil {
 		return 0, err
 	}
-	code, respBody, err := s3PostWithBody(ak, sk, endpoint, "/"+bucket, "delete=", body)
+	code, respBody, truncated, err := s3PostWithBody(ak, sk, endpoint, "/"+bucket, "delete=", body)
 	if err != nil {
 		return 0, err
 	}
 	if code < 200 || code >= 300 {
 		return 0, fmt.Errorf("DeleteObjects returned HTTP %d: %s", code, harborauth.TruncateForError([]byte(respBody)))
+	}
+	// A BODY WE DID NOT FULLY READ CANNOT BE COUNTED, and counting it anyway is how
+	// a batch that deleted nothing reported ~920 deletions. Report every key as a
+	// survivor: the caller's next LIST sees whatever is genuinely still there, and
+	// `deleted == 0` trips the stall detector on the round it actually stalled
+	// instead of after the full page budget.
+	if truncated {
+		return len(keys), nil
 	}
 	// PER-KEY FAILURES ARE NOT A DEAD END. Quiet mode reports only failures, and Ceph
 	// returns a transient InternalError for individual keys under load — observed
@@ -360,8 +404,30 @@ var s3DeleteObjects = func(ak, sk, endpoint, bucket string, keys []string) (int,
 	// The survivors are reported to the caller instead, whose LIST/delete loop sees
 	// them again on the next pass and retries them. Only a bucket that stops making
 	// progress fails.
-	if n := strings.Count(respBody, "<Error>"); n > 0 {
-		return n, nil
+	// PARSED, NOT COUNTED. `strings.Count(body, "<Error>")` also counts the string
+	// wherever it appears — including inside a <Message> that quotes it — and gives
+	// no way to tell a body it could not understand from one reporting no failures.
+	// Unmarshalling separates those: a body that does not parse is not evidence
+	// that every key was deleted.
+	var result struct {
+		XMLName xml.Name `xml:"DeleteResult"`
+		Errors  []struct {
+			Key  string `xml:"Key"`
+			Code string `xml:"Code"`
+		} `xml:"Error"`
 	}
-	return 0, nil
+	// AN EMPTY BODY IS SUCCESS, NOT AN UNPARSEABLE ONE. Quiet mode reports only
+	// FAILURES, so a 2xx with nothing in it means every key went — and
+	// xml.Unmarshal returns io.EOF for it, which the catch-all below would grade as
+	// "every key survived". On a multi-page bucket that stalls the drain for
+	// drainMaxStalledRounds and then fails, while the deletes were succeeding the
+	// whole time. Separating the two is the difference between "I could not
+	// understand the answer" and "the answer was: nothing failed".
+	if strings.TrimSpace(respBody) == "" {
+		return 0, nil
+	}
+	if err := xml.Unmarshal([]byte(respBody), &result); err != nil {
+		return len(keys), nil
+	}
+	return len(result.Errors), nil
 }

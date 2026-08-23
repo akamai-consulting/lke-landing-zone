@@ -490,3 +490,112 @@ func TestAssertNoOrphansRidesOutTheSettlingWindow(t *testing.T) {
 		}
 	})
 }
+
+// ── the capability fence narrows with the run ────────────────────────────────
+
+// recordTeardownBinding swaps newTeardownClient for one that records the
+// `mutating` flag it is handed. The existing withTeardown fixture discards that
+// argument, which is why nothing noticed the two verbs below passing a hardcoded
+// `true`: every assertion was about what got DELETED, and on a dry run that is
+// correctly nothing either way. The defect is one level down, in what the
+// transport was still ABLE to do.
+func recordTeardownBinding(t *testing.T, fake teardownClient) *[]bool {
+	t.Helper()
+	got := new([]bool)
+	prev := newTeardownClient
+	newTeardownClient = func(_ string, mutating bool) teardownClient {
+		*got = append(*got, mutating)
+		return fake
+	}
+	t.Cleanup(func() { newTeardownClient = prev })
+	return got
+}
+
+// TestDestructiveVerbsTakeTheReadBindingOnADryRun.
+//
+// extension.go's cloudBinding header states the invariant this restores: a dry
+// run not deleting is enforced by ONE early `return` inside the delete closure,
+// and selecting the read binding puts a second, independent refusal at the
+// TRANSPORT — so a bug in that `if` is caught by the fence rather than by an
+// operator reading the aftermath. Every other construction site in the package
+// narrows on `Yes && !DryRun`. RunForceDelete (which deletes the cluster) and
+// RunDeleteVPC were the two that did not, which made the two most destructive
+// verbs the only two holding a DELETE-capable transport through a dry run.
+func TestDestructiveVerbsTakeTheReadBindingOnADryRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(Deps, string) error
+	}{
+		{"force-delete", func(d Deps, dir string) error { return RunForceDelete(d, "e2e", dir) }},
+		{"delete-vpc", func(d Deps, dir string) error { return RunDeleteVPC(d, "e2e", dir, "", 3, 0, false) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeTeardownClient{
+				clusters: []uint64{777},
+				vpcs:     []map[string]any{{"id": float64(55), "label": "e2e-lke-vpc"}},
+			}
+			dir, _ := withTeardown(t, fake, teardownTFVars)
+			bindings := recordTeardownBinding(t, fake)
+			d := stubTerraformOutputs(t, map[string]string{})
+			d.Confirm = func() bool { return false }
+
+			if err := tc.run(d, dir); err != nil {
+				t.Fatalf("dry run: %v", err)
+			}
+			if len(*bindings) == 0 {
+				t.Fatal("no client was built — this test is watching the wrong seam")
+			}
+			for i, mutating := range *bindings {
+				if mutating {
+					t.Errorf("client %d was built MUTATING on a dry run: the transport can still issue "+
+						"DELETE, so the only thing between --dry-run and a destroyed cluster is the one "+
+						"`if` inside the delete closure — which is exactly the single point of failure "+
+						"cloudBinding's read binding exists to back up", i)
+				}
+			}
+		})
+	}
+}
+
+// TestDestructiveVerbsStillTakeTheMutatingBindingWhenConfirmed pins the
+// exclusion: narrowing the fence must not disarm the verbs on the path that is
+// supposed to delete.
+func TestDestructiveVerbsStillTakeTheMutatingBindingWhenConfirmed(t *testing.T) {
+	fake := &fakeTeardownClient{clusters: []uint64{777}}
+	dir, _ := withTeardown(t, fake, teardownTFVars)
+	bindings := recordTeardownBinding(t, fake)
+	d := stubTerraformOutputs(t, map[string]string{})
+
+	if err := RunForceDelete(d, "e2e", dir); err != nil {
+		t.Fatalf("force-delete: %v", err)
+	}
+	if len(*bindings) == 0 || !(*bindings)[0] {
+		t.Errorf("a confirmed force-delete must hold the mutating binding, got %v", *bindings)
+	}
+	if len(fake.deletes) == 0 {
+		t.Error("a confirmed force-delete must actually delete")
+	}
+}
+
+// TestDeleteVPCTakesTheMutatingBindingWhenConfirmed. The sibling above covers
+// force-delete only; the PR body claimed it pinned "the other side" for both,
+// which it did not. Getting this one wrong is not a missed backstop — it is every
+// `DELETE /v4/vpcs/<id>` refused at the transport and a VPC left behind on every
+// teardown.
+func TestDeleteVPCTakesTheMutatingBindingWhenConfirmed(t *testing.T) {
+	fake := &fakeTeardownClient{vpcs: []map[string]any{{"id": float64(55), "label": "e2e-lke-vpc"}}}
+	dir, _ := withTeardown(t, fake, teardownTFVars)
+	bindings := recordTeardownBinding(t, fake)
+	d := stubTerraformOutputs(t, map[string]string{})
+
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
+		t.Fatalf("delete-vpc: %v", err)
+	}
+	if len(*bindings) == 0 || !(*bindings)[0] {
+		t.Errorf("a confirmed delete-vpc must hold the mutating binding, got %v — with the read binding "+
+			"every VPC DELETE is refused at the transport and the VPC leaks", *bindings)
+	}
+	if len(fake.deletes) == 0 {
+		t.Error("a confirmed delete-vpc must actually delete")
+	}
+}

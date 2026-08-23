@@ -39,10 +39,17 @@ type teardownClient interface {
 	DeleteResourcePath(ctx context.Context, path string) error
 }
 
-// newTeardownClient takes `mutating` because its three callers differ: RunCapture
-// only lists, while RunForceDelete and RunDeleteVPC delete unconditionally. One
-// factory handing all three a delete-capable client would make the read-only one
-// indistinguishable from the destroying ones at the transport.
+// newTeardownClient takes `mutating` because its three callers differ, and all
+// three now narrow on the RUN rather than on the call site: RunCapture only ever
+// lists, while RunForceDelete and RunDeleteVPC delete only when confirmed.
+//
+// This header used to say those two "delete unconditionally", which was a
+// description of the defect rather than of the intent — they passed a hardcoded
+// `true`, so a dry run held a DELETE-capable transport through the two most
+// destructive verbs in the package. One factory handing every caller a
+// delete-capable client would make the read-only one indistinguishable from the
+// destroying ones at the transport, and a hardcoded `true` made the dry run
+// indistinguishable from the real thing.
 var newTeardownClient = func(token string, mutating bool) teardownClient {
 	return capability.CloudFor(cloudBinding(mutating)).Client(token, 60*time.Second)
 }
@@ -356,10 +363,18 @@ func RunForceDelete(d Deps, region, tfDir string) error {
 	if err != nil {
 		return err
 	}
-	// RunForceDelete DELETEs the cluster, unconditionally.
-	client := newTeardownClient(token, true)
-	ctx := context.Background()
+	// THE FENCE NARROWS WITH THE RUN, and these two verbs were the exception.
+	// extension.go's cloudBinding header states the invariant: `--dry-run` not
+	// deleting is enforced by one early `return` inside the closure below, and
+	// selecting the READ binding puts a second, independent refusal at the
+	// transport so a bug in that `if` is caught by the fence and not by an operator
+	// reading the aftermath. Every other construction site narrows on
+	// `Yes && !DryRun`; this one and RunDeleteVPC passed a hardcoded `true` — so
+	// the two most destructive verbs in the package were the two holding a
+	// DELETE-capable transport through a dry run.
 	confirm := d.Confirm()
+	client := newTeardownClient(token, confirm)
+	ctx := context.Background()
 	if !confirm {
 		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
 	}
@@ -484,8 +499,9 @@ func RunDeleteVPC(d Deps, region, tfDir, clusterID string, attempts, retryDelay 
 	if err != nil {
 		return err
 	}
-	// RunDeleteVPC DELETEs the VPC and its subnets, unconditionally.
-	client := newTeardownClient(token, true)
+	// The read binding on a dry run — see RunForceDelete above for why these two
+	// were the exception and why that is backwards.
+	client := newTeardownClient(token, d.Confirm())
 	ctx := context.Background()
 	clusterID = firstNonEmpty(clusterID, os.Getenv("LKE_CLUSTER_ID"))
 
