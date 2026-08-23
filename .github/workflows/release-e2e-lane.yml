@@ -301,6 +301,38 @@ jobs:
             --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
             --field assert_loki=true
 
+      # ── The no-op plan check ──────────────────────────────────────────────────
+      # A SECOND DISPATCH, not a step inside the first: the plan has to run after
+      # the apply has finished, and the apply chain ends in bootstrap + converge.
+      #
+      # WHAT IT BUYS, for one dispatch and no extra cluster. Until now no lane
+      # produced a `tofu plan` at all — every dispatch was apply then destroy — so
+      # "apply twice, the second is a no-op" was never asked. A resource that still
+      # proposes a change here is one Terraform cannot bring to rest: it churns
+      # every future apply an adopter runs, and the worst version of the class is
+      # an attribute the Linode API accepts on create and silently ignores on
+      # update, which re-proposes itself forever while every apply reports success.
+      # linode_lke_cluster's vpc_id/subnet_id are exactly that, and today they are
+      # guarded by one hand-written coupling test naming those two attributes. This
+      # catches the NEXT such attribute without anyone knowing about it in advance.
+      #
+      # SKIPPED ON DRY_RUN, because there the first dispatch was itself a plan
+      # against state nothing applied — a non-empty result is correct there and
+      # asserting emptiness would fail a run that did nothing wrong.
+      #
+      # module=cluster, not all: the assertion is wired into the cluster root's
+      # plan step, and a narrower dispatch is a shorter run.
+      - name: Plan again and require it to propose nothing
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
+            --field action=plan --field module=cluster --field region="${E2E_ENV}" \
+            --field assert_no_changes=true
+
   # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
   # The former `validate` job dispatched the instance's cluster-health.yml in gate
   # mode (fail-on-unhealthy + assert-loki). But `fail-on-unhealthy` just re-ran

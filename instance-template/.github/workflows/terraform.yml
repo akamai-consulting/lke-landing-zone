@@ -132,6 +132,11 @@ on:
         required: false
         type: boolean
         default: false
+      assert_no_changes:
+        description: 'On a PLAN, fail if it proposes anything at all. Default false, and only correct straight AFTER an apply of this deployment — a plan you run to preview a pending change is supposed to be non-empty. The release-e2e gate dispatches a plan with this true right after its apply, to catch a resource Terraform cannot bring to rest.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -154,4 +159,5 @@ jobs:
       # Default false via the reusable's input; release-e2e's provision dispatch
       # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
       assert_loki: ${{ inputs.assert_loki || false }}
+      assert_no_changes: ${{ inputs.assert_no_changes || false }}
     secrets: inherit

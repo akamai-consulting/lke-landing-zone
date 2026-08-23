@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      assert_no_changes:
+        description: 'On a PLAN, fail if it proposes anything at all. Default false. Only correct straight after an apply of the same deployment, where the state was just made to match the configuration and an empty plan is the only right answer — the release-e2e gate dispatches a plan with this true immediately after its apply. A resource that still wants to change is one Terraform cannot bring to rest: it will churn every future apply, and the worst version of the class (an attribute the Linode API accepts on create and ignores on update) re-proposes itself forever while every apply reports success.'
+        required: false
+        type: boolean
+        default: false
       drain_data_buckets:
         description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable.'
         required: false
@@ -665,6 +670,23 @@ jobs:
         run: |
           llz ci tf-plan --out plan.txt --title "Cluster plan" \
             -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      # THE NO-OP CHECK, and it only means anything where the caller says so.
+      # Gated on the input rather than on ACTION == 'plan' because a plan is a
+      # legitimate way to PREVIEW a pending change — an operator running one
+      # before an apply expects a non-empty result, and failing them would make
+      # the preview useless. It is only after an apply of the same deployment
+      # that an empty plan is the one correct answer.
+      #
+      # tofu show -json rather than a second plan: tfplan.bin is the plan that was
+      # just displayed, so the bytes asserted on are the bytes the reader saw. Re-
+      # planning could disagree with the summary above it and there would be no way
+      # to tell which was right.
+      - name: Plan proposes nothing (post-apply no-op check)
+        if: inputs.assert_no_changes
+        working-directory: terraform-iac-bootstrap/cluster
+        run: |
+          tofu show -json tfplan.bin | llz ci assert-upgrade-plan --expect-no-changes
 
       - name: Terraform apply — cluster
         if: env.ACTION == 'apply'

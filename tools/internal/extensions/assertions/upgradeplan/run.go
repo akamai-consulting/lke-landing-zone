@@ -12,7 +12,11 @@ import (
 )
 
 // Run reads a plan JSON from `path` ("-" for stdin) and reports.
-func Run(path string, out, errOut io.Writer, stdin io.Reader) error {
+//
+// `expectNoChanges` tightens the predicate from "proposes no destruction" to
+// "proposes NOTHING". See the header of noChangesFailure for why that stricter
+// question is worth asking separately.
+func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Reader) error {
 	var raw []byte
 	var err error
 	if path == "-" {
@@ -39,6 +43,13 @@ func Run(path string, out, errOut io.Writer, stdin io.Reader) error {
 			"WAS expected, check the state key this plan was taken against.)\n")
 	}
 	if len(v.Destructive) == 0 {
+		// len(v.Changed), NOT v.Total: Total counts every resource_changes entry,
+		// and Terraform lists every resource it READ. Gating on it made a settled
+		// cluster look like a busy one — the gate would have been red on every
+		// correct run, which is how a gate gets turned off.
+		if expectNoChanges && len(v.Changed) > 0 {
+			return noChangesFailure(v, errOut)
+		}
 		return nil
 	}
 	for _, f := range v.Destructive {
@@ -65,4 +76,55 @@ give the resource a moved{}/import path, or decide the recycle is intended and
 say so in the release notes, loudly, before the tag is cut.
 `)
 	return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(v.Destructive))
+}
+
+// noChangesFailure reports a plan that proposes changes where none were expected.
+//
+// ── WHY THE STRICTER QUESTION IS WORTH ASKING SEPARATELY ──────────────────────
+//
+// Destruction is the question that matters when comparing releases. Immediately
+// after an apply, a DIFFERENT question is answerable and cheaper: the state was
+// just made to match the configuration, so a plan taken now must be empty. Any
+// change it proposes is a resource Terraform cannot bring to rest — a perpetual
+// diff.
+//
+// That is not a cosmetic complaint. A perpetual diff means every subsequent
+// apply churns the resource, every plan an operator reads is noisy enough that
+// they stop reading it, and the class hides the worst version of itself:
+// linode_lke_cluster's create-time-only vpc_id/subnet_id plan as a calm
+// `update in-place` that the API silently refuses, so the apply "succeeds" and
+// the same diff returns forever. That one is caught today by a hand-written
+// coupling test naming those two attributes. This catches the NEXT such
+// attribute without anyone having to know about it in advance.
+//
+// Only reachable when the destructive check already passed, so the two verdicts
+// never compete for the reader: a plan that destroys something is reported as
+// destroying something, not as "unexpected changes".
+func noChangesFailure(v Verdict, errOut io.Writer) error {
+	for _, rc := range v.Changed {
+		fmt.Fprintf(errOut, "::error::%s still proposes %v immediately after an apply\n", rc.Address, rc.Actions)
+	}
+	fmt.Fprintf(errOut, "\n%s a plan taken straight after an apply proposes %d change(s):\n",
+		color.Red("✗"), len(v.Changed))
+	for _, rc := range v.Changed {
+		fmt.Fprintf(errOut, "    %s — %v\n", rc.Address, rc.Actions)
+	}
+	fmt.Fprintf(errOut, `
+WHAT THIS MEANS. The apply just made the state match the configuration, so this
+plan should be empty. A resource that still wants to change is one Terraform
+cannot bring to rest: every future apply will churn it and every plan an operator
+reads will carry this noise.
+
+THE WORST VERSION OF THIS CLASS looks exactly like the mildest. An attribute the
+Linode API accepts on create and silently ignores on update plans as a calm
+"update in-place" forever — the apply reports success and changes nothing. That
+is what linode_lke_cluster's vpc_id/subnet_id do, and a resource caught here may
+be the same shape.
+
+WHAT TO DO. Either the attribute should not be managed (add it to the resource's
+lifecycle ignore_changes, as the cluster module does for its VPC binding), or the
+value the module computes genuinely differs from what the API returns and the
+module should compute the API's form.
+`)
+	return fmt.Errorf("assert-upgrade-plan: %d resource(s) still propose changes immediately after an apply", len(v.Changed))
 }
