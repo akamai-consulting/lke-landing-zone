@@ -35,11 +35,10 @@
 # correct even if a future image moves its trust store into one of them.
 #
 # HOW IT REACHES THE CLUSTER. Argo, as part of the objProxy component — NOT the
-# tools/internal/extensions/lifecycle/bootstrapcluster/manifests/ directory its siblings live in. Those are applied by
-# `llz ci apply-kyverno-policy`, and that command is invoked by NOTHING: no
-# workflow, no Terraform, and bootstrap-cluster does not call it in-process despite
-# the comment in ci.go saying it does. Putting this there would have shipped a
-# ClusterPolicy that never reaches a cluster, which for a CA-delivery mechanism
+# bootstrapcluster manifests/ directory its siblings live in. Those are applied by
+# `llz ci apply-kyverno-policy`, which nothing invokes: no workflow, no Terraform,
+# and bootstrap-cluster does not call it in-process. Putting this there would ship
+# a ClusterPolicy that never reaches a cluster, which for a CA-delivery mechanism
 # means Harbor silently loses object storage the moment the DNS rewrite goes live.
 #
 # Living in the component is also the right lifecycle: the policy exists exactly

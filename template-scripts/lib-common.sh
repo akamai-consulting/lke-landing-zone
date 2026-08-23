@@ -31,12 +31,11 @@ usage() { sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p;}' "$0"; }
 # behaviour).
 #
 # tofu FIRST. The landing zone runs OpenTofu (docs/adr/0008-opentofu-migration.md)
-# and the CI image ships only `tofu`. This preference used to be inverted, which
-# is how the toolchain split hid: CI resolved HashiCorp Terraform from the image
-# while a developer with both installed resolved terraform too — and a developer
-# with only tofu silently tested something else entirely. Same order as llz's
-# tfBin() (tools/internal/shared/tfbin/tfbin.go) so a script and llz can never disagree about
-# which binary runs against a given state file.
+# and the CI image ships only `tofu`. Inverting this preference is how a toolchain
+# split hides: CI resolves HashiCorp Terraform from the image, a developer with
+# both installed resolves terraform too, and a developer with only tofu silently
+# tests something else. Same order as llz's tfBin() (shared/tfbin) so a script and
+# llz can never disagree about which binary runs against a given state file.
 #
 # `terraform` stays as a FALLBACK for adopters mid-migration whose runners still
 # only have it.
