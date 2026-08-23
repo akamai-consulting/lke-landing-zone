@@ -272,3 +272,70 @@ nothing is the vacuous pass in its purest form.
 
 For getting kubectl at a cluster a lane failed on, see
 [docs/runbooks/e2e-lane-diagnostics.md](runbooks/e2e-lane-diagnostics.md).
+
+## The configuration no lane runs: an upgrade over existing state
+
+Every lane force-pushes a **fresh instantiation at the commit under test** and
+tears it down afterwards (`e2e-instantiate.yml`). So the only configuration the
+release gate has ever exercised is greenfield — a cluster created by the code
+being tested. Nothing plans or applies a new template against state an **older**
+release created, which is where every adopter lives from their second day on.
+
+That is the same blind spot `llz ci assert-adopter-pin` was written for, one
+layer down. That one closed the *pin* half: e2e pins the instance, `TF_IMAGE` and
+the binary all to one commit by construction, so the image-pin chain could not be
+wrong in the only shape ever tested — and it broke in the field. The **state**
+half is still open.
+
+What hides there is not a broken apply. It is an apply that **succeeds and
+recycles infrastructure**: a field added to a module, a resource renamed, an
+attribute Terraform treats as ForceNew. Each reads as a small correct diff and
+each proposes destroying a live cluster. Nothing in the upgrade pull request
+shows it either — the roots are gitignored and generated from the pin, and no
+pull request runs a plan.
+
+`linode_lke_cluster`'s `vpc_id`/`subnet_id` are the worked example, and they are
+worse than the general case: both are create-time only, but the provider schema
+marks them as ordinary optional attributes, so the plan reads as a calm
+`update in-place`. Any instance predating the module's `vpc_id` argument meets it
+on its first plan after upgrading, on a cluster healthy for months. It was caught
+by a hand-written coupling test in `tfroots` — not by any lane, because no lane
+could see it.
+
+### The verb exists; the lane does not
+
+`llz ci assert-upgrade-plan` reads `tofu show -json` and fails on any resource
+whose planned actions include a delete — a bare destroy and both spellings of a
+replace. It is usable by hand today against any plan:
+
+```
+tofu show -json tfplan.bin | llz ci assert-upgrade-plan
+```
+
+What is missing is something that **produces** such a plan against
+older-release state. The shape:
+
+1. stand an instance up at the **previous release tag** and apply it;
+2. `llz upgrade` it to the commit under test;
+3. dispatch `terraform.yml` with `action=plan`;
+4. run the assertion over the resulting plan;
+5. tear down.
+
+**Why it is not in this repo yet, stated rather than left as a gap.** Step 1
+needs `e2e-instantiate.yml` to render `llz_version` to a tag rather than to
+`${GITHUB_SHA}`, which it does not support. Step 3 needs the delivered pipeline
+to emit `tofu show -json` somewhere the lane can read — a change to
+`llz-terraform.yml`, and therefore to every instance. And the lane costs a full
+extra cluster lifecycle.
+
+None of that is hard; all of it is **unproven until someone with e2e credentials
+runs it once**. Shipping an e2e workflow that has never executed would be the
+exact failure this document opens with — a delivered surface nothing exercises,
+indistinguishable from one that works — with a teardown path that leaks billable
+clusters if it is wrong.
+
+The cheaper variant worth considering first: have `llz-terraform.yml`'s existing
+plan step pipe its own plan through `assert-upgrade-plan` as a **reporting**
+step. That gives every adopter a destroy-warning on their own plans, needs no new
+cluster, and would surface the class on real upgrades rather than on a synthetic
+one — at the cost of being advisory rather than gating.

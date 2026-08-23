@@ -157,6 +157,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/setupgosite=79 \
 	internal/extensions/guards/mutabletags=96 \
 	internal/extensions/guards/providerlock=83 \
+	internal/extensions/assertions/upgradeplan=85 \
 	internal/extensions/guards/sourceref=87 \
 	internal/extensions/guards/workflowshells=71 \
 	internal/shared/answers=87 \

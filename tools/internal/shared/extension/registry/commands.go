@@ -44,6 +44,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/upgradeplan"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/callerperms"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
@@ -261,6 +262,7 @@ var commands = []Command{
 	{"setupgosite", setupgosite.Cmd},
 	{"mutabletags", mutabletags.Cmd},
 	{"providerlock", providerlock.Cmd},
+	{"upgradeplan", upgradeplan.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"defaultdeny", defaultdeny.Cmd},
 	{"runinjection", runinjection.Cmd},
