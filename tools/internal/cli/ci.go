@@ -38,6 +38,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
@@ -471,8 +472,10 @@ func ciCmd() *cobra.Command {
 	// file can be wrong about on its own: setup-go-sole-site holds the Go toolchain
 	// action to ONE site (a second copy had already drifted a major version), and
 	// mutable-tag-guard holds build-images.yml's publish policy — `:latest` and
-	// `:<version>` only from the default branch's HEAD (#451).
-	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
+	// `:<version>` only from the default branch's HEAD (#451). provider-lock-guard is
+	// the same shape one layer down: the provider constraint and the provider pin
+	// reach an instance by DIFFERENT routes, so neither file can be wrong alone.
+	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd(), providerlock.Cmd())
 	c.AddCommand(callerperms.Cmd(), runinjection.Cmd(), secretscope.Cmd(), defaultdeny.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())

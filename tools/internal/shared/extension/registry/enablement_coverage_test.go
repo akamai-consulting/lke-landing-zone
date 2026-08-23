@@ -114,6 +114,11 @@ var componentless = map[string]bool{
 	// Same again: which tags build-images.yml may publish is a property of THIS
 	// repo's publishing, not of any component an instance can turn off.
 	"guard-mutable-tags": true,
+	// Same: whether the lockfile the TEMPLATE delivers can satisfy the constraints
+	// the TEMPLATE ships is a property of this repo's own release hygiene. An
+	// instance cannot turn it off, and turning it off is never the right answer —
+	// the state it detects hard-blocks every existing instance's `tofu init`.
+	"guard-provider-lock": true,
 	// Same: the caller/callee permission contract is a property of the workflow
 	// files themselves, not of any component an instance can disable.
 	"reusable-workflow-caller-permissions": true,

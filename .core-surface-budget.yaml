@@ -1519,7 +1519,18 @@ categories:
     #                       asks before it writes" while nothing in it does. Banked
     #                       rather than left as slack, which is the whole point of
     #                       `exact`.
-    budget: 1966
+    #   1,967 / 129 files  +1 the `providerlock` import for `llz ci
+    #                       provider-lock-guard`. IRREDUCIBLE, and the one shape of
+    #                       growth this layer exists to accept: a new gate's command
+    #                       was folded onto an existing AddCommand call and its
+    #                       rationale put in the extension's own doc comment, so the
+    #                       only line left is the import that makes the constructor
+    #                       nameable. A guard cannot be wired with fewer. Nothing
+    #                       else about the gate lives here — the decision logic,
+    #                       the fence and the reporting are all in
+    #                       extensions/guards/providerlock, which is where ADR 0013
+    #                       says they belong.
+    budget: 1967
     exact: true
     include:
       - "tools/internal/cli/*.go"

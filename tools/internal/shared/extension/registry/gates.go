@@ -74,6 +74,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
@@ -269,6 +270,10 @@ var gates = []Gate{
 	// the majority rather than a Subtree: its subject is a single named file, and
 	// handing it .github/workflows would only shorten the path it opens.
 	{Extension: "guard-mutable-tags", New: mutabletags.Cmd},
+	// Takes the repo root rather than a Subtree: its subject spans three trees at
+	// once — the embedded roots, terraform-modules/ and the delivered scaffold — and
+	// the whole point is comparing across them.
+	{Extension: "guard-provider-lock", New: providerlock.Cmd},
 	{Extension: "reusable-workflow-caller-permissions", New: callerperms.Cmd},
 	{Extension: "workflow-injection", New: runinjection.Cmd},
 	// Beside workflow-injection because it is the same subject read a different
@@ -440,7 +445,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (31 rows, 28 of them taking the default subject — both pinned by
+	// table (32 rows, 29 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

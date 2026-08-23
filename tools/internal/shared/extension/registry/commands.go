@@ -59,6 +59,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mutabletags"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
@@ -259,6 +260,7 @@ var commands = []Command{
 	{"versionpins", versionpins.Cmd},
 	{"setupgosite", setupgosite.Cmd},
 	{"mutabletags", mutabletags.Cmd},
+	{"providerlock", providerlock.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"defaultdeny", defaultdeny.Cmd},
 	{"runinjection", runinjection.Cmd},
