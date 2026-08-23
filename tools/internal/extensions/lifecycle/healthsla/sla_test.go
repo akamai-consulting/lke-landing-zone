@@ -22,6 +22,14 @@ func itemsJSON(items ...string) []byte {
 	return []byte(`{"items":[` + strings.Join(items, ",") + `]}`)
 }
 
+// readyItem is one Ready:True resource, for fixtures that need the list to be
+// NON-EMPTY. An all-clear over zero items is not an all-clear, so any test
+// asserting "all Ready" has to supply something for the check to have read.
+func readyItem(ns, name string) string {
+	return `{"metadata":{"namespace":"` + ns + `","name":"` + name + `"},` +
+		`"status":{"conditions":[{"type":"Ready","status":"True"}]}}`
+}
+
 func rfc(daysAgo int) string {
 	return time.Now().Add(-time.Duration(daysAgo) * 24 * time.Hour).Format(time.RFC3339)
 }

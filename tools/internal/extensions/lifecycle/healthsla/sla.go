@@ -185,7 +185,7 @@ func RunLokiObjkeyRotation(d Deps, warnDays, criticalDays int) error {
 			return err
 		}
 		return fmt.Errorf("secret/loki/object-store unreadable on %s — the rotation SLA could not be measured: %w", reg, read.ReadFail)
-	case read.Updated == "":
+	case read.NotFound, read.Updated == "":
 		fmt.Fprintf(os.Stderr, "::warning::secret/loki/object-store not found on %s — Loki not yet bootstrapped\n", reg)
 		summary = append(summary, "> **Action required:** No secret/loki/object-store. Seed it via bootstrap-openbao.yml (docs/runbooks/linode-credential-rotation.md).")
 		return d.Summary("GITHUB_STEP_SUMMARY", summary...)
@@ -214,10 +214,21 @@ func RunLokiObjkeyRotation(d Deps, warnDays, criticalDays int) error {
 // found: warn and pass". Two of them are "I could not measure", which is not a
 // verdict a hard SLA gate is entitled to treat as clean.
 type objkeyRead struct {
-	Updated  string
-	NoToken  bool // OPENBAO_ROOT_TOKEN unset — see the caller; this is the EXPECTED steady state
+	Updated string
+	NoToken bool // OPENBAO_ROOT_TOKEN unset — see the caller; this is the EXPECTED steady state
+	// NotFound is "the path is not there", which `bao` reports by EXITING 2 with
+	// "No value found at …" on stderr — not by returning an empty document. Folded
+	// into ReadFail it hard-failed the weekly job on an instance that simply has
+	// not seeded Loki yet, and left the `Updated == ""` branch — the one carrying
+	// the "seed it via bootstrap-openbao.yml" remedy — unreachable against real
+	// bao, only satisfiable by a `{"data":{}}` shape nothing produces.
+	NotFound bool
 	ReadFail error
 }
+
+// baoNoValueMarker is how `bao kv metadata get` says "not there". Matched on the
+// stderr text because the exit code (2) is shared with usage errors.
+const baoNoValueMarker = "no value found at"
 
 // lokiObjkeyUpdatedTime reads secret/loki/object-store's KV-v2 metadata
 // updated_time via `bao kv metadata get` inside the OpenBao pod (the same exec
@@ -230,6 +241,12 @@ func lokiObjkeyUpdatedTime(d Deps) objkeyRead {
 	argv := d.BaoExecArgv(d.RootPod, token, []string{"kv", "metadata", "get", "-format=json", "secret/loki/object-store"})
 	out, err := d.Exec("kubectl", argv...)
 	if err != nil {
+		// ErrText recovers the child's stderr from the ExitError; without it "no
+		// value found" is invisible here and every absence reads as a read failure.
+		if strings.Contains(strings.ToLower(kubectlprobe.ErrText(err)), baoNoValueMarker) ||
+			strings.Contains(strings.ToLower(string(out)), baoNoValueMarker) {
+			return objkeyRead{NotFound: true}
+		}
 		return objkeyRead{ReadFail: fmt.Errorf("bao kv metadata get: %w", err)}
 	}
 	var j struct {
