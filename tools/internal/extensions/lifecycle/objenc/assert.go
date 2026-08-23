@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
@@ -519,7 +520,36 @@ func CheckRegistryPodsCarryCA(d Deps) []Finding {
 func checkEndpointResolvesToProxy(d Deps, endpoint string) []Finding {
 	out, err := d.KubectlOut("-n", "kube-system", "get", "configmap", "coredns-custom",
 		"-o", "jsonpath={.data}")
-	if err != nil || !strings.Contains(out, endpoint) {
+	// AN UNREADABLE ConfigMap IS NOT A MISSING REWRITE — and A MISSING ONE IS NOT
+	// UNREADABLE. Folding `err != nil` into the absent branch reported an RBAC
+	// denial or an apiserver blip as "object-storage traffic is going DIRECT to
+	// Linode, unencrypted": a specific, alarming claim about live traffic made on
+	// the strength of not having looked, whose remedy is to apply the rewrite —
+	// at best a no-op on a cluster that already has one, at worst the "flip it
+	// before the registry trusts the CA" ordering the Fix text itself warns about.
+	//
+	// But treating EVERY error as unreadable swallowed the case this check exists
+	// for. kube-system/coredns-custom is an OPTIONAL CoreDNS extension point, and
+	// coredns-rewrite.yaml records that no LLZ-managed cluster ships one: on a
+	// cluster that never applied objProxy the get exits 1 with NotFound, and the
+	// one cluster genuinely writing plaintext was the one told "UNKNOWN — do NOT
+	// apply the rewrite". ClassifyErr is the seam that already knows the
+	// difference, and using it here is what keeps the two answers apart.
+	if err != nil && kubectlprobe.ClassifyErr(err) != kubectlprobe.Absent {
+		return []Finding{{
+			Check: "dns",
+			Problem: fmt.Sprintf("could not read kube-system/coredns-custom (%v) — whether %s is rewritten "+
+				"to the obj-proxy is UNKNOWN. This is not evidence that traffic is unencrypted, and not "+
+				"evidence that it is encrypted either", err, endpoint),
+			Fix: "check RBAC on kube-system/configmaps and that the apiserver is reachable, then re-run. " +
+				"Do NOT apply the rewrite on the strength of this finding — see the ordering warning on the " +
+				"absent-rewrite case",
+		}}
+	}
+	// err != nil past the guard above means a classified ABSENCE: the ConfigMap is
+	// genuinely not there, `out` is empty, and that falls through to the
+	// missing-rewrite verdict below exactly as an empty ConfigMap would.
+	if !strings.Contains(out, endpoint) {
 		return []Finding{{
 			Check: "dns",
 			Problem: fmt.Sprintf("the CoreDNS rewrite for %s is not present in kube-system/coredns-custom — "+

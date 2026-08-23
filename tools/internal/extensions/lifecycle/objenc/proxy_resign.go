@@ -201,6 +201,17 @@ func canonicalHeaderValue(values []string) string {
 	return strings.Join(parts, ",")
 }
 
+// decodeLimit is how many decoded bytes decodeAWSChunked will buffer: the
+// client's declared length when it gave one and it is within the repair cap, and
+// the cap itself otherwise. Never unbounded — an absent or nonsensical
+// declaration is exactly the case where trusting the stream is worst.
+func decodeLimit(expected int64) int64 {
+	if expected >= 0 && expected <= objProxyResignMaxBody {
+		return expected
+	}
+	return objProxyResignMaxBody
+}
+
 // decodeAWSChunked unwraps aws-chunked framing to the raw payload.
 //
 //	<hex-len>[;chunk-signature=…]\r\n <data> \r\n … 0[;…]\r\n <trailers> \r\n
@@ -213,6 +224,27 @@ func canonicalHeaderValue(values []string) string {
 func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 	br := bufio.NewReader(r)
 	var out bytes.Buffer
+	// THE DECODE IS BOUNDED, NOT ONLY THE DECLARATION. The caller gates on
+	// x-amz-decoded-content-length — the client's own STATEMENT of the size — and
+	// nothing here held the decode to it. The equality check at the bottom fires
+	// only after every chunk has been buffered, so a request declaring 1 MiB and
+	// sending chunks summing to 64 MiB was rejected having already allocated the
+	// 64 MiB. With the raw body held alongside it for the restore path, peak
+	// footprint ran to several times the documented 32 MiB cap, and a handful of
+	// concurrent repairs OOMKilled a DaemonSet with a 512Mi limit — taking object
+	// storage down for every pod on the node, which is far worse than the write
+	// this repair exists to fix.
+	//
+	// Checking each chunk header BEFORE copying its bytes also turns a late,
+	// expensive rejection into an early, cheap one that names the same defect.
+	// NO PRE-ALLOCATION FROM `expected`. It is the CLIENT'S DECLARED length, read
+	// off a header, and resignForUpstream reads the raw body before calling this —
+	// so it is fully decoupled from the bytes actually sent. Growing to it turned a
+	// 23-byte request declaring 32 MiB into a 32 MiB allocation made BEFORE the
+	// first chunk was parsed: about sixteen concurrent 200-byte requests then
+	// OOMKill the 512Mi DaemonSet, which is the exact failure this bound exists to
+	// prevent, reached with a millionth of the traffic. Doubling from zero costs
+	// one extra copy on a real 32 MiB payload; that is the cheaper mistake.
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -226,8 +258,24 @@ func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("chunk length %q is not hex: %w", header, err)
 		}
+		if n < 0 {
+			// ParseInt accepts a leading '-' in base 16, and a negative length makes
+			// io.CopyN a silent no-op — the chunk contributes nothing, out.Len()
+			// never advances, and the loop reads framing that is already corrupt.
+			return nil, fmt.Errorf("chunk length %q is negative", header)
+		}
 		if n == 0 {
 			break // terminal chunk; whatever follows is trailers, deliberately discarded
+		}
+		// SUBTRACTION, NOT ADDITION. `out.Len()+n > lim` OVERFLOWS: a chunk header of
+		// 0x7FFFFFFFFFFFFC17 wraps the sum negative, the guard passes, and io.CopyN
+		// buffers everything the client sends — the 64 MiB worst case this bound was
+		// added to remove, reachable from one crafted header. lim is never negative,
+		// so lim-out.Len() cannot underflow.
+		if lim := decodeLimit(expected); n > lim-int64(out.Len()) {
+			return nil, fmt.Errorf("chunked body exceeds %d bytes at chunk %d (already decoded %d) — "+
+				"refusing to buffer past the bound; x-amz-decoded-content-length said %d",
+				lim, n, out.Len(), expected)
 		}
 		if _, err := io.CopyN(&out, br, n); err != nil {
 			return nil, fmt.Errorf("reading %d chunk bytes: %w", n, err)
