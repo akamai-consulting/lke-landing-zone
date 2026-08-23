@@ -18,46 +18,34 @@ package doctor
 // reliably diagnosable. This turns the most expensive failure in the flow into a
 // line of local output before anything is provisioned.
 //
-// IT REPORTS AT FULL VOLUME AND BLOCKS NOTHING, and getting to that took an
-// argument in both directions — so here is the whole of it, because the next
-// person will be tempted to move it again.
+// IT REPORTS AT FULL VOLUME AND BLOCKS NOTHING, and the next person will be
+// tempted to make it fatal — the doctor-green/build-red pattern is exactly what
+// onboard/doctor_build_preflights.go exists to eliminate. Two things say not to:
 //
-// It began advisory under a stated uncertainty: the route's existence was
-// verified but "its response BODY has not been seen against an entitled account",
-// so a check that could not be fully verified must not block a build that would
-// have worked. That uncertainty is now GONE — the catalog has been measured (see
-// linode.ListLKEVersions) — and the same question HARD FAILS on the apply path as
-// `llz ci assert-k8s-version`, added after a bad pin cost a release-e2e round on
-// 2026-08-11. On that basis it was briefly made fatal here too, to avoid the
-// doctor-green/build-red pattern onboard/doctor_build_preflights.go exists to
-// eliminate.
+//   - THE COST IT WOULD BUY DOWN IS ALREADY GONE. Doctor blocks to save an
+//     EXPENSIVE failure — the file it borrows that reasoning from is about a
+//     ~15-minute cluster apply. `llz ci assert-k8s-version` now catches this in
+//     the first CI job, in seconds, naming the versions the account does offer.
+//     A green doctor therefore costs one dispatch that fails almost immediately
+//     with a better message than doctor could print.
+//   - THE VERDICT IS NOT ABOUT THE ACCOUNT THAT WILL BUILD. Availability is
+//     per-ACCOUNT, and this reads whatever token is in the operator's shell —
+//     `llz tokens` PROMPTS for the PAT it pushes as LINODE_API_TOKEN rather than
+//     reading $LINODE_TOKEN, so the two really can differ. Blocking would abort
+//     `llz up` on a spec CI would have built fine, on the primary onboarding path,
+//     and the only way past it is to unset the token, which also silently disables
+//     objlabel_preflight — the OTHER account-reading check.
 //
-// THE ARGUMENT FOR BLOCKING DIED WITH THE COST IT WAS BUYING DOWN. Doctor blocks
-// to save an EXPENSIVE failure — the whole file it borrows that reasoning from is
-// about a ~15-minute cluster apply. The CI gate now catches this in the first job,
-// in seconds, naming the versions the account does offer. What a green doctor
-// costs an operator here is therefore one dispatch that fails almost immediately
-// with a better message than doctor could print.
-//
-// AND THE VERDICT IS NOT ABOUT THE ACCOUNT THAT WILL BUILD. Availability is
-// per-ACCOUNT, and this reads whatever token is in the operator's shell —
-// `llz tokens` PROMPTS for the PAT it pushes as the LINODE_API_TOKEN repo secret
-// rather than reading $LINODE_TOKEN, so the two really can differ. Blocking made
-// `llz up` abort on a spec CI would have built fine, on the primary onboarding
-// path, and the only way past it was to unset the token — which also silently
-// disabled objlabel_preflight, the OTHER account-reading check.
-//
-// objlabel_preflight is the precedent, in this same tree and for this same
-// reason: "it can only see this account's buckets, so it never gates". A check
-// that reads a different system than the one CI will read reports; it does not
-// decide.
+// objlabel_preflight is the precedent, in this same tree and for this same reason:
+// "it can only see this account's buckets, so it never gates." A check that reads
+// a different system than the one CI will read reports; it does not decide.
 //
 // WHAT KEEPS THE ORIGINAL COMPLAINT ANSWERED is volume, not exit status. A
 // definite mismatch prints a red ✗ and says in as many words that
-// `llz ci assert-k8s-version` will fail the build — so an operator who reads
-// doctor is never surprised by CI, which was the actual harm. Uncertainty (no
-// token, an auth failure, an empty or unparseable list, a catalog too coarse to
-// settle the pin) is reported as UNKNOWN and never as "not offered".
+// `llz ci assert-k8s-version` will fail the build, so an operator who reads doctor
+// is never surprised by CI — which was the actual harm. Uncertainty (no token, an
+// auth failure, an empty or unparseable list, a catalog too coarse to settle the
+// pin) is reported as UNKNOWN and never as "not offered".
 //
 // THE VERDICT IS SHARED WITH THE GATE. Both call linode.CheckVersion, so the
 // two cannot reach different conclusions about one spec — and now they cannot
