@@ -329,9 +329,9 @@ func TestWatchBackoffRetreatsOnConsecutiveFailures(t *testing.T) {
 
 // TestWatchLoopActuallyBacksOff is the half the function test above cannot cover.
 // Asserting watchBackoffFor is exponential says nothing about whether the LOOP
-// calls it — a first cut of this gate stayed green with the call site reverted to
-// the flat constant, which is precisely the defect. This records the durations the
-// loop asks for.
+// calls it: such a gate stays green with the call site reverted to the flat
+// constant, which is precisely the defect. This records the durations the loop
+// asks for.
 func TestWatchLoopActuallyBacksOff(t *testing.T) {
 	prevBase, prevMax, prevWait := watchReconnectBackoff, watchReconnectBackoffMax, watchBackoffWait
 	t.Cleanup(func() {
