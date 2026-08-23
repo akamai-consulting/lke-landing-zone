@@ -40,12 +40,9 @@ name: Release E2E — warm fast path (reuse a live cluster)
 #     race a full release-e2e run (or another warm run) against the same
 #     cluster/state.
 #   • The `instantiate` job below is the SHARED reusable workflow
-#     (.github/workflows/e2e-instantiate.yml) that release-e2e.yml also calls — it
-#     was previously a hand-synced verbatim copy, so the safety-critical
-#     copier-token render now exists exactly once and cannot drift. The warm path
-#     opts out of its two optional steps (see the call site). This supersedes the
-#     stale prototype release-e2e-converge.yml / PR #146 (which still pushed the
-#     retired e2e-apps branch and predates the merged bootstrap structure).
+#     (.github/workflows/e2e-instantiate.yml) that release-e2e.yml also calls, so
+#     the safety-critical copier-token render exists exactly once and cannot
+#     drift. The warm path opts out of its two optional steps (see the call site).
 
 on:
   workflow_dispatch: {}

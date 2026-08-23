@@ -110,38 +110,26 @@ env:
   # THE MANUAL ESCAPE, AND NORMALLY EMPTY. Leave it unset and `llz env add` decides:
   # it asks the account whether a cluster for this deployment already exists and pins
   # WHAT THAT CLUSTER RUNS, falling back to the newest the account offers when there
-  # is none.
+  # is none. That is what keeps a warm-cluster re-scaffold from planning an LKE-E
+  # CONTROL-PLANE UPGRADE inside a run whose whole point was to skip the 14m create
+  # (#453) — `llz ci assert-k8s-version` cannot catch that, since the derived pin IS
+  # in the catalog, just not the one the cluster runs.
   #
-  # THAT IS WHY THIS IS NO LONGER "SET IT WHILE YOU KEEP A WARM CLUSTER". The hazard
-  # was real: `k8s_version` reaches the LKE-E API on a create OR A CHANGE, so a
-  # re-scaffold that derived a DIFFERENT version than the running cluster planned an
-  # LKE-Enterprise CONTROL-PLANE UPGRADE inside a run whose whole point was to skip
-  # the 14m create — the warm lane's entire premise, and release-e2e.yml with
-  # keep_cluster=true. `llz ci assert-k8s-version` cannot catch it: the derived pin
-  # IS in the catalog, it is simply not the one that cluster runs. #453 closed it in
-  # the scaffold, where the answer actually lives.
+  # A PIN LEFT BEHIND IS THE HAZARD NOW. Once the warm cluster is gone, a stale var
+  # HARD-FAILS the next cold run the moment that version rotates out of the account's
+  # catalog — hours, for LKE-E — because an explicit --k8s-version with no cluster to
+  # exempt it is rejected outright.
   #
-  # AND A PIN LEFT BEHIND IS NOW THE HAZARD. Once the warm cluster is gone, a stale
-  # var HARD-FAILS the next cold run the moment that version rotates out of the
-  # account's catalog — hours, for LKE-E — because an explicit --k8s-version with no
-  # cluster to exempt it is rejected outright.
-  #
-  # SETTING IT IS A STOPGAP EVERYWHERE EXCEPT ONE CASE, and the difference is which
-  # code path judges the pin. With NO E2E_LINODE_TOKEN llz reads no catalog, so
-  # nothing judges the var at all and it works indefinitely — that is the one case to
-  # set it for. In the three states where llz asked but could not ANSWER — the
-  # cluster read failed, TWO clusters carry this deployment's label (an orphan beside
-  # the live one, so llz refuses to guess), or the account reports no k8s_version for
-  # the cluster it found — the catalog WAS read, so the pin is judged against it and
-  # llz has no exemption to grant. The var works only until that version rotates out,
-  # which for LKE-E is hours; after that the scaffold HARD-FAILS with "is not an
-  # LKE-Enterprise version this account can build".
-  #
-  # So in those three, fix the state rather than pinning around it: re-run the read,
-  # delete the duplicate cluster BY ID (never `llz reap --cluster-label`, which takes
-  # both), or find out why the cluster reports no version. Each says which it is in
-  # the log — and the middle two are the easy ones to miss, since the run is
-  # otherwise healthy and the only trace is a ::warning inside a green step.
+  # SET IT IN ONE CASE ONLY: no E2E_LINODE_TOKEN, where llz reads no catalog and
+  # nothing judges the var. In the three states where llz asked but could not ANSWER
+  # — the cluster read failed, TWO clusters carry this deployment's label (llz
+  # refuses to guess), or the account reports no k8s_version for the cluster it found
+  # — the catalog WAS read, so the pin is judged with no exemption available. Fix the
+  # state rather than pinning around it: re-run the read, delete the duplicate BY ID
+  # (never `llz reap --cluster-label`, which takes both), or find out why the cluster
+  # reports no version. Each says which it is in the log, and the middle two are easy
+  # to miss: the run is otherwise healthy and the only trace is a ::warning inside a
+  # green step.
   E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
 
@@ -571,13 +559,9 @@ jobs:
       # Go (llz ci pin-instance-images), not inline bash. Two distinct credentials:
       # GH_TOKEN_TEMPLATE reads THIS repo's runs + GHCR; GH_TOKEN_INSTANCE writes
       # the instance repo's variables (needs Variables:read/write).
-      # Runs on BOTH release and workflow_dispatch. Previously release-only, which
-      # let a dispatch run with whatever stale TF_IMAGE was last set — the exact
-      # skew the image-fresh guard later catches mid-provision. --build-if-missing
-      # closes the loop: if this commit's images should exist (the commit changed
-      # tools/ or dockerfiles/, so a build ran) but they're not published — the build
-      # failed or is mid-flight — it triggers Build Container Images on this ref and
-      # waits, instead of pinning stale or failing. One build covers both images.
+      # Runs on BOTH release and workflow_dispatch: a dispatch-only run would
+      # otherwise use whatever stale TF_IMAGE was last set — the exact skew the
+      # image-fresh guard later catches mid-provision.
       - name: Pin instance CI images to this commit (build them first if missing)
         env:
           GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
@@ -608,9 +592,9 @@ jobs:
       #
       # The logic lives in unit-tested Go (llz ci assert-instance-pr-gates), not
       # inline bash: branch-create / PR-open / poll / assert / cleanup is logic, and
-      # the first draft of it here WAS inline bash that got the central case wrong —
-      # `gh pr checks` exits non-zero to report a FAILING check, so a `|| echo '[]'`
-      # fallback reported a broken gate as one that never ran. See pr_gates.go.
+      # the central case is easy to get wrong — `gh pr checks` exits non-zero to
+      # report a FAILING check, so a `|| echo '[]'` fallback reports a broken gate as
+      # one that never ran. See pr_gates.go.
       - name: Instance PR gates run and pass (tf-lint + checkov)
         env:
           GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
