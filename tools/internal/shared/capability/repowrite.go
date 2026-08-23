@@ -29,6 +29,14 @@ package capability
 // succeed at all, so EvalSymlinks always has something to answer, and a link
 // anywhere along the way lands outside the root and is refused. Same for MkdirAll
 // and RemoveAll.
+//
+// THAT ALONE WAS NOT ENOUGH, AND THIS PARAGRAPH USED TO END HERE CLAIMING IT WAS.
+// Resolving the parent closes a link one or more components ABOVE the target and
+// says nothing about a link AT it: `root/out -> /etc/passwd` has the parent
+// `root`, which is the tree itself. The write followed the leaf. A fence whose
+// header asserts an escape is closed is worse than one that admits the gap,
+// because the assertion is what the next reader checks instead of the code — so
+// the leaf is resolved too now, and resolveForWrite says which check is which.
 // ────────────────────────────────────────────────────────────────────────────
 //
 // ────────────────────────────────────────────────────────────────────────────
@@ -100,9 +108,30 @@ var ErrNoRepoWrite = errors.New("this binding does not declare write-repo, so it
 
 type repoWriter struct{ root string }
 
-// resolveForWrite is the fence, and it differs from Repo.Resolve in exactly one
-// way: it resolves the PARENT. See the header for the escape that closes.
-func (w repoWriter) resolveForWrite(rel string) (string, error) {
+// resolveForWrite is the fence. It differs from Repo.Resolve in two ways, and
+// the second one is newer than this comment used to admit: it resolves the
+// PARENT, so a create several directories deep can still be judged, AND it
+// resolves the TARGET when the target is already a link. The first alone was the
+// documented design and left the leaf escape open — see the header.
+// followsLeaf / unlinksLeaf name what an operation DOES to a target that is
+// already a symlink, which is the only thing that decides whether the leaf check
+// applies. WriteFile follows the link and lands on whatever it points at;
+// os.RemoveAll unlinks the LINK and cannot leave the tree however far the target
+// is outside it.
+//
+// THE FIRST CUT APPLIED ONE RULE TO ALL THREE, on the argument that a fence with
+// one rule is easier to trust than a fence with three. It is, and it broke a
+// caller: deliverdocs prunes every entry of an adopter's docs/ and returns on the
+// first error, so a single outward or broken symlink in there aborted
+// `llz ci deliver-docs` — refusing to remove a link precisely because of where it
+// pointed, when removing it is what the prune is for and where it points never
+// comes into it.
+const (
+	followsLeaf = true
+	unlinksLeaf = false
+)
+
+func (w repoWriter) resolveForWrite(rel string, follows bool) (string, error) {
 	// repo(w) rather than repo{root: w.root}: the two structs are identical, and
 	// the conversion says so instead of re-stating the field.
 	if err := repo(w).Permits(rel); err != nil {
@@ -127,6 +156,45 @@ func (w repoWriter) resolveForWrite(rel string) (string, error) {
 		return "", fmt.Errorf("%w: %q resolves under %q, outside the tree",
 			ErrOutsideRepo, rel, anchor)
 	}
+	// AND THE TARGET ITSELF, WHENEVER IT IS ALREADY A LINK. The anchor above
+	// resolves the deepest existing ANCESTOR, which is what a create needs and
+	// what a symlinked parent is caught by — but it stops one component short.
+	//
+	// The escape the header describes is `root/out -> /etc` plus the name
+	// `passwd` that does not exist yet. ONE COMPONENT SHORTER IS THE SAME ESCAPE
+	// AND WAS NOT CLOSED: with `root/out -> /etc/passwd`, the parent is `root`,
+	// which resolves to itself inside the tree, and os.WriteFile follows the leaf
+	// and overwrites the outside file. MkdirAll onto a link to an outside
+	// DIRECTORY populates it; RemoveAll is the one operation that genuinely stops
+	// at the link, and it is refused here anyway so the fence has one rule
+	// instead of three.
+	//
+	// Repo.Resolve refuses this exact layout, so leaving it open made the READER
+	// strictly stronger than the WRITER — the wrong direction for a fence whose
+	// entire subject is mutation, and a claim this file's header made in the
+	// opposite direction. TestTheWriteFenceIsNeverWeakerThanTheRead pins the
+	// RELATION between the two resolvers rather than this one layout, because the
+	// defect was the divergence and not the case that revealed it.
+	//
+	// Lstat, not Stat: Stat follows the link, so it answers about the target and
+	// cannot see that there was a link at all.
+	if fi, lerr := os.Lstat(abs); follows && lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			// A DANGLING LINK IS NOT A SAFE LINK, which is why this is a refusal
+			// and not a fallthrough. `root/x -> /tmp/newfile` resolves to nothing
+			// today and a write through it CREATES /tmp/newfile — the escape, just
+			// with the outside file arriving a moment later. The anchor cannot see
+			// it either: it walks up to `root`, which is inside the tree.
+			return "", fmt.Errorf("%w: %q is a symlink that does not resolve (%v), so where a write to it would land cannot be established",
+				ErrOutsideRepo, rel, err)
+		}
+		if !within(rootReal, real) {
+			return "", fmt.Errorf("%w: %q is a symlink to %q, outside the tree",
+				ErrOutsideRepo, rel, real)
+		}
+	}
+
 	// The LEXICAL path is returned, not one rebuilt from the anchor. Rebuilding
 	// dropped every segment between the anchor and the target — MkdirAll("a/b/c")
 	// on an empty tree anchored at the root and created "c". The anchor's job is
@@ -150,12 +218,14 @@ func deepestExisting(p string) (string, error) {
 }
 
 func (w repoWriter) PermitsWrite(rel string) error {
-	_, err := w.resolveForWrite(rel)
+	// The predicate answers for the STRICTEST operation: a caller asking "may I
+	// write this" is asking about WriteFile.
+	_, err := w.resolveForWrite(rel, followsLeaf)
 	return err
 }
 
 func (w repoWriter) WriteFile(rel string, data []byte, perm fs.FileMode) error {
-	p, err := w.resolveForWrite(rel)
+	p, err := w.resolveForWrite(rel, followsLeaf)
 	if err != nil {
 		return err
 	}
@@ -163,7 +233,7 @@ func (w repoWriter) WriteFile(rel string, data []byte, perm fs.FileMode) error {
 }
 
 func (w repoWriter) MkdirAll(rel string, perm fs.FileMode) error {
-	p, err := w.resolveForWrite(rel)
+	p, err := w.resolveForWrite(rel, followsLeaf)
 	if err != nil {
 		return err
 	}
@@ -171,7 +241,10 @@ func (w repoWriter) MkdirAll(rel string, perm fs.FileMode) error {
 }
 
 func (w repoWriter) RemoveAll(rel string) error {
-	p, err := w.resolveForWrite(rel)
+	// unlinksLeaf: os.RemoveAll on a symlink removes the LINK. The parent anchor
+	// still applies, so a link ABOVE the target is refused as before — only the
+	// target itself is exempt, and only because deleting it cannot reach outside.
+	p, err := w.resolveForWrite(rel, unlinksLeaf)
 	if err != nil {
 		return err
 	}
