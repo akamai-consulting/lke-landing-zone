@@ -79,6 +79,11 @@ type Verdict struct {
 	Destructive []Finding // the ones that delete something
 	Creates     int
 	Updates     int
+	// Changed is every entry that proposes ANY action, destructive or not —
+	// what --expect-no-changes judges. Kept separate from the counters because a
+	// count cannot name the resource, and naming it is the whole value of the
+	// report.
+	Changed []Finding
 }
 
 // Finding is one resource the plan would destroy or replace.
@@ -125,6 +130,12 @@ func classify(actions []string) string {
 func Evaluate(p Plan) Verdict {
 	v := Verdict{Total: len(p.ResourceChanges)}
 	for _, rc := range p.ResourceChanges {
+		// no-op entries are the bulk of any plan and are not changes. Terraform
+		// lists every resource it read, so counting them would make an empty plan
+		// look like a busy one.
+		if !isNoOp(rc.Change.Actions) {
+			v.Changed = append(v.Changed, Finding{Address: rc.Address, Actions: rc.Change.Actions})
+		}
 		kind := classify(rc.Change.Actions)
 		if kind != "" {
 			v.Destructive = append(v.Destructive, Finding{
@@ -142,7 +153,20 @@ func Evaluate(p Plan) Verdict {
 		}
 	}
 	sort.Slice(v.Destructive, func(i, j int) bool { return v.Destructive[i].Address < v.Destructive[j].Address })
+	sort.Slice(v.Changed, func(i, j int) bool { return v.Changed[i].Address < v.Changed[j].Address })
 	return v
+}
+
+// isNoOp reports whether a planned action list proposes nothing. `read` counts
+// as nothing: a data source being re-read is not a change to anything an apply
+// would write.
+func isNoOp(actions []string) bool {
+	for _, a := range actions {
+		if a != "no-op" && a != "read" {
+			return false
+		}
+	}
+	return true
 }
 
 // Parse reads `tofu show -json` output.

@@ -125,6 +125,11 @@ func TestParseRefusesADocumentThatIsNotAPlan(t *testing.T) {
 		{"some other json", `{"hello":"world"}`},
 		{"the human-readable plan", "Terraform will perform the following actions:"},
 		{"truncated", `{"format_version":"1.2","resource_changes":[`},
+		// THE ONE THE DELIVERED PIPELINE CAN ACTUALLY PRODUCE. The workflow runs
+		// `tofu show -json tfplan.bin | llz ci assert-upgrade-plan`; if tofu show
+		// fails, llz is handed an empty stdin. Accepting that as "nothing to report"
+		// would turn a broken plan step into a green gate.
+		{"empty stdin, from a failed tofu show", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Parse([]byte(tc.body)); err == nil {
@@ -152,7 +157,7 @@ func TestParseAcceptsAPlanWithNoChanges(t *testing.T) {
 
 func TestRunFailsAndExplainsADestructivePlan(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := Run("-", &out, &errOut,
+	err := Run("-", false, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"delete","create"`)))
 	if err == nil {
 		t.Fatal("a plan that replaces a live cluster must fail the gate")
@@ -179,7 +184,7 @@ func TestRunFailsAndExplainsADestructivePlan(t *testing.T) {
 // real way to get a green run that proves nothing.
 func TestRunReportsWhatItExamined(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", &out, &errOut,
+	if err := Run("-", false, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"update"`))); err != nil {
 		t.Fatalf("Run: %v\n%s", err, errOut.String())
 	}
@@ -192,7 +197,7 @@ func TestRunReportsWhatItExamined(t *testing.T) {
 // the same line as a plan it actually checked.
 func TestRunCallsOutAPlanThatProposesNothing(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", &out, &errOut,
+	if err := Run("-", false, &out, &errOut,
 		strings.NewReader(`{"format_version":"1.2","resource_changes":[]}`)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -203,7 +208,89 @@ func TestRunCallsOutAPlanThatProposesNothing(t *testing.T) {
 
 func TestRunSurfacesAnUnreadablePlan(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("/nonexistent/plan.json", &out, &errOut, strings.NewReader("")); err == nil {
+	if err := Run("/nonexistent/plan.json", false, &out, &errOut, strings.NewReader("")); err == nil {
 		t.Error("an unreadable plan must be an error, not an empty verdict")
+	}
+}
+
+// ── --expect-no-changes ──────────────────────────────────────────────────────
+
+// THE BEHAVIOR THE E2E LANE DEPENDS ON. A plan taken straight after an apply must
+// be empty; a resource still proposing an update is one Terraform cannot bring to
+// rest, and it will churn every future apply.
+func TestExpectNoChangesFlagsAPerpetualUpdate(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := Run("-", true, &out, &errOut,
+		strings.NewReader(planJSON(t,
+			"module.cluster.linode_lke_cluster.this", `"update"`,
+			"module.cluster.linode_firewall.this", `"no-op"`,
+		)))
+	if err == nil {
+		t.Fatal("a non-empty plan taken after an apply must fail --expect-no-changes")
+	}
+	report := errOut.String()
+	if !strings.Contains(report, "module.cluster.linode_lke_cluster.this") {
+		t.Errorf("report does not name the resource that will not settle:\n%s", report)
+	}
+	// The vpc_id shape is the reason this mode exists — the message has to point at
+	// it, or a reader sees "update in place" and assumes it is benign.
+	if !strings.Contains(report, "vpc_id") || !strings.Contains(report, "ignore_changes") {
+		t.Errorf("report does not explain the create-time-only class or its remedy:\n%s", report)
+	}
+	// The firewall is a no-op and must NOT be reported: listing every resource
+	// Terraform read would bury the one that actually differs.
+	if strings.Contains(report, "linode_firewall") {
+		t.Errorf("a no-op entry was reported as a change:\n%s", report)
+	}
+}
+
+// An empty plan is the pass, and it must stay a pass under the strict flag.
+func TestExpectNoChangesPassesAnEmptyPlan(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := Run("-", true, &out, &errOut,
+		strings.NewReader(`{"format_version":"1.2","resource_changes":[]}`)); err != nil {
+		t.Fatalf("an empty plan must pass --expect-no-changes: %v\n%s", err, errOut.String())
+	}
+}
+
+// A plan of nothing but no-ops is also empty in every sense that matters.
+// Terraform lists every resource it read, so counting those would make a settled
+// cluster look like a busy one and the gate would be red on every correct run.
+func TestExpectNoChangesIgnoresNoOpAndReadEntries(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := Run("-", true, &out, &errOut,
+		strings.NewReader(planJSON(t,
+			"module.cluster.linode_lke_cluster.this", `"no-op"`,
+			"data.linode_instances.nodes", `"read"`,
+		))); err != nil {
+		t.Fatalf("no-op and read entries are not changes: %v\n%s", err, errOut.String())
+	}
+}
+
+// THE TWO VERDICTS MUST NOT COMPETE. A plan that destroys something is reported
+// as destroying something — not as "unexpected changes" — because the two have
+// completely different remedies and the destructive one is strictly more urgent.
+func TestExpectNoChangesDefersToTheDestructiveVerdict(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := Run("-", true, &out, &errOut,
+		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"delete","create"`)))
+	if err == nil {
+		t.Fatal("a destructive plan must still fail")
+	}
+	if !strings.Contains(err.Error(), "destroyed or replaced") {
+		t.Errorf("a destroy was reported as an unexpected change: %v", err)
+	}
+	if strings.Contains(errOut.String(), "straight after an apply") {
+		t.Errorf("both verdicts fired at once; the destructive one must win:\n%s", errOut.String())
+	}
+}
+
+// Without the flag, an ordinary update passes — the default mode is comparing
+// releases, where creates and updates are exactly what an upgrade is made of.
+func TestUpdatesPassWithoutTheStrictFlag(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := Run("-", false, &out, &errOut,
+		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"update"`))); err != nil {
+		t.Fatalf("an in-place update must pass the default mode: %v", err)
 	}
 }
