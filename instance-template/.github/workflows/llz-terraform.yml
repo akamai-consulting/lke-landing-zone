@@ -116,7 +116,7 @@ jobs:
     steps:
       - name: Explain the no-op
         run: |
-          echo "::notice title=No plan/apply on push::Push to main neither plans nor applies. Plans run on pull requests; applies run on workflow_dispatch, which 'llz build <env> --yes' (or 'llz up <env> --yes') fires. The other jobs in this run are skipped by design, not failed."
+          echo "::notice title=No plan/apply on push::Push to main neither plans nor applies. Applies run on workflow_dispatch, which 'llz build <env> --yes' (or 'llz up <env> --yes') fires. Pull requests run the credential-free checks (tf-lint, checkov, repo-readiness) but NOT a tofu plan — see the note in llz-terraform.yml where plan-cluster-pr used to be. The other jobs in this run are skipped by design, not failed."
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
           ### Terraform — push to `main` (informational)
 
@@ -125,7 +125,7 @@ jobs:
           | Goal | Run |
           |---|---|
           | **Apply** a deployment | `llz build <env> --yes` (or `llz up <env> --yes`) |
-          | **Preview** a change | open a pull request → `tofu plan` runs per deployment |
+          | **Check** a change | open a pull request → tflint, checkov and repo-readiness (no `tofu plan`; it needs environment-scoped credentials a PR cannot hold) |
 
           See `docs/quickstart.md` §4.
           SUMMARY
@@ -611,9 +611,9 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Rendered EXPLICITLY here (unlike the PR plan job) because the preflight
-      # below reads <region>.tfvars and runs BEFORE the terraform-init composite
-      # that would otherwise render it.
+      # Rendered EXPLICITLY here, rather than left to the terraform-init composite,
+      # because the preflight below reads <region>.tfvars and runs BEFORE that
+      # composite would have rendered it.
       - name: Render tfvars from the LandingZone spec (spec-driven instances)
         run: llz render "$REGION" --tfvars-only --if-spec
 

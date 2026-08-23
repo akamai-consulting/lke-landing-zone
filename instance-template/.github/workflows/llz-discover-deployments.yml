@@ -1,9 +1,10 @@
 name: llz-discover-deployments (reusable)
 
 # Reusable (`workflow_call`) single source of truth for the per-deployment CI
-# matrix. SHARED: scheduled-checks, secret-rotation and the Terraform PR plan
-# all fan out over this workflow's `deployments` output, so their matrices
-# cannot drift. Read-only — no secrets, no cluster access; the caller owns the
+# matrix. SHARED: scheduled-checks and secret-rotation both fan out over this
+# workflow's `deployments` output, so their matrices cannot drift. (The Terraform
+# pipeline used to be the third caller, for its PR plan job; that job is retired —
+# see the note in llz-terraform.yml where it used to be.) Read-only — no secrets, no cluster access; the caller owns the
 # event gating with its own `if:`.
 # Maintainer rationale (incidents, PR archaeology, why-not-X) lives in the
 # TEMPLATE repo: docs/workflows/llz-discover-deployments.md

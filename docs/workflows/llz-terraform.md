@@ -67,7 +67,7 @@ dispatch **selectors** (`action` / `module` / `region` / `confirm_destroy`) are
 `workflow_call` boundary. The caller therefore forwards them as explicit `with:`
 inputs, and the jobs gate on the `inputs` context. On push/PR the caller
 forwards empty strings, which leaves every action-gated job correctly skipped
-(PR plan jobs gate on `github.event_name`, which *does* inherit).
+(the PR-triggered jobs gate on `github.event_name`, which *does* inherit).
 
 This is the single most load-bearing gotcha in the file and a short version of
 it is deliberately kept inline. Concretely — the caller forwards each selector
@@ -161,8 +161,10 @@ Tool versions are baked into `vars.TF_IMAGE` and `vars.KUBE_IMAGE`.
 
 ## Job: `push-noop-notice`
 
-A push to `main` neither plans nor applies — plans run on PRs, applies on
-`workflow_dispatch` (what `llz build` / `llz up` fire). So committing a spec
+A push to `main` neither plans nor applies. Applies run on `workflow_dispatch`
+(what `llz build` / `llz up` fire); pull requests run the credential-free checks
+only — there is no `tofu plan`, see [No plan job on pull
+requests](#no-plan-job-on-pull-requests). So committing a spec
 (`llz env add` auto-commits, then you push) produces a run where every *other*
 job is correctly skipped, which reads as alarming on a fresh instance. This
 always-runs job makes the no-op explicit so the skips are understood as

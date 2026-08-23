@@ -416,3 +416,101 @@ jobs:
 		}
 	}
 }
+
+// ── from the code review of the PR that introduced this guard ───────────────
+
+// TestACommentIsNotASecretReference. yaml.Marshal round-trips comments, so
+// scanning the re-marshalled node verbatim reported a comment as a live
+// reference and failed the gate on a correct file. These workflows carry more
+// prose than YAML — the note where the retired plan job used to be NAMES the
+// secrets it could not resolve — so this is not a hypothetical: had that note sat
+// inside a job body, the guard would have failed on the very commit that added
+// it. A gate that cries wolf gets deleted.
+func TestACommentIsNotASecretReference(t *testing.T) {
+	files := parse(t, map[string]string{
+		"a/.github/workflows/w.yml": `
+on: {workflow_dispatch: {}}
+jobs:
+  apply:
+    # This job used to read ${{ secrets.TF_STATE_ACCESS_KEY }} and no longer does;
+    # see the retirement note. Naming it here must not resurrect the finding.
+    #
+    # NO environment: KEY ON THIS JOB, deliberately. With one, neither arm can
+    # fire and the test passes whatever the scanner does — the first cut had one
+    # and stayed green with the comment-stripping reverted, proving nothing.
+    steps:
+      - run: echo hello
+`})
+	if f := Scan(files, scoped); len(f) != 0 {
+		t.Errorf("a comment mentioning a secret is prose, not a reference, got %+v", f)
+	}
+}
+
+// TestACommentDoesNotHIDEARealReference is the other half. Blanking comment lines
+// must not blank the YAML beside them — if it did, the fix for the false positive
+// would have bought a false negative, which is the worse of the two.
+func TestACommentDoesNotHIDEARealReference(t *testing.T) {
+	files := parse(t, map[string]string{
+		"a/.github/workflows/w.yml": `
+on: {workflow_dispatch: {}}
+jobs:
+  apply:
+    # a comment mentioning secrets.LINODE_API_TOKEN, and below it a real one
+    steps:
+      - env:
+          K: ${{ secrets.TF_STATE_ACCESS_KEY }}
+`})
+	f := Scan(files, scoped)
+	if len(f) != 1 || len(f[0].Secrets) != 1 || f[0].Secrets[0] != "TF_STATE_ACCESS_KEY" {
+		t.Errorf("the real reference beside the comment must still be found, got %+v", f)
+	}
+}
+
+// TestWorkflowLevelEnvIsScanned. The parse struct decoded only `on:` and `jobs:`,
+// so a workflow that hoists its credential exports to the WORKFLOW-LEVEL env:
+// block — ordinary style, and something the delivered pipeline already does for
+// other values — put every reference outside every job body. Scanning jobs alone
+// found nothing and the gate passed: moving three lines up the file would have
+// silently disarmed it.
+func TestWorkflowLevelEnvIsScanned(t *testing.T) {
+	files := parse(t, map[string]string{
+		"a/.github/workflows/w.yml": `
+on: {workflow_dispatch: {}}
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}
+jobs:
+  apply:
+    steps:
+      - run: tofu init
+`})
+	f := Scan(files, scoped)
+	if len(f) != 1 || f[0].Kind != NoEnvironment {
+		t.Fatalf("a secret hoisted to workflow-level env: is read by every job in the file, got %+v", f)
+	}
+	if len(f[0].Secrets) != 1 || f[0].Secrets[0] != "TF_STATE_ACCESS_KEY" {
+		t.Errorf("the finding must name the hoisted secret, got %v", f[0].Secrets)
+	}
+}
+
+// TestWorkflowLevelEnvIsUnionedWithTheJobs — a file with both must report both,
+// not one or the other.
+func TestWorkflowLevelEnvIsUnionedWithTheJobs(t *testing.T) {
+	files := parse(t, map[string]string{
+		"a/.github/workflows/w.yml": `
+on: {workflow_dispatch: {}}
+env:
+  A: ${{ secrets.TF_STATE_ACCESS_KEY }}
+jobs:
+  apply:
+    steps:
+      - env:
+          B: ${{ secrets.LINODE_API_TOKEN }}
+`})
+	f := Scan(files, scoped)
+	if len(f) != 1 {
+		t.Fatalf("expected one finding, got %+v", f)
+	}
+	if len(f[0].Secrets) != 2 {
+		t.Errorf("both the workflow-level and the job-level secret must be named, got %v", f[0].Secrets)
+	}
+}

@@ -21,10 +21,12 @@ the 3am debugging aids.
 `cluster/<name>.tfvars` on legacy instances. (The per-env tfvars are gitignored
 build artifacts on spec instances, so this reads the spec, not them.)
 
-Three other workflows fan their matrices out over **this** workflow's
-`deployments` output: the scheduled health/audit checks, the credential
-rotation, and the Terraform PR plan. Because every matrix derives from the same
-call, they cannot drift from one another — or from Terraform. A rotation run can
+Two other workflows fan their matrices out over **this** workflow's
+`deployments` output: the scheduled health/audit checks and the credential
+rotation. Because both matrices derive from the same call, they cannot drift
+from one another — or from Terraform. (The Terraform pipeline was a third
+caller until its PR plan job was retired; see
+[llz-terraform.md](llz-terraform.md#no-plan-job-on-pull-requests).) A rotation run can
 never leave a checked-but-unrotated (or rotated-but-unchecked) deployment, and
 `llz env add` extends CI coverage everywhere at once.
 

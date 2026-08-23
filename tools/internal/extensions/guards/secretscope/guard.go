@@ -89,7 +89,15 @@ var eventNameRe = regexp.MustCompile(`github\.event_name\s*==\s*'([a-z_]+)'`)
 // `secrets:` mapping of a reusable call alike, and enumerating those keys is how
 // the next place a secret can be written gets missed.
 type workflow struct {
-	On   yaml.Node            `yaml:"on"`
+	On yaml.Node `yaml:"on"`
+	// Env is the WORKFLOW-LEVEL env: block, and leaving it out was a hole big
+	// enough to drive the whole finding through. A workflow that hoists
+	// `AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY }}` up here — which is
+	// ordinary style, and which the delivered pipeline already does for other
+	// values — puts the reference outside every job body, so scanning jobs alone
+	// saw nothing and the gate passed. The env block applies to EVERY job, so its
+	// secrets are attributed to every job.
+	Env  yaml.Node            `yaml:"env"`
 	Jobs map[string]yaml.Node `yaml:"jobs"`
 }
 
@@ -191,14 +199,30 @@ func jobRunsOnPR(cond string) bool {
 	return false
 }
 
+// commentLineRe matches a whole-line YAML comment in the re-marshalled node.
+var commentLineRe = regexp.MustCompile(`(?m)^[ \t]*#.*$`)
+
 // secretsIn returns the env-scoped secrets a job's YAML references, sorted.
+//
+// COMMENTS ARE NOT REFERENCES, and yaml.Marshal round-trips them. These workflows
+// carry more prose than YAML — the note where the retired plan job used to be
+// NAMES the secrets it could not resolve — so scanning the re-marshalled node
+// verbatim reports a comment as a live reference and fails the gate on a file
+// that is correct. A guard that cries wolf gets deleted, and this one would have
+// cried on the very commit that introduced it if that note had sat inside a job.
+//
+// Whole-line comments only. A trailing `# …` after real YAML cannot introduce a
+// secret reference the line does not already make, and blanking to end-of-line
+// would need to know whether the `#` is inside a quoted scalar — which is the
+// yaml package's job, not a regex's.
 func secretsIn(node yaml.Node, scoped map[string]bool) []string {
 	raw, err := yaml.Marshal(&node)
 	if err != nil {
 		return nil
 	}
+	body := commentLineRe.ReplaceAllString(string(raw), "")
 	seen := map[string]bool{}
-	for _, m := range secretRefRe.FindAllStringSubmatch(string(raw), -1) {
+	for _, m := range secretRefRe.FindAllStringSubmatch(body, -1) {
 		name := m[1]
 		if name == "" {
 			name = m[2]
@@ -210,6 +234,20 @@ func secretsIn(node yaml.Node, scoped map[string]bool) []string {
 	out := make([]string, 0, len(seen))
 	for n := range seen {
 		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// union merges two sorted secret-name lists, de-duplicated and sorted.
+func union(a, b []string) []string {
+	seen := map[string]bool{}
+	for _, v := range append(append([]string{}, a...), b...) {
+		seen[v] = true
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
 	}
 	sort.Strings(out)
 	return out
@@ -301,8 +339,11 @@ func Scan(files map[string]workflow, scoped map[string]bool) []Finding {
 	var findings []Finding
 	for p, w := range files {
 		via, onPR := reach[p]
+		// Workflow-level env: applies to every job in the file, so a secret named
+		// there is a secret every job reads.
+		wide := secretsIn(w.Env, scoped)
 		for name, node := range w.Jobs {
-			used := secretsIn(node, scoped)
+			used := union(secretsIn(node, scoped), wide)
 			if len(used) == 0 {
 				continue
 			}
