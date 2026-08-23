@@ -291,7 +291,20 @@ func registerRunnerACLIP(ip string, reassert reassertACL) error {
 			} else if !isAlreadyExists(cout) {
 				lastOut, lastErr = cout, cerr
 			} else {
-				lastOut, lastErr = out, perr // raced a creator; retry the patch
+				// RACED A CREATOR — RETRY THE PATCH NOW, not on the next lap.
+				// Falling through spent the attempt on a ConfigMap that demonstrably
+				// EXISTS, and on the LAST attempt it exited with no lease at all,
+				// where the old `apply` would at least have written one. The
+				// backstop this change added must not cost the thing it protects.
+				fmt.Fprintf(os.Stderr, "runner-acl: another runner created %s/%s first (attempt %d/%d) — patching the lease onto it\n",
+					runnerACLConfigMapNS, runnerACLConfigMapName, attempt, runnerACLPatchN)
+				if pout, perr2 := runnerACLKubectlFn("", "patch", "configmap", runnerACLConfigMapName,
+					"-n", runnerACLConfigMapNS, "--type", "merge", "-p", string(body)); perr2 == nil {
+					fmt.Printf("runner-acl: leased %s in %s/%s for %s.\n", ip, runnerACLConfigMapNS, runnerACLConfigMapName, runnerACLLeaseTTL)
+					return nil
+				} else {
+					lastOut, lastErr = pout, perr2
+				}
 			}
 		} else {
 			lastOut, lastErr = out, perr
