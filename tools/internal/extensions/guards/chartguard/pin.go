@@ -32,21 +32,21 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
-// chartPinScanRoots are the repo subtrees scanned for first-party chart pins:
-// the platform-bootstrap Applications, the live per-env Argo Application
-// manifests, and the app-of-apps generator's component list. All pin chart
 // chartsDir is the first-party chart tree, named once so the pin guard and the
 // lock-drift guard cannot disagree about where charts live.
 const chartsDir = "kubernetes-charts"
 
-// versions that must track kubernetes-charts/.
+// chartPinScanRoots are the repo subtrees scanned for first-party chart pins: the
+// platform-bootstrap Applications, the live per-env Argo Application manifests, and
+// the app-of-apps generator's component list. All pin chart versions that must
+// track kubernetes-charts/.
 //
-// platform-apl was MISSING here, and it holds the repo's first-party pins
-// (manifest/applications/cluster-foundation.yaml, components/openbao/openbao.yaml).
-// The guard reported "2 first-party chart pin(s) match" and read as full
-// coverage while pins could drift from their Chart.yaml unwatched — a pin the
-// registry never received 404s at Argo sync time, which is the exact failure
-// this guard exists to prevent.
+// KEEP platform-apl IN THIS LIST. It holds the repo's own first-party pins
+// (manifest/applications/cluster-foundation.yaml, components/openbao/openbao.yaml),
+// and without it the guard reports a match count that reads as full coverage while
+// those pins drift from their Chart.yaml unwatched — a pin the registry never
+// received 404s at Argo sync time, which is the exact failure this guard exists to
+// prevent.
 var chartPinScanRoots = []string{"platform-apl", "instance-template", "kubernetes-charts"}
 
 // chartPinRe matches a `chart: <name>` line, capturing its indent and name. The

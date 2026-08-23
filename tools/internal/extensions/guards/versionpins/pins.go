@@ -97,19 +97,12 @@ const floatingTag = "latest"
 // with a fallback for when it is unset — but the rule does not depend on that
 // or any other spelling, which is the point; see containerImages.
 //
-// THIS IS A SCAR. A KUBECTL_VERSION or TOFU_VERSION bump used to guarantee
-// exactly one red Lint run, and it read as a broken image reference rather than
-// an ordering artefact:
-//
-//	docker pull ghcr.io/<org>/ci-kubernetes:1.34.10
-//	Error response from daemon: manifest unknown
-//
-// Both gates were individually right and jointly guaranteed the failure. This
-// gate REQUIRED lint.yml's `vars.KUBE_IMAGE ||` fallback to restate the
-// Dockerfile ARG, so a bump necessarily pointed Lint at a tag that
-// build-images.yml had not published yet — build-images runs on pushes to main,
-// and Lint runs on the bump's own push. It self-healed on a re-run after the
-// merge, at the cost of a confusing red and a manual re-run per bump.
+// THIS IS A SCAR. Requiring the `vars.KUBE_IMAGE ||` fallback to restate the
+// Dockerfile ARG makes every KUBECTL_VERSION or TOFU_VERSION bump cost exactly one
+// red Lint run — `docker pull …/ci-kubernetes:1.34.10` → `manifest unknown` —
+// because build-images runs on pushes to main and Lint runs on the bump's own push,
+// so the tag does not exist yet. It reads as a broken image reference rather than
+// an ordering artefact, and self-heals on a re-run after the merge.
 //
 // So a fallback is gated the OTHER way: it must name `:latest`, the one tag
 // build-images.yml republishes on every main push and therefore the only tag
@@ -130,10 +123,9 @@ const floatingTag = "latest"
 
 // ── container images, located by YAML POSITION ───────────────────────────────
 //
-// THIS REPLACED A REGEX THAT WAS WRONG FOUR TIMES, AND THE FOUR ARE THE ARGUMENT
-// FOR THE REWRITE. It tried to recognise the fallback EXPRESSION
-// (`vars.<X>_IMAGE || format('ghcr.io/{0}/<image>:<tag>', …)`), and every
-// revision either missed a legal spelling or swept up something innocent:
+// DO NOT GO BACK TO MATCHING THE EXPRESSION. Recognising the fallback form
+// (`vars.<X>_IMAGE || format('ghcr.io/{0}/<image>:<tag>', …)`) with a regex either
+// misses a legal spelling or sweeps up something innocent, in these four ways:
 //
 //	keyed on format('ghcr.io/{0}/…') exactly   → the owner spelled out escaped
 //	loosened to "a vars.<X> || on the line"    → `${{ vars.EXTRA_FLAGS || '' }}
@@ -143,14 +135,14 @@ const floatingTag = "latest"
 //	first-quoted-string-after-||               → a YAML-wrapped fallback, and any
 //	                                             var not ending in _IMAGE
 //
-// Each escape had the same consequence and it is the worst one available: a
+// Each escape has the same consequence and it is the worst available: a
 // version-tagged fallback the float rule misses falls through to the PIN rule,
-// which then REQUIRES the version — so the gate mandates the exact ordering trap
-// it exists to prevent. Written `:latest` the same line matched no rule at all
-// and the gate printed OK.
+// which then REQUIRES the version — so the gate mandates the exact ordering trap it
+// exists to prevent. Written `:latest` the same line matches no rule at all and the
+// gate prints OK.
 //
-// An expression grammar is not a thing to chase with literal prefixes. So this
-// does not look at the expression: it asks YAML where the value SITS. A
+// An expression grammar is not a thing to chase with literal prefixes. So this does
+// not look at the expression: it asks YAML where the value SITS. A
 // `jobs.<id>.container.image` is a container image whatever it is spelled like,
 // and the property that matters there does not mention fallbacks at all —
 //
@@ -164,12 +156,12 @@ const floatingTag = "latest"
 
 // containerImage is one image expression and the lines it occupies.
 //
-// endLine is not decoration. A value may WRAP — `image: ${{ vars.TF_IMAGE ||`
-// on one line and `format('…/ci-tofu:9.9.9', …) }}` on the next is ordinary
-// YAML — and with the de-dup keyed on the first line only, the pin rule matched
-// the continuation and the same reference got two contradictory verdicts: FLOAT
-// on one line and DRIFT on the next, the drift remediation telling the reader to
-// "bump these to match" the ARG, which is the edit that re-arms the trap.
+// endLine is not decoration. A value may WRAP — `image: ${{ vars.TF_IMAGE ||` on
+// one line and `format('…/ci-tofu:9.9.9', …) }}` on the next is ordinary YAML — and
+// with the de-dup keyed on the first line only, the pin rule matches the
+// continuation and one reference gets two contradictory verdicts: FLOAT on one line
+// and DRIFT on the next, whose remediation tells the reader to "bump these to
+// match" the ARG, the edit that re-arms the trap.
 type containerImage struct {
 	value   string
 	line    int
@@ -629,10 +621,9 @@ var reTagInValue = regexp.MustCompile(`([A-Za-z0-9_.${}-]*):(\$\{\{(?:[^}]|\}[^}
 
 // judgeContainerImage decides one container image VALUE for one image name.
 //
-// IT READS THE WHOLE VALUE, AND EVERY TAG IN IT. Reading a single occurrence of
-// the image name and assuming the rest of the expression inert let four
-// different spellings through, each landing on the same `manifest unknown` trap
-// the gate exists to prevent:
+// IT READS THE WHOLE VALUE, AND EVERY TAG IN IT. Reading a single occurrence of the
+// image name and assuming the rest of the expression inert lets these spellings
+// through, each landing on the `manifest unknown` trap the gate exists to prevent:
 //
 //	format('ghcr.io/{0}/{1}:1.34.10', owner, 'ci-kubernetes')
 //	format('ghcr.io/{0}/{1}:sha-abcdef0', owner, 'ci-tofu')
@@ -642,21 +633,20 @@ var reTagInValue = regexp.MustCompile(`([A-Za-z0-9_.${}-]*):(\$\{\{(?:[^}]|\}[^}
 //	    :latest and the gate exited 0
 //
 //	vars.X && '…/ci-kubernetes:latest' || '…/ci-kubernetes:1.34.10'
-//	    only the leftmost match was judged; the second occurrence was invisible
-//	    to this rule and skipped by the pin rule, its line being a container line
+//	    only the leftmost match is judged; the second occurrence is invisible to
+//	    this rule and skipped by the pin rule, its line being a container line
 //
-// A name-anchored rule cannot see any of them, and an intermediate version of
-// this scanned only for DOTTED version tags — which closed the first and left
-// the other two open. So the rule is stated over the value:
+// A name-anchored rule cannot see any of them, and scanning only for DOTTED version
+// tags closes the first and leaves the other two open. So the rule is stated over
+// the value:
 //
 //	if the value names one of our images, every tag in it must be `latest`
 //
-// EVERY TAG OF OURS, WHICH IS NOT EVERY TAG. Requiring `latest` of every colon
-// in the value was the first form of this and it over-reached: a conditional
-// image `… && 'ghcr.io/o/ci-tofu:latest' || 'debian:bookworm-20240101'` failed
-// with `ci-tofu container image tag is bookworm-20240101`, naming a third-party
-// image this guard's own docs say it does not gate, and the only edit that
-// satisfied the message was retagging Debian.
+// EVERY TAG OF OURS, WHICH IS NOT EVERY TAG. Requiring `latest` of every colon in
+// the value over-reaches: a conditional image `… && 'ghcr.io/o/ci-tofu:latest' ||
+// 'debian:bookworm-20240101'` then fails with `ci-tofu container image tag is
+// bookworm-20240101`, naming a third-party image this guard does not gate, and the
+// only edit that satisfies the message is retagging Debian.
 //
 // So a tag is judged when the path SEGMENT it hangs off is one of ours, or is a
 // placeholder or expression whose value cannot be read here — `{1}` in
