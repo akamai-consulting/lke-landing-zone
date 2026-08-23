@@ -9,19 +9,13 @@ package linode
 // the standard /v4/lke/versions catalog is the wrong list to check against — it
 // answers for a product this landing zone does not use.
 //
-// THE RESPONSE BODY HAS NOW BEEN SEEN, and it is why this stopped being purely
-// advisory. When this file was written only the route's existence was verified (an
-// unknown Linode path returns 404 before auth; this one returns 401) and the shape
-// of an entitled account's answer was a guess. Measured on 2026-08-11 against two
-// accounts in the same hour, it returns FULL LKE-E build ids and nothing coarser:
-// one account listed `v1.33.6+lke7`, the e2e account listed exactly
-// `v1.34.6+lke2` and `v1.32.9+lke4`.
-//
-// TWO THINGS FOLLOW, and both are load-bearing. The catalog is per-ACCOUNT, so
-// "is this version valid" has no answer except against the account that will build
-// the cluster — release notes cannot answer it, and a pin that worked at 16:04 was
-// rejected at 17:06. And because the ids are exact, an absent pin is a real
-// verdict rather than a spelling difference, which is what lets
+// THE CATALOG RETURNS FULL LKE-E BUILD IDS and nothing coarser — measured against
+// two accounts in the same hour, one listing `v1.33.6+lke7` and the other exactly
+// `v1.34.6+lke2` and `v1.32.9+lke4`. Two things follow, both load-bearing. It is
+// per-ACCOUNT, so "is this version valid" has no answer except against the account
+// that will build the cluster; release notes cannot answer it, and a pin accepted
+// at 16:04 was rejected at 17:06. And because the ids are exact, an absent pin is
+// a real verdict rather than a spelling difference, which is what lets
 // `llz ci assert-k8s-version` FAIL a build on it (see VersionOffered).
 //
 // What has not changed: a shape this file did not expect is still UNKNOWN. An
@@ -157,23 +151,16 @@ const (
 // all: it neither confirms `v1.33.6+lke7` nor rejects it, so the answer is
 // UNKNOWN and the callers warn and pass.
 //
-// THREE WRONG VERSIONS OF THIS RULE SHIPPED BEFORE THIS ONE, all of them letting
-// a pin through that the apply then rejected, and all from the same instinct —
-// treating "close enough" as an answer:
-//
-//   - deciding build-vs-major.minor PER ENTRY, so one coarse row in an otherwise
-//     build-id catalog re-opened loose matching for the whole comparison;
-//   - requiring BOTH sides to name a build, so `v1.34.6` against an account
-//     offering only `v1.34.6+lke2` passed on major.minor;
-//   - treating major.minor agreement with a COARSE catalog as confirmation, so
-//     `["1.33"]` reported the retired `v1.33.6+lke7` as offered — an unqualified
-//     pass, and the apply still died at ~15 minutes with the 400.
-//
-// The last one is the subtlest, because it looked like the safe direction: it
-// applied the uncertainty rule to disagreement only. A catalog too coarse to
-// reject a build is equally too coarse to endorse one, and the difference between
-// "UNCHECKED" and "is offered" is the difference between an operator who knows to
-// look and one who does not.
+// DO NOT LOOSEN IT IN ANY OF THE THREE TEMPTING DIRECTIONS, each of which has
+// shipped and each of which lets a pin through that the apply rejects fifteen
+// minutes later: deciding build-vs-major.minor PER ENTRY (one coarse row re-opens
+// loose matching for the whole comparison); requiring BOTH sides to name a build
+// (so `v1.34.6` passes against an account offering only `v1.34.6+lke2`); and
+// reading major.minor agreement with a COARSE catalog as confirmation. The last
+// looks like the safe direction because it applies the uncertainty rule to
+// disagreement only — but a catalog too coarse to reject a build is equally too
+// coarse to endorse one, and "UNCHECKED" versus "is offered" is the difference
+// between an operator who knows to look and one who does not.
 func CheckVersion(want string, offered []string) (VersionVerdict, string) {
 	w := strings.TrimSpace(want)
 	if w == "" || len(offered) == 0 {
@@ -278,47 +265,37 @@ const (
 // preflight blocks work it has no business blocking. `k8s_version` is handed to
 // the API only on CREATE, or on an UPDATE that changes it — for an existing
 // cluster already at the pin, terraform plans no diff and the apply succeeds
-// whatever the catalog says today. LKE-E versions rotate fast (this repo measured
-// one leaving an account's catalog inside an hour), so without this exemption
-// every routine apply to a long-lived deployment — a node-pool resize, an ACL
-// change — would be blocked until someone bumped `cluster.k8sVersion`, forcing a
-// control-plane upgrade nobody asked for.
+// whatever the catalog says today. LKE-E versions rotate within hours, so without
+// this exemption every routine apply to a long-lived deployment (a node-pool
+// resize, an ACL change) would be blocked until someone bumped
+// `cluster.k8sVersion`, forcing a control-plane upgrade nobody asked for.
 //
-// IT INFERS THAT NO-DIFF FROM THE LIVE ACCOUNT, NOT FROM A PLAN, and that gap is
-// real rather than theoretical. Two shapes defeat it, and both end in the same
-// `[400] k8s_version is not valid` fifteen minutes in:
-//
-//   - an ORPHANED cluster left at this label+region by a failed cycle — this repo
-//     has a whole triage runbook for those — satisfies this while the tfstate that
-//     would adopt it is gone, so terraform plans a CREATE rather than a no-op;
-//   - a planned REPLACEMENT re-sends `k8s_version` on the create half. Flipping
-//     `cluster.bootstrap.managedAppPlatform` (`apl_enabled` is ForceNew) or moving
-//     the deployment's VPC/subnet binding does that, so a cluster sitting at a
-//     rotated-out pin is exempted here and then destroyed and recreated at it.
+// IT INFERS THAT NO-DIFF FROM THE LIVE ACCOUNT, NOT FROM A PLAN, and two shapes
+// defeat it, both ending in `[400] k8s_version is not valid` fifteen minutes in:
+// an ORPHANED cluster left at this label+region by a failed cycle satisfies this
+// while the tfstate that would adopt it is gone, so terraform plans a CREATE; and
+// a planned REPLACEMENT re-sends `k8s_version` on the create half (flipping
+// `cluster.bootstrap.managedAppPlatform` — `apl_enabled` is ForceNew — or moving
+// the VPC/subnet binding does that).
 //
 // Closing either needs a plan, and there is none: the preflight deliberately runs
-// before any root is initialised, which is the whole reason it costs seconds. So
-// the exemption is the cheaper inference on purpose — it trades a COMMON false
-// failure (every routine apply after a rotation, on every long-lived deployment)
-// for a RARE false pass whose cost is the same fifteen minutes this gate normally
-// saves. Sweeping orphans (`llz reap`) closes the first; the second is bounded to
-// changes that already imply a rebuild, where a stale pin is the operator's next
-// question anyway.
+// before any root is initialised, which is why it costs seconds. So the exemption
+// is the cheaper inference on purpose — it trades a COMMON false failure (every
+// routine apply after a rotation) for a RARE false pass whose cost is the same
+// fifteen minutes this gate normally saves. `llz reap` closes the first; the second
+// is bounded to changes that already imply a rebuild.
 //
 // ONE ASSUMPTION IS UNMEASURED AND IT FAILS SAFE. The CATALOG's spelling has been
-// seen (full `v…+lke…` ids); the CLUSTER OBJECT's `k8s_version` has not — the only
-// in-repo corroboration is credrotate/lkeadmin.go, which merely checks it contains
-// "+lke". If LKE-E reported it without the leading `v`, this would silently never
-// fire and every routine apply to a long-lived deployment would block after a
-// rotation. That is the LOUD direction (a red gate naming the offered versions),
-// not a silent pass, which is why it is written exactly rather than loosened on
-// a guess: the terraform provider round-trips this value into state, so it almost
-// certainly echoes verbatim, and if it does not the failure says so immediately.
+// seen (full `v…+lke…` ids); the CLUSTER OBJECT's `k8s_version` has not. If LKE-E
+// reported it without the leading `v`, this would never fire and every routine
+// apply after a rotation would block — the LOUD direction (a red gate naming the
+// offered versions), not a silent pass, which is why it is written exactly rather
+// than loosened on a guess.
 //
-// EXACTLY ONE MATCH, deliberately — see ClusterVersionFor, which now owns that
-// rule. Zero means there is nothing to no-op and the pin must be buildable; more
-// than one is an ambiguous account this must not guess about. Both fall through to
-// the catalog verdict, which is the safe direction.
+// EXACTLY ONE MATCH, deliberately — see ClusterVersionFor, which owns that rule.
+// Zero means there is nothing to no-op and the pin must be buildable; more than one
+// is an ambiguous account this must not guess about. Both fall through to the
+// catalog verdict, which is the safe direction.
 func ClusterRunsVersion(clusters []map[string]any, label, region, version string) bool {
 	// EXACT, for the same reason CheckVersion is: this decides whether terraform
 	// PLANS A DIFF, and terraform compares the tfvars string against what the API
@@ -335,13 +312,11 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 // ClusterVersionFor returns the k8s_version of the ONE cluster on the account
 // matching label (and region, when given), or "" when zero or several match.
 //
-// IT IS THE MATCHING RULE ClusterRunsVersion IS NOW WRITTEN IN TERMS OF, extracted
-// rather than copied. #443's whole argument is that the preflight and `llz doctor`
-// must not be able to reach different conclusions about one deployment, and #453
-// added a THIRD caller — `llz env add`, which needs the version itself rather than
-// a yes/no about a version it already has. A second loop over the same two keys is
-// how the two answers drift, and the drift would be invisible: both would still be
-// "right" about the account, and disagree about the deployment.
+// IT IS THE MATCHING RULE ClusterRunsVersion IS WRITTEN IN TERMS OF, and the
+// preflight, `llz doctor` and `llz env add` all reach it through here. A second
+// loop over the same two keys is how those answers drift, and the drift would be
+// invisible: each would still be "right" about the account and disagree about the
+// deployment (#443, #453).
 //
 // ZERO OR SEVERAL RETURN "", which every caller must read as "no answer" rather
 // than "no version". Zero means there is nothing to no-op and nothing to adopt;
@@ -359,14 +334,12 @@ func ClusterRunsVersion(clusters []map[string]any, label, region, version string
 // it and neither is about effort:
 //
 //   - THE FIELD IS RETURNED (ListClusters says so); ITS VALUES ARE UNMEASURED.
-//     Nothing in this repo has ever read an LKE-E cluster's status — the one
-//     measured `status` here is Postgres's (credrotate). This file already
-//     carries a warning about exactly this class of guess — see ClusterRunsVersion
-//     on the cluster object's `k8s_version` spelling — and the rule it settled on
-//     is to compare what has been seen and let an unmeasured shape fail LOUDLY
-//     rather than silently. A filter keyed on an unverified enum fails the other
-//     way: spell it wrong and it quietly excludes nothing, or quietly excludes
-//     everything and disables the exemption for every long-lived deployment.
+//     Nothing here has ever read an LKE-E cluster's status. A filter keyed on an
+//     unverified enum fails silently in both directions: spell it wrong and it
+//     excludes nothing, or excludes everything and disables the exemption for
+//     every long-lived deployment. Compare what has been seen, and let an
+//     unmeasured shape fail LOUDLY — the same rule ClusterRunsVersion states
+//     above about the cluster object's `k8s_version` spelling.
 //   - IT WOULD NOT CATCH THE HAZARD ANYWAY. The orphan that actually costs a build
 //     is a perfectly HEALTHY cluster whose tfstate is gone, so terraform plans a
 //     create — `status` says "ready" and always will. That case is bounded where it
@@ -385,9 +358,9 @@ func ClusterVersionFor(clusters []map[string]any, label, region string) string {
 	if label == "" {
 		return ""
 	}
-	// linode.MatchingClusters, not a loop over label+region here. That loop existed
-	// twice for a while — this file and acl.go — which is exactly the drift #443's
-	// whole argument is about, and neither copy would ever have looked wrong.
+	// linode.MatchingClusters, not a loop over label+region here — a second copy of
+	// the matching rule is the drift #443 is about, and neither copy would ever
+	// look wrong.
 	m := MatchingClusters(clusters, label, region)
 	if len(m) != 1 {
 		return ""

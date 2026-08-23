@@ -119,71 +119,43 @@ const (
 //
 // GRANTS BELONG HERE, NOT ON THE EXTENSION. Every rule about a grant is really a
 // rule about a binding ("a gate may only read the repo"), so extension-scoped
-// grants cannot be reconciled with multi-binding extensions. Scoping them wrongly
+// grants cannot be reconciled with multi-binding extensions — scoping them wrongly
 // yielded a one-line bypass and an unsatisfiable pair, both pinned as regressions
-// in extension_test.go; docs/designs/internal-extension-model.md explains them.
-// Each binding is judged on what it declares, and lends nothing to its siblings.
+// in extension_test.go. Each binding is judged on what it declares, and lends
+// nothing to its siblings. docs/designs/internal-extension-model.md has the model.
 //
-// NAME DISAMBIGUATES REPEATED ATTACHMENTS, and exists because the same reasoning
-// that moved grants onto Binding applies one level further down. `operating` is
-// the only state an invariant may attach to, so without a name an extension could
-// hold exactly one invariant — and reconcile-actions is EIGHT lanes, five of them
-// declared here (linode-creds, sc-demote, argo-nudge, es-store-recovery,
-// openbao-gauges) and three named in its Incomplete notes (tokens, apl-overlay,
-// apl-overlay-wait). Their needs genuinely differ: the token restorers place
-// credential material, sc-demote only writes to the cluster. Collapsed into one
-// binding their grants widen to the union, which is precisely the over-granting
-// that scoping grants per binding was introduced to prevent. Optional: a single
-// attachment needs no name, and two of the same kind:state do.
+// NAME DISAMBIGUATES REPEATED ATTACHMENTS, by the same reasoning one level down.
+// `operating` is the only state an invariant may attach to, so without a name an
+// extension could hold exactly one — and reconcile-actions is eight lanes whose
+// needs genuinely differ (the token restorers place credential material, sc-demote
+// only writes to the cluster). Collapsed into one binding their grants widen to
+// the union, which is the over-granting per-binding scoping exists to prevent.
+// Optional: a single attachment needs no name, two of the same kind:state do.
 //
-// THIS SENTENCE SAID SEVEN AND LISTED `linode-token-wait` AMONG THEM, which the
-// declaration it describes refutes in so many words: "linode-token-wait is NOT
-// missing: it is a watch wrapper belonging to the runtime, and the catalog counting
-// it among the seven invariants is a miscount". The model's own doc was carrying
-// the miscount an extension had already found and written down — the shape worth
-// noticing being that the correction lived in the declaration and the error lived
-// in the prose describing declarations, so neither reader met both.
-// REQUIRES IS THE PRECONDITION AXIS, and it is the third word this model has
-// gained. State says what a binding ESTABLISHES; Requires says what must ALREADY
-// HOLD for it to run. Until now only the first was expressible, and three
-// extractions in a row shipped a declaration that was true about the first while
-// silently dropping the second.
+// REQUIRES IS THE PRECONDITION AXIS. State says what a binding ESTABLISHES;
+// Requires says what must ALREADY HOLD for it to run. The shape is a mutating
+// action whose precondition is a state rather than whose effect is that state:
+// `wedge-gameday` refuses to start unless the cluster is already Healthy,
+// `rotate-admin` refuses to rotate an unseeded path, `bao-breakglass` restores
+// root access to a platform that is up. None moves the platform anywhere; all
+// three need it to be somewhere.
 //
-// THE SHAPE IS A MUTATING ACTION WHOSE PRECONDITION IS A STATE RATHER THAN WHOSE
-// EFFECT IS THAT STATE. `wedge-gameday` refuses to start unless the cluster is
-// already Healthy; `rotate-admin` refuses to rotate an unseeded path;
-// `bao-breakglass` restores root access to a platform that is up. None of the
-// three moves the platform anywhere, and all three need it to be somewhere.
+// NOT A FIFTH BINDING KIND, which is the obvious reading. The kind was never
+// wrong — all three really are transitions and really do mutate. The STATE was
+// carrying two meanings and could only ever express one, so a new kind would have
+// answered the kind question and left the state question where it was.
 //
-// WHY NOT A FIFTH BINDING KIND, which is the obvious reading and the one the
-// first two cases were nearly argued into. `wedge-gameday` wrote the refutation
-// while declaring itself: what these want "is not a new binding kind but a way to
-// say 'this is a CHECK, it must mutate to run, and it requires state X rather than
-// establishing it'. A fifth kind bolted on now would have answered the kind
-// question and left the state question exactly where it is." The kind was never
-// wrong — all three really are transitions, they really do mutate. The STATE was
-// carrying two meanings and could only ever express one.
-//
-// WHY NOT LET Transition REACH `operating` INSTEAD, the other obvious fix.
-// Because the restriction has content worth keeping: `operating` is a condition
-// that holds rather than a place you move to, and letting a transition target it
-// would let something claim to move the platform TO `operating`, which is the
-// exact thing the rule exists to prevent. Requires buys the accuracy without
-// spending the rule.
-//
-// IT ALSO RESOLVES A DISAGREEMENT BETWEEN THE TWO CEILING TABLES, which is the
-// sharpest evidence that the gap was real rather than cosmetic. grantStates puts
-// `operating` in the secret-custody row explicitly FOR rotation, while
-// bindableStates forbids a transition there — so a scheduled rotation was a
-// binding each table expected the other to be describing. `rotate-admin` ended up
-// at `seeded`, the one state both tables allow, which its own note called out as
-// the wrong home.
+// NOR LETTING Transition REACH `operating`, the other obvious fix, because that
+// restriction has content worth keeping: `operating` is a condition that holds
+// rather than a place you move to, and a transition targeting it could claim to
+// move the platform THERE. It also settles a disagreement between the two ceiling
+// tables — grantStates puts `operating` in the secret-custody row for rotation
+// while bindableStates forbids a transition there, which left `rotate-admin`
+// parked at `seeded`, a home its own note called wrong.
 //
 // THE GRANT CHECK RUNS AT BOTH STATES, never at Requires alone. Checking only the
-// precondition would have been the natural reading and is a quiet widening: a
-// binding could then ask at `operating` for something its declared State forbids.
-// Both is strictly tighter than what shipped before this field existed, and all
-// three cases pass it unchanged.
+// precondition is the natural reading and a quiet widening: a binding could then
+// ask at `operating` for something its declared State forbids.
 type Binding struct {
 	Kind     BindingKind
 	Name     string
@@ -396,9 +368,9 @@ type Extension struct {
 	// something holding the component list can know.
 	//
 	// IT IS EXTENSION-SCOPED, WHICH IS THE MISTAKE Grants WAS CORRECTED FROM, AND
-	// THERE IS ONE CASE THAT PROVES IT — which is one short of this model's bar.
+	// THERE IS ONE CASE THAT PROVES IT — one short of this model's bar.
 	//
-	// `assert-secrets` carries four named bindings, and each belongs to a DIFFERENT
+	// `assert-secrets` carries four named bindings, each belonging to a DIFFERENT
 	// component: eso-roundtrip follows externalSecrets, openbao-audit follows
 	// openbao, broad-pat-drill follows broadPatRotator, and rotation-health follows
 	// none of them (it gates every credential credpaths declares). A single
@@ -408,53 +380,23 @@ type Extension struct {
 	// THE FIX IS NOT A SLICE. `[]string` would ask a question with no good answer —
 	// all of them off, or any? — and both readings are wrong for assert-secrets,
 	// whose four bindings want four independent answers. The shape is per-BINDING,
-	// which is exactly the argument made for grants twenty lines up: every rule
-	// about a component is really a rule about the binding that follows it, so
-	// extension-scoped components cannot be reconciled with multi-binding
-	// extensions.
+	// exactly the argument made for grants above.
 	//
-	// AND `openbao` FOUND THE SAME AXIS FROM THE OTHER SIDE, independently, which is
-	// the part worth reading. Its Incomplete note says "ENABLEMENT IS PER-EXTENSION,
-	// NOT PER-BINDING": `openbao-peer-ca` only matters for an HA PAIR and shipped
-	// `Always: false`, while its siblings are unconditional — merging forced one
-	// value and the honest one was wrong. That note refuses a `Binding.Always` on
-	// the grounds that it is "STILL ONE CASE", and ends "this note stays until a
-	// second case says what shape the answer is."
-	//
-	// assert-secrets is a second case on the same axis and it says the shape is NOT
-	// what openbao guessed. peer-ca wants a PREDICATE — it runs when the deployment
-	// is an HA pair, a topology fact read at run time, not a toggle anyone sets.
-	// assert-secrets wants a per-binding COMPONENT REFERENCE, which is a static
-	// value and much smaller. Two cases, two shapes, so what they establish
-	// together is that the AXIS is real (enablement belongs on the binding) and not
-	// yet what the field is. A `Binding.Component` would serve assert-secrets and
-	// still miss peer-ca, because there is no component called `ha`.
-	//
-	// NOTHING IS INVENTED HERE. The two remaining candidates were checked and are
-	// not cases: `credential-pat` has a single binding (so its link is a
-	// whole-extension decision), and `health-sla`'s two invariants are both
-	// cross-cutting — neither follows a component at all. The reconciler lanes
-	// already carry the binding name per-binding resolution would need (see
-	// LaneDecl), so the plumbing is not what is missing; the argument is.
+	// BUT NOT YET `Binding.Component`, because the second case on this axis wants a
+	// different shape: `openbao-peer-ca` only matters for an HA PAIR, which is a
+	// topology PREDICATE read at run time, not a static component reference — and
+	// there is no component called `ha`. Two cases establish that the axis is real
+	// (enablement belongs on the binding) without establishing what the field is.
+	// The reconciler lanes already carry the binding name such a resolution would
+	// need (see LaneDecl), so the plumbing is not what is missing; the argument is.
 	//
 	// EMPTY IS NOT "ALWAYS ON". Four of the seven opt-in extensions have no
-	// component and should not be given one, and the four are import-brownfield (a
-	// one-time adoption path), wedge-gameday (not about the platform at all),
-	// release-publish (runs template-repo-side) and database-provisioner. Enablement
-	// for those is a question this field does not answer, and answering it here would
-	// mean inventing a component that exists only to be a checkbox.
-	//
-	// database-provisioner IS THE ONE THAT NEEDED CHECKING RATHER THAN ASSERTING.
-	// This list used to name `dev-mutation-testing` in its place — an extension the
-	// registry does not contain and never has, so the fourth slot was justified by a
-	// declaration nobody could look up while the real occupant went unexamined. It
-	// belongs here for a different reason from the other three: it IS about the
-	// platform, and its enablement genuinely does follow configuration — just not
-	// `spec.components`, which has no database entry. It follows `spec.databases`,
-	// and pointing Component at a component that does not exist is precisely what
-	// EnabledFor refuses (rule 3). TestEveryComponentLinkResolves is what would have
-	// caught the reverse mistake; nothing checks an extension name in PROSE, which is
-	// how this one survived into a test file's header as well.
+	// component and should not be given one — import-brownfield (a one-time
+	// adoption path), wedge-gameday (not about the platform at all),
+	// release-publish (runs template-repo-side) and database-provisioner, whose
+	// enablement follows `spec.databases` rather than `spec.components`. Pointing
+	// Component at a component that does not exist is what EnabledFor refuses
+	// (rule 3), and TestEveryComponentLinkResolves is what catches it.
 	Component string
 	// Bindings is where it attaches and, per binding, what it may touch. At least
 	// one.
@@ -463,20 +405,14 @@ type Extension struct {
 	// Incomplete names what this extension does NOT yet declare, and is empty for
 	// an extension that declares its whole surface.
 	//
-	// IT EXISTS BECAUSE TWO EXTRACTIONS ARRIVED PARTIAL AND THE MODEL COULD NOT SAY
-	// SO. `reconcile-actions` declares five invariants while three more of its lanes
-	// sit undeclared in the reconciler package next door; `template-sustain` declares the half that does not
-	// touch `.template-manifest`, which ADR 0014 pins as permanently core. Both
-	// read as COMPLETE — nothing distinguished "has four bindings" from "has eight,
-	// four of which have not moved" — and an extension that silently under-declares
-	// its own surface is the same failure shape as PR #15's ban-by-omission: the
-	// reader cannot tell what is missing.
-	//
-	// Added on the SECOND case, not the first, which is the rule this model has
-	// been following for every vocabulary change (see grantStates' cloud-mutate
-	// row). One occurrence is an anecdote; two independent ones with different
-	// causes — a sibling extension's territory, and a core-by-construction file —
-	// is a shape.
+	// IT EXISTS BECAUSE EXTRACTIONS ARRIVE PARTIAL AND THE MODEL COULD NOT SAY SO.
+	// `reconcile-actions` declares five invariants while three more of its lanes sit
+	// undeclared in the reconciler package next door; `template-sustain` declares the
+	// half that does not touch `.template-manifest`, which ADR 0014 pins as
+	// permanently core. Both read as COMPLETE — nothing distinguished "has four
+	// bindings" from "has eight, four of which have not moved" — and an extension
+	// that silently under-declares its own surface leaves the reader unable to tell
+	// what is missing.
 	//
 	// IT IS PROSE, NOT A SCHEMA, and deliberately: what is missing is a sentence
 	// about code that has not moved, and there is nothing yet to validate it
