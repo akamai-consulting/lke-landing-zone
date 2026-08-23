@@ -463,3 +463,74 @@ func TestAFailureReasonSurvivesTheForgeHandle(t *testing.T) {
 		t.Error("fixture drift: no PUT with a body was made")
 	}
 }
+
+// TestAPlanLimitWithAFailedRollbackDoesNotReportUnsupported.
+//
+// FOUND BY AUDITING THE SIBLING ARM, not by the review that produced the rest of
+// this file — the "report the rollback's real outcome" fix was applied to the
+// `default` arm and left out of `isPlanLimitErr` next to it.
+//
+// It matters because of what the CALLER does with ErrUnsupported: `llz tokens`
+// treats it as non-fatal, pushes the OpenBao unseal keys into the environment,
+// and prints WarnUnsupported — "secrets were pushed, but until the env is locked
+// a feature-branch dispatch could read them". With a failed rollback the
+// environment is in custom mode with ZERO rules, so nothing can deploy to it at
+// all: an outage, not an exposure, and that message sends the operator to fix
+// the wrong thing.
+func TestAPlanLimitWithAFailedRollbackDoesNotReportUnsupported(t *testing.T) {
+	const env = `{"protection_rules":[],"deployment_branch_policy":null}`
+	bodyPUTs := 0
+	stubGH(t, func(args []string) ([]byte, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.Contains(j, "deployment-branch-policies") && strings.Contains(j, "-X POST"):
+			return nil, errors.New("HTTP 422: Deployment protection rules are not available for private repositories on this billing plan")
+		case strings.Contains(j, "deployment-branch-policies"):
+			return []byte(`{"branch_policies":[]}`), nil
+		case strings.Contains(j, "--input"):
+			bodyPUTs++
+			if bodyPUTs >= 2 { // the rollback
+				return nil, errors.New("HTTP 502: Bad gateway")
+			}
+			return []byte("{}"), nil
+		}
+		return []byte(env), nil
+	})
+
+	err := Lock(false, "acme/instance", "prod")
+	if errors.Is(err, ErrUnsupported) {
+		t.Fatal("ErrUnsupported is the caller's signal to push the unseal keys anyway and warn about " +
+			"an UNLOCKED environment — but the rollback failed, so this one is locked OUT. The operator " +
+			"is told to configure a branch policy when what they have is a dead environment")
+	}
+	if err == nil {
+		t.Fatal("a failed rollback must not be silent")
+	}
+	if !strings.Contains(err.Error(), "ROLLBACK FAILED") {
+		t.Errorf("the error must name the state the environment is actually in: %v", err)
+	}
+}
+
+// TestAPlanLimitWithACleanRollbackStillReportsUnsupported pins the exclusion: on
+// a plan that simply cannot do branch policies, with the rollback succeeding,
+// the run must still continue and warn — this is the documented degraded path
+// for adopters on a free private repo, and turning it into a hard failure would
+// stop them onboarding at all.
+func TestAPlanLimitWithACleanRollbackStillReportsUnsupported(t *testing.T) {
+	const env = `{"protection_rules":[],"deployment_branch_policy":null}`
+	stubGH(t, func(args []string) ([]byte, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.Contains(j, "deployment-branch-policies") && strings.Contains(j, "-X POST"):
+			return nil, errors.New("HTTP 422: Deployment protection rules are not available for private repositories on this billing plan")
+		case strings.Contains(j, "deployment-branch-policies"):
+			return []byte(`{"branch_policies":[]}`), nil
+		case strings.Contains(j, "--input"):
+			return []byte("{}"), nil
+		}
+		return []byte(env), nil
+	})
+	if err := Lock(false, "acme/instance", "prod"); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("a clean rollback on an unsupported plan is the documented degraded path, got %v", err)
+	}
+}

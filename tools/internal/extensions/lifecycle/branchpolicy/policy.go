@@ -141,7 +141,24 @@ func Lock(dryRun bool, repo, env string) error {
 		case isPlanLimitErr(s):
 			// The mode flip took but the rule cannot be added on this plan. That is
 			// the same lockout as the default case below, so undo it too.
-			rollbackBranchPolicyMode(envCfg, repo, envName, priorPolicy)
+			//
+			// AND THE ROLLBACK'S OUTCOME DECIDES WHETHER THIS IS ErrUnsupported AT
+			// ALL. Returning it unconditionally discards the one fact the caller
+			// needs: `llz tokens` treats ErrUnsupported as non-fatal, PUSHES THE
+			// OPENBAO UNSEAL KEYS into the environment, and then prints
+			// WarnUnsupported — "secrets were pushed, but until the env is locked a
+			// feature-branch dispatch could read them". If the rollback failed, that
+			// message is wrong in a way that costs an outage rather than a leak: the
+			// environment is in custom mode with ZERO rules, so nothing can deploy to
+			// it at all, and the operator is sent to configure a branch policy when
+			// what they have is a dead environment. A hard error stops the push and
+			// says so.
+			if rerr := rollbackBranchPolicyMode(envCfg, repo, envName, priorPolicy); rerr != nil {
+				return fmt.Errorf("%s does not support deployment branch policies on this plan, AND THE "+
+					"ROLLBACK FAILED (%v). It is in custom-branch-policy mode with NO rules, which blocks "+
+					"EVERY deploy to it — set its deployment branch policy back to \"all branches\" in the "+
+					"repository settings before re-running", envName, rerr)
+			}
 			return ErrUnsupported
 		default:
 			// CUSTOM MODE WITH ZERO RULES BLOCKS EVERY DEPLOY TO THIS ENVIRONMENT.
