@@ -190,8 +190,8 @@ func TestMigrateAplValuesToGitHub_FailedJobSurfacesRedactedLogs(t *testing.T) {
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
 			switch {
-			case strings.Contains(line, "status.failed"):
-				return "1", true
+			case strings.Contains(line, "conditions"):
+				return "True", true
 			case strings.Contains(line, "logs"):
 				return "fatal: could not read from https://x-access-token:s3cr3t-pat@github.com/acme/instance.git (password gitea-pw)", true
 			}

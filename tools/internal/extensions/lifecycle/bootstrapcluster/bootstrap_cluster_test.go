@@ -584,8 +584,13 @@ func TestAplMigrateJobSkipsHealthyDestination(t *testing.T) {
 		}
 		// The guard must probe the DESTINATION. Probing SRC would answer the wrong
 		// question and re-push over a healthy branch anyway.
-		if !strings.Contains(y, `git ls-remote --heads "$DST_URL" "$DST_BRANCH"`) {
-			t.Error("no ls-remote guard against $DST_URL/$DST_BRANCH")
+		//
+		// Through branch_state now, not a bare `ls-remote | grep -q`: that pipeline
+		// read a FAILED ls-remote as "the branch is gone" and force-pushed over a
+		// healthy one. TestAplBranchStateSeparatesAbsentFromUnreachable runs the
+		// function; this only checks it is the thing the guard calls.
+		if !strings.Contains(y, `branch_state "$DST_URL" "$DST_BRANCH"`) {
+			t.Error("no branch_state guard against $DST_URL/$DST_BRANCH")
 		}
 		if !strings.Contains(y, "exit 0") {
 			t.Error("the skip path must exit 0 — a non-zero exit is now TERMINAL for the bootstrap")
