@@ -51,10 +51,14 @@ func brownfieldDeps() brownfield.Deps {
 		EditSpec: func(path string, mutate func(*yamlv3.Node) error, parse func([]byte) error) error {
 			return yamledit.EditSpecFile(path, mutate, parse)
 		},
-		SetSpecPath:            yamledit.SetSpecPath,
-		Render:                 func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
-		KubectlOut:             kubectlprobe.Out,
-		Confirm:                func() bool { return cliopts.Global.Yes },
+		SetSpecPath: yamledit.SetSpecPath,
+		Render:      func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
+		KubectlOut:  kubectlprobe.Out,
+		// A CLOSURE, read at call time — not `cliopts.Global.DryRun` captured here.
+		// The command tree is built before cobra parses persistent flags, so a
+		// snapshot would freeze this at false forever. That exact defect shipped in
+		// converge's installConvergeDeps and made `--dry-run` mutate a live cluster.
+		DryRun:                 func() bool { return cliopts.Global.DryRun },
 		DefaultAplChartVersion: clusterspec.BaselineAplChartVersion,
 		DefaultTemplateOrg:     templateid.DefaultOrg,
 	}

@@ -50,11 +50,19 @@ type Deps struct {
 
 	KubectlOut func(args ...string) (string, error)
 
-	// Confirm is `--yes`. THE THIRD OCCURRENCE of the authorisation-not-capability
-	// seam, after teardown and template-sustain, and the one that settles it as a
-	// pattern rather than a quirk of destroy: import writes a repo the operator
-	// owns, so being able to and being asked to are different questions here too.
-	Confirm func() bool
+	// DryRun is `--dry-run`, and it is NOT the negation of a `--yes`. `--yes` is
+	// AUTHORISATION for something destructive; `--dry-run` is a request to describe
+	// rather than act. Two of this package's steps had the read-only one gated on
+	// the destructive one — `llz import scan`, whose own help says "Purely
+	// read-only; no --yes needed", printed "(dry-run) … would write" and exited 0
+	// on every documented invocation, and `llz import init` scaffolded a whole
+	// instance while silently skipping the component toggles the scan had found.
+	//
+	// THERE IS NO Confirm SEAM HERE, deliberately. One was wired for `--yes` and
+	// then read by nothing once both of those steps moved to DryRun. A live-looking
+	// authorisation seam that no code consults is worse than none: it reads as
+	// "this package asks before it writes", and nothing in it does.
+	DryRun func() bool
 
 	// ── defaults that live in core because other verbs read them too ──
 

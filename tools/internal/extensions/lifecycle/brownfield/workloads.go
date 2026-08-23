@@ -394,18 +394,28 @@ func parsePodSecretRefs(podsJSON string) []podSecretUse {
 	return out
 }
 
-// attachDBClients fills dbInfo.Clients for each CNPG cluster with the workloads
-// that reference its connection secret (a same-namespace secret whose name starts
-// with the cluster name, e.g. "<cluster>-app"). Workload-kind DBs are left alone
-// (no published connection secret to key on).
+// attachDBClients fills dbInfo.Clients with the workloads that reference the
+// database's connection secret — a same-namespace secret whose name starts with
+// the database's own name, e.g. "<cluster>-app" for CNPG or "<release>-mariadb"
+// for a chart-installed StatefulSet.
+//
+// The Kind != "CNPG" skip that used to sit here meant every self-managed database
+// carried an empty Clients list, and the migration plan rendered that as "no
+// client detected" — a claim nothing had looked for. The heuristic is
+// name-prefix either way, so there was never a reason it could only be run on
+// one kind; a self-managed DB simply gets the same accuracy CNPG already got.
 func attachDBClients(dbs []dbInfo, uses []podSecretUse) []dbInfo {
 	for i := range dbs {
-		if dbs[i].Kind != "CNPG" {
-			continue
-		}
 		set := map[string]bool{}
 		for _, u := range uses {
 			if u.Namespace != dbs[i].Namespace {
+				continue
+			}
+			// podSecretUse.Workload is "Kind/Name" (workloadFromOwner), so the
+			// comparison is on the name half. A database mounting its own connection
+			// secret is not a client of itself, and listing it as one reads, in the
+			// migration plan, as a second workload to go find.
+			if u.Workload[strings.LastIndexByte(u.Workload, '/')+1:] == dbs[i].Name {
 				continue
 			}
 			for _, s := range u.Secrets {
@@ -450,12 +460,24 @@ func parseCNPGClusters(js string) []dbInfo {
 }
 
 // dbEngineByImage maps an image-name substring to its database engine.
+//
+// Ordered: the first substring to match wins, so a more specific name must come
+// before a prefix of it. `valkey` is listed because the Redis fork is what a
+// modern chart installs, and until it was here a valkey StatefulSet holding data
+// was invisible to this scan.
 var dbEngineByImage = []struct{ sub, engine string }{
 	{"postgres", "postgres"},
 	{"mariadb", "mysql"},
 	{"mysql", "mysql"},
 	{"mongo", "mongodb"},
+	{"valkey", "valkey"},
 	{"redis", "redis"},
+	{"memcached", "memcached"},
+	{"cassandra", "cassandra"},
+	{"clickhouse", "clickhouse"},
+	{"elasticsearch", "elasticsearch"},
+	{"opensearch", "opensearch"},
+	{"etcd", "etcd"},
 }
 
 // dbEngineForImages returns the engine of the FIRST image that looks like a
@@ -474,12 +496,24 @@ func dbEngineForImages(images []string) string {
 
 // detectDBWorkloads flags running workloads whose image looks like a database —
 // the stateful stores a CNPG scan would miss (self-managed DBs).
+//
+// AN UNRECOGNISED STATEFULSET IS REPORTED TOO, with an empty Engine. Emitting
+// only image matches made the plan's "engine not identified — inspect it before
+// deciding anything" branch unreachable: a workload whose engine we could not
+// name was not merely unclassified, it was ABSENT FROM THE PLAN ENTIRELY, and an
+// operator following that plan migrates nothing they were never told about. A
+// StatefulSet is the shape Kubernetes uses to say "this has identity and
+// storage", so it is the right net to cast, and the cost of casting it too wide
+// is a line telling someone to go look — which is the direction this file has
+// already decided to fail in.
 func detectDBWorkloads(workloads []workload) []dbInfo {
 	var out []dbInfo
 	for _, w := range workloads {
-		if engine := dbEngineForImages(w.Images); engine != "" {
-			out = append(out, dbInfo{Namespace: w.Namespace, Name: w.Name, Kind: "workload", Engine: engine})
+		engine := dbEngineForImages(w.Images)
+		if engine == "" && w.Kind != "StatefulSet" {
+			continue
 		}
+		out = append(out, dbInfo{Namespace: w.Namespace, Name: w.Name, Kind: "workload", Engine: engine})
 	}
 	return out
 }

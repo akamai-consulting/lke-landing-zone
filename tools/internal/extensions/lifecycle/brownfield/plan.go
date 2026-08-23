@@ -108,14 +108,36 @@ func planObjectStorage(b *strings.Builder, rep importReport) {
 	w("```\n\n")
 }
 
+// cacheEngines are the engines whose DEFAULT deployment is a cache — safe to
+// rebuild rather than migrate, subject to the operator confirming it.
+//
+// SPLITTING ON ENGINE, NOT ON Kind, AND THE OLD SPLIT COULD COST AN OPERATOR
+// THEIR DATABASE. planDatabases bucketed everything that was not `Kind: "CNPG"`
+// into "Caches — rebuild, do NOT migrate", each line reading "ephemeral; the new
+// cluster provisions a fresh instance". detectDBWorkloads sets Kind: "workload"
+// for every self-managed database it finds — so a `postgres:15` StatefulSet
+// holding production data was handed to the operator as throwaway, in a document
+// whose whole purpose is to be followed literally. The engine was recorded
+// correctly the entire time and simply not consulted.
+//
+// Redis is here because a Redis in a platform namespace usually IS a cache — but
+// it is stated as a default to VERIFY, not as a fact, because Redis with AOF/RDB
+// persistence is a primary store and this scan cannot tell which it is looking at.
+// Anything not listed, INCLUDING an engine this scanner could not identify, is
+// treated as durable: the failure that matters here is one-directional.
+var cacheEngines = map[string]bool{"redis": true, "valkey": true, "memcached": true}
+
 func planDatabases(b *strings.Builder, rep importReport) {
 	w := func(format string, a ...any) { fmt.Fprintf(b, format, a...) }
-	var cnpg, caches []dbInfo
+	var cnpg, selfManaged, caches []dbInfo
 	for _, d := range rep.Storage.Databases {
-		if d.Kind == "CNPG" {
+		switch {
+		case d.Kind == "CNPG":
 			cnpg = append(cnpg, d)
-		} else {
+		case cacheEngines[d.Engine]:
 			caches = append(caches, d)
+		default:
+			selfManaged = append(selfManaged, d)
 		}
 	}
 
@@ -146,10 +168,39 @@ func planDatabases(b *strings.Builder, rep importReport) {
 		w("```\n\n")
 	}
 
+	if len(selfManaged) > 0 {
+		w("## Self-managed databases — MIGRATE (%d)\n\n", len(selfManaged))
+		w("These are databases running as ordinary workloads, not CNPG clusters, so nothing\n")
+		w("above covers them and **this plan cannot write the commands for you** — it does\n")
+		w("not know their credentials, their topology, or whether the target is CNPG, a\n")
+		w("Linode Managed Database, or another self-managed StatefulSet.\n\n")
+		w("**Treat every one as holding data that matters.** An earlier version of this\n")
+		w("plan listed them under \"Caches — rebuild, do NOT migrate\" and called them\n")
+		w("ephemeral, on the strength of their not being CNPG.\n\n")
+		for _, d := range selfManaged {
+			engine := d.Engine
+			if engine == "" {
+				engine = "engine not identified — inspect it before deciding anything"
+			}
+			client := "no client detected"
+			if len(d.Clients) > 0 {
+				client = "clients: " + strings.Join(d.Clients, ", ")
+			}
+			w("- `%s/%s` (%s) — %s\n", d.Namespace, d.Name, engine, client)
+		}
+		w("\nFor each: freeze writes, dump with the engine's own tool from inside the pod,\n")
+		w("restore into the target, then verify row counts before cutting traffic over.\n\n")
+	}
+
 	if len(caches) > 0 {
-		w("## Caches — rebuild, do NOT migrate (%d)\n\n", len(caches))
+		w("## Likely caches — VERIFY, then rebuild (%d)\n\n", len(caches))
+		w("These engines are usually deployed as caches, in which case the new cluster\n")
+		w("provisions a fresh instance and there is nothing to migrate. **Confirm that\n")
+		w("before you skip them**: Redis with AOF or RDB persistence enabled is a primary\n")
+		w("store, and this scan reads the image name, not the configuration.\n\n")
 		for _, d := range caches {
-			w("- %s/%s (%s) — ephemeral; the new cluster provisions a fresh instance.\n", d.Namespace, d.Name, d.Engine)
+			w("- `%s/%s` (%s) — check for a persistence volume and for clients that treat it\n", d.Namespace, d.Name, d.Engine)
+			w("  as a system of record; if either holds, migrate it like a database.\n")
 		}
 		w("\n")
 	}
