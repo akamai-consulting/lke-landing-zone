@@ -298,8 +298,14 @@ var Components = []Component{
 		// values.yaml pins `gitea: { enabled: false }`. Modeling it enabled-by-
 		// default here would make `llz render` flip that committed `false` back to
 		// `true` (RenderValues forces every default-enabled component's app on),
-		// silently re-enabling Gitea. Kept in the registry (not deleted) so an
-		// operator can still opt in via the spec, but DefaultDisabled.
+		// silently re-enabling Gitea. Kept in the registry (not deleted) so the app
+		// is still NAMED — but the toggle no longer switches anything, and saying
+		// an operator "can still opt in via the spec" was wrong. ManagedSkip means
+		// `llz render` emits no manifests for it, and since the apps overlay
+		// started honouring EmitOnManaged it emits no toggle either, so
+		// spec.components.gitea is inert on every cluster LLZ builds. Same for
+		// policyEngine and imageScanning below. Enabling any of the three is done
+		// in the App Platform Console, where apl-core owns them.
 		Name:            "gitea",
 		AplCoreApps:     []string{"gitea"},
 		DefaultDisabled: true,

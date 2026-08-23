@@ -305,6 +305,13 @@ authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
 emitted by `llz render` — see docs/adr/0005-managed-app-platform.md.
 
+For three of them the toggle is **inert**, not merely unemitted: `gitea`,
+`policyEngine` and `imageScanning` are `ManagedSkip`, so LLZ ships neither
+manifests nor an apps-overlay toggle for them and setting `enabled` in the spec
+changes nothing on any cluster LLZ builds. They are enabled in the App Platform
+Console, where apl-core owns them. The registry keeps the entries so the apl-core
+surface LLZ deliberately does not drive is still described.
+
 > **`argoWorkflows` on managed is opt-in even though it is default-on elsewhere.**
 > It is a support component: on managed its only platform consumer is
 > `clusterHealthWorkflow`, so it emits when that is enabled — otherwise every managed
