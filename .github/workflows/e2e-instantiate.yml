@@ -598,13 +598,20 @@ jobs:
       # that the commands RESOLVE AND SUCCEED in the pinned image, on the real
       # scaffold. It runs after the image pin above so TF_IMAGE is this commit's.
       #
-      # THE PR IS OPENED AS A DRAFT, which is what keeps Plan Cluster off it. That
-      # job runs `llz ci tf-import` — a WRITE to cluster/e2e/terraform.tfstate —
+      # THE PR IS OPENED AS A DRAFT, which USED to be what kept Plan Cluster off it.
+      # That job ran `llz ci tf-import` — a WRITE to cluster/e2e/terraform.tfstate —
       # and the provision job dispatches an apply against that same state as soon
       # as this one returns, under a different concurrency group, over a backend
       # with no lock. A plan still in flight would race the apply, last write wins,
-      # and closing the PR does not cancel it. llz-terraform.yml's plan job skips
-      # drafts; the two lint gates are local and read-only, so they still run.
+      # and closing the PR does not cancel it.
+      #
+      # That job is retired: it could never resolve its environment-scoped
+      # credentials, and could not be given the infra-<env> environment holding
+      # them either, since llz locks that environment to ref=main. No pull-request
+      # path writes Terraform state now — `llz ci workflow-secret-scope` and
+      # TestNoPullRequestPathWritesTerraformState keep it that way — so the draft is
+      # hygiene rather than the mitigation. Every gate this step asserts is local
+      # and read-only.
       #
       # The logic lives in unit-tested Go (llz ci assert-instance-pr-gates), not
       # inline bash: branch-create / PR-open / poll / assert / cleanup is logic, and

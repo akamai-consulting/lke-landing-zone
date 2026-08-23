@@ -120,57 +120,130 @@ func jobEnvBlock(t *testing.T, body, job string) string {
 	return envBody
 }
 
-// ── Gate 2: the draft skip and the trigger that makes it recoverable ─────────
+// ── Gate 2: no pull-request path writes Terraform state ──────────────────────
 
 // deliveredCaller is the thin stub that owns the pull_request TRIGGER, in a
-// different manifest class from the pipeline body that owns the draft SKIP.
+// different manifest class from the pipeline body that owns the jobs.
 const deliveredCaller = "../../../instance-template/.github/workflows/terraform.yml"
 
-// TestDraftSkipHasItsReadyForReviewTrigger couples two files that a copier
-// upgrade moves by DIFFERENT rules.
+// deliveredJobHeaderRe finds each job header in the delivered pipeline, so a step
+// can be attributed to the job whose `if:` decides whether it runs.
+var deliveredJobHeaderRe = regexp.MustCompile(`(?m)^  ([a-z][a-z0-9-]*):$`)
+
+// withoutCommentLines blanks every whole-line comment, keeping the line count so
+// offsets still line up. These workflows carry more prose than YAML — the note
+// where the retired plan job used to be NAMES `llz ci tf-import` while explaining
+// why nothing runs it any more — and a scanner that reads prose as a step reports
+// the comment's job. That is not a hypothetical: the delivered-workflow scanner
+// has read prose in a `run:` block as a command before.
+func withoutCommentLines(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "#") {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestNoPullRequestPathWritesTerraformState couples two files a copier upgrade
+// moves by DIFFERENT rules, over the property that replaced the draft-PR skip.
 //
-// plan-cluster-pr skips draft PRs because it writes Terraform state with nothing
-// serializing it against a concurrent apply. That skip is only recoverable
-// because `ready_for_review` is in terraform.yml's trigger types — it is NOT in
-// GitHub's default set (opened / synchronize / reopened), so without it taking a
-// PR out of draft fires no event at all and the plan an operator just asked for
-// never runs. They would have to push an empty commit, with nothing on screen
-// explaining why.
+// THE HISTORY MATTERS, because this test is the third position on the same
+// question. `llz ci tf-import` WRITES cluster/<deployment>/terraform.tfstate with
+// nothing serializing it against a concurrent apply — PR jobs group under
+// terraform-infra-pr, dispatched applies under terraform-infra-<deployment>, and
+// the s3 backend sets no use_lockfile. Two writers, last one wins. That hazard
+// was managed first by skipping DRAFT pull requests (so an operator had a way to
+// say "do not disturb live state", and terraform.yml needed `ready_for_review` in
+// its trigger types to make the skip recoverable), and the template pin was kept
+// OUT of the paths: filter because a filter selects the WORKFLOW, not a job, and
+// would have handed the state write to every automated pin-bump PR.
+//
+// The job that did the writing is gone. `plan-cluster-pr` could never resolve its
+// environment-scoped credentials, and could not be given the environment holding
+// them either, because infra-<env> is locked to ref=main. With it retired, the
+// invariant is stronger and simpler than the skip ever was: NO pull-request path
+// writes Terraform state at all — so the draft skip is unnecessary,
+// `ready_for_review` is dead weight, and the pin can be in the filter.
 //
 // THE TWO FILES ARE NOT DELIVERED ALIKE. llz-terraform.yml is `managed` — copier
-// overwrites it from a clean render, so the skip always lands. terraform.yml is
-// `merge` — it carries jinja and an adopter may have edited it, so the trigger
-// arrives through a 3-way merge that can decline. An adopter can therefore end up
-// with the skip and not the trigger. This test cannot reach that adopter; what it
-// can do is guarantee the template never SHIPS the halves out of step, so the
-// only way to reach the broken combination is a local edit — which `llz upgrade`
-// reports as a conflict.
-func TestDraftSkipHasItsReadyForReviewTrigger(t *testing.T) {
-	body, err := os.ReadFile(deliveredPipeline)
+// overwrites it from a clean render. terraform.yml is `merge` — it carries jinja
+// and an adopter may have edited it, so its half arrives through a 3-way merge
+// that can decline. This test cannot reach that adopter; what it can do is
+// guarantee the template never SHIPS the halves out of step, so the only way to
+// reach the broken combination is a local edit, which `llz upgrade` reports as a
+// conflict.
+func TestNoPullRequestPathWritesTerraformState(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
 	if err != nil {
 		t.Fatalf("read %s: %v", deliveredPipeline, err)
 	}
-	caller, err := os.ReadFile(deliveredCaller)
+	rawCaller, err := os.ReadFile(deliveredCaller)
 	if err != nil {
 		t.Fatalf("read %s: %v", deliveredCaller, err)
 	}
-	skipsDrafts := strings.Contains(string(body), "github.event.pull_request.draft == false")
-	hasTrigger := regexp.MustCompile(`(?m)^\s*types:.*ready_for_review`).MatchString(string(caller))
+	body, caller := withoutCommentLines(string(raw)), withoutCommentLines(string(rawCaller))
 
-	switch {
-	case skipsDrafts && !hasTrigger:
-		t.Error("llz-terraform.yml skips DRAFT pull requests, but terraform.yml does not list " +
-			"`ready_for_review` in its pull_request trigger types. Marking a PR ready for review then " +
-			"fires no event, so the plan never runs and an operator has to push an empty commit to get " +
-			"one — with nothing saying why. Add ready_for_review to the trigger types.")
-	case !skipsDrafts && hasTrigger:
-		t.Error("terraform.yml lists `ready_for_review` but nothing gates on draft any more — " +
-			"either the skip was removed and this trigger type is now dead weight, or the gate moved " +
-			"and this test is no longer watching it")
-	case !skipsDrafts && !hasTrigger:
-		t.Error("the draft skip is gone from llz-terraform.yml. It is what keeps the state-writing " +
-			"Plan Cluster job off the release-e2e PR-gate probe's throwaway PR, which otherwise races " +
-			"the provision apply on the same tfstate — see pr_gates.go's header.")
+	// ARM 1: every job that runs the state write is dispatch-only. Attributing the
+	// step to its JOB (rather than grepping the file for both strings) is the part
+	// that matters — the old hazard was a state-writing step sitting in a job whose
+	// gate did not exclude pull requests, which a file-wide grep cannot see.
+	lines := strings.Split(body, "\n")
+	jobStart := map[int]string{}
+	for _, m := range deliveredJobHeaderRe.FindAllStringSubmatchIndex(body, -1) {
+		jobStart[strings.Count(body[:m[0]], "\n")] = body[m[2]:m[3]]
+	}
+	job, cond, imports := "", "", 0
+	conds := map[string]string{}
+	for i, ln := range lines {
+		if name, ok := jobStart[i]; ok {
+			job, cond = name, ""
+		}
+		if job != "" && strings.Contains(ln, "llz ci tf-import") {
+			imports++
+			conds[job] = cond
+		}
+		cond += ln + " "
+	}
+	if imports == 0 {
+		t.Fatal("no `llz ci tf-import` step in the delivered pipeline — either the state write moved " +
+			"(and this test now proves nothing) or the command was renamed. Do not delete this test to " +
+			"make it pass: find where the state write went.")
+	}
+	for name, c := range conds {
+		if !strings.Contains(c, "github.event_name == 'workflow_dispatch'") {
+			t.Errorf("job %q runs `llz ci tf-import` — which WRITES cluster/<deployment>/terraform.tfstate "+
+				"against no lock — and its `if:` does not restrict it to workflow_dispatch. A pull request "+
+				"can now race a concurrent apply on the same state, and terraform.yml lists the template pin "+
+				"in its paths: filter on the understanding that no pull-request path writes state.", name)
+		}
+	}
+
+	// ARM 2: the trigger type that existed only for the retired draft skip is gone.
+	// Left behind it re-runs the same read-only checks and, worse, reads as a live
+	// rationale for a skip nothing performs.
+	if regexp.MustCompile(`(?m)^\s*types:.*ready_for_review`).MatchString(caller) {
+		t.Error("terraform.yml still lists `ready_for_review` in its pull_request trigger types, but no " +
+			"delivered job gates on draft any more. Either it is dead weight (remove it), or a draft skip " +
+			"came back — in which case the state-write hazard it manages needs its own answer, not a " +
+			"revived trigger type.")
+	}
+	if strings.Contains(body, "github.event.pull_request.draft == false") {
+		t.Error("a delivered job skips DRAFT pull requests again. That skip only ever existed to keep the " +
+			"state-writing plan job off a PR racing an apply; if it is back, arm 1 above and terraform.yml's " +
+			"paths: filter (which now lists the template pin) both need re-deciding.")
+	}
+
+	// ARM 3: the pin IS in the filter. Arms 1 and 2 make it safe, and it is what
+	// closes the v0.0.42 gap — a pin-only upgrade PR that reaches repo-readiness.
+	// Without this the other two arms could hold while the gap they unlock stayed
+	// open, and nothing would say so.
+	if !strings.Contains(caller, "'.copier-answers.yml'") {
+		t.Error("terraform.yml's paths: filter no longer lists '.copier-answers.yml'. A pin-only upgrade PR " +
+			"then reaches no job at all — which is how v0.0.42 made TF_STATE_ENCRYPTION_PASSPHRASE required " +
+			"and an adopter found out from a failed `terraform init`. It was excluded only while a " +
+			"pull-request path wrote Terraform state; arms 1 and 2 are what pay for it being here.")
 	}
 }
 

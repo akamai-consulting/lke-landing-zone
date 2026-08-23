@@ -19,8 +19,7 @@ Sections below are organised by job, and within a job by step name.
 
 - [Workflow-level](#workflow-level)
 - [Job: `push-noop-notice`](#job-push-noop-notice)
-- [Job: `discover`](#job-discover)
-- [Job: `plan-cluster-pr`](#job-plan-cluster-pr)
+- [No plan job on pull requests](#no-plan-job-on-pull-requests)
 - [Job: `repo-readiness`](#job-repo-readiness)
 - [Jobs: `tf-lint` and `checkov`](#jobs-tf-lint-and-checkov)
 - [Job: `promote-pipeline-drift`](#job-promote-pipeline-drift)
@@ -68,7 +67,7 @@ dispatch **selectors** (`action` / `module` / `region` / `confirm_destroy`) are
 `workflow_call` boundary. The caller therefore forwards them as explicit `with:`
 inputs, and the jobs gate on the `inputs` context. On push/PR the caller
 forwards empty strings, which leaves every action-gated job correctly skipped
-(PR plan jobs gate on `github.event_name`, which *does* inherit).
+(the PR-triggered jobs gate on `github.event_name`, which *does* inherit).
 
 This is the single most load-bearing gotcha in the file and a short version of
 it is deliberately kept inline. Concretely — the caller forwards each selector
@@ -103,8 +102,10 @@ Add a dispatch input and you must touch **both** files; adding it only to the
 caller yields a job that silently never runs.
 
 The `bootstrap-openbao` job calls the sibling local reusable
-`llz-bootstrap-openbao.yml` directly; the PR `discover` job calls the sibling
-local `llz-discover-deployments.yml` the same way (vendored, secret-free).
+`llz-bootstrap-openbao.yml` directly. `llz-discover-deployments.yml` is still
+delivered and still feeds the rotation and scheduled-check matrices; the PR job
+that used to call it is gone (see [No plan job on pull
+requests](#no-plan-job-on-pull-requests)).
 
 ### `secrets:` — why every entry is `required: false`
 
@@ -160,8 +161,10 @@ Tool versions are baked into `vars.TF_IMAGE` and `vars.KUBE_IMAGE`.
 
 ## Job: `push-noop-notice`
 
-A push to `main` neither plans nor applies — plans run on PRs, applies on
-`workflow_dispatch` (what `llz build` / `llz up` fire). So committing a spec
+A push to `main` neither plans nor applies. Applies run on `workflow_dispatch`
+(what `llz build` / `llz up` fire); pull requests run the credential-free checks
+only — there is no `tofu plan`, see [No plan job on pull
+requests](#no-plan-job-on-pull-requests). So committing a spec
 (`llz env add` auto-commits, then you push) produces a run where every *other*
 job is correctly skipped, which reads as alarming on a fresh instance. This
 always-runs job makes the no-op explicit so the skips are understood as
@@ -169,48 +172,56 @@ intentional rather than as a failure.
 
 ---
 
-## Job: `discover`
+## No plan job on pull requests
 
-Single source of truth for the PR-plan matrix — see
-`llz-discover-deployments.yml`. The same reusable workflow feeds the rotation and
-scheduled-check matrices, so the PR plan covers exactly the deployments those do.
+There is no `tofu plan` on pull requests, and no `discover` job feeding one a
+per-deployment matrix. Both were retired; this section is why, because "the plan
+job is missing" is otherwise the first thing a reader notices.
 
----
+`plan-cluster-pr` needed `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` and
+`LINODE_API_TOKEN` to plan against live state. All three are **environment-scoped**
+in `llz`'s requirement table (`envreq.E2ERequirements`) — the state bucket and the
+Linode credentials are per-deployment — and the job declared no `environment:`, so
+GitHub resolved all three to the empty string and every plan died at `tofu init`.
+That is not a loud failure: an unresolved secret is not an error, it is `""`, and
+nothing in the log says a secret was asked for and not found.
 
-## Job: `plan-cluster-pr`
+**Adding `environment: infra-<deployment>` does not fix it.** `llz` locks every
+`infra-<env>` environment to a deployment-branch-policy of `main` only
+(`branchpolicy.Lock`), and that lock is the boundary that stops someone pushing a
+branch, dispatching against `infra-prod` and having GitHub inject the OpenBao
+unseal keys into a job their branch controls. A `pull_request` run's ref is
+`refs/pull/N/merge`, which no branch policy matches — so the environment form fails
+at *job start* instead of at `init`. Unlocking the environment for PR branches
+would trade a plan preview for exactly the hole the lock exists to close. There is
+no third position: a pull-request job cannot hold these credentials.
 
-Runs for every **ready-for-review** PR that touches a Terraform path. Posts a
-plan summary; never applies.
+**What still runs on a PR.** `repo-readiness`, `tf-lint`, `checkov` and
+`promote-pipeline-drift` — all read-only, none holding a cloud credential. What is
+genuinely lost is a diff against live state, which no adopter has ever seen, since
+the job never got past `init`.
 
-**Security.** Plan jobs consume production secrets (`LINODE_API_TOKEN`,
-`TF_STATE_*`). They are restricted to internal PRs only —
-`github.event.pull_request.head.repo.full_name == github.repository` — so fork
-PRs are skipped, preventing untrusted code from reading secrets via the runner
-environment. See GitHub's "Keeping your GitHub Actions and workflows secure /
-Preventing pwn requests".
+**Two things fell out with it.**
 
-**Drafts are skipped, and the reason is state, not cost.** "Never applies" is
-true of `tofu plan` and *not* of this job: the `Import VPC and subnet if not in
-state` step runs `llz ci tf-import`, which **writes**
-`cluster/<deployment>/terraform.tfstate`. Nothing serializes that against a
-concurrent apply — this job's concurrency group is `terraform-infra-pr`
-(`inputs.region` is empty on a PR) while a dispatched apply's is
-`terraform-infra-<deployment>`, and the S3 backend sets no `use_lockfile`, so
-there is no lock underneath either. Two writers, last one wins. Marking a PR
-draft is therefore how you say "do not touch live state yet"; `terraform.yml`
-lists `ready_for_review` in its `pull_request` trigger types, so taking the PR
-out of draft runs the plan without needing an empty commit.
+- The **draft-PR skip** existed only to keep this job's `llz ci tf-import` — a step
+  that *writes* `cluster/<deployment>/terraform.tfstate` with no lock underneath
+  it — off a PR racing a concurrent apply. With no `tf-import` on any pull-request
+  path, the skip is unnecessary and `terraform.yml` no longer lists
+  `ready_for_review` in its trigger types.
+- The **template pin returned to `terraform.yml`'s `paths:` filter**. It had been
+  excluded because a `paths:` filter selects the *workflow*, not a job, so listing
+  `.copier-answers.yml` would have handed the unserialized state write to every
+  automated pin-bump PR. That trade-off is gone, and with it the residual v0.0.42 /
+  `TF_STATE_ENCRYPTION_PASSPHRASE` gap: a pin-only upgrade PR now reaches
+  `repo-readiness` like any other.
 
-The release-e2e PR-gate probe (`llz ci assert-instance-pr-gates`) relies on this:
-it opens its throwaway PR as a draft so the two lint jobs below run while this
-one cannot collide with the apply the e2e dispatches immediately afterwards.
-
-### Step: `Terraform init — cluster`
-
-The per-env tfvars are gitignored build artifacts rendered from the spec; the
-`terraform-init` composite regenerates them before `init`, so no separate render
-step is needed here (the first TF step after init is the plan). No-op for
-instances without a spec.
+**The gates.** `llz ci workflow-secret-scope` fails any job that reads an
+environment-scoped secret without an `environment:`, *and* any
+pull-request-reachable job that reads one at all — so neither half of the
+contradiction above can come back quietly. It reads the scope from the requirement
+table, never from the workflows. `TestNoPullRequestPathWritesTerraformState` holds
+the other three halves together: no pull-request path runs `llz ci tf-import`, no
+delivered job skips drafts, and the pin is in the filter.
 
 ---
 
@@ -233,18 +244,17 @@ one who does not: a hand-driven `copier update`, a bot PR, an edited pin. Being
 told what a release newly requires should not depend on which command performed
 the upgrade.
 
-`.copier-answers.yml` is deliberately **not** in the `paths:` filter, and that is
-a stated trade-off. Listing it would put this job on a pin-only upgrade PR — but
-a `paths:` filter selects the *workflow*, not a job, so it would also select
-`Plan Cluster (PR)`, handing an automated PR the unserialized
-`llz ci tf-import` state write that the draft-PR skip exists to prevent. A real
-`copier update` rewrites the managed `llz-*.yml` workflows and the composite
-actions, which **are** in the filter, so every upgrade that changes anything an
-instance runs still lands here. The residual gap is an upgrade whose only change
-is the recorded pin; that is caught at the next CI-touching PR, and by
-`llz upgrade`'s own post-upgrade readiness advisory meanwhile. Closing it
-properly needs per-job path filtering, or a `tf-import` that does not write on
-pull requests.
+`.copier-answers.yml` **is** in the `paths:` filter, and it took the retirement of
+the PR plan job to get there. Listing it puts this job on a pin-only upgrade PR —
+the bot bump, the `copier update` that merged to nothing — which is exactly where a
+newly required value goes unnoticed. It was excluded for a long time because a
+`paths:` filter selects the *workflow*, not a job, so it also selected
+`Plan Cluster (PR)`, handing an automated PR the unserialized `llz ci tf-import`
+state write. With that job gone, nothing on a pull-request path writes state and
+the trade-off is gone with it; the residual v0.0.42 gap is closed rather than
+deferred to the next CI-touching PR. `TestNoPullRequestPathWritesTerraformState`
+holds the two halves together — the pin stays in the filter only while no
+pull-request job writes state.
 
 **It only checks the repo-level half, and that bound is structural.**
 `GITHUB_TOKEN` cannot list repository secrets — that needs admin — so presence is
@@ -612,7 +622,8 @@ skip this job whenever `apply-object-storage` is skipped.
 (reads the live coredns Service, helm-installs, applies manifests), so a
 plan-mode dispatch (the release-e2e dry run) that creates no cluster has nothing
 to bootstrap. `action=plan module=all` cleanly plans the cluster-creating roots
-and stops there. PR previews use `plan-cluster-pr`.
+and stops there. There are no PR previews — see
+[No plan job on pull requests](#no-plan-job-on-pull-requests).
 
 ### `needs:`
 
@@ -623,6 +634,26 @@ and stops there. PR previews use `plan-cluster-pr`.
   asserts the object-storage state is populated before `mint-bootstrap-objkeys`
   mints the scoped keys against them. It now runs on `module=cluster` too; the
   `|| skipped` arm in the `if:` above is a forward-compat backstop.
+- `apply-databases` — the Managed Postgres clusters exist before `llz ci
+  seed-db-admin` is asked to seed their credentials. **This dependency was missing,
+  and the failure was silent in both directions.** On `module=all` the two ran in
+  parallel; the seed steps are gated on `llz ci db-declared`, which reads the
+  *spec*, so they ran — and `terraform output -json connections` against a
+  databases root that had not applied yet came back empty, which `seed-db-admin`
+  reported as "no database clusters in this deployment — nothing to seed" and
+  exited 0. OpenBao finished the bootstrap with no `db-admin` credential,
+  rotate-on-create therefore never ran, and the **provisioning password Terraform
+  had just written into state stayed live** — with the whole run green.
+  `seed-db-admin` now fails closed on that contradiction (declared in the tfvars,
+  absent from the state), so the ordering and the check each catch it from one
+  side; the check is also what covers a hand-run seed or a standalone
+  `llz-bootstrap-openbao.yml` dispatch, where no ordering applies.
+
+  **The cost is real and accepted.** On `module=all`, a deployment that declares a
+  Managed Postgres now waits for it (15+ minutes) before bootstrap starts, where it
+  used to overlap. A deployment that declares none renders `databases = {}`,
+  applies in seconds, is `skipped` on `module=cluster`, and loses nothing — the
+  `|| skipped` arm covers both.
 
 ### `secrets: inherit`
 

@@ -58,8 +58,8 @@ jobs:
 
   # ── Discover deployments (the per-env matrix source of truth) ────────────────
   # Single source of truth for every per-env matrix below. The credential
-  # rotation and the Terraform PR plan call the SAME reusable workflow, so the
-  # set these checks verify cannot drift from the set the rotation covers.
+  # rotation calls the SAME reusable workflow, so the set these checks verify
+  # cannot drift from the set the rotation covers.
   discover:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     uses: ./.github/workflows/llz-discover-deployments.yml

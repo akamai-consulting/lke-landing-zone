@@ -18,18 +18,25 @@ package releasepublish
 // structurally cannot: that the commands RESOLVE AND SUCCEED in the pinned image, on
 // the real scaffold. It runs after pin-instance-images so TF_IMAGE is this commit's.
 //
-// IT ASSERTS THE pull_request-GATED JOBS, AND THE PR IS OPENED AS A DRAFT SO ONLY
-// THOSE CAN RUN. Not tidiness — a correctness requirement. The same paths:
-// filter also selects `Plan Cluster (PR)`, and that job runs `llz ci tf-import`,
-// which WRITES cluster/<env>/terraform.tfstate. The e2e's provision job dispatches
-// an apply against that very state the moment this one returns, the two run under
+// IT ASSERTS THE pull_request-GATED JOBS, and every one of them is read-only —
+// which used to be a property this verb had to ARRANGE and is now a property of
+// the delivered pipeline. The paths: filter selects the workflow, not a job, so it
+// also selected `Plan Cluster (PR)`, and that job ran `llz ci tf-import`, which
+// WRITES cluster/<env>/terraform.tfstate. The e2e's provision job dispatches an
+// apply against that very state the moment this one returns, the two run under
 // DIFFERENT concurrency groups (terraform-infra-pr vs terraform-infra-<env>), and
 // the s3 backend has no lock — so a plan still in flight and the apply would race
 // each other's state writes, last write wins. Closing the PR does not cancel a
-// running job either. The delivered pipeline therefore skips its credential- and
-// state-touching plan on DRAFT pull requests (llz-terraform.yml plan-cluster-pr),
-// and this verb opens a draft: the two cheap, local, read-only lint jobs still run,
-// and nothing this verb triggers can touch Terraform state.
+// running job either. The pipeline skipped that plan on DRAFT pull requests, and
+// this verb opens a draft to land on the safe side of that skip.
+//
+// THAT JOB IS RETIRED — it could never resolve its environment-scoped credentials,
+// and could not be given the environment holding them either, since infra-<env> is
+// locked to ref=main. No pull-request path writes Terraform state now, and
+// `llz ci workflow-secret-scope` plus TestNoPullRequestPathWritesTerraformState
+// are what keep that true. `--draft` is therefore no longer load-bearing; it is
+// kept because a throwaway probe PR has no business asking for review, and because
+// dropping it would be a change to the e2e's live behaviour bought for nothing.
 //
 // ── THE BUG THE BASH HAD, AND WHY THE PORT IS NOT A TRANSCRIPTION ──────────────
 // The inline version polled with `gh pr checks ... || echo '[]'`. `gh pr checks`
@@ -592,12 +599,14 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 			return "", fmt.Errorf("assert-instance-pr-gates: %w", redact(err, o.Token))
 		}
 	}
-	// --draft is load-bearing, not cosmetic: it is what keeps the state-writing
-	// Plan Cluster job off this PR. See the file header.
+	// --draft WAS load-bearing — it kept the state-writing Plan Cluster job off this
+	// PR — and is now hygiene: that job is retired and nothing on a pull-request
+	// path writes Terraform state. Kept because a throwaway probe should not ask
+	// for review. See the file header.
 	out, err := gatesGH(o.Token, o.Host, "pr", "create", "--repo", o.Instance, "--base", o.Base, "--head", branch,
 		"--draft",
 		"--title", "e2e: PR-gated CI gates",
-		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Draft on purpose — a draft PR does not run the state-writing plan job.")
+		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Opened as a draft — it is a probe, not a review request.")
 	if pr := prNumber(out); pr != "" {
 		return pr, nil
 	}

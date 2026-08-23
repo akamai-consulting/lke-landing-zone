@@ -39,9 +39,9 @@ A github.com fine-grained PAT (Contents: write) used for the apl-core
 ## Job: `discover`
 
 Single source of truth for every per-env matrix in this workflow — see
-`llz-discover-deployments.yml`. The credential rotation workflow and the
-Terraform PR plan call the **same** reusable workflow, so the set of deployments
-these checks verify cannot drift from the set the rotation propagates into.
+`llz-discover-deployments.yml`. The credential rotation workflow calls the
+**same** reusable workflow, so the set of deployments these checks verify cannot
+drift from the set the rotation propagates into.
 That coupling is the point: it makes "checked but unrotated" and "rotated but
 unchecked" deployments structurally impossible rather than merely unlikely.
 

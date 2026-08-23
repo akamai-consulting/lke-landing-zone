@@ -59,6 +59,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
@@ -259,6 +260,7 @@ var commands = []Command{
 	{"mutabletags", mutabletags.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"runinjection", runinjection.Cmd},
+	{"secretscope", secretscope.Cmd},
 	{"upstreamupdates", upstreamupdates.UpgradePRCmd},
 	{"sourceref", sourceref.Cmd},
 	{"sourceref", sourceref.SymbolsCmd},

@@ -116,6 +116,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
@@ -132,8 +133,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-six of the twenty-nine gates read the repository root
-// through `--root`, so twenty-six rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-seven of the thirty gates read the repository root
+// through `--root`, so twenty-seven rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -312,6 +313,12 @@ var gates = []Gate{
 	{Extension: "guard-mutable-tags", New: mutabletags.Cmd},
 	{Extension: "reusable-workflow-caller-permissions", New: callerperms.Cmd},
 	{Extension: "workflow-injection", New: runinjection.Cmd},
+	// Beside workflow-injection because it is the same subject read a different
+	// way: that one asks what an expression can EXECUTE, this one asks what a
+	// secret reference can RESOLVE. Both fail silently at runtime — an injection
+	// looks like a successful step, an unresolved secret looks like an empty
+	// string — so the tree is the only place either is visible.
+	{Extension: "workflow-secret-scope", New: secretscope.Cmd},
 
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},
@@ -472,7 +479,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (29 rows, 26 of them taking the default subject — both pinned by
+	// table (30 rows, 27 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

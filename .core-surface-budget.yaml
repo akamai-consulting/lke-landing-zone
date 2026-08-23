@@ -1471,7 +1471,21 @@ categories:
     #                       so when CALLED. Removing the frozen one leaves only the
     #                       late read, which is the pattern the next installer
     #                       should copy.
-    budget: 1964
+    #   1,965 / 129 files  +1 registering `llz ci workflow-secret-scope`: the import,
+    #                       with the constructor added to an AddCommand call that
+    #                       already existed. Spending one line of the two the entries
+    #                       above just banked, and named rather than absorbed — a
+    #                       paydown that quietly funds the next verb is a paydown
+    #                       nobody can audit. The guard itself is
+    #                       extensions/guards/secretscope under unit test: it reads
+    #                       the workflow trees and envreq's requirement table and
+    #                       fails a job that reads an environment-scoped secret with
+    #                       no `environment:`, or that reads one on a pull-request
+    #                       path at all, where infra-<env> is locked to ref=main and
+    #                       cannot be entered. Both arms were live defects in the
+    #                       delivered pipeline, and both are decisions with
+    #                       fail-closed arms rather than wiring lines.
+    budget: 1965
     exact: true
     include:
       - "tools/internal/cli/*.go"

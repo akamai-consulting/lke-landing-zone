@@ -38,6 +38,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/pincoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/plaintext"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/runinjection"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
@@ -469,7 +470,7 @@ func ciCmd() *cobra.Command {
 	// mutable-tag-guard holds build-images.yml's publish policy — `:latest` and
 	// `:<version>` only from the default branch's HEAD (#451).
 	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
-	c.AddCommand(callerperms.Cmd(), runinjection.Cmd())
+	c.AddCommand(callerperms.Cmd(), runinjection.Cmd(), secretscope.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
