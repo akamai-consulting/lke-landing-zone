@@ -12,6 +12,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // Extension is the `guard-coverage` declaration.
 //
 //	gate:scaffolded[read-repo]
+//	transition:scaffolded/floor-bank[read-repo, write-repo]
 //
 // A GATE over FILES ALONE: a coverprofile and a list of `<pkg-suffix>=<min>` floors.
 //

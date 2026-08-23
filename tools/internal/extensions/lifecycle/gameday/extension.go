@@ -22,7 +22,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `wedge-gameday` declaration.
 //
-//	transition:converged[cluster-read, cluster-write]
+//	transition:converged[cluster-read, cluster-write]  (requires operating)
 //
 // SIXTH TIME THE MODEL HAS FORCED `transition:converged` ONTO A CHECK, and the
 // first where BOTH halves of the binding are forced rather than just the kind.

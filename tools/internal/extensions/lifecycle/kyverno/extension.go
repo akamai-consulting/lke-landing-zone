@@ -36,7 +36,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `kyverno-policies` declaration.
 //
-//	transition:converged[cluster-read, cluster-write]
+//	transition:converged[read-repo, cluster-read, cluster-write]
 //
 // It server-side applies a ClusterPolicy and then polls until Kyverno reports it
 // Ready — so it both writes and reads, and the read is not incidental: an applied

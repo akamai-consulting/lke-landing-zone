@@ -2,15 +2,12 @@ package capability
 
 // repowrite.go — the handle a `write-repo` binding receives.
 //
-// SIXTH CAPABILITY, and the last grant in the vocabulary with nothing behind it.
-// `write-repo` has two holders — deliver-docs and environments — and until now it
-// was the state `read-repo` was in before repo.go: a word on a declaration that
-// no code consulted. RepoAt already honoured it (write implies read, as
+// `write-repo` has two holders — deliver-docs and environments — and both go
+// through here. RepoAt honours the grant for READS (write implies read, as
 // cluster-write implies cluster-read and secret-custody implies secret-read), so
-// a write-repo binding could READ through a fence and then write with os.WriteFile
-// past it.
+// without this a write-repo binding could read through a fence and then write with
+// os.WriteFile past it.
 //
-// ────────────────────────────────────────────────────────────────────────────
 // THE WRITE PATH HAS A HOLE THE READ PATH DOES NOT, and it is the whole reason
 // this is a separate resolver rather than three more methods on repo.
 //
@@ -25,47 +22,15 @@ package capability
 // /etc/passwd. The lexical check sees nothing wrong: no `..`, not absolute,
 // textually inside the tree.
 //
-// So a write resolves its PARENT instead. The parent must exist for the write to
-// succeed at all, so EvalSymlinks always has something to answer, and a link
-// anywhere along the way lands outside the root and is refused. Same for MkdirAll
-// and RemoveAll.
+// SO A WRITE RESOLVES ITS PARENT — which must exist for the write to succeed at
+// all, so EvalSymlinks always has something to answer, and a link anywhere along
+// the way lands outside the root and is refused. Same for MkdirAll and RemoveAll.
 //
-// THAT ALONE WAS NOT ENOUGH, AND THIS PARAGRAPH USED TO END HERE CLAIMING IT WAS.
-// Resolving the parent closes a link one or more components ABOVE the target and
-// says nothing about a link AT it: `root/out -> /etc/passwd` has the parent
-// `root`, which is the tree itself. The write followed the leaf. A fence whose
-// header asserts an escape is closed is worse than one that admits the gap,
-// because the assertion is what the next reader checks instead of the code — so
-// the leaf is resolved too now, and resolveForWrite says which check is which.
-// ────────────────────────────────────────────────────────────────────────────
-//
-// ────────────────────────────────────────────────────────────────────────────
-// ONE OF THE TWO HOLDERS IS NOT CONVERTED, AND IT CANNOT BE WITHOUT A DECISION
-// NOBODY HAS MADE. Building this handle surfaced a conflict in the model itself.
-//
-// `environments` declares write-repo on ONE binding — `definition`, at
-// `scaffolded` — and its extension header defends that split at length: folding
-// it into the others "would widen the union so that reading the topology carried
-// permission to write landingzone.yaml".
-//
-// But `llz spec set` and `llz env set` also write. They edit landingzone.yaml and
-// environments/<env>.yaml through yamledit.EditSpecFile, and their bindings are
-// `transition:configured` holding read-repo ALONE. So the declaration says those
-// two commands only read, and they do not.
-//
-// It cannot be fixed by declaring the grant: validate.go pins
-// `WriteRepo: {Scaffolded, Upgraded}`, so write-repo at `configured` is refused
-// outright. The three ways out are (a) widen that row, (b) move the writes under
-// the `definition` binding — undoing the split the header defends — or (c) decide
-// `set` belongs at a different state. Each is a change to the vocabulary, and
-// this repo's bar for that is two independent shipping cases plus an argument.
-// This is case #1.
-//
-// So deliver-docs is converted and environments is not, deliberately. Wiring it
-// by borrowing `definition`'s binding would have handed `set` a capability its
-// own declaration refuses, which is the precise failure this layer exists to
-// end — and it would have looked like progress.
-// ────────────────────────────────────────────────────────────────────────────
+// AND ITS LEAF, which is the half that is easy to miss. Resolving the parent
+// closes a link one or more components ABOVE the target and says nothing about a
+// link AT it: `root/out -> /etc/passwd` has the parent `root`, which is the tree
+// itself, and the write follows the leaf. resolveForWrite says which check is
+// which. Do not simplify one of them away on the grounds that the other covers it.
 //
 // A REFUSED DESTRUCTIVE CALL MUST NEVER RETURN NIL, which is secrets.go's
 // argument arriving in a new shape. `os.RemoveAll` returns nil for a path that

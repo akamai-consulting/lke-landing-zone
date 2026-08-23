@@ -41,21 +41,24 @@ import (
 // Extension is the `environments` declaration.
 //
 //	transition:scaffolded/definition [read-repo, write-repo]
-//	transition:configured/add        [read-repo]
-//	transition:configured/set        [read-repo]
+//	transition:configured/add        [read-repo, write-repo]
+//	transition:configured/set        [read-repo, write-repo]
 //	assertion:configured/topology    [read-repo]
 //
 // WHY `definition` KEEPS ITS OWN BINDING RATHER THAN FOLDING INTO `add`. It is the
-// only one that holds `write-repo`, and it is the only one at `scaffolded`. Folding
-// it in would widen the union so that reading the topology carried permission to
-// write `landingzone.yaml` — the over-granting argument `reconcile-actions` made
-// when it split into four, applied in the other direction.
+// only one at `scaffolded` — it creates `landingzone.yaml` when it is absent, which
+// happens before an instance is configured at all. Folding it in would widen the
+// union so that reading the topology carried permission to write the spec, which is
+// the over-granting argument `reconcile-actions` made when it split into four,
+// applied in the other direction.
 //
-// `write-repo` AT `scaffolded` is one of only two states that grant carries, and
-// this is squarely one of them: the package creates `landingzone.yaml` when it is
-// absent and writes `environments/<env>.yaml`. Files in a working tree, which is
-// exactly the distinction `write-repo` was added to draw against the GitHub API
-// writes that take `cloud-mutate`.
+// `write-repo` ON THREE OF THE FOUR, and on `add` and `set` it is a CORRECTION
+// rather than a convenience: both have always written (add through
+// envdef.WriteEnvDefinition, set through yamledit.EditSpecFile), and the writes
+// were laundered through shared packages where this package's own tests could not
+// see them. Files in a working tree, which is exactly the distinction `write-repo`
+// draws against the GitHub API writes that take `cloud-mutate`. `topology` only
+// lists, so it holds read-repo alone.
 //
 // WHY `configured` FOR THE OTHER THREE. Topology is part of what "configured"
 // MEANS for an instance: which deployments exist and how they pair is the
@@ -66,13 +69,11 @@ import (
 // environments/<env>.yaml and re-render, so a second run after a spec change
 // produces different files. Listing what exists changes nothing.
 //
-// A FIFTH BINDING WAS WRITTEN AND REMOVED, AND IT IS STILL REMOVED. `branchpolicy`
-// locks the infra-<env> GitHub Environment to `main` — a PUT against GitHub's
-// deployment-branch-policy API, and honestly `transition:configured[read-repo,
-// cloud-mutate]`. Validate() refuses `cloud-mutate` at `configured`, and the bar
-// for widening a grantStates row is two independent shipping cases plus an
-// argument. There is one. So branchpolicy stayed in its own package where the
-// CLI's grant story covers it, and this remains case #1.
+// BRANCH POLICY IS NOT A BINDING HERE. Locking the infra-<env> GitHub Environment
+// to `main` is a PUT against GitHub's deployment-branch-policy API — cloud-mutate,
+// not a file write — and it lives in its own `branch-policy` extension. Keep it
+// there: a fifth binding would put a GitHub API write inside a declaration whose
+// whole point is that it touches files only.
 //
 // NO `cloud-read` DESPITE THE VALUES BEING CLOUD FACTS. Region, node type and
 // object-storage cluster arrive already resolved: `config-readiness` is the

@@ -15,8 +15,9 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `template-sustain` declaration.
 //
-//	assertion:upgraded [read-repo]  drift — how far behind the template is this instance
-//	gate:scaffolded    [read-repo]  the upgrade-churn guard
+//	assertion:upgraded              [read-repo]              how far behind the template
+//	gate:scaffolded                 [read-repo]              the upgrade-churn guard
+//	transition:scaffolded/lock-refresh [read-repo, write-repo]  `managed-fresh --write`
 //
 // `upgraded` IS A RECURRING STATE and this is the first binding to attach to one
 // other than `destroyed`. It cost nothing: `bindableStates` already permitted both
