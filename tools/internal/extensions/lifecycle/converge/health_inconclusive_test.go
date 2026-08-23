@@ -273,3 +273,124 @@ func TestLokiAnsweredEmptyIsStillNotDeployed(t *testing.T) {
 			"(%d failed, %d pending)", v, len(r.Failed), len(r.Pending))
 	}
 }
+
+// ── from the code review of this PR ─────────────────────────────────────────
+
+// TestAReleasedLeaseIsNotAStaleOne. Without this the lease widening added by this
+// PR would abort EVERY converge on a healthy cluster.
+//
+// Kubernetes leader election clears holderIdentity on a graceful release and
+// leaves renewTime FROZEN at the moment of release. LeaseStale is therefore
+// permanently true for such a Lease — CatFail on every pass, which is
+// runConverge's "hard-failed twice in a row — operator intervention required".
+// apl-core's namespaces (harbor, istio-system, llz-observability) are exactly
+// where a released lease sits, and exactly what the widening added.
+func TestAReleasedLeaseIsNotAStaleOne(t *testing.T) {
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		if !strings.Contains(strings.Join(args, " "), "leases.coordination.k8s.io") {
+			return []byte(`{"items":[]}`), nil
+		}
+		// A released lease: no holder, renewTime frozen years ago.
+		return []byte(`{"items":[{"metadata":{"name":"cert-manager-controller"},` +
+			`"spec":{"holderIdentity":"","renewTime":"2020-01-01T00:00:00Z","leaseDurationSeconds":15}}]}`), nil
+	})
+	r := &health.Report{}
+	checkLeases(r, allNamespacesPresent())
+	if v := r.Verdict(); v != health.Converged {
+		t.Fatalf("a RELEASED lease (holderIdentity empty, renewTime frozen) is not a stopped controller — "+
+			"failing on it aborts every converge on a healthy cluster; got %v with %d failed",
+			v, len(r.Failed))
+	}
+}
+
+// TestAHeldButStaleLeaseStillFails is the exclusion: the widening must still
+// catch the thing it was widened for.
+func TestAHeldButStaleLeaseStillFails(t *testing.T) {
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		if !strings.Contains(strings.Join(args, " "), "leases.coordination.k8s.io") {
+			return []byte(`{"items":[]}`), nil
+		}
+		return []byte(`{"items":[{"metadata":{"name":"cert-manager-controller"},` +
+			`"spec":{"holderIdentity":"cert-manager-abc","renewTime":"2020-01-01T00:00:00Z","leaseDurationSeconds":15}}]}`), nil
+	})
+	r := &health.Report{}
+	checkLeases(r, allNamespacesPresent())
+	if v := r.Verdict(); v == health.Converged {
+		t.Error("a lease still HELD but not renewed is a controller that stopped dead — that is the signal " +
+			"this section exists for")
+	}
+}
+
+// TestLeaseCheckDoesNotClaimNamespacesItCouldNotRead. checkLeases recorded "all
+// controller Leases renewed" even when every list failed. Only sectionItems'
+// incidental CatPending kept the report from reading green — and that is a BARE
+// CatPending, so it lands on llz_convergence_state == 2 while
+// LLZClusterNotConverged fires on == 1: in steady-state health it alerts nobody,
+// contradicting this PR's own rule that every softened site goes through
+// PendingIfBudgeted.
+func TestLeaseCheckDoesNotClaimNamespacesItCouldNotRead(t *testing.T) {
+	prevRetries, prevDelay := kubectlprobe.Retries, kubectlprobe.Delay
+	kubectlprobe.Retries, kubectlprobe.Delay = 1, 0
+	t.Cleanup(func() { kubectlprobe.Retries, kubectlprobe.Delay = prevRetries, prevDelay })
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "leases.coordination.k8s.io") {
+			return nil, errors.New("the connection to the server was refused")
+		}
+		return []byte(`{"items":[]}`), nil
+	})
+	r := &health.Report{}
+	// CatOK entries are printed, not accumulated on the Report, so the claim has
+	// to be read off stdout — which is also where an operator reads it.
+	out := captureStdout(t, func() { checkLeases(r, allNamespacesPresent()) })
+	if strings.Contains(out, "all controller Leases renewed") {
+		t.Errorf("checkLeases claimed every Lease was renewed having read none of them:\n%s", out)
+	}
+	if len(r.Pending) == 0 && len(r.Failed) == 0 {
+		t.Error("an unreadable lease list must be recorded, not passed over")
+	}
+	// PendingIfBudgeted, not a bare CatPending: outside a budget this has to read
+	// as a verdict, or LLZClusterNotConverged never sees it. RESTORED after —
+	// Budgeted is a package global, and leaking it flips every later test in the
+	// file into steady-state mode.
+	prevBudgeted := health.Budgeted
+	t.Cleanup(func() { health.Budgeted = prevBudgeted })
+	health.Budgeted = false
+	r2 := &health.Report{}
+	checkLeases(r2, allNamespacesPresent())
+	if len(r2.Failed) == 0 {
+		t.Error("in steady-state health an unreadable lease list must be a FAILURE — a bare CatPending " +
+			"lands on llz_convergence_state == 2 and LLZClusterNotConverged fires on == 1")
+	}
+}
+
+// TestNetpolManagedSkipShortCircuitsBeforeTheListRead. On managed — the only
+// supported mode — cluster-foundation is ManagedSkip, so every policy count
+// resolves to CatOK and reading the list cannot change the verdict. Failing on an
+// unreadable read there turns a throttled `get networkpolicies` into a red
+// scheduled health run for a question already answered.
+func TestNetpolManagedSkipShortCircuitsBeforeTheListRead(t *testing.T) {
+	prevRetries, prevDelay := kubectlprobe.Retries, kubectlprobe.Delay
+	kubectlprobe.Retries, kubectlprobe.Delay = 1, 0
+	t.Cleanup(func() { kubectlprobe.Retries, kubectlprobe.Delay = prevRetries, prevDelay })
+	listed := 0
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		j := strings.Join(args, " ")
+		if strings.Contains(j, "application cluster-foundation") {
+			return nil, errors.New(`Error from server (NotFound): applications.argoproj.io "cluster-foundation" not found`)
+		}
+		if strings.Contains(j, "networkpolicies") {
+			listed++
+			return nil, errors.New("the connection to the server was refused")
+		}
+		return []byte(`{"items":[]}`), nil
+	})
+	r := &health.Report{}
+	checkNetworkPolicies(r, allNamespacesPresent())
+	if v := r.Verdict(); v != health.Converged {
+		t.Errorf("on managed the policy count cannot change the verdict, so an unreadable list must not "+
+			"fail the run; got %v (%d failed, %d pending)", v, len(r.Failed), len(r.Pending))
+	}
+	if listed != 0 {
+		t.Errorf("the list was read %d time(s) on a cluster where its answer is irrelevant", listed)
+	}
+}

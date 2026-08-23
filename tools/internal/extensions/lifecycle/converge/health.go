@@ -1068,12 +1068,44 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 	// controllers whose stale Lease is a real signal, the loop is skip-if-absent so
 	// they cost nothing where they do not exist, and LeaseStale's 4x leaseDuration
 	// threshold is generous. TestLeaseCheckUsesTheSharedNamespaceList pins the join.
+	read := 0
 	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, it := range sectionItems[leaseItem](r, "Leases in "+ns, "-n", ns, "get", "leases.coordination.k8s.io") {
+		items, listed := kubectlprobe.ListOK[leaseItem]("-n", ns, "get", "leases.coordination.k8s.io")
+		if !listed {
+			// LISTED SEPARATELY FROM "no stale leases". sectionItems records a
+			// CatPending for an unreadable list, which is why the report was not
+			// outright green — but this function still went on to record "all
+			// controller Leases renewed", a positive claim about namespaces it
+			// never read. And that incidental CatPending is a BARE CatPending, so
+			// it lands on llz_convergence_state == 2 while LLZClusterNotConverged
+			// fires on == 1: in steady-state health it alerts nobody, which
+			// contradicts this change's own rule that every softened site goes
+			// through PendingIfBudgeted.
+			cat, msg := health.PendingIfBudgeted(
+				fmt.Sprintf("could not list Leases in %s — retrying against the budget", ns),
+				fmt.Sprintf("could not list Leases in %s after retries, so whether its leader-elected "+
+					"controllers are still renewing is UNKNOWN", ns))
+			record(r, cat, msg)
+			continue
+		}
+		read++
+		for _, it := range items {
 			if it.Spec.RenewTime == "" {
+				continue
+			}
+			// A RELEASED LEASE IS NOT A STALE ONE, and without this the widening
+			// above would abort every converge. Kubernetes leader election clears
+			// holderIdentity on a graceful release and leaves renewTime FROZEN at
+			// the moment of release — so LeaseStale is permanently true for it,
+			// which is CatFail on every pass, which is runConverge's "hard-failed
+			// twice in a row — operator intervention required" on a cluster where
+			// nothing is wrong. apl-core's namespaces (harbor, istio-system,
+			// llz-observability) are exactly where a released lease sits, and they
+			// are exactly what this change added.
+			if strings.TrimSpace(it.Spec.HolderIdentity) == "" {
 				continue
 			}
 			renew, err := time.Parse(time.RFC3339, it.Spec.RenewTime)
@@ -1086,8 +1118,10 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 			}
 		}
 	}
-	if !stale {
-		record(r, health.CatOK, "all controller Leases renewed within 4× leaseDuration")
+	// ONLY CLAIM WHAT WAS READ. "all controller Leases renewed" over zero
+	// successful lists is the silent green this whole change is about.
+	if !stale && read > 0 {
+		record(r, health.CatOK, fmt.Sprintf("all controller Leases renewed within 4× leaseDuration (%d namespace(s) read)", read))
 	}
 }
 
@@ -1244,6 +1278,20 @@ func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
+		// THE MANAGED SKIP IS EVALUATED FIRST, and the order is the point. On a
+		// managed cluster — the only supported mode, ADR 0005 — cluster-foundation
+		// is ManagedSkip, so LLZ applies no NetworkPolicies and EVERY policy count
+		// resolves to CatOK below. Reading the list there cannot change the verdict,
+		// so failing on an unreadable read would turn a throttled `get
+		// networkpolicies` into a red scheduled health run and burn converge budget
+		// for a question whose answer was already fixed.
+		//
+		// The read still happens — and its failure still matters — on a
+		// self-install, where the count decides.
+		if ownsAnswered && !ownsNetpols {
+			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
+			continue
+		}
 		// ItemsOK for the same reason one line down: an unreadable list returns zero
 		// items, and zero items is the literal input ClassifyNamespaceNetpol turns
 		// into "no default-deny". A read that did not happen must not be graded as a
@@ -1267,6 +1315,9 @@ func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 				record(r, cat, msg)
 				continue
 			}
+			// Unreachable in practice — the answered-and-not-owned case returned
+			// above, before the list read. Kept so the CatFail branch stays complete
+			// on its own terms rather than depending on a guard 15 lines up.
 			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
 			continue
 		}
