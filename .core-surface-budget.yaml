@@ -1485,7 +1485,21 @@ categories:
     #                       cannot be entered. Both arms were live defects in the
     #                       delivered pipeline, and both are decisions with
     #                       fail-closed arms rather than wiring lines.
-    budget: 1965
+    #   1,966 / 129 files  +1 registering `llz ci default-deny-egress`: the import,
+    #                       with the constructor added to an AddCommand call that
+    #                       already existed. Spending one of the two lines the
+    #                       entries above just banked, and named rather than
+    #                       absorbed — a paydown that quietly funds the next verb is
+    #                       a paydown nobody can audit. The guard itself is
+    #                       extensions/guards/defaultdeny under unit test: it joins
+    #                       the RENDERED chart tree to platform-apl/ by namespace and
+    #                       fails a pod whose egress some NetworkPolicy polices while
+    #                       none grants it any. That is a decision with fail-closed
+    #                       arms (no rendered tree, no policies, no pods, an
+    #                       undecidable matchExpressions selector) rather than a
+    #                       wiring line, and it found openbao-cert-watcher, which had
+    #                       been reaching nothing at all since it shipped.
+    budget: 1966
     exact: true
     include:
       - "tools/internal/cli/*.go"

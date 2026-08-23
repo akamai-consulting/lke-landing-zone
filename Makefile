@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -153,6 +153,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/callerperms=85 \
 	internal/extensions/guards/runinjection=92 \
 	internal/extensions/guards/secretscope=85 \
+	internal/extensions/guards/defaultdeny=82 \
 	internal/extensions/guards/budget=87 \
 	internal/extensions/guards/chartguard=71 \
 	internal/extensions/guards/k8sminorcoherence=99 \
@@ -332,6 +333,7 @@ help:
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
 	@echo "  mesh-egress-guard           no NetworkPolicy egress to a STRICT-mesh namespace (harbor) from outside it"
+	@echo "  default-deny-egress         no pod is policed into total silence (egress enforced, none granted)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  core-surface-check    fail when Go logic in package main exceeds .core-surface-budget.yaml (ADR 0014)"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
@@ -743,6 +745,26 @@ at-rest-guard:
 # rather than passing green over a corpus it never saw.
 mesh-egress-guard: render-charts
 	$(call LLZ_CI,gates --only mesh-egress-guard,)
+
+# default-deny-egress: `llz ci default-deny-egress` — the openbao-cert-watcher
+# class. NetworkPolicies are additive with no deny rule, so a namespace-wide
+# `podSelector: {}` + `policyTypes: [Egress]` starts policing EVERY pod in the
+# namespace and any pod no companion allow selects reaches nothing at all — not
+# DNS, not the apiserver. The pod stays 1/1 Running with healthy endpoints, so
+# there is no status, no event and no restart for anything to observe.
+#
+# The watcher shipped that way: llz-openbao-platform's default-deny polices the
+# namespace, its one companion selects `app.kubernetes.io/name: openbao`, and the
+# watcher carries `openbao-cert-watcher`. Its kubectl poll was dropped for the
+# life of every cluster, so at certificate renewal nothing restarted OpenBao.
+#
+# Same `: render-charts` as mesh-egress-guard, and for a sharper reason: the
+# default-deny that strands a pod lives in a CHART and the pod lives in
+# platform-apl/, so without the rendered tree every pod reads as UNPOLICED and the
+# guard passes over precisely the class it exists for. It hard-fails on a missing
+# rendered tree rather than taking that pass.
+default-deny-egress: render-charts
+	$(call LLZ_CI,gates --only default-deny-egress,)
 
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —

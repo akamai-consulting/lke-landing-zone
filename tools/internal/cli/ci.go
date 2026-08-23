@@ -29,6 +29,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
@@ -470,7 +471,7 @@ func ciCmd() *cobra.Command {
 	// mutable-tag-guard holds build-images.yml's publish policy — `:latest` and
 	// `:<version>` only from the default branch's HEAD (#451).
 	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
-	c.AddCommand(callerperms.Cmd(), runinjection.Cmd(), secretscope.Cmd())
+	c.AddCommand(callerperms.Cmd(), runinjection.Cmd(), secretscope.Cmd(), defaultdeny.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())

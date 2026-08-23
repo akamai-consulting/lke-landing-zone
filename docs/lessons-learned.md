@@ -175,6 +175,26 @@ default against, not something to "clean up." Version-specific notes (apl-core
   `network-policies.yaml`). General rule: any aggregated-APIService webhook behind
   a default-deny needs its own `:443` ingress allow keyed on *its* pod label —
   don't assume the core-webhook policy covers it.
+- **A namespace default-deny polices pods from OTHER trees, and one of ours had
+  zero egress for its whole life.** `llz-openbao-platform` ships
+  `openbao-default-deny` with `podSelector: {}` over Ingress *and* Egress, so it
+  polices every pod in `llz-openbao` — not only OpenBao's own. Its single
+  companion, `openbao-allow`, selects `app.kubernetes.io/name: openbao`;
+  `openbao-cert-watcher` carries `openbao-cert-watcher`, and its own policy
+  declared `policyTypes: [Ingress]` with a comment saying there was "no egress
+  restriction". True of the file, false of the namespace. NetworkPolicies are
+  additive and there is no deny rule, so the watcher could reach nothing at all —
+  not the apiserver, not DNS. Every `kubectl get certificate` was dropped, the
+  loop logged `not readable yet (rbac? not issued?)` once a minute forever
+  (naming the two causes it was *not*), and at renewal nothing restarted OpenBao:
+  the secret-store cascade that Deployment exists to prevent happened exactly as
+  if it were not deployed. **The join is what hid it** — the default-deny is in a
+  *chart* and the pod it stranded is in `platform-apl/`, so neither tree read
+  alone shows anything wrong, and neither kube-linter nor the kind dry-run reads
+  `platform-apl/` at all. Gated by `llz ci default-deny-egress`, which reads both
+  trees and matches them by namespace. General rule: **adding a `podSelector: {}`
+  egress policy silently re-scopes every pod in the namespace, including ones
+  another repo tree owns.**
 - **argo-events v1.9+ relabeled pods.** EventBus/Sensor/EventSource pods now carry
   `controller=*-controller` labels instead of `app.kubernetes.io/component=*`. NPs
   using the old selectors match nothing → JetStream "Waiting for routing" loop.

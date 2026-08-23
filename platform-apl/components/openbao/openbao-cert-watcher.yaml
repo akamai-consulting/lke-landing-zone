@@ -165,21 +165,75 @@ spec:
             seccompProfile:           { type: RuntimeDefault }
       serviceAccountName: openbao-cert-watcher
 ---
-# Ingress-only lockdown for the watcher pod (satisfies kube-linter's
-# non-isolated-pod check). No egress restriction: the same Cilium-on-LKE-E
-# constraint that affects ESO applies — a `to: ipBlock: 0.0.0.0/0` rule on
-# TCP/443+6443 produces silent i/o timeouts against the kubernetes Service
-# ClusterIP. Defense-in-depth remains via restricted RBAC + restricted PSS.
+# Ingress denied, egress stated — and the egress half is the repair for a policy
+# that left this pod unable to reach anything at all.
+#
+# THIS DOCUMENT USED TO DECLARE `policyTypes: [Ingress]` ONLY, on the reasoning
+# that there was "no egress restriction" to work around. That reasoning was true
+# of this file and false of the namespace. llz-openbao-platform ships
+# `openbao-default-deny` with `podSelector: {}` over Ingress AND Egress — every
+# pod in llz-openbao, not just OpenBao's own — and its single companion allow,
+# `openbao-allow`, selects `app.kubernetes.io/name: openbao`. This pod carries
+# `app.kubernetes.io/name: openbao-cert-watcher`. NetworkPolicies are additive, so
+# declaring only Ingress here added no egress permission to a namespace that
+# denies it by default: the watcher had ZERO egress.
+#
+# WHAT THAT COST, and why nothing reported it. Every `kubectl get certificate`
+# was dropped, so `cur` was always empty and the loop logged
+# "openbao-tls Certificate not readable yet (rbac? not issued?)" once a minute
+# forever — a message that names the two causes it is NOT and never mentions the
+# one it is. The pod stays 1/1 Running. At renewal nothing restarts OpenBao, the
+# StatefulSet keeps serving the old certificate, and the ClusterSecretStore
+# cascade this Deployment exists to prevent happens exactly as if the Deployment
+# were not there.
+#
+# THE CROSS-TREE JOIN IS WHY IT WAS INVISIBLE: the default-deny is in a CHART
+# (kubernetes-charts/llz-openbao-platform) and the workload it strands is in
+# platform-apl/. Neither tree read on its own shows the problem, and neither
+# kube-linter nor the kind dry-run reads platform-apl/ at all.
+# `llz ci default-deny-egress` is the gate — it joins the two trees by namespace.
+#
+# EGRESS IS WRITTEN THE WAY llz-reconciler's IS, for the reasons recorded there:
+# DNS matched on the kube-system NAMESPACE (LKE-E CoreDNS is labeled
+# app.kubernetes.io/name=coredns, so a `k8s-app: kube-dns` podSelector matches
+# nothing), and the apiserver as a BARE ports rule on 443 AND 6443 — there is no
+# in-cluster kube-apiserver pod to select on managed LKE-E, and Cilium evaluates
+# egress post-DNAT so :443 alone is dropped. Deliberately NOT `to: ipBlock:
+# 0.0.0.0/0`, which is what the old comment reached for: a CIDR block misses
+# cluster identities on Cilium and produces exactly the silent timeouts it warned
+# about.
+#
+# RENAMED from openbao-cert-watcher-ingress-deny, because it is no longer an
+# ingress-only document and a name that says otherwise is the next reader's wrong
+# turn. Argo prunes and recreates in one sync; the namespace default-deny holds
+# throughout, so there is no window in which this pod is more reachable.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   annotations:
-    argocd.argoproj.io/sync-wave: "-5"
-  name: openbao-cert-watcher-ingress-deny
+    # -10, not -5: the tree's convention for per-namespace NetworkPolicies, and
+    # the chart's own default-deny is -10. Landing after the deny would leave the
+    # watcher briefly egress-less at every sync.
+    argocd.argoproj.io/sync-wave: "-10"
+  name: openbao-cert-watcher
   namespace: llz-openbao
 spec:
   ingress: []
   podSelector:
     matchLabels:
       app.kubernetes.io/name: openbao-cert-watcher
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
+  egress:
+    # DNS. Namespace-scoped, no podSelector — see above.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # LKE-E apiserver, dual-port DNAT. The only thing this pod talks to: it reads
+    # one Certificate's status and deletes three pods.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
