@@ -51,7 +51,7 @@ var citedCounts = map[extension.Grant]struct {
 	bindings, extensions int
 	cited                string
 }{
-	extension.ReadRepo:      {63, 49, "repo.go: \"declared by 49 of 69 extensions — more than any other grant\"; model doc distribution table"},
+	extension.ReadRepo:      {64, 50, "repo.go: \"declared by 50 of 70 extensions — more than any other grant\"; model doc distribution table"},
 	extension.CloudRead:     {20, 17, "cloud.go: \"20 declarations of cloud-read\"; model doc distribution table"},
 	extension.CloudMutate:   {21, 17, "cloud.go: \"21 of cloud-mutate\"; model doc distribution table"},
 	extension.SecretRead:    {11, 9, "secrets.go: \"eleven declare secret-read\"; model doc distribution table"},
@@ -80,8 +80,8 @@ func census() (bindings, extensions map[extension.Grant]int, total int) {
 
 func TestHandleHeaderCensusesMatchTheRegistry(t *testing.T) {
 	byBinding, byExt, total := census()
-	if total != 69 {
-		t.Errorf("the registry holds %d extensions; repo.go's header says 68. Update the "+
+	if total != 70 {
+		t.Errorf("the registry holds %d extensions; repo.go's header says 70. Update the "+
 			"header and the denominator below together.", total)
 	}
 	var grants []extension.Grant

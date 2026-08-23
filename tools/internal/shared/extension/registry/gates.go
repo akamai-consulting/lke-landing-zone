@@ -107,6 +107,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
@@ -322,6 +323,9 @@ var gates = []Gate{
 
 	{Extension: "guard-workflow-shells", New: workflowshells.Cmd, Flag: "--dir", Subtree: ".github/workflows"},
 	{Extension: "mesh-egress", New: meshegress.Cmd},
+	// Beside mesh-egress because it reads the same two trees for the same reason:
+	// a pod that cannot reach something, where nothing in the cluster says so.
+	{Extension: "default-deny-egress", New: defaultdeny.Cmd},
 	{Extension: "mtls-wiring", New: mtlsguard.Cmd},
 	{Extension: "version-pins", New: versionpins.Cmd},
 	// Beside version-pins because it is the same class of defect one authority
@@ -479,7 +483,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (30 rows, 27 of them taking the default subject — both pinned by
+	// table (31 rows, 28 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

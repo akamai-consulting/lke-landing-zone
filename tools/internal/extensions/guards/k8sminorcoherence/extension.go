@@ -51,7 +51,7 @@ func Extension() extension.Extension {
 				"needs a private GHCR image — while the `dry-run` job it vouches for runs " +
 				"there anyway. Two other guards were relocated to the fork-safe `go-tests` " +
 				"job for exactly this, and the same move would fix this one; it is not made " +
-				"here because it would move all twenty-nine gates, which is a change about " +
+				"here because it would move every gate in the driver, which is a change about " +
 				"the driver rather than about this gate. Same-repo PRs and the push trigger " +
 				"still catch it, so it is a detection delay rather than a hole.",
 		},

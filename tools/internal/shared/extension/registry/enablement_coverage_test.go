@@ -72,6 +72,11 @@ var componentless = map[string]bool{
 	// keys and the Linode PAT — are what the pipeline needs to exist at all, not
 	// what any one component turns on.
 	"workflow-secret-scope": true,
+	// No component: it judges the RELATION between a namespace default-deny and
+	// the pods in that namespace. Both sides move with whichever components an
+	// instance enabled, and the invariant — policed implies granted — holds for
+	// every combination, so there is no one component it follows.
+	"default-deny-egress": true,
 	// No component: an instance's opt-in to the automated template upgrade is a
 	// repo VARIABLE (LLZ_TEMPLATE_UPGRADE), not a spec component — the choice is
 	// about who may change this repo, which is not a property of the cluster the

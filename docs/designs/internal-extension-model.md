@@ -3,7 +3,7 @@
 **Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
 an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
 and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
-**68 extensions across 67 packages** declare **122 bindings** between them. The set is not enumerated
+**70 extensions across 69 packages** declare **124 bindings** between them. The set is not enumerated
 here, because a list beside the code it describes is the hand-maintained second copy this design
 exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
 each declaration's constructor rather than transcribing it.
@@ -428,7 +428,7 @@ not a measurement**: the grants were assigned in the same pass that invented the
 reported the author's judgement about package `main`, and it "cannot become evidence until extensions
 declare their own grants and the distribution is *observed* rather than assigned".
 
-**That condition has since been met, and the observation disagrees.** 68 extensions now declare their
+**That condition has since been met, and the observation disagrees.** 70 extensions now declare their
 own grants. Measured against the live registry, per extension:
 
 | grant | extensions declaring it |

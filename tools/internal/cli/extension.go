@@ -114,8 +114,8 @@ func listVerbose(out io.Writer, exts []extension.Extension) error {
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintf(out, "%s  (%s)\n", e.Name, enabledLabel(e))
-		// WHERE THE CODE IS, which the name does not tell you: thirty-six of the
-		// sixty-nine extensions — half of them — live in a package with a different name
+		// WHERE THE CODE IS, which the name does not tell you: thirty-seven of the
+		// seventy extensions — half of them — live in a package with a different name
 		// (assert-storage in assertions/volumes, posture-at-rest in
 		// lifecycle/atrest, import-brownfield in lifecycle/brownfield). Every error
 		// message, gate exemption and ratchet entry in this tree names the
