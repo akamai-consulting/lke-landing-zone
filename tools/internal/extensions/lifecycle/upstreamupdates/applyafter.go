@@ -10,10 +10,12 @@ package upstreamupdates
 // vars.TF_IMAGE. So an upgrade that changes what Terraform will do to a cluster
 // shows NO .tf diff — the change travels in the image, selected by the pin.
 //
-// On top of that the bot's pull request opens as a DRAFT, deliberately, because
-// plan-cluster-pr writes Terraform state and skips drafts. Draft plus generated
-// roots means the default reviewable artifact for an automated upgrade contains
-// no infrastructure delta at all.
+// And NO pull request runs a `tofu plan` at all any more. plan-cluster-pr is
+// retired (see the note in llz-terraform.yml where it used to be: a plan against
+// live state needs deployment-scoped credentials a pull_request run cannot hold,
+// and the `environment:` form fails the branch-policy lock that keeps a pushed
+// branch away from infra-prod's secrets). So there is no job anywhere that could
+// show an upgrade's infrastructure delta on a pull request.
 //
 // And merging applies nothing: llz-terraform.yml runs no plan and no apply on
 // push to main (push-noop-notice) — applies are workflow_dispatch only.
@@ -71,9 +73,11 @@ func applySection(envs []string) string {
 	var b strings.Builder
 	b.WriteString("\n### Merging this changes nothing on any cluster\n")
 	b.WriteString("Terraform runs on workflow_dispatch, not on push to main — so this pull request\n" +
-		"moves the pin and the pipeline is what carries it to a cluster. Note also that the\n" +
-		"roots are generated from the pin at every terraform op and are gitignored, so an\n" +
-		"upgrade that changes what Terraform does shows no .tf diff here.\n")
+		"moves the pin and the pipeline is what carries it to a cluster. Two things make that\n" +
+		"easy to miss: the roots are generated from the pin at every terraform op and are\n" +
+		"gitignored, so an upgrade that changes what Terraform DOES shows no .tf diff here;\n" +
+		"and no pull request runs a plan, because a plan against live state needs\n" +
+		"deployment-scoped credentials a pull_request run cannot hold.\n")
 	if len(envs) == 0 {
 		b.WriteString("\nThis instance declares no deployment yet, so there is nothing to apply.\n")
 		return b.String()

@@ -626,8 +626,20 @@ func TestCreatePRBodyStopsClaimingDraftOnTheFallback(t *testing.T) {
 	if strings.Contains(bodies[1], "opens as a DRAFT") {
 		t.Error("the non-draft body must NOT tell the reviewer the PR is a draft")
 	}
-	if !strings.Contains(bodies[1], "NOT a draft") || !strings.Contains(bodies[1], "tf-import") {
-		t.Errorf("the non-draft body must name the state write it no longer prevents, got:\n%s", bodies[1])
+	if !strings.Contains(bodies[1], "cannot open draft pull requests") {
+		t.Errorf("the non-draft body must say WHY it is not a draft, got:\n%s", bodies[1])
+	}
+	// IT MUST NOT WARN ABOUT A HAZARD THAT NO LONGER EXISTS. This used to require
+	// the words "tf-import" and a warning that the fallback exposed an unserialised
+	// write to cluster/<deployment>/terraform.tfstate. plan-cluster-pr is retired,
+	// so there is no tf-import on any pull-request path — and a scary paragraph
+	// about a job that cannot run costs a reviewer the same attention as a real one
+	// while teaching them the body is not to be trusted.
+	for _, gone := range []string{"tf-import", "terraform.tfstate", "concurrent apply"} {
+		if strings.Contains(bodies[1], gone) {
+			t.Errorf("the non-draft body still warns about %q, retired with plan-cluster-pr:\n%s",
+				gone, bodies[1])
+		}
 	}
 }
 
