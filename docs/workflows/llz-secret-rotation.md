@@ -52,16 +52,34 @@ health gate.
 
 ### 2. `LINODE_API_TOKEN` (shared Linode PAT)
 
-Label `gha-platform-platform_LINODE_API_TOKEN` — PAT-rotation policy
-enforcement. Creates a new PAT and updates the GHA env secrets. **CI/Terraform-ONLY:**
-the broad PAT is no longer pushed into any cluster. The previous PAT drains
-daily via `linode-pat-revoke.yml` (companion workflow on a 7-day grace window).
+Minted under the instance-scoped label `llz-<objLabelPrefix>-linode-api-token`,
+which `llz` derives from the spec — the shared literal it used to carry
+(`gha-platform-platform_LINODE_API_TOKEN`) named no instance, so `revoke-old`
+drained every LLZ instance on the Linode account down to `--keep-newest`.
+Credentials still under the old label are reported once per run and left alone;
+see `rotation_identity.go`.
+
+PAT-rotation policy enforcement. Creates a new PAT and updates the GHA env
+secrets. **CI/Terraform-ONLY:** the broad PAT is no longer pushed into any
+cluster. The previous PAT drains daily on a 7-day grace window, measured from
+when it was superseded.
+
+**Unless the in-cluster rotator owns it.** With
+`spec.components.broadPatRotator` enabled, ADR 0001 gives create and revoke of
+the broad PAT to that CronJob, and this job stands down with a notice rather
+than racing it. Two independent mints against one label family, each keeping
+the newest and draining the rest, means whichever ran last defines the survivor
+and the other's freshly-published token is an older sibling waiting out its
+grace window. (The CronJob's writes are a superset of this job's — it updates
+`secret/linode/broad-pat` **and** every `infra-<env>` `LINODE_API_TOKEN` — so
+standing down loses no coverage.)
 
 Alongside it, each region's job mints the NARROW in-cluster PAT (label
 `llz-incluster-<region>`, the token every in-cluster Linode consumer reads) and
 writes it to that region's OpenBao (`secret/linode/api-token`) via
-`llz ci rotate-incluster-pat`, which also drains older same-labeled siblings
-past a 7-day grace window.
+`llz ci rotate-incluster-pat`, which also drains same-labeled siblings
+superseded more than 7 days ago — long enough for ESO (5m refresh) and kubelet
+(~1m projection) to have served the new value everywhere.
 
 ## Triggers
 
@@ -317,11 +335,20 @@ It is the **minting** credential; the narrow token it mints is what gets written
 ## Job: `revoke-linode-pat`
 
 Stateless daily reaper — the label *is* the drain record. Lists every PAT
-matching `gha-platform-platform_LINODE_API_TOKEN`, keeps the newest (the live
-one), and revokes any sibling older than `grace-days` (default 7).
+matching the instance-scoped label, keeps the newest (the live one), and revokes
+any sibling **superseded** more than `grace-days` ago (default 7). Superseded
+means "the next-newer sibling was minted", which is when the credential stopped
+being the live one.
+
+That is the measurement, and it used to be the sibling's own AGE. The two differ
+in exactly the case that matters: the previous month's PAT is ~30 days old the
+moment it is replaced, so an age test failed a 7-day window immediately and the
+reaper deleted the credential a still-running job might be holding. The window
+only ever protected orphans from a failed run.
 
 On the monthly schedule the newly-created PAT is the newest, so the previous
-month's PAT — now ~30d old — is eligible for the next day's daily run.
+month's PAT is protected for 7 days after the rotation that replaced it, and
+drains on the daily run after that.
 
 ### `if:` guard
 

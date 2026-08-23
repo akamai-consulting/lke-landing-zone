@@ -16,7 +16,7 @@ landing-zone template. It is a single Go module (`go.mod`).
   `llz credentials` owns the mutating half of the shared Linode credential
   lifecycles (formerly the standalone `linode-pat-rotator` /
   `linode-obj-key-rotator` binaries): `pat create|revoke-old` for the
-  `LINODE_API_TOKEN` PAT (90-day PAT policy, grace-by-age drain) and `obj-key
+  `LINODE_API_TOKEN` PAT (90-day PAT policy, grace-by-supersession drain) and `obj-key
   create|revoke-old` for the 120-day TF-state Object Storage key SLA
   (keep-newest-N drain — the OBJ keys API exposes no `created` time). Built and
   exec'd by the `linode-credentials` composite action. The former standalone

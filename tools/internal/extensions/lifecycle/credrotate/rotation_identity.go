@@ -37,13 +37,14 @@ package credrotate
 // visible rather than silent.
 
 import (
+	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 // legacyRotationLabels are the pre-namespacing literals, kept ONLY so the
@@ -83,14 +84,34 @@ func resolveRotationLabel(explicit, kind, what string) (string, error) {
 	// The broad PAT has a SECOND rotator. `llz ci rotate-broad-pat` runs in-cluster
 	// from the broadPatRotator component and takes its label from BROAD_PAT_LABEL,
 	// which `llz render` fills from spec.components.broadPatRotator.broadPATLabel —
-	// an operator-chosen string with no default. Deriving independently here would
-	// give the two rotators different label families for the same credential: each
-	// would revoke only its own, both would keep writing LINODE_API_TOKEN into the
-	// same infra-<env> secrets, and the account would accumulate a second live
-	// broad PAT family nothing drains. Defer to the spec whenever it has an answer.
+	// an operator-chosen string with no default.
+	// THE BROAD PAT HAS ONE OWNER, AND WHEN THE SPEC NAMES IT, IT IS NOT THIS JOB.
+	//
+	// This used to DEFER to spec.components.broadPatRotator.broadPATLabel so both
+	// rotators drained one label family, on the reasoning that two families for
+	// one credential would leave a live PAT nothing reaps. The reasoning was
+	// right about two families and wrong about the remedy: sharing one family
+	// makes the two rotators reap EACH OTHER.
+	//
+	// Not because they publish to different places — RotateBroadPAT writes BOTH
+	// secret/linode/broad-pat AND every infra-<env> LINODE_API_TOKEN, so its
+	// coverage is a superset of the CI verb's, which writes the GitHub secrets
+	// and never touches OpenBao. The race is simpler than that and does not
+	// depend on the destinations at all: two independent mints against one label
+	// family, each keeping "the newest" and draining the rest, means whichever
+	// ran last defines the survivor and the other's freshly-published token is
+	// just an older sibling waiting out its grace window.
+	//
+	// ADR 0001 already decided this: the broadPatRotator CronJob OWNS the broad
+	// PAT's create and revoke, held "on exactly one deployment (it is
+	// account-wide, so more than one owner would race mint/revoke)". So the GHA
+	// path stands down rather than joining in.
+	//
+	// It was harmless until now only because nothing called this resolver, so the
+	// label was "" and both drains matched nothing.
 	if kind == rotationKindPAT {
 		if l := specBroadPATLabel(); l != "" {
-			return l, nil
+			return "", errBroadPATOwnedInCluster(what, l)
 		}
 	}
 	prefix, err := clusterspec.LabelPrefixFor(what)
@@ -116,6 +137,19 @@ func specBroadPATLabel() string {
 		if !ok {
 			continue
 		}
+		// ENABLED, NOT MERELY LABELLED, and reading the label alone made the
+		// stand-down's own remedy a dead end. Its message says "disable
+		// spec.components.broadPatRotator to hand rotation back to CI" — and a
+		// disabled component keeps its broadPATLabel, which validation permits,
+		// so the label still answered, CI still stood down, and NEITHER owner
+		// rotated the account-wide broad PAT. An operator following the
+		// instructions exactly would have watched it expire.
+		//
+		// ComponentEnabled is the predicate every other reader of a component
+		// toggle uses; there was no reason for this one to invent a second.
+		if !clusterspec.ComponentEnabled(e.Components, "broadPatRotator") {
+			continue
+		}
 		if l := strings.TrimSpace(e.Components["broadPatRotator"].BroadPATLabel); l != "" {
 			return l
 		}
@@ -123,35 +157,14 @@ func specBroadPATLabel() string {
 	return ""
 }
 
-// objClusterFromEndpoint extracts the object-storage cluster id from an S3
-// endpoint URL — the form `llz tokens` writes into TF_STATE_ENDPOINT
-// (https://<cluster>.linodeobjects.com). Returns "" for anything it cannot read
-// with certainty, because a guessed cluster is the bug this exists to remove.
+// objClusterFromEndpoint reads the cluster out of TF_STATE_ENDPOINT.
 //
-// Tolerates a bare host (no scheme), which is how an operator who set the
-// variable by hand is most likely to have written it.
+// A THIN ALIAS OVER linode.ObjClusterFromEndpoint, because this was a SECOND
+// implementation of a rule the onboarding wizard already had — and the two
+// disagreed on the virtual-host spelling, this one returning the BUCKET name as
+// the cluster. See that function for what both got wrong.
 func objClusterFromEndpoint(endpoint string) string {
-	e := strings.TrimSpace(endpoint)
-	if e == "" {
-		return ""
-	}
-	if !strings.Contains(e, "://") {
-		e = "https://" + e
-	}
-	u, err := url.Parse(e)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	host := u.Hostname()
-	// The cluster is the FIRST label of a host that still has a domain left after
-	// it. Requiring a dot in the remainder is what keeps a bare
-	// "linodeobjects.com" from reading as cluster "linodeobjects" — which would
-	// be a confidently wrong answer, the one outcome worse than no answer.
-	id, rest, ok := strings.Cut(host, ".")
-	if !ok || id == "" || !strings.Contains(rest, ".") {
-		return ""
-	}
-	return id
+	return linode.ObjClusterFromEndpoint(endpoint)
 }
 
 // resolveObjBucketCluster returns the object-storage cluster the TF-state key
@@ -198,4 +211,27 @@ func reportLegacyRotationLabels(kind string, count int) {
 	fmt.Fprintln(os.Stderr, "  Confirm no other instance still reads them, then revoke them in the Linode")
 	fmt.Fprintf(os.Stderr, "  console (%s). Deliberately not automated — see rotation_identity.go.\n",
 		color.Dim("Profile → API Tokens / Object Storage → Access Keys"))
+}
+
+// ErrBroadPATOwnedInCluster reports that the in-cluster rotator owns the broad
+// PAT, so the GitHub-Actions rotation must not mint or drain it.
+//
+// A SENTINEL because the callers do not treat it as a failure: the monthly
+// workflow runs `scope: all`, so an instance that opted into broadPatRotator
+// would otherwise go red every month for being correctly configured. The verbs
+// report it and stand down. It is NOT a silent skip — standing down without
+// saying so is how a rotation nobody performs looks exactly like one that works.
+var ErrBroadPATOwnedInCluster = errors.New("the broad PAT is owned by the in-cluster broadPatRotator")
+
+func errBroadPATOwnedInCluster(what, label string) error {
+	return fmt.Errorf("%w (label %q): %s must not mint or drain it.\n"+
+		"  ADR 0001 gives create+revoke of the account-wide broad PAT to the\n"+
+		"  broadPatRotator CronJob, on exactly one deployment, because two owners\n"+
+		"  race each other's mint and revoke: two independent mints against one\n"+
+		"  label family, each keeping the newest and draining the rest, so\n"+
+		"  whichever ran last defines the survivor and the other's freshly\n"+
+		"  published token is an older sibling waiting out its grace window.\n"+
+		"  • leave it to the CronJob (nothing to do), or\n"+
+		"  • disable spec.components.broadPatRotator to hand rotation back to CI",
+		ErrBroadPATOwnedInCluster, label, what)
 }

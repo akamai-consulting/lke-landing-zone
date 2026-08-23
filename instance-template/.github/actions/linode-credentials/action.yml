@@ -51,7 +51,12 @@ inputs:
     required: false
     default: '90'
   grace-days:
-    description: 'pat revoke-old: only revoke same-labeled siblings older than this many days. Newest is always kept.'
+    description: >
+      pat revoke-old: only revoke same-labeled siblings SUPERSEDED more than this
+      many days ago — measured from when the next-newer sibling was minted, not
+      from the credential's own age. The newest is always kept. (An age test
+      revoked the previously-live token immediately, since it is as old as the
+      rotation cadence.)
     required: false
     default: '7'
   gha-secret-name:
@@ -168,6 +173,23 @@ runs:
           --validity-days "$PAT_VALIDITY_DAYS" \
           > "$OUT_FILE"
 
+        # A STAND-DOWN IS NOT A FAILED CREATE. When spec.components.broadPatRotator
+        # is enabled it owns create+revoke of the account-wide broad PAT (ADR 0001),
+        # and llz emits a record saying so rather than minting. Without this branch
+        # the token check below sees an empty .new_token and `exit 1`s — failing the
+        # monthly run for an instance that is correctly configured, and taking
+        # propagate-linode-pat (gated on this job succeeding) with it.
+        SKIPPED=$(jq -r '.skipped // empty' < "$OUT_FILE")
+        if [ -n "$SKIPPED" ]; then
+          echo "::notice::broad-PAT create skipped: $SKIPPED — the in-cluster rotator owns this credential"
+          {
+            echo "new-pat-id="
+            echo "new-token-hash="
+          } >> "$GITHUB_OUTPUT"
+          jq -c '.' < "$OUT_FILE"
+          exit 0
+        fi
+
         NEW_ID=$(jq -r '.new_pat_id // empty' < "$OUT_FILE")
         if [ "${ROTATION_APPLY}" = "true" ]; then
           NEW_TOKEN=$(jq -r '.new_token // empty' < "$OUT_FILE")
@@ -220,6 +242,21 @@ runs:
           --label      "$PAT_LABEL" \
           --grace-days "$PAT_GRACE_DAYS" \
           > "$OUT_FILE"
+
+        # THE SAME STAND-DOWN AS create, and it was added there only. Without it
+        # `jq -c '.revoked_ids'` over a record that has none emits the literal
+        # string `null` into revoked-ids, and the step passes in silence — a
+        # drain that did not run, reported as a drain that revoked `null`.
+        SKIPPED=$(jq -r '.skipped // empty' < "$OUT_FILE")
+        if [ -n "$SKIPPED" ]; then
+          echo "::notice::broad-PAT revoke-old skipped: $SKIPPED — the in-cluster rotator owns this credential"
+          {
+            echo "revoked-ids=[]"
+            echo "kept-pat-id="
+          } >> "$GITHUB_OUTPUT"
+          jq -c '.' < "$OUT_FILE"
+          exit 0
+        fi
 
         REVOKED=$(jq -c '.revoked_ids' < "$OUT_FILE")
         KEPT=$(jq -r '.kept_pat_id // empty' < "$OUT_FILE")

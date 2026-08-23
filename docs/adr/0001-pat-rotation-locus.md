@@ -12,8 +12,12 @@
 
 Two Linode Personal Access Tokens back the platform:
 
-1. **Broad PAT** — `account:read_write` (label `gha-platform-platform_LINODE_API_TOKEN`,
-   surfaced as the `LINODE_API_TOKEN` env secret). Every CI workflow and Terraform
+1. **Broad PAT** — `account:read_write` (label `llz-<objLabelPrefix>-linode-api-token`
+   when CI mints it, or `spec.components.broadPatRotator.broadPATLabel` when the
+   CronJob does; both were the account-wide literal
+   `gha-platform-platform_LINODE_API_TOKEN` when this ADR was written, which named
+   no instance and so drained across them — see `rotation_identity.go`.
+   Surfaced as the `LINODE_API_TOKEN` env secret). Every CI workflow and Terraform
    run reads it; it is the one token that can *mint* other PATs. Account-wide: a
    single token family serves all deployments.
 2. **Narrow in-cluster PAT** — the scoped token (`domains:read_write`,
