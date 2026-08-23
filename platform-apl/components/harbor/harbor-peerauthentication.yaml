@@ -8,46 +8,37 @@
 # PeerAuthentication needed") and any pod in the namespace can still open a
 # plaintext connection to harbor-core.
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# WHY THIS IS THREE DOCUMENTS AND NOT ONE
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# The first revision was a SINGLE namespace-wide policy (no selector) that also
-# carried portLevelMtls. Istio rejects that combination outright:
+# WHY THIS IS THREE DOCUMENTS AND NOT ONE. A namespace-wide policy carrying
+# portLevelMtls is rejected outright by Istio:
 #
 #     PeerAuthentication.security.istio.io "harbor-strict-mtls" is invalid:
 #     spec: Invalid value: "object": portLevelMtls requires selector
 #
-# portLevelMtls is meaningful only against a known set of workload ports, so it
-# is legal only on a workload-scoped (selector-bearing) policy. The apiserver
-# refused every apply, Argo retried to its limit, and the resource NEVER EXISTED
-# on any cluster — verified on e2e cluster 637888, where `kubectl get
-# peerauthentication -A` returned nothing while the llz-harbor Application sat
-# OutOfSync on this exact message. So the namespace ran PERMISSIVE the whole
-# time, and every claim resting on "harbor is STRICT" was aspirational:
-# ci_mesh_egress_guard.go's meshStrictNamespaces assertion, and the two harbor
-# http:// residuals in ci_plaintext_guard.go that are accepted BECAUSE the
-# sidecar upgrades them.
+# portLevelMtls is meaningful only against a known set of workload ports, so it is
+# legal only on a workload-scoped (selector-bearing) policy. A single document that
+# tries to do both never applies at all — the apiserver refuses every apply, Argo
+# retries to its limit, and the namespace silently stays PERMISSIVE while every
+# claim resting on "harbor is STRICT" reads as satisfied. So:
 #
-# The split below is therefore not a refactor, it is the fix:
 #   1. namespace-wide STRICT, no port exemptions      — legal without a selector
 #   2. the CNPG database workload, with its exemptions — legal with one
 #   3. the Harbor app workloads, with theirs           — legal with one
 #
-# Istio resolves the most specific policy per workload: a workload-scoped policy
-# REPLACES the namespace-wide one for the pods it matches, rather than merging
-# with it. That is why documents 2 and 3 each restate `mtls.mode: STRICT` — drop
-# it and every unlisted port on those pods falls back to the mesh default, which
-# is PERMISSIVE, silently unmaking the enforcement for exactly the workloads that
-# hold the database and the registry.
+# ISTIO RESOLVES THE MOST SPECIFIC POLICY PER WORKLOAD AND REPLACES RATHER THAN
+# MERGES: a pod matched by document 2 or 3 never consults document 1. That is why
+# 2 and 3 each restate `mtls.mode` — drop it and every unlisted port on those pods
+# falls back to the mesh default, silently unmaking the enforcement for exactly the
+# workloads holding the database and the registry. It is also why the measurement
+# below has to cover all three: 2 and 3 select everything here that RECEIVES
+# traffic, so relaxing only document 1 would measure harbor-robot-provisioner,
+# which nothing dials into.
 #
-# The selectors are disjoint BY CONSTRUCTION, which matters because Istio does
-# not define precedence between two workload-scoped policies matching one pod:
-# the CNPG pods carry app.kubernetes.io/name=postgresql and NO `app` label, the
-# Harbor app pods carry app=harbor. Confirmed on 637888. harbor-robot-provisioner
-# matches neither (app.kubernetes.io/name=harbor-robot-provisioner), so it falls
-# under document 1 at full STRICT — correct, since nothing dials INTO it and its
-# outbound hop to harbor-core is governed by document 3.
+# The selectors are disjoint BY CONSTRUCTION, which matters because Istio defines
+# no precedence between two workload-scoped policies matching one pod: the CNPG
+# pods carry app.kubernetes.io/name=postgresql and NO `app` label, the Harbor app
+# pods carry app=harbor. harbor-robot-provisioner matches neither, so it falls under
+# document 1 at full STRICT — correct, since nothing dials into it and its outbound
+# hop to harbor-core is governed by document 3.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ⚠️  ALL THREE DOCUMENTS SHIP `PERMISSIVE`. THIS IS THE MEASUREMENT PHASE.
@@ -58,28 +49,14 @@
 # until zero — that is the list of clients that would break under STRICT. Then
 # flip to STRICT."
 #
-# That step has never run. Not "was skipped" — could not run: the single-document
-# version above was rejected by the apiserver on every apply, so no cluster has
-# ever had a PeerAuthentication in this namespace at all, in either mode. Making
-# the resource appliable and setting it STRICT in the same change would enforce
-# against a client list nobody has ever measured. The fix and the cutover are
-# separate changes; this is the fix.
-#
-# WHY ALL THREE AND NOT JUST THE NAMESPACE-WIDE ONE. Istio resolves the most
-# specific policy per workload and REPLACES rather than merges: a pod matched by
-# document 2 or 3 never consults document 1. Documents 2 and 3 select the CNPG
-# database and every app=harbor pod — i.e. everything in this namespace that
-# receives traffic. Leaving them STRICT while relaxing only document 1 would
-# enforce on exactly the workloads at risk and measure only harbor-robot-
-# provisioner, which nothing dials into. The measurement has to cover the pods
-# that take connections or it measures nothing.
+# That step has not run, so setting STRICT here would enforce against a client list
+# nobody has measured. The fix and the cutover are separate changes; this is the fix.
 #
 # THE FLIP, once the metric reads zero for a full converge: change `mode:
 # PERMISSIVE` to `mode: STRICT` in all three `mtls:` blocks — three lines, marked
 # `FLIP TO STRICT` below. Leave every portLevelMtls entry alone; they are inert
 # while the workload default is PERMISSIVE and become load-bearing the moment it
-# is not, which is why they ship now rather than being added at the same time as
-# the thing they protect against.
+# is not, which is why they ship now rather than alongside the thing they protect.
 #
 # WHAT THIS PHASE DOES AND DOES NOT BUY. PERMISSIVE does not mean plaintext: a
 # meshed client still negotiates mTLS with a meshed server, so the provisioner ->
@@ -91,24 +68,23 @@
 #
 # STRICT rejects EVERY plaintext connection into every pod in the harbor
 # namespace, including from clients LLZ does not own. Known clients that must be
-# meshed or exempted — each verified on cluster 637888 unless marked otherwise:
+# meshed or exempted — each verified live unless marked otherwise:
 #
 #   - apl-core's own Harbor components (core, registry, jobservice, portal,
 #     redis, trivy). Meshed by apl-core — confirmed, every pod runs 2/2 with a
 #     sidecar and the namespace carries istio.io/rev.
 #   - the CNPG operator's status poll of harbor-otomi-db :8000 (cnpg-system is
 #     NOT meshed). Exempted in document 2.
-#   - Prometheus scraping harbor-otomi-db :9187 (CNPG metrics). NEWLY EXEMPTED —
-#     the first revision missed it. PodMonitor harbor/harbor-otomi-db selects
-#     these pods and scrapes port `metrics` with NO `scheme:`, which Prometheus
-#     defaults to HTTP; the `monitoring` namespace has no istio.io/rev label, so
-#     that scrape is unmeshed plaintext. Under the old exemption set STRICT would
-#     have blackholed CNPG metrics for BOTH databases' worth of dashboards the
-#     moment it applied.
+#   - Prometheus scraping harbor-otomi-db :9187 (CNPG metrics). Easy to miss:
+#     PodMonitor harbor/harbor-otomi-db selects these pods and scrapes port
+#     `metrics` with NO `scheme:`, which Prometheus defaults to HTTP, and the
+#     `monitoring` namespace has no istio.io/rev label — so that scrape is unmeshed
+#     plaintext. Without this exemption STRICT blackholes CNPG metrics for both
+#     databases' dashboards the moment it applies.
 #   - Prometheus scraping :8001 Harbor metrics. Exempted in document 3.
-#     NOT VERIFIED LIVE: no pod on 637888 listens on 8001 and no Harbor
-#     ServiceMonitor exists there, because that cluster's apl-core does not
-#     deploy the exporter. Kept because configurations that DO enable it need it,
+#     NOT VERIFIED LIVE: on the cluster measured, nothing listens on 8001 and no
+#     Harbor ServiceMonitor exists, because that apl-core does not deploy the
+#     exporter. Kept because configurations that DO enable it need it,
 #     and an exemption for an absent port is inert.
 #   - the CNPG operator's connection to harbor-otomi-db :5432. UNRESOLVED, and
 #     the single most likely thing to break at the flip — see the note on
@@ -118,9 +94,8 @@
 #   - llz-cert-automation's haproxy-rebuild Workflow, which holds a NetworkPolicy
 #     egress allow into :80/:443 here from an `istio-injection: disabled`
 #     namespace. ci_mesh_egress_guard.go registers it as "BELIEVED DEAD ... since
-#     harbor is namespace-wide STRICT" — a belief that rested on this very
-#     resource being applied, which it never was. Its real status is unknown and
-#     this phase is what determines it.
+#     harbor is namespace-wide STRICT" — a belief that rests on this resource being
+#     applied. Its real status is unknown and this phase is what determines it.
 #
 # If the measurement turns up another plaintext client, add its port to the
 # document that owns that workload. Once the flip has happened, that is the ONLY

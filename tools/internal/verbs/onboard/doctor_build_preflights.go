@@ -12,32 +12,23 @@ package onboard
 //	llz ci assert-apl-version    the apl-core chart floor
 //	llz ci assert-k8s-version    the account can build the pinned k8sVersion
 //
-// THE THIRD IS COVERED DIFFERENTLY, AND THE DIFFERENCE IS THE POINT OF THIS FILE
-// RATHER THAN AN EXCEPTION TO IT. The chart floor and the image pins are
-// answerable offline, from the instance's own files, so doctor can reach CI's
-// verdict and fold it into its exit status. The k8sVersion question cannot be:
-// it needs a LINODE_TOKEN, and the account behind the operator's token need not
-// be the account CI builds under (`llz tokens` PROMPTS for the PAT it pushes).
-// A check that reads a different system than CI will read may report but must not
-// decide — objlabel_preflight.go below is the same shape for the same reason.
-//
-// So doctor/linode.go reports it at FULL VOLUME instead: a provable mismatch
-// prints a red ✗ and says `llz ci assert-k8s-version` will fail the build. That
-// answers this file's actual complaint — a green doctor letting an operator walk
-// into a red build having been told they were ready — without inventing an
-// authority doctor does not have. And it now costs a dispatch that fails in
-// SECONDS rather than the ~15-minute apply the rest of this header is about.
-//
-// The first two are local, free, and spec-only, so the miss had no upside at all:
-// doctor went green, `llz up` dispatched, and CI rejected the instance on evidence
-// doctor already had. `llz up` covered the image half by accident — its `tokens` stage
-// re-pins — but `llz up --skip-tokens` is documented in the quickstart, and a
-// plain `doctor` → `build` misses it too. The chart floor was missed on every
-// path, and its own workflow comment says the failure it prevents otherwise
-// surfaces "~2h in as CreateContainerConfigError pods".
-//
 // Doctor-green then build-red is the worst outcome for an operator following the
-// steps, because it invalidates the one signal they were told to trust.
+// steps, because it invalidates the one signal they were told to trust. The first
+// two checks are local, free and spec-only, so missing them had no upside: doctor
+// went green, `llz up` dispatched, and CI rejected the instance on evidence doctor
+// already had. (`llz up` covered the image half by accident — its `tokens` stage
+// re-pins — but `llz up --skip-tokens` is documented in the quickstart, and a plain
+// `doctor` → `build` misses it too.)
+//
+// THE THIRD IS COVERED DIFFERENTLY, AND DELIBERATELY. The chart floor and the
+// image pins are answerable offline from the instance's own files, so doctor can
+// reach CI's verdict and fold it into its exit status. The k8sVersion question
+// cannot be: it needs a LINODE_TOKEN, and the account behind the operator's token
+// need not be the account CI builds under (`llz tokens` PROMPTS for the PAT it
+// pushes). A check that reads a different system than CI will read may report but
+// must not decide — objlabel_preflight.go below is the same shape for the same
+// reason. So doctor/linode.go reports it at full volume instead, naming
+// `llz ci assert-k8s-version` as what will fail the build.
 //
 // THE CHECKS LIVE IN DIFFERENT PLACES, and that is not arbitrary — each runs
 // where its evidence is. The chart floor is answerable from the spec alone, so it
